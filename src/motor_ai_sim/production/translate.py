@@ -115,6 +115,17 @@ def translate_text(text: str, src_lang: str, tgt_lang: str,
         raise TranslateError("unsupported language pair %s -> %s" % (src_lang, tgt_lang))
     if not str(text or "").strip():
         return ""
+    from motor_ai_sim.regions import relay as RL
+    if http_post is None and RL.relay_enabled():             # regions stage 2: no provider key here, the EU peer translates
+        try:
+            out, served_by = RL.translate(text, src_lang, tgt_lang)
+        except Exception as e:                              # noqa: BLE001
+            log.warning("production translate relay failed (%s)", type(e).__name__)
+            raise TranslateError("translation failed (%s)" % type(e).__name__) from None
+        if not out:
+            raise TranslateError("translation came back empty")
+        log.info("production translate: %s -> %s relayed, served by %r", src_lang, tgt_lang, served_by or "unknown")
+        return out
     payload = _payload(text, src_lang, tgt_lang)
     try:
         out, served_by = _answer((http_post or _post)(payload, TIMEOUT_S))

@@ -1115,12 +1115,18 @@ def chat(request: Request, body: dict = Body(default={}),
     eff = _effective()
     provider = eff["provider"]
     ui_lang = _ui_lang(body)
-    if provider == "none":
+    # Regions stage 2: a server without provider keys asks the EU peer (the limiters above already ran HERE).
+    from motor_ai_sim.regions import relay as _RL
+    relayed = _RL.relay_enabled()
+    if provider == "none" and not relayed:
         return deliver(_mock_reply(messages, ui_lang), "mock")
 
     ctx = {} if anon else support_context.sanitize_context(body.get("context"))
     sp = build_system_prompt(role, anon=anon, context=ctx, authorization=authorization)
     try:
+        if relayed:
+            text, rmodel = _RL.support_complete(messages, sp, 2048)
+            return deliver(text or "(no reply)", "claude", model=rmodel)
         if provider == "gemini":
             g = eff["gemini"]
             if not g["key"]:

@@ -269,6 +269,13 @@ class AssistantUnavailable(RuntimeError):
 def complete(messages: list[dict], system_prompt: str) -> tuple[str, str, str]:
     """(reply, source, model) from the support assistant's provider (already guarded: an unpaid Gemini key never gets here,
     ``S._effective`` swapped it for Anthropic or "none").  Raises ``AssistantUnavailable`` when there is none."""
+    from motor_ai_sim.regions import relay as RL
+    if RL.relay_enabled():                       # regions stage 2: no provider key here, the EU peer answers
+        try:
+            text, model = RL.support_complete(messages, system_prompt, 2048)
+        except RL.RelayError as e:
+            raise AssistantUnavailable(str(e)) from None
+        return text, "claude", model
     from motor_ai_sim.routes import support as S
     eff = S._effective()
     if eff["provider"] == "gemini" and eff["gemini"]["key"]:

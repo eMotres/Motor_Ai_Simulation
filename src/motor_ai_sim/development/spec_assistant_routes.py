@@ -34,6 +34,9 @@ def _allowed(request: Request, project_id: str):
 
 def _provider_configured() -> bool:
     try:
+        from motor_ai_sim.regions import relay
+        if relay.relay_enabled():
+            return True
         from motor_ai_sim.routes import support
         eff = support._effective()
         return eff["provider"] != "none" and bool(eff[eff["provider"]]["key"])

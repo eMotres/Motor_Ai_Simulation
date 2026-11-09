@@ -97,6 +97,7 @@ is added to the list on purpose.
 | `MOTRES_REGION_BASE_URL_EU` / `_US` | `https://aerostator.com` / `https://us.aerostator.com` | public base URLs a 421 points at |
 | `MOTRES_REGION_GUARD` | off | `1` turns the wrong-region answer on (also needs a configured peer) |
 | `MOTRES_CROSS_REGION_COMPUTE` | off | `1` lets the scheduler send jobs to the peer (stage 2 wiring) |
+| `MOTRES_RELAY_VIA_PEER` | off | `1` sends mail and LLM calls through the peer (US; needs a configured peer, section 7) |
 | `MOTRES_REGION_DIRECTORY_FILE`, `MOTRES_REGION_JOBS_FILE` | beside `users.json` | test overrides |
 
 Single-region mode = no peer URL or no usable secret. Then every `/api/peer/v1/*` route answers 404, the peer client sends
@@ -162,11 +163,45 @@ interface for this. The secret is generated once (`openssl rand -hex 32`), store
 | `GET /directory` | `{region, entries: {email: {id, region, tier, created}}}` of the accounts this server hosts | directory sync (pull, every 5 min in stage 2 + on demand from the admin) |
 | `GET /catalog/manifest` | `{root_id, files: {path: {sha256, bytes}}, excluded_dies}` — EU only | US mirror job (stage 2) |
 | `GET /admin/{users,projects,verification,jobs}` | this server's rows, tagged with its region | the other region's admin views, live |
+| `POST /relay/mail` | `{ok}` or `{ok: false, code}` — EU sends one prepared message through its own SMTP | US (no SMTP credentials) |
+| `POST /relay/llm` | `{ok, text, model}` or `{ok: false, code}` — EU runs one help-chat / spec-assistant (`purpose: support`) or production-translation (`purpose: translate`) request with its own provider and key | US (no provider keys) |
+
+**Relay exception (owner 2026-11-09)**: the two `relay/*` endpoints are the documented exception to "pull only": they
+perform an action for the peer. They store nothing of the request on EU. The only trace is one audit line
+(`relay.mail` / `relay.llm`, actor `peer:<region>`): the sha256 of each recipient (never a plain address), message size,
+model and token counts — no subject, body, prompt or reply. Same signature check as every peer route (404 when not
+multi-region or unsigned). Limits: mail <= 2 MiB serialized and <= 100 recipients; LLM request <= 200 000 characters;
+EU-side caps for the whole peer (`MOTRES_RELAY_MAIL_HOUR_MAX` 600 / h, `MOTRES_RELAY_LLM_MIN_MAX` 120 / min,
+`MOTRES_RELAY_LLM_DAY_MAX` 20 000 / day); the per-account and per-IP help-chat limiters keep running on the US route
+before the request is relayed. A server in relay mode never executes a relayed request.
+
+**Enabling relay on US**: `MOTRES_RELAY_VIA_PEER=1` (valid only with a configured peer; ignored in single-region mode).
+Then `auth_email.deliver`, `notify` (e-mail channel), the help chat, the specification assistant and the production
+translation send to the peer instead of SMTP / the provider; no SMTP or provider key is needed on US. An unreachable or
+refusing peer is a clear failure to the caller (mail: logged and raised like an SMTP failure; chat: the usual "could not
+answer" reply; translation: `TranslateError`, text stays `pending`). `design_agent/runner.py` is never relayed. Without
+the variable nothing changes.
 
 Pull only: no peer endpoint writes anything. The directory file accepts the peer region's entries only, with the four
 fields only (extra fields are dropped), so the peer can never place personal data or a local account into it. Admin
 views of the other region fetch rows live through `GET /api/admin/regions/remote/{kind}` and never store them; a live read
 of users or verification rows is audited (`regions.remote_read`).
+
+**Open-only mirror (owner 2026-11-09)**: US mirrors only what is open in the public catalog; closed customer motors stay
+on EU. OPEN is the union of (a) the anonymous public exhibit — a die whose geometry matches a passported card of
+`motor_catalog.json` in the workspace root, the same check `routes/family.py` `tree()` runs for anonymous visitors
+(shared code in `motor_ai_sim/exhibit.py`), (b) die access `public`, (c) configurations whose `file_visibility` is
+`public`. A die is mirrored when it is open by (a) or (b), or has at least one `public` configuration. For such a die:
+`die.yaml`, every `public` configuration (or `inherit` while the die is open by (a) or (b)) with its `runs/<cfg>/`
+results and `<cfg>.*` assets; `private` configurations are left out with everything that belongs to them. If
+`motor_catalog.json` cannot be found the manifest falls back to (b)+(c) and says so (`exhibit_source: missing`).
+**Customer-project guard**: a die linked to a development project (`projects/<id>/project.json` `linked_motors`) is
+excluded unless its die access is `public`, even when it matches the exhibit; if a project file cannot be read, every
+non-public die is excluded (fail closed). Reasons in `excluded_dies` are neutral ("linked to a customer project",
+"marked as customer data", "pinned to region us", "not open ...") and never name a customer or project. Files that cannot be attributed to a configuration are left out and listed (fail
+closed). `passports/` and `cad/` (keyed die/config) follow the same rule; `motor_revisions/` only while every revision in
+it names a mirrored configuration. Backup / temp files (`*.bak*`, `*.tmp`, `*~`, `*.orig`) are never listed; unreadable
+files are skipped and counted (`skipped_unreadable`). `python scripts/catalog_manifest_report.py` prints the dry run.
 
 **Catalog replication**: EU publishes the manifest; the US job (stage 2, systemd timer, every 15 min) compares it with
 its own `build()` of the mirror, fetches the `fetch` list by rsync over WireGuard from the EU shared tree (read-only rsync

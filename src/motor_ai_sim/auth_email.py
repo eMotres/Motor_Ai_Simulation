@@ -45,8 +45,14 @@ def _smtp_pass() -> str:
     return _env("SMTP_PASS") or _env("SMTP_PASSWORD")
 
 
+def _relay() -> bool:
+    """Relay mode (regions stage 2): this server has no SMTP of its own and sends through the EU peer."""
+    from motor_ai_sim.regions import relay as _RL
+    return _RL.relay_enabled()
+
+
 def smtp_configured() -> bool:
-    return bool(_env("SMTP_USER") and _smtp_pass())
+    return bool(_env("SMTP_USER") and _smtp_pass()) or _relay()
 
 
 def app_url() -> str:
@@ -74,7 +80,15 @@ def mail_from() -> str:
 def deliver(msg: EmailMessage) -> None:
     """Hand one prepared message to the configured SMTP server.  RAISES on
     any failure (the mailing tool logs it as a failed send); `_send` below
-    is the forgiving wrapper."""
+    is the forgiving wrapper.  In relay mode the message goes to the EU peer, never to smtplib."""
+    if _relay():
+        from motor_ai_sim.regions import relay as _RL
+        try:
+            _RL.send_mail(msg)
+        except _RL.RelayError as e:
+            log.warning("auth-mail: relay through the peer failed (%s)", str(e)[:160])
+            raise
+        return
     user, password = _env("SMTP_USER"), _smtp_pass()
     if not (user and password):
         raise RuntimeError("SMTP is not configured")
@@ -116,7 +130,7 @@ def _note(to: str, kind: str, ok: bool, error: str = "") -> None:
 
 def _send(to: str, subject: str, body: str, kind: str = "") -> bool:
     user, password = _env("SMTP_USER"), _smtp_pass()
-    if not (user and password):
+    if not (user and password) and not _relay():
         return False
     msg = EmailMessage()
     msg["From"] = mail_from()

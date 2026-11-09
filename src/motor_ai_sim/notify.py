@@ -78,7 +78,8 @@ def _env(name: str, default: str = "") -> str:
 def smtp_configured() -> bool:
     """Both credentials set?  Read per call — the owner adds them to
     /etc/motres/api.env without this code changing."""
-    return bool(_env("SMTP_USER") and _env("SMTP_PASSWORD"))
+    from motor_ai_sim.regions import relay as _RL
+    return bool(_env("SMTP_USER") and _env("SMTP_PASSWORD")) or _RL.relay_enabled()
 
 
 def telegram_configured() -> bool:
@@ -102,20 +103,33 @@ def _send_email(subject: str, body: str, reply_to: str = "") -> bool:
     Never raises: a mail server having a bad minute is not a reason for a
     visitor's question to fail, and the request is already in the inbox.
     """
+    from motor_ai_sim.regions import relay as _RL
+    relayed = _RL.relay_enabled()
     user, password = _env("SMTP_USER"), _env("SMTP_PASSWORD")
-    if not (user and password):
+    if not (user and password) and not relayed:
         return False
     to = recipients()
     if not to:
         return False
     msg = EmailMessage()
-    msg["From"] = _env("NOTIFY_FROM", user)
+    if _env("NOTIFY_FROM", user):
+        msg["From"] = _env("NOTIFY_FROM", user)
     msg["To"] = ", ".join(to)
     msg["Subject"] = subject
     if reply_to:
         # Answering the alert answers the person who asked.
         msg["Reply-To"] = reply_to
     msg.set_content(body)
+    if relayed:
+        # No SMTP on this server: the EU peer sends it (regions stage 2).  Never smtplib here.
+        try:
+            _RL.send_mail(msg)
+            log.info("notify: relayed e-mail to %d recipient(s) — %s", len(to), subject)
+            return True
+        except Exception as e:                               # noqa: BLE001
+            log.warning("notify: relay through the peer failed (%s: %s) — the request "
+                        "is still in the admin inbox", type(e).__name__, str(e)[:160])
+            return False
     host = _env("SMTP_HOST", DEFAULT_SMTP_HOST)
     try:
         port = int(_env("SMTP_PORT", str(DEFAULT_SMTP_PORT)))

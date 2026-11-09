@@ -53,3 +53,15 @@ export function pickFocusProject(projects: ReadonlyArray<{ id: string; title: st
   const found = projects.find((p) => p.id === remembered.id);
   return found ? { id: found.id, title: found.title } : null;
 }
+
+/** The projects whose linked motors include this die / configuration (alias or canonical die, case-insensitive), in the list's order.
+ *  Used by Configure's "Back to project" when no project is remembered (after a reload, or a motor opened another way). */
+export function projectsOfMotor(
+  projects: ReadonlyArray<{ id: string; title: string; linked_motors?: ReadonlyArray<{ die: string; config: string }> | null }>,
+  die: string | null | undefined, config: string | null | undefined, canonicalDie?: string | null,
+): FocusProject[] {
+  if (!config) return [];
+  const keys = new Set([die, canonicalDie].filter((d): d is string => !!d).map((d) => motorKey(d, config)));
+  if (keys.size === 0) return [];
+  return projects.filter((p) => (p.linked_motors ?? []).some((m) => keys.has(motorKey(m.die, m.config)))).map((p) => ({ id: p.id, title: p.title }));
+}

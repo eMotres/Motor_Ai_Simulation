@@ -2327,39 +2327,15 @@ def tree_for_access(response: Response, _acc: dict, *, with_mass: bool = True,
     _passported: list = []
     if _client_filter:
         try:
-            import json as _pj
-            _cat = _pj.loads((_ws_root_f() / "motor_catalog.json")
-                             .read_text(encoding="utf-8"))
-            for _m in _cat.get("motors", []):
-                _g = ((_m.get("passport") or {}).get("geo")) or {}
-                if _g:
-                    _passported.append(_g)
+            from motor_ai_sim import exhibit as _exh
+            _passported = _exh.load_passported_geos(_ws_root_f() / "motor_catalog.json")
         except Exception:
             _passported = []      # no catalog → hide nothing rather than all
             _client_filter = False
 
     def _die_is_client_ready(g: dict) -> bool:
-        # Recompute the derived radii from the die's own primaries — stored
-        # deriveds can be stale (the 85 die carried stator_outer_radius 15
-        # beside stator_diameter 85; matching raw fields hid a passported
-        # motor from clients).
-        try:
-            from motor_ai_sim.simulation.geometry_2d import merge_geo_override
-            g = merge_geo_override(dict(g), None)
-        except Exception:
-            pass
-        for _g in _passported:
-            try:
-                if (int(_g.get("numSlots") or 0) == int(g.get("num_slots") or -1)
-                        and int(_g.get("numPoles") or 0) == int(g.get("num_poles") or -1)
-                        and abs(float(_g.get("statorOR_mm") or 0)
-                                - float(g.get("stator_outer_radius") or -1)) <= 0.5
-                        and abs(float(_g.get("magnetHeight_mm") or 0)
-                                - float(g.get("magnet_height") or -1)) <= 0.25):
-                    return True
-            except (TypeError, ValueError):
-                continue
-        return False
+        from motor_ai_sim import exhibit as _exh
+        return _exh.die_is_client_ready(g, _passported)
 
     # The WORKSPACE is part of the key since Stage 2: two accounts with the
     # same access mode see two different catalogs, and a memo that could not

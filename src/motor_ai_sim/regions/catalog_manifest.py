@@ -12,10 +12,12 @@ The manifest is an ALLOW-LIST (an unknown top-level entry is not replicated: fai
 ``die.yaml`` names a customer (``data_sources._customer_reason``) or carries ``home_region`` other than ``eu`` — a closed
 motor built for a client is that client's data and lives in the client's region.
 
-OPEN-ONLY (owner 2026-11-09): the US server mirrors ONLY what is open in the public catalog.  A die is mirrored when its
-die-level visibility is ``public`` OR at least one of its configurations is ``public``
-(``motor_access.get_die_access`` / ``file_visibility``).  Of such a die: ``die.yaml``; every configuration that is
-``public`` (or ``inherit`` while the die is ``public``) together with its ``runs/<cfg>/`` result files and ``<cfg>.*``
+OPEN-ONLY (owner 2026-11-09): the US server mirrors ONLY what is open in the public catalog.  OPEN = (a) the anonymous
+exhibit (``exhibit.die_is_client_ready`` against ``motor_catalog.json``, as ``routes/family.tree`` does; if that file is
+missing the result says ``exhibit_source: missing`` and only (b)+(c) apply), (b) die access ``public``, (c) configurations
+whose ``file_visibility`` is ``public``.  A die linked to a development project is excluded unless its die access is
+``public``.  A die is mirrored when open by (a) or (b) or with at least one ``public`` configuration.  Of such a die:
+``die.yaml``; every configuration that is ``public`` (or ``inherit`` while the die is open by (a) or (b)) together with its ``runs/<cfg>/`` result files and ``<cfg>.*``
 assets; a configuration that is ``private`` (or ``inherit`` under a non-public die) is left out with everything that
 belongs to it.  A file that cannot be attributed to a configuration is left out (fail closed) and listed in
 ``excluded_files``.  ``passports/`` and ``cad/`` (keyed ``<die>/<cfg>``) follow the same per-configuration rule;
@@ -124,42 +126,80 @@ def die_excluded(die_dir: Path) -> Optional[str]:
     if not isinstance(doc, dict):
         return "die.yaml malformed"
     from motor_ai_sim import data_sources as DS
-    why = DS._customer_reason(doc, "die.yaml")
-    if why:
-        return why
+    if DS._customer_reason(doc, "die.yaml"):
+        return "marked as customer data"                    # neutral text: never the customer's name
     reg = str(doc.get("home_region") or "").strip().lower()
     if reg and reg != "eu":
-        return f"die.yaml pins it to region {reg}"
+        return f"pinned to region {reg}"
     return None
 
 
 # ── open-only rule ───────────────────────────────────────────────────────────
 
-def _cfg_open(cfg_file: Path, die_public: bool) -> bool:
-    """A configuration is mirrored when it is ``public``, or ``inherit`` under a ``public`` die; ``private`` never
-    (and an unreadable file reads as ``private``: ``file_visibility`` fails closed)."""
+def _cfg_open(cfg_file: Path, die_open: bool) -> bool:
+    """A configuration is mirrored when it is ``public``, or ``inherit`` while the die is open (public die access or
+    anonymous exhibit); ``private`` never (an unreadable file reads as ``private``: ``file_visibility`` fails closed)."""
     from motor_ai_sim import motor_access as MA
     st = MA.file_visibility(cfg_file)
-    return st == MA.CFG_PUBLIC or (st == MA.CFG_INHERIT and die_public)
+    return st == MA.CFG_PUBLIC or (st == MA.CFG_INHERIT and die_open)
 
 
-def open_configs(die_dir: Path) -> Tuple[bool, Dict[str, bool]]:
-    """``(die_public, {cfg: mirrored})`` for one die folder."""
+def _die_yaml_geometry(die_dir: Path) -> Dict[str, Any]:
+    try:
+        doc = yaml.safe_load((die_dir / "die.yaml").read_text(encoding="utf-8")) or {}
+    except (OSError, yaml.YAMLError, UnicodeDecodeError):
+        return {}
+    g = doc.get("geometry") if isinstance(doc, dict) else None
+    return g if isinstance(g, dict) else {}
+
+
+def open_configs(die_dir: Path, exhibit: Optional[list] = None) -> Tuple[bool, Dict[str, bool]]:
+    """``(die_open, {cfg: mirrored})`` for one die folder.  ``die_open`` = die access ``public`` OR the die is in the
+    anonymous exhibit (``exhibit`` = the passported geometries of ``motor_catalog.json``, None = catalog not found)."""
+    from motor_ai_sim import exhibit as EX
     from motor_ai_sim import motor_access as MA
     pub = MA.get_die_access(die_dir.name).get("visibility") == MA.VIS_PUBLIC
+    shown = bool(exhibit) and EX.die_is_client_ready(_die_yaml_geometry(die_dir), exhibit)
     try:
         files = sorted(f for f in die_dir.glob("*.yaml") if f.is_file() and f.name != "die.yaml" and not _skip(f.name))
     except OSError:
         files = []
-    return pub, {f.stem: _cfg_open(f, pub) for f in files}
+    return pub or shown, {f.stem: _cfg_open(f, pub or shown) for f in files}
 
 
-def die_open_reason(die_dir: Path) -> Optional[str]:
+def die_open_reason(die_dir: Path, exhibit: Optional[list] = None) -> Optional[str]:
     """None when the die is mirrored; else why not."""
-    pub, cfgs = open_configs(die_dir)
-    if pub or any(cfgs.values()):
+    is_open, cfgs = open_configs(die_dir, exhibit)
+    if is_open or any(cfgs.values()):
         return None
-    return "not open to the public catalog (die visibility is not public and no configuration is public)"
+    return "not open to the public catalog (not in the public exhibit, die visibility not public, no public configuration)"
+
+
+def linked_dies(root: Path) -> Tuple[set, int]:
+    """Dies linked to a development project (``<root>/projects/<id>/project.json`` ``linked_motors``) and the number of
+    project files that could not be read (the caller then fails closed)."""
+    dies: set = set()
+    bad = 0
+    pr = root / "projects"
+    if not pr.is_dir():
+        return dies, bad
+    try:
+        kids = sorted(pr.iterdir())
+    except OSError:
+        return dies, 1
+    for k in kids:
+        f = k / "project.json"
+        if not k.is_dir() or not f.exists():
+            continue
+        try:
+            doc = json.loads(f.read_text(encoding="utf-8"))
+        except (OSError, ValueError, UnicodeDecodeError):
+            bad += 1
+            continue
+        for m in (doc.get("linked_motors") or []) if isinstance(doc, dict) else []:
+            if isinstance(m, dict) and m.get("die"):
+                dies.add(str(m["die"]))
+    return dies, bad
 
 
 def _owner_cfg(name: str, cfgs: Dict[str, bool]) -> Optional[str]:
@@ -259,35 +299,59 @@ def _mirror_revisions(top: Path, acc: _Acc, mirrored: Dict[str, Dict[str, bool]]
         _walk(top, top.name, acc)
 
 
-def _mirror_dies(dies: Path, acc: _Acc) -> Tuple[Dict[str, Dict[str, bool]], set]:
+def _mirror_dies(dies: Path, acc: _Acc, exhibit: Optional[list], linked: set, links_unreadable: bool
+                 ) -> Tuple[Dict[str, Dict[str, bool]], set]:
     """Mirror ``dies/`` -> (``{die: {cfg: mirrored}}`` of the mirrored dies, names of the excluded dies)."""
+    from motor_ai_sim import motor_access as MA
     mirrored: Dict[str, Dict[str, bool]] = {}
     excluded: set = set()
     for d in _iter(dies, acc, "dies"):
         if not d.is_dir() or _skip(d.name) or d.is_symlink():
             continue
-        why = die_excluded(d) or die_open_reason(d)
+        why = die_excluded(d)
+        if not why:
+            pub = MA.get_die_access(d.name).get("visibility") == MA.VIS_PUBLIC
+            if d.name in linked and not pub:
+                why = "linked to a customer project"          # fail closed: only an explicit public die access reopens it
+            elif links_unreadable and not pub:
+                why = "project links could not be read"
+        why = why or die_open_reason(d, exhibit)
         if why:
             acc.excluded_dies.append({"die": d.name, "why": why})
             excluded.add(d.name)
             continue
-        cfgs = open_configs(d)[1]
+        cfgs = open_configs(d, exhibit)[1]
         mirrored[d.name] = cfgs
         _mirror_die(d, cfgs, acc)
     return mirrored, excluded
 
 
-def build(root: Optional[Path] = None, now: Optional[float] = None) -> Dict[str, Any]:
+def _exhibit_geos(catalog_path: Optional[Path]) -> Tuple[Optional[list], str]:
+    """The passported geometries the anonymous exhibit is built from, found the way ``routes/family.tree`` finds them
+    (``motor_catalog.json`` in the workspace root).  -> (geos or None, ``"workspace"`` | ``"missing"``)."""
+    from motor_ai_sim import exhibit as EX
+    try:
+        if catalog_path is None:
+            from motor_ai_sim.workspace import root as ws_root
+            catalog_path = Path(str(ws_root())) / "motor_catalog.json"
+        return EX.load_passported_geos(Path(catalog_path)), "workspace"
+    except Exception:                                       # noqa: BLE001 - no catalog: fall back to die access + config status
+        return None, "missing"
+
+
+def build(root: Optional[Path] = None, now: Optional[float] = None, catalog_path: Optional[Path] = None) -> Dict[str, Any]:
     if root is None:
         from motor_ai_sim.workspace import shared_root
         root = Path(str(shared_root()))
     root = Path(root)
     acc = _Acc()
+    exhibit, exhibit_source = _exhibit_geos(catalog_path)
     if root.is_dir():
         mirrored: Dict[str, Dict[str, bool]] = {}
         excluded: set = set()
         if (root / "dies").is_dir():
-            mirrored, excluded = _mirror_dies(root / "dies", acc)
+            linked, bad = linked_dies(root)
+            mirrored, excluded = _mirror_dies(root / "dies", acc, exhibit, linked, bool(bad))
         for p in _iter(root, acc, ""):
             if _skip(p.name) or p.is_symlink():
                 continue
@@ -303,7 +367,7 @@ def build(root: Optional[Path] = None, now: Optional[float] = None) -> Dict[str,
     root_id = hashlib.sha256("\n".join(f"{k} {v['sha256']}" for k, v in sorted(files.items())).encode()).hexdigest()
     return {"root_id": root_id, "files": files, "count": len(files), "bytes": sum(v["bytes"] for v in files.values()),
             "excluded_dies": acc.excluded_dies, "excluded_files": acc.excluded_files,
-            "skipped_unreadable": acc.skipped_count, "skipped_unreadable_paths": acc.skipped,
+            "exhibit_source": exhibit_source, "skipped_unreadable": acc.skipped_count, "skipped_unreadable_paths": acc.skipped,
             "ts": round(time.time() if now is None else now, 1)}
 
 

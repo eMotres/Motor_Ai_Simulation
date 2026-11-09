@@ -24,7 +24,7 @@ def summarize(manifest: dict) -> dict:
         top = rel.split("/", 1)[0] if "/" in rel else "(root files)"
         per[top]["files"] += 1
         per[top]["bytes"] += int(v.get("bytes") or 0)
-    return {"root_id": manifest.get("root_id"), "count": manifest.get("count"), "bytes": manifest.get("bytes"),
+    return {"exhibit_source": manifest.get("exhibit_source"), "root_id": manifest.get("root_id"), "count": manifest.get("count"), "bytes": manifest.get("bytes"),
             "per_top_dir": dict(sorted(per.items())),
             "excluded_dies": manifest.get("excluded_dies") or [],
             "excluded_files": manifest.get("excluded_files") or [],
@@ -35,16 +35,18 @@ def summarize(manifest: dict) -> dict:
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--root", help="shared tree to scan (default: the server's shared root)")
+    ap.add_argument("--catalog", help="motor_catalog.json of the exhibit (default: the workspace one)")
     ap.add_argument("--json", action="store_true", help="print the summary as JSON")
     a = ap.parse_args(argv)
     from motor_ai_sim.regions import catalog_manifest as CM
-    rep = summarize(CM.build(Path(a.root) if a.root else None))
+    rep = summarize(CM.build(Path(a.root) if a.root else None, catalog_path=Path(a.catalog) if a.catalog else None))
     if a.json:
         print(json.dumps(rep, indent=1, sort_keys=True))
         return 0
     print("manifest %s: %d files, %d bytes" % ((rep["root_id"] or "")[:12], rep["count"], rep["bytes"]))
     for top, v in rep["per_top_dir"].items():
         print("  %-18s %6d files %14d bytes" % (top, v["files"], v["bytes"]))
+    print("anonymous exhibit source: %s" % rep["exhibit_source"])
     print("excluded dies: %d" % len(rep["excluded_dies"]))
     for e in rep["excluded_dies"]:
         print("  %-40s %s" % (e["die"], e["why"]))

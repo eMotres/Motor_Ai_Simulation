@@ -420,13 +420,13 @@ def test_catalog_manifest_is_an_allow_list(env, monkeypatch):
     _w(root / "directory" / "companies.json", "[]")
     _w(root / "legal" / "nda_signatures.jsonl", "{}")
     _w(root / "unknown_store" / "a.json", "{}")
-    m = CM.build(root)
+    m = CM.build(root, catalog_path=root.parent / "nocatalog.json")
     assert set(m["files"]) == {"materials_library.yaml", "dies/OPEN1/die.yaml", "dies/OPEN1/L12.yaml"}
     assert {e["die"] for e in m["excluded_dies"]} == {"CLIENT", "USPIN"}
-    again = CM.build(root)
+    again = CM.build(root, catalog_path=root.parent / "nocatalog.json")
     assert again["root_id"] == m["root_id"]
     _w(root / "dies" / "OPEN1" / "L12.yaml", "x: 2\n")
-    changed = CM.build(root)
+    changed = CM.build(root, catalog_path=root.parent / "nocatalog.json")
     assert changed["root_id"] != m["root_id"]
     assert CM.diff(changed, m) == {"fetch": ["dies/OPEN1/L12.yaml"], "delete": []}
     assert CM.diff({"files": {}}, m)["delete"] == sorted(m["files"])

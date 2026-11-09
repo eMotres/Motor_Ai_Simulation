@@ -188,10 +188,17 @@ views of the other region fetch rows live through `GET /api/admin/regions/remote
 of users or verification rows is audited (`regions.remote_read`).
 
 **Open-only mirror (owner 2026-11-09)**: US mirrors only what is open in the public catalog; closed customer motors stay
-on EU. A die is mirrored when its die-level visibility is `public` OR at least one configuration is `public`
-(`motor_access.get_die_access` / `file_visibility`). For such a die: `die.yaml`, every `public` configuration (or `inherit`
-while the die is `public`) with its `runs/<cfg>/` results and `<cfg>.*` assets; `private` configurations are left out with
-everything that belongs to them. Files that cannot be attributed to a configuration are left out and listed (fail
+on EU. OPEN is the union of (a) the anonymous public exhibit — a die whose geometry matches a passported card of
+`motor_catalog.json` in the workspace root, the same check `routes/family.py` `tree()` runs for anonymous visitors
+(shared code in `motor_ai_sim/exhibit.py`), (b) die access `public`, (c) configurations whose `file_visibility` is
+`public`. A die is mirrored when it is open by (a) or (b), or has at least one `public` configuration. For such a die:
+`die.yaml`, every `public` configuration (or `inherit` while the die is open by (a) or (b)) with its `runs/<cfg>/`
+results and `<cfg>.*` assets; `private` configurations are left out with everything that belongs to them. If
+`motor_catalog.json` cannot be found the manifest falls back to (b)+(c) and says so (`exhibit_source: missing`).
+**Customer-project guard**: a die linked to a development project (`projects/<id>/project.json` `linked_motors`) is
+excluded unless its die access is `public`, even when it matches the exhibit; if a project file cannot be read, every
+non-public die is excluded (fail closed). Reasons in `excluded_dies` are neutral ("linked to a customer project",
+"marked as customer data", "pinned to region us", "not open ...") and never name a customer or project. Files that cannot be attributed to a configuration are left out and listed (fail
 closed). `passports/` and `cad/` (keyed die/config) follow the same rule; `motor_revisions/` only while every revision in
 it names a mirrored configuration. Backup / temp files (`*.bak*`, `*.tmp`, `*~`, `*.orig`) are never listed; unreadable
 files are skipped and counted (`skipped_unreadable`). `python scripts/catalog_manifest_report.py` prints the dry run.

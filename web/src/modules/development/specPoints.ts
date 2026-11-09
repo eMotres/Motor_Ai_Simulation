@@ -11,8 +11,9 @@
  *   2. name: the duty name equals the spec point name, or starts with it as whole words (`cruise_5000` for `Cruise`);
  *      case, spaces, `_` and `-` are ignored;
  *   3. operating point, ONE duty per spec point (the closest): same speed (1 %) and same |torque| - a point given in power
- *      (kW at rpm) is converted to torque.  The duty's REQUESTED torque / power target is compared within 3 %; when only a SOLVED
- *      torque exists it may lie from -3 % to +15 % of the target (a point solved at a fixed current lands above it).  Torque is
+ *      (kW at rpm) is converted to torque.  A torque / power within 3 % of the target fits; failing that, ANY torque of the duty
+ *      (a stored duty's operating_point.torque_nm is usually the SOLVED value) may lie from -3 % to +15 % of it (a point solved at a
+ *      fixed current lands above the target).  A spec row naming BOTH motor and generator is two points.  Torque is
  *      compared by magnitude (a generator may store it negative).  Like with like: when both the spec row and the duty say
  *      motor or generator (row mode / name, duty mode / name) they must agree.
  *  No spec, no spec points, or no duty that matches: nothing is filtered (never an empty strip).
@@ -47,11 +48,16 @@ const words = (s: string): string[] => s.toLowerCase().split(/[^a-z0-9]+/).filte
 export function machineMode(...hints: unknown[]): MachineMode | null {
   for (const h of hints) {
     const w = words(String(h ?? ''));
-    if (w.some((x) => /^(gen|generator|generating|generation|regen)$/.test(x))) return 'generator';
-    if (w.some((x) => /^(motor|motoring)$/.test(x))) return 'motor';
+    const gen = w.some((x) => /^(gen|generator|generating|generation|regen)$/.test(x));
+    const mot = w.some((x) => /^(motor|motoring)$/.test(x));
+    if (gen && mot) return null;                      // names both ("motor and generator"): no single mode
+    if (gen) return 'generator';
+    if (mot) return 'motor';
   }
   return null;
 }
+/** Does the text name both motor and generator? */
+const namesBothModes = (text: string): boolean => { const w = words(text); return w.some((x) => /^(gen|generator|generating|generation|regen)$/.test(x)) && w.some((x) => /^(motor|motoring)$/.test(x)); };
 
 /** The points of the specification: its key points (else the legacy S1 / peak pair) and its mission-profile rows. */
 export function specPointRefs(draft: SpecDraft | null | undefined): SpecPointRef[] {
@@ -64,15 +70,18 @@ export function specPointRefs(draft: SpecDraft | null | undefined): SpecPointRef
   if (draft.mission_profile_status !== 'not_known_yet') {
     for (const r of Array.isArray(draft.mission_profile) ? draft.mission_profile : []) { const row = rec(r); rows.push({ ...row, name: row.phase ?? row.name }); }
   }
-  const out = rows.map((r): SpecPointRef => {
+  // a row that names BOTH motor and generator is two points (one per mode): each may keep its own duty
+  const out = rows.flatMap((r): SpecPointRef[] => {
     const name = String(r.name ?? '');
     const kw = first(r.power_kW, r.power_kw);
-    return {
+    const base = {
       rowId: typeof r.row_id === 'string' ? r.row_id : null, name,
       torqueNm: worst(r.torque_Nm), speedRpm: worst(r.speed_rpm ?? r.rpm),
       powerW: first(r.power_W, r.power_w, kw === null ? null : kw * 1000),
-      mode: machineMode(r.mode, r.machine_mode, r.role, name),
     };
+    const explicit = machineMode(r.mode, r.machine_mode, r.role);
+    if (explicit === null && namesBothModes(name)) return [{ ...base, mode: 'motor' }, { ...base, mode: 'generator' }];
+    return [{ ...base, mode: explicit ?? machineMode(name) }];
   });
   return out.filter((p) => p.name.trim() || p.torqueNm !== null || p.powerW !== null);
 }
@@ -88,12 +97,14 @@ export function numericDistance(d: DutyInfo, p: SpecPointRef): number | null {
   if (d.mode && p.mode && d.mode !== p.mode) return null;
   const target = targetTorque(p);
   if (d.rpm === null || p.speedRpm === null || target === null || !close(d.rpm, p.speedRpm, 0.01, 1)) return null;
-  const requested = d.reqTorqueNm !== null ? Math.abs(d.reqTorqueNm) : toTorque(d.reqPowerW, d.rpm);
-  if (requested !== null) return close(requested, target, 0.03, 0.05) ? Math.abs(requested - target) / Math.max(target, 1e-9) : null;
-  const solved = d.solvedTorqueNm !== null ? Math.abs(d.solvedTorqueNm) : toTorque(d.solvedPowerW, d.rpm);
-  if (solved === null) return null;
-  const ratio = solved / Math.max(target, 1e-9) - 1;
-  return ratio >= -0.03 && ratio <= 0.15 ? 0.5 + Math.abs(ratio) : null;
+  // a stored duty's operating_point.torque_nm is often the value the runner wrote back after SOLVING (not a request), so every
+  // torque the duty carries may also be judged in the solved window
+  const requested = [d.reqTorqueNm !== null ? Math.abs(d.reqTorqueNm) : null, toTorque(d.reqPowerW, d.rpm)].filter((v): v is number => v !== null);
+  const tight = requested.filter((v) => close(v, target, 0.03, 0.05)).map((v) => Math.abs(v - target) / Math.max(target, 1e-9));
+  if (tight.length) return Math.min(...tight);
+  const solved = [...requested, d.solvedTorqueNm !== null ? Math.abs(d.solvedTorqueNm) : null, toTorque(d.solvedPowerW, d.rpm)].filter((v): v is number => v !== null);
+  const loose = solved.map((v) => v / Math.max(target, 1e-9) - 1).filter((r) => r >= -0.03 && r <= 0.15).map((r) => 0.5 + Math.abs(r));
+  return loose.length ? Math.min(...loose) : null;
 }
 
 const nameOrLink = (d: DutyInfo, p: SpecPointRef): boolean => {

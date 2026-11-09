@@ -477,3 +477,10 @@ def test_comparison_applies_the_3d_end_effect_like_the_report():
     assert abs(c["v_phase_peak_v"] - 285.0) < 1e-9 and abs(c["v_line_peak_v"] - 494.0) < 1e-9
     plain = _comparison_projection({"result": {"T_em_avg_Nm": 1000.0, "efficiency_pct": 96.0}}, {})
     assert plain["torque_nm"] == 1000.0 and "k_3d" not in plain
+
+
+def test_run_temperatures_read_the_em_runs_fixed_coil_and_magnet_temperatures():
+    got = motors._run_temperatures({"coil_temp_C": 22.0, "magnet_temp_used_c": 20.0, "magnet_temp_c": 99.0}, {"coil_temp_c": 50})
+    assert got == {"coil_temp_c": 22.0, "magnet_temp_c": 20.0}          # the runner's used value first, first block first
+    assert motors._run_temperatures({"magnet_temp_C": 21}, {"coil_temp_c": 30}) == {"magnet_temp_c": 21, "coil_temp_c": 30}
+    assert motors._run_temperatures(None, {"coil_temp_c": True, "magnet_temp_c": float("nan")}) == {}

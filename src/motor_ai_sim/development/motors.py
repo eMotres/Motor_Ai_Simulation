@@ -640,6 +640,27 @@ def _metric_projection(value: Any) -> dict:
     return output
 
 
+#: the EM run's FIXED temperatures (the runner writes the magnet temperature it used as ``magnet_temp_used_c``)
+_RUN_TEMPERATURE_KEYS = (
+    ("coil_temp_c", ("coil_temp_c", "t_coil_c", "winding_temperature_c")),
+    ("magnet_temp_c", ("magnet_temp_used_c", "magnet_temp_c", "t_magnet_c", "magnet_temperature_c")),
+)
+
+
+def _run_temperatures(*blocks: Any) -> dict:
+    """The coil and magnet temperatures the EM run was made at (read-only), from the first block that states each; a missing one is absent."""
+    out: dict = {}
+    for target, aliases in _RUN_TEMPERATURE_KEYS:
+        for block in blocks:
+            if not isinstance(block, dict): continue
+            norm = {re.sub(r"[^a-z0-9]+", "_", str(k).lower()).strip("_"): v for k, v in block.items()}
+            value = next((_number(norm.get(a)) for a in aliases if _number(norm.get(a)) is not None), None)
+            if value is not None:
+                out[target] = value
+                break
+    return out
+
+
 def _number(value: Any) -> float | int | None:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         return None
@@ -1034,6 +1055,9 @@ def _results(die: str, config: str, cfg: dict, stored_by_duty: dict | None = Non
             primary_result = duty.get("result")
         em = _metric_projection(primary_result)
         for key, value in _metric_projection(duty.get("summary") or {}).items():
+            em.setdefault(key, value)
+        # the temperatures the EM run was made at (the magnet one the runner sends as magnet_temp_used_c): needed to pick the cold no-load point
+        for key, value in _run_temperatures(primary_result, duty.get("summary")).items():
             em.setdefault(key, value)
         stored_duty = by_duty.get(name) or {}
         if own_only:

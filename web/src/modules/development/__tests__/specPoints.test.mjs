@@ -107,3 +107,32 @@ test('the cold no-load duty is read from the EM run temperature', () => {
   assert.equal(dutyInfoOf(sevenDuties[6]).tempC, 20);
   assert.equal(dutyInfoOf(sevenDuties[7]).tempC, 120);
 });
+
+// ── the two traps found on real data ────────────────────────────────────────────────────────────────────────────────────────────
+test('trap 1: an S1 row naming both motor and generator is served by a motor duty AND a gen duty', () => {
+  const spec = { fields: { key_points: { status: 'filled', value: [
+    { row_id: 's1', name: 'S1 30 kW, motor and generator (continuous)', torque_Nm: 47.7, speed_rpm: 6000, duration_s: 'continuous' },
+  ] } } };
+  const refs = specPointRefs(spec);
+  assert.deepEqual(refs.map((r) => r.mode), ['motor', 'generator']);
+  const out = filterToSpecPoints([solved('rated_47.7Nm_6000', 6000, 'motor', { torque_nm: 47.7 }, 47.7), solved('gen_30kW_6000', 6000, 'generator', { power_kw: 30 }, -47.9), solved('other', 3000, 'motor', {}, 1)], dutyInfoOf, refs);
+  assert.deepEqual(names(out), ['rated_47.7Nm_6000', 'gen_30kW_6000']);
+});
+test('trap 2: a stored op.torque_nm that is the SOLVED value (+3.75 %) still matches its row', () => {
+  const refs = specPointRefs(sevenSpec).filter((r) => r.rowId === 'r4');
+  const out = filterToSpecPoints([solved('peak_gen_40kW_6000', 6000, 'generator', { torque_nm: 66.09 }, null), solved('other', 1, 'motor', {}, 1)], dutyInfoOf, refs);
+  assert.deepEqual(names(out), ['peak_gen_40kW_6000']);
+});
+test('regression with both traps in the full example: all seven kept', () => {
+  const spec = { fields: { key_points: { status: 'filled', value: [
+    { row_id: 'r1', name: 'S1 30 kW, motor and generator', torque_Nm: 47.7, speed_rpm: 6000, duration_s: 'continuous' },
+    ...sevenSpec.fields.key_points.value.slice(2),
+  ] } } };
+  const duties = [
+    solved('rated_47.7Nm_6000', 6000, 'motor', { torque_nm: 47.7 }, 47.7), solved('gen_30kW_6000', 6000, 'generator', { power_kw: 30 }, -49.0),
+    solved('peak_motor_40kW_6000', 6000, 'motor', { torque_nm: 65.3 }, 65.3), solved('peak_gen_40kW_6000', 6000, 'generator', { torque_nm: 66.09 }, null),
+    solved('start_25Nm_1000', 1000, 'motor', { torque_nm: 25.1 }, null), solved('start_57Nm_1000', 1000, 'motor', { torque_nm: 57.3 }, null),
+    solved('noload_7200', 7200, 'motor', {}, null, { electromagnetic: { coil_temp_c: 22 } }), solved('helper', 4000, 'motor', { torque_nm: 5 }, 5),
+  ];
+  assert.deepEqual(names(filterToSpecPoints(duties, dutyInfoOf, specPointRefs(spec))), duties.slice(0, 7).map((d) => d.duty));
+});

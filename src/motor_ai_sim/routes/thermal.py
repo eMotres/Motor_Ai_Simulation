@@ -3426,6 +3426,16 @@ def rescale_map_to_nodes(result: dict, node_temps_c: dict, *,
     return out
 
 
+def _end_turn_length_m(k_end, stack_length_m) -> float:
+    """One coil's end-turn length per side, ``(k_end − 1)·L``.  ``masses.end_winding_factor`` defines
+    k_end = mean turn / (2·L), so a turn is 2·L in the slots plus two end turns of (k_end − 1)·L each.  Used with
+    the coils as wound (``_coils_as_wound``); k_end <= 1 means no end turns."""
+    try:
+        return max(float(k_end) - 1.0, 0.0) * max(float(stack_length_m), 0.0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
 def _coils_as_wound(cfg, num_slots) -> "tuple[int, str]":
     """``(n_coils, source)`` of the end-winding model: coils as actually wound, from the winding's `layers`
     (2 -> one per tooth = num_slots, 1 -> every second tooth = num_slots / 2), see ``winding.coil_count``."""
@@ -3449,7 +3459,7 @@ def _end_winding_factor(em, geo_ov) -> "tuple[float, str]":
     NEVER a constant, and never a second estimate of its own when the run
     recorded one.  ``P_cu_exact_W`` already contains ``k_end`` (see
     ``field_ops.copper_loss_W``: P = ρ·J²·V_active·k_end), so the open-frame
-    model — which needs the end turns' LENGTH, ``(k_end − 1)·L_stack/2`` per
+    model — which needs the end turns' LENGTH, ``(k_end − 1)·L_stack`` per
     side — has to use the SAME number or the copper it puts in the wash is not
     the copper the loss was computed for.  Two sources, in order:
 
@@ -4138,7 +4148,7 @@ def solve_thermal_field(
 
       * ``end_windings`` on the WINDING domain — the end-turn bundles in cross
         flow (``cooling_models.end_windings_path``).  Their length per side is
-        ``(k_end − 1)·L_stack/2`` with the SAME ``k_end`` the electromagnetic run
+        ``(k_end − 1)·L_stack`` with the SAME ``k_end`` the electromagnetic run
         was billed at, read off the run's own payload and falling back to the
         estimator the solver itself uses for ``end_winding_factor = 0``
         (``masses.end_winding_factor``).  On this machine k_end is 1.759 (L12) /
@@ -5035,7 +5045,10 @@ def solve_thermal_field(
             + float(g.get("wire_spacing_y", 0.0) or 0.0))
         # ℓ_end per side, from the run's own k_end.  k_end = 1 means the model
         # has no end turns at all, so there is nothing to cool.
-        _ell_m = max(float(_k_end) - 1.0, 0.0) * L / 2.0
+        # k_end = mean turn / (2·L) (masses.end_winding_factor), so ONE coil's end turn per side is (k_end − 1)·L.
+        # (Before 2026-11-09 this was (k_end − 1)·L/2 with n_coils = num_slots: the two halvings cancelled on
+        # single-layer windings; with the coils as wound the length must be the whole per-coil end turn.)
+        _ell_m = _end_turn_length_m(_k_end, L)
         from motor_ai_sim.simulation import cooling_models as _cm2
         _ew_path = _cm2.end_windings_path(
             air_speed_mps=_open_v, t_ambient_c=ambient_temp,
@@ -5361,7 +5374,7 @@ def solve_thermal_field(
         _ef_bar_t_mm = float(g.get("num_wires_per_slot", 0) or 0) * (
             float(g.get("wire_height", 0.0) or 0.0)
             + float(g.get("wire_spacing_y", 0.0) or 0.0))
-        _ef_ell_m = max(float(_ef_k_end) - 1.0, 0.0) * L / 2.0
+        _ef_ell_m = _end_turn_length_m(_ef_k_end, L)
         _ew_geom = _cm3.end_winding_area(
             n_coils=int(_coils_as_wound(cfg, num_slots)[0]), bar_thickness_m=_ef_bar_t_mm * 1e-3,
             bar_width_m=_ef_bar_w_mm * 1e-3, end_turn_length_m=_ef_ell_m,
@@ -6671,7 +6684,7 @@ def solve_thermal_field(
             "heat_removed_W": round(_w, 3),
             "n_elements": int((_sk or {}).get("n_elements") or 0),
             "area_source": ("end_winding_area on this run's own k_end "
-                            "(ℓ_end = (k_end − 1)·L/2, shielded perimeter 2t + w)"
+                            "(ℓ_end = (k_end − 1)·L per coil, shielded perimeter 2t + w)"
                             if _node == "winding" else
                             "this mesh's own section area for the part × "
                             "symmetry"),

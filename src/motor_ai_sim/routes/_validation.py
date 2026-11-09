@@ -363,22 +363,24 @@ SCHEMA_FALLBACK: Dict[str, dict] = {
 #: reads what a knob does.  ``wire_split`` is exactly that case: until
 #: 2026-09-08 it meant "transposed insulated strips of wire_width/N with no CAD
 #: behind them"; it now means N drawn strips of wire_width laid side by side and
-#: wired in series, and the stored text would send the user to halve nothing.
+#: wired in PARALLEL within one turn (2026-11-09; they were counted as series
+#: turns from 2026-09-08 to 2026-11-09), and the stored text would send the
+#: user to halve nothing.
 #:
 #: LABELS, units and bounds are NOT overridden — only the sentence that explains
 #: the knob, and only for knobs whose semantics moved under the stored text.
 SCHEMA_DESCRIPTION_OVERRIDE: Dict[str, str] = {
     "wire_split": (
         "N strips per wire row, side by side across the slot, 2 x "
-        "wire_spacing_x apart, wired in SERIES: each strip is a turn, so the "
-        "coil has N x the turns of the same rows unsplit (psi and back-EMF xN, "
-        "KV /N, R_phase and Ld/Lq xN^2, every strip at the full branch "
-        "current). wire_width is ONE STRIP: the N strips are drawn, meshed and "
-        "solved as separate conductors, so the slot grows to N*wire_width + "
-        "(N-1)*2*wire_spacing_x. Split a 9 mm bar by setting wire_width 4.5 "
-        "and wire_split 2. Narrower conductors cut the width-direction "
-        "eddy/proximity copper loss (~N^2, still capped at 2 skin depths). "
-        "1 = one solid bar."),
+        "wire_spacing_x apart, wired in PARALLEL within ONE turn: the split "
+        "adds no turn (turns per coil, psi, back-EMF, KV and torque do not "
+        "change), each strip carries 1/N of the branch current. wire_width is "
+        "ONE STRIP: the N strips are drawn, meshed and solved as separate "
+        "conductors, so the slot grows only by the insulation between them, "
+        "to N*wire_width + (N-1)*2*wire_spacing_x. Split a 9 mm bar by "
+        "setting wire_width 4.5 and wire_split 2. Narrower conductors cut the "
+        "width-direction eddy/proximity copper loss (~N^2, still capped at 2 "
+        "skin depths). 1 = one solid bar."),
 }
 
 #: Geometry keys that USED to exist and no longer do.  A die, preset or catalog
@@ -399,7 +401,10 @@ SCHEMA_DESCRIPTION_OVERRIDE: Dict[str, str] = {
 # whether a wire_split row's strips were parallel strands or series turns.  The
 # user removed the parallel reading the same day ("wire_split_series can be
 # removed — we'll always only need the series connection of these two coils;
-# a parallel connection would create circulating currents between them"), so the strips are ALWAYS series turns and the flag has no meaning.
+# a parallel connection would create circulating currents between them").  On
+# 2026-11-09 the owner stated the intent of the split: strips IN PARALLEL within
+# one turn, to cut the AC loss (no extra turns).  Either way there is one
+# wiring and no flag, so the key has no meaning.
 # Accepted and dropped, like the two above — a die or sweep config saved inside
 # that window must not 422 on a field the user can no longer see.
 RETIRED_GEOMETRY_KEYS: frozenset = frozenset({"magnet_top", "shaft_diameter",

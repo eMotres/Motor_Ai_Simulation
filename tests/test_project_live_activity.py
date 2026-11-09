@@ -397,10 +397,28 @@ def test_it_never_links_into_a_project_the_die_is_not_in(link_env):
         assert not any(e["action"] == "motor.autolink" for e in _audit(pid))
 
 
-def test_a_die_copied_from_a_linked_one_links_its_new_configuration_under_its_own_name(link_env):
-    joined = autolink.autolink_new_config("Linked Die copy 2", "L9", copied_from="Linked Die", source_config="A")
-    assert joined == ["alpha"]
-    assert {"die": "Linked Die copy 2", "config": "L9", "status": "current"} in store.get_project("alpha")["linked_motors"]
+def test_a_die_copied_from_a_linked_one_never_joins_the_source_dies_project(link_env):
+    """2026-11-09 data leak: a duplicated study die's new configuration (source = the loaded motor of the ORIGINAL die)
+    was linked to the original die's customer project.  A copy is a new die: it is in no project."""
+    assert autolink.autolink_new_config("Linked Die copy 2", "L9", copied_from="Linked Die", source_config="A") == []
+    # created from scratch in the copy, with the ancestry known: still nothing (``derived_from`` is not followed)
+    assert autolink.autolink_new_config("Linked Die copy 2", "L10") == []
+    for pid in ("alpha", "beta"):
+        assert all(m["die"] != "Linked Die copy 2" for m in store.get_project(pid)["linked_motors"])
+        assert not any(e["action"] == "motor.autolink" for e in _audit(pid))
+    assert not any("copy 2" in k for k in store.load_index()["motors"])
+
+
+def test_a_new_configuration_in_the_linked_die_itself_still_auto_links(link_env):
+    assert autolink.autolink_new_config("Linked Die", "A5", source_config="A") == ["alpha"]
+    assert {"die": "Linked Die", "config": "A5", "status": "current"} in store.get_project("alpha")["linked_motors"]
+
+
+def test_a_copy_that_gets_its_own_link_by_hand_then_auto_links_inside_itself(link_env):
+    index = store.load_index()
+    index["motors"][motors._key("Study Copy", "S1")] = {"project_id": "alpha", "die": "Study Copy", "config": "S1"}
+    store.save_index(index)
+    assert autolink.autolink_new_config("Study Copy", "S2", source_config="S1") == ["alpha"]
 
 
 def test_a_motor_that_is_already_linked_is_left_alone_and_bad_names_are_refused(link_env):

@@ -490,7 +490,14 @@ def _copper_loss(p: _P, geo: Dict[str, Any], I_phase_rms: float,
 
     Returns (P_cu_W, source) where ``source`` names which section was used.
     """
-    n_wires = float(geo.get("num_wires_per_slot", 14))
+    # CONDUCTORS per slot (rows x strips): n_parallel carries the strips of a
+    # split row (winding.n_parallel_effective), so the copper they are shared
+    # over has to count them too (identical at wire_split = 1).
+    from motor_ai_sim.winding import conductors_per_slot as _cond_slot
+    try:
+        n_wires = float(_cond_slot(geo) or geo.get("num_wires_per_slot", 14))
+    except (ValueError, TypeError):
+        n_wires = float(geo.get("num_wires_per_slot", 14))
     wire_area = p.wire_width_m * p.wire_height_m
     source = "nominal(wire_width·wire_height)"
     n_cond = float(p.num_slots) * n_wires
@@ -550,9 +557,11 @@ def _raw_physics(geo: Dict[str, Any], wind: Dict[str, Any], sim: Dict[str, Any],
 
     pole_pairs = max(p.num_poles // 2, 1)
     n_series = float(wind.get("n_series", 2))
-    # STRANDS IN HAND multiply the parallel paths (winding.n_parallel_effective):
-    # the slot keeps every physical wire, but only n_wires/k of them are in
-    # series, so psi and T fall by k and P_cu by k².  Same rule the FEM uses.
+    # STRANDS IN HAND and STRIPS multiply the parallel paths
+    # (winding.n_parallel_effective): the slot keeps every physical wire, but
+    # only n_wires/k of them are in series, so psi and T fall by k and P_cu by
+    # k².  The strips of a split row are parallel within one turn: they divide
+    # the current, never the turns.  Same rule the FEM uses.
     from motor_ai_sim.winding import (n_parallel_effective as _npar_eff,
                                       turns_per_coil as _tpc)
     n_parallel = float(_npar_eff(int(wind.get("n_parallel", 2) or 2), geo))

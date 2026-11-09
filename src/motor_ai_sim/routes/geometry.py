@@ -132,9 +132,23 @@ def get_geometry():
 
 
 @router.put("")
-def update_geometry(update: GeometryUpdateModel, request: Request = None):
-    """A user's own geometry edit (and the Fusion / FreeCAD imports)."""
-    return _update_geometry(update, request, reconcile_winding=True)
+def update_geometry(update: GeometryUpdateModel, request: Request = None,
+                    allow_die_transition: Optional[bool] = None):
+    """A user's own geometry edit (and the Fusion / FreeCAD imports).
+
+    ``allow_die_transition`` (body flag or query parameter, default true = the interactive behaviour):
+    an edit that changes the die's lamination moves the active configuration onto another die
+    (a new one is minted when none matches).  A scripted caller sends ``false`` to refuse that: the
+    request answers 409 with the die it would have created and NOTHING is written or created.  The
+    response always carries ``die_transition`` (``null`` when the save stayed in the active die)."""
+    extra = getattr(update, "model_extra", None)
+    if isinstance(extra, dict) and "allow_die_transition" in extra:
+        flag = extra.pop("allow_die_transition")
+        if allow_die_transition is None:
+            allow_die_transition = flag
+    allow = True if allow_die_transition is None else (
+        str(allow_die_transition).strip().lower() not in ("0", "false", "no", "off"))
+    return _update_geometry(update, request, reconcile_winding=True, allow_die_transition=allow)
 
 
 class MachineLoadModel(BaseModel):
@@ -177,7 +191,7 @@ def load_machine(body: MachineLoadModel, request: Request = None):
 
 
 def _update_geometry(update: GeometryUpdateModel, request: Request = None, *,
-                     reconcile_winding: bool = True):
+                     reconcile_winding: bool = True, allow_die_transition: bool = True):
     # ── Input guard 1: the NAME has to be a parameter this server knows ──────
     # An unknown key was accepted twice over and applied zero times: the live
     # geometry object got the attribute, the YAML writer (`if key in
@@ -229,6 +243,32 @@ def _update_geometry(update: GeometryUpdateModel, request: Request = None, *,
         _locked = None   # the guard must never be the reason a solve breaks
     if _locked:
         raise HTTPException(status_code=423, detail=_locked)
+
+    # ── Input guard 5: a die transition the caller did not allow ─────────────
+    # An edit that reshapes the lamination silently creates (or switches to) another die
+    # (`family.sync_active_die_geometry`).  A scripted caller that sends
+    # `allow_die_transition: false` gets a 409 BEFORE anything is written, naming the die the
+    # edit would have created.  The interactive UI keeps the default (allowed).
+    if not allow_die_transition:
+        try:
+            from motor_ai_sim.config import get_config as _gc_pre
+            from motor_ai_sim.geometry.motor_geometry import refresh_derived_geometry as _refresh_pre
+            from motor_ai_sim.routes.family import preview_die_transition
+            _prospective = _refresh_pre({**dict(_gc_pre().get("geometry", {}) or {}), **_submitted_raw})
+            _would = preview_die_transition(_prospective, prev_geo=_prev_geo)
+        except HTTPException:
+            raise
+        except Exception:   # noqa: BLE001 - the guard must never be the reason a save breaks
+            log.warning("geometry PUT: die-transition preview failed", exc_info=True)
+            _would = None
+        if _would:
+            raise HTTPException(status_code=409, detail={
+                "error": "die transition not allowed",
+                "message": ("this edit changes the die's lamination (%s), so the active configuration would "
+                            "move to the die '%s'%s; allow_die_transition is false, nothing was written or "
+                            "created" % ("; ".join(_would.get("diffs") or []), _would.get("to_die"),
+                                         " (a new die)" if _would.get("creates_die") else "")),
+                "die_transition": _would})
 
     try:
         # Who is changing the live machine, and into what.  Cheap, write-only,
@@ -395,13 +435,18 @@ def _update_geometry(update: GeometryUpdateModel, request: Request = None, *,
         # stays whatever the die was duplicated from.  Locked dies are left
         # alone — their snapshot is canon.  Best-effort: a sync hiccup must not
         # fail the save that already happened.
+        _transition: dict = {}
         try:
             from motor_ai_sim.routes.family import sync_active_die_geometry
             from motor_ai_sim.config import get_config as _gc
             sync_active_die_geometry(dict(_gc().get("geometry", {}) or {}),
-                                     prev_geo=_prev_geo)
+                                     prev_geo=_prev_geo,
+                                     allow_transition=allow_die_transition, report=_transition)
         except Exception as _se:   # noqa: BLE001
             log.warning("geometry PUT: active-die snapshot sync failed: %s", _se)
+        # Said in the response, never silent: the die this edit created / switched to (2026-11-09,
+        # a wire_split edit minted a shared die nobody asked for).
+        result["die_transition"] = dict(_transition) if _transition else None
 
         # ── The winding connection follows the slot count ───────────────────
         # A user's segment / slots-per-segment edit moves the coils per phase;

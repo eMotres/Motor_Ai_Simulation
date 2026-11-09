@@ -8237,11 +8237,12 @@ def _build_transient_summary(
     # config's value quoted a J_coil the machine never saw.
     _wind = _gc().get("winding", {})
     _npar = max(1, int(sbres.get("n_parallel") or _wind.get("n_parallel", 1) or 1))
-    # STRANDS IN HAND multiply the paths for every current-splitting purpose:
-    # k wires in hand means each physical wire carries I_coil/k, so J and the
-    # phase's conductor section are built on n_parallel x wire_parallel
-    # (winding.n_parallel_effective).  `wire_split` is NOT in it: a row's strips
-    # are series TURNS, each carrying the whole branch current.  The run reports
+    # STRANDS IN HAND and STRIPS multiply the paths for every current-splitting
+    # purpose: k wires in hand means each physical wire carries I_coil/k, and a
+    # row split into N strips (parallel within ONE turn, owner 2026-11-09) means
+    # each strip carries I_coil/(k·N), so J and the phase's conductor section are
+    # built on n_parallel x wire_parallel x wire_split
+    # (winding.n_parallel_effective).  The run reports
     # its own (it may have solved a per-request geometry override the shared
     # config knows nothing about); the config is the fallback.
     try:
@@ -8263,8 +8264,9 @@ def _build_transient_summary(
     # The conductor J is measured on is the DRAWN one — one STRIP, which is
     # wire_width × wire_height whether or not there is a split (wire_split lays
     # N of them side by side, it does not subdivide the width).  `_npar_eff`
-    # below does NOT carry the split: the strips are series turns and each one
-    # carries the branch current whole, so J is the same as the unsplit row's.
+    # below carries the split: the strips are parallel within one turn and each
+    # one carries 1/N of the branch current, so J is the unsplit row's when the
+    # strips have the unsplit wire's total section.
     try:
         from motor_ai_sim.winding import strip_width_mm as _strip_w
         _a_cond_mm2 = _strip_w(_geo_cfg) * float(_geo_cfg.get("wire_height", 0.0))
@@ -8521,13 +8523,13 @@ def _build_transient_summary(
         "n_parallel": _npar,
         # STRANDS IN HAND, STRIPS PER ROW, and what they make the coil.  The
         # slot holds num_wires_per_slot wire ROWS of wire_split strips each, a
-        # row's strips being consecutive SERIES turns; turns_per_coil =
-        # (rows / wire_parallel) × wire_split is what the EMF, Kt and R were
-        # solved on, and n_parallel_eff (paths × wire_parallel — the split
-        # divides no current) is the divider both the coil current and the flux
-        # linkage carry.  Both are on the card because the split moves KV,
-        # R_phase and the voltage as well as the slot width, and the numbers are
-        # where the user checks it landed.
+        # row's strips being PARALLEL conductors of one turn (2026-11-09);
+        # turns_per_coil = rows / wire_parallel (the split adds no turn) is what
+        # the EMF, Kt and R were solved on, and n_parallel_eff (paths ×
+        # wire_parallel × wire_split) is the divider both the coil current and
+        # the flux linkage carry.  Both are on the card because the split moves
+        # the strip current, the AC copper and the slot width, and the numbers
+        # are where the user checks it landed.
         "wire_parallel": int(_wpar),
         "turns_per_coil": int(_turns),
         "n_parallel_eff": int(_npar_eff),

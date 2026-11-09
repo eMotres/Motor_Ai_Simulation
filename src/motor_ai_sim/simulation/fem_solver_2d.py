@@ -12,9 +12,9 @@ Domain-specific data (matches the CadQuery polygon classes):
     magnets        ν = 1/(μ₀·1.05),  M = ±(Br/μ₀)·φ̂   (tangential, alternating)
     coils          ν = 1/μ₀,  J_z = direction · I_phase · n_wires / area
                    (n_wires = num_wires_per_slot × wire_split: a split wire row
-                    is N strips of wire_width, each its own conductor; the
-                    current in one of them carries the ÷N when the strips are
-                    parallel — see winding.n_parallel_effective)
+                    is N strips of wire_width, each its own conductor and the N
+                    strips of a turn are PARALLEL, so the current in one of
+                    them carries the ÷N — see winding.n_parallel_effective)
 
 Boundary: A_z = 0 on the outer stator circle.
 
@@ -523,8 +523,10 @@ def psipm_cache_key(geo, wind, connection=None, materials=None) -> str:
     wire_split because none of them can move the ANGLE θ*, which is
     what that fingerprint is for.  Keying ψ_PM on it alone therefore served a
     k = 1 machine's ψ_PM to a k = 3 one, and (since the split became geometry on
-    2026-09-08, its strips SERIES turns) an unsplit machine's ψ_PM to a split
-    one — a factor N in ψ_PM and N² in the Ld derived from it.  The two
+    2026-09-08) an unsplit machine's ψ_PM to a split one.  Since 2026-11-09 the
+    strips are parallel conductors of one turn (psi is the unsplit machine's), but
+    the effective parallel paths (``n_parallel_effective``) still differ, and the
+    key carries them.  The two
     numbers that scale ψ_PM ride in the key
     instead.  Never fatal: an unreadable knob (a hand-edited yaml) falls back to
     a marker that simply never matches a cached entry.
@@ -1133,10 +1135,10 @@ def _daxis_geo_fingerprint(geo) -> str:
 #: The no-load flux linkage PER TURN is unchanged, so ψ_A(θ) is the same curve
 #: scaled and its peak sits at the same θ.
 #:
-#: The strips being SERIES turns does not change that: the flux PER TURN cannot
-#: depend on how the turns are connected to each other, so the split only
-#: rescales ψ (×N), and a constant factor on ψ_A(θ) cannot move the angle of its
-#: peak.
+#: The strips being PARALLEL conductors of one turn (2026-11-09; they were counted
+#: as series turns before) does not change that: the flux PER TURN cannot depend
+#: on how the conductors are connected, and a constant factor on ψ_A(θ) cannot
+#: move the angle of its peak.
 #:
 #: What the split does change — turns, ψ magnitude, R, L — is not the d-axis;
 #: the ``_geometry_fingerprint`` and the physics cache keys DO see the key,
@@ -2582,9 +2584,9 @@ def _field2d_static_inputs(
     n_parallel   = _npar_eff(wind.get("n_parallel", 2), geo)
     # CONDUCTORS per slot = num_wires_per_slot × wire_split.  Each strip is its
     # own drawn conductor, so the slot's ampere-turns are conductors × the
-    # current in ONE of them — and `n_parallel` above already carries the ÷N
-    # when those strips are in parallel, which is what makes the parallel mode
-    # come out identical in MMF.  wire_split = 1 leaves both untouched.
+    # current in ONE of them — and `n_parallel` above carries the ÷N because the
+    # strips of a turn are in parallel, which keeps the MMF of the unsplit
+    # machine.  wire_split = 1 leaves both untouched.
     n_wires      = _cond_slot(geo) or geo.get("num_wires_per_slot", 14)
     pole_pairs   = p.num_poles // 2
     I_coil_peak  = I_phase_rms / n_parallel * math.sqrt(2)
@@ -3165,8 +3167,8 @@ def _geo_fingerprint(geo: dict) -> str:
     state it inherited — "seeded" without naming the parent is not honesty.
 
     Every numeric knob counts, ``wire_split`` included: N strips of wire_width
-    side by side is a different MACHINE (turns ×N, ψ ×N, R ×N²) as well as a
-    wider slot, and a fingerprint that skipped it would hand a split run's
+    side by side is a different MACHINE (strip current ÷N, AC loss, a slightly
+    wider slot), and a fingerprint that skipped it would hand a split run's
     cached magnet state to an unsplit one.  Bools are hashed as 0/1 — no
     geometry knob is one today (``wire_split_series`` was, for a few hours on
     2026-09-08), but a hand-edited yaml can still carry ``true``/``false`` and
@@ -5117,13 +5119,15 @@ def _fem_transient_sliding_band_once(
     # the ampere-turn multiplier the winding source, the per-conductor imposed
     # current and the J view are all normalised by, NOT the wire-row count.
     #
-    # THE STRIPS OF A ROW ARE SERIES TURNS — always (the user removed the
-    # parallel wiring on 2026-09-08: side-by-side strips link different leakage
-    # flux, so a parallel connection would circulate current between them).  So
-    # `n_parallel` above is NOT multiplied by N: every strip carries the full
-    # branch current I/(paths·k), turns_per_coil is ×N, and therefore MMF ×N,
-    # ψ ×N, R ×N², KV /N.  At N = 1 this is the unsplit machine and every
-    # expression downstream is the one that was always there.
+    # THE STRIPS OF A ROW ARE IN PARALLEL WITHIN ONE TURN (owner 2026-11-09:
+    # the split cuts a flat wire by its width to cut the AC loss; it adds no
+    # turn).  So `n_parallel` above ALREADY carries the ÷N
+    # (winding.n_parallel_effective = paths x strands x strips): every strip
+    # carries I/(paths·k·N), turns_per_coil is unchanged by the split, and the
+    # slot MMF (n_wires × the strip current) is the unsplit machine's.  The
+    # strips are equal-current conductors (circulating current between
+    # untransposed strips is not solved).  At N = 1 this is the unsplit machine
+    # and every expression downstream is the one that was always there.
     wire_split = _ws_geo(geo)
     n_wires_drawn = int(geo.get("num_wires_per_slot", 14))
     n_wires = n_wires_drawn * wire_split
@@ -6145,7 +6149,7 @@ def _fem_transient_sliding_band_once(
     # imposed-current coefficient I_c_unit = dir for EACH physical conductor.
     # `Ist` is already divided by n_parallel_effective (connection paths ×
     # strands in hand), so every meshed strip gets its actual branch current;
-    # wire_split strips are series turns and do not divide it. The slot's
+    # wire_split strips are parallel conductors of one turn and are IN it. The slot's
     # conductor count is `n_wires`, so summing these per-body currents gives
     # the same total ampere-turns as the area-normalized magnetostatic J_z.
     # Do not scale this current by each tag's meshed area: that would make
@@ -7590,10 +7594,10 @@ def _fem_transient_sliding_band_once(
     #     while the eddy reaction redistributes J inside it.  I_b uses the
     #     SAME Iunit the P1 eddy path uses (read off _coil_con), so the two
     #     orders drive identical ampere-turns.  With ``wire_split`` = N a
-    #     conductor is one STRIP (wire_width × wire_height) carrying the full
-    #     branch current (the strips are series turns) — so the solved AC loss
-    #     is the honest one for the narrow strip, not for the wide bar it
-    #     replaced.
+    #     conductor is one STRIP (wire_width × wire_height) carrying 1/N of the
+    #     branch current (the strips are parallel within one turn) — so the
+    #     solved AC loss is the honest one for the narrow strip, not for the
+    #     wide bar it replaced.
     #   • magnets / shaft (rotor_eddy) — net ZERO axial current per connected
     #     body (∫J dΩ = 0).  A body CUT by the anti-periodic radial boundary
     #     is exempt with U_b ≡ 0, and that is EXACT rather than a convenience:
@@ -15498,9 +15502,9 @@ def _fem_transient_sliding_band_once(
         # …and the numbers that say what the coil actually is.  The slot holds
         # `num_wires_per_slot` wire rows of `wire_split` strips each;
         # `wire_parallel` rows are in hand per turn and a row's strips are
-        # consecutive SERIES turns, so the coil has
+        # PARALLEL conductors of one turn, so the coil has
         # `turns_per_coil` SERIES turns and the divider every quantity above was
-        # solved with is `n_parallel_eff`.  Reported rather than derived
+        # solved with is `n_parallel_eff` (paths x strands x strips).  Reported rather than derived
         # downstream: a consumer that recomputed it from the config could not
         # see a per-request geometry override.
         "wire_parallel": int(wire_parallel),

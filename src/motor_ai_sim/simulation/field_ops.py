@@ -541,11 +541,11 @@ def copper_loss_W(p, geo_cfg, I_phase_rms, n_parallel,
     ``wire_split`` = S lays S strips of ``wire_width`` side by side per wire
     row.  Both the conductor count and the copper (and therefore
     ``copper_area_m2``) grow by S; a strip's own section is unchanged.  Those
-    strips are SERIES turns, so ``n_parallel`` — which the CALLER passes as
-    ``winding.n_parallel_effective`` — does NOT move: I_strand is the full
-    branch current and P rises by S, S times the copper at the same J.  Against
-    the unsplit bar of S·wire_width that is R_phase ×S² (the bar's own section
-    was S times bigger), which is what splitting the bar is for.
+    strips are PARALLEL conductors of one turn, so ``n_parallel`` - which the
+    CALLER passes as ``winding.n_parallel_effective`` - carries the S: I_strand
+    is the branch current / S, and P = rho.L.k_end.I_strand^2.n_cond/A_strip is
+    that of S strips of the same wire in parallel (R_phase / S against ONE strip,
+    equal to the unsplit bar of S·wire_width).
     """
     mm = 1e-3
     from motor_ai_sim.winding import wire_split_from_geo as _ws_geo

@@ -3426,6 +3426,22 @@ def rescale_map_to_nodes(result: dict, node_temps_c: dict, *,
     return out
 
 
+def _coils_as_wound(cfg, num_slots) -> "tuple[int, str]":
+    """``(n_coils, source)`` of the end-winding model: coils as actually wound, from the winding's `layers`
+    (2 -> one per tooth = num_slots, 1 -> every second tooth = num_slots / 2), see ``winding.coil_count``."""
+    from motor_ai_sim.winding import coil_count
+    try:
+        layers = int(((cfg or {}).get("winding") or {}).get("layers") or 1)
+    except (TypeError, ValueError):
+        layers = 1
+    layers = 2 if layers >= 2 else 1
+    n = coil_count(int(num_slots), layers)
+    note = ("%d coils from the winding as wound: %s layer, num_slots = %d (%s)"
+            % (n, "double" if layers == 2 else "single", int(num_slots),
+               "one coil per tooth" if layers == 2 else "every second tooth"))
+    return n, note
+
+
 def _end_winding_factor(em, geo_ov) -> "tuple[float, str]":
     """``(k_end, where it came from)`` — the end-winding factor the LOSSES of
     this map were billed at.
@@ -4997,16 +5013,11 @@ def solve_thermal_field(
                        "frame=housed.",
                        error="no winding elements in this cross-section")
         _k_end, _k_end_src = _end_winding_factor(em, _geo_ov)
-        # ONE coil per tooth — these are fractional-slot concentrated windings,
-        # the same assumption `masses.end_winding_factor` makes when it measures
-        # the built tooth coil around ONE tooth — so the machine has as many
-        # coils as it has slots.  `num_slots`, and NOT the config's
-        # `winding.n_coils_per_phase × 3` (which is the same 12 on the live
-        # machine): the slot count follows this request's `?geo=` override and
-        # the winding block does not, so a client evaluating a 24-slot variant of
-        # its own would otherwise get the shared config's 12 coils.
-        _n_coils = num_slots
-        _n_coils_note = "one coil per tooth (concentrated winding): n = num_slots"
+        # Coils as WOUND (2026-11-09): a double-layer winding has one coil per tooth (n = num_slots), a single-layer
+        # winding (layout A|a|b|B...) only every second tooth (n = num_slots / 2).  The tooth count follows this
+        # request's `?geo=` override (a client evaluating a 24-slot variant of its own must not get the shared
+        # config's coils); the layer count is the winding block's own `layers`.
+        _n_coils, _n_coils_note = _coils_as_wound(cfg, num_slots)
         # The bundle: `num_wires_per_slot` ROWS deep (each row a wire plus the
         # air/varnish gap above it) by the whole wire COLUMN wide.  The column,
         # not one strip: with wire_split = N the end turn has to get around all
@@ -5352,7 +5363,7 @@ def solve_thermal_field(
             + float(g.get("wire_spacing_y", 0.0) or 0.0))
         _ef_ell_m = max(float(_ef_k_end) - 1.0, 0.0) * L / 2.0
         _ew_geom = _cm3.end_winding_area(
-            n_coils=int(num_slots), bar_thickness_m=_ef_bar_t_mm * 1e-3,
+            n_coils=int(_coils_as_wound(cfg, num_slots)[0]), bar_thickness_m=_ef_bar_t_mm * 1e-3,
             bar_width_m=_ef_bar_w_mm * 1e-3, end_turn_length_m=_ef_ell_m,
             n_sides=_ef_n)
         # PER ONE FACE, because `end_face_still` multiplies by `n_faces` itself.

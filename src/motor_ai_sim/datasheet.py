@@ -530,17 +530,18 @@ def _build_calculator(wb, *, pp: Dict[str, Any], geo: Dict[str, Any],
     # Conductors carrying the phase current in parallel: the connection's paths
     # TIMES the strands in hand (k wires wound together per turn each carry
     # I_coil/k).  The current-density formula below divides by exactly this.
-    # `wire_split` is NOT in it: a row's strips are consecutive SERIES turns and
-    # each carries the branch current whole.
+    # `wire_split` IS in it (2026-11-09): a row's strips are PARALLEL conductors
+    # of one turn, each carrying 1/N of the branch current.
     wp0 = max(1.0, float(pp.get("wire_parallel0") or 1))
-    strands = float(wind.get("n_parallel") or 1) * wp0
     # Strips per wire row the passport was measured at (absent = 1: it predates
     # the split).  N0 and the "Turns per slot" input below are wire ROWS, so the
-    # ELECTRICAL turn count is (N/wp0)*ws0 — the same ratio N/N0 the factors use,
-    # because wp0 and ws0 are fixed by the build and cancel; recorded here so the
-    # base section can state the turns the tables were actually measured on.
+    # ELECTRICAL turn count is N/wp0 (the strips add no turn) — the same ratio
+    # N/N0 the factors use, because wp0 is fixed by the build and cancels;
+    # recorded here so the base section can state the turns the tables were
+    # actually measured on.
     ws0 = max(1.0, float(pp.get("wire_split0") or 1))
-    turns0 = (N0 / wp0) * ws0
+    strands = float(wind.get("n_parallel") or 1) * wp0 * ws0
+    turns0 = N0 / wp0
     ldq = pp.get("ldq0") or {}
     cur = pp.get("current") or {}
     lg = pp.get("loss_grid") or {}
@@ -568,7 +569,7 @@ def _build_calculator(wb, *, pp: Dict[str, Any], geo: Dict[str, Any],
     r = line(R_N, "Wire rows per slot", N0, "",
              "wire width is fixed by the slot — only the row count moves. "
              + (f"This build winds {wp0:g} in hand and splits each row into "
-                f"{ws0:g} series strips, so the coil is {turns0:g} turns; both "
+                f"{ws0:g} parallel strips, so the coil is {turns0:g} turns; both "
                 f"are fixed by the build, so the factors below scale on the row "
                 f"ratio."
                 if (wp0 > 1 or ws0 > 1) else
@@ -1690,15 +1691,16 @@ def build_datasheet(*, die: str, cfg: str, die_doc: Dict[str, Any],
     if _wsp > 1:
         one("Strips per row (wire_split)", _wsp,
             "the row is this many strips of wire_width laid side by side and "
-            "wired in SERIES, so each strip is a turn: the turn count, the EMF "
-            "and Kt multiply by it, the phase resistance by its square", 0)
+            "wired in PARALLEL within one turn: the turn count, the EMF and Kt "
+            "do not change, each strip carries its share of the current and the "
+            "width-direction AC loss falls", 0)
     one("Series turns per coil", _turns,
-        "(wire rows ÷ wires in hand) × strips per row — what the EMF, Kt and R "
-        "are built on", 0)
+        "wire rows ÷ wires in hand — what the EMF, Kt and R are built on "
+        "(strips add no turn)", 0)
     one("Parallel paths (connection)", wind.get("n_parallel") or 1, "", 0)
     one("Conductors in parallel per phase",
-        int(float(wind.get("n_parallel") or 1)) * int(_wp),
-        "paths × strands in hand — what the phase current divides over", 0)
+        int(float(wind.get("n_parallel") or 1)) * int(_wp) * int(_wsp),
+        "paths × strands in hand × strips — what the phase current divides over", 0)
     one("Wire height (mm)", geo.get("wire_height"), "", 3)
     one("Wire width (mm)", geo.get("wire_width"), "rectangular magnet wire", 3)
     a_phase = (float(geo.get("wire_width") or 0) * float(geo.get("wire_height") or 0)

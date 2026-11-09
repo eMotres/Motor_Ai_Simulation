@@ -25,44 +25,56 @@ consumer uses ``n_parallel x wire_parallel`` and nothing else has to know:
 psi and EMF /k, Kt and T /k, KV xk, R_phase and Ld/Lq /k^2, J per strand /k.
 
 ``wire_split`` (STRIPS PER WIRE ROW) is the third, and it is GEOMETRY FIRST.  N
-strips of ``wire_width`` each — ``wire_width`` IS one strip, the user sets it
+strips of ``wire_width`` each - ``wire_width`` IS one strip, the user sets it
 himself (2026-09-08: *"make the wire width 4.5 mm, the slot will get a bit
-bigger, I'd make the gap between wires 2·Wire Spacing X"*) — are laid SIDE BY SIDE across
+bigger, I'd make the gap between wires 2*Wire Spacing X"*) - are laid SIDE BY SIDE across
 the slot width with ``2 x wire_spacing_x`` of insulation between them.  So the
 wire footprint, and with it the slot the CAD cuts, GROWS::
 
     footprint = N * wire_width + (N - 1) * 2 * wire_spacing_x
 
 That is ``winding_footprint_mm``.  The strips are drawn, meshed and solved as
-separate conductors, one imposed net current each, so the slot holds
-``num_wires_per_slot x N`` CONDUCTORS (``conductors_per_slot``).
+separate conductors, so the slot holds ``num_wires_per_slot x N`` CONDUCTORS
+(``conductors_per_slot``).
 
-The N strips of a row are CONSECUTIVE SERIES TURNS — always.  There was a
-``wire_split_series`` flag for a few hours on 2026-09-08 offering the parallel
-reading too; the user removed it the same day (*"wire_split_series can be
-removed — we'll always only need the series connection of these two coils; a
-parallel connection would create circulating currents between them"*):
-strips lying side by side in a slot see different leakage flux, so wiring them in
-parallel drives circulating current between them, which this model does not
-solve and which the machine does not want.  So::
+THE STRIPS OF A ROW ARE IN PARALLEL WITHIN ONE TURN (owner 2026-11-09).  The
+purpose of the split is to cut a flat wire by its width into strips so the
+width-direction proximity (AC) loss falls; it is NOT a way to add turns.  So
+``wire_split`` adds NO turn: ``turns_per_coil`` stays ``num_wires_per_slot /
+wire_parallel`` whatever N is, and the N strips of a turn are N parallel
+conductors of that turn, each carrying ``1/N`` of the branch current::
 
-    turns/coil xN     psi_PM, back-EMF, V xN     Kt, torque xN     KV /N
-    R_phase, Ld, Lq xN^2      P_cu(DC) xN^2      copper area, mass xN
-    I per strip = I_phase / n_parallel / wire_parallel  (the FULL branch current)
+    turns/coil unchanged      psi_PM, back-EMF, V, Kt, torque unchanged   KV unchanged
+    I per strip = I_phase / n_parallel / wire_parallel / N
+    R_phase, P_cu(DC) unchanged for strips of the same total copper (N strips of
+    wire_width carry N x the copper of one: R falls /N against ONE strip)
+    solved AC copper falls with the strip width (proximity term ~ strip^2)
 
-The split never divides current: every strip carries the whole branch current,
-which is why ``n_parallel_effective`` does NOT carry N.  The same MMF (and
-therefore the same torque) comes back at ``I_phase / N``.  The current is the
-user's to set on the Electromagnetic tab — nothing here rescales it silently;
-``turns_per_coil``, ``R_phase_ohm`` and ``KV`` are reported so the multiplied
-voltage has a visible cause.
+Electrically a split is therefore one more parallel divider, exactly like the
+strands in hand, so ``n_parallel_effective`` is ``n_parallel x wire_parallel x
+N`` and nothing else has to know.  The model treats the N strips of a turn as
+EQUAL-CURRENT parallel conductors (each is a drawn, meshed conductor with its
+own imposed 1/N current, i.e. ideally transposed): the circulating current
+that unequal leakage-flux linkage would drive between untransposed side-by-side
+strips is NOT solved (it is the reason the 2026-09-08 reading wired them in
+series; the owner has since stated the intent is parallel, cutting AC loss).
 
-Only the SOLVED AC copper is measured on the STRIP rather than on the bar: each
-conductor is ``wire_width`` wide instead of ``N x wire_width``, so the
-width-direction proximity term falls as N^2 — that is what splitting a bar buys.
+Until 2026-11-09 the strips were counted as consecutive SERIES TURNS
+(``turns_per_coil x N``, ``n_parallel_effective`` without N): a split of
+``num_wires_per_slot = 17`` into two strips came out as 34 turns and doubled
+the ampere-turns.  That reading is retired.
+
+SLOT WIDTH.  The only extra width a split needs is the insulation between its
+strips - ``(N - 1) x 2 x wire_spacing_x`` on top of ``N x wire_width`` - which
+is exactly ``winding_footprint_mm``.  A split does NOT otherwise move the
+derived slot width: the strips of ONE turn share the turn's slot position, no
+extra row or column is added.  (A caller that cuts a 6.4 mm bar into two 3.2 mm
+strips with ``wire_spacing_x = 0.05`` gets a column of 6.5 mm: +0.1 mm.)  Keep
+``wire_width`` as the strip, and set ``wire_spacing_x`` to the real strip
+insulation.
 
 ``N = 1`` is the unsplit machine, bit for bit: one strip per row, no gap, no
-extra turn, no extra conductor.
+extra conductor.
 
 Until 2026-09-08 ``wire_split`` was ELECTRICAL ONLY: strips of
 ``wire_width / N`` with no CAD behind them, modelled as ideally transposed and
@@ -207,9 +219,9 @@ def conductors_per_slot(geo: Optional[Mapping[str, Any]]) -> int:
 
     ``num_wires_per_slot x wire_split``.  The strips are drawn, meshed and
     current-constrained one by one, so this is the polygon count per slot side
-    AND the ampere-turn multiplier the winding source is normalised by.  Since
-    the strips are SERIES turns each carrying the full branch current, this is
-    also exactly ``turns_per_coil x wire_parallel``.
+    AND the ampere-turn multiplier the winding source is normalised by.  The
+    strips of a turn are PARALLEL conductors, so this is exactly
+    ``turns_per_coil x wire_parallel x wire_split``.
     """
     g = dict(geo or {})
     nw = int(round(float(g.get("num_wires_per_slot", 0) or 0)))
@@ -262,24 +274,24 @@ def winding_footprint_mm(geo: Optional[Mapping[str, Any]]) -> float:
 def turns_per_coil(geo: Optional[Mapping[str, Any]]) -> int:
     """SERIES turns of one coil.
 
-    ``(num_wires_per_slot / wire_parallel) x wire_split``.  The slot holds
-    ``num_wires_per_slot`` wire ROWS — that is geometry, and the coating and the
-    copper mass are built on it — each row carrying ``wire_split`` strips, and
-    those strips are consecutive SERIES turns.  This is the ELECTRICAL turn
-    count the MMF, psi, Kt and R are built on.
+    ``num_wires_per_slot / wire_parallel``.  The slot holds ``num_wires_per_slot``
+    wire ROWS - that is geometry, and the coating and the copper mass are built
+    on it.  ``wire_split`` is NOT in the turn count (2026-11-09): the strips of a
+    row are PARALLEL conductors within ONE turn (they cut the AC loss, they do
+    not add turns), see the module docstring and ``n_parallel_effective``.  This
+    is the ELECTRICAL turn count the MMF, psi, Kt and R are built on.
     """
     g = dict(geo or {})
     k = wire_parallel_from_geo(g)
     nw = int(round(float(g.get("num_wires_per_slot", 0) or 0)))
-    rows = (nw // k if k else nw)
-    return rows * wire_split_from_geo(g)
+    return (nw // k if k else nw)
 
 
 def n_parallel_effective(n_parallel: Any,
                          geo: Optional[Mapping[str, Any]]) -> int:
-    """The divider every physics path uses: paths x strands in hand.
+    """The divider every physics path uses: paths x strands in hand x strips.
 
-    ``n_parallel x wire_parallel``.
+    ``n_parallel x wire_parallel x wire_split``.
 
     ``n_parallel`` stays what the CONNECTION label says (it is validated against
     the coil count and must not be moved); the strands in hand multiply it at
@@ -287,15 +299,16 @@ def n_parallel_effective(n_parallel: Any,
     same divider, which is what makes EMF/Kt scale as 1/k and R/Ld/Lq as 1/k^2
     for the strands.
 
-    ``wire_split`` is deliberately NOT here.  The strips of a row are SERIES
-    turns: they add no parallel path and divide no current, every one carries
-    this same branch current, and the split multiplies ``turns_per_coil``
-    instead.  (Wiring them in parallel — the reading this function carried for a
-    few hours on 2026-09-08 — would put circulating current between strips that
-    link different leakage flux, which is why the user removed it.)
+    ``wire_split`` IS here (2026-11-09, owner): the N strips of one turn are N
+    PARALLEL conductors of that turn, so each carries ``1/N`` of the branch
+    current and ``turns_per_coil`` does not move.  (The 2026-09-08 reading wired
+    the strips as consecutive series turns, which turned a split into extra
+    turns and doubled the ampere-turns.)  The strips are treated as equal-current
+    conductors: the circulating current between untransposed strips is not
+    solved.
     """
     npar = max(1, int(n_parallel or 1))
-    return npar * wire_parallel_from_geo(geo)
+    return npar * wire_parallel_from_geo(geo) * wire_split_from_geo(geo)
 
 
 def connection_label(n_series: int, n_parallel: int) -> str:
@@ -321,6 +334,18 @@ def connection_label(n_series: int, n_parallel: int) -> str:
 def coils_per_phase(num_slots: int) -> int:
     """C = coil groups per phase of the 3-phase single-layer winding (>= 1)."""
     return max(1, int(round(int(num_slots or 0) / 6)))
+
+
+def coil_count(num_slots: int, layers: int) -> int:
+    """Number of coils (= end-turn bundles) of a concentrated tooth-coil winding as actually wound.
+
+    A double-layer winding (``layers`` 2) has one coil per tooth: ``num_slots`` coils.  A single-layer winding
+    (``layers`` 1, layout ``A|a|b|B...``) winds only every second tooth: ``num_slots / 2`` coils.  Counting one
+    coil per tooth on a single-layer machine doubles the end-winding area (2026-11-09, open-frame thermal)."""
+    n = max(int(num_slots or 0), 0)
+    if int(layers or 1) >= 2:
+        return n
+    return max(n // 2, 1) if n else 0
 
 
 def connection_options(num_slots: int) -> list:

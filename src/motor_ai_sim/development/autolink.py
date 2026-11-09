@@ -16,6 +16,12 @@ holds that family; several projects = the same skip note.
 It never links into a project the die is not already in, never steals a motor that another project holds, and never fails
 the route that created the configuration (the caller logs and moves on).
 
+SAME DIE ONLY (2026-11-09, data leak): a duplicated study die, and any configuration created in it, was linked to the CUSTOMER
+project of the die it was copied from (the editor's loaded configuration counted as the "source", and ``derived_from`` was
+followed as ancestry).  Now a new configuration joins a project only when that project ALREADY holds a configuration of the
+SAME die (its names, published label included).  A die copy, a "save as new die" and a rename-copy are new dies: they are in
+no project until a person links them by hand.  Ancestry (``derived_from``) is no longer followed for linking.
+
 WHO (2026-11-07): only a verified admin writing the shared catalog starts a link (:func:`writes_shared_catalog`).  A link
 stores a grant for every member, and such a grant is for a configuration of the catalog.  A workspace copy stays with its
 author: it never joins a project and never makes a grant.
@@ -81,6 +87,19 @@ def _projects_of(sources: List[str], die: str) -> Dict[str, str]:
             # is linked under its own name
             found.setdefault(str(row["project_id"]), rdie if _names(rdie) & own else str(die))
     return found
+
+
+def _projects_in_die(die: str) -> set:
+    """Ids of the projects that already hold at least one configuration of ``die`` itself (names matched as in ``_names``)."""
+    own = _names(die)
+    ids = set()
+    for key, row in (store.load_index().get("motors") or {}).items():
+        if not isinstance(row, dict) or not row.get("project_id"):
+            continue
+        rdie = str(row.get("die") or str(key).partition("\0")[0])
+        if _names(rdie) & own:
+            ids.add(str(row["project_id"]))
+    return ids
 
 
 def _link(project_id: str, die: str, config: str, actor: str) -> bool:
@@ -156,7 +175,7 @@ def writes_shared_catalog() -> bool:
 
 
 def autolink_new_config(die: str, config: str, *, copied_from: Optional[str] = None, source_config: Optional[str] = None,
-                        actor: str = "", sources: Optional[List[str]] = None) -> List[str]:
+                        actor: str = "", sources: Optional[List[str]] = None) -> List[str]:  # noqa: ARG001 - ``sources`` kept for callers
     """Link ``die/config`` to the ONE project that holds its source motor.  Returns the project ids it joined (0 or 1).
 
     ``source_config`` names the configuration the new one was copied from, in ``copied_from`` (another die) or in ``die``
@@ -175,8 +194,11 @@ def autolink_new_config(die: str, config: str, *, copied_from: Optional[str] = N
         reason = "the source configuration is held by more than one project"
     else:
         source = str(copied_from or die)
-        candidates = _projects_of(sources or source_dies(die, copied_from), die)
+        candidates = _projects_of([die], die)               # the die itself, never its ancestors (a copy is a new die)
         reason = "no source configuration named and the die is in more than one project"
+    # never across a die: only a project that already holds this very die may take a new variant of it
+    in_die = _projects_in_die(die)
+    candidates = {pid: c for pid, c in candidates.items() if pid in in_die}
     if not candidates:
         return []                                           # the source motor is in no project: nothing to join
     if len(candidates) > 1:

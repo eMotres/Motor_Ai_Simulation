@@ -55,6 +55,7 @@ import { createErrorText, createPayload, createReady } from '../createProject';
   import { useProjectStripContext } from '../projectStripContext';
   import { SharedComparisonTable } from '../../../components/compare/SharedComparisonTable';
   import { developmentComparisonColumns, developmentComparisonRows } from '../comparisonRows';
+  import { specPointRefs } from '../specPoints';
   import { claimProjectOpenIntent, projectOpenEvent, restoreProjectOpenIntent } from '../projectOpenIntent.ts';
   import { filterPickerCatalog, groupPickerCatalog, pickerDisplayLabel, pickerReasonKey, snapshotSourceKey } from '../pickerModel';
   import { acceptedProjectStatus, allowedProjectStatuses, cancelProjectStatus, pendingStatusForProject, proposeProjectStatus, visibleProjectVersions } from '../motorStatus';
@@ -711,7 +712,7 @@ export default function DevelopmentPage() {
         // history snapshots sit under their variant and show only in "All versions" (owner 2026-10-26)
         const versions = visibleProjectVersions(motors, snapshots, showAllVersions);
         const visibleMotors = showAllVersions ? orderByGroup(versions) : latestAndRecommended(versions);
-        const rows = developmentComparisonRows(visibleMotors);
+        const rows = developmentComparisonRows(visibleMotors, specPointRefs(spec?.draft as SpecDraft | undefined));
         const rowMotors = rows.map((r) => r.motor);
         const stepNote = (m: ProjectMotor) => m.note ? <Typography data-testid="step-note" sx={{ fontSize: 13, color: 'var(--text-2)', whiteSpace: 'normal', maxWidth: 640 }}>{m.note}</Typography> : null;
         const headerRow = (colSpan: number, accent: string, indent: boolean, content: React.ReactNode, strong = false) => <Box component="tr"><Box component="td" colSpan={colSpan} data-recommended={strong ? 'true' : undefined} sx={{ pl: indent ? 3.2 : 1.6, pr: 1.1, py: 0.55, bgcolor: strong ? 'rgba(245,158,11,0.10)' : 'var(--panel-2)', borderTop: indent ? undefined : '1px solid var(--line-soft)', borderBottom: '1px solid var(--line-soft)', boxShadow: strong ? `inset 9px 0 0 ${accent}` : `inset 4px 0 0 ${accent}`, whiteSpace: 'normal' }}><Box sx={{ position: 'sticky', left: 0, width: motorsViewW ? Math.max(motorsViewW - 48, 280) : '100%', maxWidth: motorsViewW ? Math.max(motorsViewW - 48, 280) : undefined, boxSizing: 'border-box' }}>{content}</Box></Box></Box>;

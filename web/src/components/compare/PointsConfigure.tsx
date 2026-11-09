@@ -45,6 +45,7 @@ import { openProjectMotor } from '../../lib/openProjectMotor';
 import { nsT } from '../../i18n/nsT';
 import { stepLabels } from '../../modules/development/stepSeries';
 import { specBatteryView } from '../../modules/development/specBattery';
+import { dutyInfoOf, filterToSpecPoints, specPointRefs, visibleSteps, type SpecPointRef } from '../../modules/development/specPoints';
 import { useProjectFocusStore } from '../../stores/projectFocusStore';
 import { useUIStore } from '../../stores/uiStore';
 
@@ -73,6 +74,14 @@ const PointsConfigure: React.FC<Props> = ({ view, loadedDuty }) => {
   const reloadMotors = async () => { setStepsTick((n) => n + 1); };
   const [steps, setSteps] = useState<MotorPointVariant[]>([]);
   const [stepIndex, setStepIndex] = useState(-1);
+  // owner 2026-11-09: a project page shows only the specification's points + one cold no-load duty (see modules/development/specPoints)
+  const [specPoints, setSpecPoints] = useState<SpecPointRef[]>([]);
+  const shownView = useMemo(() => {
+    if (!focus || !view || specPoints.length === 0) return view;
+    const withPoint = (view.duties ?? []).filter((d) => d.has_result === true);
+    const kept = new Set(filterToSpecPoints(withPoint, dutyInfoOf, specPoints));
+    return { ...view, duties: (view.duties ?? []).filter((d) => d.has_result !== true || kept.has(d)) };
+  }, [view, focus, specPoints]);
   const [duty, setDuty] = useState<string | null>(() => pickPointDuty(view, loadedDuty));
   const [kind, setKind] = useState<FieldKind | null>(null);
   const [field, setField] = useState<{ key: string; value: StoredField | null; error: string; missing?: boolean } | null>(null);
@@ -84,14 +93,15 @@ const PointsConfigure: React.FC<Props> = ({ view, loadedDuty }) => {
 
   const motorKey = `${view.die}\u0000${view.config}`;
   // a new motor (or the same one reloaded) restarts the mode at the loaded duty; the user's own switch is kept otherwise
-  useEffect(() => { setDuty((cur) => pickPointDuty(view, loadedDuty, cur)); cache.current.clear(); setField(null); }, [view, loadedDuty]);
+  useEffect(() => { setDuty((cur) => pickPointDuty(shownView, loadedDuty, cur)); cache.current.clear(); setField(null); }, [shownView, loadedDuty]);
 
   useEffect(() => {
-    setSpecBattery(null);
+    setSpecBattery(null); setSpecPoints([]);
     if (!focus) return;
     let cancelled = false;
     developmentApi.spec(focus.id).then((sp) => {
       if (cancelled) return;
+      setSpecPoints(specPointRefs(sp.draft as never));
       const raw = ((sp.draft?.fields ?? {}) as Record<string, unknown>)['2_1'];
       const value = raw && typeof raw === 'object' && !Array.isArray(raw) && 'value' in raw ? (raw as { value?: unknown }).value : raw;
       if (value && typeof value === 'object' && ['dc_source', 'ac_mains'].includes(String((value as Record<string, unknown>).supply_type))) return;      // a DC power source or AC mains is not a battery: Configure keeps its own default
@@ -109,14 +119,16 @@ const PointsConfigure: React.FC<Props> = ({ view, loadedDuty }) => {
     developmentApi.motorPoints(focus.id, { showAll: true })
       .then((answer) => {
         if (cancelled) return;
-        const index = findVariantIndex(answer.variants, view.die, view.config);
-        if (index >= 0) { setSteps(answer.variants); setStepIndex(index); }
+        // trial variants stay in storage but are not shown (owner 2026-11-09); the open one is kept
+        const shown = visibleSteps(answer.variants, view.die, view.config);
+        const index = findVariantIndex(shown, view.die, view.config);
+        if (index >= 0) { setSteps(shown); setStepIndex(index); }
       })
       .catch(() => { /* no project steps: the motor is still shown */ });
     return () => { cancelled = true; };
   }, [focus?.id, motorKey, stepsTick]);
 
-  const points = useMemo(() => pointDuties(view), [view]);
+  const points = useMemo(() => pointDuties(shownView), [shownView]);
   const current: MotorViewDuty | null = points.find((d) => d.duty === duty) ?? null;
   const kinds = storedFieldKinds(current);
   const otherPoint = otherPointFields(current);

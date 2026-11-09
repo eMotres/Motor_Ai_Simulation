@@ -66,3 +66,44 @@ test('Motors table rows are cut the same way', () => {
   assert.equal(developmentComparisonRows([motor]).length, 7);
   assert.equal(developmentComparisonRows([motor], specPointRefs(draft)).length, 6);
 });
+
+// ── regression: seven duties, all spec rows (generic names; numbers of a 30 kW class machine) ─────────────────────────────────────
+const sevenSpec = { fields: { key_points: { status: 'filled', value: [
+  { row_id: 'r1', name: 'S1 motor', torque_Nm: 47.7, speed_rpm: 6000, duration_s: 'continuous' },
+  { row_id: 'r2', name: 'S1 generator', torque_Nm: 47.7, speed_rpm: 6000, duration_s: 'continuous' },
+  { row_id: 'r3', name: 'Motor peak 60 s', torque_Nm: 63.7, speed_rpm: 6000, duration_s: 60 },
+  { row_id: 'r4', name: 'Generator peak 40 kW', torque_Nm: 63.7, speed_rpm: 6000, duration_s: 10 },
+  { row_id: 'r5', name: 'Start 25 Nm', torque_Nm: 25, speed_rpm: 1000, duration_s: 10 },
+  { row_id: 'r6', name: 'Start 6 kW', power_W: 6000, speed_rpm: 1000, duration_s: 10 },
+] } } };
+const solved = (name, rpm, mode, req, solvedTorque, extra = {}) => ({
+  duty: name, operating_point: { rpm, mode, ...req }, comparison: solvedTorque === null ? {} : { torque_nm: solvedTorque }, ...extra,
+});
+const sevenDuties = [
+  solved('rated_47.7Nm_6000', 6000, 'motor', { torque_nm: 47.7 }, 47.7),
+  solved('gen_30kW_6000', 6000, 'generator', { power_kw: 30 }, -49.0),
+  solved('peak_motor_40kW_6000', 6000, 'motor', {}, 65.3),
+  solved('peak_gen_40kW_6000', 6000, 'generator', {}, -66.09),          // +3.75 % solved, negative torque: still the generator peak
+  solved('start_25Nm_1000', 1000, 'motor', { torque_nm: 25 }, 25.2),
+  solved('start_57Nm_1000', 1000, 'motor', { torque_nm: 57.3 }, 57.3),   // 6 kW at 1000 rpm = 57.3 N.m
+  solved('noload_7200', 7200, 'motor', {}, null, { sources: { em: { magnet_temp_c: 20, coil_temp_c: 20 } } }),
+  solved('noload_9000_hot', 9000, 'motor', {}, null, { sources: { em: { magnet_temp_c: 90, coil_temp_c: 120 } } }),
+  solved('helper_mid', 4000, 'motor', { torque_nm: 5 }, 5),
+];
+test('regression: all seven duties of the example are kept, the helpers are not', () => {
+  const refs = specPointRefs(sevenSpec);
+  assert.equal(refs.length, 6);
+  assert.equal(refs[1].mode, 'generator');
+  const out = filterToSpecPoints(sevenDuties, dutyInfoOf, refs);
+  assert.deepEqual(names(out), sevenDuties.slice(0, 7).map((d) => d.duty));
+});
+test('a motor peak duty cannot serve the generator peak row (like with like)', () => {
+  const refs = specPointRefs(sevenSpec).filter((r) => r.rowId === 'r4');
+  assert.equal(filterToSpecPoints([solved('peak_motor_40kW_6000', 6000, 'motor', {}, 65.3), solved('other', 1, 'motor', {}, 1)], dutyInfoOf, refs).length, 2); // no match: unfiltered
+  const both = filterToSpecPoints([solved('peak_motor_40kW_6000', 6000, 'motor', {}, 65.3), solved('peak_gen', 6000, 'generator', {}, 65.3), solved('other', 1, 'motor', {}, 1)], dutyInfoOf, refs);
+  assert.deepEqual(names(both), ['peak_gen']);
+});
+test('the cold no-load duty is read from the EM run temperature', () => {
+  assert.equal(dutyInfoOf(sevenDuties[6]).tempC, 20);
+  assert.equal(dutyInfoOf(sevenDuties[7]).tempC, 120);
+});

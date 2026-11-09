@@ -15,7 +15,7 @@
  * Nothing is interpolated or invented; a missing value stays "-", a missing kind says "not computed".
  */
 import React, { Suspense, lazy, useEffect, useMemo, useRef, useState } from 'react';
-import { Box, Button, Chip, Slider, ToggleButton, ToggleButtonGroup, Tooltip, Typography } from '@mui/material';
+import { Box, Button, Chip, Menu, MenuItem, Slider, ToggleButton, ToggleButtonGroup, Tooltip, Typography } from '@mui/material';
 import { useTranslation } from 'react-i18next';
 import HelpTip from '../common/HelpTip';
 import { PANEL, LABEL, fmt } from '../common/ResultTiles';
@@ -46,6 +46,8 @@ import { nsT } from '../../i18n/nsT';
 import { stepLabels } from '../../modules/development/stepSeries';
 import { specBatteryView } from '../../modules/development/specBattery';
 import { dutyInfoOf, filterToSpecPoints, specPointRefs, visibleSteps, type SpecPointRef } from '../../modules/development/specPoints';
+import { projectsOfMotor, type FocusProject } from '../../modules/development/projectFocus';
+import { projectOpenEvent, projectOpenStorageKey } from '../../modules/development/projectOpenIntent';
 import { useProjectFocusStore } from '../../stores/projectFocusStore';
 import { useUIStore } from '../../stores/uiStore';
 
@@ -75,6 +77,25 @@ const PointsConfigure: React.FC<Props> = ({ view, loadedDuty }) => {
   const [steps, setSteps] = useState<MotorPointVariant[]>([]);
   const [stepIndex, setStepIndex] = useState(-1);
   // owner 2026-11-09: a project page shows only the specification's points + one cold no-load duty (see modules/development/specPoints)
+  // "Back to project" without a remembered project (after a reload, or a motor opened another way): the projects this die / configuration
+  // is linked to, from the project list the page already reads
+  const [linkedProjects, setLinkedProjects] = useState<FocusProject[]>([]);
+  const [backAnchor, setBackAnchor] = useState<HTMLElement | null>(null);
+  useEffect(() => {
+    setLinkedProjects([]);
+    if (focus) return;
+    let cancelled = false;
+    developmentApi.list()
+      .then((list) => { if (!cancelled) setLinkedProjects(projectsOfMotor(list, view.die, view.config, (view as { canonical_die?: string }).canonical_die)); })
+      .catch(() => { /* no list: no button */ });
+    return () => { cancelled = true; };
+  }, [focus?.id, view.die, view.config]);
+  const openProjectPage = (project: FocusProject) => {
+    setBackAnchor(null);
+    try { sessionStorage.setItem(projectOpenStorageKey, project.id); } catch { /* the event still opens it while the page is mounted */ }
+    setActiveTab('development' as never);
+    window.dispatchEvent(new CustomEvent(projectOpenEvent, { detail: { projectId: project.id } }));
+  };
   const [specPoints, setSpecPoints] = useState<SpecPointRef[]>([]);
   const shownView = useMemo(() => {
     if (!focus || !view || specPoints.length === 0) return view;
@@ -195,7 +216,16 @@ const PointsConfigure: React.FC<Props> = ({ view, loadedDuty }) => {
         <Typography sx={{ fontSize: 12, color: 'var(--text-2)' }}>{view.die} / {view.config}</Typography>
         <Box sx={{ flex: 1 }} />
         {focus && stepIndex >= 0 && steps[stepIndex] && <VariantControls projectId={focus.id} motor={motorOf(steps[stepIndex])} staff={staff} t={t} showAll onChanged={reloadMotors} />}
-        {focus && steps.length > 0 && <Button size="small" onClick={() => setActiveTab('development' as never)}>{t('points.backToProject')}</Button>}
+        {(() => {
+          const targets: FocusProject[] = focus ? (steps.length > 0 ? [focus] : []) : linkedProjects;
+          if (targets.length === 0) return null;
+          return <>
+            <Button size="small" onClick={(e) => (targets.length === 1 ? openProjectPage(targets[0]) : setBackAnchor(e.currentTarget))}>{t('points.backToProject')}</Button>
+            <Menu anchorEl={backAnchor} open={!!backAnchor && targets.length > 1} onClose={() => setBackAnchor(null)}>
+              {targets.map((p) => <MenuItem key={p.id} onClick={() => openProjectPage(p)} sx={{ fontSize: 13 }}>{p.title ?? p.id}</MenuItem>)}
+            </Menu>
+          </>;
+        })()}
       </Box>
       {openError && <Typography role="alert" sx={{ fontSize: 12, color: 'error.main' }}>{t('points.loadFailed')}: {openError}</Typography>}
 

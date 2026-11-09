@@ -228,3 +228,20 @@ export function computeNodeTotals(
     memTotal: nodeMemPct, memApp, memOutside, memIdle,
   };
 }
+
+/** "Now" table: a row counts as an idle service when it is NOT a queue job and
+ *  its CPU share of the server is below `thresholdPct` (unknown CPU = idle).
+ *  Jobs are never hidden, whatever their load -- a queued/stalled job at 0 %
+ *  is exactly what an admin needs to see. Order inside each part is kept. */
+export const IDLE_CPU_PCT = 0.5;
+export function splitIdleRows<T extends { isJob: boolean; cpuPct: number | null }>(
+  rows: T[], thresholdPct: number = IDLE_CPU_PCT,
+): { active: T[]; idle: T[] } {
+  const active: T[] = [];
+  const idle: T[] = [];
+  for (const r of rows) {
+    if (!r.isJob && (r.cpuPct == null || r.cpuPct < thresholdPct)) idle.push(r);
+    else active.push(r);
+  }
+  return { active, idle };
+}

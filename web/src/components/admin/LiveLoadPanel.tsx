@@ -37,6 +37,7 @@ import {
   mergeNodeSeries, mergeLoadSeries, isCollectingHistory, serverLabel, threadsUsed,
   cpuTooltipValue, memTooltipValue, ramNowLabel, parseServerSeriesKey, clusterLine,
   computeXAxis, sortByField, levelColor, pctCell, computeNodeTotals,
+  splitIdleRows, IDLE_CPU_PCT,
   type XAxisSpec, type SortDir,
 } from './liveLoadSeries';
 import {
@@ -223,6 +224,8 @@ const LiveLoadPanel: React.FC<{ remote?: string }> = ({ remote }) => {
   // "Now" table sort -- default CPU % descending (owner's rule).
   const [sortKey, setSortKey] = useState<SortKey>('cpuPct');
   const [sortDir, setSortDir] = useState<SortDir>('desc');
+  // "Now" table: per node, are the idle services (folded into one line) shown?
+  const [idleOpen, setIdleOpen] = useState<Record<string, boolean>>({});
   const onSort = (key: SortKey) => {
     if (key === sortKey) setSortDir(sortDir === 'desc' ? 'asc' : 'desc');
     else { setSortKey(key); setSortDir('desc'); }
@@ -348,8 +351,19 @@ const LiveLoadPanel: React.FC<{ remote?: string }> = ({ remote }) => {
     rowsByNode.set(r.node, arr);
   }
   type FlatEntry = { flatKey: string } & (
-    { kind: 'totals'; node: string; totals: ReturnType<typeof computeNodeTotals> } | { kind: 'row'; row: ProcRow });
+    { kind: 'totals'; node: string; totals: ReturnType<typeof computeNodeTotals> } | { kind: 'row'; row: ProcRow }
+    | { kind: 'idle'; node: string; count: number; open: boolean });
   const flatRows: FlatEntry[] = [];
+  // Active rows first; idle outside-app services (always-on ERP, analytics,
+  // databases at ~0 % CPU) fold into one clickable line per node.
+  const pushRows = (node: string, rows: ProcRow[]) => {
+    const { active, idle } = splitIdleRows(sortByField(rows, SORT_GETTERS[sortKey], sortDir));
+    for (const row of active) flatRows.push({ flatKey: row.procKey, kind: 'row', row });
+    if (!idle.length) return;
+    const open = !!idleOpen[node];
+    flatRows.push({ flatKey: `idle:${node}`, kind: 'idle', node, count: idle.length, open });
+    if (open) for (const row of idle) flatRows.push({ flatKey: row.procKey, kind: 'row', row });
+  };
   for (const n of nodesNow) {
     const rows = rowsByNode.get(n.id) ?? [];
     rowsByNode.delete(n.id);
@@ -358,17 +372,11 @@ const LiveLoadPanel: React.FC<{ remote?: string }> = ({ remote }) => {
     const totals = computeNodeTotals(n.cpu ?? 0, nodeMemPct,
       jobPcts.map((r) => r.cpuPct ?? 0), jobPcts.map((r) => r.memPct ?? 0));
     flatRows.push({ flatKey: `totals:${n.id}`, kind: 'totals', node: n.id, totals });
-    for (const row of sortByField(rows, SORT_GETTERS[sortKey], sortDir)) {
-      flatRows.push({ flatKey: row.procKey, kind: 'row', row });
-    }
+    pushRows(n.id, rows);
   }
   // a row whose `node` matched no registered node (no node agent there yet)
   // still shows, ungrouped, rather than silently vanishing.
-  for (const rows of rowsByNode.values()) {
-    for (const row of sortByField(rows, SORT_GETTERS[sortKey], sortDir)) {
-      flatRows.push({ flatKey: row.procKey, kind: 'row', row });
-    }
-  }
+  for (const [node, rows] of rowsByNode.entries()) pushRows(node, rows);
   const hasAnyRow = flatRows.some((e) => e.kind === 'row');
 
   const loadTooltip = (value: unknown, _name: unknown, entry: { dataKey?: unknown }) => {
@@ -564,7 +572,9 @@ const LiveLoadPanel: React.FC<{ remote?: string }> = ({ remote }) => {
           + 'the WHOLE app process tree’s memory (Python doesn’t split heap between concurrent jobs), so '
           + 'concurrent jobs show the same RSS; the totals row below takes the max of them, not the sum, for '
           + 'exactly that reason. “threads” = cores currently in use (same number CPU % is built from), not a '
-          + 'literal OS thread count. Sort by clicking a column header.'} />
+          + 'literal OS thread count. Always-on services under ' + IDLE_CPU_PCT + ' % CPU fold into one '
+          + '“idle services” line per server (click it to expand); jobs are always listed. '
+          + 'Sort by clicking a column header.'} />
       </Box>
       <Table size="small" sx={{ '& td, & th': { whiteSpace: 'nowrap' } }}>
         <TableHead><TableRow>
@@ -577,7 +587,15 @@ const LiveLoadPanel: React.FC<{ remote?: string }> = ({ remote }) => {
           <TableCell />
         </TableRow></TableHead>
         <TableBody>
-          {flatRows.map((entry) => entry.kind === 'totals' ? (
+          {flatRows.map((entry) => entry.kind === 'idle' ? (
+            <TableRow key={entry.flatKey} hover sx={{ cursor: 'pointer' }}
+              onClick={() => setIdleOpen((o) => ({ ...o, [entry.node]: !o[entry.node] }))}>
+              <TableCell colSpan={COLUMNS.length + 1} sx={{ fontSize: 11, color: 'var(--text-3)' }}
+                title={`Not queue jobs: always-on services under ${IDLE_CPU_PCT} % CPU. Click to ${entry.open ? 'hide' : 'show'}.`}>
+                {entry.open ? '▾' : '▸'} idle services ({entry.count})
+              </TableCell>
+            </TableRow>
+          ) : entry.kind === 'totals' ? (
             <TableRow key={entry.flatKey} sx={{ bgcolor: 'var(--panel-3, rgba(255,255,255,0.05))' }}>
               <TableCell colSpan={5} sx={{ fontSize: 11, fontWeight: 700 }}>{entry.node} — total</TableCell>
               <TableCell><MiniBar pct={entry.totals.cpuTotal} /></TableCell>

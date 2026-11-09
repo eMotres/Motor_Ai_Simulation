@@ -403,7 +403,11 @@ def _w(p: Path, text: str) -> None:
     p.write_text(text, encoding="utf-8")
 
 
-def test_catalog_manifest_is_an_allow_list(env):
+def test_catalog_manifest_is_an_allow_list(env, monkeypatch):
+    from motor_ai_sim import motor_access as MA
+    MA._CFG_VIS_CACHE.clear()
+    (env["tmp"] / "die_access.json").write_text(json.dumps({"OPEN1": {"visibility": "public"}}), encoding="utf-8")
+    monkeypatch.setattr(MA, "_DIE_ACCESS_FILE", env["tmp"] / "die_access.json")
     root = env["tmp"] / "shared"
     _w(root / "materials_library.yaml", "steel: {}\n")
     _w(root / "dies" / "OPEN1" / "die.yaml", "name: OPEN1\n")

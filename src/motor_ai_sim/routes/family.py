@@ -2867,7 +2867,7 @@ def retired_dies(_w: dict = Depends(require_catalog_write)):
 # ── configuration ────────────────────────────────────────────────────────────
 
 def _autolink_new_config(die: str, cfg: str, w: Optional[dict] = None, copied_from: Optional[str] = None,
-                         source_config: Optional[str] = None) -> None:
+                         source_config: Optional[str] = None, transition: bool = False) -> None:
     """A new variant of a project's motor joins the project at once (owner 2026-10-27, ``development.autolink``).  Never
     raises: the configuration is already saved, the link is an addition.
 
@@ -2879,6 +2879,8 @@ def _autolink_new_config(die: str, cfg: str, w: Optional[dict] = None, copied_fr
         if isinstance(w, dict) and isinstance(w.get("user"), dict):
             actor = str(w["user"].get("email") or "").strip().lower()
         kw = {"source_config": source_config} if source_config else {}
+        if transition:
+            kw["transition"] = True
         joined = autolink.autolink_new_config(die, cfg, copied_from=copied_from, actor=actor, **kw)
         if joined:
             log.info("family: new configuration '%s/%s' linked to project(s) %s", die, cfg, ", ".join(joined))
@@ -3173,7 +3175,7 @@ def duplicate_die(die: str, req: DieDuplicate,
     d["locked"] = False
     d["created"] = datetime.now().isoformat(timespec="seconds")
     # where the copy came from: a configuration later created in it joins the project(s) of the original (development.autolink)
-    d["derived_from"] = {"die": die, "at": d["created"]}
+    d["derived_from"] = {"die": die, "at": d["created"], "origin": "duplicate"}
     _save_yaml(dst_dir / "die.yaml", d)
     cfgs = []
     _acc = catalog_access(_w.get("authorization"))
@@ -4702,7 +4704,7 @@ def _auto_transition_die(die: str, cfg: Optional[str], duty: Optional[str],
         nd = _load_yaml(_die_file(name), "die")
         nd["geometry"] = dict(live_geo)
         nd["derived_from"] = {
-            "die": die, "config": cfg, "duty": duty,
+            "die": die, "config": cfg, "duty": duty, "origin": "transition",
             "at": datetime.now().isoformat(timespec="seconds"),
             "changed": [f"{x['key']} {x['die']} → {x['live']}" for x in diffs]}
         try:
@@ -4729,7 +4731,7 @@ def _auto_transition_die(die: str, cfg: Optional[str], duty: Optional[str],
             target_cfg = _copy_config_into(die, target, cfg)
             new_variant = True
     if new_variant and target_cfg:
-        _autolink_new_config(target, target_cfg, None, copied_from=die, source_config=cfg)
+        _autolink_new_config(target, target_cfg, None, copied_from=die, source_config=cfg, transition=True)
     # The configurations now sit on the NEW lamination: a connection that
     # factored the old slot count may not factor this one (2S on 48 slots).
     _repick_die_windings(target, skip_locked=not created)
@@ -4870,7 +4872,7 @@ def _transition_config_to_own_die(die: str, cfg: Optional[str], duty: Optional[s
         nd.update({"name": name, "locked": False, "created": at,
                    "geometry": dict(live_geo),
                    "derived_from": {
-                       "die": die, "config": cfg, "duty": duty, "at": at,
+                       "die": die, "config": cfg, "duty": duty, "at": at, "origin": "transition",
                        "reason": ("edit of one configuration on a die shared with others"
                                   if reason == "shared_die" else
                                   "duty save from a build that is another lamination"),
@@ -4897,7 +4899,7 @@ def _transition_config_to_own_die(die: str, cfg: Optional[str], duty: Optional[s
             target_cfg = _copy_config_into(die, target, cfg)
             copied = True
     if copied and target_cfg:
-        _autolink_new_config(target, target_cfg, None, copied_from=die, source_config=cfg)
+        _autolink_new_config(target, target_cfg, None, copied_from=die, source_config=cfg, transition=True)
     import json as _json
     at = datetime.now().isoformat(timespec="seconds")
     _ctx_file().write_text(_json.dumps({
@@ -4996,9 +4998,87 @@ def _move_duty_save(die: str, cfg: str, duty: str, live_geo: dict, live_build: d
     return out
 
 
+def _is_foreign_save(die_doc: dict, prev_geo: Optional[dict]) -> List[str]:
+    """Die-level keys on which the PRE-save live machine differs from ``die_doc``'s snapshot
+    (the "stranger guard", 2026-08-24); empty = the save follows an edit of this die's own machine."""
+    foreign: List[str] = []
+    if not prev_geo:
+        return foreign
+    _die_g = die_doc.get("geometry") or {}
+    # inputs only: a stale derived copy on either side is not a stranger
+    # (2026-09-30, motor_geometry.is_compared_geometry_input)
+    from motor_ai_sim.geometry.motor_geometry import is_compared_geometry_input
+    for k, dv in _die_g.items():
+        if (k in FREE_GEO_KEYS or not isinstance(dv, (int, float))
+                or not is_compared_geometry_input(k, _die_g, prev_geo)):
+            continue
+        pv = prev_geo.get(k)
+        if isinstance(pv, (int, float)) and abs(float(dv) - float(pv)) > 1e-6:
+            foreign.append(k)
+    return foreign
+
+
+def _diff_words(diffs: list) -> List[str]:
+    return [f"{x['key']} {x['die']} \u2192 {x['live']}" for x in diffs]
+
+
+def preview_die_transition(saved_geo: dict, prev_geo: Optional[dict] = None) -> Optional[dict]:
+    """Would saving ``saved_geo`` as the live machine move the active configuration onto ANOTHER die
+    (a new or an existing one)?  Side-effect free: nothing is written, nothing is created.
+
+    Mirrors the decisions of :func:`sync_active_die_geometry` (a die-defining edit of an unlocked die,
+    or a lamination-shaping edit of a die shared with other configurations).  Returns ``None`` when the
+    save stays inside the active die, else ``{"reason", "from_die", "from_config", "to_die",
+    "creates_die", "diffs"}`` (``to_die`` is the name a new die would get, or the existing die that
+    already is this lamination).  Used by ``PUT /api/geometry`` to refuse a transition the caller did
+    not allow (``allow_die_transition: false``) BEFORE anything is written."""
+    ctx = _read_ctx()
+    if not ctx:
+        return None
+    die = str(ctx.get("die") or "")
+    try:
+        d = _load_yaml(_die_file(die), "die")
+    except HTTPException:
+        return None
+    if bool(d.get("locked", True)):
+        return None
+    geo = {k: v for k, v in dict(saved_geo or {}).items() if v is not None}
+    if not geo:
+        return None
+    _die_prev = dict(d.get("geometry") or {})
+    diffs = die_identity_diffs(_die_prev, geo)
+    reason, others, find = "die_identity", [], _matching_die
+    if not diffs:
+        if _is_foreign_save(d, prev_geo):
+            return None
+        diffs = die_shape_diffs(_die_prev, geo)
+        if not diffs:
+            return None
+        others = _other_configs(die, ctx.get("config"))
+        if not others:
+            return None
+        reason, find = "shared_die", _matching_lamination
+    target = find(geo, exclude=die)
+    creates = target is None
+    if creates:
+        try:
+            target = _unique_die_name(_check_name(_die_transition_name(die, _die_prev, geo, diffs), "die"))
+        except HTTPException:
+            target = None
+    return {"reason": reason, "from_die": die, "from_config": ctx.get("config"),
+            "to_die": target, "creates_die": creates, "diffs": _diff_words(diffs)}
+
+
 def sync_active_die_geometry(saved_geo: dict,
-                             prev_geo: Optional[dict] = None) -> Optional[str]:
+                             prev_geo: Optional[dict] = None, *,
+                             allow_transition: bool = True,
+                             report: Optional[dict] = None) -> Optional[str]:
     """Refresh the ACTIVE die's geometry snapshot after a geometry save.
+
+    ``allow_transition=False`` (2026-11-09): a save that WOULD move the active configuration to another
+    die does not move it (no die is created, no context changes) and says so in ``report``
+    (``{"blocked": True, ...}``); ``report`` (an out-dict) also receives the transition that DID happen
+    (``{"reason", "from_die", "to_die", "created", "config", "diffs"}``).
 
     die.yaml's geometry was written ONCE — at creation (or copied verbatim by
     duplicate_die) — and nothing ever updated it, while an UNLOCKED die is by
@@ -5062,6 +5142,13 @@ def sync_active_die_geometry(saved_geo: dict,
         # bf246ff/f46913c papered over with offers).  Now the whole
         # configuration/duty moves WITH the machine: find or mint the die this
         # lamination is and activate it there, in the same request.
+        if not allow_transition:
+            if report is not None:
+                report.update({"blocked": True, "reason": "die_identity", "from_die": die,
+                               "from_config": ctx.get("config"), "diffs": _diff_words(_diffs)})
+            log.warning("family: die '%s' identity changed (%s) - die transition NOT allowed by the caller, "
+                        "the active configuration stays on the die", die, "; ".join(_ident))
+            return None
         try:
             out = _auto_transition_die(die, ctx.get("config"), ctx.get("duty"),
                                        d, geo, _diffs)
@@ -5075,6 +5162,10 @@ def sync_active_die_geometry(saved_geo: dict,
             except Exception as _ce:   # noqa: BLE001 — never fail the save
                 log.warning("family: could not release the context either: %s", _ce)
             return None
+        if report is not None and out:
+            report.update({"reason": "die_identity", "from_die": die, "to_die": out.get("die"),
+                           "created": bool(out.get("created")), "config": out.get("config"),
+                           "diffs": _diff_words(_diffs)})
         return (out or {}).get("die")
     # ── The stranger guard ───────────────────────────────────────────────────
     # Sync follows EDITS of this die's own machine — it never adopts a foreign
@@ -5084,18 +5175,7 @@ def sync_active_die_geometry(saved_geo: dict,
     # and adopting it is exactly how the ripple-optimized 150 was destroyed
     # (incident 2026-08-24).  Refuse loudly instead.
     if prev_geo:
-        _die_g = d.get("geometry") or {}
-        _foreign = []
-        # inputs only: a stale derived copy on either side is not a stranger
-        # (2026-09-30, motor_geometry.is_compared_geometry_input)
-        from motor_ai_sim.geometry.motor_geometry import is_compared_geometry_input
-        for k, dv in _die_g.items():
-            if (k in FREE_GEO_KEYS or not isinstance(dv, (int, float))
-                    or not is_compared_geometry_input(k, _die_g, prev_geo)):
-                continue
-            pv = prev_geo.get(k)
-            if isinstance(pv, (int, float)) and abs(float(dv) - float(pv)) > 1e-6:
-                _foreign.append(k)
+        _foreign = _is_foreign_save(d, prev_geo)
         if _foreign:
             log.warning(
                 "family: REFUSED to sync die '%s' — the machine being saved "
@@ -5127,6 +5207,13 @@ def sync_active_die_geometry(saved_geo: dict,
     if _shape:
         _others = _other_configs(die, ctx.get("config"))
         if _others:
+            if not allow_transition:
+                if report is not None:
+                    report.update({"blocked": True, "reason": "shared_die", "from_die": die,
+                                   "from_config": ctx.get("config"), "diffs": _diff_words(_shape)})
+                log.warning("family: '%s/%s' edit reshapes a die shared with others - die transition NOT "
+                            "allowed by the caller, nothing created", die, ctx.get("config"))
+                return None
             try:
                 out = _transition_config_to_own_die(die, ctx.get("config"), ctx.get("duty"),
                                                     d, geo, _shape, _others)
@@ -5134,6 +5221,10 @@ def sync_active_die_geometry(saved_geo: dict,
                 log.exception("family: moving '%s/%s' off the shared die failed - the die "
                               "snapshot is left as it was", die, ctx.get("config"))
                 return None
+            if report is not None and out:
+                report.update({"reason": "shared_die", "from_die": die, "to_die": out.get("die"),
+                               "created": bool(out.get("created")), "config": out.get("config"),
+                               "diffs": _diff_words(_shape)})
             return (out or {}).get("die")
     if new_geo == _die_prev:
         return None                        # nothing die-level changed

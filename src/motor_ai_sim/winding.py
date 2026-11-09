@@ -64,6 +64,21 @@ width-direction proximity term falls as N^2 — that is what splitting a bar buy
 ``N = 1`` is the unsplit machine, bit for bit: one strip per row, no gap, no
 extra turn, no extra conductor.
 
+CURRENT MEANING (kept 2026-11-09, pending the owner's decision): each strip of a
+row is a SERIES turn, so ``num_wires_per_slot = 17`` with ``wire_split = 2`` is
+34 turns (``turns_per_coil``) and doubles the ampere-turns.  The alternative
+reading - the strips are parallel conductors of ONE turn, to cut AC loss
+without adding turns (``turns_per_coil`` unchanged, ``n_parallel_effective``
+carries the strips) - is implemented on the branch ``wip/wire-split-parallel``
+and is NOT active.
+
+SLOT WIDTH: the only extra width a split needs is the insulation between its
+strips - ``(N - 1) x 2 x wire_spacing_x`` on top of ``N x wire_width`` (exactly
+``winding_footprint_mm``).  Cutting a 6.4 mm bar into two 3.2 mm strips with
+``wire_spacing_x = 0.05`` widens the column (and the derived slot width) by
+0.1 mm; on a shared or locked die that is a lamination change and triggers a die
+transition (see ``PUT /api/geometry`` ``die_transition`` / ``allow_die_transition``).
+
 Until 2026-09-08 ``wire_split`` was ELECTRICAL ONLY: strips of
 ``wire_width / N`` with no CAD behind them, modelled as ideally transposed and
 invisible to the mesh.  That reading is retired — ``wire_width`` is now the
@@ -321,6 +336,18 @@ def connection_label(n_series: int, n_parallel: int) -> str:
 def coils_per_phase(num_slots: int) -> int:
     """C = coil groups per phase of the 3-phase single-layer winding (>= 1)."""
     return max(1, int(round(int(num_slots or 0) / 6)))
+
+
+def coil_count(num_slots: int, layers: int) -> int:
+    """Number of coils (= end-turn bundles) of a concentrated tooth-coil winding as actually wound.
+
+    A double-layer winding (``layers`` 2) has one coil per tooth: ``num_slots`` coils.  A single-layer winding
+    (``layers`` 1, layout ``A|a|b|B...``) winds only every second tooth: ``num_slots / 2`` coils.  Counting one
+    coil per tooth on a single-layer machine doubles the end-winding area (2026-11-09, open-frame thermal)."""
+    n = max(int(num_slots or 0), 0)
+    if int(layers or 1) >= 2:
+        return n
+    return max(n // 2, 1) if n else 0
 
 
 def connection_options(num_slots: int) -> list:

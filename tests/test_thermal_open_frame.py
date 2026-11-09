@@ -330,7 +330,9 @@ def test_the_end_winding_area_is_the_hand_formula(client, em_run):
         exposed perimeter= 2·thickness + width   (the tooth-facing face is not
                            in the wash — the documented judgement call)
         ℓ_end            = (k_end − 1)·L_stack/2   per side
-        A_ew             = n_slots · 2 sides · perimeter · ℓ_end
+        A_ew             = n_coils · 2 sides · perimeter · ℓ_end
+                           (n_coils as wound: double layer = n_slots,
+                           single layer = n_slots / 2)
 
     ``k_end`` is NOT recomputed here: it is read off the answer, and separately
     checked against the estimator the solver itself uses for ``auto`` — the
@@ -353,9 +355,13 @@ def test_the_end_winding_area_is_the_hand_formula(client, em_run):
     L_m = g["motor_length"] * 1e-3
     k_end = ew["k_end"]
     ell_m = (k_end - 1.0) * L_m / 2.0
-    a_hand = n_slots * 2 * (per_mm * 1e-3) * ell_m
+    # coils AS WOUND (2026-11-09): double layer = one per tooth, single layer =
+    # every second tooth (winding.coil_count), from the config's winding block.
+    from motor_ai_sim.winding import coil_count
+    n_coils = coil_count(n_slots, int((get_config().get("winding") or {}).get("layers") or 1))
+    a_hand = n_coils * 2 * (per_mm * 1e-3) * ell_m
 
-    assert ew["n_coils"] == n_slots
+    assert ew["n_coils"] == n_coils
     assert ew["n_sides"] == 2
     assert ew["bundle_thickness_mm"] == pytest.approx(t_mm, rel=1e-6)
     assert ew["bundle_width_mm"] == pytest.approx(w_mm, rel=1e-6)

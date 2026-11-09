@@ -36,6 +36,7 @@ from scipy.sparse.linalg import splu as _splu
 from motor_ai_sim.simulation.pardiso_lifetime import release_pardiso
 from motor_ai_sim.simulation.pardiso_perm_cache import (
     PermCache as _PermCache, analyse as _perm_analyse)
+from motor_ai_sim.simulation.p2_frame_plan import PlanMismatch
 
 from motor_ai_sim.simulation.field_ops import (
     MU0, _grad_at_quad, _mu_r_from_bh_vec, _p2_B_at_quad,
@@ -167,7 +168,8 @@ class _Skeleton:
     already carries the factorization.
     """
 
-    __slots__ = ("nb", "nt", "idx", "shape", "lshape", "dx", "gg", "g", "_csr_stiff", "_csr_tang")
+    __slots__ = ("nb", "nt", "idx", "shape", "lshape", "dx", "gg", "g", "_csr_stiff", "_csr_tang",
+                 "edofs")
 
     def __init__(self, sb):
         self.nb = int(sb.Nbfun)
@@ -181,6 +183,7 @@ class _Skeleton:
                 rows[ix] = sb.element_dofs[i]
                 cols[ix] = sb.element_dofs[j]
         self.idx = np.array([rows, cols])
+        self.edofs = np.asarray(sb.element_dofs)
         self.shape = (sb.N, sb.N)
         self.lshape = (nb, nb)
         self.dx = sb.dx
@@ -201,6 +204,12 @@ class _Skeleton:
         ``gg[j, i]`` and ``gg[i, j]`` are the same two products added in the
         same order (IEEE multiplication commutes), so ``data[j, i]`` and
         ``data[i, j]`` are equal bit for bit and the copy is exact."""
+        return self._csr_stiff.assemble(self.stiff_data(nu))
+
+    def stiff_data(self, nu):
+        """The element entries of :meth:`stiff` before the scatter:
+        ``(nb, nb, nt)`` in the COO order of ``idx`` (``data[j, i]`` is the
+        entry at row ``edofs[i]``, column ``edofs[j]``)."""
         nb, nt = self.nb, self.nt
         data = np.empty((nb, nb, nt))
         work = np.empty_like(self.dx)
@@ -211,11 +220,15 @@ class _Skeleton:
                 np.sum(work, axis=1, out=data[j, i])
                 if i != j:
                     data[i, j] = data[j, i]
-        return self._csr_stiff.assemble(data)
+        return data
 
     def tang(self, gA, c):
         """``asm(tang_nu2, sb, gA=gA, c=c)`` with gA·∇φ hoisted out of the
         36-way loop — there are only ``Nbfun`` distinct ones, not ``Nbfun²``."""
+        return self._csr_tang.assemble(self.tang_data(gA, c))
+
+    def tang_data(self, gA, c):
+        """The element entries of :meth:`tang` before the scatter."""
         nb, nt = self.nb, self.nt
         a = [gA[0] * gi[0] + gA[1] * gi[1] for gi in self.g]
         data = np.empty((nb, nb, nt))
@@ -226,7 +239,15 @@ class _Skeleton:
                 np.multiply(caj, a[i], out=work)
                 np.multiply(work, self.dx, out=work)
                 np.sum(work, axis=1, out=data[j, i])
-        return self._csr_tang.assemble(data)
+        return data
+
+    def matvec(self, data, x):
+        """``scatter(data) @ x`` without the matrix: row ``edofs[i]`` gets
+        Σ_j data[j, i]·x[edofs[j]] (equal to the CSR product to round-off)."""
+        xl = x[self.edofs]                                   # (nb, nt)
+        y = np.einsum("jie,je->ie", data, xl)
+        return np.bincount(self.edofs.ravel(), weights=y.ravel(),
+                           minlength=self.shape[0])
 
 
 class P2Nonlinear:
@@ -285,6 +306,14 @@ class P2Nonlinear:
         self.spd_perm_hits = 0      # ...of which ordered from the perm cache
         self.spd_declined = 0       # spd=True solves sent to LU by the checks
         self.spd_failures = 0       # Cholesky errors (then LU for the run)
+        # Frame-plan path (simulation/p2_frame_plan.py): the rotor-side slip
+        # dofs (set by the sliding-band caller; None = no plan), the one-deep
+        # memo of kpw_el, and the FrameSystem the Cholesky handle last
+        # analysed (the SciPy path's _spd_pat and this share the handle).
+        self.slip_dofs = None
+        self._kel_memo = None
+        self._fs_analysed = None
+        self.plan_solves = 0        # Cholesky solves through a frame plan
 
     # ── linear algebra ───────────────────────────────────────────────────────
     def solve_ff(self, Mff, rhs, spd: bool = False):
@@ -445,6 +474,7 @@ class P2Nonlinear:
                 if _perm_analyse(s, U, pat.perm_key):
                     self.spd_perm_hits += 1
                 pat.analysed = s
+                self._fs_analysed = None      # the handle now holds this one
                 self.spd_analyses += 1
             s.set_phase(23)
             x = s._call_pardiso(U, b)
@@ -651,10 +681,7 @@ class P2Nonlinear:
         T = None
         _min_r = None
         for _k2, _ids2, _c2, gA, Bm, nuq in info:
-            _dB = 1e-3 * Bm + 1e-6
-            nu1 = 1.0 / (MU0 * np.maximum(_mu_r_from_bh_vec(
-                _c2, (Bm + _dB).ravel()).reshape(Bm.shape), 1.0))
-            nup = (nu1 - nuq) / _dB / (2.0 * Bm)                  # dν/dB²
+            nup = self._nup(_c2, Bm, nuq)                         # dν/dB²
             if clamp:
                 nup = np.maximum(nup, 0.0)
             else:
@@ -669,6 +696,103 @@ class P2Nonlinear:
             #: unclamped tangent (1 = linear; <= 0 = non-monotone B-H there)
             self.last_dhdb_min_rel = _min_r
         return T
+
+    # ── frame-plan path (simulation/p2_frame_plan.py) ───────────────────────
+    def _nup(self, c2, Bm, nuq):
+        """dν/dB² by the one-sided difference :meth:`tangent2` uses."""
+        _dB = 1e-3 * Bm + 1e-6
+        nu1 = 1.0 / (MU0 * np.maximum(_mu_r_from_bh_vec(
+            c2, (Bm + _dB).ravel()).reshape(Bm.shape), 1.0))
+        return (nu1 - nuq) / _dB / (2.0 * Bm)
+
+    def iron_blocks(self):
+        """(rows, cols) of every saturable sub-basis's element entries, in the
+        order :meth:`kpw_el` returns their values."""
+        return [tuple(self.skel(k, sb).idx)
+                for k, (sb, _s0, _i, _c) in enumerate(self.sat_sub)]
+
+    def kpw_el(self, Avec):
+        """:meth:`Kpw` without the matrix: per saturable sub-basis the
+        element entries of the pointwise secant stiffness, plus what the
+        tangent needs.  Same arithmetic per element as :meth:`Kpw`; memoised
+        one deep on the content of ``Avec`` like it."""
+        _m = self._kel_memo
+        if _m is not None and _m[0].shape == Avec.shape                 and np.array_equal(_m[0], Avec):
+            self.kpw_hits += 1
+            return _m[1]
+        self.kpw_calls += 1
+        el = []
+        for _k2, (_sb2, _sb02, _ids2, _c2) in enumerate(self.sat_sub):
+            gA = _grad_at_quad(_sb2, Avec)
+            Bm = np.sqrt(np.maximum(gA[0] ** 2 + gA[1] ** 2, 1e-18))
+            mur = np.maximum(_mu_r_from_bh_vec(
+                _c2, Bm.ravel()).reshape(Bm.shape), 1.0)
+            nuq = 1.0 / (MU0 * mur)
+            el.append((_k2, _c2, gA, Bm, nuq, self.skel(_k2, _sb2).stiff_data(nuq)))
+        self._kel_memo = (Avec.copy(), el)
+        return el
+
+    def apply_K(self, el, x):
+        """K(ν of ``el``)·x = K_const·x + Σ the iron element products."""
+        y = self.K_const @ x
+        for _k2, _c2, _gA, _Bm, _nuq, d in el:
+            y = y + self._skel[_k2].matvec(d, x)
+        return y
+
+    def jac_el(self, el):
+        """Per sub-basis element entries of K + T (clamped tangent, as the
+        Newton's :meth:`tangent2` builds it)."""
+        out = []
+        for _k2, _c2, gA, Bm, nuq, d in el:
+            nup = np.maximum(self._nup(_c2, Bm, nuq), 0.0)
+            out.append(d + self._skel[_k2].tang_data(gA, 2.0 * nup))
+        return out
+
+    def solve_plan(self, fs, data, rhs):
+        """Cholesky solve of a frame plan's upper-triangle CSR (``fs`` a
+        :class:`p2_frame_plan.FrameSystem`, ``data`` its values).
+
+        The analysis is redone only when ``fs``'s pattern is not the one this
+        handle last analysed (once per analysis window of frames), through
+        the ordering cache.  Raises
+        :class:`PlanMismatch` — the caller then takes the SciPy path — when
+        there is no Cholesky handle, a diagonal is not positive, or PARDISO
+        fails (the handle is then dropped for the run, as in
+        :meth:`_solve_spd`)."""
+        s = self._pardiso_spd
+        if s is None:
+            raise PlanMismatch("no Cholesky handle")
+        if not bool(np.all(data[fs.diag] > 0.0)):
+            raise PlanMismatch("non-positive diagonal")
+        U = _csr_matrix((data, fs.indices, fs.indptr), shape=(fs.n, fs.n),
+                        copy=False)
+        b = s._check_b(U, rhs)
+        s.iparm[11] = 0
+        pat = getattr(fs, "pattern", fs)    # frames of one window share it
+        try:
+            if self._fs_analysed is not pat:
+                if pat.perm_key is None:
+                    pat.perm_key = _PermCache.key(2, fs.indptr, fs.indices)
+                if _perm_analyse(s, U, pat.perm_key):
+                    self.spd_perm_hits += 1
+                self._fs_analysed = pat
+                if self._spd_pat is not None:
+                    self._spd_pat.analysed = None
+                self.spd_analyses += 1
+            s.set_phase(23)
+            x = s._call_pardiso(U, b)
+        except Exception as _e:              # noqa: BLE001 — loud, then LU
+            self.spd_failures += 1
+            self._log.warning(
+                "PARDISO Cholesky failed (%s, n=%d) on a frame-plan system "
+                "— not positive definite?  The rest of this run uses the "
+                "unsymmetric LU.", _e, fs.n)
+            self._drop_spd()
+            self._fs_analysed = None
+            raise PlanMismatch("Cholesky failed") from _e
+        self.spd_solves += 1
+        self.plan_solves += 1
+        return x
 
     # ── globally convergent fallback / Newton seed ───────────────────────────
     def pic2_sweeps(self, Pro, free, bff, nu_in, n_max, tol,

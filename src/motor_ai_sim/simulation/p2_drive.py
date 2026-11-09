@@ -57,6 +57,11 @@ def _reduce(p2, M, Pro, free):
 from motor_ai_sim.simulation.drive import (
     circuit_residual_ll, circuit_jacobian_ll,
 )
+from motor_ai_sim.simulation import p2_frame_plan as _fp
+from motor_ai_sim.simulation.p2_frame_plan import (
+    PlanMismatch as _PlanMismatch, ReducedPlan as _ReducedPlan,
+    reduced_map as _reduced_map,
+)
 from motor_ai_sim.simulation.field_ops import MU0, _mu_r_from_bh_vec
 
 
@@ -90,6 +95,13 @@ class P2Drive:
         self.Msd = Msd
         self.Sdt = Sdt
         self._ops_cache = None           # (dte, Msig/dte, S·dte) — see eddy_ops
+        # frame-plan state (see _eddy_solve_plan): the run's plan, the last
+        # frame's system, its constant part, and the off switch
+        self._plan = None
+        self._plan_fs = None             # (Pro, free, FrameSystem)
+        self._plan_const = None          # (FrameSystem, Msd, Sdt, data)
+        self._plan_dead = None           # why the plan was switched off
+        self._plan_win = None            # (plan, member maps, systems, free)
         self.S_raw = None
         self.ed_ca = self.ed_cb = None
         self.pT = self.pQ = self.p_rep = self.p_mask = None
@@ -499,6 +511,25 @@ class P2Drive:
                   float(np.linalg.norm(_dt * _Iv)),
                   float(np.linalg.norm(np.asarray(self.G.T @ A_start).ravel())),
                   1e-30)
+        # DC seed for the conductor voltages: at ∂A/∂t = 0 the constraint
+        # gives U_b = I_b/S_b, which is the bulk of the answer (the eddy
+        # reaction is a correction to it).  Starting from U = 0 instead puts
+        # the whole ampere-turn drive in the first Newton step, and at 60 A
+        # that step lands past the BH knee from an unsaturated start.
+        if not np.any(Ue):
+            Ue = (np.asarray(I_vec, float) * _dt
+                  / np.maximum(_Sdt, 1e-30))
+        # The frame-plan path (p2_frame_plan.py): the same Newton on a reduced
+        # system assembled in place.  Any doubt about the plan (projection
+        # shape, a dof outside the slip set moving, a Cholesky failure) takes
+        # the SciPy path below from the same start.
+        if (not _sp and nu_fix is None and _SB_FAST_LA and _fp.ENABLED
+                and self._plan_usable()):
+            try:
+                return self._eddy_solve_plan(
+                    Pro, free, Ae, Ue, _Msd, _Sdt, rhs_e, cr, _bn, _cn, maxit)
+            except _PlanMismatch as _pm:
+                self._plan_off(str(_pm))
         Bf = (Pro.T @ self.G).tocsr()[free, :]
         nit = 0; rrel = 1.0
         # ── SB_FAST_LA per-FRAME precompute ──────────────────────────────
@@ -535,15 +566,6 @@ class P2Drive:
             return rf, np.concatenate([rc, rp, rg]), max(
                 float(np.linalg.norm(rf)) / _bn,
                 float(np.linalg.norm(np.concatenate([rc, rp, rg]))) / _cden)
-
-        # DC seed for the conductor voltages: at ∂A/∂t = 0 the constraint
-        # gives U_b = I_b/S_b, which is the bulk of the answer (the eddy
-        # reaction is a correction to it).  Starting from U = 0 instead puts
-        # the whole ampere-turn drive in the first Newton step, and at 60 A
-        # that step lands past the BH knee from an unsaturated start.
-        if not np.any(Ue):
-            Ue = (np.asarray(I_vec, float) * _dt
-                  / np.maximum(_Sdt, 1e-30))
 
         for it in range(max(int(maxit), 2)):
             nit = it + 1
@@ -625,6 +647,157 @@ class P2Drive:
                     Ae = At; Ue = Ut; acc = True
                     if _sp:
                         _ip = _it_; _Wg = _Wt_
+                    break
+                lam *= 0.5
+            if not acc:
+                return False, Ae, Ue, rrel, nit
+        return False, Ae, Ue, rrel, nit
+
+    # ── frame-plan bordered Newton (simulation/p2_frame_plan.py) ─────────
+    def _plan_usable(self) -> bool:
+        p2 = self.p2
+        return (self._plan_dead is None
+                and getattr(p2, "slip_dofs", None) is not None
+                and hasattr(p2, "kpw_el")
+                and getattr(p2, "_pardiso_spd", None) is not None
+                and self.G is not None)
+
+    def _plan_off(self, why: str) -> None:
+        """Stop using the plan for this run (said once).  A Cholesky failure
+        has already dropped the handle; anything else is a plan that does not
+        fit this frame, so the SciPy path is the one that is right."""
+        if self._plan_dead is None:
+            self._plan_dead = why
+            self.log.warning("P2 eddy frame plan off for this run (%s) — "
+                             "SciPy assembly path", why)
+
+    def _plan_system(self, Pro, free, Msd, Sdt):
+        """(FrameSystem, constant data) of this frame: the system once per
+        frame, the plan once per run (again if the conductor-mass pattern or
+        the reduced size changes)."""
+        p2 = self.p2
+        c = self._plan_fs
+        if c is not None and c[0] is Pro and c[1] is free:
+            fs = c[2]
+        else:
+            rr, sg = _reduced_map(Pro, free)
+            G = self.G.tocoo()
+            N = self.N
+            nU = int(G.shape[1])
+            plan = self._plan
+            if plan is None or plan.nf != len(free) or plan.nb != nU:
+                Kc = p2.K_const.tocoo()
+                Mc = Msd.tocoo()
+                blocks = [(Kc.row, Kc.col), (Mc.row, Mc.col),
+                          (G.row, N + G.col),
+                          (N + np.arange(nU), N + np.arange(nU))]
+                blocks += p2.iron_blocks()
+                plan = _ReducedPlan(N, len(free), nU, blocks, p2.slip_dofs,
+                                    rr, sg)
+                plan.M_rows, plan.M_cols = Mc.row.copy(), Mc.col.copy()
+                plan.K_data, plan.G_data = Kc.data.copy(), -G.data
+                self._plan = plan
+            fs = self._plan_window_member(plan, Pro, free, rr, sg)
+            self._plan_fs = (Pro, free, fs)
+        c = self._plan_const
+        if c is not None and c[0] is fs and c[1] is Msd and c[2] is Sdt:
+            return fs, c[3]
+        plan = self._plan
+        Mc = Msd.tocoo()
+        if not (np.array_equal(Mc.row, plan.M_rows)
+                and np.array_equal(Mc.col, plan.M_cols)):
+            raise _PlanMismatch("conductor mass pattern changed")
+        vals = [plan.K_data, Mc.data, plan.G_data, np.asarray(Sdt, float)]
+        data = fs.data(vals + [None] * (len(plan.fixed) - 4))
+        self._plan_const = (fs, Msd, Sdt, data)
+        return fs, data
+
+    def _plan_window_member(self, plan, Pro, free, rr, sg):
+        """This frame's system on the current analysis window, or on a new
+        window built for the shifts around it (``p2.shift_hint`` = (Pro, m,
+        step, projection), set by the frame loop; without it the window is
+        this frame alone).  Frames of one window share one PARDISO analysis."""
+        w = self._plan_win
+        # the whole map and free set: anything else must meet plan.window's
+        # check that no dof outside the slip set moved
+        if w is not None and w[0] is plan and np.array_equal(w[3], free):
+            for (r_, s_), fs in zip(w[1], w[2]):
+                if np.array_equal(r_, rr) and np.array_equal(s_, sg):
+                    return fs
+        maps = [(rr, sg)]
+        hint = getattr(self.p2, "shift_hint", None)
+        if _fp.WINDOW > 1 and hint is not None and hint[0] is Pro:
+            _m, _d, _proj = hint[1], hint[2], hint[3]
+            for sh in _fp.window_shifts(_m, _d, _fp.WINDOW):
+                if sh == _m:
+                    continue
+                P_s, out_s = _proj.build(sh)
+                if P_s.shape != Pro.shape:
+                    continue
+                keep = np.ones(P_s.shape[1], dtype=bool)
+                keep[np.asarray(out_s, dtype=np.int64)] = False
+                if not np.array_equal(np.flatnonzero(keep), free):
+                    continue
+                try:
+                    maps.append(_reduced_map(P_s, free))
+                except _PlanMismatch:
+                    continue
+        try:
+            systems = plan.window(maps)
+        except _PlanMismatch:
+            if len(maps) == 1:
+                raise
+            maps = maps[:1]
+            systems = plan.window(maps)
+        self._plan_win = (plan, maps, systems, np.array(free))
+        return systems[0]
+
+    def _eddy_solve_plan(self, Pro, free, Ae, Ue, Msd, Sdt, rhs_e, cr, bn,
+                         cn, maxit):
+        """:meth:`eddy_solve` for current drive, no strand paths, nonlinear ν,
+        on the frame plan: the same residual, Newton step and line search;
+        the Jacobian goes straight into the reduced upper triangle and is
+        solved by Cholesky.  Raises PlanMismatch before anything the caller
+        holds has changed."""
+        p2 = self.p2
+        fs, const = self._plan_system(Pro, free, Msd, Sdt)
+        nf = len(free)
+        nU = np.asarray(Sdt).size
+        n_iron = len(fs.plan.fixed) - 4
+        _Pt = Pro.T.tocsr()
+        G = self.G
+
+        def _res(Av, Uv, el):
+            t = p2.apply_K(el, Av) + Msd @ Av - G @ Uv - rhs_e
+            rf = np.asarray(_Pt @ t).ravel()[free]
+            _GtA = np.asarray(G.T @ Av).ravel()
+            rc = Sdt * Uv - _GtA - cr
+            _cden = max(cn, float(np.linalg.norm(_GtA)),
+                        float(np.linalg.norm(Sdt * Uv)))
+            return rf, rc, max(float(np.linalg.norm(rf)) / bn,
+                               float(np.linalg.norm(rc)) / _cden)
+
+        nit = 0; rrel = 1.0
+        for it in range(max(int(maxit), 2)):
+            nit = it + 1
+            el = p2.kpw_el(Ae)
+            rf, rc, rrel = _res(Ae, Ue, el)
+            if rrel < 1e-7:
+                return True, Ae, Ue, rrel, nit
+            jv = list(p2.jac_el(el))
+            data = fs.data([None] * 4 + jv + [None] * (n_iron - len(jv)),
+                           const)
+            sol = p2.solve_plan(fs, data, -np.concatenate([rf, rc]))
+            dA = p2.pad2(Pro, free, sol[:nf])
+            dU = sol[nf:nf + nU]
+            # backtracking line search on the FIELD residual (see eddy_solve)
+            _f0 = float(np.linalg.norm(rf))
+            lam = 1.0; acc = False
+            for _ls in range(8):
+                At = Ae + lam * dA; Ut = Ue + lam * dU
+                if float(np.linalg.norm(
+                        _res(At, Ut, p2.kpw_el(At))[0])) < _f0:
+                    Ae = At; Ue = Ut; acc = True
                     break
                 lam *= 0.5
             if not acc:

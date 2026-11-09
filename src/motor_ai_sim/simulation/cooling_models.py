@@ -1523,7 +1523,7 @@ def end_winding_area(*, n_coils: int, bar_thickness_m: float,
         P_exposed = 2·thickness + width        (the tooth-facing face is shielded)
         D_e = 4·A_bar / P_bar                  (the bar as an equivalent cylinder)
 
-    ``end_turn_length_m`` is ℓ_end = (k_end − 1)·L_stack / 2 — derived from the
+    ``end_turn_length_m`` is ℓ_end = (k_end − 1)·L_stack (one coil's end turn per side; k_end = mean turn / 2·L_stack) — derived from the
     SAME end-winding factor the electromagnetic run billed its copper loss at, so
     the area that cools the end turns and the length that heats them are one
     number, not two guesses.  ``bar_thickness_m`` is the wire stack's depth
@@ -1569,7 +1569,7 @@ def end_windings_path(*, air_speed_mps: float, t_ambient_c: float,
     ``winding.winding_footprint_mm``, which is ``wire_width`` on an unsplit
     machine) — and its length per side is ``end_turn_length_m``, which the caller
     derives from the SAME end-winding factor the electromagnetic run used:
-    ``ℓ_end = (k_end − 1)·L_stack / 2``.
+    ``ℓ_end = (k_end − 1)·L_stack (one coil's end turn per side; k_end = mean turn / 2·L_stack)``.
 
         A_ew = n_coils · n_sides · P_exposed · ℓ_end
         D_e  = 4·A_bar / P_bar          (the bar as an equivalent cylinder)

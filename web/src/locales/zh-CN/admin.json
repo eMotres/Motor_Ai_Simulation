@@ -379,7 +379,12 @@
     "singleTip": "未配置对端服务器；本服务器服务所有账户。",
     "homeRegion": "所属区域",
     "homeRegionTip": "管理员覆盖，已记录。不迁移数据：迁移是单独的步骤。",
-    "remoteTip": "位于 {{region}} 服务器；请在该服务器上管理。",
+    "remoteTip": "位于 {region} 服务器；请在该服务器上管理。",
+    "serverName": "{region} 服务器",
+    "remoteTileTip": "{region} 服务器的 CPU 和内存，实时获取。点击查看图表。",
+    "remoteServersTip": "{region} 服务器的节点，实时获取；只读。",
+    "remoteLive": "{region} 实时负载",
+    "remoteLiveTip": "{region} 服务器的 CPU 和内存，实时获取；只读，账户显示为 user N。",
     "source": {
       "admin": "管理员设置",
       "classifier": "分类器设置",

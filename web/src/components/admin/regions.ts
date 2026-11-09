@@ -68,3 +68,38 @@ export const serverRows = (view: RegionsView | null | undefined): ServerRow[] =>
   if (view.peer) rows.push(row(view.peer, false));
   return rows;
 };
+
+// ── the other server's load graphs (GET /api/admin/regions/remote/cluster) ──────────────────────────────────────
+
+export interface RemoteClusterTotals { nodes?: number; online?: number; cores?: number; cpu_used_cores?: number; mem_used?: number; mem_total?: number }
+export interface RemoteCluster {
+  configured: boolean; reachable: boolean; region: string | null;
+  nodes: { nodes: unknown[]; cluster: RemoteClusterTotals | null };
+  app: { jobs?: { running?: number; queued?: number } } | null;
+  live: unknown | null; history: Record<string, unknown[]>;
+}
+
+export interface RemoteTile { region: string; label: string; reachable: boolean; cpu: number | null; ram: number | null; cores: number | null; jobs: string }
+
+/** The Overview tile of the other server.  ``null`` = single-region mode (nothing is shown); an unreachable peer is a tile
+ *  with ``reachable: false`` and no numbers, never zeros. */
+export const remoteTile = (r: RemoteCluster | null | undefined, label = 'server'): RemoteTile | null => {
+  if (!r?.configured) return null;
+  const region = regionLabel(r.region ?? 'us');
+  const base = { region, label: `${region} ${label}`, reachable: false, cpu: null, ram: null, cores: null, jobs: dash };
+  if (!r.reachable) return base;
+  const c = r.nodes?.cluster;
+  const cores = num(c?.cores);
+  const used = num(c?.cpu_used_cores);
+  const mu = num(c?.mem_used);
+  const mt = num(c?.mem_total);
+  const run = num(r.app?.jobs?.running);
+  const q = num(r.app?.jobs?.queued);
+  return {
+    ...base, reachable: true,
+    cpu: cores && used != null ? Math.round((100 * used) / cores) : null,
+    ram: mt && mu != null ? Math.round((100 * mu) / mt) : null,
+    cores,
+    jobs: run != null && q != null ? `${run} / ${q}` : dash,
+  };
+};

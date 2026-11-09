@@ -79,6 +79,8 @@ ACTIONS = frozenset({
     "verification.read", "verification.approve", "verification.deny", "verification.request", "verification.rerun", "verification.document",
     # two regions (docs/regions/DESIGN.md): the home-region override, the classifier report, the directory pull, a live read of the peer's rows
     "user.region", "regions.classify", "regions.directory_sync", "regions.remote_read",
+    # regions stage 2: mail / LLM relayed for the peer (no content, hashed recipients only)
+    "relay.mail", "relay.llm",
 })
 
 _SECRETISH = ("password", "secret", "token", "key", "authorization", "cookie",

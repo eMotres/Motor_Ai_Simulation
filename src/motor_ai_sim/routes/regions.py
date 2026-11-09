@@ -8,6 +8,8 @@ PEER (server-to-server, HMAC-signed: regions/peer.py; 404 for anything unsigned 
   GET  /api/peer/v1/directory                   the global account directory entries this server hosts (email -> id,
                                                 region, tier, created; nothing else)
   GET  /api/peer/v1/catalog/manifest            hashes of the shared library (EU only: EU authors, US mirrors)
+  POST /api/peer/v1/relay/mail                  send one mail for the peer (EU executes; audit line of hashes only)
+  POST /api/peer/v1/relay/llm                   run one help-chat / spec-assistant / translation LLM call for the peer
   GET  /api/peer/v1/admin/{users|projects|verification|jobs}
                                                 this server's rows, tagged with the region, for the OTHER region's admin
                                                 view.  Fetched live, shown, never stored by the caller.
@@ -74,6 +76,20 @@ def peer_catalog_manifest(_peer: str = Depends(require_peer)) -> Dict[str, Any]:
         raise HTTPException(status_code=404, detail="Not Found")      # only the authoring region publishes a manifest
     from motor_ai_sim.regions import catalog_manifest as CM
     return CM.build()
+
+
+@router.post(P.PREFIX + "/relay/mail")
+def peer_relay_mail(payload: Dict[str, Any] = Body(default={}), _peer: str = Depends(require_peer)) -> Dict[str, Any]:
+    """The documented exception to "pull only": send one mail for the peer.  Stores nothing but an audit line of hashes."""
+    from motor_ai_sim.regions import relay as RL
+    return RL.execute_mail(payload)
+
+
+@router.post(P.PREFIX + "/relay/llm")
+def peer_relay_llm(payload: Dict[str, Any] = Body(default={}), _peer: str = Depends(require_peer)) -> Dict[str, Any]:
+    """The second exception: run one LLM request (help chat / spec assistant / translation) for the peer."""
+    from motor_ai_sim.regions import relay as RL
+    return RL.execute_llm(payload)
 
 
 def _local_users() -> List[Dict[str, Any]]:

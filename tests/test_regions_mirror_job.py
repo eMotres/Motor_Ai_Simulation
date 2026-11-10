@@ -479,3 +479,29 @@ def test_install_note_lists_the_owner_variables_and_every_step():
         assert needle in note, needle
     assert "sudo bash -c 'set -a; . /etc/motres/backup-us.env; set +a; restic init'" in note       # L9: sourced as root
     assert "sudo -E restic init" not in note and "rsyncd-motres.include" not in note
+
+
+def test_plan_warns_about_unattributed_rows(world, capsys):
+    """A non-zero count of rows EU could not send is a visible warning in the job output, not a silent loss."""
+    real = P.get
+
+    def with_unattributed(path, **kw):
+        out = real(path, **kw)
+        if path == "/catalog/manifest":
+            out["extracts"]["counts"]["unattributed"] = 3
+        return out
+    import pytest as _pt
+    mp = _pt.MonkeyPatch()
+    mp.setattr(P, "get", with_unattributed)
+    try:
+        assert MI.main(["plan", "--init"]) == MI.EXIT_OK
+    finally:
+        mp.undo()
+    cap = capsys.readouterr()
+    assert json.loads(cap.out.strip().splitlines()[0])["unattributed_rows"] == 3
+    assert "WARNING 3 result row(s)" in cap.err
+    assert json.loads((world["work"] / "plan.json").read_text(encoding="utf-8"))["unattributed_rows"] == 3
+    capsys.readouterr()
+    assert MI.main(["plan", "--init"]) == MI.EXIT_OK
+    assert "WARNING" not in capsys.readouterr().err                        # zero: no warning
+

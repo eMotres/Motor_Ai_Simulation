@@ -253,7 +253,7 @@ whole library, so they are not copied by hash. `GET /api/peer/v1/catalog/extract
 Allow-lists (counted in `counts.scrubbed`): a **string** in a result row crosses only under a key of `ROW_TEXT_KEYS`
 (enumerations, units, timestamps, fingerprints, stamps) and only as a short plain token that does not look like an e-mail, a
 path or a file name; free text, names, urls and the keys `source`, `notes`, `note`, `label`, `path`, `file`, who-did-it keys are
-dropped wherever they are. Numbers, booleans, null and nested objects / lists under plain identifier keys are data and cross.
+dropped wherever they are. Numbers, booleans, null and nested objects / lists are data and cross. Duty names and row keys are checked with `name_ok`: up to 120 characters, spaces, Cyrillic letters and degree signs allowed (they already cross in the mirrored configuration files); refused are control characters and anything that looks like an e-mail, a path or a file name, and such a duty is counted as `unattributed`; the US job prints a warning when that count is not zero.
 A passport entry carries only the keys of `PASSPORT_KEYS` (the admin `note` and `source` paths stay on EU) and strings only under
 `PASSPORT_TEXT_KEYS` / inside `materials`. An unknown result kind is dropped.
 

@@ -191,7 +191,7 @@ def test_extracts_pass_only_allow_listed_text_and_plain_data(eu):
     t = row["thermal"]
     assert t["t_max"] == 90.0 and t["mode"] == "steady" and t["kind"] == "thermal" and t["series"] == [1.0, 2.0, None, True]
     assert t["nested"] == {"keep": 1, "state": "ok"}                       # text under unlisted keys and a/b (not a token) gone
-    assert t["components"] == {"winding": {"avg": 1.5, "max": 2.0}}        # data-labelled numbers cross, odd key names do not
+    assert t["components"] == {"winding": {"avg": 1.5, "max": 2.0}, "bad key with spaces": {"avg": 3}}   # data-labelled numbers cross
     assert not ({"source", "notes", "note", "owner", "reason", "comment_x"} & set(t))
     assert row["em_run"]["text"] == {"drive": "voltage"} and row["em_run"]["numbers"] == {"T_avg_Nm": 1.2}
     assert ext["passports"]["fpPUB1"] == {"k_flux": 0.95, "machine": "24s/28p OD 85",
@@ -517,3 +517,34 @@ def test_safe_rel_rejects_control_characters():
         assert MI.safe_rel(bad) is None
     files, dropped = MI.clean_manifest_files({"files": {"dies/PUB/a\nb.yaml": {"sha256": "a" * 64, "bytes": 1}}})
     assert files == {} and dropped == 1
+
+
+REAL_STYLE_DUTIES = ["peak 1x9 mm", "rated 120\u0421 wire 80C NdFeB", "\u043d\u043e\u043c\u0438\u043d\u0430\u043b 6000 \u043e\u0431/\u043c\u0438\u043d",
+                     "cruise 85 \u00b0C coil", "S1 (continuous) 40\u00b0C"]
+
+
+def test_real_style_duty_names_cross_and_only_bad_ones_are_counted(eu):
+    """Names have spaces, Cyrillic letters and degree signs; they already cross in the mirrored configuration files.  Only a
+    name that looks like an e-mail / path / file name, has control characters or is too long is refused (and counted)."""
+    rows = {name: {"thermal": {"kind": "thermal", "geometry_fingerprint": "fpPUB1", "t_max": 90.0 + i,
+                               "components": {"magnet \u0421": {"avg": 1.0}, "winding 120 \u00b0C": {"avg": 2.0}}}}
+            for i, name in enumerate(REAL_STYLE_DUTIES)}
+    bad = {"mail me@example.com": {"thermal": {"t_max": 1}}, "C:/Users/x/duty": {"thermal": {"t_max": 2}},
+           "duty.json": {"thermal": {"t_max": 3}}, "x" * 121: {"thermal": {"t_max": 4}}, "line\nbreak": {"thermal": {"t_max": 5}}}
+    _j(eu / ".duty_results.json", {"results": {"PUB": {"L1": {**rows, **bad}}}, "history": {}})
+    _man, ext = _build(eu)
+    got = ext["dies"]["PUB"]["duty"]["results"]["L1"]
+    assert set(got) == set(REAL_STYLE_DUTIES)                              # none of the real-style names is lost
+    for i, name in enumerate(REAL_STYLE_DUTIES):
+        assert got[name]["thermal"]["t_max"] == 90.0 + i
+        assert got[name]["thermal"]["components"] == {"magnet \u0421": {"avg": 1.0}, "winding 120 \u00b0C": {"avg": 2.0}}
+    assert ext["counts"]["unattributed"] == 5 and ext["counts"]["mirrored"] == 1       # the five refused names are counted
+    blob = json.dumps(ext, ensure_ascii=False)
+    for leak in ("me@example.com", "C:/Users", "duty.json", "line\nbreak"):
+        assert leak not in blob
+
+
+def test_name_ok_rules():
+    assert CM.name_ok("peak 1x9 mm") and CM.name_ok("rated 120\u0421 wire 80C NdFeB") and CM.name_ok("85 \u00b0C") and CM.name_ok("a" * 120)
+    for bad in ("", "a" * 121, "x\ty", "x\x00y", "a@b.com", "/srv/motres/x", "C:\\Users\\x", "run.json", 5, None):
+        assert not CM.name_ok(bad)

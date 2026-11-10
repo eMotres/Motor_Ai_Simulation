@@ -457,7 +457,7 @@ ROW_DROP_KEYS = frozenset({"source", "src", "notes", "note", "screening_note", "
 #: ALLOW-LIST of the keys that may carry a STRING in a result row: enumerations, units, timestamps, fingerprints, stamps.  A
 #: string under any other key is dropped (free text, names, urls can only live there), and a string under a listed key must
 #: still be a short plain token (``SAFE_TOKEN``) that does not look like an e-mail, a path or a file name.  Everything else in a
-#: row - numbers, booleans, null, nested objects and lists under plain identifier keys - is data and crosses.
+#: row - numbers, booleans, null, nested objects and lists under any key that passes ``name_ok`` - is data and crosses.
 ROW_TEXT_KEYS = frozenset({
     "kind", "computed_at", "recorded_at", "saved_at", "updated_at", "mode", "drive", "state", "status", "verdict", "flag",
     "type", "topology", "symmetry", "option", "strength_kind", "stress_convention", "load_basis", "load_case", "cooling_mode",
@@ -475,7 +475,19 @@ PASSPORT_TEXT_KEYS = frozenset({"fidelity", "generated_utc", "adopted_utc", "mac
 PASSPORT_TEXT_PARENTS = frozenset({"materials", "mesh"})
 SAFE_TOKEN = re.compile(r"[A-Za-z0-9 _.:+%-]{0,64}")
 PASSPORT_SAFE = re.compile(r"[A-Za-z0-9 _.:+%,()=/-]{0,80}")
-_KEY_OK = re.compile(r"[A-Za-z0-9_.-]{1,48}")
+NAME_MAX = 120
+
+
+def name_ok(name: Any) -> bool:
+    """A duty name or a row key that may cross.  Real names have spaces, Cyrillic letters, degree signs ("rated 120С wire 80C"):
+    they already cross in the mirrored configuration files.  Refused: empty, longer than ``NAME_MAX``, control characters, and
+    anything that looks like an e-mail address, a path or a file name (``compute._bad_string``)."""
+    from motor_ai_sim.regions import compute as CP
+    if not isinstance(name, str) or not (1 <= len(name) <= NAME_MAX):
+        return False
+    if any(ord(c) < 32 or ord(c) == 127 for c in name):
+        return False
+    return not CP._bad_string(name)
 _GONE = object()
 
 
@@ -492,7 +504,7 @@ def clean_value(v: Any, counts: Dict[str, int], key: Optional[str] = None, paren
         out: Dict[str, Any] = {}
         for k, x in v.items():
             ks = str(k)
-            if ks.strip().lower() in ROW_DROP_KEYS or not _KEY_OK.fullmatch(ks):
+            if ks.strip().lower() in ROW_DROP_KEYS or not name_ok(ks):
                 counts["scrubbed"] = counts.get("scrubbed", 0) + 1
                 continue
             c = clean_value(x, counts, ks, key, depth=depth + 1, **kw)
@@ -517,7 +529,7 @@ def clean_cfg_rows(rows: Any, counts: Dict[str, int]) -> Dict[str, Any]:
     from motor_ai_sim import duty_results as DR
     out: Dict[str, Any] = {}
     for duty, kinds in (rows.items() if isinstance(rows, dict) else []):
-        if not isinstance(kinds, dict) or not _KEY_OK.fullmatch(str(duty)):
+        if not isinstance(kinds, dict) or not name_ok(str(duty)):
             counts["unattributed"] = counts.get("unattributed", 0) + 1
             continue
         for kind, rec in kinds.items():

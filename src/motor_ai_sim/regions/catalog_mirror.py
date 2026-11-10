@@ -526,12 +526,18 @@ def _pull(init: bool, prune: bool) -> int:
         print(f"catalog mirror: {exc}", file=sys.stderr)
         return EXIT_FAILED
     wd.mkdir(parents=True, exist_ok=True)
+    unattributed = int(((manifest.get("extracts") or {}).get("counts") or {}).get("unattributed") or 0)
+    plan["unattributed_rows"] = unattributed
     _atomic_write(wd / "manifest.json", json.dumps(manifest))
     _atomic_write(wd / "extracts.json", json.dumps(extracts if isinstance(extracts, dict) else {}))
     _atomic_write(wd / "plan.json", json.dumps(plan, indent=1))
     _atomic_write(wd / "fetch.txt", fetch_list_text(plan))
     print(json.dumps({k: (len(v) if isinstance(v, list) else v) for k, v in plan.items()
-                      if k in ("root_id", "refuse", "fetch", "delete", "edits", "collisions", "leftovers", "dropped_paths")}))
+                      if k in ("root_id", "refuse", "fetch", "delete", "edits", "collisions", "leftovers", "dropped_paths",
+                               "unattributed_rows")}))
+    if unattributed:
+        print(f"catalog mirror: WARNING {unattributed} result row(s) on EU could not be attributed to a mirrored configuration "
+              "or carry a name that does not pass the checks, and were not sent; check the configurations on EU", file=sys.stderr)
     for e in (plan["edits"] + plan["collisions"])[:20]:
         print(f"  {e['path']}: {e['why']}", file=sys.stderr)
     if extracts is None:

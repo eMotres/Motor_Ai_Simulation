@@ -377,6 +377,8 @@
     "disk": "可用磁盘",
     "single": "单区域",
     "singleTip": "未配置对端服务器；本服务器服务所有账户。",
+    "duplicates": "重复邮箱：{n}",
+    "duplicatesTip": "这些邮箱在两台服务器上都有账户。系统不会自动合并，请手动处理：",
     "homeRegion": "所属区域",
     "homeRegionTip": "管理员覆盖，已记录。不迁移数据：迁移是单独的步骤。",
     "remoteTip": "位于 {region} 服务器；请在该服务器上管理。",

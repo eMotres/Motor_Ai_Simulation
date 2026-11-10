@@ -6,7 +6,10 @@ PUBLIC (no sign-in, nothing personal)
 PEER (server-to-server, HMAC-signed: regions/peer.py; 404 for anything unsigned and in single-region mode)
   GET  /api/peer/v1/health                      status: region, version, commit, load, queue depth, disk
   GET  /api/peer/v1/directory                   the global account directory entries this server hosts (email -> id,
-                                                region, tier, created; nothing else)
+                                                region, tier, created; nothing else); ``?email=`` answers for that
+                                                one address only (the synchronous sign-up check, 2 s timeout)
+  GET  /api/peer/v1/migration/receipt?bundle=   the import receipt of one account-migration bundle (root hash, file
+                                                count, when): the source checks the target holds the same bytes
   GET  /api/peer/v1/catalog/manifest            hashes of the shared library (EU only: EU authors, US mirrors)
   POST /api/peer/v1/relay/mail                  send one mail for the peer (EU executes; audit line of hashes only)
   POST /api/peer/v1/relay/llm                   run one help-chat / spec-assistant / translation LLM call for the peer
@@ -19,7 +22,8 @@ PEER (server-to-server, HMAC-signed: regions/peer.py; 404 for anything unsigned 
 
 ADMIN (require_admin)
   GET  /api/admin/regions                       both regions' status (the Servers card); the local one alone when single
-  GET  /api/admin/regions/accounts              {email: region} for the admin tables (local + directory)
+  GET  /api/admin/regions/accounts              {email: region} for the admin tables (local + directory), plus the
+                                                e-mails both regions host (``duplicates``; never merged automatically)
   GET  /api/admin/regions/remote/cluster        the peer's cluster / load payload, live; reachable:false when it is down
   GET  /api/admin/regions/remote/{kind}         the peer's rows of users / projects / verification / jobs, live
   GET  /api/admin/regions/classify              the classifier's DRY-RUN report (proposed region + reason per account)
@@ -71,8 +75,22 @@ def peer_health(_peer: str = Depends(require_peer)) -> Dict[str, Any]:
 
 
 @router.get(P.PREFIX + "/directory")
-def peer_directory(_peer: str = Depends(require_peer)) -> Dict[str, Any]:
-    return {"region": RC.local_region(), "entries": RS.local_directory()}
+def peer_directory(email: str = "", _peer: str = Depends(require_peer)) -> Dict[str, Any]:
+    entries = RS.local_directory()
+    if email:
+        from motor_ai_sim import users as U
+        em = U._norm(email)
+        entries = {em: entries[em]} if em in entries else {}
+    return {"region": RC.local_region(), "entries": entries}
+
+
+@router.get(P.PREFIX + "/migration/receipt")
+def peer_migration_receipt(bundle: str = "", _peer: str = Depends(require_peer)) -> Dict[str, Any]:
+    from motor_ai_sim.regions import migrate as MG
+    rec = MG.load_receipt(bundle)
+    if rec is None:
+        raise HTTPException(status_code=404, detail="Not Found")
+    return {"region": RC.local_region(), **MG.public_receipt(rec)}
 
 
 @router.get(P.PREFIX + "/catalog/manifest")
@@ -169,7 +187,8 @@ def admin_regions(_admin: dict = Depends(require_admin)) -> Dict[str, Any]:
 def admin_region_accounts(_admin: dict = Depends(require_admin)) -> Dict[str, Any]:
     m = RS.region_map()
     return {"region": RC.local_region(), "mode": RC.describe()["mode"], "accounts": m,
-            "counts": {r: sum(1 for v in m.values() if v == r) for r in RC.REGIONS}}
+            "counts": {r: sum(1 for v in m.values() if v == r) for r in RC.REGIONS},
+            "duplicates": RS.duplicates()}
 
 
 @router.get("/api/admin/regions/remote/cluster")
@@ -224,7 +243,8 @@ def admin_directory_sync(admin: dict = Depends(require_admin)) -> Dict[str, Any]
         raise HTTPException(status_code=502, detail="the peer region did not answer")
     doc = RS.store_remote_directory(got.get("entries") or {}, RC.peer_region())
     _AA.record(_AA.actor_of(admin), "regions.directory_sync", RC.peer_region(), details={"entries": len(doc["entries"])})
-    return {"ok": True, "region": doc["region"], "entries": len(doc["entries"]), "updated": doc["updated"]}
+    return {"ok": True, "region": doc["region"], "entries": len(doc["entries"]), "updated": doc["updated"],
+            "duplicates": doc.get("duplicates") or []}
 
 
 @router.post("/api/admin/users/{email}/region")

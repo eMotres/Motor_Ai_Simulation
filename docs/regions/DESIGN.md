@@ -133,6 +133,30 @@ on the target consumes it and opens a local session, so the person is not asked 
 **Turning the guard on**: only for an account whose data have been migrated (stage 3). Until then the field `home_region`
 is advisory and `MOTRES_REGION_GUARD` stays off on both servers.
 
+**Stage 3 as built** (`regions/routing.py`, `regions/handoff.py`, `regions/guard.py`, `routes/auth_local.py`):
+
+* *Where an e-mail is served*: a local non-staff record whose home is the peer AND whose guard is on (per account
+  `region_guard`, written by the migration's `finish`; or the global switch) -> the peer; no local record, multi-region
+  mode, and the remote directory lists the address -> the peer; anything else -> here. An account classified US but
+  not migrated is served here.
+* *Sign-in routes*: login, Google, sign-up, reset request / confirm, resend and the JSON verify answer `421
+  wrong_region` (`signin: true`, `reason`) for such an address, the login BEFORE any password check. The mail-link pages
+  (`/api/auth/link/*`) show a page with one button to `<base_url>/?signin=1` and change nothing.
+* *Hand-off ticket*: `v1.<base64url JSON>.<HMAC-SHA256(peer secret, "motres-handoff-v1\n" + body)>`, 60 s life (10 s
+  grace), nonce burned in `identity/region_handoff_used.json` (all API workers see it). **It is minted only when the
+  refusing server has verified the caller itself** — never for an e-mail alone (that would open a session on the
+  target for anyone who types an address): `session` (a valid bearer of a guarded account hit the guard), `google` (a
+  verified Google ID token), `password` (the correct password of the account's not-yet-deleted local copy; a wrong one
+  counts as a failed sign-in and gets the 421 without a ticket). `session` / `password` tickets carry a digest of the
+  password hash; the target refuses them once the password was changed there. The target accepts a ticket only from
+  the configured peer, addressed to itself, for a local, enabled, verified, non-staff account whose home it is.
+* *The web*: a 421 with `handoff` moves the tab to `<base_url>/region-handoff#t=<ticket>&next=<path>`; that page posts
+  the ticket to `POST /api/auth/region-handoff` before the first render and shows `next` signed in. A 421 with `signin`
+  moves to the same path with `?signin=1`. https and `*.aerostator.com` only, never onto the refusing host.
+* *Per-account guard*: on with `region_guard`, independent of `MOTRES_REGION_GUARD`; staff are never guarded. While a
+  bundle is built the account carries `region_freeze`: every write (method other than GET / HEAD / OPTIONS) answers
+  `423 {code: account_migrating}`. With nothing flagged and the global guard off, the middleware verifies no token.
+
 ## 6. Edge routing of anonymous visitors (stage 4) — options
 
 | Option | How | Cost | Remarks |
@@ -243,6 +267,11 @@ map of the Projects / Verification tables. Race: two sign-ups of one new e-mail 
 -> stage 3 sign-up asks the peer synchronously (`GET /directory?email=`, 2 s timeout); if the peer is down the sign-up
 proceeds locally and the next sync flags the duplicate in the admin (never auto-merged).
 
+As built: the peer route answers `?email=` for that one address only; a hosted answer is cached into the remote
+directory at once. Google's first sign-in asks the same way. Every directory sync stores `duplicates` (local accounts
+of this region that the peer also hosts); `GET /api/admin/regions/accounts` returns them and the Regions card shows a
+red "Duplicates: N" chip with the addresses in its tooltip.
+
 ## 9. Compute pool across regions
 
 Owner 2026-11-08: jobs of any account may run on either server; a computation is not personal data.
@@ -321,6 +350,16 @@ Owner 2026-11-08: jobs of any account may run on either server; a computation is
    backup of it has run once (EU backups age out by rotation).
 4. Projects with members in both regions stay with the owner's region; members from the other region open them on that
    server (staff anyway; customers of one company are normally in one region).
+5. Dies that belong to a moved project move with it: the dies its `linked_motors` / `motor_history` name, every die
+   derived from one of them, and the dies named with `--die` (a base die is never added on its own: it is often a
+   catalog die other accounts use). Each carries `dies/<die>/`, its catalog history, production, tests, CAD, passports,
+   die access entry and duty-results rows; the moved `die.yaml` gets `home_region: us` on both servers, so the catalog
+   mirror (section 7) leaves it out.
+
+The tool is `scripts/migrate_account_region.py` (export -> transfer -> import -> finish; `unfreeze` to abort;
+`delete-source` later), runbook `docs/regions/MIGRATION.md`. The bundle moves by rsync over WireGuard; the peer channel
+stays pull-only — the source only READS the target's import receipt (`GET /api/peer/v1/migration/receipt?bundle=`,
+root hash and counts, no e-mail) before it turns the guard on.
 
 ## 14. Stages
 
@@ -328,7 +367,7 @@ Owner 2026-11-08: jobs of any account may run on either server; a computation is
 |---|---|---|
 | 1 (this PR) | Design; region field + classifier (dry run); region config; guard (off); signed peer client / server (inactive); admin column, filter, override, Servers -> Regions card; compute-pool contract; legal texts v0.7 | code |
 | 2 | Provision the US server (same compose, `MOTRES_REGION=us`), WireGuard between the hosts, peer secret on both, `MOTRES_PEER_URL` on both, catalog mirror timer, directory sync timer, US backups, `us.aerostator.com` DNS + certificate, Google sign-in origin; deploy; wire cross-region compute behind its switch | orchestrator |
-| 3 | Login 421 + hand-off ticket, sign-up uniqueness, migration of US accounts, guard on per migrated account | code + orchestrator |
+| 3 | Login 421 + hand-off ticket, sign-up uniqueness, migration of US accounts, guard on per migrated account (code: section 5 "Stage 3 as built", section 13, `docs/regions/MIGRATION.md`) | code + orchestrator |
 | 4 | Edge routing of anonymous visitors (option A), `signup_country` from the edge header | orchestrator |
 
 ## 15. Open owner decisions

@@ -21,6 +21,12 @@ from a password account below; RIGHTS always come from our registry
 - POST /api/auth/reset/request, /reset/confirm — password reset by link
 - GET  /api/auth/methods      — which sign-in methods the form may offer
 - GET  /api/auth/pending, POST /api/auth/pending/{email}/approve — admin
+- POST /api/auth/region-handoff — consume a sign-in hand-off ticket minted by the other region's server (regions/handoff.py)
+
+TWO REGIONS (docs/regions/DESIGN.md sections 5 and 8): an e-mail this server must not serve (regions/routing.py:
+a migrated account whose home is the peer, or an address only the peer hosts) gets ``421 wrong_region`` with the
+peer's base URL from the login, Google, sign-up, reset and resend routes - BEFORE any password check - and the mail
+links show a page that leads there.  A sign-up also asks the peer synchronously (2 s) whether it hosts the address.
 
 Login is rate-limited in-memory per account and per IP (auth_email.Limiter);
 register/reset answers never reveal whether an address has an account.  The one thing they DO say, because it depends on the
@@ -116,6 +122,73 @@ def _locked(email: str, ip: str) -> None:
             "too many failed sign-ins — wait 15 minutes and try again"))
 
 
+def _elsewhere(email: str) -> Optional[str]:
+    """The other region's name when this server must not serve ``email`` (regions/routing.py), else None.  Never
+    raises: a broken directory means "serve here", exactly as before stage 3."""
+    if not email:
+        return None
+    try:
+        from motor_ai_sim.regions import routing as RR
+        return RR.serving_region(email)
+    except Exception:                                        # noqa: BLE001
+        log.exception("regions: serving-region lookup failed; served here")
+        return None
+
+
+def _peer_hosts(email: str) -> Optional[str]:
+    """The peer region when the PEER hosts this e-mail and this server has no account for it: the last directory sync
+    first, then a synchronous ``GET /directory?email=`` (2 s).  An unreachable peer is None - the caller goes on
+    locally and the next directory sync shows the duplicate to the admin (never merged automatically)."""
+    try:
+        from motor_ai_sim.regions import config as RC
+        from motor_ai_sim.regions import store as RS
+        if not RC.peer_configured() or U.get_user(email) is not None:
+            return None
+        if RS.email_taken_elsewhere(email):
+            return RC.peer_region()
+        look = RS.peer_lookup(email, timeout=2.0)
+        if look and look.get("hosted"):
+            try:
+                RS.upsert_remote_entry(email, look.get("entry") or {}, RC.peer_region())
+            except (OSError, ValueError):
+                pass
+            return RC.peer_region()
+    except Exception:                                        # noqa: BLE001
+        log.exception("regions: peer directory lookup failed; sign-up goes on here")
+    return None
+
+
+def _refuse_region(region: str, *, reason: str, ticket: str = "") -> HTTPException:
+    from motor_ai_sim.regions import routing as RR
+    return RR.refuse(region, ticket=ticket, signin=not ticket, reason=reason)
+
+
+def _login_elsewhere(email: str, password: str, ip: str) -> None:
+    """421 for an e-mail the other region serves, decided BEFORE any password check.  Only when this server still holds
+    the account's (migrated, not yet deleted) copy AND the password matches it does the answer carry a hand-off ticket,
+    so the person is not asked again on the target; a wrong password counts as a failed sign-in and gets the 421
+    without a ticket.  The hash is never upgraded here (that would change the copy the target compares against)."""
+    region = _elsewhere(email)
+    if region is None:
+        return
+    if E.LOGIN_IP.blocked(ip):
+        raise HTTPException(429, detail="too many failed sign-ins — wait 15 minutes and try again")
+    ticket = ""
+    rec = U.get_user(email)
+    if rec is not None and not E.LOGIN_ACCOUNT.blocked(email):
+        if U._verify_pw(rec, password):
+            if not rec.get("disabled") and U.is_verified(rec):
+                from motor_ai_sim.regions import handoff as H
+                ticket = H.mint(email, region, method="password", rec=rec)
+        else:
+            E.LOGIN_ACCOUNT.hit(email)
+            E.LOGIN_IP.hit(ip)
+            S.record_event("login_failed", email=email, reason="bad_password", ip=ip, path="/api/auth/login")
+    S.record_event("login_redirected", email=email, reason="region:" + region + (":handoff" if ticket else ""), ip=ip,
+                   path="/api/auth/login")
+    raise _refuse_region(region, reason="login", ticket=ticket)
+
+
 class LoginReq(BaseModel):
     email: str
     password: str
@@ -128,6 +201,7 @@ def login(req: LoginReq, request: Request):
     reveals nothing) and per IP (30 / 15 min)."""
     ip = _ip(request)
     email = U._norm(req.email)
+    _login_elsewhere(email, req.password, ip)
     _locked(email, ip)
     status, _rec = U.authenticate(email, req.password)
     if status == "bad":
@@ -330,6 +404,12 @@ def register(req: RegisterReq, request: Request):
     _check_domain(email)
     if E.SIGNUP_IP.blocked(ip):
         raise HTTPException(429, detail="too many sign-ups from this network — try again later")
+    # two regions: an address the other region hosts is "already registered" there - sign in on that server
+    elsewhere = _elsewhere(email) or _peer_hosts(email)
+    if elsewhere:
+        E.SIGNUP_IP.hit(ip)
+        S.record_event("register", email=email, reason="registered_elsewhere:" + elsewhere, ip=ip, path="/api/auth/register")
+        raise _refuse_region(elsewhere, reason="registered_elsewhere")
     rid = _oauth_rid(req.return_to)
     nxt = _next_path(req.next)
     topics = _comm_prefs_ticked(req.comm_prefs)
@@ -381,6 +461,9 @@ def register_resend(req: ResendReq, request: Request):
     email = U._norm(req.email)
     if not _valid_email(email):
         raise HTTPException(422, detail="enter a valid e-mail address")
+    elsewhere = _elsewhere(email)
+    if elsewhere:
+        raise _refuse_region(elsewhere, reason="resend")
     may_mail = _mail_allowed(email, ip)
     rec = U.get_user(email)
     if may_mail and rec is not None and not U.is_verified(rec) and not rec.get("disabled"):
@@ -462,6 +545,9 @@ def verify_email(req: VerifyReq, request: Request):
         email = info["email"] if info and info["state"] == "valid" else ""
     if not email:
         raise invalid
+    elsewhere = _elsewhere(email)
+    if elsewhere:
+        raise _refuse_region(elsewhere, reason="verify")
     if not U._verify_pw(U.get_user(email), req.password):
         raise ApiError(403, "auth.verify_password", "Open the link in the mail and enter your password to confirm this address.")
     if not (U.consume_link_token(req.token, "verify") or U.consume_short_link(req.token, "verify")):
@@ -502,6 +588,9 @@ def reset_request(req: EmailReq, request: Request):
     if not _valid_email(email):
         raise HTTPException(422, detail="enter a valid e-mail address")
     _check_domain(email)
+    elsewhere = _elsewhere(email)
+    if elsewhere:
+        raise _refuse_region(elsewhere, reason="reset")
     may_mail = _mail_allowed(email, ip)
     rec = U.get_user(email)
     if may_mail and rec is not None and not rec.get("disabled"):
@@ -523,6 +612,10 @@ def reset_confirm(req: ResetReq, request: Request):
         U.check_password_policy(req.password)
     except U.PasswordPolicyError as e:
         raise HTTPException(422, detail=str(e))
+    peek = U.peek_link_token(req.token, "reset") or ((U.find_short_link(req.token, "reset") or {}).get("email") or "")
+    elsewhere = _elsewhere(peek)
+    if elsewhere:
+        raise _refuse_region(elsewhere, reason="reset")
     email = U.consume_link_token(req.token, "reset") or U.consume_short_link(req.token, "reset")
     if not email:
         raise HTTPException(400, detail=(
@@ -621,6 +714,18 @@ def _confirmed_page(request: Request, email: str, *, already: bool, return_path:
                              switch_url=_switch(request, lang), open_label="open_next" if nxt else ""))
 
 
+def _moved_page(request: Request, email: str) -> Optional[HTMLResponse]:
+    """The page of a mail link whose account now lives on the other region's server (nothing is changed here), or None."""
+    region = _elsewhere(email)
+    if region is None:
+        return None
+    from motor_ai_sim import link_pages as LP
+    from motor_ai_sim.regions import config as RC
+    lang = _link_lang(request, email)
+    target = RC.base_url(region) + ("/zh-cn/" if lang == "zh-CN" else "/") + "?signin=1"
+    return _html(LP.moved(lang, open_url=target, switch_url=_switch(request, lang) if request.method == "GET" else ""))
+
+
 def _invalid_page(request: Request, kind: str, email: str = "") -> HTMLResponse:
     from motor_ai_sim import link_pages as LP
     _bad_link(request)
@@ -651,6 +756,9 @@ def link_verify(sid: str, request: Request):
     info = U.find_short_link(sid, "verify")
     if info is None:
         return _invalid_page(request, "verify")
+    moved = _moved_page(request, info["email"])
+    if moved is not None:
+        return moved
     email, rec = info["email"], U.get_user(info["email"])
     if rec is None:
         return _invalid_page(request, "verify")
@@ -666,6 +774,9 @@ def link_verify_legacy(request: Request, t: str = ""):
     """The long link of a mail sent before the short ones (``/?verify=<token>``; nginx redirects the old SPA URL here).  Changes nothing."""
     _link_guard(request)
     email = U.peek_link_token(t, "verify")
+    moved = _moved_page(request, email or U.link_token_subject(t))
+    if moved is not None:
+        return moved
     rec = U.get_user(email) if email else None
     if rec is not None and not U.is_verified(rec) and not rec.get("disabled"):
         fields = {"t": t}
@@ -696,6 +807,9 @@ def link_verify_submit(request: Request, id: str = Form(""), t: str = Form(""), 
         fields = {"t": t}
         if secret:
             fields["continue"] = secret
+    moved = _moved_page(request, email)
+    if moved is not None:
+        return moved
     rec = U.get_user(email) if email else None
     if rec is not None and U.is_verified(rec):                # a second submit of the form
         return _confirmed_page(request, email, already=True, next_path=info.get("next_path", ""))
@@ -732,6 +846,9 @@ def _reset_page(request: Request, email: str, fields: dict, error: str = "") -> 
 def link_reset_form(sid: str, request: Request):
     _link_guard(request)
     info = U.find_short_link(sid, "reset")
+    moved = _moved_page(request, (info or {}).get("email", ""))
+    if moved is not None:
+        return moved
     if info is None or info["state"] != "valid":
         return _invalid_page(request, "reset", (info or {}).get("email", ""))
     return _reset_page(request, info["email"], {"id": sid})
@@ -742,6 +859,9 @@ def link_reset_form_legacy(request: Request, t: str = ""):
     """The long reset link of an older mail (``/?reset=<token>``; nginx redirects the old SPA URL here)."""
     _link_guard(request)
     email = U.peek_link_token(t, "reset")
+    moved = _moved_page(request, email or U.link_token_subject(t))
+    if moved is not None:
+        return moved
     if not email:
         return _invalid_page(request, "reset", U.link_token_subject(t))
     return _reset_page(request, email, {"t": t})
@@ -761,6 +881,9 @@ def link_reset_submit(request: Request, id: str = Form(""), t: str = Form(""), p
         fields = {"t": t}
     if not email:
         return _invalid_page(request, "reset")
+    moved = _moved_page(request, email)
+    if moved is not None:
+        return moved
     lang = _link_lang(request, email)
     if password != password2:
         return _reset_page(request, email, fields, LP.STRINGS[lang]["mismatch"])
@@ -792,6 +915,9 @@ def link_resend(request: Request, email: str = Form(""), kind: str = Form("verif
     home, _signin = _urls(lang)
     if not _valid_email(addr):
         return _html(LP.invalid(lang, kind=kind, email=email, action="/api/auth/link/resend"))
+    moved = _moved_page(request, addr)
+    if moved is not None:
+        return moved
     if _mail_allowed(addr, ip):
         rec = U.get_user(addr)
         if rec is not None and not rec.get("disabled"):
@@ -857,6 +983,15 @@ def google_login(req: GoogleReq, request: Request):
     if claims.get("email_verified") is not True:
         raise HTTPException(403, detail="Google account email is not verified")
     email = (claims.get("email") or "").strip().lower()
+    # two regions: Google has just proved who this is, so an account the other region serves gets the 421 WITH a
+    # hand-off ticket (no second sign-in there); a first sign-in also asks the peer, so one address is never two accounts
+    elsewhere = _elsewhere(email) or _peer_hosts(email)
+    if elsewhere:
+        from motor_ai_sim.regions import handoff as H
+        ticket = H.mint(email, elsewhere, method="google")
+        S.record_event("login_redirected", email=email, reason="region:" + elsewhere + (":handoff" if ticket else ""),
+                       ip=_ip(request), path="/api/auth/google")
+        raise _refuse_region(elsewhere, reason="google", ticket=ticket)
     first_sign_in = U.get_user(email) is None
     topics = _comm_prefs_ticked(req.comm_prefs) if first_sign_in else {}
     if first_sign_in:
@@ -884,6 +1019,31 @@ def google_login(req: GoogleReq, request: Request):
     return {"token": token,
             "user": {**U.public_user(email), "role": role,
                      "name": claims.get("name") or U.public_user(email).get("name", "")}}
+
+
+class HandoffReq(BaseModel):
+    ticket: str
+
+
+@router.post("/region-handoff")
+def region_handoff(req: HandoffReq, request: Request):
+    """Open a session from a hand-off ticket the other region's server minted (regions/handoff.py): 60 s, single use,
+    for an account this server is the home of.  Every refusal is the same 400 (the reason goes to the event log only)."""
+    from motor_ai_sim.regions import handoff as H
+    ip = _ip(request)
+    if E.LINK_IP.blocked(ip):
+        raise HTTPException(429, detail="too many requests - try again later")
+    try:
+        got = H.consume(req.ticket)
+    except H.HandoffError as e:
+        E.LINK_IP.hit(ip)
+        S.record_event("login_failed", reason="region_handoff:" + e.reason, ip=ip, path="/api/auth/region-handoff")
+        raise ApiError(400, "auth.region_handoff_invalid",
+                       "This sign-in hand-over has expired or was already used. Sign in with your e-mail.")
+    email = got["email"]
+    token = _start_session(email, method="region_handoff", request=request)
+    log.info("auth: region hand-off sign-in ok for %s (%s) from %s", email, got["method"], ip)
+    return {"token": token, "user": U.public_user(email)}
 
 
 class CreateReq(BaseModel):

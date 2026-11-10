@@ -377,6 +377,8 @@
     "disk": "Disk free",
     "single": "Single region",
     "singleTip": "No peer server is configured; this server serves every account.",
+    "duplicates": "Duplicates: {n}",
+    "duplicatesTip": "These e-mails have an account on both servers. Never merged automatically; resolve by hand:",
     "homeRegion": "Home region",
     "homeRegionTip": "Admin override, logged. Moves no data: migration is a separate step.",
     "remoteTip": "Lives on the {region} server; manage it there.",

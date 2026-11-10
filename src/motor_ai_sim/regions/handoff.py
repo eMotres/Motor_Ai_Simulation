@@ -129,9 +129,14 @@ def _spend(nonce: str, exp: int, now: float) -> None:
     with _USED_LOCK:
         try:
             used = json.loads(p.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
+        except FileNotFoundError:
             used = {}
-        used = {k: v for k, v in (used if isinstance(used, dict) else {}).items()
+        except (OSError, ValueError):
+            # an unreadable or corrupt store would forget every burned nonce: refuse instead of allowing replays
+            raise HandoffError("store_unavailable")
+        if not isinstance(used, dict):
+            raise HandoffError("store_unavailable")
+        used = {k: v for k, v in used.items()
                 if isinstance(v, (int, float)) and v >= now - GRACE_S}
         if nonce in used:
             raise HandoffError("replay")

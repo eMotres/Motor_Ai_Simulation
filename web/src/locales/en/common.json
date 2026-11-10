@@ -157,6 +157,7 @@
     }
   },
   "auth": {
+    "handoffReplace": "You are signed in as {current}. Sign out and continue as {incoming}?",
     "idleClosed": "Signed out after {minutes} minutes without activity",
     "idleClosedTip": "A session closes after {minutes} minutes with no activity and no computation running. Computations already started keep running.",
     "title": {

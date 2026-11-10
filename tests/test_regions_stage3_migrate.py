@@ -54,6 +54,8 @@ def _server(env, region: str) -> Path:
     mp.setenv("MOTRES_REGION_DIRECTORY_FILE", str(ident / "region_directory.json"))
     mp.setenv("MOTRES_REGION_HANDOFF_FILE", str(ident / "region_handoff_used.json"))
     mp.setenv("MOTRES_REGION_MIGRATIONS_DIR", str(ident / "region_migrations"))
+    mp.delenv("MOTRES_REGION_BUNDLES_DIR", raising=False)
+    mp.delenv("MCP_KEYS_DIR", raising=False)
     mp.setenv("MOTRES_REGION", region)
     mp.setenv("MOTRES_PEER_URL", "http://peer.invalid:8001")
     mp.setenv("MOTRES_PEER_HMAC_SECRET", SECRET)
@@ -144,6 +146,14 @@ def _bundle(env) -> Path:
     return Path(rep["bundle_dir"])
 
 
+def _to_us(env, b: Path, name: str = "") -> Path:
+    """What the host's rsync does: a copy of the bundle folder on the US host."""
+    import shutil
+    dst = env["tmp"] / "us_bundles" / (name or b.name)
+    shutil.copytree(b, dst)
+    return dst
+
+
 def _fake_peer(env):
     """The US server's answers over the peer channel: its receipt and its directory entry (read from US's own files)."""
     def handler(req: httpx.Request):
@@ -198,6 +208,35 @@ def test_plan_blocks(env):
     assert not RS.is_frozen(env["U"].get_user(BUYER))
 
 
+def test_plan_blocks_other_writers_of_what_moves(env):
+    """Other non-staff members of a moved project, and other accounts in a moved die's access list, would keep writing
+    to the source copy: both block (staff members do not: they work on both servers)."""
+    one = env["eu"] / "shared" / "projects" / "p-one" / "project.json"
+    doc = json.loads(one.read_text())
+    doc["members"].append({"email": STAFF, "role": "engineer"})
+    one.write_text(json.dumps(doc))
+    assert MG.plan(BUYER)["blockers"] == []                                # a staff member is fine
+    doc["members"].append({"email": OTHER, "role": "editor"})
+    one.write_text(json.dumps(doc))
+    assert any("p-one: 1 other non-staff member" in b for b in MG.plan(BUYER)["blockers"])
+    assert MG.plan(BUYER, allow_project_members=True)["blockers"] == []
+    doc["members"] = doc["members"][:-1]
+    one.write_text(json.dumps(doc))
+    acc = env["eu"] / "identity" / "die_access.json"
+    a = json.loads(acc.read_text())
+    a["DIEA"]["clients"].append(OTHER)
+    acc.write_text(json.dumps(a))
+    assert any("die 'DIEA' is used by 1 other account" in b for b in MG.plan(BUYER)["blockers"])
+
+
+def test_bundle_goes_to_the_mounted_identity_folder_by_default(env):
+    rep = MG.export(BUYER, apply=True, actor="test")
+    b = Path(rep["bundle_dir"])
+    assert b.parent == env["eu"] / "identity" / "region_bundles"
+    m = MG.load_manifest(b)
+    assert m["root_hmac"] == MG.root_hmac(m["root_sha256"]) and MG.verify_bundle(b)["signature_ok"]
+
+
 def test_extra_die_and_its_descendants(env):
     _w(env["eu"] / "shared" / "dies" / "DIEB v2" / "die.yaml", "name: DIEB v2\nderived_from:\n  die: DIEB\n")
     assert MG.plan(BUYER, extra_dies=["DIEB"], allow_shared_dies=True)["dies"] == ["DIEA", "DIEB", "DIEA buyer", "DIEB v2"]
@@ -223,12 +262,16 @@ def test_export_freezes_and_the_bundle_is_hashed(env):
     assert not MG.verify_bundle(b)["ok"] and MG.verify_bundle(b)["bad"] == ["projects/p-one/project.json"]
 
 
-def test_transfer_builds_a_checksummed_rsync(env):
+def test_transfer_builds_a_checksummed_rsync(env, monkeypatch):
     b = _bundle(env)
     ran = []
-    rep = MG.transfer(b, "10.77.0.2:/srv/motres/run/migrations", runner=lambda c: ran.append(c) or 0)
+    rep = MG.transfer(b, "10.77.0.2:/srv/motres/identity/region_bundles", runner=lambda c: ran.append(c) or 0)
     assert rep["dry_run"] and "--dry-run" in ran[0] and "--checksum" in ran[0]
-    assert ran[0][-1] == f"10.77.0.2:/srv/motres/run/migrations/{b.name}/"
+    assert ran[0][-1] == f"10.77.0.2:/srv/motres/identity/region_bundles/{b.name}/"
+    monkeypatch.setattr(MG.shutil, "which", lambda name: None)              # the API container: no rsync
+    with pytest.raises(MG.MigrationError) as e:
+        MG.transfer(b, "10.77.0.2:/srv/motres/identity/region_bundles", apply=True)
+    assert "run on the host: rsync -a --checksum" in str(e.value)
 
 
 def test_full_migration_eu_to_us(env):
@@ -236,10 +279,12 @@ def test_full_migration_eu_to_us(env):
     b = _bundle(env)
     eu_rec = U.get_user(BUYER)
     _server(env, "us")
-    dry = MG.import_bundle(b)
-    assert dry["blockers"] == [] and dry["to_install"] == MG.load_manifest(b)["files"].__len__()
+    bu = _to_us(env, b)
+    dry = MG.import_bundle(bu)
+    assert dry["blockers"] == [] and dry["to_install"] == len(MG.load_manifest(bu)["files"])
     assert U.get_user(BUYER) is None                                       # a dry run writes nothing
-    rep = MG.import_bundle(b, apply=True, actor="test")
+    rep = MG.import_bundle(bu, apply=True, actor="test")
+    assert rep["bundle_removed"] and not bu.exists()                       # the US copy of the bundle is gone
     us = env["tmp"] / "us"
     rec = U.get_user(BUYER)
     assert rec["pw_hash"] == eu_rec["pw_hash"] and rec["home_region"] == "us"
@@ -252,13 +297,15 @@ def test_full_migration_eu_to_us(env):
     assert "DIEA" in json.loads((us / "shared" / ".duty_results.json").read_text())["results"]
     from motor_ai_sim.verification import store as VS
     assert [c["id"] for c in VS.cases_of(BUYER)] == [env["case"]]
-    assert rep["receipt"]["root_sha256"] == MG.load_manifest(b)["root_sha256"]
-    assert MG.import_bundle(b, apply=True)["already_imported"] is True     # idempotent
-    # back on the source: finish needs the target's receipt
+    assert rep["receipt"]["root_sha256"] == MG.load_manifest(b)["root_sha256"] and rep["receipt"]["state"] == "done"
+    # back on the source: an agent key of the account exists; finish needs the target's receipt
     _server(env, "eu")
+    from motor_ai_sim import agent_keys as K
+    K.create_key(BUYER, name="laptop")
     fin = MG.finish(BUYER, b, transport=_fake_peer(env))
     assert fin["blockers"] == [] and fin["dry_run"]
-    MG.finish(BUYER, b, apply=True, actor="test", transport=_fake_peer(env))
+    done = MG.finish(BUYER, b, apply=True, actor="test", transport=_fake_peer(env))
+    assert done["revoked"]["agent_keys"] == 1 and not any(k["active"] for k in K.list_keys(BUYER))
     rec = U.get_user(BUYER)
     assert RS.is_guarded(rec) and not RS.is_frozen(rec) and RS.effective_region(rec) == "us"
     assert "home_region: us" in (env["eu"] / "shared" / "dies" / "DIEA" / "die.yaml").read_text()
@@ -271,25 +318,112 @@ def test_full_migration_eu_to_us(env):
     assert client.post("/api/auth/region-handoff", json={"ticket": ticket}).status_code == 200
     # LATER: delete the EU copy
     _server(env, "eu")
-    changed = env["eu"] / "workspaces" / env["ws"] / "motor_config.yaml"
-    changed.write_text("rpm: 4000\n")
     with pytest.raises(MG.MigrationError):
         MG.delete_source(BUYER, b, apply=True, transport=_fake_peer(env))      # backup not confirmed
+    # a write that reached the EU copy after the export: outside a die it blocks, inside a die that die stays whole
+    ws_file = env["eu"] / "workspaces" / env["ws"] / "motor_config.yaml"
+    ws_file.write_text("rpm: 4000\n")
     dry = MG.delete_source(BUYER, b, target_backup_confirmed=True, transport=_fake_peer(env))
-    assert dry["kept_changed"] == [f"workspaces/{env['ws']}/motor_config.yaml"] and dry["blockers"]
+    assert dry["changed"] == [f"workspaces/{env['ws']}/motor_config.yaml"] and dry["blockers"]
     with pytest.raises(MG.MigrationError):
         MG.delete_source(BUYER, b, apply=True, target_backup_confirmed=True, transport=_fake_peer(env))
-    d = MG.delete_source(BUYER, b, apply=True, target_backup_confirmed=True, allow_changed=True, actor="test",
-                         transport=_fake_peer(env))
-    assert d["kept_changed"] == [f"workspaces/{env['ws']}/motor_config.yaml"]
-    assert not (env["eu"] / "workspaces" / env["ws"]).exists()              # the workspace goes with the purge
+    ws_file.write_text("rpm: 3000\n")
+    (env["eu"] / "shared" / "production" / "DIEA" / "c1" / "production.json").write_text('{"die": "DIEA", "x": 2}')
+    _w(env["eu"] / "shared" / "projects" / "p-three" / "project.json", json.dumps({
+        "id": "p-three", "members": [{"email": OTHER, "role": "owner"}], "linked_motors": [{"die": "DIEA buyer"}]}))
+    d = MG.delete_source(BUYER, b, apply=True, target_backup_confirmed=True, actor="test", transport=_fake_peer(env))
+    assert set(d["kept_dies"]) == {"DIEA", "DIEA buyer"}                   # a changed file / a project that stays
+    assert (env["eu"] / "shared" / "dies" / "DIEA" / "c1.yaml").is_file()
+    assert (env["eu"] / "shared" / "dies" / "DIEA buyer" / "die.yaml").is_file()
+    assert "DIEA" in json.loads((env["eu"] / "identity" / "die_access.json").read_text())
+    assert not (env["eu"] / "workspaces" / env["ws"]).exists()
     assert not (env["eu"] / "shared" / "projects" / "p-one").exists()
     assert (env["eu"] / "shared" / "projects" / "p-two" / "project.json").is_file()
     assert (env["eu"] / "shared" / "dies" / "DIEB" / "die.yaml").is_file()
     assert U.get_user(BUYER) is None and U.get_user(OTHER) is not None
-    assert "DIEA" not in json.loads((env["eu"] / "identity" / "die_access.json").read_text())
+    assert d["bundle_removed"] and not b.exists()                          # the EU bundle went with the copy
     r = client.post("/api/auth/login", json={"email": BUYER, "password": PW})
     assert r.status_code == 421 and r.json()["detail"]["region"] == "us"  # the directory still sends the person on
+
+
+def _imported(env) -> Path:
+    b = _bundle(env)
+    _server(env, "us")
+    MG.import_bundle(_to_us(env, b), apply=True, actor="test")
+    _server(env, "eu")
+    return b
+
+
+def test_finish_refuses_a_source_change_between_export_and_finish(env):
+    """A write that slipped past the freeze (a staff edit of a moved project, here) makes the bundle stale."""
+    b = _imported(env)
+    (env["eu"] / "shared" / "projects" / "p-one" / "project.json").write_text('{"id": "p-one", "edited": true}')
+    rep = MG.finish(BUYER, b, transport=_fake_peer(env))
+    assert any("1 file(s) changed" in x for x in rep["blockers"]) and rep["changed"] == ["projects/p-one/project.json"]
+    with pytest.raises(MG.MigrationError):
+        MG.finish(BUYER, b, apply=True, transport=_fake_peer(env))
+    assert not RS.is_guarded(env["U"].get_user(BUYER)) and RS.is_frozen(env["U"].get_user(BUYER))
+
+
+def test_finish_refuses_a_password_or_disabled_change_during_the_freeze(env):
+    b = _imported(env)
+    env["U"].set_password(BUYER, "a different password 9")
+    assert any("password changed" in x for x in MG.finish(BUYER, b, transport=_fake_peer(env))["blockers"])
+    b2 = _imported_again(env)
+    env["U"].update_user(BUYER, disabled=True)
+    assert any("enabled / disabled" in x for x in MG.finish(BUYER, b2, transport=_fake_peer(env))["blockers"])
+
+
+def _imported_again(env) -> Path:
+    """Abort, then a fresh export of the (changed) account."""
+    MG.unfreeze(BUYER, apply=True)
+    return _bundle(env)
+
+
+def test_import_checks_the_signature_and_refuses_staff(env):
+    b = _bundle(env)
+    _server(env, "us")
+    bu = _to_us(env, b)
+    m = json.loads((bu / "manifest.json").read_text())
+    m["root_hmac"] = "0" * 64
+    (bu / "manifest.json").write_text(json.dumps(m))
+    rep = MG.import_bundle(bu)
+    assert rep["verify"]["signature_ok"] is False and rep["blockers"]
+    # a staff record in a bundle that is otherwise well formed and signed
+    bu2 = _to_us(env, b, name="staff-copy")
+    rec = json.loads((bu2 / "records.json").read_text())
+    rec["user"]["role"] = "admin"
+    raw = json.dumps(rec, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    (bu2 / "records.json").write_bytes(raw.encode("utf-8"))
+    m2 = json.loads((bu2 / "manifest.json").read_text())
+    m2["records_sha256"] = hashlib.sha256(raw.encode("utf-8")).hexdigest()
+    m2["root_sha256"] = MG.root_hash(m2)
+    m2["root_hmac"] = MG.root_hmac(m2["root_sha256"])
+    (bu2 / "manifest.json").write_text(json.dumps(m2))
+    assert any("staff account" in x for x in MG.import_bundle(bu2)["blockers"])
+
+
+def test_interrupted_import_can_run_again(env, monkeypatch):
+    b = _bundle(env)
+    _server(env, "us")
+    bu = _to_us(env, b)
+
+    def boom():
+        raise RuntimeError("power cut")
+    monkeypatch.setattr(MG, "_rebuild_indexes", boom)
+    with pytest.raises(RuntimeError):
+        MG.import_bundle(bu, apply=True)
+    assert MG.load_receipt(b.name)["state"] == "pending" and env["U"].get_user(BUYER) is not None
+    monkeypatch.undo()
+    _server(env, "us")
+    rep = MG.import_bundle(bu, apply=True)                                 # the account here equals the bundle's
+    assert rep["receipt"]["state"] == "done" and rep["merged"]["account"] == 0
+    # a DIFFERENT account record under the same address is never merged
+    _server(env, "eu")
+    b2 = _imported_again(env)
+    _server(env, "us")
+    env["U"].update_user(BUYER, name="someone else")
+    assert any("already exists" in x for x in MG.import_bundle(_to_us(env, b2))["blockers"])
 
 
 def test_import_refuses_conflicts_and_wrong_region(env):
@@ -297,11 +431,12 @@ def test_import_refuses_conflicts_and_wrong_region(env):
     with pytest.raises(MG.MigrationError):
         MG.import_bundle(b, apply=True)                                   # this is the EU server
     _server(env, "us")
+    bu = _to_us(env, b)
     _w(env["tmp"] / "us" / "shared" / "dies" / "DIEA" / "die.yaml", "name: something else\n")
-    rep = MG.import_bundle(b)
+    rep = MG.import_bundle(bu)
     assert rep["conflicts"] == ["dies/DIEA/die.yaml"] and rep["blockers"]
     with pytest.raises(MG.MigrationError):
-        MG.import_bundle(b, apply=True)
+        MG.import_bundle(bu, apply=True)
     assert env["U"].get_user(BUYER) is None
 
 
@@ -319,12 +454,13 @@ def test_finish_refuses_without_a_matching_receipt_and_unfreeze_aborts(env):
 def test_peer_receipt_route_shows_hashes_only(env):
     b = _bundle(env)
     _server(env, "us")
-    MG.import_bundle(b, apply=True)
+    MG.import_bundle(_to_us(env, b), apply=True)
     bid = b.name
     path = f"/api/peer/v1/migration/receipt?bundle={bid}"
     h = P.sign_headers("GET", path, secret=SECRET, region="eu")
     j = client.get(path, headers=h).json()
     assert j["root_sha256"] == MG.load_manifest(b)["root_sha256"] and BUYER not in json.dumps(j)
+    assert j["state"] == "done" and j["verified"] is True
     assert client.get(path).status_code == 404                            # unsigned
     h = P.sign_headers("GET", "/api/peer/v1/migration/receipt?bundle=mig-nope", secret=SECRET, region="eu")
     assert client.get("/api/peer/v1/migration/receipt?bundle=mig-nope", headers=h).status_code == 404

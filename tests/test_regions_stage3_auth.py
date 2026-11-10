@@ -236,8 +236,12 @@ def test_peer_lookup_is_none_when_unreachable(env):
 
 def test_reset_request_and_mail_links_lead_to_the_home_server(env):
     _directory_has("only.on.us@example.com")
+    sent = []
+    env["mp"].setattr(P, "post", lambda path, payload, **kw: sent.append((path, payload)) or {"ok": True})
     r = client.post("/api/auth/reset/request", json={"email": "only.on.us@example.com"})
-    assert r.status_code == 421 and r.json()["detail"]["signin"] is True
+    nobody = client.post("/api/auth/reset/request", json={"email": "nobody.anywhere@example.com"})
+    assert r.status_code == 202 and r.json() == nobody.json()             # the same answer: nothing about where it lives
+    assert sent == [("/auth/reset-mail", {"email": "only.on.us@example.com"})]   # the home server mails its own link
     sid = env["U"].issue_short_link(US_USER, "verify")
     _migrate_record(env)
     page = client.get(f"/api/auth/link/v/{sid}")

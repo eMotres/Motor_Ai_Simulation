@@ -25,13 +25,18 @@ from a password account below; RIGHTS always come from our registry
 
 TWO REGIONS (docs/regions/DESIGN.md sections 5 and 8): an e-mail this server must not serve (regions/routing.py:
 a migrated account whose home is the peer, or an address only the peer hosts) gets ``421 wrong_region`` with the
-peer's base URL from the login, Google, sign-up, reset and resend routes - BEFORE any password check - and the mail
-links show a page that leads there.  A sign-up also asks the peer synchronously (2 s) whether it hosts the address.
+peer's base URL from the login (BEFORE any password check), Google, sign-up and link-token routes, and the mail links
+show a page that leads there.  A sign-up also asks the peer synchronously (2 s) whether it hosts the address.  The
+reset request and the resend do NOT answer 421: they answer the usual 202 (the reset mail is sent by the home server,
+relayed over the peer channel).  A frozen account (migration running) gets 423 on the password and reset routes.
 
-Login is rate-limited in-memory per account and per IP (auth_email.Limiter);
-register/reset answers never reveal whether an address has an account.  The one thing they DO say, because it depends on the
-input alone, is that the DOMAIN of the address does not exist (email_domain.py): a mistyped domain bounces every mail and locks the
-person out, so it is refused before anything is sent.
+Login is rate-limited in-memory per account and per IP (auth_email.Limiter).  WHAT AN ANSWER REVEALS: the reset and
+resend answers never reveal whether an address has an account or where it lives.  The login and sign-up 421 DO reveal
+that an address is hosted by the other region (the person must be sent there); every such 421 counts against the same
+per-IP limit as a failed sign-in (30 / 15 min), so addresses cannot be sorted by region faster than passwords can be
+tried.  A sign-up of an address THIS server hosts still answers the same 202 as a new one.  The other thing these routes
+say, because it depends on the input alone, is that the DOMAIN of the address does not exist (email_domain.py): a
+mistyped domain bounces every mail and locks the person out, so it is refused before anything is sent.
 
 Every sign-in now creates a SERVER-SIDE session (sessions.py) whose sid rides
 in the token, and appends a line to logs/auth_events.jsonl.  Before that, a
@@ -158,9 +163,27 @@ def _peer_hosts(email: str) -> Optional[str]:
     return None
 
 
-def _refuse_region(region: str, *, reason: str, ticket: str = "") -> HTTPException:
+def _refuse_region(region: str, *, reason: str, ip: str, ticket: str = "") -> HTTPException:
+    """The 421 of a sign-in route.  It says which region hosts an address, so EVERY one counts against the per-IP
+    sign-in limit (30 / 15 min): an address list cannot be sorted by region faster than passwords can be guessed."""
     from motor_ai_sim.regions import routing as RR
+    if E.LOGIN_IP.blocked(ip):
+        return HTTPException(429, detail="too many failed sign-ins — wait 15 minutes and try again")
+    E.LOGIN_IP.hit(ip)
     return RR.refuse(region, ticket=ticket, signin=not ticket, reason=reason)
+
+
+def _refuse_if_frozen(email: str) -> None:
+    """423 on the password / reset routes of an account whose migration bundle is being built: a password changed on
+    the source during the freeze would be lost on the target (``finish`` also compares the password digest and refuses
+    on a change).  These routes are exempt from the guard middleware (/api/auth/), so they check it themselves."""
+    if not email:
+        return
+    from motor_ai_sim.regions import guard as G
+    from motor_ai_sim.regions import store as RS
+    rec = U.get_user(email)
+    if RS.is_frozen(rec):
+        raise HTTPException(G.FROZEN_STATUS, detail=G.frozen_body()["detail"])
 
 
 def _login_elsewhere(email: str, password: str, ip: str) -> None:
@@ -181,12 +204,11 @@ def _login_elsewhere(email: str, password: str, ip: str) -> None:
                 from motor_ai_sim.regions import handoff as H
                 ticket = H.mint(email, region, method="password", rec=rec)
         else:
-            E.LOGIN_ACCOUNT.hit(email)
-            E.LOGIN_IP.hit(ip)
+            E.LOGIN_ACCOUNT.hit(email)                      # the IP is counted by _refuse_region, like every 421
             S.record_event("login_failed", email=email, reason="bad_password", ip=ip, path="/api/auth/login")
     S.record_event("login_redirected", email=email, reason="region:" + region + (":handoff" if ticket else ""), ip=ip,
                    path="/api/auth/login")
-    raise _refuse_region(region, reason="login", ticket=ticket)
+    raise _refuse_region(region, reason="login", ip=ip, ticket=ticket)
 
 
 class LoginReq(BaseModel):
@@ -409,7 +431,7 @@ def register(req: RegisterReq, request: Request):
     if elsewhere:
         E.SIGNUP_IP.hit(ip)
         S.record_event("register", email=email, reason="registered_elsewhere:" + elsewhere, ip=ip, path="/api/auth/register")
-        raise _refuse_region(elsewhere, reason="registered_elsewhere")
+        raise _refuse_region(elsewhere, reason="registered_elsewhere", ip=ip)
     rid = _oauth_rid(req.return_to)
     nxt = _next_path(req.next)
     topics = _comm_prefs_ticked(req.comm_prefs)
@@ -461,9 +483,8 @@ def register_resend(req: ResendReq, request: Request):
     email = U._norm(req.email)
     if not _valid_email(email):
         raise HTTPException(422, detail="enter a valid e-mail address")
-    elsewhere = _elsewhere(email)
-    if elsewhere:
-        raise _refuse_region(elsewhere, reason="resend")
+    if _elsewhere(email):
+        return _ACCEPTED            # an account the other region serves is confirmed there: same answer, nothing sent
     may_mail = _mail_allowed(email, ip)
     rec = U.get_user(email)
     if may_mail and rec is not None and not U.is_verified(rec) and not rec.get("disabled"):
@@ -501,6 +522,11 @@ def register_change_email(req: ChangeEmailReq, request: Request):
             _send_verification(old)
         return _ACCEPTED
     if not _mail_allowed(new, ip):
+        return _ACCEPTED
+    if _elsewhere(new) or _peer_hosts(new):
+        # the other region hosts the new address: one address is never two accounts - same answer, nothing changes
+        S.record_event("email_change_refused", email=old, reason="registered_elsewhere", ip=ip,
+                       path="/api/auth/register/change-email")
         return _ACCEPTED
     if U.get_user(new) is not None:
         subj, body = E.exists_mail(new)
@@ -547,7 +573,7 @@ def verify_email(req: VerifyReq, request: Request):
         raise invalid
     elsewhere = _elsewhere(email)
     if elsewhere:
-        raise _refuse_region(elsewhere, reason="verify")
+        raise _refuse_region(elsewhere, reason="verify", ip=_ip(request))
     if not U._verify_pw(U.get_user(email), req.password):
         raise ApiError(403, "auth.verify_password", "Open the link in the mail and enter your password to confirm this address.")
     if not (U.consume_link_token(req.token, "verify") or U.consume_short_link(req.token, "verify")):
@@ -575,6 +601,34 @@ def _send_reset_mail(email: str) -> None:
         log.warning("auth: SMTP not configured - password-reset link for %s: %s", email, url)
 
 
+def _relay_reset(email: str, region: str) -> None:
+    """Ask the peer (signed, ``POST /api/peer/v1/auth/reset-mail``) to mail its own reset link.  Never raises: a peer
+    that is down means no mail, and the caller answers the same 202 either way."""
+    try:
+        from motor_ai_sim.regions import config as RC
+        from motor_ai_sim.regions import peer as P
+        if RC.peer_configured() and RC.peer_region() == region:
+            P.post("/auth/reset-mail", {"email": email}, timeout=4.0)
+    except Exception:                                        # noqa: BLE001
+        log.exception("regions: reset-mail relay to the peer failed")
+
+
+def send_reset_for_peer(email: str) -> bool:
+    """The peer asked THIS server to mail a reset link (its user typed the address there).  Only for an account this
+    server is the home of, enabled and not frozen, and within the usual per-address mail limit."""
+    from motor_ai_sim.regions import config as RC
+    from motor_ai_sim.regions import store as RS
+    em = U._norm(email)
+    rec = U.get_user(em)
+    if (not isinstance(rec, dict) or rec.get("disabled") or RS.is_frozen(rec)
+            or RS.effective_region(rec) != RC.local_region() or E.MAIL_ACCOUNT.blocked(em)):
+        return False
+    E.MAIL_ACCOUNT.hit(em)
+    _send_reset_mail(em)
+    S.record_event("reset_requested", email=em, reason="via_peer", path="/api/peer/v1/auth/reset-mail")
+    return True
+
+
 class EmailReq(BaseModel):
     email: str
 
@@ -582,18 +636,25 @@ class EmailReq(BaseModel):
 @router.post("/reset/request", status_code=202)
 def reset_request(req: EmailReq, request: Request):
     """Mail a reset link if the account exists.  Same answer either way.
-    Also the way a Google-only account gets a password."""
+    Also the way a Google-only account gets a password.
+
+    Two regions: an account the other region serves gets its reset mail FROM that server (it holds the account and
+    issues the link): the request is relayed over the signed peer channel and the answer here stays the same 202, so
+    this route says nothing about where an address lives.  A frozen account (migration running) gets no link."""
     ip = _ip(request)
     email = U._norm(req.email)
     if not _valid_email(email):
         raise HTTPException(422, detail="enter a valid e-mail address")
     _check_domain(email)
+    may_mail = _mail_allowed(email, ip)
     elsewhere = _elsewhere(email)
     if elsewhere:
-        raise _refuse_region(elsewhere, reason="reset")
-    may_mail = _mail_allowed(email, ip)
+        if may_mail:
+            _relay_reset(email, elsewhere)
+        return _ACCEPTED
     rec = U.get_user(email)
-    if may_mail and rec is not None and not rec.get("disabled"):
+    from motor_ai_sim.regions import store as _RS
+    if may_mail and rec is not None and not rec.get("disabled") and not _RS.is_frozen(rec):
         _send_reset_mail(email)
         S.record_event("reset_requested", email=email, ip=ip,
                        path="/api/auth/reset/request")
@@ -615,7 +676,8 @@ def reset_confirm(req: ResetReq, request: Request):
     peek = U.peek_link_token(req.token, "reset") or ((U.find_short_link(req.token, "reset") or {}).get("email") or "")
     elsewhere = _elsewhere(peek)
     if elsewhere:
-        raise _refuse_region(elsewhere, reason="reset")
+        raise _refuse_region(elsewhere, reason="reset", ip=_ip(request))
+    _refuse_if_frozen(peek)
     email = U.consume_link_token(req.token, "reset") or U.consume_short_link(req.token, "reset")
     if not email:
         raise HTTPException(400, detail=(
@@ -885,6 +947,10 @@ def link_reset_submit(request: Request, id: str = Form(""), t: str = Form(""), p
     if moved is not None:
         return moved
     lang = _link_lang(request, email)
+    from motor_ai_sim.regions import store as _RS
+    if _RS.is_frozen(U.get_user(email)):                     # migration running: the link stays valid for later
+        from motor_ai_sim import link_pages as LP
+        return _reset_page(request, email, fields, LP.STRINGS[lang]["frozen"])
     if password != password2:
         return _reset_page(request, email, fields, LP.STRINGS[lang]["mismatch"])
     try:
@@ -991,7 +1057,7 @@ def google_login(req: GoogleReq, request: Request):
         ticket = H.mint(email, elsewhere, method="google")
         S.record_event("login_redirected", email=email, reason="region:" + elsewhere + (":handoff" if ticket else ""),
                        ip=_ip(request), path="/api/auth/google")
-        raise _refuse_region(elsewhere, reason="google", ticket=ticket)
+        raise _refuse_region(elsewhere, reason="google", ip=_ip(request), ticket=ticket)
     first_sign_in = U.get_user(email) is None
     topics = _comm_prefs_ticked(req.comm_prefs) if first_sign_in else {}
     if first_sign_in:
@@ -1134,6 +1200,8 @@ def users_patch(email: str, req: PatchReq, _admin: dict = Depends(require_admin)
                 except Exception:                              # noqa: BLE001
                     log.warning("comm_prefs: sign-up choices did not follow the admin's address change")
                 _send_verification(email)
+        if req.password is not None or req.disabled is not None:
+            _refuse_if_frozen(U._norm(email))                # finish compares both with the bundle
         before = (U.get_user(email) or {}).get("role", "user")
         if req.password is not None:
             U.set_password(email, req.password)
@@ -1191,6 +1259,11 @@ def change_password(req: SelfPassword, request: Request,
     me = det["user"]
     if me is None or not me.get("email"):
         raise HTTPException(401, detail="sign in first")
+    _refuse_if_frozen(me["email"])
+    moved = _elsewhere(me["email"])
+    if moved:                                                # a migrated account changes its password at home
+        from motor_ai_sim.regions import routing as RR
+        raise RR.refuse(moved, signin=True, reason="password")
     if U.check_login(me["email"], req.old_password) is None:
         raise HTTPException(403, detail="current password does not match")
     try:

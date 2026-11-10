@@ -66,17 +66,57 @@ def _bearer(headers) -> str:
 
 
 def _account(token: str) -> Optional[Tuple[str, dict]]:
-    """``(email, record)`` of a VALID bearer, else None."""
+    """``(email, record)`` of a VALID bearer, else None.  Every bearer the role gate accepts on ``/api/`` counts: OUR
+    token, and a raw Google ID token (auth.resolve_user_detail step 2) - a guard that only knew our tokens let a Google
+    token write to a frozen or migrated account.  ``/mcp`` keys and OAuth tokens: :func:`account_block`."""
+    got = _account_kind(token)
+    return (got[0], got[1]) if got is not None else None
+
+
+def _account_kind(token: str) -> Optional[Tuple[str, dict, str]]:
+    """``(email, record, "session" | "google")`` of a valid bearer."""
     from motor_ai_sim import users as U
-    try:
-        res = U.verify_token(token)
-    except Exception:                                       # noqa: BLE001 - the role gate owns token errors
-        return None
-    if not res.ok:
-        return None
-    email = U._norm(str((res.user or {}).get("email") or res.email or ""))
+    res = U.verify_token(token)
+    if res.ok:
+        email = U._norm(str((res.user or {}).get("email") or res.email or ""))
+        kind = "session"
+    elif res.reason in ("expired", "revoked", "disabled", "unknown_user", "idle_timeout", "store_unavailable"):
+        return None                                         # definitively ours and bad: the role gate answers it
+    else:
+        from motor_ai_sim import auth as A
+        claims = A._verify_google_token(token)
+        if not claims or claims.get("email_verified") is not True:
+            return None
+        email = U._norm(str(claims.get("email") or ""))
+        kind = "google"
     rec = U.get_user(email)
-    return (email, rec) if isinstance(rec, dict) else None
+    return (email, rec, kind) if isinstance(rec, dict) else None
+
+
+def account_block(rec: Optional[dict], method: str = "POST") -> Optional[str]:
+    """Why this account may not act on THIS server right now: ``wrong_region`` (migrated away, or the global guard),
+    ``account_migrating`` (frozen; ``method`` decides for /api - the MCP channel passes a write, it cannot tell), or
+    None.  The one rule for every channel: the /api middleware below and ``mcp_app.verify_any``."""
+    if not isinstance(rec, dict):
+        return None
+    from motor_ai_sim.regions import store as RS
+    if _misdirected(rec) is not None:
+        return CODE
+    if RS.is_frozen(rec) and (method or "GET").upper() not in SAFE_METHODS:
+        return FROZEN_CODE
+    return None
+
+
+def _flagged_claim(token: str) -> bool:
+    """The token's UNVERIFIED e-mail claim names a flagged account (cheap: it only ever skips work or, after a crash,
+    keeps a write out)."""
+    from motor_ai_sim import users as U
+    from motor_ai_sim.regions import store as RS
+    flagged = RS.flagged_emails()
+    if not flagged or not token:
+        return False
+    claims = U._unverified(token)
+    return U._norm(str(claims.get("email") or claims.get("sub") or "")) in flagged
 
 
 def _worth_verifying(token: str) -> bool:
@@ -86,13 +126,7 @@ def _worth_verifying(token: str) -> bool:
         return False
     if RC.guard_enabled():
         return True
-    from motor_ai_sim import users as U
-    from motor_ai_sim.regions import store as RS
-    flagged = RS.flagged_emails()
-    if not flagged:
-        return False
-    claims = U._unverified(token)
-    return U._norm(str(claims.get("email") or claims.get("sub") or "")) in flagged
+    return _flagged_claim(token)
 
 
 def misdirected_region(token: str) -> Optional[str]:
@@ -125,18 +159,22 @@ def decide(token: str, method: str) -> Optional[Tuple[int, dict]]:
     """-> ``(status, body)`` to answer instead of the route, or None to pass."""
     if not _worth_verifying(token):
         return None
-    got = _account(token)
+    got = _account_kind(token)
     if got is None:
         return None
-    email, rec = got
-    region = _misdirected(rec)
-    if region is not None:
+    email, rec, kind = got
+    block = account_block(rec, method)
+    if block == CODE:
         from motor_ai_sim.regions import handoff as H
-        return STATUS, body_for(region, H.mint(email, region, method="session", rec=rec))
-    from motor_ai_sim.regions import store as RS
-    if RS.is_frozen(rec) and (method or "GET").upper() not in SAFE_METHODS:
-        return FROZEN_STATUS, {"detail": {"code": FROZEN_CODE, "message": FROZEN_MESSAGE}}
+        region = _misdirected(rec) or ""
+        return STATUS, body_for(region, H.mint(email, region, method=kind, rec=rec))
+    if block == FROZEN_CODE:
+        return FROZEN_STATUS, frozen_body()
     return None
+
+
+def frozen_body() -> dict:
+    return {"detail": {"code": FROZEN_CODE, "message": FROZEN_MESSAGE}}
 
 
 class RegionGuardMiddleware:
@@ -146,11 +184,18 @@ class RegionGuardMiddleware:
     async def __call__(self, scope, receive, send):
         if scope.get("type") != "http" or exempt(scope.get("path") or "/"):
             return await self.app(scope, receive, send)
+        token, method = _bearer(scope.get("headers") or []), str(scope.get("method") or "GET")
         try:
-            verdict = decide(_bearer(scope.get("headers") or []), str(scope.get("method") or "GET"))
+            verdict = decide(token, method)
         except Exception:                                   # noqa: BLE001 - the guard never takes the site down
-            log.exception("regions: guard check failed; request passed")
+            # ... but never lets a write of a flagged (frozen / migrated) account through either: fail closed for those
             verdict = None
+            try:
+                if method.upper() not in SAFE_METHODS and _flagged_claim(token):
+                    verdict = (FROZEN_STATUS, frozen_body())
+            except Exception:                               # noqa: BLE001
+                verdict = None
+            log.exception("regions: guard check failed; %s", "write refused" if verdict else "request passed")
         if verdict is None:
             return await self.app(scope, receive, send)
         status, body = verdict

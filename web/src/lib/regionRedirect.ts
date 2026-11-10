@@ -49,6 +49,24 @@ export const wrongRegionTarget = (status: number, body: unknown, currentHref: st
   return `${base.origin}${curPath}${cur.search}${cur.hash}`;
 };
 
+/** The account a ticket is for (its `e` claim), for the "replace the signed-in account?" question only - the server
+ *  alone decides whether the ticket is good.  '' when it cannot be read. */
+export const ticketEmail = (ticket: string): string => {
+  try {
+    const body = String(ticket || '').split('.')[1] || '';
+    const b64 = body.replace(/-/g, '+').replace(/_/g, '/') + '='.repeat((4 - (body.length % 4)) % 4);
+    const doc = JSON.parse(atob(b64)) as { e?: unknown };
+    return typeof doc.e === 'string' ? doc.e.toLowerCase() : '';
+  } catch { return ''; }
+};
+
+/** A hand-off would REPLACE a session of another account in this browser: it must be confirmed first (login CSRF - a
+ *  link from someone else must never silently swap the signed-in account). */
+export const handoffNeedsConfirm = (currentEmail: string | null | undefined, ticket: string): boolean => {
+  const cur = String(currentEmail || '').trim().toLowerCase();
+  return !!cur && cur !== ticketEmail(ticket);
+};
+
 /** On the hand-off page: the ticket and where to go after, read from the fragment (never sent to a server log). */
 export const handoffFromLocation = (pathname: string, hash: string): { ticket: string; next: string } | null => {
   if (pathname !== HANDOFF_PATH) return null;

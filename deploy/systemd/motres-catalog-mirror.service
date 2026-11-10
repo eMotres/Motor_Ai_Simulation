@@ -1,0 +1,17 @@
+# US server: mirror the OPEN catalog from EU (docs/regions/DESIGN.md sections 7, 12; install note: docs/regions/INSTALL_US_MIRROR.md).
+# plan -> rsync over WireGuard from EU's read-only module -> apply (delete, verify, merge the per-die extracts).
+# Refuses to run (exit 2, unit "failed") when the US copy has local edits; exit 75 = EU or rsync did not answer, retried at the next tick.
+[Unit]
+Description=AeroStator US catalog mirror (open library from EU)
+After=docker.service network-online.target
+Wants=network-online.target
+ConditionPathExists=/etc/motres/region-us
+
+[Service]
+Type=oneshot
+Nice=15
+IOSchedulingClass=idle
+WorkingDirectory=/opt/motres/app/deploy
+ExecStart=/bin/bash /opt/motres/app/scripts/mirror_catalog_us.sh
+SuccessExitStatus=75
+TimeoutStartSec=1800

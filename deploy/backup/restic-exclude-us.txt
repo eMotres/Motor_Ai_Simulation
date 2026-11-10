@@ -1,0 +1,12 @@
+# What the US restic skips IN ADDITION to restic-exclude.txt (pass both with --exclude-file).
+# Install as /etc/motres/restic-exclude-us.txt.
+
+# The other region's jobs: never in a backup (docs/regions/DESIGN.md section 9).  Also named in restic-exclude.txt.
+foreign_jobs/
+
+# The mirror job's scratch files (the state file next to them IS backed up: it says which files the mirror owns).
+/srv/motres/identity/mirror/manifest.json
+/srv/motres/identity/mirror/extracts.json
+/srv/motres/identity/mirror/plan.json
+/srv/motres/identity/mirror/fetch.txt
+/srv/motres/identity/mirror/restic-exclude-mirrored.txt

@@ -214,6 +214,26 @@ its own `build()` of the mirror, fetches the `fetch` list by rsync over WireGuar
 module limited to the allow-listed paths), deletes the `delete` list, and refuses to run if the US copy has local edits
 (US never authors the library). `root_id` equal on both = in sync; the Regions card can show it in stage 2.
 
+**Partial shared files (stage 2)**: `.duty_results.json`, `end_effect_passports.json` and `die_access.json` are one file for the
+whole library, so they are not copied by hash. `GET /api/peer/v1/catalog/extracts` (EU only, signed) returns per-die extracts
+(`regions/catalog_manifest.build_extracts`; the manifest carries their id and counts):
+
+* **duty results**: the `results` and `history` rows of every mirrored configuration of a mirrored die. A row of a closed
+  die or a private configuration is counted as `closed`; a row of a mirrored die whose configuration is unknown (a stale
+  row), or a malformed store, as `unattributed`; neither is sent. An unreadable store is counted and sends nothing.
+* **end-effect passports**: an entry crosses only when its geometry fingerprint is named by a mirrored row
+  (`geometry_fingerprint`) or by a mirrored configuration's passport file; the rest are `passports_left_out`.
+* **die access**: only dies whose access is `public`, as `{visibility: public, clients: []}` (a `selected` die's client
+  e-mails never cross; other mirrored dies take US's private default).
+
+On US `catalog_mirror.merge_extracts` merges them per die into the US stores (atomic write, cross-process lock, a corrupt
+store is never overwritten) and removes what it merged earlier for a die that is no longer mirrored; rows and entries it did
+not merge (closed motors of US accounts) are left alone. The mirror job (`scripts/mirror_catalog_us.sh`: plan, rsync, apply)
+deletes only files it installed itself (its state file), refuses to run when one of them changed on US or a mirrored path
+collides with a file that is not the mirror's, and drops any manifest path that is absolute, climbs out or is outside the
+allow-list. Timers: catalog mirror every 15 min, directory sync every 5 min (`deploy/systemd`); install note
+`docs/regions/INSTALL_US_MIRROR.md`.
+
 ## 8. Global account directory
 
 Local half: derived from `users.json` on every call. Remote half: `identity/region_directory.json`, replaced by each sync.
@@ -241,9 +261,16 @@ Owner 2026-11-08: jobs of any account may run on either server; a computation is
 * **Scheduling**: `pick_region` sends a job to the peer only with `MOTRES_CROSS_REGION_COMPUTE=1`, a configured and
   reachable peer, and clearly lower pressure there ((running + queued) / cores lower by more than 0.25), so equal load
   does not ping-pong. Otherwise home.
-* Stage 1 ships the contract and its tests; nothing calls it from the queue yet (stage 2 wires `jobs.queued` once both
-  servers run the same build). Consequence for the privacy text: computing a job elsewhere moves no personal data and is
-  therefore not described as data storage (owner's correction of the v0.7 draft).
+* Stage 2 wires it (`regions/foreign.py`, off unless `MOTRES_CROSS_REGION_COMPUTE=1` on both servers): `jobs.run_job` (so every
+  `@jobs.queued` route) offers a job whose kind has a registered handler to `foreign.route`, which asks `pick_region`,
+  builds the scrubbed payload (refused -> runs at home), writes the token map, and sends it with `POST /api/peer/v1/foreign/submit`
+  (the peer answers `ok: false` when it is off, busy or the payload still identifies someone -> runs at home). The home
+  record lives in `compute_nodes` leased to the virtual node `region:<peer>`. The peer stores the job under
+  `run/foreign_jobs/<token>.json`, the worker loop runs it only while its own queue has a free slot and hands the result
+  back with `POST /api/peer/v1/foreign/result` (retry with a growing delay, file deleted at once when confirmed, else after
+  24 h); `home_sweep` re-runs at home a token that never came back in 24 h. Only handler kinds can cross; a route closure
+  cannot be shipped. Computing a job elsewhere moves no personal data and is therefore not described as data storage
+  (owner's correction of the v0.7 draft).
 
 ## 10. Admin panel
 
@@ -275,6 +302,12 @@ Owner 2026-11-08: jobs of any account may run on either server; a computation is
   its own key, the same include list. US backups never go to the EU box and EU backups never to the US.
 * The mirrored library on US is excluded from US backups (it is restorable from EU); `run/foreign_jobs/` is excluded on
   both.
+* US storage (owner 2026-11-10): Backblaze B2, US region, restic `b2:<bucket>:<path>` backend. Credentials
+  (`B2_ACCOUNT_ID`, `B2_ACCOUNT_KEY`, `RESTIC_PASSWORD`, `RESTIC_REPOSITORY`) only in the root-only
+  `/etc/motres/backup-us.env` (0600), never in code, units or logs. Own include list (`restic-include-us.txt`) and
+  `motres-backup-us.{service,timer}`; the files the mirror installed are excluded through a list regenerated from its state
+  file before every run (`catalog_mirror backup-exclude`), so closed motors of US accounts and every region-owned store are
+  still backed up.
 * Restore rehearsal per region after stage 2.
 
 ## 13. Migration of existing US accounts (stage 3)
@@ -306,7 +339,7 @@ Owner 2026-11-08: jobs of any account may run on either server; a computation is
   computation elsewhere is not described as storage.
 * (c) Which edge option (A free / B paid) and whether `us.aerostator.com` should also send non-US visitors back to EU.
 * (d) US territories as US (section 2)?
-* (e) The US backup storage provider and its retention.
+* (e) ~~The US backup storage provider~~ **Decided 2026-11-10**: Backblaze B2 (US); retention as the EU one (24 hourly / 30 daily / 12 monthly) until the owner says otherwise.
 * (f) Whether published community work of one region should be readable from the other.
 * (g) The Hetzner rows of Schedule 2 still say "All Platform data"; with a second host the owner may want "Platform data of
   accounts hosted in the EU" in a later version (v0.7 changed only what was approved).

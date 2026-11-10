@@ -52,6 +52,13 @@ def idle(state: dict) -> bool:
 def serve() -> None:
     os.environ.setdefault("MOTRES_ROLE", "worker")
     import uvicorn
+    # Cross-region compute (docs/regions/DESIGN.md section 9): the loop that runs the peer's jobs and hands results back.
+    # A no-op unless MOTRES_CROSS_REGION_COMPUTE=1 and a peer is configured.
+    try:
+        from motor_ai_sim.regions import foreign as _foreign
+        _foreign.start_loop()
+    except Exception as exc:                                # noqa: BLE001 - the worker must come up without it
+        print("foreign jobs loop not started: %s" % type(exc).__name__, file=sys.stderr)
     uvicorn.run("motor_ai_sim.api:app", host=os.environ.get("WORKER_HOST", "0.0.0.0"), port=_port(),
                 log_level=os.environ.get("WORKER_LOG_LEVEL", "info"))
 

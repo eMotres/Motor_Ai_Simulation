@@ -1,0 +1,25 @@
+# What the US server's restic backs up.  One path per line; --files-from.
+# Install as /etc/motres/restic-include-us.txt.  (docs/regions/DESIGN.md section 12)
+#
+# Same irreplaceable set as the EU list, with two differences:
+#   * the mirrored library is NOT backed up (it is restorable from EU by the catalog mirror).  /srv/motres/shared is listed
+#     because a US server also holds region-owned data there (projects, production, directory, legal, motor_tests and the
+#     closed motors of US accounts); the files the mirror installed are cut out by restic-exclude-mirrored.txt, which
+#     `catalog_mirror backup-exclude` regenerates from the mirror's state file before every run;
+#   * run/foreign_jobs/ (the other region's jobs, 24 h) is not in any listed tree and is excluded by name as well.
+
+# ── irreplaceable ───────────────────────────────────────────────────────────
+# .auth_secret + users.json of the US accounts, the region directory, die_access.json, the mirror state file.
+/srv/motres/identity
+
+# ── the US customers' work ──────────────────────────────────────────────────
+/srv/motres/workspaces
+/srv/motres/published
+
+# ── region-owned data in the shared tree (the mirrored files are excluded, see above) ─────────────────
+/srv/motres/shared
+
+# ── configuration ───────────────────────────────────────────────────────────
+# Includes backup-us.env (the B2 key and the repository password).  The repository password is also kept OFF this server
+# (a password manager): a key stored only on the machine it protects protects nothing.
+/etc/motres

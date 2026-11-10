@@ -10,7 +10,11 @@ Modules:
   classifier        proposes a home region for every account, with the reason (dry run by default)
   peer              HMAC-signed server-to-server requests (sign / verify / client)
   status            this server's health, version, load, queue depth and disk
-  catalog_manifest  hashes of the shared library that EU replicates read-only to US
+  catalog_manifest  hashes of the open shared library that EU replicates read-only to US, plus the per-die extracts of the
+                    partial files (duty results, end-effect passports, die access)
+  catalog_mirror    the US half: plan / apply / merge of the mirror job (scripts/mirror_catalog_us.sh)
+  directory_sync    pull the peer's account directory entries (5-minute timer)
+  foreign           cross-region compute, both halves: dispatch + token map at home, foreign-job store + hand-back at the peer
   compute           the cross-region compute pool: where a job runs, the anonymised job payload, the opaque token map
   guard             the wrong-region answer (421) for a signed-in account on the other region's server
 """

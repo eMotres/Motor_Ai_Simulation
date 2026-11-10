@@ -423,6 +423,8 @@ app.include_router(data_sharing_router)
 app.include_router(cluster_router)
 from motor_ai_sim.routes.regions import router as regions_router
 app.include_router(regions_router)   # /api/region, /api/peer/v1/*, /api/admin/regions*: two regions, stage 1 (docs/regions/DESIGN.md)
+from motor_ai_sim.routes.regions_sync import router as regions_sync_router
+app.include_router(regions_sync_router)   # /api/peer/v1/catalog/extracts, /foreign/*: two regions, stage 2 (docs/regions/DESIGN.md)
 app.include_router(compute_nodes_router)
 app.include_router(compute_nodes_admin_router)
 app.include_router(support_router)

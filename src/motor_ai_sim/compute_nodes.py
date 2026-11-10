@@ -1016,6 +1016,50 @@ def _account(rec: Dict[str, Any]) -> None:
 #  jobs.run_job hook + a demo kind
 # ─────────────────────────────────────────────────────────────────────────────
 
+#: Cross-region compute (``regions/foreign.py``): the peer REGION is a virtual node.  The home server keeps the job record
+#: here (so ``/api/jobs`` shows it and the result is filed in the owner's workspace like a node's), leased to the label
+#: ``region:<peer>`` for good - ``reap`` never re-queues it; ``regions.foreign.home_sweep`` ends it.
+REGION_NODE_PREFIX = "region:"
+REGION_HOLD_S = 30 * 24 * 3600.0
+
+
+def lease_to_region(rid: str, label: str, now: Optional[float] = None) -> bool:
+    """Mark a just-submitted job as running on the peer region ``label`` (``region:us``)."""
+    t = time.time() if now is None else now
+    with _LOCK:
+        jobs = _load("remote_jobs.json")
+        j = jobs.get(rid)
+        if j is None or j["state"] != QUEUED:
+            return False
+        j.update(state=LEASED, node=label, started_at=t, lease_expires=t + REGION_HOLD_S, attempts=1)
+        _save("remote_jobs.json", jobs)
+    audit("job.region", owner=j["owner"], run_id=rid, region=label)
+    return True
+
+
+def finish_region(rid: str, ok: bool, result: Any = None, error: str = "", wall_s: float = 0.0,
+                  now: Optional[float] = None) -> Optional[Dict[str, Any]]:
+    """The peer region handed the job back (or the home server gave up on it).  -> the record, or ``None`` when the job is
+    unknown or already over (a repeated hand-back is a no-op)."""
+    t = time.time() if now is None else now
+    with _LOCK:
+        jobs = _load("remote_jobs.json")
+        j = jobs.get(rid)
+        if j is None or j["state"] not in _OPEN:
+            return None
+        cancelled = bool(j.get("cancel"))
+        state = CANCELLED if cancelled else (DONE if ok else FAILED)
+        j.update(state=state, finished_at=t, lease_expires=0.0,
+                 error="" if ok else CM.redact(str(error or "failed")[:400]),
+                 provenance={"node_id": j.get("node") or "", "cpu_s": 0.0, "wall_s": max(0.0, float(wall_s or 0.0))})
+        rec = dict(j)
+        _save("remote_jobs.json", jobs)
+    if state == DONE:
+        _file_result(rec, result)
+    audit("job.region_done", owner=rec["owner"], run_id=rid, state=state)
+    return rec
+
+
 def remote_router(rec: Any) -> bool:
     """``jobs.run_job``'s hook: True if ``rec`` was dispatched to a node."""
     try:

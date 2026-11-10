@@ -609,7 +609,25 @@ def _rpc_error(msg_id, code: int, text: str, data: Optional[dict] = None) -> dic
 
 
 def verify_any(authorization):
-    """An agent key (``emk_``) or an OAuth access token (``emo_``) -> Principal."""
+    """An agent key (``emk_``) or an OAuth access token (``emo_``) -> Principal.
+
+    Two regions: the owning account must be served HERE.  A migrated account (``wrong_region``) or one whose writes are
+    frozen while its migration bundle is built (``account_migrating``) is refused - every MCP call, since this channel
+    cannot tell a read from a write (regions/guard.py ``account_block``, the same rule as the /api middleware)."""
+    principal, reason = _verify_credential(authorization)
+    if principal is not None:
+        try:
+            from motor_ai_sim import users as _U
+            from motor_ai_sim.regions import guard as _RG
+            block = _RG.account_block(_U.get_user(principal.email), "POST")
+        except Exception:                                    # noqa: BLE001 - fail closed: the account cannot be checked
+            block = "account_unavailable"
+        if block:
+            return None, block
+    return principal, reason
+
+
+def _verify_credential(authorization):
     if isinstance(authorization, str):
         parts = authorization.strip().split(" ", 1)
         if (len(parts) == 2 and parts[0].lower() == "bearer"

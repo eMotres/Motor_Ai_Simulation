@@ -71,8 +71,40 @@ test('the hand-off page reads the ticket from the fragment and only same-origin 
 
 test('the app consumes a hand-off before its first render', () => {
   const main = readFileSync(join(HERE, '..', '..', 'main.tsx'), 'utf8');
-  assert.match(main, /consumeRegionHandoff\(\)\.finally\(\(\) => createRoot/);
+  assert.match(main, /consumeRegionHandoff\(confirmHandoff\)\.finally\(\(\) => createRoot/);
   const la = readFileSync(join(HERE, '..', 'localAuth.ts'), 'utf8');
   assert.match(la, /post\('\/api\/auth\/region-handoff', \{ ticket: got\.ticket \}\)/);
   assert.match(la, /window\.history\.replaceState\(null, '', got\.next\)/);
+});
+
+// ── review fix: a hand-off never silently replaces another signed-in account (login CSRF) ──
+import { ticketEmail, handoffNeedsConfirm } from '../regionRedirect.ts';
+
+const ticketFor = (email) => {
+  const body = Buffer.from(JSON.stringify({ e: email, to: 'us', n: 'x'.repeat(20) })).toString('base64url');
+  return `v1.${body}.${'b'.repeat(64)}`;
+};
+
+test('the ticket names its account; another signed-in account must confirm', () => {
+  assert.equal(ticketEmail(ticketFor('A@Example.com')), 'a@example.com');
+  assert.equal(ticketEmail('garbage'), '');
+  assert.equal(handoffNeedsConfirm(null, ticketFor('a@example.com')), false);           // nobody signed in
+  assert.equal(handoffNeedsConfirm('a@example.com', ticketFor('a@example.com')), false); // the same account
+  assert.equal(handoffNeedsConfirm('b@example.com', ticketFor('a@example.com')), true);  // another account: ask
+  assert.equal(handoffNeedsConfirm('b@example.com', 'garbage'), true);                    // unreadable: ask
+});
+
+test('the app ALWAYS asks before a hand-off signs in, and changes nothing on no', () => {
+  const la = readFileSync(join(HERE, '..', 'localAuth.ts'), 'utf8');
+  assert.doesNotMatch(la, /if \(handoffNeedsConfirm/);                      // no "only when signed in" shortcut
+  assert.match(la, /ok = confirmContinue \? await confirmContinue\(current, ticketEmail\(got\.ticket\)\) : false/);
+  assert.match(la, /if \(!ok\) return false;\s+try \{\s+const \{ token, user \} = await post\('\/api\/auth\/region-handoff'/);
+  const main = readFileSync(join(HERE, '..', '..', 'main.tsx'), 'utf8');
+  assert.match(main, /window\.confirm\(i18n\.t\('common:auth\.handoffContinue'/);
+  assert.match(main, /window\.confirm\(i18n\.t\('common:auth\.handoffReplace'/);
+  for (const lang of ['en', 'zh-CN']) {
+    const common = JSON.parse(readFileSync(join(HERE, '..', '..', 'locales', lang, 'common.json'), 'utf8'));
+    assert.match(common.auth.handoffReplace, /\{current\}.*\{incoming\}/s, lang);
+    assert.match(common.auth.handoffContinue, /\{incoming\}/, lang);
+  }
 });

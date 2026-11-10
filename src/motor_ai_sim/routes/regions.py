@@ -84,6 +84,22 @@ def peer_directory(email: str = "", _peer: str = Depends(require_peer)) -> Dict[
     return {"region": RC.local_region(), "entries": entries}
 
 
+@router.post(P.PREFIX + "/auth/reset-mail")
+def peer_reset_mail(payload: Dict[str, Any] = Body(default={}), _peer: str = Depends(require_peer)) -> Dict[str, Any]:
+    """The peer's user asked for a password reset of an account THIS server hosts: mail it from here (this server
+    holds the account and issues the link).  The documented exception to "pull only", like the relays: it stores
+    nothing of the peer's request, and the answer is always ``{ok: true}`` (the peer learns nothing about the address)."""
+    from motor_ai_sim.routes import auth_local as AL
+    em = str((payload or {}).get("email") or "")[:254]
+    if em:
+        try:
+            AL.send_reset_for_peer(em)
+        except Exception:                                    # noqa: BLE001
+            import logging
+            logging.getLogger(__name__).exception("regions: reset mail for the peer failed")
+    return {"ok": True}
+
+
 @router.get(P.PREFIX + "/migration/receipt")
 def peer_migration_receipt(bundle: str = "", _peer: str = Depends(require_peer)) -> Dict[str, Any]:
     from motor_ai_sim.regions import migrate as MG

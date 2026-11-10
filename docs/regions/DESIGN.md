@@ -139,9 +139,13 @@ is advisory and `MOTRES_REGION_GUARD` stays off on both servers.
   `region_guard`, written by the migration's `finish`; or the global switch) -> the peer; no local record, multi-region
   mode, and the remote directory lists the address -> the peer; anything else -> here. An account classified US but
   not migrated is served here.
-* *Sign-in routes*: login, Google, sign-up, reset request / confirm, resend and the JSON verify answer `421
-  wrong_region` (`signin: true`, `reason`) for such an address, the login BEFORE any password check. The mail-link pages
-  (`/api/auth/link/*`) show a page with one button to `<base_url>/?signin=1` and change nothing.
+* *Sign-in routes*: login, Google, sign-up and the link-token routes (verify, reset confirm) answer `421
+  wrong_region` (`signin: true`, `reason`) for such an address, the login BEFORE any password check. That 421 says which
+  region hosts an address, so every one counts against the per-IP sign-in limit (30 / 15 min). The reset request and the
+  resend never answer 421: they answer the usual 202, and a reset of an account the peer hosts is relayed to it
+  (`POST /api/peer/v1/auth/reset-mail`, signed; the peer mails its own link; the documented exception to "pull only",
+  like the relays: nothing stored, answer always `{ok: true}`). The mail-link pages (`/api/auth/link/*`) show a page with
+  one button to `<base_url>/?signin=1` and change nothing.
 * *Hand-off ticket*: `v1.<base64url JSON>.<HMAC-SHA256(peer secret, "motres-handoff-v1\n" + body)>`, 60 s life (10 s
   grace), nonce burned in `identity/region_handoff_used.json` (all API workers see it). **It is minted only when the
   refusing server has verified the caller itself** — never for an e-mail alone (that would open a session on the
@@ -149,13 +153,25 @@ is advisory and `MOTRES_REGION_GUARD` stays off on both servers.
   verified Google ID token), `password` (the correct password of the account's not-yet-deleted local copy; a wrong one
   counts as a failed sign-in and gets the 421 without a ticket). `session` / `password` tickets carry a digest of the
   password hash; the target refuses them once the password was changed there. The target accepts a ticket only from
-  the configured peer, addressed to itself, for a local, enabled, verified, non-staff account whose home it is.
+  the configured peer, addressed to itself, for a local, enabled, verified, non-staff account whose home it is. The
+  used-nonce file is read under a cross-process lock; an unreadable or corrupt file refuses every ticket (never forgets
+  burned nonces).
 * *The web*: a 421 with `handoff` moves the tab to `<base_url>/region-handoff#t=<ticket>&next=<path>`; that page posts
   the ticket to `POST /api/auth/region-handoff` before the first render and shows `next` signed in. A 421 with `signin`
-  moves to the same path with `?signin=1`. https and `*.aerostator.com` only, never onto the refusing host.
+  moves to the same path with `?signin=1`. https and `*.aerostator.com` only, never onto the refusing host. When the
+  browser is signed in to ANOTHER account on the target, the page asks before the ticket replaces that session (a link
+  from someone else must never silently swap the account); on no, the current session stays.
 * *Per-account guard*: on with `region_guard`, independent of `MOTRES_REGION_GUARD`; staff are never guarded. While a
   bundle is built the account carries `region_freeze`: every write (method other than GET / HEAD / OPTIONS) answers
   `423 {code: account_migrating}`. With nothing flagged and the global guard off, the middleware verifies no token.
+  Every credential counts (`guard.account_block`, one rule): our tokens and raw Google ID tokens on `/api/` (the
+  middleware), agent keys and OAuth tokens on `/mcp` (`mcp_app.verify_any` refuses every call of a frozen or migrated
+  account: that channel cannot tell a read from a write). The password and reset routes (exempt from the middleware)
+  answer 423 themselves for a frozen account, and the admin cannot change its password or disabled state. A crash of
+  the check never lets a write of a flagged account through (423). Writers that no credential check can stop — a staff
+  edit, another member of a moved project — are caught by `finish`, which re-hashes every bundle file and refuses on a
+  change; the plan blocks on other non-staff members of moved projects and on other accounts in a moved die's access
+  list.
 
 ## 6. Edge routing of anonymous visitors (stage 4) — options
 
@@ -376,7 +392,9 @@ Owner 2026-11-08: jobs of any account may run on either server; a computation is
    mirror (section 7) leaves it out.
 
 The tool is `scripts/migrate_account_region.py` (export -> transfer -> import -> finish; `unfreeze` to abort;
-`delete-source` later), runbook `docs/regions/MIGRATION.md`. The bundle moves by rsync over WireGuard; the peer channel
+`delete-source` later), runbook `docs/regions/MIGRATION.md`. The bundle is written to the host-mounted 0700 folder
+`identity/region_bundles/`, its root hash is signed with the peer secret (checked by `import`), the US copy is deleted
+by a done import and the EU copy by `delete-source`. The bundle moves by rsync over WireGuard, run on the host; the peer channel
 stays pull-only — the source only READS the target's import receipt (`GET /api/peer/v1/migration/receipt?bundle=`,
 root hash and counts, no e-mail) before it turns the guard on.
 

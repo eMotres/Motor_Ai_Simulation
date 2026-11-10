@@ -1521,7 +1521,7 @@ def any_users() -> bool:
 
 # ── login / tokens ───────────────────────────────────────────────────────────
 
-def authenticate(email: str, password: str) -> tuple[str, Optional[dict]]:
+def authenticate(email: str, password: str, *, upgrade: bool = True) -> tuple[str, Optional[dict]]:
     """Password check with a status: ("ok", rec) | ("bad", None) |
     ("unverified", None) | ("disabled", None).
 
@@ -1537,7 +1537,7 @@ def authenticate(email: str, password: str) -> tuple[str, Optional[dict]]:
         return "disabled", None
     if not is_verified(u):
         return "unverified", None
-    if u.get("pw_algo") != "argon2id":
+    if upgrade and u.get("pw_algo") != "argon2id":        # upgrade=False: a frozen (migrating) account keeps its hash
         try:
             with _LOCK:
                 users = _load()

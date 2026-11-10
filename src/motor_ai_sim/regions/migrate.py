@@ -5,19 +5,24 @@ Every step is a DRY RUN unless ``apply`` is asked for, and prints a report.  The
 =================  =========  ==============================================================================================
 step               runs on    what it does with ``apply``
 =================  =========  ==============================================================================================
-``export``         source     freezes the account's writes (``region_freeze``: 423 on every write, reads go on), copies its
-                              data into a bundle folder with a sha256 per file, writes ``manifest.json`` + ``records.json``
-``transfer``       source     ``rsync`` of the bundle folder to the target host over WireGuard (prints the command dry)
-``import``         target     verifies every hash, refuses on any file that already exists there with other content,
-                              installs the files, creates the account with the SAME password hash, grants and home region,
-                              merges the account's lines into the target's stores, writes a receipt
-``finish``         source     reads the target's receipt over the signed peer channel (pull, read-only) and compares the
-                              root hash; then sets the home region, turns the per-account guard on, tells the directory,
-                              marks the moved dies as pinned to the target region and lifts the freeze
+``export``         source     freezes the account's writes (``region_freeze``: 423 on every write of every credential,
+                              reads go on), copies its data into ``identity/region_bundles/<id>/`` (0700, a host mount)
+                              with a sha256 per file and the root hash signed with the peer secret
+``transfer``       source     ``rsync`` of the bundle folder to the target host over WireGuard - ON THE HOST (the API
+                              image has no rsync; in a container it refuses and prints the host command)
+``import``         target     checks every hash and the signature, refuses staff and any file that exists there with
+                              other content, writes a ``pending`` receipt, installs the files, creates the account with
+                              the SAME password hash, grants and home region (or accepts the identical record of an
+                              interrupted run), merges its lines, marks the receipt ``done``, deletes the bundle copy
+``finish``         source     re-hashes every bundle file HERE and compares the password digest and disabled state with
+                              the bundle (refuses on any change: a write past the freeze would be lost), reads the
+                              target's ``done`` receipt over the signed peer channel (pull, read-only); then home region,
+                              guard on, agent keys + OAuth grants here revoked, dies pinned, directory, freeze lifted
 ``unfreeze``       source     aborts a migration before ``finish`` (lifts the freeze, changes nothing else)
 ``delete-source``  source     LATER, only after the target's backup of the account has run once: deletes the source copy of
-                              every bundle file whose bytes are still those of the bundle, the die access entries of the
-                              moved dies and the directory person; then purges the account (account_lifecycle.purge)
+                              every bundle file whose bytes are still those of the bundle (a changed file outside a die
+                              blocks; a die with a changed file, a project that stays or another client is kept whole),
+                              the die access entries and the directory person; purges the account; deletes the bundle
 =================  =========  ==============================================================================================
 
 WHAT THE BUNDLE HOLDS (areas = the store roots, resolved on each server from its own environment, so the two hosts may lay
@@ -39,8 +44,9 @@ their trees out differently):
 NOT moved (by design): sessions, agent keys and OAuth grants (tokens are per server: the person signs in on the target
 and reconnects AI apps there), and anything of another account.  The plan BLOCKS on: a staff account (staff work on both
 servers), an account whose home region is not the target yet (set it first: classifier ``--apply`` or the admin
-override), an account already guarded, a die that a project which stays also links, a die open in the public catalog,
-and running or queued jobs of the account (each with an explicit ``allow_*`` switch for the owner's decision).
+override), an account already guarded, no configured peer, another non-staff member in a moved project, a moved die
+that a project which stays also links or another account has in its access list, a die open in the public catalog, and
+running or queued jobs of the account (each of the last four with an explicit ``allow_*`` switch for the owner).
 """
 from __future__ import annotations
 
@@ -246,16 +252,34 @@ def _die_items(die: str, roots: Dict[str, Optional[Path]]) -> List[Tuple[str, st
     return [(a, r) for a, r in items if roots.get(a) is not None and (roots[a] / r).exists()]
 
 
-def _active_jobs(email: str) -> Optional[List[dict]]:
+def _active_jobs(email: str, dies: Iterable[str] = ()) -> Optional[List[dict]]:
+    """Running or queued jobs that would write into what moves: the account's own (any machine), and ANY account's -
+    staff included - on a moved die (an engineer's run would file its result into the source copy after the export).
+    None when the queue cannot be read."""
+    U = _U()
+    want = set(dies)
+    out: List[dict] = []
     try:
         from motor_ai_sim import cluster_monitor as CM
-        U = _U()
         items = CM.jobs_view().get("items") or []
     except Exception:                                       # noqa: BLE001
         return None
-    return [{"run_id": it.get("run_id"), "kind": it.get("kind"), "state": it.get("state")} for it in items
-            if isinstance(it, dict) and U._norm(str(it.get("owner") or "")) == email
-            and str(it.get("state") or "").lower() in JOB_ACTIVE_STATES]
+    for it in items:
+        if (isinstance(it, dict) and U._norm(str(it.get("owner") or "")) == email
+                and str(it.get("state") or "").lower() in JOB_ACTIVE_STATES):
+            out.append({"run_id": it.get("run_id"), "kind": it.get("kind"), "state": it.get("state"), "why": "own"})
+    if want:
+        try:
+            from motor_ai_sim.development import activity as ACT
+            rows = ACT.app_rows()                           # every account's runs with the machine they are for
+        except Exception:                                   # noqa: BLE001
+            return None
+        for r in rows:
+            if (isinstance(r, dict) and str(r.get("die") or "") in want
+                    and str(r.get("state") or "").lower() in JOB_ACTIVE_STATES):
+                out.append({"run_id": None, "kind": r.get("kind"), "state": r.get("state"),
+                            "why": f"on die {r.get('die')}"})
+    return out
 
 
 def collect_records(email: str, *, dies: List[str], cases: List[str], rec: dict) -> Dict[str, Any]:
@@ -316,8 +340,55 @@ def _duty_rows(dies: List[str]) -> Dict[str, Dict[str, Any]]:
 
 # ── the plan (dry run of export) ─────────────────────────────────────────────
 
+def _staff_emails() -> set:
+    U = _U()
+    return {em for em, r in U._load_soft().items() if RS.is_staff(r)}
+
+
+def _other_members(p: dict, email: str, staff: set) -> List[str]:
+    """Non-staff members of a project other than ``email``: they would keep writing to the EU copy after the move."""
+    U = _U()
+    out = []
+    for m in p.get("members") or []:
+        em = U._norm(str((m or {}).get("email") or "")) if isinstance(m, dict) else ""
+        if em and em != email and em not in staff and em not in out:
+            out.append(em)
+    return out
+
+
+def _die_clients(die: str, email: str) -> List[str]:
+    """Accounts other than ``email`` in the die's access list (they see or use it on THIS server)."""
+    from motor_ai_sim import motor_access as MA
+    U = _U()
+    try:
+        clients = MA.get_die_access(die).get("clients") or []
+    except Exception:                                       # noqa: BLE001
+        return ["<unreadable die access>"]
+    return sorted({U._norm(str(c)) for c in clients if U._norm(str(c)) and U._norm(str(c)) != email})
+
+
+def die_sharing(die: str, email: str, moving_projects: Iterable[str]) -> List[str]:
+    """Why a die is NOT the account's alone right now: projects that stay and link it, other die-access clients.  The
+    same check runs in the plan (blocker) and again in delete-source (the die is then kept whole)."""
+    moving = set(moving_projects)
+    why = []
+    try:
+        from motor_ai_sim.development import store as DS
+        stay = sorted(str(p.get("id")) for p in DS.list_projects()
+                      if str(p.get("id")) not in moving and die in _project_dies(p))
+    except Exception:                                       # noqa: BLE001 - fail closed
+        stay = ["<projects unreadable>"]
+    if stay:
+        why.append("also linked by project(s) that stay: " + ", ".join(stay))
+    others = _die_clients(die, email)
+    if others:
+        why.append(f"used by {len(others)} other account(s) through its access list")
+    return why
+
+
 def plan(email: str, *, target_region: Optional[str] = None, extra_dies: Iterable[str] = (),
-         allow_shared_dies: bool = False, allow_open_dies: bool = False, allow_active_jobs: bool = False) -> Dict[str, Any]:
+         allow_shared_dies: bool = False, allow_open_dies: bool = False, allow_active_jobs: bool = False,
+         allow_project_members: bool = False) -> Dict[str, Any]:
     """Everything the export would take, and what blocks it.  Writes nothing."""
     from motor_ai_sim.workspace import workspace_id
     from motor_ai_sim import motor_access as MA
@@ -338,6 +409,8 @@ def plan(email: str, *, target_region: Optional[str] = None, extra_dies: Iterabl
                         "(classify_regions.py --apply, or the admin override)")
     if RS.is_guarded(rec):
         blockers.append("already migrated (its region guard is on)")
+    if not RC.peer_configured() or RC.peer_region() != target:
+        blockers.append("no configured peer for the target region (the bundle is signed with the peer secret)")
     roots = area_roots()
     ws_id = workspace_id(em)
     items: List[Tuple[str, str]] = []
@@ -347,26 +420,26 @@ def plan(email: str, *, target_region: Optional[str] = None, extra_dies: Iterabl
     if roots.get("workspaces") is None:
         warnings.append("WORKSPACES_ROOT is not set on this server: no workspace to move")
     mine, other = _owned_projects(em)
+    staff = _staff_emails()
     for p in mine:
         items.append(("projects", str(p.get("id"))))
-        owners = [m for m in (p.get("members") or []) if isinstance(m, dict) and m.get("role") == "owner"]
-        if len(owners) > 1:
-            warnings.append(f"project {p.get('id')}: has {len(owners)} owners; it moves with this account")
+        members = _other_members(p, em, staff)
+        if members:
+            # they would keep writing to the source copy, which stops being the project after the move
+            msg = (f"project {p.get('id')}: {len(members)} other non-staff member(s) work in it on this server; "
+                   "they must move too or be removed first")
+            (warnings if allow_project_members else blockers).append(msg)
     seed = []
     for p in mine:
         seed += [d for d in _project_dies(p) if d not in seed]
     seed += [d for d in extra_dies if d and d not in seed]
     dies = _dies_closure(seed, roots.get("dies"))
-    other_links: Dict[str, List[str]] = {}
-    for p in other:
-        for d in _project_dies(p):
-            other_links.setdefault(d, []).append(str(p.get("id")))
+    moving_ids = [str(p.get("id")) for p in mine]
     for d in dies:
         if roots.get("dies") is None or not (roots["dies"] / d / "die.yaml").is_file():
             warnings.append(f"die '{d}': no catalog folder on this server (nothing of it moves but its records)")
-        if d in other_links:
-            msg = f"die '{d}' is also linked by project(s) that stay: {', '.join(sorted(other_links[d]))}"
-            (warnings if allow_shared_dies else blockers).append(msg)
+        for why in die_sharing(d, em, moving_ids):
+            (warnings if allow_shared_dies else blockers).append(f"die '{d}' is {why}")
         try:
             vis = MA.get_die_access(d).get("visibility")
         except Exception:                                   # noqa: BLE001
@@ -398,11 +471,11 @@ def plan(email: str, *, target_region: Optional[str] = None, extra_dies: Iterabl
                 items.append(("legal", f"nda_signed/{rid}.pdf"))
     except Exception:                                       # noqa: BLE001
         log.exception("migrate: NDA lookup failed")
-    jobs = _active_jobs(em)
+    jobs = _active_jobs(em, dies)
     if jobs is None:
-        warnings.append("the job queue could not be read: make sure the account runs no job")
+        warnings.append("the job queue could not be read: make sure no job runs for the account or its dies")
     elif jobs:
-        msg = f"{len(jobs)} running or queued job(s) of the account"
+        msg = f"{len(jobs)} running or queued job(s) of the account or on its dies (any account, staff included)"
         (warnings if allow_active_jobs else blockers).append(msg)
     files = []
     seen = set()
@@ -431,10 +504,32 @@ def root_hash(manifest: Dict[str, Any]) -> str:
     return hashlib.sha256(_canon(core)).hexdigest()
 
 
-def export(email: str, out_dir: Path, *, apply: bool = False, actor: str = "migration", **plan_kw: Any) -> Dict[str, Any]:
-    """Dry run: the plan.  Apply: freeze the account, copy its files into ``out_dir/<bundle id>/`` with hashes."""
+def root_hmac(root_sha256: str, secret: Optional[str] = None) -> str:
+    """The bundle's root hash signed with the peer secret: only a server holding the secret made this bundle, so a
+    bundle edited on the way (manifest and files re-hashed together) is refused by import."""
+    import hmac as _hmac
+    sec = RC.peer_secret() if secret is None else secret
+    if not sec:
+        return ""
+    return _hmac.new(sec.encode("utf-8"), b"motres-bundle-v1\n" + str(root_sha256).encode("ascii"),
+                     hashlib.sha256).hexdigest()
+
+
+def bundles_dir() -> Path:
+    """Where bundles are written by default: a 0700 folder beside the registry (``/srv/motres/identity`` on a server).
+    It is a bind mount of the host, so the bundle (it holds the password hash) survives a blue/green switch and the HOST
+    can rsync it; the container layer and ``/srv/motres/run`` are not mounted into the API containers."""
+    env = (os.environ.get("MOTRES_REGION_BUNDLES_DIR") or "").strip()
+    return Path(env) if env else Path(_U()._USERS_FILE).parent / "region_bundles"
+
+
+def export(email: str, out_dir: Optional[Path] = None, *, apply: bool = False, actor: str = "migration",
+           **plan_kw: Any) -> Dict[str, Any]:
+    """Dry run: the plan.  Apply: freeze the account, copy its files into ``<out_dir or bundles_dir()>/<bundle id>/``
+    with hashes and the signed root hash."""
     from motor_ai_sim import admin_audit as AA
     from motor_ai_sim.private_files import ensure_private_dir, open_private
+    out_dir = Path(out_dir) if out_dir is not None else bundles_dir()
     p = plan(email, **plan_kw)
     rep = {"step": "export", "dry_run": not apply, **p}
     if not apply:
@@ -447,6 +542,7 @@ def export(email: str, out_dir: Path, *, apply: bool = False, actor: str = "migr
         p = plan(email, **plan_kw)                          # again, now that nothing of the account can change
         roots = area_roots()
         bid = _bundle_id(p["ws_id"])
+        ensure_private_dir(Path(out_dir))
         bdir = ensure_private_dir(Path(out_dir) / bid)
         files: Dict[str, Dict[str, Any]] = {}
         for f in p["files"]:
@@ -466,10 +562,14 @@ def export(email: str, out_dir: Path, *, apply: bool = False, actor: str = "migr
         raw = (bdir / "records.json").read_bytes()
         manifest = {"v": BUNDLE_VERSION, "bundle_id": bid, "created": _now_iso(), "email": em, "ws_id": p["ws_id"],
                     "source_region": p["source_region"], "target_region": p["target_region"],
-                    "projects": p["projects"], "dies": p["dies"], "cases": p["cases"], "files": files,
+                    "projects": p["projects"], "dies": p["dies"], "cases": p["cases"], "items": p["items"],
+                    "files": files,
                     "records_sha256": hashlib.sha256(raw).hexdigest(),
                     "record_counts": {k: len(v) for k, v in records.items() if isinstance(v, (list, dict))}}
         manifest["root_sha256"] = root_hash(manifest)
+        manifest["root_hmac"] = root_hmac(manifest["root_sha256"])
+        if not manifest["root_hmac"]:
+            raise MigrationError("no peer secret: the bundle cannot be signed")
         with open_private(bdir / "manifest.json", "w") as fh:
             json.dump(manifest, fh, indent=1, sort_keys=True, ensure_ascii=False)
     except Exception:
@@ -493,8 +593,10 @@ def load_manifest(bundle_dir: Path) -> Dict[str, Any]:
     return m
 
 
-def verify_bundle(bundle_dir: Path) -> Dict[str, Any]:
-    """Every file and the records against the manifest, and the root hash -> ``{ok, bad, missing, extra, ...}``."""
+def verify_bundle(bundle_dir: Path, *, signed: bool = True) -> Dict[str, Any]:
+    """Every file and the records against the manifest, the root hash and (``signed``) its HMAC with the peer secret
+    -> ``{ok, bad, missing, extra, ...}``.  ``signed=False`` only for the host-side transfer, which has no secret; the
+    import on the target always checks the signature."""
     bdir = Path(bundle_dir)
     m = load_manifest(bdir)
     bad, missing = [], []
@@ -514,31 +616,58 @@ def verify_bundle(bundle_dir: Path) -> Dict[str, Any]:
     except OSError:
         rec_ok = False
     root_ok = root_hash(m) == m.get("root_sha256")
-    return {"ok": not bad and not missing and not extra and rec_ok and root_ok, "bad": bad, "missing": missing,
-            "extra": extra, "records_ok": rec_ok, "root_ok": root_ok, "files": len(m["files"]),
-            "bundle_id": m.get("bundle_id"), "root_sha256": m.get("root_sha256")}
+    import hmac as _hmac
+    want = root_hmac(str(m.get("root_sha256") or ""))
+    sig_ok = bool(want) and _hmac.compare_digest(str(m.get("root_hmac") or ""), want)
+    return {"ok": not bad and not missing and not extra and rec_ok and root_ok and (sig_ok or not signed), "bad": bad,
+            "missing": missing, "extra": extra, "records_ok": rec_ok, "root_ok": root_ok, "signature_ok": sig_ok,
+            "files": len(m["files"]), "bundle_id": m.get("bundle_id"), "root_sha256": m.get("root_sha256")}
 
 
 # ── transfer ─────────────────────────────────────────────────────────────────
 
-def transfer_command(bundle_dir: Path, dest: str, *, ssh: str = "ssh", dry_run: bool = True) -> List[str]:
-    """``rsync`` of the bundle folder to ``dest`` (``host:/path`` over WireGuard).  Checksummed, private modes."""
+#: The uid:gid the API containers run as (deploy/docker-compose.yml): the US container must be able to read the
+#: 0600 / 0700 bundle the host's root copies in.
+CONTAINER_OWNER = "10001:10001"
+
+
+def transfer_command(bundle_dir: Path, dest: str, *, ssh: str = "ssh", dry_run: bool = True,
+                     owner: str = CONTAINER_OWNER) -> List[str]:
+    """``rsync`` of the bundle folder to ``dest`` (``host:/path`` over WireGuard), run as ROOT on both hosts.
+
+    Checksummed; private modes; ``--numeric-ids --chown=<owner>`` so the copy belongs to the container user on the
+    target (uid 10001 has no shell or key of its own, so the copy cannot run as that user); ``--rsync-path`` first
+    creates the target's bundles folder (0700, owner) when it is missing."""
+    import shlex
     src = str(Path(bundle_dir)).rstrip("/\\") + "/"
     target = dest.rstrip("/") + "/" + Path(bundle_dir).name + "/"
-    cmd = ["rsync", "-a", "--checksum", "--chmod=D700,F600", "-e", ssh]
+    remote_dir = dest.split(":", 1)[1] if ":" in dest else dest
+    uid, _, gid = owner.partition(":")
+    mk = "install -d -m 0700 -o %s -g %s %s && rsync" % (shlex.quote(uid), shlex.quote(gid or uid),
+                                                          shlex.quote(remote_dir.rstrip("/") or "/"))
+    cmd = ["rsync", "-a", "--checksum", "--numeric-ids", f"--chown={owner}", "--chmod=D700,F600",
+           f"--rsync-path={mk}", "-e", ssh]
     if dry_run:
         cmd.append("--dry-run")
     return cmd + [src, target]
 
 
-def transfer(bundle_dir: Path, dest: str, *, apply: bool = False, ssh: str = "ssh", runner=None) -> Dict[str, Any]:
-    v = verify_bundle(bundle_dir)
+def transfer(bundle_dir: Path, dest: str, *, apply: bool = False, ssh: str = "ssh", runner=None,
+             owner: str = CONTAINER_OWNER) -> Dict[str, Any]:
+    """Run ON THE HOST (the API image has no rsync / ssh).  The bundle folder sits under ``/srv/motres/identity``, the
+    same path on the host as in the container.  In a container without rsync it refuses and prints the host command."""
+    v = verify_bundle(bundle_dir, signed=False)
     if not v["ok"]:
         raise MigrationError("the bundle does not match its manifest; export it again")
-    cmd = transfer_command(bundle_dir, dest, ssh=ssh, dry_run=not apply)
+    cmd = transfer_command(bundle_dir, dest, ssh=ssh, dry_run=not apply, owner=owner)
     rep = {"step": "transfer", "dry_run": not apply, "command": cmd, "bundle_id": v["bundle_id"]}
     if runner is None:
         import subprocess
+        if shutil.which("rsync") is None:
+            import shlex
+            raise MigrationError("no rsync here (the API container has none): run on the host: "
+                                 + " ".join(shlex.quote(c) for c in transfer_command(bundle_dir, dest, ssh=ssh,
+                                                                                      dry_run=False, owner=owner)))
         runner = lambda c: subprocess.run(c, check=False).returncode   # noqa: E731
     rc = runner(cmd)
     if rc != 0:
@@ -565,8 +694,12 @@ def load_receipt(bundle_id: str) -> Optional[Dict[str, Any]]:
 
 
 def public_receipt(r: Dict[str, Any]) -> Dict[str, Any]:
-    """What the peer channel shows of a receipt: hashes and counts, no e-mail, no paths."""
-    return {k: r.get(k) for k in ("bundle_id", "root_sha256", "files", "installed", "imported_iso", "verified")}
+    """What the peer channel shows of a receipt: hashes and counts, no e-mail, no paths.  ``verified`` is true only for
+    a ``done`` import (an interrupted one stays ``pending``)."""
+    out = {k: r.get(k) for k in ("bundle_id", "root_sha256", "files", "installed", "imported_iso")}
+    out["state"] = r.get("state", "done")
+    out["verified"] = r.get("verified") is True and out["state"] == "done"
+    return out
 
 
 def _append_lines(path: Path, lines: List[str]) -> int:
@@ -625,26 +758,68 @@ def _unpinned_sha(die_yaml: Path, region: str) -> str:
     return hashlib.sha256((nl.join(lines[:-1]) + nl).encode("utf-8")).hexdigest()
 
 
-def import_bundle(bundle_dir: Path, *, apply: bool = False, actor: str = "migration") -> Dict[str, Any]:
-    """Verify and install a bundle on THIS (target) server."""
-    from motor_ai_sim import admin_audit as AA
+_ACCOUNT_LOCAL_KEYS = ("home_region", "home_region_set", "region_guard", "region_freeze")
+
+
+def _same_account(existing: Optional[dict], bundled: Optional[dict]) -> bool:
+    """The record here IS the bundle's (a rerun after an interrupted import): equal but for the region fields."""
+    if not isinstance(existing, dict) or not isinstance(bundled, dict):
+        return False
+
+    def strip(r: dict) -> dict:
+        return {k: v for k, v in r.items() if k not in _ACCOUNT_LOCAL_KEYS}
+    return strip(existing) == strip(bundled)
+
+
+def _write_receipt(receipt: Dict[str, Any]) -> None:
     from motor_ai_sim.private_files import ensure_private_dir, open_private
+    ensure_private_dir(receipts_dir())
+    p = receipts_dir() / f"{receipt.get('bundle_id')}.json"
+    tmp = p.with_name(p.name + ".tmp")
+    with open_private(tmp, "w") as fh:
+        json.dump(receipt, fh, indent=1, sort_keys=True)
+    os.replace(tmp, p)
+
+
+def import_bundle(bundle_dir: Path, *, apply: bool = False, actor: str = "migration",
+                  keep_bundle: bool = False) -> Dict[str, Any]:
+    """Verify and install a bundle on THIS (target) server.
+
+    The signature of the root hash (peer secret) and every file hash are checked first.  A ``pending`` receipt is
+    written BEFORE anything is installed and turned ``done`` at the end, so an interrupted import can be run again: an
+    account that already exists here is accepted only when its record equals the bundle's.  A staff account is never
+    imported (staff live on both servers).  After a ``done`` import the bundle folder here is deleted (it holds the
+    password hash; the installed copy is the data now) unless ``keep_bundle``."""
+    from motor_ai_sim import admin_audit as AA
+    from motor_ai_sim.private_files import ensure_private_dir
     U = _U()
     bdir = Path(bundle_dir)
     v = verify_bundle(bdir)
     m = load_manifest(bdir)
     blockers: List[str] = []
     if not v["ok"]:
-        blockers.append("the bundle does not match its manifest (bad %d, missing %d, extra %d, records %s, root %s)"
-                        % (len(v["bad"]), len(v["missing"]), len(v["extra"]), v["records_ok"], v["root_ok"]))
+        blockers.append("the bundle does not match its manifest or signature (bad %d, missing %d, extra %d, records %s, "
+                        "root %s, signature %s)" % (len(v["bad"]), len(v["missing"]), len(v["extra"]), v["records_ok"],
+                                                     v["root_ok"], v["signature_ok"]))
     if RC.norm_region(m.get("target_region")) != RC.local_region():
         blockers.append(f"the bundle is for region '{m.get('target_region')}', this server is '{RC.local_region()}'")
+    if RC.norm_region(m.get("source_region")) != RC.peer_region():
+        blockers.append("the bundle does not come from this server's configured peer region")
     em = U._norm(str(m.get("email") or ""))
     receipt = load_receipt(str(m.get("bundle_id")))
-    if receipt is not None and receipt.get("root_sha256") == m.get("root_sha256"):
+    if (receipt is not None and receipt.get("root_sha256") == m.get("root_sha256")
+            and receipt.get("state", "done") == "done"):
         return {"step": "import", "dry_run": not apply, "already_imported": True, "bundle_id": m.get("bundle_id"),
                 "root_sha256": m.get("root_sha256"), "blockers": [], "conflicts": []}
-    if U.get_user(em) is not None:
+    try:
+        bundled_user = (json.loads((bdir / "records.json").read_text(encoding="utf-8")) or {}).get("user")
+    except (OSError, ValueError):
+        bundled_user = None
+    if RS.is_staff(bundled_user):
+        blockers.append("the bundle is of a staff account: staff work on both servers and are never imported")
+    existing = U.get_user(em)
+    rerun = existing is not None and _same_account(existing, bundled_user)
+    if existing is not None and not rerun:
         blockers.append("an account with this e-mail already exists on this server (never merged automatically)")
     roots = area_roots()
     conflicts, todo, same = [], [], 0
@@ -655,7 +830,8 @@ def import_bundle(bundle_dir: Path, *, apply: bool = False, actor: str = "migrat
             continue
         dst = roots[area] / sub
         if dst.exists():
-            if dst.is_file() and sha256_file(dst) == meta.get("sha256"):
+            if dst.is_file() and (sha256_file(dst) == meta.get("sha256") or (
+                    dst.name == "die.yaml" and _unpinned_sha(dst, RC.local_region()) == meta.get("sha256"))):
                 same += 1
                 continue
             conflicts.append(rel)
@@ -672,6 +848,8 @@ def import_bundle(bundle_dir: Path, *, apply: bool = False, actor: str = "migrat
     if blockers:
         raise MigrationError("import refused: " + "; ".join(blockers))
     records = json.loads((bdir / "records.json").read_text(encoding="utf-8"))
+    _write_receipt({"bundle_id": m.get("bundle_id"), "email": em, "root_sha256": m.get("root_sha256"),
+                    "files": len(m["files"]), "state": "pending", "verified": False, "started_iso": _now_iso()})
     for rel, dst in todo:
         if rel.startswith(("workspaces/", "verification/", "legal/")):
             ensure_private_dir(dst.parent)
@@ -689,15 +867,18 @@ def import_bundle(bundle_dir: Path, *, apply: bool = False, actor: str = "migrat
     _rebuild_indexes()
     installed = len(todo)
     receipt = {"bundle_id": m.get("bundle_id"), "email": em, "root_sha256": m.get("root_sha256"),
-               "files": len(m["files"]), "installed": installed, "verified": True, "imported_iso": _now_iso(),
-               "merged": merged, "pinned_dies": pinned}
-    ensure_private_dir(receipts_dir())
-    with open_private(receipts_dir() / f"{m.get('bundle_id')}.json", "w") as fh:
-        json.dump(receipt, fh, indent=1, sort_keys=True)
+               "files": len(m["files"]), "installed": installed, "state": "done", "verified": True,
+               "imported_iso": _now_iso(), "merged": merged, "pinned_dies": pinned, "rerun": rerun}
+    _write_receipt(receipt)
     AA.record(actor, "region.migrate_import", em, subject=em,
               details={"bundle": m.get("bundle_id"), "files": installed, "root_sha256": m.get("root_sha256"),
-                       "from": m.get("source_region")})
-    return {**rep, "installed": installed, "merged": merged, "pinned_dies": pinned, "receipt": public_receipt(receipt)}
+                       "from": m.get("source_region"), "rerun": rerun})
+    removed = False
+    if not keep_bundle:
+        shutil.rmtree(bdir, ignore_errors=True)
+        removed = not bdir.exists()
+    return {**rep, "installed": installed, "merged": merged, "pinned_dies": pinned, "receipt": public_receipt(receipt),
+            "bundle_removed": removed}
 
 
 def _merge_records(records: Dict[str, Any], m: Dict[str, Any], *, actor: str) -> Dict[str, Any]:
@@ -719,10 +900,13 @@ def _merge_records(records: Dict[str, Any], m: Dict[str, Any], *, actor: str) ->
     with U._LOCK:
         users = U._load()
         if em in users:
-            raise MigrationError("an account with this e-mail appeared on this server during the import")
-        users[em] = user
-        U._save(users)
-    out["account"] = 1
+            if not _same_account(users[em], user):
+                raise MigrationError("an account with this e-mail appeared on this server during the import")
+            out["account"] = 0                                 # a rerun: the record is already the bundle's
+        else:
+            users[em] = user
+            U._save(users)
+            out["account"] = 1
     out["terms_acceptances"] = _append_lines(LT.acceptances_path(), records.get("terms_acceptances") or [])
     out["comm_prefs_history"] = _append_lines(Path(CP._HISTORY_FILE), records.get("comm_prefs_history") or [])
     state = records.get("comm_prefs_state")
@@ -827,9 +1011,94 @@ def _peer_receipt(bundle_id: str, transport: Any = None) -> Optional[Dict[str, A
     return got if isinstance(got, dict) else None
 
 
+def _manifest_items(m: Dict[str, Any]) -> List[Tuple[str, str]]:
+    """The (area, item) roots the export walked; derived from the file list for a manifest without ``items``."""
+    out: List[Tuple[str, str]] = []
+    raw = m.get("items")
+    if isinstance(raw, list):
+        for it in raw:
+            if isinstance(it, str) and "/" in it and _safe_rel(it):
+                a, r = it.split("/", 1)
+                out.append((a, r))
+        return out
+    for rel in m.get("files") or {}:
+        a, sub = rel.split("/", 1)
+        parts = sub.split("/")
+        r = "/".join(parts[:2]) if (a == "dies" and parts[0] == ".history") or (a == "verification") else parts[0]
+        if (a, r) not in out:
+            out.append((a, r))
+    return out
+
+
+def new_files(m: Dict[str, Any], email: str) -> List[str]:
+    """Files that exist NOW under what moves but are not in the bundle: a job result an engineer's run filed into the
+    workspace or a die folder after the export, a new verification case ...  Walks the export's items AND the items a
+    fresh plan finds today (a project or case created since).  They would be orphaned on the target and purged with the
+    source, so ``finish`` and ``delete-source`` block on them."""
+    roots = area_roots()
+    items = list(_manifest_items(m))
+    try:
+        fresh = plan(email, target_region=m.get("target_region"), extra_dies=m.get("dies") or [])
+        for it in fresh.get("items") or []:
+            a, r = it.split("/", 1)
+            if (a, r) not in items:
+                items.append((a, r))
+    except MigrationError:
+        pass
+    have = set(m.get("files") or {})
+    out = []
+    for area, rel in items:
+        if roots.get(area) is None:
+            continue
+        for f in _walk(roots[area] / rel):
+            r = f"{area}/{f.relative_to(roots[area]).as_posix()}"
+            if r not in have and r not in out:
+                out.append(r)
+    return sorted(out)
+
+
+def _source_changes(m: Dict[str, Any], *, pinned_ok: bool) -> Tuple[List[str], List[str]]:
+    """Re-hash THIS server's copy of every bundle file -> ``(changed, missing)``.  ``pinned_ok``: a die.yaml that
+    differs only by the ``home_region`` pin of a finish counts as unchanged."""
+    roots = area_roots()
+    target = str(m.get("target_region"))
+    changed, missing = [], []
+    for rel, meta in sorted(m["files"].items()):
+        area, sub = rel.split("/", 1)
+        if roots.get(area) is None:
+            missing.append(rel)
+            continue
+        f = roots[area] / sub
+        if not f.is_file():
+            missing.append(rel)
+            continue
+        if sha256_file(f) == meta.get("sha256"):
+            continue
+        if pinned_ok and f.name == "die.yaml" and _unpinned_sha(f, target) == meta.get("sha256"):
+            continue
+        changed.append(rel)
+    return changed, missing
+
+
+def _bundled_user(bundle_dir: Path) -> Dict[str, Any]:
+    try:
+        return (json.loads((Path(bundle_dir) / "records.json").read_text(encoding="utf-8")) or {}).get("user") or {}
+    except (OSError, ValueError):
+        raise MigrationError("records.json of the bundle cannot be read")
+
+
 def finish(email: str, bundle_dir: Path, *, apply: bool = False, actor: str = "migration",
            transport: Any = None) -> Dict[str, Any]:
+    """Switch the account over, on the SOURCE.  Refuses unless: the target holds a ``done`` receipt of exactly this
+    bundle (signed root hash, read over the peer channel), the target's directory lists the account, EVERY bundle file
+    on this server still has the bytes it had at the export (a write that slipped past the freeze - a staff edit, a
+    member of a moved project - would otherwise be lost), and the account's password and disabled state are the
+    bundle's (a change during the freeze would be lost on the target).  Then: home region, guard on, the account's agent
+    keys and OAuth grants here revoked (those channels would act on the stale copy), dies pinned, directory entry,
+    freeze lifted."""
+    import hmac as _hmac
     from motor_ai_sim import admin_audit as AA
+    from motor_ai_sim.regions import handoff as H
     U = _U()
     em = U._norm(email)
     m = load_manifest(bundle_dir)
@@ -841,17 +1110,37 @@ def finish(email: str, bundle_dir: Path, *, apply: bool = False, actor: str = "m
     rec = U.get_user(em)
     if not isinstance(rec, dict):
         raise MigrationError("no such account on this server")
+    want = root_hmac(str(m.get("root_sha256") or ""))
+    if not want or not _hmac.compare_digest(str(m.get("root_hmac") or ""), want) or root_hash(m) != m.get("root_sha256"):
+        blockers.append("the bundle manifest is not the one this server signed")
+    changed, missing = _source_changes(m, pinned_ok=True)
+    added = new_files(m, em)
+    if changed or missing or added:
+        blockers.append(f"{len(changed)} file(s) changed, {len(missing)} missing and {len(added)} new on this server "
+                        "since the export: the bundle is stale - unfreeze, export again")
+    jobs = _active_jobs(em, m.get("dies") or [])
+    if jobs is None:
+        blockers.append("the job queue could not be read: no job may run for the account or its dies at finish")
+    elif jobs:
+        blockers.append(f"{len(jobs)} running or queued job(s) of the account or on its dies: wait, export again")
+    bundled = _bundled_user(bundle_dir)
+    if H.pw_digest(rec) != H.pw_digest(bundled):
+        blockers.append("the password changed on this server since the export: unfreeze, export again")
+    if bool(rec.get("disabled")) != bool(bundled.get("disabled")):
+        blockers.append("the account was enabled / disabled since the export: unfreeze, export again")
     got = _peer_receipt(str(m.get("bundle_id")), transport=transport) if not blockers else None
     if not blockers and got is None:
         blockers.append("the target has no receipt of this bundle (import it there first) or did not answer")
     elif got is not None and (got.get("root_sha256") != m.get("root_sha256") or got.get("verified") is not True):
-        blockers.append("the target's receipt does not match this bundle's root hash")
+        blockers.append("the target's receipt does not match this bundle's root hash or is still pending")
     look = RS.peer_lookup(em, timeout=4.0, transport=transport) if not blockers else None
     if not blockers and not (look and look.get("hosted")):
         blockers.append("the target's directory does not list the account yet")
     rep = {"step": "finish", "dry_run": not apply, "email": em, "bundle_id": m.get("bundle_id"),
            "root_sha256": m.get("root_sha256"), "target_receipt": got, "blockers": blockers,
+           "changed": changed[:50], "missing": missing[:50], "new": added[:50],
            "will": ["set home region " + str(m.get("target_region")), "turn the account's region guard on",
+                    "revoke its agent keys and OAuth grants on this server",
                     "pin the moved dies to " + str(m.get("target_region")), "put the account in the directory",
                     "lift the write freeze"]}
     if not apply:
@@ -862,6 +1151,9 @@ def finish(email: str, bundle_dir: Path, *, apply: bool = False, actor: str = "m
     if RS.effective_region(rec) != target or RS.region_source(rec) == "default":
         RS.set_home_region(em, target, by="admin", actor=actor, reason=f"migration {m.get('bundle_id')}")
     RS.set_region_guard(em, True, by=actor, bundle=str(m.get("bundle_id")))
+    from motor_ai_sim import agent_keys as K
+    from motor_ai_sim import oauth as O
+    revoked = {"agent_keys": K.revoke_all_keys(em), "oauth_grants": O.revoke_all_grants(em)}
     roots = area_roots()
     pinned = [d for d in (m.get("dies") or []) if roots.get("dies") is not None
               and _pin_die(roots["dies"] / d / "die.yaml", target)]
@@ -869,8 +1161,8 @@ def finish(email: str, bundle_dir: Path, *, apply: bool = False, actor: str = "m
     RS.set_region_freeze(em, False)
     AA.record(actor, "region.migrate", em, subject=em,
               details={"bundle": m.get("bundle_id"), "root_sha256": m.get("root_sha256"), "to": target,
-                       "pinned_dies": len(pinned)})
-    return {**rep, "guard": True, "frozen": False, "pinned_dies": pinned}
+                       "pinned_dies": len(pinned), "revoked": revoked})
+    return {**rep, "guard": True, "frozen": False, "pinned_dies": pinned, "revoked": revoked}
 
 
 def unfreeze(email: str, *, apply: bool = False, actor: str = "migration") -> Dict[str, Any]:
@@ -891,12 +1183,30 @@ def unfreeze(email: str, *, apply: bool = False, actor: str = "migration") -> Di
 
 # ── delete the source copy (later, after the target's backup) ────────────────
 
+def _die_of(rel: str, dies: List[str]) -> Optional[str]:
+    """The moved die a bundle file belongs to, or None (workspace, project, verification ...)."""
+    area, sub = rel.split("/", 1)
+    first = sub.split("/", 1)[0]
+    if area == "dies" and first == ".history":
+        first = (sub.split("/") + ["", ""])[1]
+    if area in ("dies", "cad", "passports"):
+        return first if first in dies else None
+    if area in ("production", "motor_tests"):
+        by_slug = {_slug(d): d for d in dies}
+        return by_slug.get(first)
+    return None
+
+
 def delete_source(email: str, bundle_dir: Path, *, apply: bool = False, target_backup_confirmed: bool = False,
-                  allow_changed: bool = False, actor: str = "migration", transport: Any = None) -> Dict[str, Any]:
-    """Remove this server's copy of a migrated account.  Only files whose bytes still equal the bundle's are deleted; a
-    file changed since the export BLOCKS unless ``allow_changed`` (then a changed shared file is kept and listed, while
-    the workspace and published folders go with the purge whatever they hold).  Append-only logs (audit, verification
-    events, NDA signature lines) stay and are pseudonymised by the purge where the purge does that."""
+                  actor: str = "migration", transport: Any = None) -> Dict[str, Any]:
+    """Remove this server's copy of a migrated account, then the bundle folder itself.
+
+    Only files whose bytes still equal the bundle's are deleted.  A changed file OUTSIDE a die (workspace, project,
+    verification ...) blocks the whole step: the purge would delete the workspace whatever it holds, and nothing that
+    was written after the export is ever thrown away silently.  A DIE is kept whole (all its files, its access entry)
+    when any of its files changed or, checked again now, a project that stays links it or another account is in its
+    access list.  Append-only logs (audit, verification events, NDA signature lines, duty-results rows) stay and are
+    pseudonymised by the purge where the purge does that."""
     from motor_ai_sim import admin_audit as AA
     from motor_ai_sim import motor_access as MA
     U = _U()
@@ -911,25 +1221,38 @@ def delete_source(email: str, bundle_dir: Path, *, apply: bool = False, target_b
     if not isinstance(rec, dict) or not RS.is_guarded(rec):
         blockers.append("the account is not migrated here (no region guard): run finish first")
     got = _peer_receipt(str(m.get("bundle_id")), transport=transport)
-    if got is None or got.get("root_sha256") != m.get("root_sha256"):
+    if got is None or got.get("root_sha256") != m.get("root_sha256") or got.get("verified") is not True:
         blockers.append("the target's receipt is missing or does not match this bundle")
+    dies = list(m.get("dies") or [])
+    changed, _missing = _source_changes(m, pinned_ok=True)
+    keep_dies: Dict[str, List[str]] = {}
+    for rel in changed:
+        d = _die_of(rel, dies)
+        if d is None:
+            continue
+        keep_dies.setdefault(d, []).append("file changed since the export: " + rel)
+    for d in dies:
+        for why in die_sharing(d, em, m.get("projects") or []):
+            keep_dies.setdefault(d, []).append(why)
+    added = new_files(m, em)
+    if added:
+        blockers.append(f"{len(added)} file(s) under what moved are not in the bundle (written after the export, for "
+                        "example a job result): they would be orphaned - review them, move them by hand first")
+    outside = [r for r in changed if _die_of(r, dies) is None]
+    if outside:
+        blockers.append(f"{len(outside)} file(s) outside the dies changed on this server since the export: review "
+                        "them first (nothing written after the export is deleted silently)")
     roots = area_roots()
-    delete, kept = [], []
-    for rel, meta in sorted(m["files"].items()):
+    delete = []
+    for rel in sorted(m["files"]):
         area, sub = rel.split("/", 1)
-        if roots.get(area) is None:
+        if roots.get(area) is None or rel in changed or _die_of(rel, dies) in keep_dies:
             continue
-        p = roots[area] / sub
-        if not p.is_file():
-            continue
-        same = sha256_file(p) == meta.get("sha256") or (
-            p.name == "die.yaml" and _unpinned_sha(p, str(m.get("target_region"))) == meta.get("sha256"))
-        (delete if same else kept).append(rel)
-    if kept and not allow_changed:
-        blockers.append(f"{len(kept)} file(s) changed on this server since the export: review them first "
-                        "(--allow-changed keeps the changed shared files; the workspace / published ones go with the purge)")
+        if (roots[area] / sub).is_file():
+            delete.append(rel)
     rep = {"step": "delete-source", "dry_run": not apply, "email": em, "bundle_id": m.get("bundle_id"),
-           "blockers": blockers, "delete": len(delete), "kept_changed": kept,
+           "blockers": blockers, "delete": len(delete), "changed": changed[:50], "new": added[:50],
+           "kept_dies": {d: why for d, why in sorted(keep_dies.items())},
            "kept_logs": ["admin audit", "verification events", "NDA signature lines", "duty-results ledger rows"]}
     if not apply:
         return rep
@@ -938,27 +1261,28 @@ def delete_source(email: str, bundle_dir: Path, *, apply: bool = False, target_b
     dirs = set()
     for rel in delete:
         area, sub = rel.split("/", 1)
-        p = roots[area] / sub
-        p.unlink()
-        dirs.update(q for q in p.parents if roots[area] in q.parents)
-    for d in sorted(dirs, key=lambda q: len(q.parts), reverse=True):
+        f = roots[area] / sub
+        f.unlink()
+        dirs.update(q for q in f.parents if roots[area] in q.parents)
+    for dd in sorted(dirs, key=lambda q: len(q.parts), reverse=True):
         try:
-            d.rmdir()                                       # only empty folders
+            dd.rmdir()                                      # only empty folders
         except OSError:
             pass
     with MA._DA_LOCK:
-        d = MA._load_die_access()
-        gone = [k for k in (m.get("dies") or []) if k in d]
+        acc = MA._load_die_access()
+        gone = [k for k in dies if k in acc and k not in keep_dies]
         for k in gone:
-            d.pop(k, None)
+            acc.pop(k, None)
         if gone:
-            MA._save_die_access(d)
+            MA._save_die_access(acc)
     _drop_directory_person(em)
     from motor_ai_sim import account_lifecycle as AL
     purge = AL.purge(em, actor=actor, reason="region_migrated")
+    shutil.rmtree(Path(bundle_dir), ignore_errors=True)    # the bundle holds the password hash: gone with the copy
     AA.record(actor, "region.migrate_delete_source", em, subject=em,
-              details={"bundle": m.get("bundle_id"), "deleted": len(delete), "kept": len(kept)})
-    return {**rep, "deleted": len(delete), "purge": purge.get("steps")}
+              details={"bundle": m.get("bundle_id"), "deleted": len(delete), "kept_dies": sorted(keep_dies)})
+    return {**rep, "deleted": len(delete), "purge": purge.get("steps"), "bundle_removed": not Path(bundle_dir).exists()}
 
 
 def _drop_directory_person(email: str) -> None:

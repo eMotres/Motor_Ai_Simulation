@@ -60,6 +60,7 @@ STRINGS = {
         "moved_head": "Your account is on another AeroStator server",
         "moved_text": "Your account and its data are now served by the AeroStator server of your region. Open it and sign in there.",
         "moved_go": "Open your AeroStator server",
+        "frozen": "Your account is being moved to its home server. Try again in a few minutes; this link stays valid.",
         "other": "中文",
     },
     "zh-CN": {
@@ -103,6 +104,7 @@ STRINGS = {
         "moved_head": "您的账户在另一台 AeroStator 服务器上",
         "moved_text": "您的账户及其数据现由您所在地区的 AeroStator 服务器提供。请打开该服务器并在那里登录。",
         "moved_go": "打开您的 AeroStator 服务器",
+        "frozen": "您的账户正在迁移到其所属服务器。请几分钟后再试，此链接仍然有效。",
         "other": "English",
     },
 }

@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import threading
 import time
 from pathlib import Path
@@ -448,39 +449,67 @@ def _read_json(p: Path) -> Tuple[Any, bool]:
         return None, True
 
 
-#: Keys that never cross inside a result row (free text, paths, who did it).  A string value that still looks like an
-#: e-mail, a path or a file name is dropped with its key as well (``compute.identifying_strings`` rules).
-ROW_DROP_KEYS = frozenset({"source", "src", "notes", "note", "screening_note", "comment", "comments", "path", "paths", "file",
-                           "files", "filename", "by", "user", "owner", "actor", "email", "author", "recorded_by", "host",
-                           "hostname", "ip"})
+#: Keys that never cross inside a result row, whatever their value (free text, paths, who did it).
+ROW_DROP_KEYS = frozenset({"source", "src", "notes", "note", "screening_note", "state_note", "comment", "comments", "path",
+                           "paths", "file", "files", "filename", "by", "user", "owner", "actor", "email", "author",
+                           "recorded_by", "host", "hostname", "ip", "name", "die", "config", "label", "message",
+                           "datasheet_url", "schematic_svg", "manufacturer"})
+#: ALLOW-LIST of the keys that may carry a STRING in a result row: enumerations, units, timestamps, fingerprints, stamps.  A
+#: string under any other key is dropped (free text, names, urls can only live there), and a string under a listed key must
+#: still be a short plain token (``SAFE_TOKEN``) that does not look like an e-mail, a path or a file name.  Everything else in a
+#: row - numbers, booleans, null, nested objects and lists under plain identifier keys - is data and crosses.
+ROW_TEXT_KEYS = frozenset({
+    "kind", "computed_at", "recorded_at", "saved_at", "updated_at", "mode", "drive", "state", "status", "verdict", "flag",
+    "type", "topology", "symmetry", "option", "strength_kind", "stress_convention", "load_basis", "load_case", "cooling_mode",
+    "cooling_air_source", "torque_path", "inner_mode", "gap_side", "solve_to", "from_state", "stopped_by", "limiting_part",
+    "part", "sf_min_part", "air_speed_source", "b_source", "bearing_temp_source", "coil_source", "magnet_source",
+    "t_sink_source", "holder_open_fraction_source", "geometry_fingerprint", "geometry_fingerprint_v2", "geo_fingerprint",
+    "code_version", "build_sig", "warning_code", "cap_reason", "excited_by", "propeller_position", "slipstream_position",
+    "commit", "version", "device", "package", "material", "unit", "units"})
+#: Objects whose children are all text-valued data (the em_run ``text`` block): their strings pass the same safe-token test.
+ROW_TEXT_PARENTS = frozenset({"text"})
 #: The only keys of an end-effect passport entry that cross (the admin ``note``, ``source`` paths ... stay on EU).
 PASSPORT_KEYS = frozenset({"k_flux", "k_flux_self", "fidelity", "generated_utc", "adopted_utc", "machine", "stack_mm",
                            "k_flux_vs_L", "materials", "mesh", "k_torque", "k_t"})
+PASSPORT_TEXT_KEYS = frozenset({"fidelity", "generated_utc", "adopted_utc", "machine"})
+PASSPORT_TEXT_PARENTS = frozenset({"materials", "mesh"})
+SAFE_TOKEN = re.compile(r"[A-Za-z0-9 _.:+%-]{0,64}")
+PASSPORT_SAFE = re.compile(r"[A-Za-z0-9 _.:+%,()=/-]{0,80}")
+_KEY_OK = re.compile(r"[A-Za-z0-9_.-]{1,48}")
 _GONE = object()
 
 
-def clean_value(v: Any, counts: Dict[str, int], depth: int = 0) -> Any:
-    """Recursively drop ``ROW_DROP_KEYS`` and identifying strings (counted in ``counts['scrubbed']``)."""
+def clean_value(v: Any, counts: Dict[str, int], key: Optional[str] = None, parent: Optional[str] = None, *,
+                text_keys: frozenset = ROW_TEXT_KEYS, text_parents: frozenset = ROW_TEXT_PARENTS,
+                safe: "re.Pattern" = SAFE_TOKEN, depth: int = 0) -> Any:
+    """Recursively clean one value of a result row / passport entry (see ``ROW_TEXT_KEYS``).  Dropped things are counted in
+    ``counts['scrubbed']``.  Lists inherit the key of their owner."""
     from motor_ai_sim.regions import compute as CP
+    kw = dict(text_keys=text_keys, text_parents=text_parents, safe=safe)
     if depth > 14:
         return _GONE
     if isinstance(v, dict):
         out: Dict[str, Any] = {}
         for k, x in v.items():
-            if str(k).strip().lower() in ROW_DROP_KEYS:
+            ks = str(k)
+            if ks.strip().lower() in ROW_DROP_KEYS or not _KEY_OK.fullmatch(ks):
                 counts["scrubbed"] = counts.get("scrubbed", 0) + 1
                 continue
-            c = clean_value(x, counts, depth + 1)
+            c = clean_value(x, counts, ks, key, depth=depth + 1, **kw)
             if c is _GONE:
                 counts["scrubbed"] = counts.get("scrubbed", 0) + 1
             else:
                 out[k] = c
         return out
     if isinstance(v, list):
-        return [c for c in (clean_value(x, counts, depth + 1) for x in v) if c is not _GONE]
-    if isinstance(v, str) and CP._bad_string(v):
+        return [c for c in (clean_value(x, counts, key, parent, depth=depth + 1, **kw) for x in v) if c is not _GONE]
+    if isinstance(v, str):
+        if (key in text_keys or parent in text_parents) and safe.fullmatch(v) and not CP._bad_string(v):
+            return v
         return _GONE
-    return v
+    if v is None or isinstance(v, (bool, int, float)):
+        return v
+    return _GONE
 
 
 def clean_cfg_rows(rows: Any, counts: Dict[str, int]) -> Dict[str, Any]:
@@ -488,17 +517,25 @@ def clean_cfg_rows(rows: Any, counts: Dict[str, int]) -> Dict[str, Any]:
     from motor_ai_sim import duty_results as DR
     out: Dict[str, Any] = {}
     for duty, kinds in (rows.items() if isinstance(rows, dict) else []):
-        if not isinstance(kinds, dict):
+        if not isinstance(kinds, dict) or not _KEY_OK.fullmatch(str(duty)):
             counts["unattributed"] = counts.get("unattributed", 0) + 1
             continue
         for kind, rec in kinds.items():
             if kind not in DR.KINDS or not isinstance(rec, (dict, list)):
                 counts["unknown_kind"] = counts.get("unknown_kind", 0) + 1
                 continue
-            c = clean_value(rec, counts)
+            c = clean_value(rec, counts, str(kind))
             if c is not _GONE:
                 out.setdefault(str(duty), {})[str(kind)] = c
     return out
+
+
+def clean_passport(entry: Dict[str, Any], counts: Dict[str, int]) -> Dict[str, Any]:
+    """An end-effect passport entry: allow-listed keys only, strings only under ``PASSPORT_TEXT_KEYS`` / inside ``materials``."""
+    kept = {k: v for k, v in entry.items() if k in PASSPORT_KEYS}
+    counts["scrubbed"] = counts.get("scrubbed", 0) + len(entry) - len(kept)
+    out = clean_value(kept, counts, text_keys=PASSPORT_TEXT_KEYS, text_parents=PASSPORT_TEXT_PARENTS, safe=PASSPORT_SAFE)
+    return out if isinstance(out, dict) else {}
 
 
 def _cut_block(block: Any, mirrored: Dict[str, Dict[str, bool]], counts: Dict[str, int],
@@ -569,9 +606,7 @@ def build_extracts(root: Path, mirrored: Dict[str, Dict[str, bool]], files: Opti
     passports: Dict[str, Any] = {}
     for fp, entry in (store.items() if isinstance(store, dict) else []):
         if isinstance(entry, dict) and str(fp) in fps:
-            kept = {k: v for k, v in entry.items() if k in PASSPORT_KEYS}
-            counts["scrubbed"] += len(entry) - len(kept)
-            passports[str(fp)] = clean_value(kept, counts)
+            passports[str(fp)] = clean_passport(entry, counts)
             counts["passports_mirrored"] += 1
         else:
             counts["passports_left_out"] += 1

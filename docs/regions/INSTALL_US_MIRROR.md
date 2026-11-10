@@ -48,9 +48,9 @@ it installs is root-owned.
 
 `--init` adopts the copy already on US and removes, from `.duty_results.json`, `end_effect_passports.json` and `die_access.json`,
 every die that EU does not mirror and that has no folder of its own on US (US-local dies, i.e. closed motors of US accounts,
-are never touched). `--prune-leftovers` also deletes the **files** of closed dies that an earlier hand copy left under
+are never touched); `die_access.json` entries are removed on an HMAC match only, never merely because a die has no folder. `--prune-leftovers` also deletes the **files** of closed dies that an earlier hand copy left under
 `dies/`, `passports/` and `cad/`. EU sends no die name for this: it sends an HMAC (peer secret) of each excluded die name and US
-matches them against its own folders. Run the first plan without `--prune-leftovers` if unsure: the output shows the number of
+matches them against its own folders under `dies/`, `passports/` and `cad/`. Run the first plan without `--prune-leftovers` if unsure: the output shows the number of
 leftovers.
 
 Behaviour to know:
@@ -58,7 +58,7 @@ Behaviour to know:
 | Exit | Meaning |
 |---|---|
 | 2 | the US copy has local edits, or a mirrored path collides with a file the job did not install. Nothing was changed; the unit shows *failed* until somebody looks. |
-| 7 | a file or row that must go could not be removed (permissions), or a US store is corrupt. The unit shows *failed*; nothing is lost, the next run retries. A de-published die cannot silently stay on US. |
+| 7 | a file or row that must go could not be removed (permissions), a folder cannot be listed, or a US store is corrupt (the merge failed). The unit shows *failed*; nothing is lost: the file state is saved before the merge, so the next run does not refuse, it retries. A de-published die cannot silently stay on US. |
 | 75 | EU or rsync did not answer (retried at the next tick, not a failure). |
 
 The job deletes only files **it installed** (`/srv/motres/identity/mirror/catalog_mirror_state.json`). A corrupt US

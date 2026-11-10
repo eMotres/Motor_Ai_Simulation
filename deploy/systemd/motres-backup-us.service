@@ -21,6 +21,8 @@ ConditionPathExists=/etc/motres/backup-us.env
 
 [Service]
 Type=oneshot
+# A default, so that an env file without LIMIT_UPLOAD_KIB still gives a valid `--limit-upload 0` (unlimited); the env file wins.
+Environment=LIMIT_UPLOAD_KIB=0
 EnvironmentFile=/etc/motres/backup-us.env
 Nice=15
 IOSchedulingClass=idle
@@ -32,9 +34,12 @@ ExecStartPre=/usr/bin/install -d -o 10001 -g 10001 -m 0750 /srv/motres/identity/
 ExecStartPre=-/bin/bash /opt/motres/app/deploy/bluegreen.sh exec worker python -m motor_ai_sim.regions.catalog_mirror backup-exclude
 ExecStartPre=/bin/bash -c '[ -e /srv/motres/identity/mirror/restic-exclude-mirrored.txt ] || install -o 10001 -g 10001 -m 0644 /dev/null /srv/motres/identity/mirror/restic-exclude-mirrored.txt'
 
+# --retry-lock: the daily prune (motres-backup-us-prune) holds the repository's exclusive lock for a while; wait for it
+# instead of failing the hourly run.
 # --limit-upload is a restic OPTION (KiB/s, 0 = unlimited); restic does not read it from the environment.  The value comes
 # from LIMIT_UPLOAD_KIB in the env file through systemd's own ${...} expansion.
 ExecStart=/usr/bin/restic backup \
+    --retry-lock 30m \
     --limit-upload ${LIMIT_UPLOAD_KIB} \
     --files-from /etc/motres/restic-include-us.txt \
     --exclude-file /etc/motres/restic-exclude.txt \

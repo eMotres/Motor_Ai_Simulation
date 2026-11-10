@@ -122,7 +122,7 @@ def _sha(p: Path) -> Optional[str]:
 
 def safe_rel(rel: Any) -> Optional[str]:
     """The manifest path if it is a plain relative path inside the library allow-list, else ``None``."""
-    if not isinstance(rel, str) or not rel or "\\" in rel or "\x00" in rel:
+    if not isinstance(rel, str) or not rel or "\\" in rel or any(ord(c) < 32 or ord(c) == 127 for c in rel):
         return None
     pp = PurePosixPath(rel)
     if pp.is_absolute() or ".." in pp.parts or "." in pp.parts or str(pp) != rel:
@@ -163,11 +163,19 @@ def local_edits(root: Path, state: Dict[str, Any]) -> List[Dict[str, str]]:
     return out
 
 
-def _die_dirs(root: Path) -> List[str]:
+def _dir_names(root: Path, top: str) -> List[str]:
+    """Folder names under ``<root>/<top>``.  A folder that does not exist is ``[]``; ANY other listing error raises
+    ``MirrorError``: an empty list would read as "no US-local dies" and the prune would then delete their rows."""
     try:
-        return sorted(p.name for p in (Path(root) / "dies").iterdir() if p.is_dir() and not p.is_symlink())
-    except OSError:
+        return sorted(p.name for p in (Path(root) / top).iterdir() if p.is_dir() and not p.is_symlink())
+    except FileNotFoundError:
         return []
+    except OSError as exc:
+        raise MirrorError(f"cannot list {top}/ on US ({type(exc).__name__}); refusing to decide which dies are US-local") from exc
+
+
+def _die_dirs(root: Path) -> List[str]:
+    return _dir_names(root, "dies")
 
 
 def mirrored_dies(manifest: Dict[str, Any], extracts: Optional[Dict[str, Any]] = None) -> set:
@@ -178,12 +186,14 @@ def mirrored_dies(manifest: Dict[str, Any], extracts: Optional[Dict[str, Any]] =
 
 
 def excluded_here(root: Path, manifest: Dict[str, Any], keep: set) -> List[str]:
-    """Names of dies on US (``dies/<name>``) that EU says it does NOT mirror.  EU sends no names: it sends an HMAC (peer
-    secret) of every excluded name and US matches them against its own folders.  Dies in ``keep`` are never named."""
+    """Names of dies on US - a folder under ``dies/``, ``passports/`` or ``cad/`` - that EU says it does NOT mirror.  EU sends
+    no names: it sends an HMAC (peer secret) of every excluded name and US matches them against its own folders.  Dies in
+    ``keep`` are never named."""
     hm = set(manifest.get("excluded_die_hmacs") or [])
     if not hm:
         return []
-    return [n for n in _die_dirs(root) if n not in keep and CM.die_hmac(n) in hm]
+    names = set(_dir_names(root, "dies")) | set(_dir_names(root, "passports")) | set(_dir_names(root, "cad"))
+    return sorted(n for n in names if n not in keep and CM.die_hmac(n) in hm)
 
 
 def leftovers(root: Path, manifest: Dict[str, Any], state: Dict[str, Any]) -> List[str]:
@@ -315,16 +325,24 @@ def apply_plan(manifest: Dict[str, Any], extracts: Optional[Dict[str, Any]], pla
                 files[rel] = {"sha256": have, "bytes": meta["bytes"]}
     state = {**state, "files": {k: v for k, v in files.items() if v}, "root_id": manifest.get("root_id"),
              "ts": round(time.time(), 1)}
+    # The file state is saved BEFORE the merge: the files above are already deleted / fetched on disk, and a state that still
+    # listed the deleted ones would make every later run refuse with "local edits" (exit 2).
+    save_state(state)
     if isinstance(extracts, dict) and extracts.get("v") == CM.EXTRACT_VERSION:
         if (manifest.get("extracts") or {}).get("id") in (None, extracts.get("id")):
-            state["extracts"] = merge_extracts(extracts, state.get("extracts") or {}, root, duty_store=duty_store,
-                                               passport_store=passport_store, mirrored=mirrored_dies(manifest, extracts),
-                                               manifest=manifest if prune_stores else None)
+            try:
+                state["extracts"] = merge_extracts(extracts, state.get("extracts") or {}, root, duty_store=duty_store,
+                                                   passport_store=passport_store, mirrored=mirrored_dies(manifest, extracts),
+                                                   manifest=manifest if prune_stores else None)
+            except (MirrorError, OSError) as exc:
+                report["failed"].append("extracts: " + str(exc)[:200])        # reported (exit 7); the next run merges again
+                report["extracts"] = {"error": str(exc)[:200]}
+                return report
             report["extracts"] = {"id": extracts.get("id"), "dies": len(extracts.get("dies") or {}),
                                   "passports": len(extracts.get("passports") or {})}
+            save_state(state)
         else:
             report["extracts"] = {"skipped": "extracts changed between the manifest and the extract; next run"}
-    save_state(state)
     return report
 
 
@@ -380,12 +398,15 @@ def _load_store(p: Path, what: str) -> Dict[str, Any]:
     return d
 
 
-def _foreign_dies(root: Path, manifest: Dict[str, Any], keep: set, names: set) -> set:
+def _foreign_dies(root: Path, manifest: Dict[str, Any], keep: set, names: set, *, hmac_only: bool = False) -> set:
     """Dies in a US store that are NOT the mirror's and NOT US-local: EU says they are closed (HMAC match), or no folder of
     that name exists on US at all (a stale row).  A die with a folder on US that EU does not know is US-local: never touched."""
     hm = set(manifest.get("excluded_die_hmacs") or [])
-    local = set(_die_dirs(root))
-    return {d for d in names if d not in keep and ((hm and CM.die_hmac(d) in hm) or d not in local)}
+    closed = {d for d in names if d not in keep and hm and CM.die_hmac(d) in hm}
+    if hmac_only:                                   # die_access: an entry without a folder is not ours to delete
+        return closed
+    local = set(_die_dirs(root))                    # raises MirrorError when the listing fails
+    return closed | {d for d in names if d not in keep and d not in local}
 
 
 def merge_extracts(extracts: Dict[str, Any], previous: Dict[str, Any], root: Path, *, duty_store: Optional[Path] = None,
@@ -396,8 +417,8 @@ def merge_extracts(extracts: Dict[str, Any], previous: Dict[str, Any], root: Pat
 
     The mirror owns the rows of every die it mirrors (``mirrored``) and of every die it merged earlier (``previous``): they
     are replaced by the extract or removed.  With ``manifest`` (``--init`` / ``--prune-leftovers``) it also removes the rows of
-    dies that EU says are closed or that have no folder on US, and the end-effect entries only those rows named; the rows of
-    US-local dies stay.  A store that cannot be read is never overwritten (``MirrorError``)."""
+    dies that EU says are closed (HMAC match) or that have no folder on US, and the end-effect entries only those rows named;
+    ``die_access`` entries are removed on an HMAC match only; the rows of US-local dies stay.  A store that cannot be read is never overwritten (``MirrorError``)."""
     from motor_ai_sim import motor_access as MA
     root = Path(root)
     keep = set(mirrored) | set((extracts.get("dies") or {}))
@@ -452,7 +473,7 @@ def merge_extracts(extracts: Dict[str, Any], previous: Dict[str, Any], root: Pat
         before = json.dumps(store, sort_keys=True)
         gone = (set(previous.get("access_dies") or []) | set(mirrored)) - set(access_dies)
         if manifest is not None:
-            gone |= _foreign_dies(root, manifest, keep, set(store)) - set(access_dies)
+            gone |= _foreign_dies(root, manifest, keep, set(store), hmac_only=True) - set(access_dies)
         for die in gone:
             store.pop(die, None)
         for die in access_dies:
@@ -499,7 +520,11 @@ def _pull(init: bool, prune: bool) -> int:
     wd = work_dir()
     root = shared_dir()
     state = load_state()
-    plan = make_plan(manifest, root, state, init=init, prune=prune)
+    try:
+        plan = make_plan(manifest, root, state, init=init, prune=prune)
+    except MirrorError as exc:
+        print(f"catalog mirror: {exc}", file=sys.stderr)
+        return EXIT_FAILED
     wd.mkdir(parents=True, exist_ok=True)
     _atomic_write(wd / "manifest.json", json.dumps(manifest))
     _atomic_write(wd / "extracts.json", json.dumps(extracts if isinstance(extracts, dict) else {}))

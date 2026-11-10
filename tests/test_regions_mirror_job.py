@@ -330,8 +330,62 @@ def test_us_backup_targets_b2_with_credentials_only_in_the_root_env_file():
         assert "--limit-upload ${LIMIT_UPLOAD_KIB}" in text                      # the flag restic really has
     text = _read("deploy/systemd/motres-backup-us.service")
     assert "--host motres-us" in text and "restic-include-us.txt" in text and "motres-box" not in text
+    # the hourly backup waits for the daily prune's exclusive lock instead of failing; a default keeps --limit-upload valid
+    for rel, restic_lines in (("deploy/systemd/motres-backup-us.service", ("restic backup",)),
+                              ("deploy/systemd/motres-backup-us-prune.service", ("restic forget", "restic check"))):
+        raw = _read(rel)
+        code = re.sub(r"#.*", "", raw)
+        flat = re.sub(r"\\\n\s*", " ", code)
+        for cmd in restic_lines:
+            assert re.search(re.escape(cmd) + r"[^\n]*--retry-lock 30m", flat), (rel, cmd)
+        assert raw.index("Environment=LIMIT_UPLOAD_KIB=0") < raw.index("EnvironmentFile=/etc/motres/backup-us.env")
     assert "0600" in env and "/etc/motres/backup-us.env" in env
     assert _unit("deploy/systemd/motres-backup-us.timer")[("Timer", "OnCalendar")] == ["hourly"]
+
+
+def _parse_rsyncd(text):
+    """A small rsyncd.conf parser: ``({global key: value}, {module: {key: value}})`` (comments and blank lines skipped)."""
+    glob, mods, cur = {}, {}, None
+    for ln in text.splitlines():
+        ln = ln.strip()
+        if not ln or ln.startswith(("#", ";")):
+            continue
+        m = re.fullmatch(r"\[([^\]]+)\]", ln)
+        if m:
+            cur = mods.setdefault(m.group(1), {})
+            continue
+        k, _, v = ln.partition("=")
+        (cur if cur is not None else glob)[k.strip()] = v.strip()
+    return glob, mods
+
+
+def test_the_daemon_config_itself_is_safe_and_agrees_with_the_code_and_the_deployment(monkeypatch):
+    """L10: the shipped rsyncd.conf is parsed and every setting that makes the module safe is checked, together with the files
+    it points at (the path the API writes, the folder compose mounts)."""
+    glob, mods = _parse_rsyncd(_read("deploy/regions/rsyncd-motres.conf"))
+    assert list(mods) == ["motres-library"]                                  # exactly one module
+    assert glob["address"] == "10.77.0.1" and glob["port"] == "873"          # WireGuard address only, never 0.0.0.0
+    assert glob["uid"] == "10001" and glob["gid"] == "10001"                 # the application user, not root
+    assert glob["use chroot"] == "no"                                        # the include file lives outside the module path
+    m = mods["motres-library"]
+    assert m["read only"] == "yes" and m["write only"] == "no" and m["list"] == "no"
+    assert m["hosts allow"] == "10.77.0.2" and m["hosts deny"] == "*"        # the US peer only
+    assert m["path"] == "/srv/motres/shared"
+    assert m["exclude"] == "*"                                               # everything the include file does not name is hidden
+    for opt in ("delete", "delete-before", "delete-during", "delete-after", "delete-delay", "delete-excluded"):
+        assert opt in m["refuse options"].split()
+    # the include file is the one the API writes on every manifest build (identity dir of the data root)
+    from motor_ai_sim import users as U
+    monkeypatch.delenv("MOTRES_RSYNC_FILTER_FILE", raising=False)
+    monkeypatch.setattr(U, "_USERS_FILE", Path("/srv/motres/identity/users.json"))
+    assert CM.rsync_filter_path().as_posix() == m["include from"]
+    # that folder is mounted into the API (compose mounts /srv/motres/identity), and the shared path is the mounted catalog
+    compose = _read("deploy/docker-compose.yml")
+    assert "/srv/motres/identity:/srv/motres/identity" in compose and "/srv/motres/shared:/srv/motres/shared" in compose
+    # no setting of the module may re-open what the filter hides
+    assert not any(k in m for k in ("include", "filter", "exclude from", "munge symlinks", "incoming chmod", "dont compress")) \
+        or m.get("include") is None
+    assert "motres-library" in _read("scripts/mirror_catalog_us.sh") and "10.77.0.1" in _read("scripts/mirror_catalog_us.sh")
 
 
 def test_prune_and_check_run_daily_not_hourly():

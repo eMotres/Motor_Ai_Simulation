@@ -10,9 +10,10 @@ ConditionPathExists=/etc/motres/backup-us.env
 
 [Service]
 Type=oneshot
+Environment=LIMIT_UPLOAD_KIB=0
 EnvironmentFile=/etc/motres/backup-us.env
 Nice=15
 IOSchedulingClass=idle
-ExecStart=/usr/bin/restic forget --prune --limit-upload ${LIMIT_UPLOAD_KIB} --keep-hourly 24 --keep-daily 30 --keep-monthly 12
-ExecStart=/usr/bin/restic check
+ExecStart=/usr/bin/restic forget --prune --retry-lock 30m --limit-upload ${LIMIT_UPLOAD_KIB} --keep-hourly 24 --keep-daily 30 --keep-monthly 12
+ExecStart=/usr/bin/restic check --retry-lock 30m
 TimeoutStartSec=7200

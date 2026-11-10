@@ -250,14 +250,18 @@ whole library, so they are not copied by hash. `GET /api/peer/v1/catalog/extract
 * **die access**: only dies whose access is `public`, as `{visibility: public, clients: []}` (a `selected` die's client
   e-mails never cross; other mirrored dies take US's private default).
 
-Keys that never cross inside a row: `source`, `notes`, `note`, `path`/`file` names, who-did-it keys and any string that looks like
-an e-mail, a path or a file name; a passport entry carries only its measured numbers and provenance keys (`PASSPORT_KEYS`; the
-admin `note` stays on EU); an unknown result kind is dropped (counted).
+Allow-lists (counted in `counts.scrubbed`): a **string** in a result row crosses only under a key of `ROW_TEXT_KEYS`
+(enumerations, units, timestamps, fingerprints, stamps) and only as a short plain token that does not look like an e-mail, a
+path or a file name; free text, names, urls and the keys `source`, `notes`, `note`, `label`, `path`, `file`, who-did-it keys are
+dropped wherever they are. Numbers, booleans, null and nested objects / lists under plain identifier keys are data and cross.
+A passport entry carries only the keys of `PASSPORT_KEYS` (the admin `note` and `source` paths stay on EU) and strings only under
+`PASSPORT_TEXT_KEYS` / inside `materials`. An unknown result kind is dropped.
 
 **What EU tells US about closed dies: nothing by name.** The manifest the peer route serves (`catalog_manifest.public_manifest`)
 carries counts (`excluded_dies_count`, `excluded_files_count`) and an HMAC (peer secret) of each excluded die name; the names stay
 in EU's own dry-run report. US stores the manifest in `identity/mirror/manifest.json`, so it must hold no closed name. US finds
-what an earlier hand copy left behind by HMAC-matching its own `dies/*` folders. **The EU rsync module serves only the manifest
+what an earlier hand copy left behind by HMAC-matching the folder names under its own `dies/`, `passports/` and `cad/`; a listing
+error stops the run (`MirrorError`, exit 7) instead of reading as "no local dies". **The EU rsync module serves only the manifest
 files**: the API rewrites its include file from the manifest on every build (`write_rsync_filter`; the module reads it at each
 connection and ends with `exclude = *`), and the module runs as uid 10001, not root.
 

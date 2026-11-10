@@ -32,7 +32,7 @@
 #   /srv/motres/workspaces   one folder per account    -> rw
 #   /srv/motres/identity     users.json .auth_secret .sessions.json -> rw
 #   /srv/motres/web          published builds + upstream/api.conf (the active API colour)  -> web: ro
-#   /srv/motres/run          state.env of the blue-green deploy (host only, not mounted)
+#   /srv/motres/run          state.env of the blue-green deploy (host only, not mounted); only run/foreign_jobs is mounted (cross-region compute, 10001:10001 0700)
 #
 #   sudo mkdir -p /srv/motres/{shared,published,workspaces,identity,run,web/upstream}
 #   sudo chown -R 10001:10001 /srv/motres      # the image's `motres` user
@@ -62,6 +62,10 @@ x-app-common: &app-common
     # from MOTOR_AI_SIM_CONFIG's folder.
     - /srv/motres/identity:/srv/motres/identity
     - /srv/motres/logs:/app/logs
+    # Cross-region compute (docs/regions/DESIGN.md section 9): the OTHER region's jobs wait here for at most 24 h.  Shared by
+    # the API (which takes them) and the worker (which runs them); NOT in any restic include list and excluded by name.
+    # Unused (empty) unless MOTRES_CROSS_REGION_COMPUTE=1.
+    - /srv/motres/run/foreign_jobs:/srv/motres/run/foreign_jobs
     # The private data checkout (eMotres/motor-ai-sim-private), READ-ONLY: the CAD reference profiles at
     # /srv/motres/private_assets/cad/reference (cad/store.py, candidate 5) for the CAD export / profile views.  k_end does
     # NOT read them - it is one coil rule for every machine (coil_build.py, owner 2026-10-30).

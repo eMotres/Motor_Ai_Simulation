@@ -15,7 +15,7 @@
  * Nothing is interpolated or invented; a missing value stays "-", a missing kind says "not computed".
  */
 import React, { Suspense, lazy, useEffect, useMemo, useRef, useState } from 'react';
-import { Box, Button, Chip, Slider, ToggleButton, ToggleButtonGroup, Tooltip, Typography } from '@mui/material';
+import { Box, Button, Chip, Menu, MenuItem, Slider, ToggleButton, ToggleButtonGroup, Tooltip, Typography } from '@mui/material';
 import { useTranslation } from 'react-i18next';
 import HelpTip from '../common/HelpTip';
 import { PANEL, LABEL, fmt } from '../common/ResultTiles';
@@ -45,6 +45,9 @@ import { openProjectMotor } from '../../lib/openProjectMotor';
 import { nsT } from '../../i18n/nsT';
 import { stepLabels } from '../../modules/development/stepSeries';
 import { specBatteryView } from '../../modules/development/specBattery';
+import { dutyInfoOf, filterToSpecPoints, specPointRefs, visibleSteps, type SpecPointRef } from '../../modules/development/specPoints';
+import { projectsOfMotor, type FocusProject } from '../../modules/development/projectFocus';
+import { projectOpenEvent, projectOpenStorageKey } from '../../modules/development/projectOpenIntent';
 import { useProjectFocusStore } from '../../stores/projectFocusStore';
 import { useUIStore } from '../../stores/uiStore';
 
@@ -73,6 +76,33 @@ const PointsConfigure: React.FC<Props> = ({ view, loadedDuty }) => {
   const reloadMotors = async () => { setStepsTick((n) => n + 1); };
   const [steps, setSteps] = useState<MotorPointVariant[]>([]);
   const [stepIndex, setStepIndex] = useState(-1);
+  // owner 2026-11-09: a project page shows only the specification's points + one cold no-load duty (see modules/development/specPoints)
+  // "Back to project" without a remembered project (after a reload, or a motor opened another way): the projects this die / configuration
+  // is linked to, from the project list the page already reads
+  const [linkedProjects, setLinkedProjects] = useState<FocusProject[]>([]);
+  const [backAnchor, setBackAnchor] = useState<HTMLElement | null>(null);
+  useEffect(() => {
+    setLinkedProjects([]);
+    if (focus) return;
+    let cancelled = false;
+    developmentApi.list()
+      .then((list) => { if (!cancelled) setLinkedProjects(projectsOfMotor(list, view.die, view.config, (view as { canonical_die?: string }).canonical_die)); })
+      .catch(() => { /* no list: no button */ });
+    return () => { cancelled = true; };
+  }, [focus?.id, view.die, view.config]);
+  const openProjectPage = (project: FocusProject) => {
+    setBackAnchor(null);
+    try { sessionStorage.setItem(projectOpenStorageKey, project.id); } catch { /* the event still opens it while the page is mounted */ }
+    setActiveTab('development' as never);
+    window.dispatchEvent(new CustomEvent(projectOpenEvent, { detail: { projectId: project.id } }));
+  };
+  const [specPoints, setSpecPoints] = useState<SpecPointRef[]>([]);
+  const shownView = useMemo(() => {
+    if (!focus || !view || specPoints.length === 0) return view;
+    const withPoint = (view.duties ?? []).filter((d) => d.has_result === true);
+    const kept = new Set(filterToSpecPoints(withPoint, dutyInfoOf, specPoints));
+    return { ...view, duties: (view.duties ?? []).filter((d) => d.has_result !== true || kept.has(d)) };
+  }, [view, focus, specPoints]);
   const [duty, setDuty] = useState<string | null>(() => pickPointDuty(view, loadedDuty));
   const [kind, setKind] = useState<FieldKind | null>(null);
   const [field, setField] = useState<{ key: string; value: StoredField | null; error: string; missing?: boolean } | null>(null);
@@ -84,14 +114,15 @@ const PointsConfigure: React.FC<Props> = ({ view, loadedDuty }) => {
 
   const motorKey = `${view.die}\u0000${view.config}`;
   // a new motor (or the same one reloaded) restarts the mode at the loaded duty; the user's own switch is kept otherwise
-  useEffect(() => { setDuty((cur) => pickPointDuty(view, loadedDuty, cur)); cache.current.clear(); setField(null); }, [view, loadedDuty]);
+  useEffect(() => { setDuty((cur) => pickPointDuty(shownView, loadedDuty, cur)); cache.current.clear(); setField(null); }, [shownView, loadedDuty]);
 
   useEffect(() => {
-    setSpecBattery(null);
+    setSpecBattery(null); setSpecPoints([]);
     if (!focus) return;
     let cancelled = false;
     developmentApi.spec(focus.id).then((sp) => {
       if (cancelled) return;
+      setSpecPoints(specPointRefs(sp.draft as never));
       const raw = ((sp.draft?.fields ?? {}) as Record<string, unknown>)['2_1'];
       const value = raw && typeof raw === 'object' && !Array.isArray(raw) && 'value' in raw ? (raw as { value?: unknown }).value : raw;
       if (value && typeof value === 'object' && ['dc_source', 'ac_mains'].includes(String((value as Record<string, unknown>).supply_type))) return;      // a DC power source or AC mains is not a battery: Configure keeps its own default
@@ -109,14 +140,16 @@ const PointsConfigure: React.FC<Props> = ({ view, loadedDuty }) => {
     developmentApi.motorPoints(focus.id, { showAll: true })
       .then((answer) => {
         if (cancelled) return;
-        const index = findVariantIndex(answer.variants, view.die, view.config);
-        if (index >= 0) { setSteps(answer.variants); setStepIndex(index); }
+        // trial variants stay in storage but are not shown (owner 2026-11-09); the open one is kept
+        const shown = visibleSteps(answer.variants, view.die, view.config);
+        const index = findVariantIndex(shown, view.die, view.config);
+        if (index >= 0) { setSteps(shown); setStepIndex(index); }
       })
       .catch(() => { /* no project steps: the motor is still shown */ });
     return () => { cancelled = true; };
   }, [focus?.id, motorKey, stepsTick]);
 
-  const points = useMemo(() => pointDuties(view), [view]);
+  const points = useMemo(() => pointDuties(shownView), [shownView]);
   const current: MotorViewDuty | null = points.find((d) => d.duty === duty) ?? null;
   const kinds = storedFieldKinds(current);
   const otherPoint = otherPointFields(current);
@@ -183,7 +216,16 @@ const PointsConfigure: React.FC<Props> = ({ view, loadedDuty }) => {
         <Typography sx={{ fontSize: 12, color: 'var(--text-2)' }}>{view.die} / {view.config}</Typography>
         <Box sx={{ flex: 1 }} />
         {focus && stepIndex >= 0 && steps[stepIndex] && <VariantControls projectId={focus.id} motor={motorOf(steps[stepIndex])} staff={staff} t={t} showAll onChanged={reloadMotors} />}
-        {focus && steps.length > 0 && <Button size="small" onClick={() => setActiveTab('development' as never)}>{t('points.backToProject')}</Button>}
+        {(() => {
+          const targets: FocusProject[] = focus ? (steps.length > 0 ? [focus] : []) : linkedProjects;
+          if (targets.length === 0) return null;
+          return <>
+            <Button size="small" onClick={(e) => (targets.length === 1 ? openProjectPage(targets[0]) : setBackAnchor(e.currentTarget))}>{t('points.backToProject')}</Button>
+            <Menu anchorEl={backAnchor} open={!!backAnchor && targets.length > 1} onClose={() => setBackAnchor(null)}>
+              {targets.map((p) => <MenuItem key={p.id} onClick={() => openProjectPage(p)} sx={{ fontSize: 13 }}>{p.title ?? p.id}</MenuItem>)}
+            </Menu>
+          </>;
+        })()}
       </Box>
       {openError && <Typography role="alert" sx={{ fontSize: 12, color: 'error.main' }}>{t('points.loadFailed')}: {openError}</Typography>}
 

@@ -15,6 +15,8 @@ import { roleLabel } from '../../lib/accessUi';
 import type { RegistryUser } from './dialogs/MotorsDialog';
 import { canEditEmail, lastMailText } from './userMail';
 import { parseProjectLimit, projectLimitChanged, projectLimitText, type ProjectLimit } from './projectLimit';
+import { useTranslation } from 'react-i18next';
+import { REGIONS, normRegion, regionLabel } from './regions';
 
 const ROLE_COLOR: Record<string, string> = {
   anon: 'var(--text-4)', user: 'var(--text-3)', engineer: '#60a5fa', admin: '#fbbf24',
@@ -40,6 +42,8 @@ const UserDrawer: React.FC<{
   onClose: () => void;
   busy: boolean;
   onRole: (role: string) => void;
+  /** Two regions: the admin override of the home region (audited on the server; moves no data). */
+  onRegion?: (region: string) => void;
   onQuota: (hours: number | null) => void;
   projectLimitDefault: number;
   onProjectLimit: (limit: ProjectLimit) => void;
@@ -52,8 +56,9 @@ const UserDrawer: React.FC<{
   onRevokeAllSessions: () => void;
 }> = ({
   user, liveSessions, lastLogin, cpuH30d, jobs30d, onClose, busy,
-  onRole, onQuota, projectLimitDefault, onProjectLimit, onToggleDisabled, onDelete, onResetPassword, onOpenMotors, onNda, onRevokeAllSessions, onChangeEmail,
+  onRole, onRegion, onQuota, projectLimitDefault, onProjectLimit, onToggleDisabled, onDelete, onResetPassword, onOpenMotors, onNda, onRevokeAllSessions, onChangeEmail,
 }) => {
+  const { t } = useTranslation('admin');
   const [revoking, setRevoking] = useState(false);
   const [quota, setQuota] = useState('');
   const [projLimit, setProjLimit] = useState('');
@@ -111,6 +116,19 @@ const UserDrawer: React.FC<{
             sx={{ fontSize: 13, fontWeight: 700, color: ROLE_COLOR[user.role] ?? 'var(--text-2)', width: '100%' }}>
             {ROLES.map((r) => <MenuItem key={r} value={r} sx={{ fontSize: 13, color: ROLE_COLOR[r] }}>{roleLabel(r)}</MenuItem>)}
           </Select>
+
+          {onRegion && (
+            <>
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mt: 1.5, mb: 0.5 }}>
+                <Typography sx={{ fontSize: 11, color: 'var(--text-3)', fontWeight: 700, textTransform: 'uppercase' }}>{t('regions.homeRegion')}</Typography>
+                <HelpTip title={t('regions.homeRegionTip')} />
+              </Box>
+              <Select size="small" value={normRegion(user.home_region)} disabled={busy} onChange={(e) => onRegion(e.target.value)}
+                inputProps={{ 'aria-label': t('regions.homeRegion') }} sx={{ fontSize: 13, fontWeight: 700, width: '100%' }}>
+                {REGIONS.map((r) => <MenuItem key={r} value={r} sx={{ fontSize: 13 }}>{regionLabel(r)}</MenuItem>)}
+              </Select>
+            </>
+          )}
 
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mt: 1.5, mb: 0.5 }}>
             <Typography sx={{ fontSize: 11, color: 'var(--text-3)', fontWeight: 700, textTransform: 'uppercase' }}>CPU quota (h / month)</Typography>

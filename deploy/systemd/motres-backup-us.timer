@@ -1,0 +1,13 @@
+# Hourly incremental for the US server (same cadence as the EU one).
+[Unit]
+Description=Hourly motor_ai_sim restic backup (US, Backblaze B2)
+Documentation=file:///opt/motres/app/docs/regions/INSTALL_US_MIRROR.md
+
+[Timer]
+OnCalendar=hourly
+RandomizedDelaySec=300
+Persistent=true
+Unit=motres-backup-us.service
+
+[Install]
+WantedBy=timers.target

@@ -329,8 +329,10 @@ def test_the_end_winding_area_is_the_hand_formula(client, em_run):
                            on an unsplit machine)
         exposed perimeter= 2·thickness + width   (the tooth-facing face is not
                            in the wash — the documented judgement call)
-        ℓ_end            = (k_end − 1)·L_stack/2   per side
-        A_ew             = n_slots · 2 sides · perimeter · ℓ_end
+        ℓ_end            = (k_end − 1)·L_stack     per coil per side (k_end = mean turn / 2·L)
+        A_ew             = n_coils · 2 sides · perimeter · ℓ_end
+                           (n_coils as wound: double layer = n_slots,
+                           single layer = n_slots / 2)
 
     ``k_end`` is NOT recomputed here: it is read off the answer, and separately
     checked against the estimator the solver itself uses for ``auto`` — the
@@ -352,10 +354,14 @@ def test_the_end_winding_area_is_the_hand_formula(client, em_run):
     per_mm = 2.0 * t_mm + w_mm
     L_m = g["motor_length"] * 1e-3
     k_end = ew["k_end"]
-    ell_m = (k_end - 1.0) * L_m / 2.0
-    a_hand = n_slots * 2 * (per_mm * 1e-3) * ell_m
+    ell_m = (k_end - 1.0) * L_m            # one coil's whole end turn per side (2026-11-09 fix)
+    # coils AS WOUND (2026-11-09): double layer = one per tooth, single layer =
+    # every second tooth (winding.coil_count), from the config's winding block.
+    from motor_ai_sim.winding import coil_count
+    n_coils = coil_count(n_slots, int((get_config().get("winding") or {}).get("layers") or 1))
+    a_hand = n_coils * 2 * (per_mm * 1e-3) * ell_m
 
-    assert ew["n_coils"] == n_slots
+    assert ew["n_coils"] == n_coils
     assert ew["n_sides"] == 2
     assert ew["bundle_thickness_mm"] == pytest.approx(t_mm, rel=1e-6)
     assert ew["bundle_width_mm"] == pytest.approx(w_mm, rel=1e-6)
@@ -567,3 +573,20 @@ def test_the_frame_is_only_sent_when_the_machine_is_open():
     z = cooling_fields({"coolMode": "air", "airSpeed": "10", "boreMode": "none",
                         "frame": "open"})
     assert z["frame"] == "open" and z["open_air_speed_mps"] == 0.0
+
+
+def test_end_turn_length_is_one_coils_full_end_turn_and_single_layer_area_is_unchanged():
+    """2026-11-09 regression: with the coils as wound (single layer = num_slots/2 coils) the end-turn length must be
+    the WHOLE per-coil end turn, (k_end - 1)*L (k_end = mean turn / 2L).  The pre-#622 model (num_slots coils x
+    (k_end - 1)*L/2) gave the same area on a single-layer machine; a double-layer machine gets twice the old area."""
+    from motor_ai_sim.routes.thermal import _end_turn_length_m
+    from motor_ai_sim.simulation import cooling_models as cm
+    k_end, L = 1.47, 0.030
+    assert abs(_end_turn_length_m(k_end, L) - (k_end - 1.0) * L) < 1e-12
+    assert _end_turn_length_m(0.9, L) == 0.0
+    kw = dict(bar_thickness_m=0.0069, bar_width_m=0.0065, n_sides=2)
+    old = cm.end_winding_area(n_coils=24, end_turn_length_m=(k_end - 1.0) * L / 2.0, **kw)["area_m2"]
+    single = cm.end_winding_area(n_coils=12, end_turn_length_m=_end_turn_length_m(k_end, L), **kw)["area_m2"]
+    double = cm.end_winding_area(n_coils=24, end_turn_length_m=_end_turn_length_m(k_end, L), **kw)["area_m2"]
+    assert abs(single - old) <= 1e-12
+    assert abs(double - 2.0 * old) <= 1e-12

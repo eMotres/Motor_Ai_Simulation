@@ -6,6 +6,7 @@ import {
   mergeNodeSeries, mergeLoadSeries, isCollectingHistory, serverLabel, threadsUsed,
   cpuTooltipValue, memTooltipValue, ramNowLabel, parseServerSeriesKey, clusterLine,
   computeXAxis, RANGE_LOOKBACK_S, sortByField, levelColor, pctCell, computeNodeTotals,
+  splitIdleRows, IDLE_CPU_PCT,
 } from '../liveLoadSeries.ts';
 
 // ── mergeNodeSeries: separate CPU/RAM series per server (the "only CPU shows,
@@ -268,4 +269,18 @@ test('computeNodeTotals: clamps a negative residual to 0 instead of going negati
   const t = computeNodeTotals(40, 40, [50], [60]);
   assert.equal(t.cpuOutside, 0);
   assert.equal(t.memOutside, 0);
+});
+
+// ── splitIdleRows: idle outside-app services collapse into one line ─────────
+test('splitIdleRows: idle services fold away, jobs always stay, order kept', () => {
+  const rows = [
+    { k: 'erp', isJob: false, cpuPct: 0 },
+    { k: 'job0', isJob: true, cpuPct: 0 },
+    { k: 'mesher', isJob: false, cpuPct: 12 },
+    { k: 'umami', isJob: false, cpuPct: null },
+    { k: 'pg', isJob: false, cpuPct: IDLE_CPU_PCT },
+  ];
+  const { active, idle } = splitIdleRows(rows);
+  assert.deepEqual(active.map((r) => r.k), ['job0', 'mesher', 'pg']);
+  assert.deepEqual(idle.map((r) => r.k), ['erp', 'umami']);
 });

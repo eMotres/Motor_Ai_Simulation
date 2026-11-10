@@ -168,6 +168,17 @@ class SlipProjection:
         self.n_cut_v = len(_cut_v)
         self.n_cut_e = len(_cut_e)
 
+    @property
+    def slip_dofs(self) -> np.ndarray:
+        """The rotor-side ring dofs (vertices + ring-edge midpoints): the only
+        dofs whose column in ``Pro`` moves with the shift.  Every other dof is
+        welded the same way at every shift (the union roots are stator dofs),
+        which is what lets ``p2_frame_plan`` keep their reduced positions for
+        the whole run — and checks per frame."""
+        v = [int(self.vdof[int(r) + self.nsn]) for r in self.rring]
+        e = [int(d) for d in self._re_dofs if d is not None]
+        return np.unique(np.asarray(v + e, dtype=np.int64))
+
     def edge_dof(self, va, vb):
         fi = self._emap.get((va, vb) if va < vb else (vb, va))
         return None if fi is None else int(self.fdof[fi])

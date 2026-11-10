@@ -130,7 +130,9 @@ _ANON_OK_PATHS = frozenset({"/api/health", "/api/me", "/api/version", "/api/noti
                             # motors, cached 5 min and rate-limited per IP (routes/public_motors.py)
                             "/api/public/motors",
                             # node agents: own per-node bearer, checked in the route
-                            "/api/admin/nodes/metrics"})
+                            "/api/admin/nodes/metrics",
+                            # two regions: this server's region and public base URLs (routes/regions.py; nothing personal)
+                            "/api/region"})
 #: …plus the sign-in endpoints themselves: the password login, the Google GIS
 #: token exchange, and logout (which must work for a token we are rejecting).
 #: NOT the rest of routes/auth_local.py — /api/auth/users, /api/auth/sessions and
@@ -138,6 +140,9 @@ _ANON_OK_PATHS = frozenset({"/api/health", "/api/me", "/api/version", "/api/noti
 _ANON_OK_PREFIXES = ("/api/auth/login", "/api/auth/google", "/api/auth/logout",
                      "/api/auth/register", "/api/auth/verify",
                      "/api/auth/reset", "/api/auth/methods",
+                     # two regions: the sign-in hand-off ticket from the other region's server IS the credential
+                     # (regions/handoff.py, routes/auth_local.py)
+                     "/api/auth/region-handoff",
                      # the links in the account mails: small server-rendered pages, no JavaScript needed (routes/auth_local.py)
                      "/api/auth/link",
                      # the data-export ZIP: the signed single-use token in the
@@ -156,7 +161,10 @@ _ANON_OK_PREFIXES = ("/api/auth/login", "/api/auth/google", "/api/auth/logout",
                      "/api/verification/reply",
                      # MOTRES ERP pulls the companies catalogue and the motor prices with its own service token
                      # (ERP_SYNC_TOKEN, checked in routes/erp_export.py; without it the route asks for an admin).
-                     "/api/erp-export")
+                     "/api/erp-export",
+                     # the server-to-server channel of the two regions: the HMAC signature is the credential, checked in
+                     # routes/regions.py (404 when unsigned or when no peer is configured)
+                     "/api/peer")
 
 
 #: The worker-facing routes of docs/BYO_COMPUTE.md (heartbeat, lease, progress,

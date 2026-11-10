@@ -1,5 +1,6 @@
 import { coggingDigits } from '../../lib/coggingTile.ts';
 import type { ProjectMotor, MotorResult } from './types';
+import { dutyInfoOf, filterToSpecPoints, type SpecPointRef } from './specPoints.ts';
 import type { SharedComparisonColumn } from '../../components/compare/SharedComparisonTable';
 import { comparisonNumber } from '../../components/compare/comparisonModel.ts';
 
@@ -28,10 +29,12 @@ const formatValue = (value: unknown, partial = false, t: (key: string) => string
   if (typeof value === 'number') return `${Number(value.toFixed(3))}${partial ? '*' : ''}`;
   return `${String(value)}${partial ? '*' : ''}`;
 };
-export function developmentComparisonRows(motors: ProjectMotor[]): DevelopmentComparisonRow[] {
+/** `specPoints` (owner 2026-11-09): when given, a variant's duty rows are cut to the specification's points + one cold no-load duty
+ *  (modules/development/specPoints.ts); nothing is cut when none of its duties matches. */
+export function developmentComparisonRows(motors: ProjectMotor[], specPoints: SpecPointRef[] = []): DevelopmentComparisonRow[] {
   return motors.flatMap((motor) => {
     const projected: MotorResult[] = motor.results?.length ? motor.results : (motor.duties ?? []).map((duty) => ({ duty: typeof duty === 'string' ? duty : duty.name ?? '' }));
-    const dutyRows: MotorResult[] = projected.length ? projected : [{ duty: '' }];
+    const dutyRows: MotorResult[] = projected.length ? filterToSpecPoints(projected, dutyInfoOf, specPoints) : [{ duty: '' }];
     return dutyRows.map((result, index) => {
     const op = result.operating_point ?? {};
     const c = (result as MotorResult & { comparison?: Record<string, unknown> }).comparison ?? {};

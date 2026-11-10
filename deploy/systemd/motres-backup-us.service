@@ -1,0 +1,53 @@
+# restic backup of the US server tree -> Backblaze B2 (US).  The US twin of motres-backup.service
+# (docs/regions/DESIGN.md section 12).  Own repository, own key, own include list; never the EU Storage Box.
+#
+# WHAT IS NOT BACKED UP
+#   * the mirrored library: restorable from EU.  ExecStartPre regenerates restic-exclude-mirrored.txt from the mirror's
+#     state file (the list of files the mirror installed), so closed motors of US accounts and every region-owned store in
+#     /srv/motres/shared ARE backed up.
+#   * run/foreign_jobs/ (the other region's jobs): never, in either region.
+#
+# Setup (coordinator, on the US server; credentials come from /etc/motres/backup-us.env, see backup-us.env.example):
+#   sudo apt install restic
+#   sudo install -m 600 -o root -g root deploy/backup/backup-us.env.example /etc/motres/backup-us.env   # then fill it in
+#   sudo install -m 644 deploy/backup/restic-include-us.txt deploy/backup/restic-exclude.txt \
+#                       deploy/backup/restic-exclude-us.txt /etc/motres/
+#   set -a; . /etc/motres/backup-us.env; set +a; sudo -E restic init
+#   sudo cp deploy/systemd/motres-backup-us.{service,timer} /etc/systemd/system/ && sudo systemctl daemon-reload
+#   sudo systemctl enable --now motres-backup-us.timer
+
+[Unit]
+Description=motor_ai_sim restic backup (US server) to Backblaze B2
+Documentation=file:///opt/motres/app/docs/regions/INSTALL_US_MIRROR.md
+After=network-online.target docker.service
+Wants=network-online.target
+ConditionPathExists=/etc/motres/backup-us.env
+
+[Service]
+Type=oneshot
+EnvironmentFile=/etc/motres/backup-us.env
+Nice=15
+IOSchedulingClass=idle
+
+# The exclude list of the mirrored files (the worker container sees the same /srv/motres/identity and /srv/motres/shared).
+# The file must exist for restic; if regenerating it fails (worker down) the previous list is used - a stale list can only
+# back up a little more, never less.
+ExecStartPre=/usr/bin/install -d -m 0750 /srv/motres/identity/mirror
+ExecStartPre=/usr/bin/touch /srv/motres/identity/mirror/restic-exclude-mirrored.txt
+ExecStartPre=-/bin/bash /opt/motres/app/deploy/bluegreen.sh exec worker python -m motor_ai_sim.regions.catalog_mirror backup-exclude
+
+ExecStart=/usr/bin/restic backup \
+    --files-from /etc/motres/restic-include-us.txt \
+    --exclude-file /etc/motres/restic-exclude.txt \
+    --exclude-file /etc/motres/restic-exclude-us.txt \
+    --exclude-file /srv/motres/identity/mirror/restic-exclude-mirrored.txt \
+    --tag hourly \
+    --host motres-us
+
+ExecStart=/usr/bin/restic forget --prune \
+    --keep-hourly 24 --keep-daily 30 --keep-monthly 12
+
+# Structure only, no data read (a B2 data read costs egress).
+ExecStart=/usr/bin/restic check
+
+TimeoutStartSec=3600

@@ -6,6 +6,7 @@ import './index.css'
 import './i18n'
 import Root from './Root'
 import { AuthProvider } from './contexts/AuthContext'
+import { consumeRegionHandoff } from './lib/localAuth'
 import { loadThemeMode } from './theme'
 
 // Stamp the persisted theme on <html> BEFORE first paint so the CSS design
@@ -88,7 +89,9 @@ console.warn = (...args) => {
   originalConsoleWarn.apply(console, args);
 };
 
-createRoot(document.getElementById('root')!).render(
+// Two regions: a tab sent here from the other region's server with a hand-off ticket signs in BEFORE the first render,
+// so AuthProvider starts with the session (lib/localAuth.ts consumeRegionHandoff; any other page: resolves at once).
+consumeRegionHandoff().finally(() => createRoot(document.getElementById('root')!).render(
   <StrictMode>
     <Suspense fallback={<div role="status" aria-live="polite" style={{ minHeight: '100vh', display: 'grid', placeItems: 'center' }}>Loading…</div>}>
       <AuthProvider>
@@ -97,4 +100,4 @@ createRoot(document.getElementById('root')!).render(
       </AuthProvider>
     </Suspense>
   </StrictMode>,
-)
+))

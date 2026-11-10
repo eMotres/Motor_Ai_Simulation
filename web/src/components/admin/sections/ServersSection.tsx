@@ -4,6 +4,9 @@
 import React, { useEffect, useState } from 'react';
 import { Box, Typography, Table, TableHead, TableRow, TableCell, TableBody } from '@mui/material';
 import ServersPanel from '../ServersPanel';
+import RegionsCard from '../RegionsCard';
+import { useTranslation } from 'react-i18next';
+import { useRemoteCluster } from '../useRemoteCluster';
 import { getStoredToken } from '../../../lib/localAuth';
 
 const API = (import.meta.env.VITE_API_URL ?? 'http://localhost:8001').replace(/\/$/, '');
@@ -61,12 +64,31 @@ const UserNodesTable: React.FC = () => {
   );
 };
 
-const ServersSection: React.FC = () => (
-  <Box>
-    <Typography sx={{ fontSize: 16, fontWeight: 800, color: 'var(--text-0)', mb: 1.5 }}>Servers</Typography>
-    <ServersPanel />
-    <UserNodesTable />
-  </Box>
-);
+const ServerHeading: React.FC<{ region: string; testId: string }> = ({ region, testId }) => {
+  const { t } = useTranslation('admin');
+  return (
+    <Typography data-testid={testId} sx={{ fontSize: 14, fontWeight: 700, color: 'var(--text-0)', mb: 0.5 }}>
+      {t('regions.serverName', { region: region.toUpperCase() })}
+    </Typography>
+  );
+};
+
+const ServersSection: React.FC = () => {
+  // The other region's graphs: only in multi-region mode (single-region: configured is false, nothing new is shown).
+  const remote = useRemoteCluster(60_000);
+  const peer = remote?.configured ? (remote.region ?? 'us').toLowerCase() : null;
+  const local = peer === 'us' ? 'eu' : 'us';
+  return (
+    <Box>
+      <Typography sx={{ fontSize: 16, fontWeight: 800, color: 'var(--text-0)', mb: 1.5 }}>Servers</Typography>
+      <RegionsCard />
+      {peer && <ServerHeading region={local} testId="server-heading-local" />}
+      <ServersPanel />
+      {peer && <ServerHeading region={peer} testId="server-heading-remote" />}
+      {peer && <ServersPanel remote={peer} />}
+      <UserNodesTable />
+    </Box>
+  );
+};
 
 export default ServersSection;

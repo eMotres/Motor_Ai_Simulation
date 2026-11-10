@@ -1,0 +1,14 @@
+# Pull the other region's account directory entries (email -> id, region, tier, created; nothing else), docs/regions/DESIGN.md section 8.
+# Signed peer channel; runs in the API container.  Exit 4 = the peer did not answer (the last sync stays); exit 6 = single-region mode.
+[Unit]
+Description=AeroStator account directory sync with the peer region
+After=docker.service
+ConditionPathExists=/etc/motres/region-us
+
+[Service]
+Type=oneshot
+Nice=10
+WorkingDirectory=/opt/motres/app/deploy
+ExecStart=/bin/bash /opt/motres/app/deploy/bluegreen.sh exec api python -m motor_ai_sim.regions.directory_sync
+SuccessExitStatus=4
+TimeoutStartSec=120

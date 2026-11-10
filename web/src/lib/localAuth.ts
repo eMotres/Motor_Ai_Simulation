@@ -6,6 +6,7 @@
 // every API call carries. Rights (role/admin) always live server-side in
 // config/users.json + ADMIN_EMAILS — nothing here is trusted for authorization.
 import { resolveLegalUrl, signupPayload, type LegalLang } from './legalLogic';
+import { handoffFromLocation } from './regionRedirect';
 
 const API = (import.meta.env.VITE_API_URL ?? 'http://localhost:8001').replace(/\/$/, '');
 
@@ -165,6 +166,27 @@ async function post(path: string, body: unknown): Promise<{ token: string; user:
     throw e;
   }
   return j as { token: string; user: SessionUser };
+}
+
+/** Two regions: on `/region-handoff#t=<ticket>&next=<path>` (the other region's server sent the tab here with a hand-off
+ *  ticket, lib/regionRedirect.ts) exchange the ticket for OUR session, then show `next`.  The fragment is cleared first,
+ *  so a reload never replays it.  A refused ticket opens the sign-in dialog on `next` instead.  Never throws. */
+export async function consumeRegionHandoff(): Promise<boolean> {
+  let got: { ticket: string; next: string } | null = null;
+  try { got = handoffFromLocation(window.location.pathname, window.location.hash); } catch { return false; }
+  if (!got) return false;
+  try { window.history.replaceState(null, '', got.next); } catch { /* keep going */ }
+  try {
+    const { token, user } = await post('/api/auth/region-handoff', { ticket: got.ticket });
+    storeSession(token, user);
+    return true;
+  } catch {
+    try {
+      const sep = got.next.includes('?') ? '&' : '?';
+      window.history.replaceState(null, '', `${got.next}${sep}signin=1`);
+    } catch { /* ignore */ }
+    return false;
+  }
 }
 
 /** Email/password → our token. Throws with a human message on failure. */

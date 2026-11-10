@@ -56,6 +56,10 @@ STRINGS = {
         "bad_reset_text": "Enter your e-mail address and we will send a new reset link.",
         "resend_reset": "Send a new reset link",
         "policy_hint": "At least 10 characters; common passwords are refused.",
+        "moved_title": "Your account has moved",
+        "moved_head": "Your account is on another AeroStator server",
+        "moved_text": "Your account and its data are now served by the AeroStator server of your region. Open it and sign in there.",
+        "moved_go": "Open your AeroStator server",
         "other": "中文",
     },
     "zh-CN": {
@@ -95,6 +99,10 @@ STRINGS = {
         "bad_reset_text": "请输入您的邮箱地址，我们会发送新的重置链接。",
         "resend_reset": "发送新的重置链接",
         "policy_hint": "至少 10 个字符，不能是常见密码。",
+        "moved_title": "您的账户已迁移",
+        "moved_head": "您的账户在另一台 AeroStator 服务器上",
+        "moved_text": "您的账户及其数据现由您所在地区的 AeroStator 服务器提供。请打开该服务器并在那里登录。",
+        "moved_go": "打开您的 AeroStator 服务器",
         "other": "English",
     },
 }
@@ -212,6 +220,16 @@ def reset_form(lang: str, *, email: str, action: str, fields: dict, error: str =
             % (_e(s["reset_head"]), _e(s["reset_text"].format(email=email)), err, _e(action), hidden, _e(s["pw"]), _e(s["pw2"]),
                _e(s["policy_hint"]), _e(s["reset_go"])))
     return _page(lang, s["reset_title"], body, switch_url)
+
+
+def moved(lang: str, *, open_url: str, switch_url: str = "") -> str:
+    """A mail link of an account that now lives on the other region's server (regions/routing.py): nothing is done here,
+    one button leads to the sign-in of the account's home server."""
+    lang = norm_lang(lang)
+    s = STRINGS[lang]
+    body = '<h1>%s</h1><p>%s</p><a class="btn" href="%s">%s</a>' % (_e(s["moved_head"]), _e(s["moved_text"]), _e(open_url),
+                                                                   _e(s["moved_go"]))
+    return _page(lang, s["moved_title"], body, switch_url)
 
 
 def reset_done(lang: str, *, signin_url: str, open_url: str) -> str:

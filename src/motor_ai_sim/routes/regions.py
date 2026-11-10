@@ -98,7 +98,12 @@ def peer_catalog_manifest(_peer: str = Depends(require_peer)) -> Dict[str, Any]:
     if RC.local_region() != "eu":
         raise HTTPException(status_code=404, detail="Not Found")      # only the authoring region publishes a manifest
     from motor_ai_sim.regions import catalog_manifest as CM
-    return CM.build()
+    manifest = CM.build()
+    try:
+        CM.write_rsync_filter(manifest)         # the rsync module shows exactly these files and nothing else
+    except OSError:
+        raise HTTPException(status_code=503, detail="the library filter could not be written")   # never serve a list the module cannot enforce
+    return CM.public_manifest(manifest)         # counts and HMACs only: no closed die or file name leaves EU
 
 
 @router.post(P.PREFIX + "/relay/mail")

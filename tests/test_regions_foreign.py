@@ -96,6 +96,7 @@ def home(tmp_path, monkeypatch, peer):
     from motor_ai_sim import workspace as W
 
     class _WS:
+        id = "ws-alice"
         root = tmp_path / "ws_alice"
     _WS.root.mkdir()
     monkeypatch.setattr(W, "workspace", lambda *a, **k: _WS)
@@ -136,21 +137,40 @@ def test_queued_decorator_reaches_the_router(tmp_path, monkeypatch):
 
 # ── home: dispatch ───────────────────────────────────────────────────────────
 
-def test_route_sends_a_scrubbed_payload_and_keeps_the_token_map(tmp_path, home):
-    body = {"n": 1000, "owner": OWNER, "label": "alice's run", "project_id": "p1", "nested": {"email": OWNER, "k": 3}}
-    rec = _rec(tmp_path, body)
+def test_route_sends_the_unmodified_payload_and_keeps_the_token_map(tmp_path, home):
+    rec = _rec(tmp_path, {"n": 1000})
     assert F.route(rec) is True
     path, payload = home.sent[0]
     blob = json.dumps(payload)
     assert path == "/foreign/submit"
-    for leak in (OWNER, "alice", "ws-alice", "run_test_1", "SECRETDIE", "p1"):
+    for leak in (OWNER, "alice", "ws-alice", "run_test_1", "SECRETDIE"):
         assert leak not in blob
-    assert payload["inputs"] == {"n": 1000, "nested": {"k": 3}} and set(payload) == {"v", "token", "kind", "priority", "inputs"}
+    assert payload["inputs"] == {"n": 1000} and set(payload) == {"v", "token", "kind", "priority", "inputs"}
     ent = CP.resolve_token(payload["token"])
     assert ent["owner"] == OWNER and ent["run_id"] == "run_test_1" and ent["region"] == "us"
     job = CN.get_job("run_test_1")                                # the home record: visible in /api/jobs, leased to the region
     assert job["state"] == CN.LEASED and job["node"] == "region:us"
     assert CN.reap(time.time() + 3600) == 0                       # reap never re-queues it
+
+
+def test_a_job_is_never_sent_in_a_modified_form(tmp_path, home):
+    """M6: a body the scrub would change (owner / label / nested e-mail key) or with a key outside the kind's allow-list runs at
+    home with the inputs the user gave - not as a different job elsewhere."""
+    for body in ({"n": 1000, "owner": OWNER}, {"n": 1000, "label": "alice's run"}, {"n": 1, "nested": {"email": OWNER}},
+                 {"n": 1000, "extra": 3}, {}):
+        assert F.route(_rec(tmp_path, body or {"zzz": 1})) is False
+    assert home.sent == [] and CP._load_out() == {} and CN.get_job("run_test_1") is None
+
+
+def test_a_kind_without_an_input_allow_list_never_crosses(tmp_path, home, monkeypatch):
+    monkeypatch.setitem(J.HANDLERS, "other.kind", lambda body: body)
+    rec = J.JobRecord(run_id="run_x", ws_id="w", owner=OWNER, kind="other.kind", body={"n": 1}, queued_at=time.time())
+    assert F.route(rec) is False and home.sent == []
+    F.register_inputs("other.kind", ["n"])
+    try:
+        assert F.route(rec) is True
+    finally:
+        F.INPUT_KEYS.pop("other.kind", None)
 
 
 def test_identifying_payload_is_refused_and_runs_at_home(tmp_path, home):
@@ -233,6 +253,42 @@ def test_lost_job_is_rerun_at_home_after_24_hours(tmp_path, home):
             break
         time.sleep(0.05)
     assert CN.get_job("run_test_1")["state"] == CN.DONE
+    queued = J.queue().status("run_test_1-home")                          # it went THROUGH the job queue (M7), not a bare thread
+    assert queued is not None and queued.kind == "selftest.cpu" and queued.owner == OWNER
+
+
+def test_expiry_handback_and_sweep_go_on_with_the_switch_off(tmp_path, monkeypatch, home):
+    """M7: turning MOTRES_CROSS_REGION_COMPUTE off must not leave foreign files or outbound tokens behind for ever."""
+    assert F.route(_rec(tmp_path)) is True
+    tok = _sent_token(home)
+    _multi(monkeypatch, "eu", cross=False)
+    old = time.time() - CP.RETENTION_S - 10
+    F._write({"v": 1, "token": "o" * 24, "kind": "selftest.cpu", "priority": 0, "inputs": {"n": 1}, "state": "done",
+              "created_at": old, "started_at": old, "ended_at": old, "result": {"n": 1}, "error": "", "tries": 3, "next_at": 0.0})
+    out = F.tick(time.time() + CP.RETENTION_S + 5)
+    assert out["expired"] == 1 and F.list_jobs() == []
+    assert out["swept"] == 1 and CP.resolve_token(tok) is None
+    # a finished job is still handed back (retry) with the switch off
+    peer_calls = len(home.sent)
+    F._write({"v": 1, "token": "p" * 24, "kind": "selftest.cpu", "priority": 0, "inputs": {"n": 1}, "state": "done",
+              "created_at": time.time(), "started_at": time.time(), "ended_at": time.time(), "result": {"n": 1}, "error": "",
+              "tries": 1, "next_at": 0.0})
+    assert F.tick()["handbacks"] == 1 and len(home.sent) == peer_calls + 1 and F.list_jobs() == []
+
+
+def test_the_worker_loop_always_starts_even_with_the_switch_off(monkeypatch):
+    import threading
+    stop, ticked = threading.Event(), threading.Event()
+    monkeypatch.setattr(F, "tick", lambda *a, **k: ticked.set())
+    F._LOOP = None
+    try:
+        assert CP.cross_region_enabled() is False
+        assert F.start_loop(interval_s=0.01, stop=stop) is True
+        assert ticked.wait(5)
+    finally:
+        stop.set()
+        F._LOOP.join(5)
+        F._LOOP = None
 
 
 # ── computing server ─────────────────────────────────────────────────────────
@@ -249,8 +305,8 @@ def test_accept_stores_a_foreign_job_only_when_enabled_and_clean(tmp_path, monke
     assert len(F.list_jobs()) == 1
     f = Path(F.foreign_dir()) / ("a" * 24 + ".json")
     assert f.is_file() and "alice" not in f.read_text(encoding="utf-8")
-    assert F.accept(_payload("b" * 24, inputs={"n": 1, "who": OWNER}))["code"] == "identifying"
-    assert F.accept(_payload("c" * 24, inputs={"n": 1, "owner": "x"}))["code"] == "identifying"        # forbidden key survived
+    assert F.accept(_payload("b" * 24, inputs={"n": OWNER}))["code"] == "identifying"
+    assert F.accept(_payload("c" * 24, inputs={"n": 1, "owner": "x"}))["code"] == "unexpected_input"   # outside the allow-list
     assert F.accept(_payload("d" * 24, kind="no.such.kind"))["code"] == "unknown_kind"
     assert F.accept(_payload("short"))["code"] == "bad_payload"
     assert F.accept({**_payload("e" * 24), "v": 2})["code"] == "bad_payload"
@@ -326,6 +382,7 @@ def test_failed_job_hands_back_the_error_only(tmp_path, monkeypatch, peer):
     def boom(body):
         raise ValueError("solver exploded")
     monkeypatch.setitem(J.HANDLERS, "boom.kind", boom)
+    monkeypatch.setitem(F.INPUT_KEYS, "boom.kind", frozenset({"n"}))
     F.accept(_payload(kind="boom.kind"))
     F.tick()
     for th in list(F._THREADS.values()):

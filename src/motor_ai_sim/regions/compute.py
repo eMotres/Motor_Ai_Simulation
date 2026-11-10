@@ -16,7 +16,7 @@ only — never who it is for:
 
 Scheduling (``pick_region``): the less loaded server, the home server on a tie or when the peer is unknown; the peer
 only when ``MOTRES_CROSS_REGION_COMPUTE=1`` and multi-region mode is configured.  Stage 1 ships the contract and its
-tests; nothing calls it from the job queue yet (stage 2 wires the queue once both servers run).
+tests; stage 2 wires it into the job queue (regions/foreign.py).
 """
 from __future__ import annotations
 
@@ -101,10 +101,15 @@ def _bad_string(s: str) -> bool:
 
 
 def job_payload(kind: str, body: Dict[str, Any], *, priority: int = 0,
-                token: Optional[str] = None) -> Tuple[str, Dict[str, Any]]:
-    """-> ``(token, payload)``: what is sent to the computing region for one job.  Raises CrossRegionPayloadError."""
+                token: Optional[str] = None, strict: bool = False) -> Tuple[str, Dict[str, Any]]:
+    """-> ``(token, payload)``: what is sent to the computing region for one job.  Raises CrossRegionPayloadError.
+
+    ``strict`` (the queue wiring, ``regions/foreign.py``): a body from which the scrub would drop ANY key is refused instead
+    of being sent in a modified form - the job runs at home with the inputs the user gave, never with different ones."""
     tok = token or secrets.token_urlsafe(18)
     inputs = scrub(body if isinstance(body, dict) else {})
+    if strict and inputs != (body if isinstance(body, dict) else {}):
+        raise CrossRegionPayloadError("job input carries identifying keys; it is not sent in a modified form")
     bad = identifying_strings(inputs)
     if bad:
         raise CrossRegionPayloadError("job input still identifies someone at " + ", ".join(bad[:5]))

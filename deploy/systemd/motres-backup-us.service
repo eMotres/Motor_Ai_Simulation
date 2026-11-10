@@ -7,14 +7,10 @@
 #     /srv/motres/shared ARE backed up.
 #   * run/foreign_jobs/ (the other region's jobs): never, in either region.
 #
-# Setup (coordinator, on the US server; credentials come from /etc/motres/backup-us.env, see backup-us.env.example):
-#   sudo apt install restic
-#   sudo install -m 600 -o root -g root deploy/backup/backup-us.env.example /etc/motres/backup-us.env   # then fill it in
-#   sudo install -m 644 deploy/backup/restic-include-us.txt deploy/backup/restic-exclude.txt \
-#                       deploy/backup/restic-exclude-us.txt /etc/motres/
-#   set -a; . /etc/motres/backup-us.env; set +a; sudo -E restic init
-#   sudo cp deploy/systemd/motres-backup-us.{service,timer} /etc/systemd/system/ && sudo systemctl daemon-reload
-#   sudo systemctl enable --now motres-backup-us.timer
+# Pruning (forget --prune) and the structure check are in motres-backup-us-prune.service, DAILY: a prune takes the repository's
+# exclusive lock and rewrites packs (B2 transactions), which an hourly job should not do.
+#
+# Setup: docs/regions/INSTALL_US_MIRROR.md section 4.  Credentials come only from /etc/motres/backup-us.env (0600, root).
 
 [Unit]
 Description=motor_ai_sim restic backup (US server) to Backblaze B2
@@ -25,29 +21,31 @@ ConditionPathExists=/etc/motres/backup-us.env
 
 [Service]
 Type=oneshot
+# A default, so that an env file without LIMIT_UPLOAD_KIB still gives a valid `--limit-upload 0` (unlimited); the env file wins.
+Environment=LIMIT_UPLOAD_KIB=0
 EnvironmentFile=/etc/motres/backup-us.env
 Nice=15
 IOSchedulingClass=idle
 
-# The exclude list of the mirrored files (the worker container sees the same /srv/motres/identity and /srv/motres/shared).
-# The file must exist for restic; if regenerating it fails (worker down) the previous list is used - a stale list can only
-# back up a little more, never less.
-ExecStartPre=/usr/bin/install -d -m 0750 /srv/motres/identity/mirror
-ExecStartPre=/usr/bin/touch /srv/motres/identity/mirror/restic-exclude-mirrored.txt
+# The exclude list of the mirrored files.  The mirror directory belongs to the application user (10001), never to root: the
+# worker container writes the list, the mirror job its state.  If regenerating fails (worker down) the previous list is
+# used - a stale list can only back up a little more, never less - and an empty file is made so that restic can start.
+ExecStartPre=/usr/bin/install -d -o 10001 -g 10001 -m 0750 /srv/motres/identity/mirror
 ExecStartPre=-/bin/bash /opt/motres/app/deploy/bluegreen.sh exec worker python -m motor_ai_sim.regions.catalog_mirror backup-exclude
+ExecStartPre=/bin/bash -c '[ -e /srv/motres/identity/mirror/restic-exclude-mirrored.txt ] || install -o 10001 -g 10001 -m 0644 /dev/null /srv/motres/identity/mirror/restic-exclude-mirrored.txt'
 
+# --retry-lock: the daily prune (motres-backup-us-prune) holds the repository's exclusive lock for a while; wait for it
+# instead of failing the hourly run.
+# --limit-upload is a restic OPTION (KiB/s, 0 = unlimited); restic does not read it from the environment.  The value comes
+# from LIMIT_UPLOAD_KIB in the env file through systemd's own ${...} expansion.
 ExecStart=/usr/bin/restic backup \
+    --retry-lock 30m \
+    --limit-upload ${LIMIT_UPLOAD_KIB} \
     --files-from /etc/motres/restic-include-us.txt \
     --exclude-file /etc/motres/restic-exclude.txt \
     --exclude-file /etc/motres/restic-exclude-us.txt \
     --exclude-file /srv/motres/identity/mirror/restic-exclude-mirrored.txt \
     --tag hourly \
     --host motres-us
-
-ExecStart=/usr/bin/restic forget --prune \
-    --keep-hourly 24 --keep-daily 30 --keep-monthly 12
-
-# Structure only, no data read (a B2 data read costs egress).
-ExecStart=/usr/bin/restic check
 
 TimeoutStartSec=3600

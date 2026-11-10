@@ -5,6 +5,7 @@ coordinator installs (units, timers, rsync module, restic lists, B2 env template
 from __future__ import annotations
 
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -69,7 +70,7 @@ def world(tmp_path, monkeypatch):
     def fake_get(path, **kw):
         calls.append(path)
         man, ext = build()
-        return json.loads(json.dumps(man if path == "/catalog/manifest" else ext))
+        return json.loads(json.dumps(CM.public_manifest(man) if path == "/catalog/manifest" else ext))
 
     monkeypatch.setattr(P, "get", fake_get)
     return {"eu": eu, "us": us, "work": work, "calls": calls, "tmp": tmp_path}
@@ -217,13 +218,101 @@ def test_mirror_script_is_a_safe_plan_rsync_apply_chain():
         assert r.returncode == 0, r.stderr
 
 
-def test_rsync_module_is_read_only_wireguard_only_and_matches_the_allow_list():
+def test_rsync_module_is_read_only_unprivileged_wireguard_only_and_filtered_by_the_generated_list():
     conf = _read("deploy/regions/rsyncd-motres.conf")
     assert "read only = yes" in conf and "address = 10.77.0.1" in conf and "hosts allow = 10.77.0.2" in conf
-    assert "hosts deny = *" in conf and "list = no" in conf and "exclude = *" in conf and "delete" in conf
-    inc = {ln.strip() for ln in _read("deploy/regions/rsyncd-motres.include").splitlines() if ln.strip() and not ln.startswith("#")}
-    assert inc == {f"/{d}/***" for d in CM.LIBRARY_DIRS} | {f"/{f}" for f in CM.LIBRARY_FILES}
-    assert not any(r in " ".join(inc) for r in CM.REGION_OWNED)
+    assert "hosts deny = *" in conf and "exclude = *" in conf and "delete" in conf
+    assert re.search(r"^uid = 10001$", conf, re.M) and re.search(r"^gid = 10001$", conf, re.M)     # B2: not root
+    assert not re.search(r"^uid = (root|0)$", conf, re.M)
+    assert "include from = /srv/motres/identity/mirror/rsync-library.include" in conf                 # generated, not a static tree
+    assert not (ROOT / "deploy/regions/rsyncd-motres.include").exists()                              # no static allow-list of whole trees
+    svc = _read("deploy/systemd/motres-rsyncd-library.service")
+    assert "--config=/etc/motres/rsyncd-motres.conf" in svc
+
+
+def _rsync_visible(rules, path, is_dir):
+    """What rsync's daemon filter does with ``include from`` followed by ``exclude = *``: the first matching anchored rule
+    wins; a rule ending in / matches directories only; a path nothing includes is excluded."""
+    for r in rules:
+        want_dir = r.endswith("/")
+        pat = re.sub(r"\\(.)", lambda m: "\x00" + m.group(1), r.rstrip("/"))      # escaped characters are literal
+        pat = pat.lstrip("/")
+        if want_dir and not is_dir:
+            continue
+        if pat.replace("\x00", "") == path:
+            return True
+    return False
+
+
+def test_the_generated_filter_shows_exactly_the_manifest_files_and_hides_closed_dies(tmp_path):
+    """B2: with the generated include list + ``exclude = *`` a closed die's folder is not even listable."""
+    eu = tmp_path / "eu"
+    for rel in ("dies/PUB/die.yaml", "dies/PUB/L1.yaml", "dies/PRIV/die.yaml", "dies/PRIV/C1.yaml", "passports/PRIV/C1.json",
+                "cad/PRIV/C1/manifest.json", "passports/PUB/L1.json", "materials_library.yaml", "projects/p1/project.json"):
+        (eu / rel).parent.mkdir(parents=True, exist_ok=True)
+        (eu / rel).write_text("x: 1\n", encoding="utf-8")
+    (eu / "passports/PUB/L1.json").write_text("{}", encoding="utf-8")
+    eu_access = tmp_path / "eu_access.json"
+    eu_access.write_text(json.dumps({"PUB": {"visibility": "public"}}), encoding="utf-8")
+    saved = MA._DIE_ACCESS_FILE
+    MA._DIE_ACCESS_FILE = eu_access
+    MA._CFG_VIS_CACHE.clear()
+    try:
+        man = CM.build(eu, catalog_path=tmp_path / "none.json")
+    finally:
+        MA._DIE_ACCESS_FILE = saved
+        MA._CFG_VIS_CACHE.clear()
+    out = tmp_path / "mirror" / "rsync-library.include"
+    n = CM.write_rsync_filter(man, out)
+    rules = [ln for ln in out.read_text(encoding="utf-8").splitlines() if ln and not ln.startswith("#")]
+    assert n == len(rules) and (out.stat().st_mode & 0o044) in (0o044, 0)                 # readable by the unprivileged daemon
+    on_disk = {p.relative_to(eu).as_posix(): p.is_dir() for p in eu.rglob("*")}
+    shown = {p for p, d in on_disk.items() if _rsync_visible(rules, p, d)}
+    files = {p for p in shown if not on_disk[p]}
+    assert files == set(man["files"]) and "dies/PUB/die.yaml" in files and "materials_library.yaml" in files
+    assert not any(p.startswith(("dies/PRIV", "passports/PRIV", "cad/PRIV", "projects")) for p in shown)
+    assert {p for p in shown if on_disk[p]} == {"dies", "dies/PUB", "passports", "passports/PUB"}      # only parents of shown files
+    assert CM.rsync_filter_rules({"files": {"dies/a[1]/x*.yaml": {}}}) == ["/dies/", "/dies/a\\[1]/", "/dies/a\\[1]/x\\*.yaml"]
+    if shutil.which("rsync"):                                                           # the real thing, where it is installed
+        r = subprocess.run(["rsync", "-r", "--list-only", "--include-from=" + str(out), "--exclude=*", str(eu) + "/"],
+                           capture_output=True, text=True)
+        listed = r.stdout
+        assert "materials_library.yaml" in listed and "PRIV" not in listed and "projects" not in listed
+
+
+def test_manifest_route_serves_counts_only_and_writes_the_filter(tmp_path, monkeypatch):
+    from fastapi.testclient import TestClient
+    from motor_ai_sim.api import app
+    c = TestClient(app)
+    P.reset_nonces()
+    for k in ("MOTRES_REGION", "MOTRES_PEER_URL", "MOTRES_PEER_HMAC_SECRET"):
+        monkeypatch.delenv(k, raising=False)
+    monkeypatch.setenv("MOTRES_REGION", "eu")
+    monkeypatch.setenv("MOTRES_PEER_URL", "http://us.invalid:8001")
+    monkeypatch.setenv("MOTRES_PEER_HMAC_SECRET", SECRET)
+    flt = tmp_path / "mirror" / "rsync-library.include"
+    monkeypatch.setenv("MOTRES_RSYNC_FILTER_FILE", str(flt))
+    full = {"root_id": "r", "files": {"dies/PUB/die.yaml": {"sha256": "a" * 64, "bytes": 1}}, "count": 1, "bytes": 1,
+            "excluded_dies": [{"die": "SECRET_CLOSED_DIE", "why": "marked as customer data"}],
+            "excluded_files": [{"path": "dies/PUB/SECRET_CLOSED_CFG.yaml", "why": "x"}], "excluded_files_total": 1,
+            "skipped_unreadable": 1, "skipped_unreadable_paths": ["dies/PUB/secret_name.bak"], "exhibit_source": "workspace", "ts": 1.0}
+    monkeypatch.setattr(CM, "build", lambda *a, **k: full)
+    path = P.PREFIX + "/catalog/manifest"
+    h = P.sign_headers("GET", path, b"", secret=SECRET, region="us")
+    r = c.get(path, headers=h)
+    assert r.status_code == 200
+    blob = r.text
+    assert "SECRET_CLOSED" not in blob and "secret_name" not in blob
+    body = r.json()
+    assert body["excluded_dies_count"] == 1 and body["excluded_die_hmacs"] == [CM.die_hmac("SECRET_CLOSED_DIE", SECRET)]
+    assert "excluded_dies" not in body and "excluded_files" not in body
+    assert flt.read_text(encoding="utf-8").splitlines()[1:] == ["/dies/", "/dies/PUB/", "/dies/PUB/die.yaml"]
+    # a filter that cannot be written is never served around: no list the module cannot enforce
+    P.reset_nonces()
+    (tmp_path / "blocker").write_text("a file, not a folder", encoding="utf-8")
+    monkeypatch.setenv("MOTRES_RSYNC_FILTER_FILE", str(tmp_path / "blocker" / "x" / "rsync-library.include"))
+    h = P.sign_headers("GET", path, b"", secret=SECRET, region="us")
+    assert c.get(path, headers=h).status_code == 503
 
 
 def test_us_backup_targets_b2_with_credentials_only_in_the_root_env_file():
@@ -232,13 +321,89 @@ def test_us_backup_targets_b2_with_credentials_only_in_the_root_env_file():
     assert vals["RESTIC_REPOSITORY"].startswith("b2:")
     for secret in ("B2_ACCOUNT_ID", "B2_ACCOUNT_KEY", "RESTIC_PASSWORD"):
         assert vals[secret] == ""                                                # template: nothing filled in
-    svc = _unit("deploy/systemd/motres-backup-us.service")
-    assert svc[("Service", "EnvironmentFile")] == ["/etc/motres/backup-us.env"]
+    assert vals["LIMIT_UPLOAD_KIB"].isdigit() and "RESTIC_LIMIT_UPLOAD" not in env     # L9: restic reads no such variable
+    for name in ("motres-backup-us", "motres-backup-us-prune"):
+        svc = _unit(f"deploy/systemd/{name}.service")
+        assert svc[("Service", "EnvironmentFile")] == ["/etc/motres/backup-us.env"]
+        text = re.sub(r"#.*", "", _read(f"deploy/systemd/{name}.service"))
+        assert "B2_ACCOUNT" not in text and "RESTIC_PASSWORD" not in text
+        assert "--limit-upload ${LIMIT_UPLOAD_KIB}" in text                      # the flag restic really has
     text = _read("deploy/systemd/motres-backup-us.service")
-    assert "B2_ACCOUNT" not in re.sub(r"#.*", "", text) and "RESTIC_PASSWORD" not in re.sub(r"#.*", "", text)
-    assert "--host motres-us" in text and "restic-include-us.txt" in text and "hetzner" not in text.lower().replace("not the eu", "")
+    assert "--host motres-us" in text and "restic-include-us.txt" in text and "motres-box" not in text
+    # the hourly backup waits for the daily prune's exclusive lock instead of failing; a default keeps --limit-upload valid
+    for rel, restic_lines in (("deploy/systemd/motres-backup-us.service", ("restic backup",)),
+                              ("deploy/systemd/motres-backup-us-prune.service", ("restic forget", "restic check"))):
+        raw = _read(rel)
+        code = re.sub(r"#.*", "", raw)
+        flat = re.sub(r"\\\n\s*", " ", code)
+        for cmd in restic_lines:
+            assert re.search(re.escape(cmd) + r"[^\n]*--retry-lock 30m", flat), (rel, cmd)
+        assert raw.index("Environment=LIMIT_UPLOAD_KIB=0") < raw.index("EnvironmentFile=/etc/motres/backup-us.env")
     assert "0600" in env and "/etc/motres/backup-us.env" in env
     assert _unit("deploy/systemd/motres-backup-us.timer")[("Timer", "OnCalendar")] == ["hourly"]
+
+
+def _parse_rsyncd(text):
+    """A small rsyncd.conf parser: ``({global key: value}, {module: {key: value}})`` (comments and blank lines skipped)."""
+    glob, mods, cur = {}, {}, None
+    for ln in text.splitlines():
+        ln = ln.strip()
+        if not ln or ln.startswith(("#", ";")):
+            continue
+        m = re.fullmatch(r"\[([^\]]+)\]", ln)
+        if m:
+            cur = mods.setdefault(m.group(1), {})
+            continue
+        k, _, v = ln.partition("=")
+        (cur if cur is not None else glob)[k.strip()] = v.strip()
+    return glob, mods
+
+
+def test_the_daemon_config_itself_is_safe_and_agrees_with_the_code_and_the_deployment(monkeypatch):
+    """L10: the shipped rsyncd.conf is parsed and every setting that makes the module safe is checked, together with the files
+    it points at (the path the API writes, the folder compose mounts)."""
+    glob, mods = _parse_rsyncd(_read("deploy/regions/rsyncd-motres.conf"))
+    assert list(mods) == ["motres-library"]                                  # exactly one module
+    assert glob["address"] == "10.77.0.1" and glob["port"] == "873"          # WireGuard address only, never 0.0.0.0
+    assert glob["uid"] == "10001" and glob["gid"] == "10001"                 # the application user, not root
+    assert glob["use chroot"] == "no"                                        # the include file lives outside the module path
+    m = mods["motres-library"]
+    assert m["read only"] == "yes" and m["write only"] == "no" and m["list"] == "no"
+    assert m["hosts allow"] == "10.77.0.2" and m["hosts deny"] == "*"        # the US peer only
+    assert m["path"] == "/srv/motres/shared"
+    assert m["exclude"] == "*"                                               # everything the include file does not name is hidden
+    for opt in ("delete", "delete-before", "delete-during", "delete-after", "delete-delay", "delete-excluded"):
+        assert opt in m["refuse options"].split()
+    # the include file is the one the API writes on every manifest build (identity dir of the data root)
+    from motor_ai_sim import users as U
+    monkeypatch.delenv("MOTRES_RSYNC_FILTER_FILE", raising=False)
+    monkeypatch.setattr(U, "_USERS_FILE", Path("/srv/motres/identity/users.json"))
+    assert CM.rsync_filter_path().as_posix() == m["include from"]
+    # that folder is mounted into the API (compose mounts /srv/motres/identity), and the shared path is the mounted catalog
+    compose = _read("deploy/docker-compose.yml")
+    assert "/srv/motres/identity:/srv/motres/identity" in compose and "/srv/motres/shared:/srv/motres/shared" in compose
+    # no setting of the module may re-open what the filter hides
+    assert not any(k in m for k in ("include", "filter", "exclude from", "munge symlinks", "incoming chmod", "dont compress")) \
+        or m.get("include") is None
+    assert "motres-library" in _read("scripts/mirror_catalog_us.sh") and "10.77.0.1" in _read("scripts/mirror_catalog_us.sh")
+
+
+def test_prune_and_check_run_daily_not_hourly():
+    hourly = re.sub(r"#.*", "", _read("deploy/systemd/motres-backup-us.service"))
+    assert "forget" not in hourly and "prune" not in hourly and "restic check" not in hourly
+    daily = _unit("deploy/systemd/motres-backup-us-prune.service")
+    cmds = daily[("Service", "ExecStart")]
+    assert any(c.startswith("/usr/bin/restic forget --prune") and "--keep-daily 30" in c for c in cmds)
+    assert any(c.startswith("/usr/bin/restic check") for c in cmds)
+    t = _unit("deploy/systemd/motres-backup-us-prune.timer")
+    assert t[("Timer", "OnCalendar")] == ["*-*-* 03:30:00 UTC"] and t[("Timer", "Unit")] == ["motres-backup-us-prune.service"]
+
+
+def test_backup_unit_never_creates_the_mirror_directory_as_root():
+    text = re.sub(r"#.*", "", _read("deploy/systemd/motres-backup-us.service"))
+    assert "install -d -o 10001 -g 10001 -m 0750 /srv/motres/identity/mirror" in text
+    assert "touch " not in text and "install -d -m" not in text                        # the old root-owned forms
+    assert "-o 10001 -g 10001 -m 0644 /dev/null" in text                                # the fallback file is the app user's
 
 
 def test_us_backup_lists_cut_out_the_library_and_foreign_jobs():
@@ -249,13 +414,94 @@ def test_us_backup_lists_cut_out_the_library_and_foreign_jobs():
     assert "foreign_jobs/" in exc
     svc = _read("deploy/systemd/motres-backup-us.service")
     assert "restic-exclude-mirrored.txt" in svc and "backup-exclude" in svc          # the mirrored files are excluded
-    assert "repository" not in svc.lower().replace("own repository", "")            # the repository comes from the env file
     assert "motres-box" not in svc                                                   # never the EU Storage Box
+
+
+def _run_script(tmp_path, *, plan_rc=0, apply_rc=0, rsync_rc=0, fetch="dies/PUB/die.yaml\n"):
+    """Run scripts/mirror_catalog_us.sh under bash with fake install / chown / flock / rsync / bluegreen: record what it does."""
+    bash = shutil.which("bash")
+    if not bash:
+        pytest.skip("no bash")
+    bindir, work, log = tmp_path / "bin", tmp_path / "work", tmp_path / "calls.log"
+    bindir.mkdir(parents=True)
+    work.mkdir(parents=True)
+
+    def tool(name, body):
+        f = bindir / name
+        f.write_text("#!/usr/bin/env bash\n" + body, encoding="utf-8")
+        f.chmod(0o755)
+        return f
+    tool("install", f'echo "install $*" >> "{log.as_posix()}"\n')
+    tool("chown", f'echo "chown $*" >> "{log.as_posix()}"\n')
+    tool("flock", "exit 0\n")
+    rs = tool("rsync", f'echo "rsync $*" >> "{log.as_posix()}"\nexit {rsync_rc}\n')
+    bg = tool("bg.sh", f'echo "bluegreen $*" >> "{log.as_posix()}"\n'
+                       f'case "$*" in *" plan"*) printf "{fetch}" > "{work.as_posix()}/fetch.txt"; exit {plan_rc};; '
+                       f'*" apply"*) exit {apply_rc};; esac\n')
+    env = {**os.environ, "PATH": bindir.as_posix() + os.pathsep + os.environ["PATH"], "MOTRES_MIRROR_DIR": work.as_posix(),
+           "MOTRES_SHARED": (tmp_path / "shared").as_posix(), "RSYNC": rs.as_posix(), "MOTRES_BLUEGREEN": bg.as_posix()}
+    r = subprocess.run([bash, str(ROOT / "scripts/mirror_catalog_us.sh")], capture_output=True, text=True, env=env, timeout=60)
+    calls = log.read_text(encoding="utf-8").splitlines() if log.exists() else []
+    return r.returncode, calls, r.stdout + r.stderr
+
+
+def test_script_fetches_as_the_app_user_and_never_creates_root_files(tmp_path):
+    """B3: the work dir is created for 10001, rsync is told to chown / chmod, and nothing recursive or deleting is passed."""
+    rc, calls, out = _run_script(tmp_path)
+    assert rc == 0, out
+    assert any(c.startswith("install -d -o 10001 -g 10001 -m 0750 ") and c.endswith("/work") for c in calls)
+    assert any(c.startswith("chown 10001:10001 ") and c.endswith(".lock") for c in calls)
+    (rs,) = [c for c in calls if c.startswith("rsync ")]
+    assert "--chown=10001:10001" in rs and "--chmod=D755,F644" in rs and "--files-from=" in rs
+    assert not re.search(r"(^| )-[a-zA-Z]*[ra]", rs.split("--")[0].replace("rsync", "", 1)) and "--delete" not in rs
+    assert rs.index("rsync ") < rs.index("--chown")
+    assert [c for c in calls if c.startswith("bluegreen")][-1].endswith(" apply")
+
+
+def test_script_exit_codes_failed_delete_is_non_zero_and_refusals_stop_before_rsync(tmp_path):
+    rc, calls, out = _run_script(tmp_path, apply_rc=7)
+    assert rc == 7 and "FAILED" in out                                                   # a failed delete / corrupt store: the unit fails
+    for plan_rc, want in ((2, 2), (3, 3), (4, 75), (6, 6)):
+        rc, calls, out = _run_script(tmp_path / f"p{plan_rc}", plan_rc=plan_rc)
+        assert rc == want and not any(c.startswith("rsync ") for c in calls) and not any(c.endswith(" apply") for c in calls)
+    rc, calls, out = _run_script(tmp_path / "rs", rsync_rc=23)
+    assert rc == 75 and not any(c.endswith(" apply") for c in calls)                    # rsync failed: apply never runs
+    rc, calls, out = _run_script(tmp_path / "empty", fetch="")
+    assert rc == 0 and not any(c.startswith("rsync ") for c in calls)                  # nothing to fetch: no rsync at all
 
 
 def test_install_note_lists_the_owner_variables_and_every_step():
     note = _read("docs/regions/INSTALL_US_MIRROR.md")
-    for needle in ("B2_ACCOUNT_ID", "B2_ACCOUNT_KEY", "RESTIC_PASSWORD", "RESTIC_REPOSITORY", "backup-us.env", "--init",
-                   "motres-catalog-mirror.timer", "motres-directory-sync.timer", "motres-rsyncd-library", "MOTRES_CROSS_REGION_COMPUTE",
-                   "/srv/motres/run/foreign_jobs", "region-us"):
+    for needle in ("B2_ACCOUNT_ID", "B2_ACCOUNT_KEY", "RESTIC_PASSWORD", "RESTIC_REPOSITORY", "LIMIT_UPLOAD_KIB", "backup-us.env",
+                   "--init", "motres-catalog-mirror.timer", "motres-directory-sync.timer", "motres-rsyncd-library",
+                   "motres-backup-us-prune", "MOTRES_CROSS_REGION_COMPUTE", "/srv/motres/run/foreign_jobs", "region-us",
+                   "Acceptance check", "10001"):
         assert needle in note, needle
+    assert "sudo bash -c 'set -a; . /etc/motres/backup-us.env; set +a; restic init'" in note       # L9: sourced as root
+    assert "sudo -E restic init" not in note and "rsyncd-motres.include" not in note
+
+
+def test_plan_warns_about_unattributed_rows(world, capsys):
+    """A non-zero count of rows EU could not send is a visible warning in the job output, not a silent loss."""
+    real = P.get
+
+    def with_unattributed(path, **kw):
+        out = real(path, **kw)
+        if path == "/catalog/manifest":
+            out["extracts"]["counts"]["unattributed"] = 3
+        return out
+    import pytest as _pt
+    mp = _pt.MonkeyPatch()
+    mp.setattr(P, "get", with_unattributed)
+    try:
+        assert MI.main(["plan", "--init"]) == MI.EXIT_OK
+    finally:
+        mp.undo()
+    cap = capsys.readouterr()
+    assert json.loads(cap.out.strip().splitlines()[0])["unattributed_rows"] == 3
+    assert "WARNING 3 result row(s)" in cap.err
+    assert json.loads((world["work"] / "plan.json").read_text(encoding="utf-8"))["unattributed_rows"] == 3
+    capsys.readouterr()
+    assert MI.main(["plan", "--init"]) == MI.EXIT_OK
+    assert "WARNING" not in capsys.readouterr().err                        # zero: no warning
+

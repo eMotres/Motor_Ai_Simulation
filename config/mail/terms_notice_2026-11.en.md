@@ -2,7 +2,7 @@ Subject: AeroStator account notice: new terms and engineering-data choices
 
 Hello,
 
-We have updated the AeroStator Terms of Use and Privacy Policy and introduced a Platform Agreement for simulations. When you next sign in, a short line asks you to accept the updated Terms. The Platform Agreement, with the choice of FREE or PRIVATE mode, is asked for when you first start a simulation; without it, simulations cannot be started. Until you accept it, your data are not used for internal AI training.
+We have updated the AeroStator Terms of Use and Privacy Policy and introduced a Platform Agreement for projects and simulations. When you next sign in, a short line asks you to accept the updated Terms. The Platform Agreement, with the choice of FREE or PRIVATE mode, is asked for when you create your first project or start your first simulation, whichever comes first; without it, neither can be started. Until you accept it, your data are not used for internal AI training.
 
 ## What the new terms say
 
@@ -15,6 +15,7 @@ We have updated the AeroStator Terms of Use and Privacy Policy and introduced a 
 - **PRIVATE mode** excludes all AI training on the data you supply after switching to it and on everything derived from them; data supplied earlier in FREE mode remain usable for training. It is a paid mode for business clients, including registered sole traders, with its commercial terms in a separate order; you can ask for it at support@aerostator.com.
 - **AI assistants** in AeroStator are optional and run on Anthropic's commercial Claude service, which does not use your inputs to train its models.
 - **Liability.** The service, simulations and results are free and provided "as is". MOTRES's liability is excluded in full, except where the law does not allow it to be excluded. Liability for a product arises only under a separate paid agreement.
+- **Where your data are hosted.** Accounts in North, Central or South America or the Caribbean are hosted on our server in the United States, with backups in the United States; all other accounts are hosted in Germany, with backups in the EU.
 - **Law and forum:** Slovenian law and the courts of Ljubljana, or Hong Kong law and HKIAC arbitration for businesses established in Mainland China or Hong Kong.
 
 ## If you do not agree

@@ -39,3 +39,8 @@ __pycache__/
 # ── noise ───────────────────────────────────────────────────────────────────
 .DS_Store
 Thumbs.db
+
+# ── cross-region compute (docs/regions/DESIGN.md section 9) ─────────────────
+# Jobs of the OTHER region run here under run/foreign_jobs/ for at most 24 h.  Never in a backup, on either server
+# (run/ is not in the include list either; this line keeps it out if a parent is ever added).
+foreign_jobs/

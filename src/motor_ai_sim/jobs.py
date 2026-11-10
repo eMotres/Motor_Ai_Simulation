@@ -413,6 +413,24 @@ HANDLERS: "Dict[str, Callable[[Dict[str, Any]], Any]]" = {}
 #: ``compute_nodes.remote_router`` once that module is imported: called with a
 #: fresh record, returns True when the job went to one of the owner's nodes.
 REMOTE_ROUTER: "Optional[Callable[[JobRecord], bool]]" = None
+
+
+def _region_router(rec: "JobRecord") -> bool:
+    """Cross-region compute (docs/regions/DESIGN.md section 9): True when the job went to the other region's server.
+    One environment read when ``MOTRES_CROSS_REGION_COMPUTE`` is not ``1`` - the default - and nothing else is imported."""
+    if str(os.environ.get("MOTRES_CROSS_REGION_COMPUTE", "")).strip().lower() not in ("1", "true", "yes", "on"):
+        return False
+    try:
+        from motor_ai_sim.regions import foreign as _foreign
+        return bool(_foreign.route(rec))
+    except Exception:                                   # noqa: BLE001 - the job simply runs here
+        log.warning("cross-region routing failed; the job runs here", exc_info=True)
+        return False
+
+
+#: Called with a fresh record of a kind that has a handler (after the owner's own nodes were offered it); True = it was sent
+#: to the peer region (``regions/foreign.py``).  Replaceable by a test.
+REGION_ROUTER: "Optional[Callable[[JobRecord], bool]]" = _region_router
 #: ``kind`` -> ``hook(run_id)``, called when a RUNNING job of that kind is
 #: cancelled.  The optimizer's subprocess killer and static3d's cancel flag hang
 #: here, so ``POST /api/jobs/{run_id}/cancel`` reaches them without this module
@@ -1164,6 +1182,10 @@ def run_job(kind: str, work: Callable[[], Any], *,
     # node instead (their routing preference decides).  Always 202 then: the
     # answer comes back from another machine.
     if REMOTE_ROUTER is not None and kind in HANDLERS and REMOTE_ROUTER(rec):
+        raise JobAccepted(rec)
+    # The other REGION's server (docs/regions/DESIGN.md section 9): only a kind with a handler can be shipped, only with
+    # MOTRES_CROSS_REGION_COMPUTE=1 and a configured peer, and only when the payload is clean (regions/compute.py).
+    if REGION_ROUTER is not None and kind in HANDLERS and REGION_ROUTER(rec):
         raise JobAccepted(rec)
     return queue().submit(rec, work, block=block)
 

@@ -78,6 +78,28 @@ def _skip(name: str) -> bool:
             or ".bak" in name)
 
 
+def _is_dir(p: Path) -> bool:
+    """``Path.is_dir`` that never raises (a root-owned unreadable entry reads as "not a directory": skipped, not a crash)."""
+    try:
+        return p.is_dir()
+    except OSError:
+        return False
+
+
+def _is_file(p: Path) -> bool:
+    try:
+        return p.is_file()
+    except OSError:
+        return False
+
+
+def _is_link(p: Path) -> bool:
+    try:
+        return p.is_symlink()
+    except OSError:
+        return True                                         # cannot tell: treat as unsafe, skip
+
+
 class _Acc:
     """Collects the result of one ``build()``."""
 
@@ -161,7 +183,7 @@ def open_configs(die_dir: Path, exhibit: Optional[list] = None) -> Tuple[bool, D
     pub = MA.get_die_access(die_dir.name).get("visibility") == MA.VIS_PUBLIC
     shown = bool(exhibit) and EX.die_is_client_ready(_die_yaml_geometry(die_dir), exhibit)
     try:
-        files = sorted(f for f in die_dir.glob("*.yaml") if f.is_file() and f.name != "die.yaml" and not _skip(f.name))
+        files = sorted(f for f in die_dir.glob("*.yaml") if _is_file(f) and f.name != "die.yaml" and not _skip(f.name))
     except OSError:
         files = []
     return pub or shown, {f.stem: _cfg_open(f, pub or shown) for f in files}
@@ -181,7 +203,7 @@ def linked_dies(root: Path) -> Tuple[set, int]:
     dies: set = set()
     bad = 0
     pr = root / "projects"
-    if not pr.is_dir():
+    if not _is_dir(pr):
         return dies, bad
     try:
         kids = sorted(pr.iterdir())
@@ -189,7 +211,7 @@ def linked_dies(root: Path) -> Tuple[set, int]:
         return dies, 1
     for k in kids:
         f = k / "project.json"
-        if not k.is_dir() or not f.exists():
+        if not _is_dir(k) or not _is_file(f):
             continue
         try:
             doc = json.loads(f.read_text(encoding="utf-8"))
@@ -213,52 +235,52 @@ def _owner_cfg(name: str, cfgs: Dict[str, bool]) -> Optional[str]:
 def _walk(base: Path, rel: str, acc: _Acc) -> None:
     """Plain recursive walk (a subtree that is already attributed, or a library dir that is not keyed per die)."""
     for p in _iter(base, acc, rel):
-        if _skip(p.name) or p.is_symlink():
+        if _skip(p.name) or _is_link(p):
             continue
         r = f"{rel}/{p.name}" if rel else p.name
-        if p.is_dir():
+        if _is_dir(p):
             _walk(p, r, acc)
-        elif p.is_file():
+        elif _is_file(p):
             acc.add(p, r)
 
 
 def _take(p: Path, r: str, owner: Optional[str], cfgs: Dict[str, bool], acc: _Acc, what: str = "") -> None:
-    mark = "/" if p.is_dir() else ""
+    mark = "/" if _is_dir(p) else ""
     if owner is None:
         acc.leave_out(r + mark, f"{what}cannot be attributed to a configuration")
     elif not cfgs.get(owner):
         acc.leave_out(r + mark, f"{what}belongs to configuration {owner}, which is not public")
-    elif p.is_dir():
+    elif _is_dir(p):
         _walk(p, r, acc)
-    elif p.is_file():
+    elif _is_file(p):
         acc.add(p, r)
 
 
 def _mirror_die(d: Path, cfgs: Dict[str, bool], acc: _Acc) -> None:
     rel0 = f"dies/{d.name}"
     for p in _iter(d, acc, rel0):
-        if _skip(p.name) or p.is_symlink():
+        if _skip(p.name) or _is_link(p):
             continue
         r = f"{rel0}/{p.name}"
-        if p.name == "die.yaml" and p.is_file():
+        if p.name == "die.yaml" and _is_file(p):
             acc.add(p, r)
-        elif p.is_dir() and p.name == "runs":                # runs/<cfg>/... : result sidecars of one configuration
+        elif _is_dir(p) and p.name == "runs":                # runs/<cfg>/... : result sidecars of one configuration
             for q in _iter(p, acc, r):
-                if _skip(q.name) or q.is_symlink():
+                if _skip(q.name) or _is_link(q):
                     continue
-                _take(q, f"{r}/{q.name}", q.name if q.is_dir() and q.name in cfgs else None, cfgs, acc)
+                _take(q, f"{r}/{q.name}", q.name if _is_dir(q) and q.name in cfgs else None, cfgs, acc)
         else:
-            _take(p, r, _owner_cfg(p.stem if p.suffix == ".yaml" and p.is_file() else p.name, cfgs), cfgs, acc)
+            _take(p, r, _owner_cfg(p.stem if p.suffix == ".yaml" and _is_file(p) else p.name, cfgs), cfgs, acc)
 
 
 def _mirror_keyed(top: Path, acc: _Acc, mirrored: Dict[str, Dict[str, bool]], excluded: set) -> None:
     """``passports/`` and ``cad/``: ``<die>/<cfg>[.json|/...]`` follow the open-only rule of the die in ``dies/``."""
     kind = top.name
     for dd in _iter(top, acc, kind):
-        if _skip(dd.name) or dd.is_symlink():
+        if _skip(dd.name) or _is_link(dd):
             continue
         rel0 = f"{kind}/{dd.name}"
-        if not dd.is_dir():
+        if not _is_dir(dd):
             acc.leave_out(rel0, f"{kind}: not keyed by die")
             continue
         cfgs = mirrored.get(dd.name)
@@ -267,9 +289,9 @@ def _mirror_keyed(top: Path, acc: _Acc, mirrored: Dict[str, Dict[str, bool]], ex
                           else f"{kind}: die not found in dies/, cannot attribute")
             continue
         for p in _iter(dd, acc, rel0):
-            if _skip(p.name) or p.is_symlink():
+            if _skip(p.name) or _is_link(p):
                 continue
-            _take(p, f"{rel0}/{p.name}", _owner_cfg(p.stem if p.is_file() else p.name, cfgs), cfgs, acc, f"{kind}: ")
+            _take(p, f"{rel0}/{p.name}", _owner_cfg(p.stem if _is_file(p) else p.name, cfgs), cfgs, acc, f"{kind}: ")
 
 
 def _mirror_revisions(top: Path, acc: _Acc, mirrored: Dict[str, Dict[str, bool]]) -> None:
@@ -278,9 +300,9 @@ def _mirror_revisions(top: Path, acc: _Acc, mirrored: Dict[str, Dict[str, bool]]
     why = ""
     try:
         f = top / "revisions.json"
-        doc = json.loads(f.read_text(encoding="utf-8")) if f.is_file() else {}
+        doc = json.loads(f.read_text(encoding="utf-8")) if _is_file(f) else {}
         lineages = doc.get("lineages") if isinstance(doc, dict) else None
-        if lineages is None and not f.is_file():
+        if lineages is None and not _is_file(f):
             lineages = {}
         if not isinstance(lineages, dict):
             raise ValueError("no lineages")
@@ -306,7 +328,7 @@ def _mirror_dies(dies: Path, acc: _Acc, exhibit: Optional[list], linked: set, li
     mirrored: Dict[str, Dict[str, bool]] = {}
     excluded: set = set()
     for d in _iter(dies, acc, "dies"):
-        if not d.is_dir() or _skip(d.name) or d.is_symlink():
+        if not _is_dir(d) or _skip(d.name) or _is_link(d):
             continue
         why = die_excluded(d)
         if not why:
@@ -340,35 +362,171 @@ def _exhibit_geos(catalog_path: Optional[Path]) -> Tuple[Optional[list], str]:
 
 
 def build(root: Optional[Path] = None, now: Optional[float] = None, catalog_path: Optional[Path] = None) -> Dict[str, Any]:
+    """The manifest (file hashes + a SUMMARY of the per-die extracts).  ``build_all`` also returns the extracts."""
+    return build_all(root, now, catalog_path)[0]
+
+
+def build_all(root: Optional[Path] = None, now: Optional[float] = None, catalog_path: Optional[Path] = None,
+              access: Optional[Dict[str, Dict[str, Any]]] = None) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+    """``(manifest, extracts)`` from one walk of the shared tree.  ``access`` = ``{die: die_access entry}`` (default: the
+    server's ``die_access.json`` through ``motor_access``)."""
     if root is None:
         from motor_ai_sim.workspace import shared_root
         root = Path(str(shared_root()))
     root = Path(root)
     acc = _Acc()
     exhibit, exhibit_source = _exhibit_geos(catalog_path)
-    if root.is_dir():
-        mirrored: Dict[str, Dict[str, bool]] = {}
+    mirrored: Dict[str, Dict[str, bool]] = {}
+    if _is_dir(root):
         excluded: set = set()
-        if (root / "dies").is_dir():
+        if _is_dir(root / "dies"):
             linked, bad = linked_dies(root)
             mirrored, excluded = _mirror_dies(root / "dies", acc, exhibit, linked, bool(bad))
         for p in _iter(root, acc, ""):
-            if _skip(p.name) or p.is_symlink():
+            if _skip(p.name) or _is_link(p):
                 continue
-            if p.is_file() and p.name in LIBRARY_FILES:
+            if _is_file(p) and p.name in LIBRARY_FILES:
                 acc.add(p, p.name)
-            elif p.is_dir() and p.name in ("passports", "cad"):
+            elif _is_dir(p) and p.name in ("passports", "cad"):
                 _mirror_keyed(p, acc, mirrored, excluded)
-            elif p.is_dir() and p.name == "motor_revisions":
+            elif _is_dir(p) and p.name == "motor_revisions":
                 _mirror_revisions(p, acc, mirrored)
-            elif p.is_dir() and p.name in LIBRARY_DIRS and p.name != "dies":
+            elif _is_dir(p) and p.name in LIBRARY_DIRS and p.name != "dies":
                 _walk(p, p.name, acc)
     files = acc.files
+    extracts = build_extracts(root, mirrored, files, access=access)
     root_id = hashlib.sha256("\n".join(f"{k} {v['sha256']}" for k, v in sorted(files.items())).encode()).hexdigest()
-    return {"root_id": root_id, "files": files, "count": len(files), "bytes": sum(v["bytes"] for v in files.values()),
-            "excluded_dies": acc.excluded_dies, "excluded_files": acc.excluded_files,
-            "exhibit_source": exhibit_source, "skipped_unreadable": acc.skipped_count, "skipped_unreadable_paths": acc.skipped,
-            "ts": round(time.time() if now is None else now, 1)}
+    manifest = {"root_id": root_id, "files": files, "count": len(files), "bytes": sum(v["bytes"] for v in files.values()),
+                "excluded_dies": acc.excluded_dies, "excluded_files": acc.excluded_files,
+                "exhibit_source": exhibit_source,
+                "skipped_unreadable": acc.skipped_count + extracts["counts"]["unreadable"],
+                "skipped_unreadable_paths": acc.skipped,
+                "extracts": {"id": extracts["id"], "dies": sorted(extracts["dies"]),
+                             "passports": len(extracts["passports"]), "counts": extracts["counts"]},
+                "ts": round(time.time() if now is None else now, 1)}
+    return manifest, extracts
+
+
+# ── per-die extracts of the PARTIAL shared files ─────────────────────────────
+# ``<shared>/.duty_results.json`` (every die's solver rows), ``<shared>/end_effect_passports.json`` (keyed by geometry
+# fingerprint) and the server's ``die_access.json`` (every die's visibility) are ONE file for the whole library, so they
+# cannot be copied by hash.  EU cuts out what belongs to the mirrored dies; US merges it into its own stores
+# (``catalog_mirror.merge_extracts``) and removes what it merged earlier for a die that is no longer mirrored.
+# Fail closed: a row that cannot be attributed to a mirrored die and configuration is left out and COUNTED, never sent.
+
+EXTRACT_VERSION = 1
+#: Keys that carry a machine's geometry fingerprint in a result row / a passport file.
+FP_KEYS = frozenset({"geometry_fingerprint", "geo_fingerprint"})
+DUTY_STORE = ".duty_results.json"
+END_EFFECT_STORE = "end_effect_passports.json"
+
+
+def _collect_fps(value: Any, out: set, depth: int = 0) -> None:
+    if depth > 12:
+        return
+    if isinstance(value, dict):
+        for k, v in value.items():
+            if k in FP_KEYS and isinstance(v, str) and v:
+                out.add(v)
+            else:
+                _collect_fps(v, out, depth + 1)
+    elif isinstance(value, list):
+        for v in value:
+            _collect_fps(v, out, depth + 1)
+
+
+def _read_json(p: Path) -> Tuple[Any, bool]:
+    """-> ``(document, unreadable)``.  A missing file is an empty document, not an error."""
+    try:
+        return json.loads(p.read_text(encoding="utf-8")), False
+    except FileNotFoundError:
+        return None, False
+    except (OSError, ValueError, UnicodeDecodeError):
+        return None, True
+
+
+def _cut_block(block: Any, mirrored: Dict[str, Dict[str, bool]], counts: Dict[str, int],
+               fps: set) -> Dict[str, Dict[str, Any]]:
+    """``{die: {cfg: ...}}`` -> the same for mirrored dies and configurations only (every other entry is counted)."""
+    out: Dict[str, Dict[str, Any]] = {}
+    if block is None:
+        return out
+    if not isinstance(block, dict):
+        counts["unattributed"] += 1
+        return out
+    for die, cfgs in block.items():
+        if not isinstance(cfgs, dict):
+            counts["unattributed"] += 1
+            continue
+        m = mirrored.get(str(die))
+        for cfg, rows in cfgs.items():
+            if m is None:
+                counts["closed"] += 1                       # a die that is not mirrored: closed by design
+            elif str(cfg) not in m:
+                counts["unattributed"] += 1                 # mirrored die, unknown configuration (stale row)
+            elif not m[str(cfg)]:
+                counts["closed"] += 1                       # a configuration that is not public
+            else:
+                out.setdefault(str(die), {})[str(cfg)] = rows
+                counts["mirrored"] += 1
+                _collect_fps(rows, fps)
+    return out
+
+
+def build_extracts(root: Path, mirrored: Dict[str, Dict[str, bool]], files: Optional[Dict[str, Any]] = None,
+                   access: Optional[Dict[str, Dict[str, Any]]] = None) -> Dict[str, Any]:
+    """The per-die extracts for the mirrored dies ``{die: {cfg: mirrored?}}``.
+
+    ``{v, id, dies: {die: {"duty": {"results": {cfg: ...}, "history": {cfg: ...}}, "access": {...}}}, passports:
+    {fingerprint: entry}, counts}``.  ``access`` carries an entry only for a die whose access is ``public`` (a
+    ``selected`` die's client e-mails never cross; every other mirrored die takes US's default).  A passport entry is
+    carried only when its fingerprint appears in a mirrored configuration's result rows or passport file.
+    """
+    from motor_ai_sim import motor_access as MA
+    counts = {"mirrored": 0, "closed": 0, "unattributed": 0, "unreadable": 0,
+              "passports_mirrored": 0, "passports_left_out": 0, "access": 0}
+    fps: set = set()
+    dies: Dict[str, Dict[str, Any]] = {d: {} for d in mirrored}
+
+    doc, bad = _read_json(Path(root) / DUTY_STORE)
+    if bad:
+        counts["unreadable"] += 1
+        doc = None
+    if doc is not None and not isinstance(doc, dict):
+        counts["unattributed"] += 1
+        doc = None
+    doc = doc or {}
+    results = _cut_block(doc.get("results"), mirrored, counts, fps)
+    history = _cut_block(doc.get("history"), mirrored, {"mirrored": 0, "closed": 0, "unattributed": 0}, fps)
+    for die in dies:
+        if die in results or die in history:
+            dies[die]["duty"] = {"results": results.get(die, {}), "history": history.get(die, {})}
+
+    for rel in (files or {}):                               # fingerprints named by the mirrored configurations' passports
+        if rel.startswith("passports/") and rel.endswith(".json"):
+            _collect_fps(_read_json(Path(root) / rel)[0], fps)
+
+    store, bad = _read_json(Path(root) / END_EFFECT_STORE)
+    if bad:
+        counts["unreadable"] += 1
+    passports: Dict[str, Any] = {}
+    for fp, entry in (store.items() if isinstance(store, dict) else []):
+        if isinstance(entry, dict) and str(fp) in fps:
+            passports[str(fp)] = entry
+            counts["passports_mirrored"] += 1
+        else:
+            counts["passports_left_out"] += 1
+
+    acc_src = access if access is not None else MA.all_die_access()
+    for die in dies:
+        e = MA.normalize_die_access(acc_src.get(die))
+        if e["visibility"] == MA.VIS_PUBLIC:
+            dies[die]["access"] = {"visibility": MA.VIS_PUBLIC, "clients": []}
+            counts["access"] += 1
+    dies = {d: v for d, v in dies.items() if v}
+    body = {"dies": dies, "passports": passports}
+    ident = hashlib.sha256(json.dumps(body, sort_keys=True, separators=(",", ":"), default=str).encode()).hexdigest()
+    return {"v": EXTRACT_VERSION, "id": ident, **body, "counts": counts}
 
 
 def diff(source: Dict[str, Any], mirror: Dict[str, Any]) -> Dict[str, List[str]]:

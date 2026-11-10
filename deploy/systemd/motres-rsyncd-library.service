@@ -1,0 +1,16 @@
+# EU server: the READ-ONLY rsync module the US mirror job fetches the open library from (docs/regions/INSTALL_US_MIRROR.md).
+# Listens on the WireGuard address ONLY (10.77.0.1); the module is limited to the library allow-list and to the US peer.
+[Unit]
+Description=AeroStator library rsync module (read-only, WireGuard only)
+After=network-online.target wg-quick@wg0.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/rsync --daemon --no-detach --config=/etc/motres/rsyncd-motres.conf
+Restart=on-failure
+Nice=15
+IOSchedulingClass=idle
+
+[Install]
+WantedBy=multi-user.target

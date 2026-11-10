@@ -13,11 +13,17 @@ const RegionsCard: React.FC = () => {
   const { t } = useTranslation('admin');
   const [view, setView] = useState<RegionsView | null>(null);
   const [err, setErr] = useState<string | null>(null);
+  // e-mails both servers host as their own account (a sign-up raced with the peer down); shown, never merged
+  const [dups, setDups] = useState<string[]>([]);
   const load = useCallback(() => {
     fetch(`${API}/api/admin/regions`)
       .then(async (r) => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); })
       .then((j: RegionsView) => { setView(j); setErr(null); })
       .catch((e: unknown) => setErr(e instanceof Error ? e.message : String(e)));
+    fetch(`${API}/api/admin/regions/accounts`)
+      .then((r) => (r.ok ? r.json() : { duplicates: [] }))
+      .then((j: { duplicates?: unknown }) => setDups(Array.isArray(j.duplicates) ? j.duplicates.map(String) : []))
+      .catch(() => setDups([]));
   }, []);
   useEffect(() => {
     load();
@@ -33,6 +39,12 @@ const RegionsCard: React.FC = () => {
         {view?.mode === 'single' && (
           <Tooltip title={t('regions.singleTip')} arrow>
             <Chip size="small" label={t('regions.single')} sx={{ height: 18, fontSize: 10, bgcolor: 'var(--panel)', color: 'var(--text-3)' }} />
+          </Tooltip>
+        )}
+        {dups.length > 0 && (
+          <Tooltip title={`${t('regions.duplicatesTip')} ${dups.join(', ')}`} arrow>
+            <Chip size="small" data-testid="regions-duplicates" label={t('regions.duplicates', { n: dups.length })}
+              sx={{ height: 18, fontSize: 10, bgcolor: 'rgba(248,113,113,0.15)', color: '#f87171' }} />
           </Tooltip>
         )}
       </Box>

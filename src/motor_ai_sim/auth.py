@@ -140,6 +140,9 @@ _ANON_OK_PATHS = frozenset({"/api/health", "/api/me", "/api/version", "/api/noti
 _ANON_OK_PREFIXES = ("/api/auth/login", "/api/auth/google", "/api/auth/logout",
                      "/api/auth/register", "/api/auth/verify",
                      "/api/auth/reset", "/api/auth/methods",
+                     # two regions: the sign-in hand-off ticket from the other region's server IS the credential
+                     # (regions/handoff.py, routes/auth_local.py)
+                     "/api/auth/region-handoff",
                      # the links in the account mails: small server-rendered pages, no JavaScript needed (routes/auth_local.py)
                      "/api/auth/link",
                      # the data-export ZIP: the signed single-use token in the

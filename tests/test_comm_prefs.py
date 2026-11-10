@@ -660,4 +660,4 @@ def test_template_image_is_embedded_never_fetched(mail, monkeypatch):
         assert len(parts) == 1 and parts[0]["Content-ID"] == f"<{cids[0]}>" and parts[0].get_filename() == f"free_simulation_flow.{lang}.png"
         assert parts[0].get_content()[:8] == b"\x89PNG\r\n\x1a\n"
         text = raw.get_body(("plain",)).get_content()
-        assert ("[How it works:" in text) if lang == "en" else ("[使用方式：" in text)
+        assert ("[Your motor, simulated free." in text) if lang == "en" else ("[免费为您仿真电机。" in text)

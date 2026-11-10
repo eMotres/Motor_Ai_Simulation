@@ -644,3 +644,20 @@ def test_essential_notice_reaches_unsubscribed_accounts_but_never_unverified_or_
     assert code == 0 and len(list(out.glob("*.eml"))) == 3 and "would send 3" in capsys.readouterr().out
     with pytest.raises(SystemExit):
         run(mail, "--essential", "--topic", "new_motors")
+
+
+def test_template_image_is_embedded_never_fetched(mail, monkeypatch):
+    """The launch mail's flow picture (owner 2026-11-10) is an inline part (cid:), in the message's language; no remote image."""
+    M = mail["M"]
+    monkeypatch.delenv("MAIL_TEMPLATE_DIR", raising=False)
+    for lang in ("en", "zh-CN"):
+        msg = M.build_message("free_simulation_launch_2026-11", lang, email=ANNA, name="", sender="AeroStator <support@aerostator.com>")
+        raw = emaillib.message_from_bytes(msg.as_bytes(), policy=policy.default)
+        html = raw.get_body(("html",)).get_content()
+        cids = __import__("re").findall(r'<img src="cid:([^"]+)"', html)
+        assert len(cids) == 1 and "src=\"http" not in html and html.count("<img") == 1
+        parts = [p for p in raw.walk() if p.get_content_type() == "image/png"]
+        assert len(parts) == 1 and parts[0]["Content-ID"] == f"<{cids[0]}>" and parts[0].get_filename() == f"free_simulation_flow.{lang}.png"
+        assert parts[0].get_content()[:8] == b"\x89PNG\r\n\x1a\n"
+        text = raw.get_body(("plain",)).get_content()
+        assert ("[How it works:" in text) if lang == "en" else ("[使用方式：" in text)

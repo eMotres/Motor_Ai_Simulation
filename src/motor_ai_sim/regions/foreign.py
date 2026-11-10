@@ -51,6 +51,20 @@ HANDBACK_MAX_S = 900.0
 PEER_STATUS_TTL_S = 10.0
 _TOKEN = re.compile(r"[A-Za-z0-9_-]{16,64}")
 
+#: Per-kind allow-list of the top-level input keys that may cross.  A kind that is not listed never leaves its home server, a
+#: body with any other key is not sent (and not modified: it runs at home), and the computing server refuses it as well.
+#: Registering a kind here is a deliberate act: say which inputs of that kind are pure engineering numbers.
+INPUT_KEYS: Dict[str, frozenset] = {"selftest.cpu": frozenset({"n"})}
+
+
+def register_inputs(kind: str, keys: Any) -> None:
+    INPUT_KEYS[str(kind)] = frozenset(str(k) for k in keys)
+
+
+def inputs_allowed(kind: str, inputs: Any) -> bool:
+    allowed = INPUT_KEYS.get(str(kind))
+    return allowed is not None and isinstance(inputs, dict) and set(inputs) <= allowed
+
 _LOCK = threading.RLock()
 _THREADS: Dict[str, threading.Thread] = {}
 _PEER_STATUS: Dict[str, Any] = {"ts": 0.0, "value": None}
@@ -123,8 +137,10 @@ def accept(payload: Any, now: Optional[float] = None) -> Dict[str, Any]:
     token, kind, inputs = str(payload.get("token") or ""), str(payload.get("kind") or ""), payload.get("inputs")
     if not _TOKEN.fullmatch(token) or not re.fullmatch(r"[a-z0-9_.:-]{1,64}", kind) or not isinstance(inputs, dict):
         return {"ok": False, "code": "bad_payload"}
-    if kind not in J.HANDLERS:
+    if kind not in J.HANDLERS or kind not in INPUT_KEYS:
         return {"ok": False, "code": "unknown_kind"}
+    if not inputs_allowed(kind, inputs):
+        return {"ok": False, "code": "unexpected_input"}
     try:
         size = len(json.dumps(inputs, separators=(",", ":")))
     except (TypeError, ValueError):
@@ -271,8 +287,10 @@ def route(rec: Any) -> bool:
         if where == home:
             return False
         body = dict(rec.body or {})
+        if not inputs_allowed(rec.kind, body):
+            return False                                    # not listed, or an input key outside the allow-list: runs at home
         json.dumps(body)
-        token, payload = CP.job_payload(rec.kind, body, priority=int(rec.priority))
+        token, payload = CP.job_payload(rec.kind, body, priority=int(rec.priority), strict=True)
     except CP.CrossRegionPayloadError as exc:
         log.info("cross-region compute: a %s job stays at home (%s)", getattr(rec, "kind", "?"), exc)
         return False
@@ -324,6 +342,36 @@ def receive_result(payload: Any) -> Dict[str, Any]:
     return {"ok": True, "known": True}
 
 
+def _requeue_at_home(j: Dict[str, Any], fn: Any) -> bool:
+    """Run a job whose token never came back at home, THROUGH the job queue (its priority, per-account fairness and slots),
+    in its owner's workspace.  The result is filed on the job's own record.  -> whether it was queued."""
+    from motor_ai_sim import compute_nodes as CN
+    from motor_ai_sim import jobs as J
+    from motor_ai_sim import workspace as W
+    rid, body = str(j["run_id"]), dict(j.get("body") or {})
+
+    def work() -> Any:
+        t0 = time.time()
+        try:
+            res = fn(dict(body))
+        except Exception as exc:                            # noqa: BLE001
+            CN.finish_region(rid, False, error=type(exc).__name__, wall_s=time.time() - t0)
+            return None
+        CN.finish_region(rid, True, result=res, wall_s=time.time() - t0)
+        return res
+
+    try:
+        with W.use_workspace(W.workspace_for_identity(j.get("owner"))):
+            rec = J.make_record(str(j["kind"]), run_id=rid + "-home", body=body, owner=str(j.get("owner") or ""))
+            J.queue().submit(rec, work, block=False)
+    except J.JobAccepted:
+        return True
+    except Exception as exc:                                # noqa: BLE001
+        log.warning("cross-region compute: re-queue at home failed (%s)", type(exc).__name__)
+        return False
+    return True
+
+
 def home_sweep(now: Optional[float] = None) -> int:
     """Tokens that never came back within the retention: forget them and run the job at home (a lost foreign job)."""
     from motor_ai_sim import compute_nodes as CN
@@ -343,14 +391,8 @@ def home_sweep(now: Optional[float] = None) -> int:
             CN.finish_region(j["run_id"], False, error="the computing region did not answer")
             continue
 
-        def _again(rid=j["run_id"], body=dict(j.get("body") or {}), fn=fn):
-            t0 = time.time()
-            try:
-                CN.finish_region(rid, True, result=fn(body), wall_s=time.time() - t0)
-            except Exception as exc:                        # noqa: BLE001
-                CN.finish_region(rid, False, error=type(exc).__name__, wall_s=time.time() - t0)
-
-        threading.Thread(target=_again, daemon=True, name="foreign-rerun").start()
+        if not _requeue_at_home(j, fn):
+            CN.finish_region(j["run_id"], False, error="the computing region did not answer and the job could not be re-queued")
     return n
 
 
@@ -359,17 +401,18 @@ def home_sweep(now: Optional[float] = None) -> int:
 _LOOP: Optional[threading.Thread] = None
 
 
-def start_loop(interval_s: float = TICK_S) -> bool:
-    """Start the daemon loop (worker process).  A no-op unless cross-region compute is on.  -> whether it was started."""
+def start_loop(interval_s: float = TICK_S, stop: Optional[threading.Event] = None) -> bool:
+    """Start the daemon loop (worker process).  It always runs: expiring foreign jobs, retrying hand-backs and sweeping lost
+    tokens must go on after the switch is turned OFF (a file left from before must not stay for ever); only STARTING a
+    foreign job needs ``MOTRES_CROSS_REGION_COMPUTE=1``.  The pass is a directory listing and a small file read.
+    -> whether it was started."""
     global _LOOP
-    if not CP.cross_region_enabled():
-        return False
     with _LOCK:
         if _LOOP is not None and _LOOP.is_alive():
             return False
 
         def _loop():
-            while True:
+            while not (stop is not None and stop.is_set()):
                 try:
                     tick()
                 except Exception:                           # noqa: BLE001

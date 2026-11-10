@@ -250,10 +250,23 @@ whole library, so they are not copied by hash. `GET /api/peer/v1/catalog/extract
 * **die access**: only dies whose access is `public`, as `{visibility: public, clients: []}` (a `selected` die's client
   e-mails never cross; other mirrored dies take US's private default).
 
+Keys that never cross inside a row: `source`, `notes`, `note`, `path`/`file` names, who-did-it keys and any string that looks like
+an e-mail, a path or a file name; a passport entry carries only its measured numbers and provenance keys (`PASSPORT_KEYS`; the
+admin `note` stays on EU); an unknown result kind is dropped (counted).
+
+**What EU tells US about closed dies: nothing by name.** The manifest the peer route serves (`catalog_manifest.public_manifest`)
+carries counts (`excluded_dies_count`, `excluded_files_count`) and an HMAC (peer secret) of each excluded die name; the names stay
+in EU's own dry-run report. US stores the manifest in `identity/mirror/manifest.json`, so it must hold no closed name. US finds
+what an earlier hand copy left behind by HMAC-matching its own `dies/*` folders. **The EU rsync module serves only the manifest
+files**: the API rewrites its include file from the manifest on every build (`write_rsync_filter`; the module reads it at each
+connection and ends with `exclude = *`), and the module runs as uid 10001, not root.
+
 On US `catalog_mirror.merge_extracts` merges them per die into the US stores (atomic write, cross-process lock, a corrupt
-store is never overwritten) and removes what it merged earlier for a die that is no longer mirrored; rows and entries it did
+store is never overwritten; `die_access.json` is written under the same cross-process lock the API's writer takes) and removes what
+it merged earlier for a die that is no longer mirrored; rows and entries it did
 not merge (closed motors of US accounts) are left alone. The mirror job (`scripts/mirror_catalog_us.sh`: plan, rsync, apply)
-deletes only files it installed itself (its state file), refuses to run when one of them changed on US or a mirrored path
+deletes only files it installed itself (its state file; fetched files are owned by 10001, a removal that fails makes the run exit
+7 / the unit fail), refuses to run when one of them changed on US or a mirrored path
 collides with a file that is not the mirror's, and drops any manifest path that is absolute, climbs out or is outside the
 allow-list. Timers: catalog mirror every 15 min, directory sync every 5 min (`deploy/systemd`); install note
 `docs/regions/INSTALL_US_MIRROR.md`.
@@ -297,8 +310,10 @@ Owner 2026-11-08: jobs of any account may run on either server; a computation is
   record lives in `compute_nodes` leased to the virtual node `region:<peer>`. The peer stores the job under
   `run/foreign_jobs/<token>.json`, the worker loop runs it only while its own queue has a free slot and hands the result
   back with `POST /api/peer/v1/foreign/result` (retry with a growing delay, file deleted at once when confirmed, else after
-  24 h); `home_sweep` re-runs at home a token that never came back in 24 h. Only handler kinds can cross; a route closure
-  cannot be shipped. Computing a job elsewhere moves no personal data and is therefore not described as data storage
+  24 h); `home_sweep` re-queues at home, through the job queue and in the owner's workspace, a token that never came back in 24 h.
+  Only handler kinds with an input allow-list (`foreign.INPUT_KEYS`) can cross, and a body is sent exactly as it is or not at
+  all (never scrubbed into a different job). Expiry, hand-back retries and the sweep run even with the switch off. A route
+  closure cannot be shipped. Computing a job elsewhere moves no personal data and is therefore not described as data storage
   (owner's correction of the v0.7 draft).
 
 ## 10. Admin panel
@@ -336,7 +351,7 @@ Owner 2026-11-08: jobs of any account may run on either server; a computation is
   `/etc/motres/backup-us.env` (0600), never in code, units or logs. Own include list (`restic-include-us.txt`) and
   `motres-backup-us.{service,timer}`; the files the mirror installed are excluded through a list regenerated from its state
   file before every run (`catalog_mirror backup-exclude`), so closed motors of US accounts and every region-owned store are
-  still backed up.
+  still backed up. The hourly unit only backs up; `forget --prune` and `check` run daily (`motres-backup-us-prune`).
 * Restore rehearsal per region after stage 2.
 
 ## 13. Migration of existing US accounts (stage 3)

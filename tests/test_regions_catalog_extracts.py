@@ -153,11 +153,41 @@ def test_unreadable_bak_files_are_skipped_not_fatal(eu, monkeypatch):
     assert "dies/PUB/L1.yaml" in man["files"] and "PUB" in ext["dies"]
 
 
-def test_a_non_public_die_never_appears_anywhere_in_the_payload(eu):
+def test_the_manifest_that_leaves_eu_names_no_closed_die_or_file(eu):
+    """B1: US stores the manifest on disk, so it carries counts and HMACs only - never a die / file name of a closed motor."""
     man, ext = _build(eu)
-    blob = json.dumps({"m": man["files"], "e": ext})
-    assert "PRIV" not in blob
-    assert {d["die"] for d in man["excluded_dies"]} == {"PRIV"}
+    assert {d["die"] for d in man["excluded_dies"]} == {"PRIV"}            # EU's own dry-run report still names them
+    pub = CM.public_manifest(man, secret="k" * 40)
+    blob = json.dumps({"m": pub, "e": ext})
+    assert "PRIV" not in blob and "C1" not in blob
+    for k in ("excluded_dies", "excluded_files", "skipped_unreadable_paths"):
+        assert k not in pub
+    assert pub["excluded_dies_count"] == 1 and pub["excluded_files_count"] >= 0
+    assert pub["excluded_die_hmacs"] == [CM.die_hmac("PRIV", "k" * 40)] and "PRIV" not in pub["excluded_die_hmacs"][0]
+    assert CM.die_hmac("PRIV", "k" * 40) != CM.die_hmac("PRIV", "j" * 40) and CM.die_hmac("PRIV", "") == ""
+    assert set(pub["files"]) == set(man["files"])
+
+
+def test_extracts_drop_source_paths_notes_and_the_admin_note(eu):
+    """M8: free text, paths and who-did-it keys never cross inside a result row or a passport entry."""
+    _j(eu / ".duty_results.json", {"results": {"PUB": {"L1": {"d1": {
+        "thermal": {"kind": "thermal", "geometry_fingerprint": "fpPUB1", "t_max": 90.0, "source": "C:/Users/x/run.json",
+                    "notes": ["see mail from boss@example.com"], "note": "admin remark", "owner": "x@example.com",
+                    "nested": {"path": "/srv/motres/x", "keep": 1, "file_ref": "run_final.json", "label": "24 kHz"}},
+        "mystery_kind": {"x": 1}}}}}, "history": {}})
+    _j(eu / "end_effect_passports.json", {"fpPUB1": {"k_flux": 0.95, "machine": "24s/28p OD 85", "note": "adopted by the owner",
+                                                       "source": "/srv/motres/run/stage_a.json", "mesh": {"h": 1, "path": "x"}}})
+    _man, ext = _build(eu)
+    row = ext["dies"]["PUB"]["duty"]["results"]["L1"]["d1"]
+    assert set(row) == {"thermal"}                                         # an unknown kind is dropped
+    t = row["thermal"]
+    assert t["t_max"] == 90.0 and t["nested"] == {"keep": 1, "label": "24 kHz"}
+    assert not ({"source", "notes", "note", "owner"} & set(t))
+    assert ext["passports"]["fpPUB1"] == {"k_flux": 0.95, "machine": "24s/28p OD 85", "mesh": {"h": 1}}
+    blob = json.dumps(ext)
+    for leak in ("boss@", "admin remark", "adopted by the owner", "run.json", "/srv/motres", "run_final.json"):
+        assert leak not in blob
+    assert ext["counts"]["scrubbed"] >= 8 and ext["counts"]["unknown_kind"] == 1
 
 
 # ── US: plan / apply / merge ─────────────────────────────────────────────────
@@ -169,6 +199,7 @@ def us(tmp_path, monkeypatch):
     monkeypatch.setattr(MA, "_DIE_ACCESS_FILE", tmp_path / "us_die_access.json")
     state = tmp_path / "state.json"
     monkeypatch.setenv(MI.ENV_STATE, str(state))
+    monkeypatch.setenv("MOTRES_PEER_HMAC_SECRET", "s" * 40)              # the HMAC of excluded die names (EU and US share it)
     return {"root": root, "state": state, "tmp": tmp_path, "mp": monkeypatch}
 
 
@@ -180,15 +211,20 @@ def _rsync(eu_root: Path, us_root: Path, plan: dict) -> None:
         shutil.copy2(eu_root / rel, dst)
 
 
+def _wire(man, ext):
+    """What US receives: the PUBLIC manifest (no closed names) and the extracts, as JSON."""
+    return json.loads(json.dumps(CM.public_manifest(man))), json.loads(json.dumps(ext))
+
+
 def _round(eu_root, us_env, *, init=False, extracts=True, prune=False):
-    man, ext = _build(eu_root)
-    man, ext = json.loads(json.dumps(man)), json.loads(json.dumps(ext))     # as they arrive over the wire
+    man, ext = _wire(*_build(eu_root))
     st = MI.load_state()
-    plan = MI.make_plan(man, us_env["root"], st, init=init)
+    plan = MI.make_plan(man, us_env["root"], st, init=init, prune=prune)
     if plan["refuse"]:
         return man, ext, plan, None
     _rsync(eu_root, us_env["root"], plan)
-    rep = MI.apply_plan(man, ext if extracts else None, plan, us_env["root"], st, prune_leftovers=prune)
+    rep = MI.apply_plan(man, ext if extracts else None, plan, us_env["root"], st, prune_leftovers=plan["prune_files"],
+                        prune_stores=plan["prune_stores"])
     return man, ext, plan, rep
 
 
@@ -286,14 +322,94 @@ def test_wrong_fetch_is_reported_and_refetched_next_time(eu, us):
     assert plan2["refuse"] is None and plan2["fetch"] == ["materials_library.yaml"]
 
 
-def test_leftovers_of_excluded_dies_are_listed_and_pruned_on_request(eu, us):
-    _w(us["root"] / "dies/PRIV/die.yaml", "name: hand copy from before the job existed\n")
-    _w(us["root"] / "dies/PRIV/C1.yaml", "name: C1\n")
+def test_leftovers_of_excluded_dies_are_found_by_hmac_listed_and_pruned_on_request(eu, us):
+    root = us["root"]
+    _w(root / "dies/PRIV/die.yaml", "name: hand copy from before the job existed\n")
+    _w(root / "dies/PRIV/C1.yaml", "name: C1\n")
+    _w(root / "passports/PRIV/C1.json", "{}")
+    _w(root / "cad/PRIV/C1/manifest.json", "{}")
+    _w(root / "dies/CUSTOMER/die.yaml", "name: lives on US\n")           # US-local: EU never heard of it
     man, _ext, plan, rep = _round(eu, us, init=True)
-    assert sorted(plan["leftovers"]) == ["dies/PRIV/C1.yaml", "dies/PRIV/die.yaml"]
-    assert (us["root"] / "dies/PRIV/die.yaml").exists()                   # listed, not deleted
+    assert "PRIV" not in json.dumps(man)                                   # US was told no name ...
+    assert sorted(plan["leftovers"]) == ["cad/PRIV/C1/manifest.json", "dies/PRIV/C1.yaml", "dies/PRIV/die.yaml",
+                                         "passports/PRIV/C1.json"]         # ... and still finds its own copy by HMAC
+    assert (root / "dies/PRIV/die.yaml").exists()                          # listed, not deleted
     _man, _ext, plan, rep = _round(eu, us, prune=True)
-    assert rep["leftovers_removed"] == 2 and not (us["root"] / "dies/PRIV").exists()
+    assert rep["leftovers_removed"] == 4 and rep["failed"] == []
+    assert not (root / "dies/PRIV").exists() and not (root / "passports/PRIV").exists() and not (root / "cad/PRIV").exists()
+    assert (root / "dies/CUSTOMER/die.yaml").is_file()
+
+
+def test_init_removes_closed_dies_from_the_three_stores_but_keeps_us_local_dies(eu, us):
+    """H4: a hand copy left rows of closed dies in the US stores; --init removes them, US-local dies stay."""
+    root = us["root"]
+    _w(root / "dies/PRIV/die.yaml", "name: PRIV\n")                       # hand copy of a closed die (HMAC-excluded)
+    _w(root / "dies/CUSTOMER/die.yaml", "name: lives on US\n")           # a closed motor of a US account
+    _j(root / ".duty_results.json", {"version": 1, "results": {
+        "PRIV": {"C1": {"d": {"thermal": {"geometry_fingerprint": "fpPRIV"}}}},
+        "CUSTOMER": {"X": {"d": {"thermal": {"geometry_fingerprint": "fpCUST"}}}},
+        "STALE": {"Y": {"d": {"thermal": {"geometry_fingerprint": "fpSTALE"}}}}},          # no folder on US at all
+        "history": {"PRIV": {"C1": {}}}})
+    _j(root / "end_effect_passports.json", {"fpPRIV": {"k_flux": 0.9}, "fpCUST": {"k_flux": 0.9}, "fpSTALE": {"k_flux": 0.9},
+                                              "fpOther": {"k_flux": 0.9}})
+    _j(us["tmp"] / "us_die_access.json", {"PRIV": {"visibility": "public", "clients": []},
+                                           "CUSTOMER": {"visibility": "selected", "clients": ["us.owner@example.com"]},
+                                           "STALE": {"visibility": "public", "clients": []}})
+    _round(eu, us, init=True)
+    duty = json.loads((root / ".duty_results.json").read_text(encoding="utf-8"))
+    assert set(duty["results"]) == {"PUB", "SEL", "CUSTOMER"} and "PRIV" not in duty["history"]
+    assert set(json.loads((root / "end_effect_passports.json").read_text(encoding="utf-8"))) == \
+        {"fpPUB1", "fpSEL1", "fpOLD", "fpCUST", "fpOther"}                 # only entries named by the removed rows go
+    acc = json.loads((us["tmp"] / "us_die_access.json").read_text(encoding="utf-8"))
+    assert set(acc) == {"PUB", "CUSTOMER"} and acc["CUSTOMER"]["clients"] == ["us.owner@example.com"]
+    assert (root / "dies/PRIV/die.yaml").exists()                          # files go only with --prune-leftovers
+
+
+def test_a_failed_delete_is_reported_kept_in_the_state_and_retried(eu, us, monkeypatch):
+    """B3: a de-published die whose file cannot be removed must not pass silently."""
+    _round(eu, us, init=True)
+    _j(eu.parent / "die_access.json", {})                                   # EU: PUB is closed again
+    (eu / "dies/PUB/L1.yaml").write_text("visibility: private\nname: L1\n", encoding="utf-8")
+    real_unlink = Path.unlink
+
+    def deny(self, *a, **k):
+        if self.name == "die.yaml":
+            raise PermissionError(13, "Permission denied", str(self))
+        return real_unlink(self, *a, **k)
+    monkeypatch.setattr(Path, "unlink", deny)
+    _man, _ext, plan, rep = _round(eu, us)
+    assert rep["failed"] == ["dies/PUB/die.yaml"] and (us["root"] / "dies/PUB/die.yaml").exists()
+    assert "dies/PUB/die.yaml" in MI.load_state()["files"]                  # still the mirror's: retried, not forgotten
+    monkeypatch.setattr(Path, "unlink", real_unlink)
+    _man, _ext, plan, rep = _round(eu, us)
+    assert rep["failed"] == [] and not (us["root"] / "dies/PUB").exists()
+    assert "dies/PUB/die.yaml" not in MI.load_state()["files"]
+
+
+def test_corrupt_die_access_is_never_overwritten(eu, us):
+    """H5."""
+    (us["tmp"] / "us_die_access.json").write_text("{corrupt", encoding="utf-8")
+    _man, ext = _wire(*_build(eu))
+    with pytest.raises(MI.MirrorError):
+        MI.merge_extracts(ext, {}, us["root"])
+    assert (us["tmp"] / "us_die_access.json").read_text(encoding="utf-8") == "{corrupt"
+    (us["tmp"] / "us_die_access.json").write_text("[1]", encoding="utf-8")        # valid JSON, wrong shape
+    with pytest.raises(MI.MirrorError):
+        MI.merge_extracts(ext, {}, us["root"])
+
+
+def test_die_access_merge_holds_the_lock_the_api_writer_takes(eu, us):
+    """H5: the mirror's read-modify-write of die_access.json excludes the API's writer (same lock object)."""
+    import threading
+    _man, ext = _wire(*_build(eu))
+    done = threading.Event()
+    with MA._DA_LOCK:                                                      # "the API" is writing right now
+        th = threading.Thread(target=lambda: (MI.merge_extracts(ext, {}, us["root"]), done.set()), daemon=True)
+        th.start()
+        assert not done.wait(0.5)                                          # the merge waits for the writer ...
+    assert done.wait(10)                                                   # ... and goes on when it is released
+    th.join(5)
+    assert MA.get_die_access("PUB")["visibility"] == "public"
 
 
 def test_plan_command_refuses_outside_a_us_server(monkeypatch):

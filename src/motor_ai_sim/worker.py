@@ -53,7 +53,8 @@ def serve() -> None:
     os.environ.setdefault("MOTRES_ROLE", "worker")
     import uvicorn
     # Cross-region compute (docs/regions/DESIGN.md section 9): the loop that runs the peer's jobs and hands results back.
-    # A no-op unless MOTRES_CROSS_REGION_COMPUTE=1 and a peer is configured.
+    # Always on (expiry, hand-back retries and the 24 h sweep must outlive the switch); only STARTING foreign jobs needs
+    # MOTRES_CROSS_REGION_COMPUTE=1 and a configured peer.
     try:
         from motor_ai_sim.regions import foreign as _foreign
         _foreign.start_loop()

@@ -1,0 +1,18 @@
+# US backups: retention and integrity, once a day (the hourly backup is motres-backup-us.service).
+# forget --prune takes the repository's exclusive lock and rewrites packs; check reads the structure only (a B2 data read
+# costs egress).  Same retention as the EU server: 24 hourly / 30 daily / 12 monthly.
+[Unit]
+Description=motor_ai_sim restic retention + check (US server, Backblaze B2)
+Documentation=file:///opt/motres/app/docs/regions/INSTALL_US_MIRROR.md
+After=network-online.target
+Wants=network-online.target
+ConditionPathExists=/etc/motres/backup-us.env
+
+[Service]
+Type=oneshot
+EnvironmentFile=/etc/motres/backup-us.env
+Nice=15
+IOSchedulingClass=idle
+ExecStart=/usr/bin/restic forget --prune --limit-upload ${LIMIT_UPLOAD_KIB} --keep-hourly 24 --keep-daily 30 --keep-monthly 12
+ExecStart=/usr/bin/restic check
+TimeoutStartSec=7200

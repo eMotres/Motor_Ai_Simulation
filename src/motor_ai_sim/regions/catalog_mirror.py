@@ -27,7 +27,8 @@ Rules:
 
 Exit codes of ``plan`` / ``apply``: 0 ok (also "already in sync"), 2 local edits / collision, 3 first run without
 ``--init``, 4 EU did not answer, 5 a fetched file did not match the manifest (state stays consistent, the next run
-refetches), 6 not a US server / single-region mode.
+refetches), 6 not a US server / single-region mode, 7 a file or row that must go could not be removed (or a store is
+corrupt): the state keeps it, the next run tries again, and the unit shows "failed" so a de-published die cannot linger.
 """
 from __future__ import annotations
 
@@ -51,7 +52,7 @@ STATE_VERSION = 1
 ENV_STATE = "MOTRES_MIRROR_STATE_FILE"
 ENV_DIR = "MOTRES_MIRROR_DIR"
 EXTRACT_TIMEOUT_S = 60.0
-EXIT_OK, EXIT_EDITS, EXIT_INIT, EXIT_PEER, EXIT_VERIFY, EXIT_MODE = 0, 2, 3, 4, 5, 6
+EXIT_OK, EXIT_EDITS, EXIT_INIT, EXIT_PEER, EXIT_VERIFY, EXIT_MODE, EXIT_FAILED = 0, 2, 3, 4, 5, 6, 7
 
 _LOCK = threading.RLock()
 
@@ -162,22 +163,48 @@ def local_edits(root: Path, state: Dict[str, Any]) -> List[Dict[str, str]]:
     return out
 
 
-def leftovers(root: Path, manifest: Dict[str, Any], state: Dict[str, Any]) -> List[str]:
-    """Files on US under ``dies/<die>/`` of a die EU says is NOT mirrored, that this job did not install: what an earlier
-    hand copy left behind.  Reported by ``plan``; removed only by ``--prune-leftovers``."""
-    names = {str(d.get("die")) for d in (manifest.get("excluded_dies") or []) if isinstance(d, dict)}
-    out: List[str] = []
-    for name in sorted(names):
-        base = Path(root) / "dies" / name
-        if not base.is_dir() or name in {p.split("/")[1] for p in state.get("files", {}) if p.startswith("dies/")}:
-            continue
-        for p in sorted(base.rglob("*")):
-            if p.is_file() and not p.is_symlink():
-                out.append(p.relative_to(root).as_posix())
+def _die_dirs(root: Path) -> List[str]:
+    try:
+        return sorted(p.name for p in (Path(root) / "dies").iterdir() if p.is_dir() and not p.is_symlink())
+    except OSError:
+        return []
+
+
+def mirrored_dies(manifest: Dict[str, Any], extracts: Optional[Dict[str, Any]] = None) -> set:
+    """Dies EU mirrors: those with a file in the manifest, plus those of the extracts."""
+    out = {p.split("/")[1] for p in (manifest.get("files") or {}) if p.startswith("dies/") and p.count("/") >= 2}
+    out |= set((extracts or {}).get("dies") or {})
     return out
 
 
-def make_plan(manifest: Dict[str, Any], root: Path, state: Dict[str, Any], *, init: bool = False) -> Dict[str, Any]:
+def excluded_here(root: Path, manifest: Dict[str, Any], keep: set) -> List[str]:
+    """Names of dies on US (``dies/<name>``) that EU says it does NOT mirror.  EU sends no names: it sends an HMAC (peer
+    secret) of every excluded name and US matches them against its own folders.  Dies in ``keep`` are never named."""
+    hm = set(manifest.get("excluded_die_hmacs") or [])
+    if not hm:
+        return []
+    return [n for n in _die_dirs(root) if n not in keep and CM.die_hmac(n) in hm]
+
+
+def leftovers(root: Path, manifest: Dict[str, Any], state: Dict[str, Any]) -> List[str]:
+    """Files on US under ``dies/<die>/``, ``passports/<die>/`` and ``cad/<die>/`` of a die EU says is NOT mirrored, that this
+    job did not install: what an earlier hand copy left behind.  Reported by ``plan``; removed by ``--prune-leftovers``."""
+    root = Path(root)
+    keep = mirrored_dies(manifest) | {p.split("/")[1] for p in state.get("files", {}) if p.startswith("dies/")}
+    out: List[str] = []
+    for name in excluded_here(root, manifest, keep):
+        for top in ("dies", "passports", "cad"):
+            base = root / top / name
+            if not base.is_dir():
+                continue
+            for p in sorted(base.rglob("*")):
+                if p.is_file() and not p.is_symlink():
+                    out.append(p.relative_to(root).as_posix())
+    return out
+
+
+def make_plan(manifest: Dict[str, Any], root: Path, state: Dict[str, Any], *, init: bool = False,
+              prune: bool = False) -> Dict[str, Any]:
     """What to fetch / delete, or why to refuse.  Pure: reads the disk, writes nothing."""
     root = Path(root)
     src, dropped = clean_manifest_files(manifest)
@@ -185,7 +212,8 @@ def make_plan(manifest: Dict[str, Any], root: Path, state: Dict[str, Any], *, in
     plan: Dict[str, Any] = {"v": 1, "ts": round(time.time(), 1), "root_id": manifest.get("root_id"), "refuse": None,
                             "fetch": [], "delete": [], "edits": [], "collisions": [], "leftovers": [],
                             "dropped_paths": dropped, "init": bool(init),
-                            "excluded_dies": len(manifest.get("excluded_dies") or []),
+                            "prune_files": bool(prune), "prune_stores": bool(prune or init),
+                            "excluded_dies": int(manifest.get("excluded_dies_count") or 0),
                             "skipped_unreadable": int(manifest.get("skipped_unreadable") or 0)}
     if not state.get("initialised") and not init:
         plan["refuse"] = {"code": EXIT_INIT, "why": "first run: no state file; check the copy on US, then run with --init"}
@@ -243,22 +271,30 @@ def _remove(root: Path, rel: str) -> bool:
 
 
 def apply_plan(manifest: Dict[str, Any], extracts: Optional[Dict[str, Any]], plan: Dict[str, Any], root: Path,
-               state: Dict[str, Any], *, prune_leftovers: bool = False, duty_store: Optional[Path] = None,
-               passport_store: Optional[Path] = None) -> Dict[str, Any]:
-    """Delete, verify what was fetched, merge the extracts, record the state.  -> a report (``bad`` non-empty = exit 5)."""
+               state: Dict[str, Any], *, prune_leftovers: bool = False, prune_stores: bool = False,
+               duty_store: Optional[Path] = None, passport_store: Optional[Path] = None) -> Dict[str, Any]:
+    """Delete, verify what was fetched, merge the extracts, record the state.  -> a report: ``bad`` non-empty = a fetched file
+    did not match (exit 5); ``failed`` non-empty = a file or row that must go could not be removed (exit 7)."""
     root = Path(root)
     src, _dropped = clean_manifest_files(manifest)
-    report: Dict[str, Any] = {"deleted": 0, "fetched_ok": 0, "bad": [], "leftovers_removed": 0, "extracts": None}
+    report: Dict[str, Any] = {"deleted": 0, "fetched_ok": 0, "bad": [], "failed": [], "leftovers_removed": 0,
+                              "extracts": None}
     files = dict(state.get("files") or {})
     for rel in plan.get("delete") or []:
-        if rel in files and _remove(root, rel):
+        if rel not in files:
+            continue
+        if _remove(root, rel):
             files.pop(rel, None)
             report["deleted"] += 1
+        else:
+            report["failed"].append(rel)              # stays in the state: the next run tries again, the exit code is non-zero
     if prune_leftovers:
         for rel in plan.get("leftovers") or []:
-            p = Path(rel)
-            if p.parts[:1] == ("dies",) and _remove_any(root, rel):
-                report["leftovers_removed"] += 1
+            if safe_rel(rel) is not None and Path(rel).parts[:1] in (("dies",), ("passports",), ("cad",)):
+                if _remove_any(root, rel):
+                    report["leftovers_removed"] += 1
+                else:
+                    report["failed"].append(rel)
     for rel in plan.get("fetch") or []:
         # Record what is on disk, right or wrong: rsync wrote it, so it is not a local edit; a wrong one differs from the
         # manifest and is fetched again by the next run.
@@ -282,7 +318,8 @@ def apply_plan(manifest: Dict[str, Any], extracts: Optional[Dict[str, Any]], pla
     if isinstance(extracts, dict) and extracts.get("v") == CM.EXTRACT_VERSION:
         if (manifest.get("extracts") or {}).get("id") in (None, extracts.get("id")):
             state["extracts"] = merge_extracts(extracts, state.get("extracts") or {}, root, duty_store=duty_store,
-                                               passport_store=passport_store)
+                                               passport_store=passport_store, mirrored=mirrored_dies(manifest, extracts),
+                                               manifest=manifest if prune_stores else None)
             report["extracts"] = {"id": extracts.get("id"), "dies": len(extracts.get("dies") or {}),
                                   "passports": len(extracts.get("passports") or {})}
         else:
@@ -294,7 +331,10 @@ def apply_plan(manifest: Dict[str, Any], extracts: Optional[Dict[str, Any]], pla
 def _remove_any(root: Path, rel: str) -> bool:
     try:
         (Path(root) / rel).unlink()
-    except OSError:
+    except FileNotFoundError:
+        pass
+    except OSError as exc:
+        log.warning("catalog mirror: cannot delete %s (%s)", rel, type(exc).__name__)
         return False
     _prune_empty_dirs(root, rel)
     return True
@@ -340,26 +380,46 @@ def _load_store(p: Path, what: str) -> Dict[str, Any]:
     return d
 
 
+def _foreign_dies(root: Path, manifest: Dict[str, Any], keep: set, names: set) -> set:
+    """Dies in a US store that are NOT the mirror's and NOT US-local: EU says they are closed (HMAC match), or no folder of
+    that name exists on US at all (a stale row).  A die with a folder on US that EU does not know is US-local: never touched."""
+    hm = set(manifest.get("excluded_die_hmacs") or [])
+    local = set(_die_dirs(root))
+    return {d for d in names if d not in keep and ((hm and CM.die_hmac(d) in hm) or d not in local)}
+
+
 def merge_extracts(extracts: Dict[str, Any], previous: Dict[str, Any], root: Path, *, duty_store: Optional[Path] = None,
-                   passport_store: Optional[Path] = None) -> Dict[str, Any]:
+                   passport_store: Optional[Path] = None, mirrored: Any = (),
+                   manifest: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """Merge the per-die extracts into the US stores.  -> the record of what was merged (kept in the state file, so the
-    next run can remove the rows of a die that stopped being public)."""
+    next run can remove the rows of a die that stopped being public).
+
+    The mirror owns the rows of every die it mirrors (``mirrored``) and of every die it merged earlier (``previous``): they
+    are replaced by the extract or removed.  With ``manifest`` (``--init`` / ``--prune-leftovers``) it also removes the rows of
+    dies that EU says are closed or that have no folder on US, and the end-effect entries only those rows named; the rows of
+    US-local dies stay.  A store that cannot be read is never overwritten (``MirrorError``)."""
     from motor_ai_sim import motor_access as MA
     root = Path(root)
+    keep = set(mirrored) | set((extracts.get("dies") or {}))
     duty_path = Path(duty_store) if duty_store else root / CM.DUTY_STORE
     pass_path = Path(passport_store) if passport_store else root / CM.END_EFFECT_STORE
     dies = extracts.get("dies") if isinstance(extracts.get("dies"), dict) else {}
     passports = extracts.get("passports") if isinstance(extracts.get("passports"), dict) else {}
+    fps = sorted(str(k) for k, v in passports.items() if isinstance(v, dict))
 
     duty_dies = sorted(d for d, v in dies.items() if isinstance(v, dict) and isinstance(v.get("duty"), dict))
+    orphan_fps: set = set()
     with _LOCK, _FileLock(duty_path):
         doc = _load_store(duty_path, "the duty results store")
         res = doc.get("results") if isinstance(doc.get("results"), dict) else {}
         hist = doc.get("history") if isinstance(doc.get("history"), dict) else {}
-        for die in previous.get("duty_dies") or []:
-            if die not in duty_dies:
-                res.pop(die, None)
-                hist.pop(die, None)
+        drop = (set(previous.get("duty_dies") or []) | set(mirrored)) - set(duty_dies)
+        if manifest is not None:
+            drop |= _foreign_dies(root, manifest, keep, set(res) | set(hist)) - set(duty_dies)
+        for die in sorted(drop):
+            for block in (res, hist):
+                if die in block:
+                    CM._collect_fps(block.pop(die), orphan_fps)
         for die in duty_dies:
             d = dies[die]["duty"]
             res[die] = d.get("results") or {}
@@ -368,24 +428,37 @@ def merge_extracts(extracts: Dict[str, Any], previous: Dict[str, Any], root: Pat
         doc.setdefault("version", 1)
         doc["updated_at"] = time.strftime("%Y-%m-%dT%H:%M:%S")
         _atomic_write(duty_path, json.dumps(doc, ensure_ascii=False, default=str))
+        still: set = set()
+        CM._collect_fps(res, still)
+        CM._collect_fps(hist, still)
 
-    fps = sorted(str(k) for k, v in passports.items() if isinstance(v, dict))
     with _LOCK, _FileLock(pass_path):
         store = _load_store(pass_path, "the end-effect passport store")
         for fp in previous.get("passport_fps") or []:
             if fp not in fps:
                 store.pop(fp, None)
+        if manifest is not None:
+            for fp in orphan_fps - set(fps) - still:
+                store.pop(fp, None)                   # named only by rows of a closed / vanished die
         for fp in fps:
             store[fp] = passports[fp]
         _atomic_write(pass_path, json.dumps(store, ensure_ascii=False, indent=1))
 
     access_dies = sorted(d for d, v in dies.items() if isinstance(v, dict) and isinstance(v.get("access"), dict)
                          and v["access"].get("visibility") == MA.VIS_PUBLIC)
-    for die in previous.get("access_dies") or []:
-        if die not in access_dies:
-            MA.set_die_access(die, visibility=MA.VIS_PRIVATE, clients=[])       # back to the default: the row is dropped
-    for die in access_dies:
-        MA.set_die_access(die, visibility=MA.VIS_PUBLIC, clients=[])
+    with MA._DA_LOCK:                                   # shared with the API's writer (flock across processes)
+        acc_path = MA.die_access_file()
+        store = _load_store(acc_path, "die_access.json")     # corrupt -> MirrorError, never overwritten
+        before = json.dumps(store, sort_keys=True)
+        gone = (set(previous.get("access_dies") or []) | set(mirrored)) - set(access_dies)
+        if manifest is not None:
+            gone |= _foreign_dies(root, manifest, keep, set(store)) - set(access_dies)
+        for die in gone:
+            store.pop(die, None)
+        for die in access_dies:
+            store[die] = {"visibility": MA.VIS_PUBLIC, "clients": []}
+        if json.dumps(store, sort_keys=True) != before:
+            MA._save_die_access(store)
     return {"id": extracts.get("id"), "duty_dies": duty_dies, "passport_fps": fps, "access_dies": access_dies,
             "ts": round(time.time(), 1)}
 
@@ -426,11 +499,10 @@ def _pull(init: bool, prune: bool) -> int:
     wd = work_dir()
     root = shared_dir()
     state = load_state()
-    plan = make_plan(manifest, root, state, init=init)
+    plan = make_plan(manifest, root, state, init=init, prune=prune)
     wd.mkdir(parents=True, exist_ok=True)
     _atomic_write(wd / "manifest.json", json.dumps(manifest))
     _atomic_write(wd / "extracts.json", json.dumps(extracts if isinstance(extracts, dict) else {}))
-    plan["prune_leftovers"] = bool(prune)
     _atomic_write(wd / "plan.json", json.dumps(plan, indent=1))
     _atomic_write(wd / "fetch.txt", fetch_list_text(plan))
     print(json.dumps({k: (len(v) if isinstance(v, list) else v) for k, v in plan.items()
@@ -456,11 +528,14 @@ def _apply() -> int:
         return int(plan["refuse"].get("code") or EXIT_EDITS)
     try:
         rep = apply_plan(manifest, extracts or None, plan, shared_dir(), load_state(),
-                         prune_leftovers=bool(plan.get("prune_leftovers")))
+                         prune_leftovers=bool(plan.get("prune_files")), prune_stores=bool(plan.get("prune_stores")))
     except MirrorError as exc:
         print(f"catalog mirror: {exc}", file=sys.stderr)
-        return EXIT_VERIFY
+        return EXIT_FAILED
     print(json.dumps(rep))
+    if rep["failed"]:
+        print(f"catalog mirror: {len(rep['failed'])} file(s) that must go could not be removed; will retry", file=sys.stderr)
+        return EXIT_FAILED
     return EXIT_VERIFY if rep["bad"] else EXIT_OK
 
 

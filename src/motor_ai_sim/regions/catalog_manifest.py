@@ -107,6 +107,7 @@ class _Acc:
         self.files: Dict[str, Dict[str, Any]] = {}
         self.excluded_dies: List[Dict[str, str]] = []
         self.excluded_files: List[Dict[str, str]] = []
+        self.excluded_files_total = 0
         self.skipped: List[str] = []
         self.skipped_count = 0
 
@@ -126,6 +127,7 @@ class _Acc:
             self.skipped.append(rel)
 
     def leave_out(self, rel: str, why: str) -> None:
+        self.excluded_files_total += 1
         if len(self.excluded_files) < MAX_REPORTED:
             self.excluded_files.append({"path": rel, "why": why})
 
@@ -398,6 +400,7 @@ def build_all(root: Optional[Path] = None, now: Optional[float] = None, catalog_
     root_id = hashlib.sha256("\n".join(f"{k} {v['sha256']}" for k, v in sorted(files.items())).encode()).hexdigest()
     manifest = {"root_id": root_id, "files": files, "count": len(files), "bytes": sum(v["bytes"] for v in files.values()),
                 "excluded_dies": acc.excluded_dies, "excluded_files": acc.excluded_files,
+                "excluded_files_total": acc.excluded_files_total,
                 "exhibit_source": exhibit_source,
                 "skipped_unreadable": acc.skipped_count + extracts["counts"]["unreadable"],
                 "skipped_unreadable_paths": acc.skipped,
@@ -445,6 +448,59 @@ def _read_json(p: Path) -> Tuple[Any, bool]:
         return None, True
 
 
+#: Keys that never cross inside a result row (free text, paths, who did it).  A string value that still looks like an
+#: e-mail, a path or a file name is dropped with its key as well (``compute.identifying_strings`` rules).
+ROW_DROP_KEYS = frozenset({"source", "src", "notes", "note", "screening_note", "comment", "comments", "path", "paths", "file",
+                           "files", "filename", "by", "user", "owner", "actor", "email", "author", "recorded_by", "host",
+                           "hostname", "ip"})
+#: The only keys of an end-effect passport entry that cross (the admin ``note``, ``source`` paths ... stay on EU).
+PASSPORT_KEYS = frozenset({"k_flux", "k_flux_self", "fidelity", "generated_utc", "adopted_utc", "machine", "stack_mm",
+                           "k_flux_vs_L", "materials", "mesh", "k_torque", "k_t"})
+_GONE = object()
+
+
+def clean_value(v: Any, counts: Dict[str, int], depth: int = 0) -> Any:
+    """Recursively drop ``ROW_DROP_KEYS`` and identifying strings (counted in ``counts['scrubbed']``)."""
+    from motor_ai_sim.regions import compute as CP
+    if depth > 14:
+        return _GONE
+    if isinstance(v, dict):
+        out: Dict[str, Any] = {}
+        for k, x in v.items():
+            if str(k).strip().lower() in ROW_DROP_KEYS:
+                counts["scrubbed"] = counts.get("scrubbed", 0) + 1
+                continue
+            c = clean_value(x, counts, depth + 1)
+            if c is _GONE:
+                counts["scrubbed"] = counts.get("scrubbed", 0) + 1
+            else:
+                out[k] = c
+        return out
+    if isinstance(v, list):
+        return [c for c in (clean_value(x, counts, depth + 1) for x in v) if c is not _GONE]
+    if isinstance(v, str) and CP._bad_string(v):
+        return _GONE
+    return v
+
+
+def clean_cfg_rows(rows: Any, counts: Dict[str, int]) -> Dict[str, Any]:
+    """``{duty: {kind: record | [records]}}`` -> only known kinds, every record cleaned."""
+    from motor_ai_sim import duty_results as DR
+    out: Dict[str, Any] = {}
+    for duty, kinds in (rows.items() if isinstance(rows, dict) else []):
+        if not isinstance(kinds, dict):
+            counts["unattributed"] = counts.get("unattributed", 0) + 1
+            continue
+        for kind, rec in kinds.items():
+            if kind not in DR.KINDS or not isinstance(rec, (dict, list)):
+                counts["unknown_kind"] = counts.get("unknown_kind", 0) + 1
+                continue
+            c = clean_value(rec, counts)
+            if c is not _GONE:
+                out.setdefault(str(duty), {})[str(kind)] = c
+    return out
+
+
 def _cut_block(block: Any, mirrored: Dict[str, Dict[str, bool]], counts: Dict[str, int],
                fps: set) -> Dict[str, Dict[str, Any]]:
     """``{die: {cfg: ...}}`` -> the same for mirrored dies and configurations only (every other entry is counted)."""
@@ -467,7 +523,7 @@ def _cut_block(block: Any, mirrored: Dict[str, Dict[str, bool]], counts: Dict[st
             elif not m[str(cfg)]:
                 counts["closed"] += 1                       # a configuration that is not public
             else:
-                out.setdefault(str(die), {})[str(cfg)] = rows
+                out.setdefault(str(die), {})[str(cfg)] = clean_cfg_rows(rows, counts)
                 counts["mirrored"] += 1
                 _collect_fps(rows, fps)
     return out
@@ -483,7 +539,7 @@ def build_extracts(root: Path, mirrored: Dict[str, Dict[str, bool]], files: Opti
     carried only when its fingerprint appears in a mirrored configuration's result rows or passport file.
     """
     from motor_ai_sim import motor_access as MA
-    counts = {"mirrored": 0, "closed": 0, "unattributed": 0, "unreadable": 0,
+    counts = {"mirrored": 0, "closed": 0, "unattributed": 0, "unreadable": 0, "scrubbed": 0, "unknown_kind": 0,
               "passports_mirrored": 0, "passports_left_out": 0, "access": 0}
     fps: set = set()
     dies: Dict[str, Dict[str, Any]] = {d: {} for d in mirrored}
@@ -497,7 +553,8 @@ def build_extracts(root: Path, mirrored: Dict[str, Dict[str, bool]], files: Opti
         doc = None
     doc = doc or {}
     results = _cut_block(doc.get("results"), mirrored, counts, fps)
-    history = _cut_block(doc.get("history"), mirrored, {"mirrored": 0, "closed": 0, "unattributed": 0}, fps)
+    history = _cut_block(doc.get("history"), mirrored, {"mirrored": 0, "closed": 0, "unattributed": 0, "scrubbed": 0,
+                                                          "unknown_kind": 0}, fps)
     for die in dies:
         if die in results or die in history:
             dies[die]["duty"] = {"results": results.get(die, {}), "history": history.get(die, {})}
@@ -512,7 +569,9 @@ def build_extracts(root: Path, mirrored: Dict[str, Dict[str, bool]], files: Opti
     passports: Dict[str, Any] = {}
     for fp, entry in (store.items() if isinstance(store, dict) else []):
         if isinstance(entry, dict) and str(fp) in fps:
-            passports[str(fp)] = entry
+            kept = {k: v for k, v in entry.items() if k in PASSPORT_KEYS}
+            counts["scrubbed"] += len(entry) - len(kept)
+            passports[str(fp)] = clean_value(kept, counts)
             counts["passports_mirrored"] += 1
         else:
             counts["passports_left_out"] += 1
@@ -527,6 +586,85 @@ def build_extracts(root: Path, mirrored: Dict[str, Dict[str, bool]], files: Opti
     body = {"dies": dies, "passports": passports}
     ident = hashlib.sha256(json.dumps(body, sort_keys=True, separators=(",", ":"), default=str).encode()).hexdigest()
     return {"v": EXTRACT_VERSION, "id": ident, **body, "counts": counts}
+
+
+# ── what leaves EU: the PUBLIC view of the manifest, and the rsync filter ─────
+# The full ``build()`` result names the closed dies and files it left out (the local dry-run report prints them).  That list
+# must never leave EU: US stores the manifest on disk.  ``public_manifest`` carries COUNTS only, plus an HMAC (peer secret) of
+# each excluded die name so that US can find what an earlier hand copy left under its own ``dies/`` without being told a name.
+
+#: Keys of the full manifest that carry names of closed dies / files and never cross.
+PRIVATE_MANIFEST_KEYS = ("excluded_dies", "excluded_files", "skipped_unreadable_paths")
+
+
+def die_hmac(name: str, secret: Optional[str] = None) -> str:
+    """HMAC-SHA256 (peer secret) of a die name, hex.  Empty when the channel has no secret (single-region mode)."""
+    import hmac
+    if secret is None:
+        from motor_ai_sim.regions import config as RC
+        secret = RC.peer_secret()
+    if not secret:
+        return ""
+    msg = b"excluded-die\n" + str(name).encode("utf-8")
+    return hmac.new(secret.encode("utf-8"), msg, hashlib.sha256).hexdigest()
+
+
+def public_manifest(manifest: Dict[str, Any], secret: Optional[str] = None) -> Dict[str, Any]:
+    """The manifest as the peer may see it: no names of closed dies, files or unreadable paths - counts and HMACs only."""
+    out = {k: v for k, v in manifest.items() if k not in PRIVATE_MANIFEST_KEYS}
+    dies = manifest.get("excluded_dies") or []
+    out["excluded_dies_count"] = len(dies)
+    out["excluded_files_count"] = int(manifest.get("excluded_files_total") or len(manifest.get("excluded_files") or []))
+    out["excluded_die_hmacs"] = sorted({h for h in (die_hmac(d.get("die", ""), secret) for d in dies
+                                                    if isinstance(d, dict)) if h})
+    return out
+
+
+def _filter_escape(name: str) -> str:
+    return "".join("\\" + c if c in "*?[\\" else c for c in name)
+
+
+def rsync_filter_rules(manifest: Dict[str, Any]) -> List[str]:
+    """Anchored rsync include rules for EXACTLY the files of the manifest (and their parent directories).  Paired with
+    ``exclude = *`` in the module, the module shows nothing else: a closed die's folder is not even listable."""
+    rules: List[str] = []
+    seen: set = set()
+    for rel in sorted((manifest.get("files") or {})):
+        parts = rel.split("/")
+        for i in range(1, len(parts)):
+            d = "/" + "/".join(_filter_escape(x) for x in parts[:i]) + "/"
+            if d not in seen:
+                seen.add(d)
+                rules.append(d)
+        rules.append("/" + "/".join(_filter_escape(x) for x in parts))
+    return rules
+
+
+def rsync_filter_path() -> Path:
+    import os
+    env = (os.environ.get("MOTRES_RSYNC_FILTER_FILE") or "").strip()
+    if env:
+        return Path(env).expanduser()
+    from motor_ai_sim import users as U
+    return Path(U._USERS_FILE).parent / "mirror" / "rsync-library.include"
+
+
+def write_rsync_filter(manifest: Dict[str, Any], path: Optional[Path] = None) -> int:
+    """(Re)write the include file the EU rsync module reads (``include from =``) from this manifest, atomically and
+    world-readable (the daemon runs as an unprivileged user).  -> the number of rules."""
+    import os
+    p = Path(path) if path else rsync_filter_path()
+    rules = rsync_filter_rules(manifest)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    tmp = p.with_name(p.name + ".%d.tmp" % os.getpid())
+    header = "# generated from the catalog manifest on every build: exactly the files US may fetch\n"
+    tmp.write_text(header + "".join(r + "\n" for r in rules), encoding="utf-8")
+    try:
+        os.chmod(tmp, 0o644)
+    except OSError:
+        pass
+    os.replace(tmp, p)
+    return len(rules)
 
 
 def diff(source: Dict[str, Any], mirror: Dict[str, Any]) -> Dict[str, List[str]]:

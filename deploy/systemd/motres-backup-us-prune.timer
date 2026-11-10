@@ -1,0 +1,13 @@
+# Daily, away from the hourly backup (which runs at :00 + up to 5 min).
+[Unit]
+Description=Daily motor_ai_sim restic retention + check (US)
+Documentation=file:///opt/motres/app/docs/regions/INSTALL_US_MIRROR.md
+
+[Timer]
+OnCalendar=*-*-* 03:30:00 UTC
+RandomizedDelaySec=600
+Persistent=true
+Unit=motres-backup-us-prune.service
+
+[Install]
+WantedBy=timers.target

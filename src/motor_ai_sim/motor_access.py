@@ -260,7 +260,10 @@ def _die_open_via_config(access: dict, die: str) -> bool:
 # separate, unaffected gate for that).
 
 _DIE_ACCESS_FILE = Path(DEFAULT_CONFIG_PATH).parent / "die_access.json"
-_DA_LOCK = threading.Lock()
+# Cross-process (deploy stage 2): the API writes this file (admin) and the US catalog mirror merges the public dies' entries into
+# it from another process; the sidecar flock makes both read-modify-write cycles exclusive (file_lock.StoreLock, re-entrant).
+from motor_ai_sim.file_lock import store_lock as _store_lock
+_DA_LOCK = _store_lock(lambda: _DIE_ACCESS_FILE)
 
 
 def die_access_file() -> Path:

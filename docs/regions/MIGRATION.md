@@ -38,9 +38,12 @@ python scripts/migrate_account_region.py export --email A --die "DIE NAME" --die
 #    routes; reads go on) and build the bundle: sha256 per file, root hash signed with the peer secret -> prints B
 python scripts/migrate_account_region.py export --email A --die ... --apply
 
-# 3. EU container (dry run) prints the exact command; run it on the EU HOST, as the user that owns /srv/motres/identity
-python scripts/migrate_account_region.py transfer --bundle B --to 10.77.0.2:/srv/motres/identity/region_bundles
-rsync -a --checksum --chmod=D700,F600 -e ssh B/ 10.77.0.2:/srv/motres/identity/region_bundles/<bundle id>/
+# 3. EU container (dry run) prints the exact command; run that command on the EU HOST as ROOT, to root on the US host
+#    (uid 10001, the container user, has no shell and no key). It keeps ids numerically, makes the copy belong to
+#    10001:10001 (0700 folders / 0600 files the US container can read) and first creates
+#    /srv/motres/identity/region_bundles on US (0700, 10001) when it is missing:
+python scripts/migrate_account_region.py transfer --bundle B --to root@10.77.0.2:/srv/motres/identity/region_bundles
+rsync -a --checksum --numeric-ids --chown=10001:10001 --chmod=D700,F600   '--rsync-path=install -d -m 0700 -o 10001 -g 10001 /srv/motres/identity/region_bundles && rsync'   -e ssh B/ root@10.77.0.2:/srv/motres/identity/region_bundles/<bundle id>/
 
 # 4. US container: check the hashes and the signature, install, create the account (same password hash, role, grants,
 #    home_region us); a pending receipt first, done at the end; then the US copy of the bundle is deleted
@@ -55,8 +58,12 @@ python scripts/migrate_account_region.py finish --email A --bundle B
 python scripts/migrate_account_region.py finish --email A --bundle B --apply
 ```
 
-`finish` refuses when anything of the account changed on EU after the export (a staff edit of a moved project, a
-password change, a disable): then `unfreeze`, remove the US copy (step "Abort"), export again.
+`finish` refuses when anything of the account changed on EU after the export: a bundle file changed or missing (a staff
+edit of a moved project), a file under what moves that is NOT in the bundle (a job result an engineer's run filed into
+the workspace or a die folder, a new verification case), a password change, a disable, or a job still running or
+queued for the account or on one of its dies (any account, staff included). Then `unfreeze`, remove the US copy
+(step "Abort"), export again. A frozen account's legacy (PBKDF2) password hash is not upgraded at sign-in, so a plain
+sign-in during the freeze does not make `finish` refuse.
 
 **Abort** before step 5: `python scripts/migrate_account_region.py unfreeze --email A --apply` (lifts the freeze, nothing
 else changes). If the US import already ran, remove the US account and files by hand before the next attempt (owner's
@@ -79,8 +86,9 @@ python scripts/migrate_account_region.py delete-source --email A --bundle B --ta
 It deletes every EU file whose bytes are still the bundle's, the die access entries of the moved dies and the directory
 person, purges the account (`account_lifecycle.purge`, reason `region_migrated`) and deletes the bundle folder B.
 
-* A file **outside a die** that changed on EU since the export blocks the step (listed): nothing written after the
-  export is deleted silently. Review it with the owner, then fix the cause.
+* A file **outside a die** that changed on EU since the export blocks the step (listed), and so does ANY file under
+  what moved that is not in the bundle (it would be orphaned or purged): nothing written after the export is deleted
+  silently. Review it with the owner, then fix the cause.
 * A **die** is kept whole on EU (all its files and its access entry; listed under `kept_dies` with the reason) when any
   of its files changed, or — checked again at this moment — a project that stays links it or another account is in its
   access list.
@@ -102,5 +110,5 @@ views.
 | a moved project has other non-staff members (they would keep writing to the EU copy) | `--allow-project-members` |
 | a moved die is also linked by a project that stays, or another account is in its access list | `--allow-shared-dies` (delete-source then keeps that die on EU) |
 | a moved die is open in the public catalog | `--allow-open-dies` |
-| the account has running or queued jobs | `--allow-active-jobs` (better: wait) |
+| running or queued jobs of the account, or of ANY account (staff included) on a moved die | `--allow-active-jobs` (better: wait; `finish` refuses while any still runs) |
 | staff account, home region not yet `us`, already guarded, no configured peer | none: fix the cause |

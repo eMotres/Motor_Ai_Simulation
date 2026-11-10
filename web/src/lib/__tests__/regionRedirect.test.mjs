@@ -71,7 +71,7 @@ test('the hand-off page reads the ticket from the fragment and only same-origin 
 
 test('the app consumes a hand-off before its first render', () => {
   const main = readFileSync(join(HERE, '..', '..', 'main.tsx'), 'utf8');
-  assert.match(main, /consumeRegionHandoff\(confirmHandoffReplace\)\.finally\(\(\) => createRoot/);
+  assert.match(main, /consumeRegionHandoff\(confirmHandoff\)\.finally\(\(\) => createRoot/);
   const la = readFileSync(join(HERE, '..', 'localAuth.ts'), 'utf8');
   assert.match(la, /post\('\/api\/auth\/region-handoff', \{ ticket: got\.ticket \}\)/);
   assert.match(la, /window\.history\.replaceState\(null, '', got\.next\)/);
@@ -94,16 +94,17 @@ test('the ticket names its account; another signed-in account must confirm', () 
   assert.equal(handoffNeedsConfirm('b@example.com', 'garbage'), true);                    // unreadable: ask
 });
 
-test('the app asks before a hand-off replaces another session, and keeps it on no', () => {
+test('the app ALWAYS asks before a hand-off signs in, and changes nothing on no', () => {
   const la = readFileSync(join(HERE, '..', 'localAuth.ts'), 'utf8');
-  assert.match(la, /if \(handoffNeedsConfirm\(current, got\.ticket\)\)/);
-  assert.match(la, /ok = confirmReplace \? await confirmReplace\(current, ticketEmail\(got\.ticket\)\) : false/);
-  assert.match(la, /if \(!ok\) return false;/);
+  assert.doesNotMatch(la, /if \(handoffNeedsConfirm/);                      // no "only when signed in" shortcut
+  assert.match(la, /ok = confirmContinue \? await confirmContinue\(current, ticketEmail\(got\.ticket\)\) : false/);
+  assert.match(la, /if \(!ok\) return false;\s+try \{\s+const \{ token, user \} = await post\('\/api\/auth\/region-handoff'/);
   const main = readFileSync(join(HERE, '..', '..', 'main.tsx'), 'utf8');
-  assert.match(main, /consumeRegionHandoff\(confirmHandoffReplace\)\.finally/);
+  assert.match(main, /window\.confirm\(i18n\.t\('common:auth\.handoffContinue'/);
   assert.match(main, /window\.confirm\(i18n\.t\('common:auth\.handoffReplace'/);
   for (const lang of ['en', 'zh-CN']) {
     const common = JSON.parse(readFileSync(join(HERE, '..', '..', 'locales', lang, 'common.json'), 'utf8'));
     assert.match(common.auth.handoffReplace, /\{current\}.*\{incoming\}/s, lang);
+    assert.match(common.auth.handoffContinue, /\{incoming\}/, lang);
   }
 });

@@ -280,3 +280,50 @@ def test_sign_up_does_not_wait_longer_than_2_s_for_the_peer(env):
     finally:
         srv.shutdown()
         srv.server_close()
+
+
+# ── re-review of #632 ───────────────────────────────────────────────────────
+
+def test_the_reset_relay_does_not_hold_up_the_answer(env):
+    """The peer is asked in the background: the 202 for an address the peer hosts comes as fast as for any other."""
+    _directory_has("only.on.us@example.com")
+    done = threading.Event()
+
+    def slow_post(path, payload, **kw):
+        time.sleep(1.5)
+        done.set()
+        return {"ok": True}
+    env["mp"].setattr(P, "post", slow_post)
+    t0 = time.monotonic()
+    r = client.post("/api/auth/reset/request", json={"email": "only.on.us@example.com"})
+    assert r.status_code == 202 and time.monotonic() - t0 < 1.0
+    assert done.wait(5.0)                                                    # ... and the peer was still asked
+
+
+def test_admin_cannot_change_the_address_of_a_frozen_account(env):
+    RS.set_region_freeze(EU_USER, True, by="test")
+    r = client.patch(f"/api/auth/users/{EU_USER}", json={"new_email": "renamed@example.com"})
+    assert r.status_code == 423
+    assert env["U"].get_user(EU_USER) is not None and env["U"].get_user("renamed@example.com") is None
+
+
+def test_a_frozen_account_keeps_its_legacy_hash_at_sign_in(env):
+    """Upgrading a legacy PBKDF2 hash at sign-in would change the password digest finish compares with the bundle."""
+    import hashlib
+    U = env["U"]
+    salt = "ab" * 16
+    with U._LOCK:
+        users = U._load()
+        rec = users[EU_USER]
+        for k in ("pw_algo", "pw_hash", "pw_salt", "pw_iters"):
+            rec.pop(k, None)
+        rec.update(pw_salt=salt, pw_iters=1000,
+                   pw_hash=hashlib.pbkdf2_hmac("sha256", PW.encode(), bytes.fromhex(salt), 1000).hex())
+        U._save(users)
+    RS.set_region_freeze(EU_USER, True, by="test")
+    before = H.pw_digest(U.get_user(EU_USER))
+    assert _login(EU_USER).status_code == 200
+    assert U.get_user(EU_USER).get("pw_algo") != "argon2id" and H.pw_digest(U.get_user(EU_USER)) == before
+    RS.set_region_freeze(EU_USER, False)
+    assert _login(EU_USER).status_code == 200
+    assert U.get_user(EU_USER).get("pw_algo") == "argon2id"                 # unfrozen: upgraded as before

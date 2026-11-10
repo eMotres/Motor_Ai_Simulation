@@ -225,7 +225,10 @@ def login(req: LoginReq, request: Request):
     email = U._norm(req.email)
     _login_elsewhere(email, req.password, ip)
     _locked(email, ip)
-    status, _rec = U.authenticate(email, req.password)
+    from motor_ai_sim.regions import store as _RS
+    # a frozen account's legacy PBKDF2 hash is NOT upgraded at sign-in: the new hash would differ from the bundle's and
+    # make finish refuse (password digest) although nobody changed the password
+    status, _rec = U.authenticate(email, req.password, upgrade=not _RS.is_frozen(U.get_user(email)))
     if status == "bad":
         E.LOGIN_ACCOUNT.hit(email)
         E.LOGIN_IP.hit(ip)
@@ -602,15 +605,18 @@ def _send_reset_mail(email: str) -> None:
 
 
 def _relay_reset(email: str, region: str) -> None:
-    """Ask the peer (signed, ``POST /api/peer/v1/auth/reset-mail``) to mail its own reset link.  Never raises: a peer
-    that is down means no mail, and the caller answers the same 202 either way."""
-    try:
-        from motor_ai_sim.regions import config as RC
-        from motor_ai_sim.regions import peer as P
-        if RC.peer_configured() and RC.peer_region() == region:
-            P.post("/auth/reset-mail", {"email": email}, timeout=4.0)
-    except Exception:                                        # noqa: BLE001
-        log.exception("regions: reset-mail relay to the peer failed")
+    """Ask the peer (signed, ``POST /api/peer/v1/auth/reset-mail``) to mail its own reset link - in a background
+    thread, so the time of the 202 answer does not tell whether the peer was asked (a local address answers at once).
+    Never raises: a peer that is down means no mail, and the caller answers the same 202 either way."""
+    def _go() -> None:
+        try:
+            from motor_ai_sim.regions import config as RC
+            from motor_ai_sim.regions import peer as P
+            if RC.peer_configured() and RC.peer_region() == region:
+                P.post("/auth/reset-mail", {"email": email}, timeout=4.0)
+        except Exception:                                    # noqa: BLE001
+            log.exception("regions: reset-mail relay to the peer failed")
+    threading.Thread(target=_go, name="region-reset-relay", daemon=True).start()
 
 
 def send_reset_for_peer(email: str) -> bool:
@@ -1184,6 +1190,8 @@ class PatchReq(BaseModel):
 def users_patch(email: str, req: PatchReq, _admin: dict = Depends(require_admin)):
     _AA.record(_AA.actor_of(_admin), "user.update", str(email), subject=str(email), details={k: v for k, v in req.model_dump().items() if v is not None and k != "password"} | {"password_reset": req.password is not None})
     try:
+        if req.password is not None or req.disabled is not None or req.new_email is not None:
+            _refuse_if_frozen(U._norm(email))                # finish compares the record with the bundle: change nothing
         if req.new_email is not None:
             new = U._norm(req.new_email)
             if not _valid_email(new):
@@ -1200,8 +1208,6 @@ def users_patch(email: str, req: PatchReq, _admin: dict = Depends(require_admin)
                 except Exception:                              # noqa: BLE001
                     log.warning("comm_prefs: sign-up choices did not follow the admin's address change")
                 _send_verification(email)
-        if req.password is not None or req.disabled is not None:
-            _refuse_if_frozen(U._norm(email))                # finish compares both with the bundle
         before = (U.get_user(email) or {}).get("role", "user")
         if req.password is not None:
             U.set_password(email, req.password)

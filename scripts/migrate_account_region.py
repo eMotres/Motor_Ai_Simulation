@@ -9,9 +9,9 @@ transfer (the API image has no rsync / ssh: it runs on the host).  Bundles go to
     python scripts/migrate_account_region.py export --email A
     # 2. source (container): freeze the account's writes and build the signed bundle
     python scripts/migrate_account_region.py export --email A --apply
-    # 3. source HOST: copy the bundle to the target over WireGuard (the dry run in the container prints the command)
-    python scripts/migrate_account_region.py transfer --bundle B --to 10.77.0.2:/srv/motres/identity/region_bundles
-    rsync -a --checksum --chmod=D700,F600 -e ssh B/ 10.77.0.2:/srv/motres/identity/region_bundles/<id>/
+    # 3. source HOST, as root (both hosts): copy the bundle over WireGuard; the dry run in the container prints the
+    #    exact command (rsync -a --numeric-ids --chown=10001:10001 ..., it also creates region_bundles/ on the target)
+    python scripts/migrate_account_region.py transfer --bundle B --to root@10.77.0.2:/srv/motres/identity/region_bundles
     # 4. target (US, container): verify hashes + signature, install, create the account; deletes the US bundle copy
     python scripts/migrate_account_region.py import --bundle B --apply
     # 5. source (container): re-hash the source, compare password, check the receipt, guard on, revoke keys, unfreeze
@@ -56,6 +56,8 @@ def _print(rep: dict, as_json: bool) -> None:
         print("  CONFLICT " + c)
     for c in (rep.get("changed") or [])[:20]:
         print("  CHANGED  " + c + " (since the export)")
+    for c in (rep.get("new") or [])[:20]:
+        print("  NEW      " + c + " (not in the bundle)")
     for d, why in (rep.get("kept_dies") or {}).items():
         print("  KEEP DIE %s: %s" % (d, "; ".join(why)))
 
@@ -88,6 +90,7 @@ def main(argv=None) -> int:
     tr = common(sub.add_parser("transfer", help="rsync the bundle to the target (source)"), bundle=True)
     tr.add_argument("--to", required=True, help="host:/path on the target, over WireGuard")
     tr.add_argument("--ssh", default="ssh", help="the ssh command rsync uses (-e)")
+    tr.add_argument("--owner", default="10001:10001", help="uid:gid of the API container user on the target")
     im = common(sub.add_parser("import", help="verify + install the bundle (target)"), bundle=True)
     im.add_argument("--keep-bundle", action="store_true", help="keep the bundle folder after a done import")
     common(sub.add_parser("finish", help="compare the receipt, guard on, unfreeze (source)"), email=True, bundle=True)
@@ -109,7 +112,7 @@ def main(argv=None) -> int:
         elif a.cmd == "verify":
             rep = MG.verify_bundle(a.bundle)
         elif a.cmd == "transfer":
-            rep = MG.transfer(a.bundle, a.to, apply=a.apply, ssh=a.ssh)
+            rep = MG.transfer(a.bundle, a.to, apply=a.apply, ssh=a.ssh, owner=a.owner)
         elif a.cmd == "import":
             rep = MG.import_bundle(a.bundle, apply=a.apply, actor=a.actor, keep_bundle=a.keep_bundle)
         elif a.cmd == "finish":

@@ -92,15 +92,18 @@ console.warn = (...args) => {
 
 // Two regions: a tab sent here from the other region's server with a hand-off ticket signs in BEFORE the first render,
 // so AuthProvider starts with the session (lib/localAuth.ts consumeRegionHandoff; any other page: resolves at once).
-// Signed in to ANOTHER account here: ask before the hand-off replaces it.
-const confirmHandoffReplace = async (current: string, incoming: string): Promise<boolean> => {
-  try { await i18n.loadNamespaces('common'); } catch { /* the English fallback below */ }
-  return window.confirm(i18n.t('common:auth.handoffReplace', {
-    current, incoming,
-    defaultValue: `You are signed in as ${current}. Sign out and continue as ${incoming || 'the other account'}?`,
-  }));
+// Always asked before the hand-off signs in ("Continue as X?"); signed in to another account here: "replace it?".
+const confirmHandoff = async (current: string, incoming: string): Promise<boolean> => {
+  try { await i18n.loadNamespaces('common'); } catch { /* the English fallbacks below */ }
+  const who = incoming || 'the other account';
+  if (current && current !== incoming) {
+    return window.confirm(i18n.t('common:auth.handoffReplace', {
+      current, incoming: who, defaultValue: `You are signed in as ${current}. Sign out and continue as ${who}?`,
+    }));
+  }
+  return window.confirm(i18n.t('common:auth.handoffContinue', { incoming: who, defaultValue: `Continue as ${who}?` }));
 };
-consumeRegionHandoff(confirmHandoffReplace).finally(() => createRoot(document.getElementById('root')!).render(
+consumeRegionHandoff(confirmHandoff).finally(() => createRoot(document.getElementById('root')!).render(
   <StrictMode>
     <Suspense fallback={<div role="status" aria-live="polite" style={{ minHeight: '100vh', display: 'grid', placeItems: 'center' }}>Loading…</div>}>
       <AuthProvider>

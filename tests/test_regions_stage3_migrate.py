@@ -268,6 +268,9 @@ def test_transfer_builds_a_checksummed_rsync(env, monkeypatch):
     rep = MG.transfer(b, "10.77.0.2:/srv/motres/identity/region_bundles", runner=lambda c: ran.append(c) or 0)
     assert rep["dry_run"] and "--dry-run" in ran[0] and "--checksum" in ran[0]
     assert ran[0][-1] == f"10.77.0.2:/srv/motres/identity/region_bundles/{b.name}/"
+    # root on both hosts: ids kept numerically, the copy owned by the container user, the target folder created 0700
+    assert "--numeric-ids" in ran[0] and "--chown=10001:10001" in ran[0]
+    assert "--rsync-path=install -d -m 0700 -o 10001 -g 10001 /srv/motres/identity/region_bundles && rsync" in ran[0]
     monkeypatch.setattr(MG.shutil, "which", lambda name: None)              # the API container: no rsync
     with pytest.raises(MG.MigrationError) as e:
         MG.transfer(b, "10.77.0.2:/srv/motres/identity/region_bundles", apply=True)
@@ -475,3 +478,42 @@ def test_cli_dry_run_is_the_default(env, capsys):
     assert "EXPORT (DRY RUN)" in out and "p-one" in out
     assert not RS.is_frozen(env["U"].get_user(BUYER))
     assert cli.main(["export", "--email", STAFF]) == 1
+
+
+# ── re-review of #632: files added after the export, other accounts' jobs on the moved dies ──
+
+def test_finish_and_delete_source_block_on_files_added_after_the_export(env):
+    """An engineer's run files a new result into the workspace or a die folder after the export: it is not in the
+    bundle, so finish (and later delete-source) must stop instead of orphaning or purging it."""
+    b = _imported(env)
+    new_ws = _w(env["eu"] / "workspaces" / env["ws"] / "results" / "r2.json", '{"T": 2.0}')
+    rep = MG.finish(BUYER, b, transport=_fake_peer(env))
+    assert rep["new"] == [f"workspaces/{env['ws']}/results/r2.json"] and any("1 new" in x for x in rep["blockers"])
+    new_ws.unlink()
+    new_die = _w(env["eu"] / "shared" / "dies" / "DIEA" / "runs" / "c1" / "late.json", "{}")
+    assert MG.finish(BUYER, b, transport=_fake_peer(env))["new"] == ["dies/DIEA/runs/c1/late.json"]
+    new_die.unlink()
+    MG.finish(BUYER, b, apply=True, actor="test", transport=_fake_peer(env))
+    _w(env["eu"] / "shared" / "production" / "DIEA" / "c1" / "late_record.json", "{}")
+    d = MG.delete_source(BUYER, b, target_backup_confirmed=True, transport=_fake_peer(env))
+    assert d["new"] == ["production/DIEA/c1/late_record.json"] and any("not in the bundle" in x for x in d["blockers"])
+    with pytest.raises(MG.MigrationError):
+        MG.delete_source(BUYER, b, apply=True, target_backup_confirmed=True, transport=_fake_peer(env))
+    assert env["U"].get_user(BUYER) is not None                            # nothing purged
+
+
+def test_a_job_of_any_account_on_a_moved_die_blocks(env, monkeypatch):
+    """A staff engineer's run on a moved die writes into the source copy: the plan and finish count it too."""
+    from motor_ai_sim import cluster_monitor as CM
+    from motor_ai_sim.development import activity as ACT
+    monkeypatch.setattr(CM, "jobs_view", lambda *a, **k: {"items": []})
+    monkeypatch.setattr(ACT, "app_rows", lambda: [{"kind": "coupled", "state": "running", "die": "DIEA buyer",
+                                                   "config": "c1"}])
+    p = MG.plan(BUYER)
+    assert any("on its dies (any account, staff included)" in x for x in p["blockers"])
+    assert p["active_jobs"][0]["why"] == "on die DIEA buyer"
+    monkeypatch.setattr(ACT, "app_rows", lambda: [{"kind": "coupled", "state": "running", "die": "DIEB"}])
+    assert MG.plan(BUYER)["blockers"] == []                                 # a die that stays is not ours
+    b = _imported(env)
+    monkeypatch.setattr(ACT, "app_rows", lambda: [{"kind": "thermal", "state": "queued", "die": "DIEA"}])
+    assert any("job(s) of the account or on its dies" in x for x in MG.finish(BUYER, b, transport=_fake_peer(env))["blockers"])

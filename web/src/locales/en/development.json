@@ -1047,6 +1047,18 @@
   },
   "specReadOnly": "View only",
   "specReadOnlyTip": "Only the project owner can change the specification. You can test in Configure and write recommendations in Messages.",
+  "order": {
+    "button": "Order this motor",
+    "tip": "Send a request to our team to order this motor.",
+    "noResultsTip": "Available once this motor has computed results.",
+    "quantity": "Quantity",
+    "note": "Note (optional)",
+    "contact": "We will contact you with the price and lead time.",
+    "send": "Send request",
+    "cancel": "Cancel",
+    "failed": "Could not send the request.",
+    "requested": "Order requested on {date} — we will contact you with the price and lead time"
+  },
   "recommended": {
     "label": "Recommended",
     "tip": "Recommended variant of this project, marked by our engineers.",

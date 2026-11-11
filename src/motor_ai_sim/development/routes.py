@@ -1296,3 +1296,5 @@ from motor_ai_sim.development.documents import router as _documents_router  # no
 from motor_ai_sim.development.cover import router as _cover_router  # noqa: E402
 router.include_router(_documents_router)
 router.include_router(_cover_router)
+from motor_ai_sim.development.order_requests import router as _order_requests_router  # noqa: E402
+router.include_router(_order_requests_router)

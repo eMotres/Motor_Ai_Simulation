@@ -106,7 +106,9 @@ const SupportWidget: React.FC = () => {
   useEffect(() => { if (!user && tab === 'tickets') setTab('ask'); }, [user, tab]);
 
   // ONE assistant (owner 2026-11-11): inside a project's Specification the same chat works on the form (fill, Undo, submit)
-  const spec = useAssistantPlace((s) => s.spec);
+  // the Projects page stays mounted behind other tabs: the spec mode holds only while that tab is the one shown
+  const placeSpec = useAssistantPlace((s) => s.spec);
+  const spec = activeTab === 'development' ? placeSpec : null;
   const openRequest = useAssistantPlace((s) => s.openRequest);
   const setActiveTab = useUIStore((s) => s.setActiveTab) as unknown as (tab: never) => void;
   const lang = i18n.resolvedLanguage ?? i18n.language;
@@ -215,7 +217,7 @@ const SupportWidget: React.FC = () => {
             // on a phone the specification's Back / Next bar fills the bottom of the screen: the bubble sits IN the bar's free right end
             // (mobile audit 2026-11: lifted above the bar it covered the input right above it), never over Next or a field
             // (the wizard stacks below 900 px, a 768 px tablet included: there the bubble sat on Next)
-            '@media (max-width:899.95px)': { 'body:has([data-wizard-bar]) &': { bottom: 7 } },
+            'body:has([data-wizard-bar]) &': { bottom: 7 },
           }}
         >
           <ChatBubbleOutlineIcon />

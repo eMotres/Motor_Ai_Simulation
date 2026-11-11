@@ -24,8 +24,9 @@ def test_the_notice_exists_in_both_languages_with_the_agreed_wording():
 
 
 def test_every_assistant_surface_renders_the_notice():
+    # ONE assistant (2026-11-11): the chat bubble is also the specification assistant; its side panel is gone
+    assert not (_WEB / "modules/development/components/SpecAssistantPanel.tsx").exists()
     for rel in ("components/support/SupportWidget.tsx",
-                "modules/development/components/SpecAssistantPanel.tsx",
                 "modules/designer/DesignerTab.tsx"):
         src = (_WEB / rel).read_text(encoding="utf-8")
         assert "aiNotice" in src and 'data-testid="ai-notice"' in src, rel

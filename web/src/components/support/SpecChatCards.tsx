@@ -31,7 +31,7 @@ export default function SpecChatCards({ applied = [], proposals = [], schema, la
       const basis = basisOf(a);
       return <Box key={a.id} data-testid="spec-applied" sx={{ mt: 0.6, border: '1px solid var(--line)', borderLeft: `3px solid ${basis === 'assumed' ? '#f59e0b' : '#16a34a'}`, borderRadius: 1, p: 0.8, bgcolor: 'var(--panel-2)' }}>
         <Typography sx={{ fontWeight: 700, fontSize: 12.5 }}>{td('specAssistant.filled')}: {c.title}</Typography>
-        <Typography sx={{ fontSize: 13 }}>{c.proposed}</Typography>
+        <Typography sx={{ fontSize: 13 }}>{(a as Proposal & { answer_status?: string }).answer_status === 'not_known_yet' ? td('unknown') : c.proposed}</Typography>
         <Typography sx={{ fontSize: 12, color: 'var(--text-2)' }}>{c.reason}</Typography>
         {sources(a).map((u) => <Typography key={u} component="a" href={u} target="_blank" rel="noopener noreferrer" sx={{ display: 'block', fontSize: 12, overflowWrap: 'anywhere' }}>{u}</Typography>)}
         <Chip size="small" label={td(basis === 'stated' ? 'specAssistant.basisStated' : basis === 'derived' ? 'specAssistant.basisDerived' : 'specAssistant.basisAssumed')}

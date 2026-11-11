@@ -71,9 +71,15 @@ function objectText(value: Obj, props: SchemaProperty[], lang: Lang): string {
   const parts: string[] = [];
   for (const [key, v] of Object.entries(value)) {
     const prop = byId.get(key);
-    if (prop?.ui_hidden || v === null || v === undefined || v === '') continue;
+    // row ids are bookkeeping, never a value the reader needs
+    if (prop?.ui_hidden || key === 'row_id' || v === null || v === undefined || v === '') continue;
     const label = prop ? (localized(prop.short_label, lang) || localized(prop.label, lang) || key) : key;
-    parts.push(`${label}: ${scalarText(v, prop?.unit, lang, prop?.options)}`);
+    // a nested group (3_1 airflow: mode + speed) reads as "Airflow: Propeller wash, 8.7 m/s", never "[object Object]"
+    const nested = (prop as SchemaProperty & { properties?: SchemaProperty[] } | undefined)?.properties;
+    const text = isObj(v) && !('minimum' in v || 'maximum' in v)
+      ? (nested ? objectText(v, nested, lang).replace(/; /g, ', ') : Object.values(v).filter((x) => x !== null && x !== '').map(String).join(', '))
+      : scalarText(v, prop?.unit, lang, prop?.options);
+    parts.push(`${label}: ${text}`);
   }
   return parts.join('; ') || '-';
 }

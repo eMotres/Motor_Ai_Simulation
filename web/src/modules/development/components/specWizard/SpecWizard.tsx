@@ -13,8 +13,7 @@ import { overallProgress, stepCommentRefs, stepIndexForField } from './steps';
 import { TOUCH } from './ui';
 import { NARROW } from '../../../../lib/narrowLayout';
 
-/** Below the wide layout (no step list on the left, a tablet too) the help bubble docks in the bar's right end. */
-const WIZARD_STACKED = '@media (max-width:899.95px)';
+// The assistant's chat bubble docks in the Back / Next bar's free right end at every width (2026-11-11: on a desktop it covered Next).
 
 export interface SpecWizardProps {
   project: ProjectSummary;
@@ -157,7 +156,7 @@ export default function SpecWizard(p: SpecWizardProps) {
         {saveError && <Alert severity="error" action={<><Button color="inherit" size="small" onClick={p.onRetrySave}>{tr('retrySave')}</Button><Button color="inherit" size="small" onClick={p.onReloadDraft}>{tr('reloadDraft')}</Button></>}>{tr('saveFailed', { reason: saveError })}</Alert>}
         {/* Phone (mobile audit 2026-11): the step counter is already in the step bar above, so the bar keeps Back and Next on one line
             each, and its right end is left free for the help bubble (SupportWidget sits there instead of over the fields). */}
-        <Stack data-wizard-bar direction="row" alignItems="center" spacing={1.5} sx={{ position: 'sticky', bottom: 0, zIndex: 2, bgcolor: 'var(--panel)', border: '1px solid var(--line)', borderRadius: '14px', px: 1.5, py: 1, boxShadow: '0 -4px 12px rgba(0,0,0,.06)', [WIZARD_STACKED]: { pr: '72px' } }}>
+        <Stack data-wizard-bar direction="row" alignItems="center" spacing={1.5} sx={{ position: 'sticky', bottom: 0, zIndex: 2, bgcolor: 'var(--panel)', border: '1px solid var(--line)', borderRadius: '14px', px: 1.5, py: 1, boxShadow: '0 -4px 12px rgba(0,0,0,.06)', pr: '72px' }}>
           <Button variant="outlined" disabled={!back} onClick={() => onStep(step - 1)} sx={{ minHeight: 48, px: 2.5, textTransform: 'none', borderRadius: '12px', flexShrink: 0 }}>{tr('previous')}</Button>
           <Typography sx={{ flex: 1, textAlign: 'center', fontSize: 13, color: 'var(--text-3)', [NARROW]: { display: 'none' } }}>{isReview ? tr(current.title) : tr('wizard.stepOf', { step: step + 1, total: fieldSteps.length })}</Typography>
           {!isReview && next && <Button variant="contained" onClick={() => onStep(step + 1)} sx={{ minHeight: 48, px: 3, textTransform: 'none', borderRadius: '12px', fontWeight: 600, minWidth: 0, [NARROW]: { flex: 1, px: 1.5 } }}><Box component="span" sx={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{tr(next.kind === 'review' ? 'wizard.toReview' : 'wizard.nextTo', { title: tr(next.title) })}</Box></Button>}

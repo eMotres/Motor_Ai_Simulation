@@ -39,11 +39,11 @@ FONTS = {
 TEXT = {
     "en": {
         "title": "Your motor, simulated free",
-        "kicker": "Describe it. Our engineers simulate it.",
+        "kicker": "Describe it. We simulate it.",
         "steps": [
             ("Describe your motor", "Specification: operating points, voltage, space, cooling"),
             ("Your AI agent or our assistant fills it in", "Through MCP, or with the specification assistant"),
-            ("MOTRES engineers simulate it", "Electromagnetic, thermal and mechanical FEM"),
+            ("We simulate it", "Electromagnetic, thermal and mechanical FEM"),
             ("Results in your project", "Shared with your team in the project"),
             ("Order your motor", "We send you the price and lead time"),
         ],
@@ -52,11 +52,11 @@ TEXT = {
     },
     "zh-CN": {
         "title": "免费为您仿真电机",
-        "kicker": "您来描述，我们的工程师来仿真。",
+        "kicker": "您来描述，我们来仿真。",
         "steps": [
             ("描述您的电机", "规格书：工况点、电压、安装空间、冷却方式"),
             ("人工智能代理或助手协助填写", "通过 MCP，或使用规格书助手"),
-            ("MOTRES 工程师进行仿真", "电磁、热和机械有限元分析"),
+            ("我们进行仿真", "电磁、热和机械有限元分析"),
             ("结果在您的项目中", "在项目中与您的团队共享"),
             ("订购电机", "我们为您提供价格和交货期"),
         ],

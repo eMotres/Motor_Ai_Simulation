@@ -385,8 +385,11 @@ const MechanicalPanel: React.FC = () => {
   // and `hydrate` only ever runs once per session (2026-09-10).
   const refreshLast = st.refreshLast;
   const loadStored = st.loadStored;
-  useEffect(() => { void hydrate().then(() => refreshLast()).then(() => loadStored()); },
-            [hydrate, refreshLast, loadStored]);
+  // the point's stored result at once, beside the hydration (see the Thermal tab: `hydrate` ends in a mesh build)
+  useEffect(() => {
+    void loadStored();
+    void hydrate().then(() => refreshLast());
+  }, [hydrate, refreshLast, loadStored]);
 
   /* The rotor drawn while nothing of this point is solved is THIS motor's: a mesh
      built for the previous machine is not drawn (`geomFor`, compared by value) and is

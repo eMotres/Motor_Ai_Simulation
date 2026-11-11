@@ -13,7 +13,6 @@ import {
   Chip,
   Badge,
   CircularProgress,
-  useMediaQuery,
 } from '@mui/material';
 import {
   Refresh as RefreshIcon,
@@ -75,6 +74,14 @@ import { narrowSplitColumn, narrowSplitOuter } from './lib/narrowLayout';
 
 // Every tab except Motors and Configure (the two a standard account has) is its own chunk: three.js, recharts, the
 // FEM viewers and the admin tools are fetched when their tab is first opened, not with the workspace.
+/** One top-bar tab: sentence case, tight padding.  `flex: 1 1 0` shares a wide bar evenly (what 'fullWidth' did on a
+ *  desktop); `minWidth: max-content` keeps every label whole, so a bar too narrow for all of them (a phone) scrolls
+ *  sideways instead of squeezing the labels on top of each other (owner 2026-11-11, 390 px). */
+const TOP_TAB_SX = {
+  minHeight: 40, fontSize: '0.8rem', textTransform: 'none', px: 0.75, letterSpacing: 0,
+  flexGrow: 1, flexShrink: 0, flexBasis: 0, minWidth: 'max-content', maxWidth: 'none',
+} as const;
+
 const UnifiedActiveMotorScene = lazy(watchChunkImport(() => import('./components/viewer3d/UnifiedActiveMotorScene')));
 const ParameterVariationTable = lazy(watchChunkImport(() => import('./components/sweep/ParameterVariationTable')));
 const GeometryTab = lazy(watchChunkImport(() => import('./components/geometry/GeometryTab')));
@@ -249,7 +256,6 @@ const GeometryBuildTimer: React.FC = () => {
 
 function App() {
   const [themeMode, setThemeMode] = useState<AppMode>(() => loadThemeMode());
-  const narrow = useMediaQuery('(max-width:899.95px)');
   useEffect(() => { saveThemeMode(themeMode); }, [themeMode]);
   const appTheme = useMemo(() => buildAppTheme(themeMode), [themeMode]);
   const { activeTab, setActiveTab } = useUIStore();
@@ -792,9 +798,13 @@ function App() {
               const to = simulationsTarget(lastSim, simMembers);
               if (to) setActiveTab(to as never);
             }}
-            /* Thirteen tabs do not fit a phone: below md they scroll sideways instead of squeezing to unreadable widths. */
-            variant={narrow ? 'scrollable' : 'fullWidth'}
-            scrollButtons={narrow ? 'auto' : false}
+            /* Fifteen tabs do not fit a phone: they scroll sideways instead of squeezing to unreadable widths.
+               ALWAYS scrollable, decided by CSS, not by a media query in JS (owner 2026-11-11, 390 px: the labels
+               overlapped - the 'fullWidth' chosen at a desktop width stayed when the window narrowed, and each tab
+               was squeezed to 26 px).  `TOP_TAB_SX` makes the tabs share a wide bar evenly, as 'fullWidth' did, and
+               never shrink below their label, so a narrow bar scrolls instead. */
+            variant="scrollable"
+            scrollButtons="auto"
             allowScrollButtonsMobile
             sx={{ minHeight: 40 }}
           >
@@ -802,8 +812,7 @@ function App() {
               <Tab key={e.id} value={e.id}
                 /* a plain tab like the others; the members are sub-tabs in the Simulations header row below the bar */
                 label={tr('tabs.simulations', { defaultValue: 'Simulations' })}
-                sx={{ minHeight: 40, fontSize: '0.8rem', textTransform: 'none',
-                  px: 0.75, minWidth: 0, letterSpacing: 0 }} />
+                sx={TOP_TAB_SX} />
             ) : (() => { const t = tabs.find((x) => x.id === e.id)!; return (
               <Tab key={t.id} value={t.id}
                 /* The badge rides on the RENDERED label, never on the registry
@@ -828,8 +837,7 @@ function App() {
                 /* Sentence case and tight padding: "ELECTROMAGNETIC" in caps
                    did not fit a full-width tab and was clipped to "ECTROMAGNE"
                    (user 2026-09-08). */
-                sx={{ minHeight: 40, fontSize: '0.8rem', textTransform: 'none',
-                  px: 0.75, minWidth: 0, letterSpacing: 0,
+                sx={{ ...TOP_TAB_SX,
                   ...(t.id === 'motors' ? { fontWeight: 700 } : {}),
                   ...(t.id === 'admin' ? { fontWeight: 700, color: '#fbbf24' } : {}) }} />
             ); })())}

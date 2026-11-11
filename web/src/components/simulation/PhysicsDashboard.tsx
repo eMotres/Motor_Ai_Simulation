@@ -24,6 +24,9 @@ import StoredRunSelector   from './StoredRunSelector';
 import SimPointSwitcher    from './SimPointSwitcher';
 import { useMotorStore }   from '../../stores/motorStore';
 import { geoSigsDiffer, geoSignature } from '../common/geoSig';
+import { appliedChartsNote, appliedSourceOf } from '../../lib/appliedSummary';
+import type { AppliedSource } from '../../lib/appliedSummary';
+import { loadedPointKey, watchLoadedPoint } from '../../lib/loadedPoint';
 import { applyS1AsOperatingPoint, s1AutoSetPlan, s1AutoSetNoticeText }
                             from './coupledApi';
 import type { TransientSummary } from './SummaryTable';
@@ -99,13 +102,33 @@ const PhysicsDashboard: React.FC<Props> = ({ gamma_deg, I_phase_rms, connection 
   // Kept even after a Run supersedes it, so the Run can be REPORTED against the
   // point it was supposed to reproduce instead of silently replacing it.
   const appliedRef = React.useRef<TransientSummary | null>(null);
+  // WHAT the applied summary is, and FOR WHICH catalog point (owner 2026-11-11: after a motor switch in one
+  // session the charts read "⚠ stale (computed before the Sweep design was applied)" until a reload).  Every
+  // catalog load pushes its stored summary through the same event as a Sweep design, so the flag fired on a
+  // stored run whose own waveforms were on screen, and an applied summary of the motor just left survived the
+  // switch.  `source`: 'sweep' (a Sweep design - the charts below really are from before it), 'stored-run'
+  // (a stored run: summary AND its waveforms), 'stored-summary' (stored numbers, no stored waveforms).
+  const [appliedSource, setAppliedSource] = React.useState<AppliedSource>('sweep');
+  const appliedPointRef = React.useRef<string | null>(null);
   React.useEffect(() => {
     const onApply = (e: Event) => {
-      const s = (e as CustomEvent).detail?.summary;
-      if (s) { setAppliedSummary(s as TransientSummary); appliedRef.current = s as TransientSummary; }
+      const detail = (e as CustomEvent).detail;
+      const s = detail?.summary;
+      if (s) {
+        setAppliedSummary(s as TransientSummary); appliedRef.current = s as TransientSummary;
+        setAppliedSource(appliedSourceOf(detail?.source));
+        appliedPointRef.current = loadedPointKey();
+      }
     };
     window.addEventListener('sim-apply-summary', onApply as EventListener);
-    return () => window.removeEventListener('sim-apply-summary', onApply as EventListener);
+    // ANOTHER point / machine was loaded: an applied summary that is not that point's leaves with the one it
+    // belonged to (the new point's own, if it has one, is pushed by its load right after)
+    const unwatch = watchLoadedPoint((now) => {
+      if (appliedPointRef.current === now) return;
+      appliedPointRef.current = null; appliedRef.current = null;
+      setAppliedSummary(null); setAppliedSource('sweep');
+    });
+    return () => { window.removeEventListener('sim-apply-summary', onApply as EventListener); unwatch(); };
   }, []);
   // A refined ripple of the point on the card (TransientCharts "Refine
   // ripple") belongs on an APPLIED summary too — a duty's saved run is the
@@ -283,7 +306,7 @@ const PhysicsDashboard: React.FC<Props> = ({ gamma_deg, I_phase_rms, connection 
         iBlock={iBlock} waveform={waveform}
         battery={battery as never} busCouple={busCouple} chargeMax={chargeMax}
         steps={steps} runNonce={runNonce} fresh={fresh} onBusyChange={onBusyChange}
-        appliedFromSweep={!!appliedSummary}
+        appliedNote={appliedChartsNote(!!appliedSummary, appliedSource)}
         onSummary={setTransientSummary}/>
     </Box>
   );

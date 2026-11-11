@@ -97,6 +97,32 @@ t('a stored map is drawn only when its fingerprint is the live one; missing is u
   assert.equal(R.storedVerdict('c26331a1', 'nofp'), 'unproven');
 });
 
+// ── the build stamp decides first (owner 2026-11-11: every 40 mm catalog point read "older build" on Thermal) ────────
+t('the bug: a current build stamp draws the stored map although the geometry fingerprint drifted', () => {
+  // live 2026-11-11, CIANO14 40 new: stored be587744…, live bc0cbd7a… - the same machine, a longer geometry dict
+  assert.equal(R.storedPointVerdict({ buildStale: false, storedFingerprint: 'be587744', liveFingerprint: 'bc0cbd7a',
+    configGeoSig: SIG, liveGeoSig: SIG }), 'draw');
+});
+
+t('a stamp of another build is older, whatever the fingerprints say', () => {
+  assert.equal(R.storedPointVerdict({ buildStale: true, storedFingerprint: 'c26331a1', liveFingerprint: 'c26331a1' }),
+    'older_build');
+});
+
+t('a current stamp on a machine edited after the load is "edited", compared by value', () => {
+  assert.equal(R.storedPointVerdict({ buildStale: false, configGeoSig: SIG, liveGeoSig: SIG_400 }), 'edited');
+  assert.equal(R.storedPointVerdict({ buildStale: false, configGeoSig: 'a:52.95|b:1', liveGeoSig: 'a:52.94999999999999|b:1' }),
+    'draw', 'a float round trip is not an edit');
+  assert.equal(R.storedPointVerdict({ buildStale: false, configGeoSig: null, liveGeoSig: SIG }), 'draw',
+    'an unknown side is not an edit');
+});
+
+t('no stamp: the fingerprint rule, unchanged', () => {
+  assert.equal(R.storedPointVerdict({ buildStale: null, storedFingerprint: 'c26331a1', liveFingerprint: 'c26331a1' }), 'draw');
+  assert.equal(R.storedPointVerdict({ storedFingerprint: '32fb1d38', liveFingerprint: 'c26331a1' }), 'older_build');
+  assert.equal(R.storedPointVerdict({}), 'unproven');
+});
+
 // ── geoSig.geoStaleAgainstLive / isStale no longer compare stamps as strings ──────────────────────────────────────────
 t('geoSigsDiffer is the comparison (never !==)', async () => {
   const G = await import('../../components/common/geoSig.ts');

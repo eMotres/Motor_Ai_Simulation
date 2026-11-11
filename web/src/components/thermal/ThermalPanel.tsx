@@ -35,6 +35,9 @@ import SolveProgressStrip from '../common/SolveProgressStrip';
 import { SolveTimer, solvedIn } from '../mechanical/SolveTimer';
 import ThermalMap, { GeometryMap } from './ThermalMap';
 import StoredPointMap from '../common/StoredPointMap';
+import { storedTempsOf } from '../../lib/storedPointResult';
+import type { StoredTemps } from '../../lib/storedPointResult';
+import { provenanceLine } from '../../modules/development/pointsLimited';
 import DutyCycleEditor from './DutyCycleEditor';
 import { DUTY_CYCLE_ENABLED } from '../../lib/dutyCycleFlag';
 import HelpTip, { CTRL_ROW, TIP_PROPS } from './HelpTip';
@@ -277,6 +280,45 @@ const Tile: React.FC<{
     </Box>
   </Tooltip>
 );
+
+/** The loaded CATALOG point's stored temperatures (owner 2026-11-11: «a catalog motor is already computed» - loading
+ *  it shows its stored results at once, Thermal included).  The coupled loop's own answer at the point, as the Motors
+ *  view keeps it; only drawn when the store judged it this machine's (`lib/storedPointResult`).  Nothing is solved. */
+const StoredTempsTiles: React.FC<{ temps: StoredTemps }> = ({ temps }) => {
+  const when = provenanceLine(temps.provenance);
+  const kind = temps.kind === 'coupled' ? 'coupled loop' : 'temperature map';
+  const tip = tx('storedTempsTip', { kind, when: when || 'no date stored' });
+  const pair = (max: number | undefined, mean: number | undefined) =>
+    max != null && Number.isFinite(max) && mean != null && Number.isFinite(mean)
+      ? { value: fmt(max, 0), value2: fmt(mean, 0), sub: 'max / mean', top: max }
+      : { value: fmt(mean ?? max, 0), value2: undefined, sub: max != null ? 'max' : 'mean', top: mean ?? max };
+  const w = pair(temps.winding_max_c, temps.winding_c);
+  const m = pair(temps.magnet_max_c, temps.magnet_c);
+  return (
+    <Box data-testid="stored-point-temps" sx={{ mb: 1 }}>
+      <Typography sx={{ ...lbl, whiteSpace: 'normal', mb: 0.5, display: 'block' }}>
+        {tx('storedTempsTitle')} · {kind}{when ? ` · ${when}` : ''}
+        {temps.converged === false ? ' · not converged' : ''}
+      </Typography>
+      <Box sx={{ display: 'grid', gap: 1, gridTemplateColumns: 'repeat(auto-fit, minmax(110px, 1fr))' }}>
+        {temps.winding_c != null && (
+          <Tile label="Winding" value={w.value} value2={w.value2} unit="°C" sub={w.sub}
+            colour={hotAccent(w.top, 155)} tooltip={tip} />
+        )}
+        {temps.magnet_c != null && (
+          <Tile label="Magnets" value={m.value} value2={m.value2} unit="°C" sub={m.sub}
+            colour={hotAccent(m.top, 150)} tooltip={tip} />
+        )}
+        {temps.housing_c != null && (
+          <Tile label="Housing" value={fmt(temps.housing_c, 0)} unit="°C" sub="mean" tooltip={tip} />
+        )}
+        {temps.bearing_c != null && (
+          <Tile label="Bearing" value={fmt(temps.bearing_c, 0)} unit="°C" sub="hottest" tooltip={tip} />
+        )}
+      </Box>
+    </Box>
+  );
+};
 
 /** Colour for a temperature against the limit of what is being heated: class-F
  *  insulation gives up around 155 °C, sintered NdFeB starts losing Br well
@@ -667,8 +709,13 @@ const ThermalPanel: React.FC = () => {
   // only ever runs once per session (2026-09-10).
   const refreshLastThermal = st.refreshLast;
   const loadStoredThermal = st.loadStored;
-  useEffect(() => { void hydrate().then(() => refreshLastThermal()).then(() => loadStoredThermal()); },
-            [hydrate, refreshLastThermal, loadStoredThermal]);
+  // The loaded point's STORED result is looked up at once, beside the hydration - not after it: `hydrate` ends by
+  // building the mesh (seconds), and a catalog motor sat on "Nothing solved for this machine yet" all that time
+  // (owner 2026-11-11).  The lookup reads nothing `hydrate` writes.
+  useEffect(() => {
+    void loadStoredThermal();
+    void hydrate().then(() => refreshLastThermal());
+  }, [hydrate, refreshLastThermal, loadStoredThermal]);
 
   /* The cross-section drawn while nothing of this point is solved is THIS motor's:
      a mesh built for the previous machine is not drawn (`geomFor`, compared by value)
@@ -704,6 +751,9 @@ const ThermalPanel: React.FC = () => {
     };
   }, [refreshEmRun]);
   const emLine = emRun?.ok ? emRunLine(emRun.em_run) : null;
+  // The loaded catalog point's stored temperatures / map, when they are this machine's (lib/storedPointResult)
+  const storedTemps = res ? null : storedTempsOf(st.stored);
+  const storedShown = !res && (st.stored.status === 'ready' || !!storedTemps);
 
   // Thermal follows the same account-scoped loaded motor as Configure. The
   // server's shared cooling registry is the single allowlist; no propeller is
@@ -1595,9 +1645,18 @@ const ThermalPanel: React.FC = () => {
                   {emLine}
                 </Typography>
               </Tooltip>
+            ) : storedShown ? (
+              // The loaded catalog point's stored result is on screen: the workspace's EM run is
+              // only what a NEW Solve would need, not a fault of what is shown (owner 2026-11-11)
+              <Tooltip {...TIP_PROPS} title={`${emRun.error ?? ''}${emRun.reason ? ` - ${emRun.reason}` : ''}`}>
+                <Typography sx={{ ...lbl, whiteSpace: 'normal', cursor: 'help',
+                  borderBottom: '1px dotted var(--text-4)' }}>
+                  {tx('solveNeedsEmRun')}
+                </Typography>
+              </Tooltip>
             ) : (
               <Tooltip {...TIP_PROPS} title={emRun.reason ?? emRun.error ?? ''}>
-                <Typography sx={{ ...warn, fontWeight: 700, cursor: 'help' }}>
+                <Typography sx={{ ...warn, whiteSpace: 'normal', fontWeight: 700, cursor: 'help' }}>
                   ⚠ {emRun.error ?? 'No Electromagnetic run for this machine'}
                 </Typography>
               </Tooltip>
@@ -1669,6 +1728,7 @@ const ThermalPanel: React.FC = () => {
           2026-11-04) - the store drops those before they get here. */}
       {!res && (
         <Paper sx={{ p: 1.25, bgcolor: 'var(--panel)' }}>
+          {storedTemps && <StoredTempsTiles temps={storedTemps} />}
           <StoredPointMap stored={st.stored} what="thermal">
             {!err && st.stored.status === 'idle' && (
               <Typography sx={{ ...lbl, mb: 0.75, display: 'block' }}>

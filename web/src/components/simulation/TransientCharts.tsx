@@ -226,9 +226,12 @@ interface Props {
   // SOLVED copper loss and its field snapshot carries the real eddy J⟳ — which
   // is what makes the J⟳ field view instant instead of a second transient.
   eddyCoupled?: boolean;
-  // A design was just applied from the Sweep tab (summary numbers reused) — the
-  // shown waveforms are still the PREVIOUS design's, so flag them stale.
-  appliedFromSweep?: boolean;
+  // An applied summary sits on the card and the shown waveforms are NOT its run:
+  // why, in words ("before the Sweep design was applied", …), or null/absent when
+  // they are (a catalog point's stored run: its summary AND its own waveforms -
+  // lib/appliedSummary).  Was `appliedFromSweep`, which took every catalog load
+  // for a Sweep design (owner 2026-11-11).
+  appliedNote?: string | null;
   // EXCITATION SOURCE: imposed sinusoidal current (default), imposed
   // sinusoidal voltage (FOC verification — currents are the machine's own
   // response), a PWM inverter's chopped voltage, a 120° block, or an arbitrary
@@ -338,7 +341,7 @@ function loadLastTransient(): TransientPayload | null {
 }
 
 // (live recompute progress strip: elapsed + points, driven by busy + /progress)
-const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onSummary, runNonce = 0, onBusyChange, steps = 12, fresh = false, fieldLosses = true, demag = false, appliedFromSweep = false, drive = 'current', vPeak = 0, vDelta = 0, iBlock = 0, waveform = '', eddyCoupled = true, battery = null, busCouple = false, chargeMax = false, readOnly = false, payloadOverride = null }) => {
+const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onSummary, runNonce = 0, onBusyChange, steps = 12, fresh = false, fieldLosses = true, demag = false, appliedNote = null, drive = 'current', vPeak = 0, vDelta = 0, iBlock = 0, waveform = '', eddyCoupled = true, battery = null, busCouple = false, chargeMax = false, readOnly = false, payloadOverride = null }) => {
   // `steps` (n_steps_per_period) is controlled from the left panel and
   // matches the animation viewer's n_frames so both hit the same backend
   // cache key (one solve, not two).
@@ -1501,9 +1504,9 @@ const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onS
             + (data?.computed_at ? ` (run of ${data.computed_at})` : '')
             + '. Nothing below describes the current geometry. Press Run Simulation.'} />
         </Box>
-      ) : (stale || appliedFromSweep) && (
-        <Tooltip title={`The waveforms below were computed ${appliedFromSweep
-            ? 'before the Sweep design was applied' : 'for different inputs'} — run Simulation to recompute.`}
+      ) : (stale || (!!appliedNote && !!data)) && (
+        <Tooltip title={`The waveforms below were computed ${appliedNote
+            ? appliedNote : 'for different inputs'} — run Simulation to recompute.`}
           placement="top">
           <Box sx={{ alignSelf: 'flex-start', px: 1, py: 0.25, borderRadius: 1,
             bgcolor: 'rgba(251,191,36,0.12)', border: '1px solid #b45309',

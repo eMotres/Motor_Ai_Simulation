@@ -92,5 +92,8 @@
   "coolingMismatch": "solved with {solved}, fields now {now} - re-Solve",
   "coolingMismatchTip": "This result was solved with a different outer cooling mode or frame than the fields hold now. Press Solve to recompute it with the cooling shown here.",
   "coolingDetailNda": "Detailed cooling paths with NDA",
-  "coolingNetworkNda": "Detailed cooling network with NDA"
+  "coolingNetworkNda": "Detailed cooling network with NDA",
+  "storedTempsTitle": "Stored result of this point",
+  "storedTempsTip": "This catalog point is already computed: these are the temperatures its stored {kind} settled at ({when}). Nothing was solved now. Press Solve for the full map, the component table and the heat budget at the cooling shown here.",
+  "solveNeedsEmRun": "a new Solve needs an Electromagnetic run of this machine"
 }

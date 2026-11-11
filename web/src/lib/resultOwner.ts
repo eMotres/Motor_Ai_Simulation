@@ -110,3 +110,38 @@ export function storedVerdict(stored: string | null | undefined, live: string | 
   if (!stored || !live || live === 'nofp') return 'unproven';
   return stored === live ? 'draw' : 'older_build';
 }
+
+/** What a stored point result is judged on (all optional: a missing witness is unknown, never a pass). */
+export interface StoredWitnesses {
+  /** the server's verdict on the point's BUILD STAMP (`family.stored_build_stale`): true = solved on another build of
+   *  the configuration, false = on its current build (every spelling - the #640 alias rule), null/undefined = unknown */
+  buildStale?: boolean | null;
+  /** the configuration's own geometry, as `geoSignature` stamps it, and the machine on screen now (`liveGeoSig`) */
+  configGeoSig?: string | null;
+  liveGeoSig?: string | null;
+  /** the geometry fingerprints: the stored file's and the server's live one (the fallback witness) */
+  storedFingerprint?: string | null;
+  liveFingerprint?: string | null;
+}
+
+export type StoredPointVerdict = StoredVerdict | 'edited';
+
+/**
+ * May the loaded CATALOG point's stored result be drawn for the machine on screen?  (owner 2026-11-11: «a catalog motor is
+ * already computed» - loading it shows its stored results at once, Thermal and Mechanical included.)
+ *
+ *   1. the build stamp decides first - the rule the Motors row's amber chip uses, so a tab never calls "older build" what
+ *      the row calls current.  The geometry fingerprint is a hash of the whole geometry dict and moved for unchanged
+ *      machines whenever a field was added to it: on 2026-11-11 every 40 mm point read "older build" on Thermal while its
+ *      row was current.
+ *   2. a current stamp says the result is the CONFIGURATION's; the machine on screen must still be that configuration - a
+ *      geometry edited after the load is `edited` (compared by value, `geoSigsDiffer`; an unknown side is not an edit).
+ *   3. no stamp: the old fingerprint rule (`storedVerdict`).
+ */
+export function storedPointVerdict(w: StoredWitnesses): StoredPointVerdict {
+  if (w.buildStale === true) return 'older_build';
+  if (w.buildStale === false) {
+    return (w.configGeoSig && w.liveGeoSig && geoSigsDiffer(w.configGeoSig, w.liveGeoSig)) ? 'edited' : 'draw';
+  }
+  return storedVerdict(w.storedFingerprint, w.liveFingerprint);
+}

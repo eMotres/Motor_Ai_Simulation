@@ -9,15 +9,15 @@ test('a customer posts only a company; the server makes the id and the name', ()
   assert.deepEqual(createPayload(false, { title: '', org: ' Acme ', id: '' }), { customer_org: 'Acme' });
 });
 
-test('staff post the id and the customer organisation as before', () => {
-  assert.deepEqual(createPayload(true, { title: 'A', org: 'Acme', id: ' acme-1 ' }), { id: 'acme-1', title: 'A', customer_org: 'Acme' });
+test('staff post the title and the customer organisation, never an id (the server makes it)', () => {
+  assert.deepEqual(createPayload(true, { title: 'A', org: 'Acme', id: ' acme-1 ' }), { title: 'A', customer_org: 'Acme' });
 });
 
-test('a customer can always press Create; staff need a title, an organisation and an id', () => {
+test('a customer can always press Create; staff need a title and an organisation, no id', () => {
   assert.equal(createReady(false, { title: '', org: '', id: '' }), true);
   assert.equal(createReady(true, { title: 'x', org: '', id: 'a' }), false);
-  assert.equal(createReady(true, { title: 'x', org: 'o', id: '' }), false);
-  assert.equal(createReady(true, { title: 'x', org: 'o', id: 'a' }), true);
+  assert.equal(createReady(true, { title: '', org: 'o', id: '' }), false);
+  assert.equal(createReady(true, { title: 'x', org: 'o', id: '' }), true);
 });
 
 test('the open-project limit is shown from the localised string, other refusals keep the server text', () => {

@@ -44,7 +44,6 @@
   "renameProject": "Rename project",
   "renameProjectTip": "A name set here stays; it no longer follows the specification.",
   "customerOrg": "Customer organisation",
-  "projectId": "Project ID (slug)",
   "create": "Create project",
   "back": "All projects",
   "cancel": "Cancel",

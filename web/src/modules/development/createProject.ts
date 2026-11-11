@@ -1,16 +1,17 @@
 // Pure helpers of the "New project" dialog (owner 2026-10-30: any signed-in account may open its own project).
 
-/** What the create dialog posts: staff name the project, the customer organisation and the id; a customer gives only (optionally) its
- *  company - the server generates the id, makes the account the owner and ignores everything else. */
+/** What the create dialog posts: staff name the project and the customer organisation; a customer gives only (optionally) its
+ *  company.  The id is never typed (owner 2026-11-11): the server generates it (from the title for staff), makes a customer the
+ *  owner and ignores everything else. */
 export function createPayload(staff: boolean, v: { title: string; org: string; id: string }):
   { id?: string; title?: string; customer_org: string } {
   const title = v.title.trim(); const customer_org = v.org.trim();
-  return staff ? { id: v.id.trim(), title, customer_org } : { customer_org };
+  return staff ? { title, customer_org } : { customer_org };
 }
 
 /** May the dialog's Create button be pressed? */
 export function createReady(staff: boolean, v: { title: string; org: string; id: string }): boolean {
-  return !staff || (!!v.title.trim() && !!v.org.trim() && !!v.id.trim());
+  return !staff || (!!v.title.trim() && !!v.org.trim());
 }
 
 /** The text of a refused create: the account's open-project limit (HTTP 429, detail.code "project_limit") is shown from the

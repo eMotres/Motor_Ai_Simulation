@@ -44,7 +44,6 @@
   "renameProject": "重命名项目",
   "renameProjectTip": "此处设置的名称会保留，不再随规格变化。",
   "customerOrg": "客户组织",
-  "projectId": "项目 ID（短标识）",
   "create": "创建项目",
   "back": "全部项目",
   "cancel": "取消",

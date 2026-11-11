@@ -11,7 +11,7 @@ import { useTranslation } from 'react-i18next';
 import MotorsDialog, { type RegistryUser } from '../dialogs/MotorsDialog';
 import type { ProjectMember, ProjectMotor, ProjectMotorPickerItem, ProjectStatus } from '../../../modules/development/types';
 import { useUIStore } from '../../../stores/uiStore';
-import { adminProjectPaths, projectAdminMembers, projectCompletenessLabel, projectOwnerLabel, projectMotorKey, projectOpenEvent, projectOpenIntent, projectRoleBody, validProjectId } from '../adminProjectsModel';
+import { adminProjectPaths, projectAdminMembers, projectCompletenessLabel, projectOwnerLabel, projectMotorKey, projectOpenEvent, projectOpenIntent, projectRoleBody } from '../adminProjectsModel';
 import { filterPickerCatalog, groupPickerCatalog, pickerDisplayLabel, pickerReasonKey } from '../../../modules/development/pickerModel';
 import StarIcon from '@mui/icons-material/Star';
 import StarBorderIcon from '@mui/icons-material/StarBorder';
@@ -56,7 +56,6 @@ const ProjectsSection: React.FC = () => {
   const [notice, setNotice] = useState<string | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [createOpen, setCreateOpen] = useState(false);
-  const [createId, setCreateId] = useState('');
   const [createTitle, setCreateTitle] = useState('');
   const [createOrg, setCreateOrg] = useState('');
   const [candidateUser, setCandidateUser] = useState<RegistryUser | null>(null);
@@ -92,8 +91,8 @@ const ProjectsSection: React.FC = () => {
     if (creating) return;
     setCreating(true); setError(null);
     try {
-      await request('/api/admin/projects', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: createId.trim().toLowerCase(), title: createTitle.trim(), customer_org: createOrg.trim() }) });
-      setCreateOpen(false); setCreateId(''); setCreateTitle(''); setCreateOrg(''); changed(t('projects.created'));
+      await request('/api/admin/projects', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ title: createTitle.trim(), customer_org: createOrg.trim() }) });
+      setCreateOpen(false); setCreateTitle(''); setCreateOrg(''); changed(t('projects.created'));
     } catch (e) { setError(e instanceof Error ? e.message : String(e)); }
     finally { setCreating(false); }
   };
@@ -126,19 +125,18 @@ const ProjectsSection: React.FC = () => {
     <Drawer anchor="right" open={!!current} onClose={() => setSelectedId(null)} PaperProps={{ sx: { width: { xs: '100%', sm: 430 }, bgcolor: 'var(--panel)', p: 2.5, overflowY: 'auto' } }}>
       {current && <ProjectDrawer project={current} users={users} onClose={() => setSelectedId(null)} onChanged={changed} onManageGrants={setCandidateUser} onOpenProject={() => { const intent = projectOpenIntent(current.id); try { sessionStorage.setItem(intent.storageKey, intent.projectId); } catch { /* Event path still opens while the page is mounted. */ } setSelectedId(null); setActiveTab('development' as never); window.dispatchEvent(new CustomEvent(projectOpenEvent, { detail: { projectId: intent.projectId } })); }} />}
     </Drawer>
-    <CreateProject open={createOpen} id={createId} title={createTitle} org={createOrg} error={error} busy={creating} onId={setCreateId} onTitle={setCreateTitle} onOrg={setCreateOrg} onClose={() => setCreateOpen(false)} onCreate={() => void create()} />
+    <CreateProject open={createOpen} title={createTitle} org={createOrg} error={error} busy={creating} onTitle={setCreateTitle} onOrg={setCreateOrg} onClose={() => setCreateOpen(false)} onCreate={() => void create()} />
     <MotorsDialog user={candidateUser} onClose={() => setCandidateUser(null)} onSaved={() => { setCandidateUser(null); changed(t('projects.grantsUpdated')); }} />
   </Box>;
 };
 
-const CreateProject: React.FC<{ open: boolean; id: string; title: string; org: string; error: string | null; busy: boolean; onId: (v: string) => void; onTitle: (v: string) => void; onOrg: (v: string) => void; onClose: () => void; onCreate: () => void }> = ({ open, id, title, org, error, busy, onId, onTitle, onOrg, onClose, onCreate }) => {
+const CreateProject: React.FC<{ open: boolean; title: string; org: string; error: string | null; busy: boolean; onTitle: (v: string) => void; onOrg: (v: string) => void; onClose: () => void; onCreate: () => void }> = ({ open, title, org, error, busy, onTitle, onOrg, onClose, onCreate }) => {
   const { t } = useTranslation('admin');
   return <Drawer anchor="right" open={open} onClose={onClose} PaperProps={{ sx: { width: 360, bgcolor: 'var(--panel)', p: 2.5 } }}><Typography sx={{ fontSize: 15, fontWeight: 800, mb: 2 }}>{t('projects.create')}</Typography>
-    <TextField size="small" fullWidth label={t('projects.id')} value={id} onChange={(e) => onId(e.target.value)} sx={{ mb: 1 }} />
     <TextField size="small" fullWidth label={t('projects.name')} value={title} onChange={(e) => onTitle(e.target.value)} sx={{ mb: 1 }} />
     <TextField size="small" fullWidth label={t('projects.org')} value={org} onChange={(e) => onOrg(e.target.value)} sx={{ mb: 1.5 }} />
     {error && <Typography sx={{ color: '#f87171', fontSize: 11, mb: 1 }}>{error}</Typography>}
-    <Box sx={{ display: 'flex', gap: 1 }}><Button onClick={onClose} sx={{ textTransform: 'none' }}>{t('projects.cancel')}</Button><Button variant="contained" disabled={busy || !validProjectId(id) || !title.trim()} onClick={onCreate} sx={{ textTransform: 'none' }}>{t('projects.create')}</Button></Box>
+    <Box sx={{ display: 'flex', gap: 1 }}><Button onClick={onClose} sx={{ textTransform: 'none' }}>{t('projects.cancel')}</Button><Button variant="contained" disabled={busy || !title.trim()} onClick={onCreate} sx={{ textTransform: 'none' }}>{t('projects.create')}</Button></Box>
   </Drawer>;
 };
 

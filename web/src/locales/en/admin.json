@@ -238,7 +238,6 @@
     "motors": "Linked motors",
     "activity": "Last activity",
     "empty": "No projects found",
-    "id": "Project ID (lowercase slug)",
     "name": "Project name",
     "org": "Organization",
     "cancel": "Cancel",

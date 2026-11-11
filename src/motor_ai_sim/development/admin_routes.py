@@ -58,16 +58,29 @@ async def admin_create(request: Request, admin_user: dict = Depends(auth.require
     body = await request.json()
     if not isinstance(body, dict):
         raise HTTPException(status_code=400, detail="Expected JSON object")
-    project_id = str(body.get("id") or "").strip().lower()
-    if not store.valid_id(project_id):
+    # The id is never typed (owner 2026-11-11): an explicit id is still accepted (scripts), otherwise it comes from the title.
+    requested_id = str(body.get("id") or "").strip().lower()
+    if requested_id and not store.valid_id(requested_id):
         raise HTTPException(status_code=422, detail="id must be a lowercase slug")
-    try:
-        project = models.project_record(project_id, body, _email(admin_user))
-        store.create_project(project)
-    except FileExistsError:
-        raise HTTPException(status_code=409, detail="Project already exists")
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc))
+    if not requested_id and not str(body.get("title") or "").strip():
+        raise HTTPException(status_code=422, detail="title is required")
+    from motor_ai_sim.development import self_service
+    ids = iter([requested_id]) if requested_id else self_service.candidate_ids(str(body.get("title") or ""))
+    project = None
+    for project_id in ids:
+        try:
+            project = models.project_record(project_id, body, _email(admin_user))
+            store.create_project(project)
+            break
+        except FileExistsError:
+            if requested_id:
+                raise HTTPException(status_code=409, detail="Project already exists")
+            project = None
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc))
+    if project is None:
+        raise HTTPException(status_code=409, detail="Could not find a free project id")
+    project_id = project["id"]
     store.save_json(project_id, "draft.json", {"draft": {"fields": {}, "mission_profile": [], "mission_profile_status": "missing", "production": {}, "provenance": {}}, "revision": 0, "version": None})
     store.append_audit(project_id, _email(admin_user), "create", "project", project_id, {})
     return project

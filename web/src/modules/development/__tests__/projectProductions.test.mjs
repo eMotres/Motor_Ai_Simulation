@@ -70,7 +70,8 @@ test('the project page wires the Production view; every label exists in en and z
   assert.match(page, /hasProductionView\(productions\)/);
   assert.match(page, /view === 'production' && <ProjectProductions/);
   const comp = read('../components/ProjectProductions.tsx');
-  assert.match(comp, /openProduction\(b\.die, b\.config\)/);
+  // 'development': the production's back arrow and the browser's Back return to this project (mobile audit 2026-11)
+  assert.match(comp, /openProduction\(b\.die, b\.config, 'development'\)/);
   const keys = ['tabs.production', 'productionView.none', 'productionView.tip', 'productionView.revision', 'productionView.open',
     'productionView.openTip', 'productionView.readiness', 'productionView.readinessTip',
     ...['active', 'paused', 'archived'].map((s) => `productionView.status.${s}`),

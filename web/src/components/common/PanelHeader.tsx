@@ -43,14 +43,20 @@ export const PanelHeader: React.FC<HeaderProps> = ({ label, tabs, testId }) => {
     <Box data-testid={testId ?? 'panel-header'} sx={{
       display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap', px: 3, py: 0.25, minHeight: SUB_TAB_HEIGHT + 2,
       bgcolor: 'background.paper', borderBottom: '1px solid', borderColor: 'divider', flexShrink: 0,
+      // phone width, a panel with sub-tabs and no actions (a project, a production): the label row held only the name of the top tab
+      // that is already underlined above it, 40 px of a 780 px screen - the sub-tabs row is the header there (mobile audit 2026-11)
+      '@media (max-width:599.95px)': {
+        '&:has([data-header-tabs]:not(:empty)):has([data-header-right]:empty) > [data-header-label], &:has([data-header-tabs]:not(:empty)):has([data-header-right]:empty) > [data-header-spacer]': { display: 'none' },
+        '&:has([data-header-tabs]:not(:empty))': { px: 1 },
+      },
     }}>
-      <Typography variant="subtitle2" sx={{ whiteSpace: 'nowrap' }}>{label}</Typography>
+      <Typography data-header-label variant="subtitle2" sx={{ whiteSpace: 'nowrap' }}>{label}</Typography>
       {/* phone width: the tabs take their own full-width line under label + actions */}
-      <Box ref={setTabs} sx={{ order: { xs: 3, sm: 0 }, flex: { xs: '1 1 100%', sm: '0 1 auto' }, minWidth: 0, '&:empty': { display: 'none' } }}>
+      <Box ref={setTabs} data-header-tabs sx={{ order: { xs: 3, sm: 0 }, flex: { xs: '1 1 100%', sm: '0 1 auto' }, minWidth: 0, '&:empty': { display: 'none' } }}>
         {tabs}
       </Box>
-      <Box sx={{ flex: 1, order: { xs: 1, sm: 0 } }} />
-      <Box ref={setRight} sx={{ display: 'flex', alignItems: 'center', gap: 1, order: { xs: 2, sm: 0 }, '&:empty': { display: 'none' } }} />
+      <Box data-header-spacer sx={{ flex: 1, order: { xs: 1, sm: 0 } }} />
+      <Box ref={setRight} data-header-right sx={{ display: 'flex', alignItems: 'center', gap: 1, order: { xs: 2, sm: 0 }, '&:empty': { display: 'none' } }} />
     </Box>
   );
 };

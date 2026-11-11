@@ -23,7 +23,6 @@ import CloseIcon from '@mui/icons-material/Close';
 import SendIcon from '@mui/icons-material/Send';
 import { useTranslation } from 'react-i18next';
 import { useAuth } from '../../contexts/AuthContext';
-import { NARROW } from '../../lib/narrowLayout';
 import { useUIStore } from '../../stores/uiStore';
 import { APP_VERSION, APP_GIT_SHA } from '../../lib/version';
 import { askAssistant, submitTicket, listMyTickets, type Ticket } from '../../lib/support';
@@ -117,8 +116,10 @@ const SupportWidget: React.FC = () => {
             position: 'fixed', bottom: 20, right: 20, zIndex: 1300,
             width: 52, height: 52, bgcolor: '#2563eb', color: '#fff',
             boxShadow: '0 4px 16px rgba(0,0,0,0.4)', '&:hover': { bgcolor: '#1d4ed8' },
-            // on a phone the specification's Back / Next bar fills the bottom of the screen: the bubble sits above it, never over Next
-            [NARROW]: { 'body:has([data-wizard-bar]) &': { bottom: 112 } },
+            // on a phone the specification's Back / Next bar fills the bottom of the screen: the bubble sits IN the bar's free right end
+            // (mobile audit 2026-11: lifted above the bar it covered the input right above it), never over Next or a field
+            // (the wizard stacks below 900 px, a 768 px tablet included: there the bubble sat on Next)
+            '@media (max-width:899.95px)': { 'body:has([data-wizard-bar]) &': { bottom: 7 } },
             // the floating specification assistant has its input and Send at the bottom right: the bubble sits above them
             'body:has([data-assistant-floating]) &': { bottom: 112 },
           }}

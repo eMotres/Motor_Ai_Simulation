@@ -75,11 +75,12 @@ const LandingShell: React.FC = () => {
         <AppBar position="static" elevation={0}
           sx={{ backgroundColor: 'background.paper', borderBottom: '1px solid',
             borderColor: 'divider', flexShrink: 0 }}>
-          <Toolbar variant="dense" sx={{ gap: 1 }}>
+          {/* phone (mobile audit 2026-11): tighter gutters and the brand without "Core", so language, Sign in and theme fit one row at 360 px */}
+          <Toolbar variant="dense" sx={{ gap: 1, px: { xs: 1, sm: 3 }, columnGap: { xs: 0.5, sm: 1 } }}>
             <BrandLogo size={28} />
             <Typography variant="h6" sx={{ mr: 1, letterSpacing: 0.3, whiteSpace: 'nowrap', fontSize: { xs: '1.05rem', sm: '1.25rem' } }}>
               AeroStator{' '}
-              <Box component="span" sx={{ fontWeight: 300, opacity: 0.7 }}>Core</Box>
+              <Box component="span" sx={{ fontWeight: 300, opacity: 0.7, display: { xs: 'none', sm: 'inline' } }}>Core</Box>
             </Typography>
             {/* Phone width: the version badge and the connection chip leave the bar so brand, language, sign-in and theme fit. */}
             <Box sx={{ display: { xs: 'none', sm: 'contents' } }}>

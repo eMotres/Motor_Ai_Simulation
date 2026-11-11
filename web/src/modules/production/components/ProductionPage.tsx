@@ -24,6 +24,8 @@ import { shortTitle } from '../../../lib/stripContext.ts';
 import { useTabContextStore } from '../../../stores/tabContextStore';
 import { isProductionLinkPath, parseProductionLink, productionLinkPath, type ProductionLink } from '../../../lib/productionLink';
 import { appLinkPath, isAppLinkPath, parseAppLink } from '../../../lib/appLink';
+import { useHistoryLevel } from '../../../lib/historyLevels';
+import { useUIStore } from '../../../stores/uiStore';
 import DigestSettings from '../../../components/digest/DigestSettings';
 import { productionUnreadKey } from '../../../lib/unreadMessages';
 import { useUnreadCounts } from '../../../lib/useUnreadMessages';
@@ -63,9 +65,9 @@ function appLinkFromAddressBar() {
   try { const l = parseAppLink(window.location.pathname, window.location.search); return l && l.kind === 'production' ? l : null; } catch { return null; }
 }
 
-const ProductionPage: React.FC<{ die: string; config: string; onBack: () => void; link?: ProductionLink | null;
+const ProductionPage: React.FC<{ die: string; config: string; onBack: () => void; /** what the back arrow says (default: All productions) */ backLabel?: string; link?: ProductionLink | null;
   /** the tab a link named (not documents: that one comes with `link`) and the item inside it */
-  initialTab?: TabId; itemId?: string }> = ({ die, config, onBack, link: linkProp = null, initialTab, itemId }) => {
+  initialTab?: TabId; itemId?: string }> = ({ die, config, onBack, backLabel, link: linkProp = null, initialTab, itemId }) => {
   const { t } = useTranslation('production');
   const ui = useContentLang();
   const { user, isAdmin } = useAuth();
@@ -89,13 +91,13 @@ const ProductionPage: React.FC<{ die: string; config: string; onBack: () => void
     try {
       if (linkProp && tab === 'documents') {
         const p = productionLinkPath({ die, config, since: link?.since, ids: link?.ids });
-        if (p && p !== window.location.pathname + window.location.search) window.history.replaceState(null, '', p);
+        if (p && p !== window.location.pathname + window.location.search) window.history.replaceState(window.history.state, '', p);
       } else if (!linkProp && initialTab && tab === initialTab) {
         // entered by a link to this tab: the bar keeps that link (reload / copy from the bar both work)
         const p = appLinkPath({ kind: 'production', die, config, tab: initialTab, ...(itemId ? { item: itemId } : {}) });
-        if (p && p !== window.location.pathname + window.location.search) window.history.replaceState(null, '', p);
+        if (p && p !== window.location.pathname + window.location.search) window.history.replaceState(window.history.state, '', p);
       } else if (isProductionLinkPath(window.location.pathname) || isAppLinkPath(window.location.pathname)) {
-        window.history.replaceState(null, '', '/');
+        window.history.replaceState(window.history.state, '', '/');
       }
     } catch { /* no history API */ }
   }, [linkProp, tab, link, die, config, initialTab, itemId]);
@@ -162,7 +164,7 @@ const ProductionPage: React.FC<{ die: string; config: string; onBack: () => void
   return (
     <Box>
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, mb: 1.5, flexWrap: 'wrap' }}>
-        <Button size="small" onClick={onBack} sx={{ textTransform: 'none', fontSize: 12, color: 'var(--text-2)' }}>← {t('back')}</Button>
+        <Button size="small" onClick={onBack} sx={{ textTransform: 'none', fontSize: 12, color: 'var(--text-2)' }}>← {backLabel ?? t('back')}</Button>
         <Typography sx={{ fontSize: 16, fontWeight: 800, color: 'var(--text-0)' }}>{die} / {config}<RevisionLabel rev={prod?.product_revision?.rev} /></Typography>
         {prod && (
           <>
@@ -180,8 +182,8 @@ const ProductionPage: React.FC<{ die: string; config: string; onBack: () => void
         <HeaderTabs tab="production">
           {/* the way out stays in the fixed menu (owner 2026-11-06): on a phone the link above scrolls away with the page */}
           <Box sx={{ display: 'flex', alignItems: 'center', minWidth: 0 }}>
-            <Tooltip title={t('back')}>
-              <IconButton size="small" aria-label={t('back')} data-testid="production-back" onClick={onBack} sx={{ flexShrink: 0 }}><ArrowBackIcon sx={{ fontSize: 18 }} /></IconButton>
+            <Tooltip title={backLabel ?? t('back')}>
+              <IconButton size="small" aria-label={backLabel ?? t('back')} data-testid="production-back" onClick={onBack} sx={{ flexShrink: 0 }}><ArrowBackIcon sx={{ fontSize: 18 }} /></IconButton>
             </Tooltip>
             <Box sx={{ minWidth: 0, flex: 1 }}>
               <SubTabs value={tab} onChange={setTab} ariaLabel={t('title')}
@@ -269,11 +271,22 @@ export const ProductionTab: React.FC = () => {
     return v && typeof v.die === 'string' && typeof v.config === 'string' ? { die: v.die, config: v.config } : null;
   });
   const setSel = (v: { die: string; config: string } | null) => { setSelState(v); writeStore(LAST_KEY, v); };
+  // opened from a project ("Open in Production"): going up returns to that project, not to the production list (mobile audit 2026-11:
+  // test -> Production -> project -> projects list)
+  const [returnTab, setReturnTab] = useState<string | null>(null);
+  const { t } = useTranslation('production');
+  const goUp = () => {
+    setEntry(null); setAppEntry(null); setSel(null);
+    if (returnTab) { const to = returnTab; setReturnTab(null); useUIStore.getState().setActiveTab(to as never); }
+  };
+  // the phone's / browser's Back goes up from an open production instead of leaving the app (lib/historyLevels)
+  const tabShown = (useUIStore((s) => s.activeTab) as string) === 'production';
+  useHistoryLevel(!!sel && tabShown, goUp);
   // "Open in Production" from a project (lib/openProduction): the tab may already be mounted, so it listens
   useEffect(() => {
     const on = (e: Event) => {
       const d = (e as CustomEvent<OpenProductionDetail>).detail;
-      if (d && typeof d.die === 'string' && typeof d.config === 'string') { setEntry(null); setAppEntry(null); setSel({ die: d.die, config: d.config }); }
+      if (d && typeof d.die === 'string' && typeof d.config === 'string') { setEntry(null); setAppEntry(null); setSel({ die: d.die, config: d.config }); setReturnTab(typeof d.from === 'string' ? d.from : null); }
     };
     window.addEventListener(OPEN_PRODUCTION_EVENT, on);
     return () => window.removeEventListener(OPEN_PRODUCTION_EVENT, on);
@@ -289,11 +302,11 @@ export const ProductionTab: React.FC = () => {
     <Box sx={{ overflowY: 'auto', height: '100%' }}>
       <Box sx={{ px: 3, pt: 3, pb: 3 }}>
         {sel
-          ? <ProductionPage key={`${sel.die}|${sel.config}`} die={sel.die} config={sel.config} onBack={() => { setEntry(null); setAppEntry(null); setSel(null); }}
+          ? <ProductionPage key={`${sel.die}|${sel.config}`} die={sel.die} config={sel.config} onBack={goUp} backLabel={returnTab === 'development' ? t('backToProject') : undefined}
               link={entry && entry.die === sel.die && entry.config === sel.config ? entry : null}
               initialTab={appEntry && appEntry.tab && appEntry.tab !== 'documents' && appEntry.die === sel.die && appEntry.config === sel.config ? appEntry.tab : undefined}
               itemId={appEntry && appEntry.die === sel.die && appEntry.config === sel.config ? appEntry.item : undefined} />
-          : <ProductionListPage onOpen={(p) => { setEntry(null); setAppEntry(null); setSel({ die: p.die, config: p.config }); }} />}
+          : <ProductionListPage onOpen={(p) => { setEntry(null); setAppEntry(null); setReturnTab(null); setSel({ die: p.die, config: p.config }); }} />}
       </Box>
     </Box>
   );

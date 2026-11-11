@@ -69,8 +69,9 @@ const DiscussionPanel: React.FC<{ threads: Thread[]; parts: Part[]; ctx: ProdCtx
 
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.25 }}>
-      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-        <TextField select size="small" label={t('discussion.thread')} value={sel} onChange={(e) => setSel(e.target.value)} sx={{ minWidth: 240 }}>
+      {/* wraps on a phone (mobile audit 2026-11: the "Factory only" switch ran off the screen) */}
+      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
+        <TextField select size="small" label={t('discussion.thread')} value={sel} onChange={(e) => setSel(e.target.value)} sx={{ minWidth: 'min(240px, 100%)', flex: { xs: '1 1 200px', sm: '0 0 auto' } }}>
           <MenuItem value="">{t('discussion.general')}{badge(unreadOf(threads.find((x) => !x.part_id)).length)}</MenuItem>
           {choices.map((c) => <MenuItem key={c.key} value={c.key}>{c.label}{badge(unreadOf(threads.find((x) => x.part_id === c.key)).length)}</MenuItem>)}
         </TextField>

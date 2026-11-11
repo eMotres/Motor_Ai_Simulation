@@ -4,7 +4,7 @@ Hello,
 
 On AeroStator you can now describe the motor or generator you need in a specification, and MOTRES engineers simulate it for you, free of charge: electromagnetic, thermal and mechanical FEM analysis of permanent-magnet machines.
 
-![Your motor, simulated free. 1. Describe your motor in a specification. 2. Your AI agent or our assistant fills it in. 3. MOTRES engineers simulate it: electromagnetic, thermal and mechanical FEM. 4. Results in your project. Free; your engineering data help train our AI models, personal data never.](image:free_simulation_flow)
+![Your motor, simulated free. 1. Describe your motor in a specification. 2. Your AI agent or our assistant fills it in. 3. MOTRES engineers simulate it: electromagnetic, thermal and mechanical FEM. 4. Results in your project. 5. Order your motor: we send you the price and lead time. Free; your engineering data help train our AI models, personal data never.](image:free_simulation_flow)
 
 ## How it works
 

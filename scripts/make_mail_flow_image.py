@@ -4,7 +4,7 @@
     python scripts/make_mail_flow_image.py
 
 Writes ``config/mail/images/free_simulation_flow.<lang>.png`` (1104 px wide = 2x the 552 px text column of the mail).
-A hero strip with renders of OUR PUBLIC motors (owner 2026-11-11 «возьми картинки наших моторов»), then the four steps; step 3
+A hero strip with renders of OUR PUBLIC motors (owner 2026-11-11 «возьми картинки наших моторов»), then the five steps; step 3
 shows the electromagnetic, thermal and displacement maps the landing page already publishes.  Sources, all public:
 
 * ``web/public/landing/core-l12.webp`` and the three ``web/public/landing/*-map/field`` pictures - CIANO14 40 L12, a public
@@ -45,6 +45,7 @@ TEXT = {
             ("Your AI agent or our assistant fills it in", "Through MCP, or with the specification assistant"),
             ("MOTRES engineers simulate it", "Electromagnetic, thermal and mechanical FEM"),
             ("Results in your project", "Shared with your team in the project"),
+            ("Order your motor", "We send you the price and lead time"),
         ],
         "maps": ("Field", "Heat", "Mechanics"),
         "note": "Free. Your engineering data help train our AI models; personal data never.",
@@ -57,6 +58,7 @@ TEXT = {
             ("人工智能代理或助手协助填写", "通过 MCP，或使用规格书助手"),
             ("MOTRES 工程师进行仿真", "电磁、热和机械有限元分析"),
             ("结果在您的项目中", "在项目中与您的团队共享"),
+            ("订购电机", "我们为您提供价格和交货期"),
         ],
         "maps": ("磁场", "温度", "机械"),
         "note": "免费。您的工程数据用于帮助训练我们的人工智能模型；绝不使用个人数据。",
@@ -113,7 +115,7 @@ def hero(lang: str, fonts: dict) -> Image.Image:
 
 
 def icon(draw: ImageDraw.ImageDraw, i: int, x: int, y: int, s: int) -> None:
-    """Flat icons in a rounded tile: 0 specification sheet, 1 chat bubble, 3 result bars (2 = the maps, drawn separately)."""
+    """Flat icons in a rounded tile: 0 specification sheet, 1 chat bubble, 3 result bars, 4 order box (2 = the maps, drawn separately)."""
     draw.rounded_rectangle((x, y, x + s, y + s), radius=s // 5, fill=PALE)
     if i == 0:
         draw.rounded_rectangle((x + s * .27, y + s * .18, x + s * .73, y + s * .82), radius=8, fill=(255, 255, 255), outline=NAVY, width=5)
@@ -131,6 +133,12 @@ def icon(draw: ImageDraw.ImageDraw, i: int, x: int, y: int, s: int) -> None:
             bx = x + s * (.20 + .16 * k)
             draw.rounded_rectangle((bx, y + s * (.80 - h), bx + s * .11, y + s * .80), radius=5, fill=RED if k == 3 else BLUE)
         draw.line((x + s * .16, y + s * .82, x + s * .84, y + s * .82), fill=NAVY, width=5)
+    elif i == 4:
+        # a shipping box with a red tick
+        draw.polygon([(x + s * .20, y + s * .38), (x + s * .50, y + s * .24), (x + s * .80, y + s * .38), (x + s * .50, y + s * .52)], fill=(219, 234, 254), outline=NAVY)
+        draw.polygon([(x + s * .20, y + s * .38), (x + s * .50, y + s * .52), (x + s * .50, y + s * .84), (x + s * .20, y + s * .70)], fill=BLUE, outline=NAVY)
+        draw.polygon([(x + s * .80, y + s * .38), (x + s * .50, y + s * .52), (x + s * .50, y + s * .84), (x + s * .80, y + s * .70)], fill=NAVY)
+        draw.line([(x + s * .58, y + s * .64), (x + s * .65, y + s * .72), (x + s * .76, y + s * .55)], fill=RED, width=8, joint="curve")
 
 
 def map_tile(path: Path, s: int) -> Image.Image:
@@ -175,7 +183,7 @@ def make(lang: str) -> Path:
     note_lines = wrap(probe, t["note"], f_note, W - 2 * PAD - 60, cjk)
     note_h = len(note_lines) * 46 + 44
     hero_img = hero(lang, fonts)
-    H = hero_img.height + 44 + sum(r[2] for r in rows) + 3 * 50 + 36 + note_h + PAD
+    H = hero_img.height + 44 + sum(r[2] for r in rows) + (len(rows) - 1) * 50 + 36 + note_h + PAD
 
     img = Image.new("RGBA", (W, H), (255, 255, 255, 255))
     img.alpha_composite(hero_img, (0, 0))
@@ -209,7 +217,7 @@ def make(lang: str) -> Path:
                 img.alpha_composite(map_tile(p, map_s), (mx, my))
                 d.text((mx + map_s // 2, my + map_s + 18), label, font=f_map, fill=GREY, anchor="mm")
         y += h
-        if i < 3:
+        if i < len(rows) - 1:
             ax = PAD + num_d // 2
             d.line((ax, y + 6, ax, y + 42), fill=(203, 213, 225), width=6)
             d.polygon([(ax - 14, y + 30), (ax + 14, y + 30), (ax, y + 46)], fill=BLUE)

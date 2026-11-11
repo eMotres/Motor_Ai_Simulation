@@ -106,7 +106,7 @@ def _save(die: str, cfg: str, run: Dict[str, Any], who: dict) -> Dict[str, Any]:
                                                                                cfg_doc.get("name") or cfg):
         raise HTTPException(409, detail="this run belongs to '%s / %s' - nothing saved" % (run["die"], run["config"]))
     sig = C.current_build_sig(die_doc, cfg_doc)
-    if run.get("build_sig") and run["build_sig"] != sig:
+    if run.get("build_sig") and run["build_sig"] not in C.current_build_sigs(die_doc, cfg_doc):
         raise HTTPException(409, detail=("the configuration changed after this run was solved (geometry, winding "
                                          "or materials) - run it again; nothing saved"))
     cfg_doc[C.BLOCK_KEY] = C.build_block(run, build_sig=sig)
@@ -194,7 +194,7 @@ def get_cogging(die: str, cfg: str, waveform: bool = False, authorization: str =
     _F._require_die_access(die, authorization, cfg)
     die_doc, cfg_doc, die, cfg = _docs(die, cfg)
     blk = C.block_of(cfg_doc)
-    v = (C.view(blk, current_sig=C.current_build_sig(die_doc, cfg_doc), cfg_doc=cfg_doc,
+    v = (C.view(blk, current_sig=C.current_build_sigs(die_doc, cfg_doc), cfg_doc=cfg_doc,
                 stored_by_duty=_stored(die, cfg)) if blk else None)
     out: Dict[str, Any] = {"die": die, "config": cfg, "cogging": v}
     if v is not None and waveform:

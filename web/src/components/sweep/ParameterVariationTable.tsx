@@ -595,7 +595,10 @@ const ParameterVariationTable: React.FC = () => {
                 )}
 
                 {/* Optimizable switch — may Sweep / Optimize vary this parameter. */}
-                {optAvailable && (() => {
+                {/* …never on a FLAG (owner 2026-11-11: "Outer notches" showed its checkbox AND this switch, which
+                    read as two controls for one thing): a flag is never a sweep variable, so the cell stays empty. */}
+                {optAvailable && param.type === 'bool' && <Box />}
+                {optAvailable && param.type !== 'bool' && (() => {
                   const on = param.optimizable !== false;
                   const last = isLastEnabled(parameterSchema, param.name, optAll);
                   const tip = !optCanEdit ? tx('optimizableReadOnly')

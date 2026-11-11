@@ -64,6 +64,13 @@ test('stale: the saved result or a stored run is from another build', () => {
   assert.deepEqual(pointsOf(c, true).map((p) => p.stale), [true, false, true]);
 });
 
+test('stale: every spelling of the current build counts (build_sig_aliases, owner 2026-11-11)', () => {
+  const c = { ...cfg([duty('a', { result: { build_sig: 'OLD' } }), duty('b', { result: { build_sig: 'OTHER' } })]),
+              build_sig_aliases: ['B1', 'OLD'] };
+  // 'OLD' names the same build spelled without the default materials; 'OTHER' is a different build
+  assert.deepEqual(c.duties.map((d) => isStale(d, c)), [false, true]);
+});
+
 test('drives: the primary excitation first, as the run chips show them', () => {
   assert.deepEqual(drivesOf(duty('x', { runs: [run('pwm_voltage'), run('current')] })), ['current', 'pwm_voltage']);
   assert.deepEqual(drivesOf(duty('x', { runs: [] })), []);

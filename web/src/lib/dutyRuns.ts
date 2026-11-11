@@ -200,8 +200,13 @@ const NEVER = new Set(['sim.runNonce', 'sim.lastTransient', 'sim.lastSummary',
  * The run SELECTOR passes true, because switching sine → PWM is precisely a
  * request to put that run's drive and carrier back on the panel.
  */
-export function applyStoredRun(run: StoredRun, opts?: { settings?: boolean }): void {
+export function applyStoredRun(run: StoredRun,
+                               opts?: { settings?: boolean; dutyKey?: string | null }): void {
   if (!run) return;
+  // Which catalog point the waveforms below belong to — read back on the next
+  // mount (TransientCharts), so a reload never trades them for another
+  // machine's run (see `storedRunOnScreen`).
+  if (run.payload) markLastTransientOf(opts?.dutyKey ?? null);
   // 1) the panel settings the run was solved with (drive, steps, carrier, …)
   if (opts?.settings !== false) {
     try {
@@ -246,6 +251,79 @@ export async function showStoredRun(duty: { die: string; config: string; duty: s
   const k = dutyKey(duty.die, duty.config, duty.duty);
   const run = await getDutyRun(k, duty.die, duty.config, duty.duty, drive);
   if (!run?.payload) throw new Error('its waveforms are gone from disk — re-run and save');
-  applyStoredRun(run);
+  applyStoredRun(run, { dutyKey: k });
   setPickedRun(k, drive);
+}
+
+// ── which catalog point the cached waveforms belong to ──────────────────────
+//
+// Owner 2026-11-11, phone: a catalog motor (CIANO14 40 new / L12 / rated) was
+// loaded, and the Electromagnetic tab showed "STALE — DIFFERENT MACHINE · Run
+// Simulation" over a 175 N·m GENERATOR — the workspace's last solve of another
+// machine.  The page had reloaded (a phone discards background tabs), the
+// mount restore asked the server for "its last transient", and adopted it as
+// NEWER than the stored run the catalog load had put on screen.  A catalog
+// motor is already computed (owner 2026-10-31): its stored run is the answer,
+// and the workspace's last solve of something else never replaces it.
+//
+// `family.*`, not `sim.*`: the duty snapshot and the die memory capture every
+// `sim.*` key, and this one must never travel with a saved duty.
+const LAST_OF_KEY = 'family.lastTransientOf';
+
+/** The waveforms in `sim.lastTransient` are the stored run of duty `key`
+ *  (null = they are not a stored run: a fresh solve, a history row). */
+export function markLastTransientOf(key: string | null): void {
+  try {
+    if (key) localStorage.setItem(LAST_OF_KEY, key);
+    else localStorage.removeItem(LAST_OF_KEY);
+  } catch { /* quota — the next mount then re-fetches the stored run */ }
+}
+
+export function lastTransientOf(): string | null {
+  try { return localStorage.getItem(LAST_OF_KEY); } catch { return null; }
+}
+
+/** Which stored run to show for duty `key`: the one picked last, else the
+ *  primary one the list remembers, else the sine run every duty has. */
+export function storedRunDrive(key: string | null): string {
+  const pick = pickedRun(key);
+  if (pick) return pick;
+  const meta = dutyRuns(key);
+  return String(meta.find(r => r.primary)?.drive ?? meta[0]?.drive ?? 'current');
+}
+
+/**
+ * Put the ACTIVE catalog point's stored run back on screen — the restore a
+ * mount makes when what it holds is not provably that machine's.  Resolves
+ * to the run when one with waveforms was shown, null when there is none (no
+ * catalog point loaded, nothing stored, offline): the caller then shows
+ * nothing rather than another machine's numbers.  Nothing is solved.
+ */
+export async function restoreActiveStoredRun(
+  duty: { die: string; config: string; duty: string } | null,
+): Promise<StoredRun | null> {
+  if (!duty) return null;
+  const k = dutyKey(duty.die, duty.config, duty.duty);
+  try {
+    const run = await getDutyRun(k, duty.die, duty.config, duty.duty, storedRunDrive(k));
+    if (!run?.payload) return null;
+    applyStoredRun(run, { settings: false, dutyKey: k });
+    return run;
+  } catch { return null; }
+}
+
+/** Another machine is on the panel and it has no stored waveforms: the
+ *  previous machine's run must not survive in the restore cache (a reload
+ *  would put it back on screen under the new motor's name).  The charts drop
+ *  it on `sim-transient-cleared`; nothing is solved. */
+export function clearLastTransient(): void {
+  try { localStorage.removeItem('sim.lastTransient'); } catch { /* nothing to clear */ }
+  markLastTransientOf(null);
+  try { window.dispatchEvent(new CustomEvent('sim-transient-cleared')); } catch { /* SSR */ }
+}
+
+/** Is what `sim.lastTransient` holds the stored run of the active catalog point? */
+export function storedRunOnScreen(duty: { die: string; config: string; duty: string } | null): boolean {
+  if (!duty) return false;
+  return lastTransientOf() === dutyKey(duty.die, duty.config, duty.duty);
 }

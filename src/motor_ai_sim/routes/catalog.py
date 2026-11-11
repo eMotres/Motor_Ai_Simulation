@@ -495,7 +495,7 @@ def _cogging_of_card(card: Optional[dict]) -> Optional[dict]:
         c = _fam._load_yaml(_fam._cfg_file(str(die), str(cfg)), "configuration")
         if _cg.block_of(c) is None:
             return None
-        sig = _fam._build_sig(_fam._die_doc_for_sig(str(die)), c)
+        sig = _fam._build_sigs(_fam._die_doc_for_sig(str(die)), c)
         return _cg.view(_cg.block_of(c), current_sig=sig, cfg_doc=c, stored_by_duty=_dr.get(str(die), str(cfg)))
     except Exception:                                           # noqa: BLE001
         return None

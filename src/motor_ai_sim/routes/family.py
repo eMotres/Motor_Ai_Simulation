@@ -1162,7 +1162,7 @@ def config_default_duty(c: dict) -> Optional[str]:
     return low[0] if low else names[0]
 
 
-def _cogging_view(die_doc: dict, cfg_doc: dict, stored_by_duty: Optional[dict], build_sig: str) -> Optional[dict]:
+def _cogging_view(die_doc: dict, cfg_doc: dict, stored_by_duty: Optional[dict], build_sig: Any) -> Optional[dict]:
     """The saved cogging torque of a configuration as a screen shows it (None = nothing saved; never raises)."""
     try:
         from motor_ai_sim import cogging as _cg
@@ -1178,14 +1178,78 @@ def _build_sig(die_doc: dict, cfg_doc: dict) -> str:
     """Fingerprint of the BUILD a result was computed on: the die's stamped
     geometry + the configuration's free-key overrides + winding + materials.
     Duty RESULTS carry the sig they were recorded under; a mismatch against
-    the configuration's current sig marks them 'computed on an older build'."""
+    the configuration's current sig marks them 'computed on an older build'.
+
+    This is the STAMP a new result is written with.  To JUDGE a stored stamp,
+    use :func:`_build_sigs` / :func:`build_sig_moved`: one build has more than
+    one spelling (see there)."""
+    return _build_sig_of(die_doc, cfg_doc, cfg_doc.get("materials") or {})
+
+
+def _materials_without_defaults(mats: dict) -> dict:
+    """``mats`` minus the parts that only name the project default
+    (``_ABSENT_MATERIALS``) — the spelling of a configuration that never named
+    them, because a load fills exactly those values in."""
+    return {k: v for k, v in (mats or {}).items()
+            if not (k in _ABSENT_MATERIALS and v == _ABSENT_MATERIALS[k])}
+
+
+def _materials_with_defaults(mats: dict) -> dict:
+    """``mats`` with every unnamed default part filled in (the reverse spelling)."""
+    out = dict(mats or {})
+    for k, v in _ABSENT_MATERIALS.items():
+        if not out.get(k):
+            out[k] = v
+    return out
+
+
+def _build_sigs(die_doc: dict, cfg_doc: dict) -> tuple:
+    """Every signature that names the configuration's CURRENT build — the
+    stamp :func:`_build_sig` writes first, then the same build spelled with
+    the default liner / enamel / conductor left unnamed, then spelled with
+    them named.
+
+    ABSENT IS NOT CHANGED (owner 2026-11-11, phone: a catalog motor opened on
+    "⚠ rated / ⚠ peak" and "Run Simulation").  On 2026-10-30/31 the catalog
+    files that never named the slot liner, the enamel or the conductor got
+    them written in — the very values a load had always filled for them
+    (``_ABSENT_MATERIALS``: Nomex, polyimide, copper).  The machine every
+    stored duty was solved on did not change; only its description did, and
+    hashing the description flagged every one of those results "computed on an
+    older build".  The duty-save path already carried such stamps forward
+    (``_restamp_results``); the files edited elsewhere were not, so the
+    judgement accepts both spellings instead.  A material that CONTRADICTS
+    the default (Al2O3 where the default is Nomex) is a different build and
+    still moves the signature."""
+    mats = cfg_doc.get("materials") or {}
+    out = [_build_sig(die_doc, cfg_doc)]          # the stamp itself, first
+    for alt in (_materials_without_defaults(mats), _materials_with_defaults(mats)):
+        s = _build_sig_of(die_doc, cfg_doc, alt)
+        if s not in out:
+            out.append(s)
+    return tuple(out)
+
+
+def build_sig_moved(stamp: Any, sigs: Any) -> bool:
+    """True when a stored ``build_sig`` stamp names a build other than the
+    current one.  ``sigs`` is :func:`_build_sigs`' tuple (a bare string is
+    accepted too).  Unknown on either side is NOT moved — the rule every
+    caller already had (``stamp and sig and stamp != sig``)."""
+    if isinstance(sigs, str):
+        sigs = (sigs,)
+    sigs = tuple(s for s in (sigs or ()) if s)
+    return bool(stamp and sigs and str(stamp) not in sigs)
+
+
+def _build_sig_of(die_doc: dict, cfg_doc: dict, materials: dict) -> str:
+    """The hash behind :func:`_build_sig`, over an explicit materials map."""
     import hashlib
     import json as _json
     src = {
         "geo": die_doc.get("geometry") or {},
         "ov": cfg_doc.get("geometry_overrides") or {},
         "winding": cfg_doc.get("winding") or {},
-        "materials": cfg_doc.get("materials") or {},
+        "materials": materials or {},
         # Per-part accounting states (included / reference / excluded).  A
         # frameless build that stops billing its shaft — or solves it as air —
         # is not the build its earlier duties were computed on: `excluded`
@@ -1593,7 +1657,7 @@ def _store_run(die: str, cfg: str, cfg_doc: dict, entry: dict, drive: str, *,
     return rec
 
 
-def _run_rows(build_sig: str, entry: dict) -> list[dict]:
+def _run_rows(build_sig: Any, entry: dict) -> list[dict]:
     """What the TREE says about a duty's stored runs — never a payload."""
     prim = _primary_drive(entry)
     rows: list[dict] = []
@@ -1612,8 +1676,7 @@ def _run_rows(build_sig: str, entry: dict) -> list[dict]:
             "assignment_sig": r.get("assignment_sig"),
             # Solved on a build the configuration has since moved off — the
             # chip goes amber, same rule as the duty row's own result.
-            "stale": bool(r.get("build_sig") and build_sig
-                          and r.get("build_sig") != build_sig),
+            "stale": build_sig_moved(r.get("build_sig"), build_sig),
             "ripple_pct": res.get("ripple_pct", summ.get("T_ripple_pct")),
             "f_switch_hz": st.get("sim.fSwitch"),
             "steps": st.get("sim.stepsPP"),
@@ -2418,7 +2481,8 @@ def tree_for_access(response: Response, _acc: dict, *, with_mass: bool = True,
             _dr_cfg = _dr_die.get(cf.stem) or {}
             ov = c.get("geometry_overrides") or {}
             w = c.get("winding") or {}
-            _bsig = _build_sig(die, c)
+            _bsigs = _build_sigs(die, c)
+            _bsig = _bsigs[0]
             _role, _role_src = _config_role(c)
             _apps, _apps_err = config_applications(c)
             cfgs.append({
@@ -2458,6 +2522,10 @@ def tree_for_access(response: Response, _acc: dict, *, with_mass: bool = True,
                 # customer supplies, so the catalog row can say so.
                 "parts": c.get("parts") or {},
                 "build_sig": _bsig,
+                # Every stamp that names this same build (`_build_sigs`): a
+                # stored result is "older build" only when its stamp is none
+                # of these (web lib/simPoints.isStale, catalogCardStaleness).
+                "build_sig_aliases": list(_bsigs),
                 # The mode the Motors row shows and loads (owner 2026-10-13);
                 # `default_duty_stored` is what the yaml says, kept visible
                 # when it names a duty that no longer exists.
@@ -2480,7 +2548,7 @@ def tree_for_access(response: Response, _acc: dict, *, with_mass: bool = True,
                 "controller": c.get("controller"),
                 # The no-load cogging torque of the configuration (owner 2026-10-26): pk-pk, half-amplitude, share of
                 # the continuous torque, `stale` when the build moved.  Absent when none is saved.
-                **({"cogging": _cg} if (_cg := _cogging_view(die, c, _dr_cfg, _bsig)) else {}),
+                **({"cogging": _cg} if (_cg := _cogging_view(die, c, _dr_cfg, _bsigs)) else {}),
                 "duties": [
                     {"name": d.get("name"), "mode": d.get("mode", "motor"),
                      # "test" = a bench-test / validation point: the public Motors row, its mode list and the
@@ -2505,7 +2573,7 @@ def tree_for_access(response: Response, _acc: dict, *, with_mass: bool = True,
                      # on every catalog render).  Empty list = a duty that has
                      # only ever been saved the way duties always were.
                      "primary_drive": _primary_drive(d),
-                     "runs": _run_rows(_bsig, d),
+                     "runs": _run_rows(_bsigs, d),
                      # HOW LONG MAY IT RUN (2026-09-17).  Absent — never null —
                      # on a duty with no coupled record, on a record older than
                      # the feature, and on a point inside every limit it has.
@@ -3906,7 +3974,8 @@ def get_duty_runs(die: str, cfg: str, duty: str,
                   if x.get("name") == duty), None)
     if entry is None:
         raise HTTPException(404, detail=f"duty '{duty}' not found in {die}/{cfg}")
-    bsig = _build_sig(d, c)
+    bsigs = _build_sigs(d, c)
+    bsig = bsigs[0]
     prim = _primary_drive(entry)
     out = []
     for drive in _RUN_DRIVES:
@@ -3926,7 +3995,7 @@ def get_duty_runs(die: str, cfg: str, duty: str,
             "recorded_at": r.get("recorded_at"),
             "build_sig": r.get("build_sig"),
             "assignment_sig": r.get("assignment_sig"),
-            "stale": bool(r.get("build_sig") and r.get("build_sig") != bsig),
+            "stale": build_sig_moved(r.get("build_sig"), bsigs),
             "settings": r.get("settings") or {},
             "summary": _summary_with_full_mass(r.get("summary"), die, cfg), "result": r.get("result"),
             "payload": payload,
@@ -3957,12 +4026,11 @@ def get_duty_run(die: str, cfg: str, duty: str, drive: str,
             "it, run the point on that source and save"))
     rel = r.get("payload_file")
     payload = _read_run_payload(die, str(rel)) if rel else None
-    bsig = _build_sig(d, c)
     return {
         "die": die, "config": cfg, "duty": duty, "drive": drive,
         "recorded_at": r.get("recorded_at"),
         "build_sig": r.get("build_sig"), "assignment_sig": r.get("assignment_sig"),
-        "stale": bool(r.get("build_sig") and r.get("build_sig") != bsig),
+        "stale": build_sig_moved(r.get("build_sig"), _build_sigs(d, c)),
         "settings": r.get("settings") or {},
         "summary": _summary_with_full_mass(r.get("summary"), die, cfg), "result": r.get("result"),
         # None = the description outlived its sidecar (deleted by hand): the

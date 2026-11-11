@@ -15,7 +15,7 @@ import React, { useCallback, useEffect, useState } from 'react';
 import {
   Box, Typography, Button, Checkbox, IconButton, Tooltip, Alert,
   CircularProgress, TextField, Popover, FormControlLabel,
-  Dialog, DialogTitle, DialogContent, DialogActions,
+  Dialog, DialogTitle, DialogContent, DialogActions, useMediaQuery,
 } from '@mui/material';
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
 import RefreshIcon       from '@mui/icons-material/Refresh';
@@ -401,6 +401,8 @@ const TD = {
 } as const;
 
 const ComparePanel: React.FC = () => {
+  /** a phone (lib/narrowLayout NARROW): saved points as cards, not a wide table */
+  const phone = useMediaQuery('(max-width:767.95px)');
   const [sims,    setSims]    = useState<SavedSim[]>([]);
   // Ticked rows persist across reloads and tab switches — the user picks what
   // they are comparing, and it stays picked until they change it.
@@ -895,12 +897,14 @@ const ComparePanel: React.FC = () => {
               your own library, anonymous → the shared local one.  Without saying so,
               a sign-in/sign-out silently swaps the whole list and reads as data loss. */}
           <Tooltip placement="top" title={user
-            ? 'Points are saved to YOUR library. Sign out and this list is replaced by the local one.'
+            ? `Points are saved to YOUR library (${user.email ?? String(user.uid).slice(0, 8)}). Sign out and this list is replaced by the local one.`
             : 'Not signed in — points go to the shared LOCAL library on this machine. Sign in and you will see your own library instead.'}>
             <Typography sx={{ fontSize: 10.5, px: 0.75, py: 0.15, borderRadius: 0.5, cursor: 'help',
               border: '1px solid var(--line)', whiteSpace: 'nowrap',
               color: user ? '#4ade80' : '#fbbf24' }}>
-              {user ? `library: ${user.email ?? String(user.uid).slice(0, 8)}` : 'library: local (not signed in)'}
+              {/* on a phone the account e-mail does not fit beside the title; it stays in the tooltip */}
+              {user ? (phone ? 'my library' : `library: ${user.email ?? String(user.uid).slice(0, 8)}`)
+                : (phone ? 'local library' : 'library: local (not signed in)')}
             </Typography>
           </Tooltip>
           <Box sx={{ flex: 1 }} />
@@ -985,7 +989,63 @@ const ComparePanel: React.FC = () => {
               <HelpTip title="In the Simulation tab, run a solve and press + Add to Compare on the summary card to snapshot the design here. The Mechanical and Thermal tabs have the same button beside their results, and their rows land in this same table — so one line can carry torque, efficiency, the sleeve safety factor and every part's peak temperature." />
             </Box>
           )}
-          {sims.length > 0 && (
+          {/* PHONE (owner 2026-11-11, screenshot at ~390 px): the table's long name column took the whole width and
+              every number sat past the right edge ("TORQU…").  One card per saved point instead: tick, ▶ apply,
+              the name on as many lines as it needs, the first result columns as label / value pairs, delete. */}
+          {sims.length > 0 && phone && (
+            <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }} data-testid="compare-cards">
+              {sims.map(s => (
+                <Box key={s.id} sx={{ border: '1px solid var(--line-soft)', borderRadius: 1, p: 1,
+                  bgcolor: sel.has(s.id) ? 'var(--panel)' : 'transparent' }}>
+                  <Box sx={{ display: 'flex', alignItems: 'flex-start', gap: 0.5 }}>
+                    <Checkbox size="small" checked={sel.has(s.id)} onChange={() => toggle(s.id)}
+                      inputProps={{ 'aria-label': `Compare ${s.name}` }}
+                      sx={{ p: 0.25, color: 'var(--text-4)', '&.Mui-checked': { color: '#3b82f6' } }} />
+                    <Tooltip title="Apply this geometry + operating point, then recompute in Simulation">
+                      <IconButton size="small" onClick={() => applyPoint(s)} sx={{ color: '#2563eb', p: 0.25 }}>
+                        <PlayArrowIcon sx={{ fontSize: 18 }} />
+                      </IconButton>
+                    </Tooltip>
+                    <Typography sx={{ flex: 1, minWidth: 0, fontSize: 12.5, fontWeight: 600, color: 'var(--text-0)',
+                      overflowWrap: 'anywhere', pt: 0.25 }} onDoubleClick={() => startRename(s)}>
+                      {s.name}
+                    </Typography>
+                    <IconButton size="small" onClick={() => startRename(s)} aria-label="Rename"
+                      sx={{ color: 'var(--text-3)', p: 0.25 }}><EditIcon sx={{ fontSize: 15 }} /></IconButton>
+                    <IconButton size="small" onClick={() => del(s.id)} aria-label="Delete"
+                      sx={{ color: 'var(--text-3)', p: 0.25 }}><DeleteOutlineIcon sx={{ fontSize: 16 }} /></IconButton>
+                  </Box>
+                  {editId === s.id && (
+                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.25, mt: 0.5 }}>
+                      <TextField value={editName} onChange={e => setEditName(e.target.value)} size="small" autoFocus fullWidth
+                        onKeyDown={e => { if (e.key === 'Enter') commitRename(); if (e.key === 'Escape') setEditId(null); }}
+                        inputProps={{ style: { fontSize: 12, padding: '4px 6px' } }} />
+                      <IconButton size="small" onClick={commitRename} sx={{ color: '#4ade80', p: 0.25 }}><CheckIcon sx={{ fontSize: 15 }} /></IconButton>
+                      <IconButton size="small" onClick={() => setEditId(null)} sx={{ color: 'var(--text-3)', p: 0.25 }}><CloseIcon sx={{ fontSize: 15 }} /></IconButton>
+                    </Box>
+                  )}
+                  <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', columnGap: 1.5, rowGap: 0.25, mt: 0.75, pl: 0.5 }}>
+                    {resultCols.slice(0, 6).map(r => {
+                      const txt = r.text ? resultText(r, s) : null;
+                      const raw = r.text ? NaN : resultVal(r, s);
+                      return (
+                        <Box key={colId(r)} sx={{ display: 'flex', alignItems: 'baseline', gap: 0.5, minWidth: 0 }}>
+                          <Typography sx={{ fontSize: 10, fontWeight: 700, color: HDR_RESULT, textTransform: 'uppercase',
+                            whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', minWidth: 0 }}>{r.label}</Typography>
+                          <Typography sx={{ fontSize: 12, fontFamily: 'monospace', color: 'var(--text-0)', whiteSpace: 'nowrap', ml: 'auto' }}>
+                            {txt ?? (Number.isFinite(raw) ? fmtNum(raw, r.d ?? 2, r.scale ?? 1) : '—')}
+                            {r.unit && txt == null && Number.isFinite(raw) ? <Box component="span" sx={{ color: 'var(--text-3)', fontSize: 10 }}>{unitGap(r.unit)}{r.unit}</Box> : null}
+                          </Typography>
+                        </Box>
+                      );
+                    })}
+                  </Box>
+                  <Typography sx={{ fontSize: 10, color: 'var(--text-4)', mt: 0.5, pl: 0.5 }}>{s.created}</Typography>
+                </Box>
+              ))}
+            </Box>
+          )}
+          {sims.length > 0 && !phone && (
             <Box component="table" sx={{ borderCollapse: 'collapse', width: '100%' }}>
               <Box component="thead"><Box component="tr">
                 <Box component="th" sx={{ ...TH, textAlign: 'center', left: 0, zIndex: 3, position: 'sticky' }}>✓</Box>

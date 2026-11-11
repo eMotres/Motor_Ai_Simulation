@@ -152,7 +152,7 @@ interface Battery {
   v_min: number; v_max: number; v_nom?: number | null;
 }
 interface Cfg {
-  name: string; role: string; locked?: boolean; build_sig?: string;
+  name: string; role: string; locked?: boolean; build_sig?: string; build_sig_aliases?: string[];
   /** 'duties' when the role was read off the saved duties, 'stored' when there
    *  are none yet and the creation-time toggle is all there is. */
   role_source?: string;
@@ -820,7 +820,7 @@ const FamilyCatalog: React.FC<{
     if (!canWrite) return '';
     const c = die.configs.find((x) => x.name === config);
     if (!c) return '';
-    const line = cardStatusTip(txCommon, { date: c.card_date, staleDuties: staleCatalogDutyNames(c.build_sig, c.duties) });
+    const line = cardStatusTip(txCommon, { date: c.card_date, staleDuties: staleCatalogDutyNames(c.build_sig_aliases ?? c.build_sig, c.duties) });
     return line ? ` ${line}` : '';
   };
 

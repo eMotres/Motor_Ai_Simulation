@@ -265,6 +265,19 @@ def test_a_prop_not_in_the_catalogue_is_looked_up_on_the_web_and_filled_with_its
     assert support.web_search_budget(CUST) == 0                                        # the daily cap
 
 
+def test_a_refused_web_tool_still_gets_an_answer():
+    """Web search switched off for the organisation: the API answers 400 to the tool; the chat answers without it."""
+    class Refusing(FakeClient):
+        def _create(self, **kw):
+            if "tools" in kw:
+                self.calls.append(kw)
+                raise type("BadRequest", (Exception,), {"status_code": 400})("web search is not enabled")
+            return super()._create(**kw)
+    client = Refusing(["Answer without the web."])
+    out = support.anthropic_answer(client, "claude-haiku-5-5", "sys", [{"role": "user", "content": "q"}], web_search=3)
+    assert out["text"] == "Answer without the web." and out["searches"] == [] and len(client.calls) == 2
+
+
 def test_the_dynamic_web_tool_is_used_on_models_that_have_it():
     assert support.web_search_tool("claude-sonnet-5-5", 2)["type"] == "web_search_20260209"
     assert support.web_search_tool("claude-haiku-5-5", 2)["type"] == "web_search_20250305"

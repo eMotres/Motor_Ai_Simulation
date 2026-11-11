@@ -700,7 +700,15 @@ def anthropic_answer(client, model: str, system: str, messages: list[dict], *, m
     Every text block is joined (a searched answer comes in several, with citations); the searches (queries) and the result URLs are
     returned for the archive.  A paused turn (the server-side loop's own limit) is resumed once."""
     kw = {"tools": [web_search_tool(model, web_search)]} if web_search > 0 else {}
-    resp = _call_provider(lambda: client.messages.create(model=model, max_tokens=max_tokens, system=system, messages=messages, **kw))
+    try:
+        resp = _call_provider(lambda: client.messages.create(model=model, max_tokens=max_tokens, system=system, messages=messages, **kw))
+    except Exception as e:                                   # noqa: BLE001
+        # web search switched off for the organisation (or the model): answer without it rather than not at all
+        if not kw or getattr(e, "status_code", None) not in (400, 403):
+            raise
+        logger.warning("support: the web_search tool was refused (%s) - answering without it", str(e)[:160])
+        kw, web_search = {}, 0
+        resp = _call_provider(lambda: client.messages.create(model=model, max_tokens=max_tokens, system=system, messages=messages))
     blocks = list(_block_get(resp, "content", []) or [])
     if web_search > 0 and _block_get(resp, "stop_reason") == "pause_turn":
         again = messages + [{"role": "assistant", "content": blocks}]

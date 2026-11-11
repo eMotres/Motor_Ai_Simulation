@@ -350,3 +350,14 @@ def test_dismiss_by_the_owner_closes_the_proposal(env):
     assert c.post(f"/api/projects/alpha/spec/proposals/{p['id']}/dismiss", headers=H).status_code == 409
     assert c.post("/api/projects/alpha/spec/proposals/p-none/dismiss", headers=H).status_code == 404
     assert _wrapper()["revision"] == 3
+
+
+def test_the_prompt_says_what_happens_after_the_specification():
+    """Launch 2026-11: users submit the specification and MOTRES engineers simulate it free of charge; the assistant says
+    so, never starts a simulation, and points data-use questions to the Platform Agreement instead of explaining modes."""
+    low = SPEC_PROMPT.lower()
+    assert "submit specification" in low and "motres engineers then run the simulation" in low
+    assert "free of charge" in low and "motors & results" in low
+    assert "does not start a simulation itself" in low and "you cannot start one" in low
+    assert "https://aerostator.com/mcp" in SPEC_PROMPT and "/platform-agreement" in SPEC_PROMPT
+    assert "PRIVATE" not in SPEC_PROMPT and "paid" not in low

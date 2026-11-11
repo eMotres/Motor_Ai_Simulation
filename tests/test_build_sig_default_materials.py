@@ -68,3 +68,20 @@ def test_run_rows_and_cogging_view_use_every_spelling():
     assert cogging.view(blk, current_sig=fam._build_sigs(DIE, NAMED))["stale"] is False
     assert cogging.view(blk, current_sig=fam._build_sig(DIE, NAMED))["stale"] is True
     assert cogging.is_stale({"pkpk_Nm": 1}, fam._build_sigs(DIE, NAMED)) is True    # no stamp = unknown = stale
+
+
+def test_stored_build_stale_judges_the_duty_stamp_with_every_spelling():
+    """The Thermal / Mechanical tabs' verdict on a point's stored map (owner 2026-11-11): the duty's own stamp, judged
+    like the Motors row judges it - so a tab never says "older build" for a point its row calls current."""
+    before = fam._build_sig(DIE, OLD)
+    cfg = {**NAMED, "duties": [{"name": "rated", "result": {"build_sig": before}},
+                               {"name": "peak", "result": {"build_sig": "000000000000"}},
+                               {"name": "nostamp", "result": {}},
+                               {"name": "runonly", "runs": {"current": {"build_sig": before}}}]}
+    assert fam.stored_build_stale(DIE, cfg, "rated") is False          # stamped before the defaults were written
+    assert fam.stored_build_stale(DIE, cfg, "peak") is True            # another build
+    assert fam.stored_build_stale(DIE, cfg, "nostamp") is None         # unknown, never a false alarm
+    assert fam.stored_build_stale(DIE, cfg, "runonly") is False        # the primary run's stamp stands in
+    assert fam.stored_build_stale(DIE, cfg, "missing") is None
+    shaft = {**cfg, "materials": {**cfg["materials"], "shaft": "steel_1045"}}
+    assert fam.stored_build_stale(DIE, shaft, "rated") is True         # a material the result was not solved with

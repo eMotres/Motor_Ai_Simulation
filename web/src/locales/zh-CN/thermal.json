@@ -92,5 +92,8 @@
   "coolingMismatch": "求解时为 {solved}，当前字段为 {now} - 请重新求解",
   "coolingMismatchTip": "该结果所用的外部冷却方式或外壳形式与当前字段不同。请点击“求解”，用此处显示的冷却重新计算。",
   "coolingDetailNda": "详细的冷却路径需签署保密协议（NDA）后查看",
-  "coolingNetworkNda": "详细的冷却网络需签署保密协议（NDA）后查看"
+  "coolingNetworkNda": "详细的冷却网络需签署保密协议（NDA）后查看",
+  "storedTempsTitle": "该工况点的已存结果",
+  "storedTempsTip": "该目录工况点已计算完毕：以下是其已存{kind}收敛时的温度（{when}）。此处未进行任何求解。点击“求解”可按此处显示的冷却得到完整温度分布、部件表和热平衡。",
+  "solveNeedsEmRun": "重新求解需要本电机的一次电磁计算"
 }

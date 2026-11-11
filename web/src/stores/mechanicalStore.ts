@@ -666,9 +666,14 @@ export const useMechanicalStore = create<MechanicalState>()((set, get) => ({
     const cur = get().stored;
     // keep a ready map of the SAME point on screen while it is re-read; anything else shows the lookup
     if (!(cur.key === key && cur.status === 'ready')) set({ stored: { key, status: 'loading' } });
-    const next = await loadStoredPoint(key, 'rotor_stress', async () => {
-      const last = await fetchLastMechanicalLight();
-      return last?.live_geometry_fingerprint ?? null;
+    // the build stamp decides first (the Motors row's rule), then "edited since the load"; the fingerprint is the
+    // fallback for a point with no stamp (lib/resultOwner.storedPointVerdict)
+    const next = await loadStoredPoint(key, 'rotor_stress', {
+      liveFingerprint: async () => {
+        const last = await fetchLastMechanicalLight();
+        return last?.live_geometry_fingerprint ?? null;
+      },
+      liveGeoSig,
     });
     // a newer lookup started, or the point moved while this was being read: this answer is not for what is loaded now
     if (seq !== storedSeq || loadedPointKey() !== key) return;

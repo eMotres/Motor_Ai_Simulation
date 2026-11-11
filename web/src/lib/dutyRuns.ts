@@ -235,7 +235,9 @@ export function applyStoredRun(run: StoredRun,
         { detail: { payload: run.payload } }));
     }
     if (summary) {
-      window.dispatchEvent(new CustomEvent('sim-apply-summary', { detail: { summary } }));
+      // a stored run's summary rides WITH its own waveforms: the charts under it are its run (lib/appliedSummary)
+      window.dispatchEvent(new CustomEvent('sim-apply-summary',
+        { detail: { summary, source: run.payload ? 'stored-run' : 'stored-summary' } }));
     }
   } catch { /* SSR/no-window */ }
 }

@@ -446,7 +446,7 @@ export async function applyDutyLocal(die: string, cfg: string, duty: string,
   if (changed) clearLastTransient();
   if (dd.summary && typeof dd.summary === 'object') {
     window.dispatchEvent(new CustomEvent('sim-apply-summary',
-      { detail: { summary: dd.summary } }));
+      { detail: { summary: dd.summary, source: 'stored-summary' } }));
     return { machineChanged: changed,
              message: `saved run state restored; Run to recompute${alsoTxt}` };
   }
@@ -486,7 +486,7 @@ export async function applyDutyLocal(die: string, cfg: string, duty: string,
       power_per_mass_W_kg: mass > 0 ? Pmech / mass : 0,
       loss_density_W_kg: mass > 0 ? ploss / mass : 0,
     };
-    window.dispatchEvent(new CustomEvent('sim-apply-summary', { detail: { summary } }));
+    window.dispatchEvent(new CustomEvent('sim-apply-summary', { detail: { summary, source: 'stored-summary' } }));
     return { machineChanged: changed,
              message: 'saved results are on the dashboard; Run to recompute' };
   }

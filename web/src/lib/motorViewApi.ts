@@ -26,3 +26,10 @@ export const fetchMotorView = (die: string, config: string) =>
 
 export const fetchMotorField = (die: string, config: string, duty: string, kind: FieldKind) =>
   get<StoredField>(`/api/motor-view/${enc(die)}/${enc(config)}/${enc(duty)}/field/${kind}`);
+
+/** The configuration's own merged geometry (die + its overrides, the dict a ▶ load puts on the panel) - what a stored
+ *  point result was solved on when its build stamp is current.  A read: the payload route writes nothing. */
+export async function fetchConfigGeometry(die: string, config: string): Promise<Record<string, unknown> | null> {
+  const p = await get<{ geometry?: Record<string, unknown> } | null>(`/api/family/payload/${enc(die)}/${enc(config)}`);
+  return p && p.geometry && typeof p.geometry === 'object' ? p.geometry : null;
+}

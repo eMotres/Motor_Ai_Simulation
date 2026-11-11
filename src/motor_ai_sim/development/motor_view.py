@@ -1219,6 +1219,17 @@ def field_kind(name: Any) -> Optional[str]:
     return _KIND_ALIASES.get(str(name or "").strip().lower())
 
 
+def with_build_verdict(payload: Dict[str, Any], die: str, cfg_doc: Dict[str, Any], duty: str) -> Dict[str, Any]:
+    """``payload`` plus ``build_stale``: is the point's stored result of the configuration's CURRENT build?
+
+    The build-stamp rule the Motors row's chip uses (``family.stored_build_stale``, every spelling of the build - #640),
+    so the Thermal and Mechanical tabs never call "older build" a stored map that the row calls current (owner
+    2026-11-11).  ``None`` = unknown; the tab then falls back to the geometry fingerprint."""
+    from motor_ai_sim.routes import family
+    payload["build_stale"] = family.stored_build_stale(family._die_doc_for_sig(die), cfg_doc, duty)
+    return payload
+
+
 def field_payload(die: str, config: str, duty: str, kind: str) -> Optional[Dict[str, Any]]:
     """The stored field of one duty, shaped like the payload its tab's adapter draws - or ``None`` (not computed).
 

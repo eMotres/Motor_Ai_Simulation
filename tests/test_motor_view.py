@@ -854,3 +854,27 @@ def test_j_the_view_serves_the_cruise_record_as_a_steady_state():
     rows = [{"duty": "cruise", "operating_point": {"rpm": 850, "current_arms": 181.5}}]
     d = motor_view.build_view(DIE, CFG, rows, {"cruise": {"coupled_limit": _within_limits_run()}}, {}, set())["duties"][0]
     assert d["thermal"]["duty_temps"]["winding_c"] == 137.3 and d["thermal"]["limit_search"]["reached_limit"] is False
+
+
+def test_d_stored_maps_and_the_view_carry_the_build_verdict(client, sandbox):
+    """The tabs judge a stored map by the point's build stamp (owner 2026-11-11), from the field routes and the view."""
+    import yaml
+    from motor_ai_sim.routes import family
+    cat = sandbox / "catalog"
+    # no stamp in the fixture: unknown on every route
+    assert client.get(f"/api/motor-view/{DIE}/{CFG}/{DUTY}/field/thermal").json()["build_stale"] is None
+    view = client.get(f"/api/motor-view/{DIE}/{CFG}", headers={"x-user": "customer"}).json()
+    assert {d["duty"]: d["build_stale"] for d in view["duties"]} == {DUTY: None, DUTY2: None}
+    # stamped on the configuration's current build: current
+    doc = yaml.safe_load((cat / f"{CFG}.yaml").read_text(encoding="utf-8"))
+    doc["duties"][0]["result"] = {"build_sig": family._build_sig({}, doc)}
+    (cat / f"{CFG}.yaml").write_text(yaml.safe_dump(doc), encoding="utf-8")
+    assert client.get(f"/api/motor-view/{DIE}/{CFG}/{DUTY}/field/thermal").json()["build_stale"] is False
+    assert pget(client, "customer", "field", die=DIE, config=CFG, duty=DUTY,
+                kind="thermal").json()["build_stale"] is False
+    # stamped on another build: older
+    doc["duties"][0]["result"] = {"build_sig": "000000000000"}
+    (cat / f"{CFG}.yaml").write_text(yaml.safe_dump(doc), encoding="utf-8")
+    assert client.get(f"/api/motor-view/{DIE}/{CFG}/{DUTY}/field/thermal").json()["build_stale"] is True
+    view = client.get(f"/api/motor-view/{DIE}/{CFG}", headers={"x-user": "customer"}).json()
+    assert {d["duty"]: d["build_stale"] for d in view["duties"]}[DUTY] is True

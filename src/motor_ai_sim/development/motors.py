@@ -1736,7 +1736,14 @@ def motor_view_for(open_die: str, config: str, cfg_path: Path, cfg: dict, author
         row["can_open_configure"] = row["duty"] in configure
         # the duty's saved EM summary: the results panel (motor_view.build_panel) is drawn from it, whole
         row["em_summary"] = summaries.get(row["duty"])
-    return motor_view.build_view(open_die, config, rows, stored, fields, configure)
+    view = motor_view.build_view(open_die, config, rows, stored, fields, configure)
+    # per duty: is its stored result of the configuration's CURRENT build (the Motors row's rule, every spelling of the
+    # build)?  None = unknown.  The Thermal tab shows a point's stored temperatures only when this is not True.
+    from motor_ai_sim.routes import family
+    die_doc = family._die_doc_for_sig(open_die)
+    for d in view.get("duties") or []:
+        d["build_stale"] = family.stored_build_stale(die_doc, cfg, str(d.get("duty") or ""))
+    return view
 
 
 def _project_motor(project_id: str, request: Request, die: str, config: str, show_all: bool):
@@ -1797,7 +1804,7 @@ def project_motor_field(project_id: str, request: Request, die: str, config: str
     payload = motor_view.field_payload(open_die, cfg_name, duty, kind)
     if payload is None:
         raise HTTPException(404, detail="Not computed")
-    return payload
+    return motor_view.with_build_verdict(payload, open_die, cfg, duty)
 
 
 @router.get("/sim")

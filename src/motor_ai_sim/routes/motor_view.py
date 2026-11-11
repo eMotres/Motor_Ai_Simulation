@@ -48,4 +48,4 @@ def motor_field(die: str, cfg: str, duty: str, kind: str, response: Response,
     payload = motor_view.field_payload(die, cfg, duty, kind)
     if payload is None:
         raise HTTPException(404, detail="Not computed")
-    return payload
+    return motor_view.with_build_verdict(payload, die, doc, duty)

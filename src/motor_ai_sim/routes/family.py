@@ -1241,6 +1241,37 @@ def build_sig_moved(stamp: Any, sigs: Any) -> bool:
     return bool(stamp and sigs and str(stamp) not in sigs)
 
 
+def stored_build_stale(die_doc: dict, cfg_doc: dict, duty: str) -> Optional[bool]:
+    """Was duty ``duty``'s STORED result solved on another build than the
+    configuration's current one?  ``None`` = unknown (no such duty, or its
+    result carries no stamp).
+
+    The stamp is the duty result's ``build_sig`` (what the tree's amber chip
+    reads), else its primary run's.  Judged with :func:`build_sig_moved`
+    against every spelling of the build (:func:`_build_sigs`), so the
+    Thermal and Mechanical tabs call a stored map current exactly when the
+    Motors row calls the point current (owner 2026-11-11: a catalog motor is
+    already computed; loading it shows its stored results)."""
+    if not isinstance(cfg_doc, dict) or not duty:
+        return None
+    d = next((x for x in (cfg_doc.get("duties") or [])
+              if isinstance(x, dict) and str(x.get("name") or "") == str(duty)), None)
+    if d is None:
+        return None
+    res = d.get("result") if isinstance(d.get("result"), dict) else {}
+    stamp = res.get("build_sig")
+    if not stamp:
+        run = (d.get("runs") or {}).get(_primary_drive(d)) if isinstance(d.get("runs"), dict) else None
+        stamp = run.get("build_sig") if isinstance(run, dict) else None
+    if not stamp:
+        return None
+    try:
+        sigs = _build_sigs(die_doc or {}, cfg_doc)
+    except Exception:                                        # noqa: BLE001 - unknown, never a false alarm
+        return None
+    return build_sig_moved(stamp, sigs)
+
+
 def _build_sig_of(die_doc: dict, cfg_doc: dict, materials: dict) -> str:
     """The hash behind :func:`_build_sig`, over an explicit materials map."""
     import hashlib

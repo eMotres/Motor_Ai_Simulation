@@ -1384,7 +1384,7 @@ def build_datasheet(*, die: str, cfg: str, die_doc: Dict[str, Any],
     try:
         from motor_ai_sim import cogging as _cog
         _cv = _cog.view(_cog.block_of(cfg_doc),
-                        current_sig=_cog.current_build_sig(die_doc, cfg_doc),
+                        current_sig=_cog.current_build_sigs(die_doc, cfg_doc),
                         cfg_doc=cfg_doc, stored_by_duty=_ctrl_by_duty)
     except Exception:                            # noqa: BLE001 - a missing row must not fail a datasheet
         _cv = None

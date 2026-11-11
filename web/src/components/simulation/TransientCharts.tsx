@@ -21,6 +21,8 @@ import type { TransientSummary } from './SummaryTable';
 import { useMotorStore } from '../../stores/motorStore';
 import { geoSigsDiffer, geoSignature } from '../common/geoSig';
 import { assignmentSignature } from '../../lib/dutyMaterials';
+import { activeDuty, dutyKey } from '../../lib/dutySettings';
+import { lastTransientOf, markLastTransientOf, restoreActiveStoredRun } from '../../lib/dutyRuns';
 // THE REQUEST BODY of an Electromagnetic run — shared with the Thermal tab,
 // which builds the same one when it has to make the run its own solve was
 // missing.  See lib/emRunPayload.
@@ -343,6 +345,9 @@ const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onS
   const [data,  setData]  = useState<TransientPayload | null>(() => (readOnly ? (payloadOverride as TransientPayload | null) : null));
   // read-only: the shown run follows the prop, never the workbench
   useEffect(() => { if (readOnly) setData((payloadOverride as TransientPayload | null) ?? null); }, [readOnly, payloadOverride]);
+  // what is on screen NOW, for async lookups that must not overwrite a newer answer
+  const dataRef = useRef<TransientPayload | null>(data);
+  dataRef.current = data;
   const [busy,  setBusy]  = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
   // …and publish every change of it to the Run button.  This panel renders
@@ -596,17 +601,44 @@ const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onS
         // covers the parts that have no mass row of their own (the liner, the
         // enamel), which name-matching on the mass rows cannot see.  A RESTORED
         // result keeps whatever stamp it was saved with.
+        // A RESTORE that the server says was solved on ANOTHER machine is never
+        // put on screen (owner 2026-11-11, phone: a catalog motor opened on
+        // "STALE — DIFFERENT MACHINE · Run Simulation" over the workspace's
+        // last solve of a 175 N·m generator).  The restore cache is the
+        // workspace's LAST solve, whatever machine that was; a catalog motor
+        // is already computed (owner 2026-10-31), so its stored run goes on
+        // screen instead, and a machine with nothing stored shows nothing —
+        // never another machine's numbers under its name.
+        // "Unknown" (a run saved before the fingerprint existed) is not proof of
+        // THIS machine either, so a loaded catalog point's own run wins there
+        // too; only with nothing stored does an unknown restore still show.
+        if (restoreOnly && (d.stale_geometry === true
+                            || (d.stale_geometry !== false && activeDuty()))) {
+          const own = await restoreActiveStoredRun(activeDuty());
+          if (own?.payload) {
+            setBusy(false); setError(null);
+            setData(own.payload as TransientPayload); setStale(false);
+            return;
+          }
+          if (d.stale_geometry === true) {
+            console.warn('[stale] the workspace\'s last transient was solved on a '
+              + 'DIFFERENT machine — not shown');
+            setBusy(false); setError(null);
+            setData(prev => (prev && (prev as { restored?: boolean }).restored === true
+              && prev.stale_geometry === true) ? null : prev);
+            return;
+          }
+        }
         const stamped: TransientPayload = restoreOnly ? d : {
           ...d, _geoSig: geoSig,
           _matSig: assignmentSignature((p as { mat?: string }).mat) || undefined,
         };
         setStale(!!d.stale);
-        if (restoreOnly && d.stale_geometry === true) {
-          // Loud in the console too: a restored run from another machine is the
-          // exact situation where the user reads the numbers before the banner.
-          console.warn('[stale] restored transient was solved on a DIFFERENT '
-            + 'machine (backend fingerprint mismatch) — shown flagged, press Run '
-            + 'to recompute on the current geometry');
+        // A fresh solve belongs to the catalog point on the panel (if any): a
+        // reload keeps it instead of re-fetching that point's stored run.
+        if (!restoreOnly) {
+          const ad = activeDuty();
+          markLastTransientOf(ad ? dutyKey(ad.die, ad.config, ad.duty) : null);
         }
         setData(stamped); setBusy(false);
         setError(null);
@@ -842,6 +874,29 @@ const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onS
       mountedRef.current = true;
       handledNonceRef.current = runNonce;      // remember the mount nonce — never recompute it
       const last = loadLastTransient();
+      // A CATALOG point is on the panel, and the cached run is not its stored
+      // run nor a solve made on it (lib/dutyRuns `family.lastTransientOf`):
+      // the point is already computed, so its stored run goes on screen.  A
+      // phone reloads discarded tabs all the time, and this mount used to show
+      // whatever the cache or the workspace's last solve held — another
+      // machine's numbers under this motor's name (owner 2026-11-11).
+      const ad = activeDuty();
+      if (ad && lastTransientOf() !== dutyKey(ad.die, ad.config, ad.duty)) {
+        (async () => {
+          const own = await restoreActiveStoredRun(ad);
+          if (own?.payload) {
+            setData(prev => (prev == null || prev === last)
+              ? own.payload as TransientPayload : prev);
+            return;
+          }
+          // nothing stored for it: what the cache holds, if it is stamped
+          // (the banner judges it), else the server's restore — which never
+          // shows another machine's run (run(true) above)
+          if (last && last._geoSig) setData(prev => prev ?? last);
+          else run(true);
+        })();
+        return;
+      }
       if (last) {
         setData(last);                       // localStorage copy → show it, no compute
         // …but the SUMMARY may be stale in SHAPE: the backend rebuilds stored
@@ -875,11 +930,22 @@ const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onS
             // another tab, or the response was lost to a mid-run reload):
             // adopt it WHOLE — waveforms and summary together, never a
             // frankenstein of one run's charts under another run's cards.
+            // …and ONLY when the server can say it is THIS machine
+            // (`stale_geometry === false`).  The workspace's last solve is
+            // whatever was solved last — on 2026-11-11 a 175 N·m generator
+            // replaced a loaded 40 mm catalog motor's stored run this way, and
+            // was persisted too, so every reload repeated it.
             const backNewer = !!d?.computed_at && !!(last as any)?.computed_at
               && !sameRun && String(d.computed_at) > String((last as any).computed_at)
-              && !!d?.time_s?.length && !!d?.summary;
-            if (backNewer) {
+              && !!d?.time_s?.length && !!d?.summary
+              && d?.stale_geometry === false;
+            if (backNewer && dataRef.current !== last && dataRef.current != null) {
+              // the panel moved on while this lookup was in flight (a duty
+              // load, a Run): neither shown nor remembered
+            } else if (backNewer) {
               setData(prev => (prev === last || prev == null) ? d : prev);
+              const adNow = activeDuty();     // proven this machine: it belongs to the point on the panel
+              markLastTransientOf(adNow ? dutyKey(adNow.die, adNow.config, adNow.duty) : null);
               // …and REMEMBER it: the local copy is what "Save to duty" files
               // as the duty's waveforms (ActiveFamilyStrip's same-run check
               // reads sim.lastTransient).  Adopting a newer backend run on
@@ -984,7 +1050,18 @@ const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onS
       setData(d); setStale(false); setError(null);
     };
     window.addEventListener('sim-transient-restored', onRestored as EventListener);
-    return () => window.removeEventListener('sim-transient-restored', onRestored as EventListener);
+    // …and its opposite: another machine was loaded and it has no stored run, so
+    // the previous machine's waveforms leave the screen (lib/dutyRuns
+    // clearLastTransient).  A solve in flight keeps its own panel.
+    const onCleared = () => {
+      if (busyRef.current) return;
+      setData(null); setStale(false); setError(null);
+    };
+    window.addEventListener('sim-transient-cleared', onCleared);
+    return () => {
+      window.removeEventListener('sim-transient-restored', onRestored as EventListener);
+      window.removeEventListener('sim-transient-cleared', onCleared);
+    };
   }, []);
 
   // Build chart-friendly row arrays

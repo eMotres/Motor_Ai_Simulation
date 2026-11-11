@@ -24,7 +24,7 @@ import {
   setActiveDuty, ASSIGN_KEY,
 } from './dutySettings';
 import {
-  applyStoredRun, clearDutyRuns, driveLabel, fetchDutyRuns, setDutyRuns,
+  applyStoredRun, clearDutyRuns, clearLastTransient, driveLabel, fetchDutyRuns, setDutyRuns,
   setPickedRun, type StoredRun,
 } from './dutyRuns';
 import {
@@ -435,11 +435,15 @@ export async function applyDutyLocal(die: string, cfg: string, duty: string,
       ...primaryRun,
       summary: (dd.summary && typeof dd.summary === 'object')
         ? dd.summary : primaryRun.summary,
-    }, { settings: false });
+    }, { settings: false, dutyKey: opKey });
     return { machineChanged: changed,
              message: `${driveLabel(String(primaryRun.drive))} run restored `
                + `(charts + summary, nothing recomputed)${alsoTxt}` };
   }
+  // No stored waveforms for this point.  On ANOTHER machine the cached run
+  // belongs to the one just left: drop it, so neither the open charts nor a
+  // reload can present it under this motor's name (owner 2026-11-11).
+  if (changed) clearLastTransient();
   if (dd.summary && typeof dd.summary === 'object') {
     window.dispatchEvent(new CustomEvent('sim-apply-summary',
       { detail: { summary: dd.summary } }));

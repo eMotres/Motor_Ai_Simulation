@@ -73,20 +73,21 @@ def _num(v: Any) -> Optional[float]:
     return f if f == f and f not in (float("inf"), float("-inf")) else None
 
 
-def _run_meta(r: dict, drive: str, prim: str, build_sig: str) -> dict:
+def _run_meta(r: dict, drive: str, prim: str, build_sig) -> dict:
+    from motor_ai_sim.routes.family import build_sig_moved
     st = r.get("settings") if isinstance(r.get("settings"), dict) else {}
     summ = r.get("summary") if isinstance(r.get("summary"), dict) else {}
     res = r.get("result") if isinstance(r.get("result"), dict) else {}
     return {
         "drive": drive, "primary": drive == prim, "recorded_at": r.get("recorded_at"),
-        "stale": bool(r.get("build_sig") and build_sig and r.get("build_sig") != build_sig),
+        "stale": build_sig_moved(r.get("build_sig"), build_sig),
         "ripple_pct": _num(res.get("ripple_pct", summ.get("T_ripple_pct"))),
         "f_switch_hz": _num(st.get("sim.fSwitch")), "steps": _num(st.get("sim.stepsPP")),
         "has_payload": bool(r.get("payload_file")),
     }
 
 
-def _duty_row(d: dict, family, build_sig: str) -> dict:
+def _duty_row(d: dict, family, build_sig) -> dict:
     prim = family._primary_drive(d)
     res = d.get("result") if isinstance(d.get("result"), dict) else {}
     runs = []
@@ -94,7 +95,7 @@ def _duty_row(d: dict, family, build_sig: str) -> dict:
         r = (d.get("runs") or {}).get(drive)
         if isinstance(r, dict):
             runs.append(_run_meta(r, drive, prim, build_sig))
-    stale = bool(res.get("build_sig") and build_sig and res.get("build_sig") != build_sig)
+    stale = family.build_sig_moved(res.get("build_sig"), build_sig)
     return {
         "name": d.get("name"), "mode": d.get("mode", "motor"),
         "current_arms": _num(d.get("current_arms")), "rpm": _num(d.get("rpm")),
@@ -116,7 +117,7 @@ def points_for(open_die: str, config: str, cfg: dict, die_doc: dict, stored: Opt
     be read only costs the "short-time never stands in for the rating" refinement of the default point.
     """
     from motor_ai_sim.routes import family
-    build_sig = family._build_sig(die_doc, cfg)
+    build_sig = family._build_sigs(die_doc, cfg)   # every spelling of the current build
     try:
         classes = family.config_classes(cfg, stored if isinstance(stored, dict) else {})
     except Exception:                                        # noqa: BLE001 - a class hiccup never hides the points
@@ -145,11 +146,11 @@ def run_for(open_die: str, config: str, cfg: dict, die_doc: dict, duty: str, dri
         raise HTTPException(404, detail="This point has no stored run on that source")
     rel = r.get("payload_file")
     payload = family._read_run_payload(open_die, str(rel)) if rel else None
-    build_sig = family._build_sig(die_doc, cfg)
+    build_sig = family._build_sigs(die_doc, cfg)
     summary = family._summary_with_full_mass(r.get("summary"), open_die, config)
     return {
         "duty": duty, "drive": drive, "recorded_at": r.get("recorded_at"),
-        "stale": bool(r.get("build_sig") and build_sig and r.get("build_sig") != build_sig),
+        "stale": family.build_sig_moved(r.get("build_sig"), build_sig),
         "summary": scrub(summary) if isinstance(summary, dict) else None,
         # None = the description outlived its waveform file: the card still shows, the charts say so
         "payload": scrub(payload) if isinstance(payload, dict) else None,

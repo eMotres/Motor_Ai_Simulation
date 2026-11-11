@@ -244,11 +244,21 @@ def current_build_sig(die_doc: Mapping[str, Any], cfg_doc: Mapping[str, Any]) ->
     return family._build_sig(dict(die_doc or {}), dict(cfg_doc or {}))
 
 
-def is_stale(block: Mapping[str, Any], current_sig: Optional[str]) -> bool:
+def current_build_sigs(die_doc: Mapping[str, Any], cfg_doc: Mapping[str, Any]) -> tuple:
+    """``routes.family._build_sigs`` - every stamp that names the configuration's current build (the default liner /
+    enamel / conductor named or not).  Judge a stored stamp against THIS, write a new one with ``current_build_sig``."""
+    from motor_ai_sim.routes import family
+    return family._build_sigs(dict(die_doc or {}), dict(cfg_doc or {}))
+
+
+def is_stale(block: Mapping[str, Any], current_sig: Any) -> bool:
     """True when the build moved since the block was computed.  A block with no stamp is UNKNOWN, which is stale; so
-    is one judged against no signature at all (a build that cannot be fingerprinted cannot vouch for the number)."""
+    is one judged against no signature at all (a build that cannot be fingerprinted cannot vouch for the number).
+    ``current_sig`` is one signature or a tuple of them (``current_build_sigs``: one build, several spellings)."""
     sig = block.get("build_sig")
-    return not sig or not current_sig or str(sig) != str(current_sig)
+    sigs = (current_sig,) if isinstance(current_sig, str) else tuple(current_sig or ())
+    sigs = tuple(str(s) for s in sigs if s)
+    return not sig or not sigs or str(sig) not in sigs
 
 
 def _s1_ok(cr: Any) -> bool:
@@ -302,7 +312,7 @@ def continuous_torque(cfg_doc: Mapping[str, Any], stored_by_duty: Optional[Mappi
     return None, None, None
 
 
-def view(block: Optional[Mapping[str, Any]], *, current_sig: Optional[str] = None,
+def view(block: Optional[Mapping[str, Any]], *, current_sig: Any = None,
          cfg_doc: Optional[Mapping[str, Any]] = None,
          stored_by_duty: Optional[Mapping[str, Any]] = None) -> Optional[Dict[str, Any]]:
     """What a screen / datasheet / report shows of a saved block, or ``None`` when there is nothing to show.
@@ -379,7 +389,7 @@ def for_config(die: str, cfg_doc: Mapping[str, Any], stored_by_duty: Optional[Ma
     try:
         if current_sig is None:
             from motor_ai_sim.routes import family
-            current_sig = current_build_sig(family._die_doc_for_sig(die), cfg_doc)
+            current_sig = current_build_sigs(family._die_doc_for_sig(die), cfg_doc)
         return view(blk, current_sig=current_sig, cfg_doc=cfg_doc, stored_by_duty=stored_by_duty)
     except Exception:                                           # noqa: BLE001 - a display must never fail a read
         log.exception("cogging view failed for %s", die)

@@ -24,6 +24,7 @@
  */
 import { defaultDutyOf, shownDuties } from './catalogRows.ts';
 import { perSetFromTotal, setsOf } from './perSetCurrent.ts';
+import { buildSigMoved } from './catalogCardStaleness.ts';
 
 /** One stored run of a duty, as the TREE describes it (no payload). */
 export interface TreeRun {
@@ -49,6 +50,8 @@ export interface TreeDuty {
 /** A configuration row of the tree. */
 export interface TreeCfg {
   name: string; build_sig?: string; default_duty?: string | null;
+  /** Every stamp that names the CURRENT build (routes/family._build_sigs); judged before `build_sig`. */
+  build_sig_aliases?: string[];
   phases?: number | string | null; duties: TreeDuty[];
 }
 
@@ -100,8 +103,8 @@ export function drivesOf(d: TreeDuty): string[] {
  *  the configuration has since moved off? */
 export function isStale(d: TreeDuty, cfg: TreeCfg): boolean {
   if (d.stale === true) return true;
-  const sig = d.result?.build_sig;
-  if (sig && cfg.build_sig && sig !== cfg.build_sig) return true;
+  // every spelling of the current build counts (catalogCardStaleness.buildSigMoved)
+  if (buildSigMoved(d.result?.build_sig, cfg.build_sig_aliases ?? cfg.build_sig)) return true;
   return (d.runs ?? []).some((r) => r?.stale === true);
 }
 

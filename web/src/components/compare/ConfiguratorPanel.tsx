@@ -1681,6 +1681,8 @@ ${s1Text.text}` : '';
   // Narrow screens (< COMPACT_BAR_MAX_PX): the knobs are on top and the numbers they move far below, so a one-line results
   // bar stays pinned to the bottom edge and follows every slider (the full tiles are unchanged on a wide screen).
   const narrow = useMediaQuery(`(max-width:${COMPACT_BAR_MAX_PX - 0.05}px)`);
+  /** a phone (lib/narrowLayout NARROW): the drawings go below the results */
+  const phone = useMediaQuery('(max-width:767.95px)');
   const compactTiles = compactResultTiles({
     T_Nm: pointGate.accepted ? result.T_Nm : null,
     P_kW: pointGate.accepted ? result.P_mech_W / 1000 : null,
@@ -2237,6 +2239,20 @@ ${s1Text.text}` : '';
     ].filter(Boolean),
   });
 
+  // battery | cross-section | side view: one row (they wrap on a narrow screen).  On a PHONE (< 768 px, owner
+  // 2026-11-11: «в мобильном Configure не видно параметров мотора») the row moves BELOW the results: stacked in one
+  // column, the two drawings stood ~1500 px tall between the knobs and the motor's numbers, so the numbers were never
+  // in sight.  Desktop and tablet keep the row under the knobs exactly as before.
+  const picturesRow = (blocked || loadingModel) ? null : (
+    <Box sx={{ display: 'flex', gap: 1.5, flexWrap: 'wrap', alignItems: 'stretch' }}>
+      <Box sx={{ flex: '1 1 300px', minWidth: 0 }}>
+        <BatteryPanel vDc={result.Vphase_peak_V * Math.sqrt(3)} bat={battery} onChange={updateBattery}
+          machinePack={machinePack} onReset={resetBattery}
+          stockNote={!batteryKnown} vDcTip={tx('configure.motorVTip', { I: fmt(knobs.I_A, 1), rpm: fmt(knobs.rpm, 0) })} />
+      </Box>
+      <GeometryProjections ref0={ref} knobs={knobs} />
+    </Box>
+  );
 
   return (
     <Box sx={{ height: '100%', display: 'flex', flexDirection: 'column', bgcolor: 'var(--panel-2)', overflow: 'auto' }}>
@@ -2650,19 +2666,12 @@ ${s1Text.text}` : '';
           </Box>
           {/* i18n-guard:end */}
         </Box>
-        {/* battery | cross-section | side view: one row (they wrap on a narrow screen) */}
-        <Box sx={{ display: 'flex', gap: 1.5, flexWrap: 'wrap', alignItems: 'stretch' }}>
-          <Box sx={{ flex: '1 1 300px', minWidth: 0 }}>
-            <BatteryPanel vDc={result.Vphase_peak_V * Math.sqrt(3)} bat={battery} onChange={updateBattery}
-              machinePack={machinePack} onReset={resetBattery}
-              stockNote={!batteryKnown} vDcTip={tx('configure.motorVTip', { I: fmt(knobs.I_A, 1), rpm: fmt(knobs.rpm, 0) })} />
-          </Box>
-          <GeometryProjections ref0={ref} knobs={knobs} />
-        </Box>
+        {/* battery | cross-section | side view (`picturesRow`; below the results on a phone) */}
+        {!phone && picturesRow}
         </Box>
 
-        {/* ── RESULT ── */}
-        <Box sx={{ flex: '2 1 460px', minWidth: 360, display: 'flex', flexDirection: 'column', gap: 1.25 }}>
+        {/* ── RESULT ── (min 360 px wide on a desktop/tablet; a phone column is narrower than that) */}
+        <Box sx={{ flex: '2 1 460px', minWidth: phone ? 0 : 360, display: 'flex', flexDirection: 'column', gap: 1.25 }}>
           {/* SEVEN ROWS — the same order as the Simulation summary card
               (user 2026-09-04: "the same for both simulation and configure"):
               1 torque · power · mass · efficiency · ripple · densities
@@ -2901,6 +2910,7 @@ ${s1Text.text}` : '';
             {tx('configure.addToComparison')}
           </Button>
         </Box>
+        {phone && <Box sx={{ minWidth: 0 }}>{picturesRow}</Box>}
       </Box>
 
       {/* owner 2026-10-18: the two propeller-curve charts repeated the load chart below - only the load chart stays */}

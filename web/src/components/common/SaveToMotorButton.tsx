@@ -8,6 +8,7 @@ import CheckIcon from '@mui/icons-material/Check';
 import BoltIcon from '@mui/icons-material/Bolt';
 import LockOutlinedIcon from '@mui/icons-material/LockOutlined';
 import { getActiveMotor, createMotorFromCurrent, overwriteActiveMotor } from './motorSettings';
+import { activeDuty } from '../../lib/dutySettings';
 import HelpTip from './HelpTip';
 import { useTranslation } from 'react-i18next';
 import { nsT } from '../../i18n/nsT';
@@ -24,6 +25,18 @@ const SaveToMotorButton: React.FC<Props> = ({ disabled }) => {
     const on = (e: Event) => setActive((e as CustomEvent).detail ?? getActiveMotor());
     window.addEventListener('motor:active-changed', on);
     return () => window.removeEventListener('motor:active-changed', on);
+  }, []);
+  // A CATALOG motor on the panel (owner 2026-11-11, phone: "Motor: My motor · auto-saved" and a big "Overwrite this
+  // motor" while CIANO14 40 new / L12 was loaded).  The two buttons below act on the account's own working preset
+  // ("My motor", /api/presets) — never on the catalog configuration — so naming that preset here, with an Overwrite
+  // next to it, read as "this overwrites the catalog motor".  With a catalog point loaded the panel names the catalog
+  // motor, offers "Save as new…" (a private copy) only, and leaves catalog saves to the header's explicit
+  // "Save to <point>" (admins / owners).
+  const [catalog, setCatalog] = useState(() => activeDuty());
+  useEffect(() => {
+    const on = () => setCatalog(activeDuty());
+    for (const ev of ['sim-settings-restored', 'family-changed', 'motor:active-changed']) window.addEventListener(ev, on);
+    return () => { for (const ev of ['sim-settings-restored', 'family-changed', 'motor:active-changed']) window.removeEventListener(ev, on); };
   }, []);
   const [naming, setNaming] = useState(false);
   const [name, setName] = useState('');
@@ -58,10 +71,23 @@ const SaveToMotorButton: React.FC<Props> = ({ disabled }) => {
   // editor drives it normally, but nothing auto-saves into it. ONE short chip
   // says so; the owner's name lives in the tip, not in a paragraph on the panel.
   const ro = !!active?.readOnly;
+  // the working preset is not what is on screen: no Overwrite, no "auto-saved" claim
+  const showOverwrite = !!active && !ro && !catalog;
 
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.5 }}>
-      {active && (ro ? (
+      {catalog ? (
+        <Tooltip title={tx('catalogMotorTip')} placement="top">
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, fontSize: 11, color: 'var(--text-2)', minWidth: 0 }}
+            data-testid="motor-chip-catalog">
+            <LockOutlinedIcon sx={{ fontSize: 13, color: '#fbbf24' }} />
+            <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              {tx('motorLabel')}&nbsp;<b style={{ color: 'var(--text-0)' }}>{catalog.die} / {catalog.config}</b>
+            </span>
+            <span style={{ color: 'var(--text-4)', whiteSpace: 'nowrap' }}>· {tx('catalogMotor')}</span>
+          </Box>
+        </Tooltip>
+      ) : active && (ro ? (
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, fontSize: 11, color: 'var(--text-2)' }}>
           <LockOutlinedIcon sx={{ fontSize: 13, color: '#fbbf24' }} />
           <span>Motor:&nbsp;<b style={{ color: 'var(--text-0)' }}>{active.name}</b></span>
@@ -93,7 +119,7 @@ const SaveToMotorButton: React.FC<Props> = ({ disabled }) => {
         </Box>
       ) : (
         <Box sx={{ display: 'flex', gap: 0.5 }}>
-          {active && !ro && (
+          {showOverwrite && (
             <Tooltip title={`Overwrite "${active.name}" in place with the current geometry / mesh / simulation (updates its Motors-tab card). Use "Save as new" to keep the original and fork a copy.`} placement="top">
               <span style={{ flex: 1 }}>
                 <Button size="small" variant="contained" fullWidth disableElevation disabled={disabled || ovrBusy}
@@ -108,7 +134,7 @@ const SaveToMotorButton: React.FC<Props> = ({ disabled }) => {
           <Button size="small" variant="outlined" disableElevation disabled={disabled}
             startIcon={done ? <CheckIcon sx={{ fontSize: 15 }} /> : <SaveIcon sx={{ fontSize: 15 }} />}
             onClick={() => setNaming(true)}
-            sx={{ flex: (active && !ro) ? 'unset' : 1, whiteSpace: 'nowrap', textTransform: 'none', fontSize: 11, borderColor: 'var(--line)',
+            sx={{ flex: showOverwrite ? 'unset' : 1, whiteSpace: 'nowrap', textTransform: 'none', fontSize: 11, borderColor: 'var(--line)',
               color: done ? '#34d399' : '#a5b4fc', '&:hover': { borderColor: '#6366f1', bgcolor: '#1e1b4b' } }}>
             {done ? 'Saved ✓' : active ? 'Save as new…' : 'Save as new motor…'}
           </Button>

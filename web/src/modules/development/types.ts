@@ -1,6 +1,6 @@
 export type ProjectStatus = 'spec' | 'design' | 'simulation' | 'quote' | 'prototype' | 'production' | 'closed';
 export interface ProjectMember { email: string; role: 'customer' | 'engineer' | 'owner'; pending?: boolean }
-export interface Completeness { filled?: number; required?: number; filled_required?: number; total_required?: number; answered?: number; unknown?: number; missing?: number; invalid?: number; sections?: Record<string, { filled: number; required: number; total?: number; complete?: boolean }> }
+export interface Completeness { filled?: number; required?: number; filled_required?: number; total_required?: number; answered?: number; unknown?: number; missing?: number; invalid?: number; /** the minimum needed to simulate the machine is given (server rule); Submit stays off while false */ simulation_ready?: boolean; simulation_missing?: Array<{ field: string; field_id: string; section: string; label: string; message: string }>; sections?: Record<string, { filled: number; required: number; total?: number; complete?: boolean }> }
 export interface ProjectSummary {
   id: string; title: string; customer_org: string; status: ProjectStatus; owner_engineer?: string;
   members: ProjectMember[]; linked_motors: Array<{ die: string; config: string }>;

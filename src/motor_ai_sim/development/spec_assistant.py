@@ -290,6 +290,7 @@ def build_context(project: dict, wrapper: dict, proposals: list[dict], *, lang: 
                     line += "   [incomplete now, see the data below]"
                     incomplete.append(f"{fid} {label} = {_compact(ans.get('value'))}")
                 (req_missing if models._field_required(f, draft) else optional).append(line)
+    sim_lines = [f"{m['field']}: {m['label']}" for m in comp.get("simulation_missing", [])]
     begin, end = (f"<<<{kind} UNTRUSTED DATA {token}>>>" for token in [secrets.token_hex(6)] for kind in ("BEGIN", "END"))
     lines = [
         "SPECIFICATION CONTEXT (read-only, from the server)",
@@ -301,6 +302,10 @@ def build_context(project: dict, wrapper: dict, proposals: list[dict], *, lang: 
          if fill else "The user CAN apply proposals (FILL MODE IS OFF: your markers become proposal cards)."
          if can_apply else
          "The user CANNOT apply proposals (only the project owner or an admin can); say so once if relevant."),
+        "",
+        "SIMULATION MINIMUM still missing (the specification cannot be submitted until these are answered with real values; "
+        "'not known yet' does not count). Ask for these FIRST, one at a time:",
+        *(sim_lines or ["(none - the minimum for the simulation is complete)"]),
         "",
         "REQUIRED fields still missing (id label [unit]: value shape):",
         *(req_missing or ["(none)"]),

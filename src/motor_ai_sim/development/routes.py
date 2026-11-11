@@ -899,7 +899,9 @@ def submit_spec_for(user: dict, project_id: str, raw_revision: Any, *, audit_det
         errors = models.validation_errors(draft)
         if errors:
             store.append_audit(project_id, _email(user), "submit_rejected", "spec_draft", "draft", {"revision": expected, "errors": errors} | extra)
-            raise HTTPException(status_code=422, detail={"message": "Specification is incomplete", "errors": errors,
+            sim_open = any(e.get("simulation") for e in errors)
+            raise HTTPException(status_code=422, detail={"message": ("Specification lacks data needed for the simulation" if sim_open
+                                                                     else "Specification is incomplete"), "errors": errors,
                                                          "completeness": models.completeness(draft)})
         latest = _latest_version_record(project_id)
         if isinstance(latest, dict) and _spec_content(latest.get("draft")) == _spec_content(draft):

@@ -245,6 +245,8 @@
       "submittedChanged": "Submitted: version {version}, {date}. Newer changes are not submitted yet.",
       "noChanges": "Submitted, no changes since version {version}",
       "noChangesTip": "Change an answer to submit a new version.",
+      "simulationMissing": "Needed for the simulation, please answer:",
+      "simulationTip": "Submit is off until the data needed for the simulation is given (not known yet does not count).",
       "stillOpen": "Still open",
       "later": "Answer later",
       "at": "at",

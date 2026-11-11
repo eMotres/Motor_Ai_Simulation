@@ -27,9 +27,13 @@ MAX_OPEN = 40
 #: commercial) and production, the mass target and the target budget.
 CUSTOMER_SECTIONS = frozenset({"6", "production", "mission_profile"})
 CUSTOMER_FIELDS = frozenset({"4_2", "6_3", "target_price"})
-#: Fields the assistant may FILL only when the customer stated the value (basis "stated"): the application, the key
-#: operating points and the supply voltage are never invented (owner 2026-11-11).  Otherwise the proposal stays a card.
+#: Commercial fields: never written by the assistant, not even when stated (owner: no price talk during design).
+COMMERCIAL_FIELDS = frozenset({"6_3", "target_price"})
+#: Fields the assistant may FILL only from data (basis "stated" - the customer said it - or "derived" - computed from published
+#: data such as the propeller catalogue or a maker's table, with the source named): the application, the key operating points and
+#: the supply voltage are never ASSUMED (owner 2026-11-11).  An assumed value stays a card.
 STATED_ONLY = frozenset({"1_1", "key_points", "1_4", "1_5", "2_1", "2_2"})
+FILL_BASES = frozenset({"stated", "derived"})
 #: Version-2 fields the specification derives from the key operating points (S1 and peak point).
 DERIVED_V2 = frozenset({"1_4", "1_5"})
 
@@ -95,9 +99,12 @@ def field_info(field_id: str, version: int) -> tuple[dict, dict]:
     return known[field_id]
 
 
-def refusal(field_id: str, section_id: str) -> str | None:
-    """Why the assistant must not propose this field, or ``None``."""
-    if field_id in CUSTOMER_FIELDS or section_id in CUSTOMER_SECTIONS:
+def refusal(field_id: str, section_id: str, basis: str | None = None) -> str | None:
+    """Why the assistant must not propose this field, or ``None``.  A customer decision may only carry what the customer said
+    (basis ``stated``, owner 2026-11-11: the assistant asks for it and writes the answer down); commercial fields never."""
+    if field_id in COMMERCIAL_FIELDS:
+        return f"{field_id} is a customer decision - ask the customer, do not propose a value"
+    if (field_id in CUSTOMER_FIELDS or section_id in CUSTOMER_SECTIONS) and basis != "stated":
         return f"{field_id} is a customer decision - ask the customer, do not propose a value"
     return None
 
@@ -144,14 +151,23 @@ def coerce_value(field: dict, value: Any) -> Any:
     return value
 
 
-def validate(wrapper: dict, field_id: str, value: Any) -> dict:
+def validate(wrapper: dict, field_id: str, value: Any, basis: str | None = None, answer_status: str = "filled") -> dict:
     """The normalised ``{value, status: "filled"}`` of a single field, validated by the specification's own rules
-    (same ``normalize_draft`` as ``PUT /spec``), or ``ProposalError``."""
+    (same ``normalize_draft`` as ``PUT /spec``), or ``ProposalError``.  ``answer_status="not_known_yet"`` is the customer's own
+    "not known yet" (basis ``stated``): ``{value: None, status: "not_known_yet"}`` where the field allows it."""
     version = schema_version_of(wrapper)
     section, field = field_info(field_id, version)
-    why = refusal(field_id, section["id"])
+    why = refusal(field_id, section["id"], basis)
     if why:
         raise ProposalError(why)
+    if answer_status == "not_known_yet":
+        if basis != "stated":
+            raise ProposalError(f"{field_id}: only the customer can say a value is not known yet")
+        if field_id != "mission_profile" and not field.get("allow_not_known_yet"):
+            raise ProposalError(f"{field_id}: this field cannot be marked not known yet")
+        if version >= 2 and field_id in DERIVED_V2:
+            raise ProposalError(f"{field_id} is derived from the key operating points - propose key_points instead")
+        return {"value": None, "status": "not_known_yet"}
     if field_id == "mission_profile":
         raise ProposalError("mission_profile cannot be proposed")
     if version >= 2 and field_id in DERIVED_V2:
@@ -209,7 +225,8 @@ def with_current(project_id: str, proposals: list[dict]) -> list[dict]:
     return out
 
 
-def create(project_id: str, field_id: str, value: Any, reason: str, *, by: str = "assistant", basis: str | None = None) -> dict:
+def create(project_id: str, field_id: str, value: Any, reason: str, *, by: str = "assistant", basis: str | None = None,
+           answer_status: str = "filled", sources: list | None = None) -> dict:
     """Validate and store a proposal.  A newer proposal for the same field replaces the open one (dismissed as
     ``superseded``).  Raises ``ProposalError`` for an invalid one - nothing is stored then."""
     reason = " ".join(str(reason or "").split())
@@ -219,12 +236,17 @@ def create(project_id: str, field_id: str, value: Any, reason: str, *, by: str =
     wrapper = draft_wrapper(project_id)
     version = schema_version_of(wrapper)
     section, _ = field_info(field_id, version)
-    answer = validate(wrapper, field_id, value)
+    answer = validate(wrapper, field_id, value, basis, answer_status)
     proposal = {"id": "p-" + secrets.token_hex(5), "field_id": field_id, "value": answer["value"], "reason": reason,
                 "recalc": recalc_for(field_id, section["id"]), "by": by, "created_at": models.now(),
                 "status": "open", "applied_by": None, "applied_revision": None}
     if basis:
         proposal["basis"] = basis
+    if answer["status"] == "not_known_yet":
+        proposal["answer_status"] = "not_known_yet"
+    urls = [str(u)[:300] for u in (sources or []) if isinstance(u, str) and u.startswith(("http://", "https://"))][:5]
+    if urls:
+        proposal["sources"] = urls
 
     def mutate(doc: dict) -> None:
         rows = doc.setdefault("proposals", [])
@@ -294,13 +316,16 @@ def apply(project_id: str, proposal_id: str, actor_email: str, expected_revision
             version = schema_version_of(current)
             try:
                 section, _ = field_info(field_id, version)
-                why = refusal(field_id, section["id"])
+                why = refusal(field_id, section["id"], prop.get("basis"))
                 if why:
                     raise ProposalError(why)
-                answer = validate(current, field_id, value)
+                answer = validate(current, field_id, value, prop.get("basis"), prop.get("answer_status") or "filled")
                 trial = copy.deepcopy(current.get("draft") or {})
                 trial["schema_version"] = version
-                _answer_area(trial, section["id"])[field_id] = answer
+                if field_id == "mission_profile":
+                    trial["mission_profile_status"] = "not_known_yet"
+                else:
+                    _answer_area(trial, section["id"])[field_id] = answer
                 draft = models.normalize_draft(trial, schema_version=version)
             except (ValueError, TypeError) as exc:       # ProposalError is a ValueError
                 out["invalid"] = str(exc)
@@ -311,7 +336,8 @@ def apply(project_id: str, proposal_id: str, actor_email: str, expected_revision
             if via:
                 draft["provenance"].setdefault("assistant_fills", {})[field_id] = {
                     "proposal_id": proposal_id, "basis": prop.get("basis") or "assumed", "reason": prop.get("reason", ""),
-                    "by": actor_email.lower(), "at": models.now(), "revision": revision + 1, "value": answer["value"]}
+                    "by": actor_email.lower(), "at": models.now(), "revision": revision + 1, "value": answer["value"],
+                    **({"sources": prop["sources"]} if prop.get("sources") else {})}
             current.update({"draft": draft, "schema_version": version, "revision": revision + 1,
                             "updated_at": models.now()})
             out["saved"] = copy.deepcopy(current)
@@ -382,7 +408,11 @@ def undo(project_id: str, proposal_id: str, actor_email: str) -> dict:
             trial = copy.deepcopy(current.get("draft") or {})
             trial["schema_version"] = version
             area = _answer_area(trial, section["id"])
-            if previous.get("status") == "missing" or not models._value_present(previous.get("value")):
+            if field_id == "mission_profile":
+                trial["mission_profile_status"] = "missing" if not trial.get("mission_profile") else "filled"
+            elif previous.get("status") == "not_known_yet":
+                area[field_id] = {"value": None, "status": "not_known_yet"}
+            elif previous.get("status") == "missing" or not models._value_present(previous.get("value")):
                 area.pop(field_id, None)
             else:
                 area[field_id] = previous
@@ -438,5 +468,5 @@ def live_fills(wrapper: dict) -> dict:
         except ProposalError:
             same = False
         if same:
-            out[field_id] = {k: info.get(k) for k in ("proposal_id", "basis", "reason", "at")}
+            out[field_id] = {k: info.get(k) for k in ("proposal_id", "basis", "reason", "at", "sources") if k != "sources" or info.get(k)}
     return out

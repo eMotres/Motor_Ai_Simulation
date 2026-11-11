@@ -21,6 +21,16 @@ test('it survives a sign-in and never becomes an open redirect', () => {
   assert.equal(L.safeReturnTarget('//evil.test/projects?new=spec'), null);
 });
 
+test("the assistant's hand-off token rides on the link through the sign-up, and only a well-formed one", () => {
+  const tok = 'AbCdEfGhIjKlMnOpQrSt12';
+  const link = L.parseAppLink('/projects', `?new=spec&handoff=${tok}`);
+  assert.deepEqual(link, { kind: 'new', zh: false, handoff: tok });
+  assert.equal(L.appLinkPath(link), `/projects?new=spec&handoff=${tok}`);
+  assert.equal(L.appLinkReturnPath('/projects', `?new=spec&handoff=${tok}&utm=x`), `/projects?new=spec&handoff=${tok}`);
+  assert.deepEqual(L.parseAppLink('/projects', '?new=spec&handoff=../x'), { kind: 'new', zh: false });
+  assert.deepEqual(L.newProjectIntent(link, false), { openDialog: false, openSpecAfterCreate: true, consumeTo: '/', handoff: tok });
+});
+
 test('newProjectIntent: dialog for everybody, specification + assistant after Create for customers only, link consumed', () => {
   const link = L.parseAppLink('/projects', '?new=spec');
   assert.deepEqual(L.newProjectIntent(link, false), { openDialog: true, openSpecAfterCreate: true, consumeTo: '/' });

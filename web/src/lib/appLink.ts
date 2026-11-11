@@ -21,13 +21,14 @@ export const PROJECT_VIEWS = ['specification', 'motors', 'messages', 'notes', 'd
 export type ProjectViewId = (typeof PROJECT_VIEWS)[number];
 
 export type AppLink =
-  | { kind: 'new'; zh: boolean }
+  | { kind: 'new'; zh: boolean; handoff?: string }
   | { kind: 'production'; die: string; config: string; tab?: ProductionTabId; item?: string; since?: string; ids?: string[] }
   | { kind: 'project'; id: string; view?: ProjectViewId; die?: string; config?: string; item?: string };
 
 const SEG = /^[A-Za-z0-9][A-Za-z0-9 ._-]{0,79}$/;
 const PROJECT_ID = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 const ITEM = /^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$/;
+const HANDOFF = /^[A-Za-z0-9_-]{16,64}$/;
 const MAX_LEN = 280;
 
 const goodName = (s: string) => SEG.test(s) && !s.includes('..');
@@ -40,9 +41,14 @@ export function parseAppLink(pathname: string, search = ''): AppLink | null {
   const item = q.get('item');
   if (item !== null && !ITEM.test(item)) return null;
 
-  // /projects?new=spec (and under /zh-cn/): the "describe your motor" link of the launch mail
+  // /projects?new=spec (and under /zh-cn/): the "describe your motor" link of the launch mail; with &handoff=<token> the values the
+  // assistant gathered for a visitor (owner 2026-11-11): after the sign-up the specification is created with them
   const fresh = /^(\/zh-cn)?\/projects\/?$/i.exec(pathname);
-  if (fresh) return q.get('new') === 'spec' ? { kind: 'new', zh: !!fresh[1] } : null;
+  if (fresh) {
+    if (q.get('new') !== 'spec') return null;
+    const handoff = q.get('handoff');
+    return { kind: 'new', zh: !!fresh[1], ...(handoff && HANDOFF.test(handoff) ? { handoff } : {}) };
+  }
 
   const prod =/^\/production\/([^/]+)\/([^/]+)(?:\/([a-z]+))?\/?$/.exec(pathname);
   if (prod) {
@@ -78,7 +84,7 @@ export function parseAppLink(pathname: string, search = ''): AppLink | null {
 
 /** The canonical path (+ query) of a link; null when a part is not valid. */
 export function appLinkPath(link: AppLink): string | null {
-  if (link.kind === 'new') return `${link.zh ? '/zh-cn' : ''}/projects?new=spec`;
+  if (link.kind === 'new') return `${link.zh ? '/zh-cn' : ''}/projects?new=spec${link.handoff && HANDOFF.test(link.handoff) ? `&handoff=${link.handoff}` : ''}`;
   if (link.kind === 'project') {
     if (!PROJECT_ID.test(link.id) || link.id.length > 64) return null;
     if (link.view && !(PROJECT_VIEWS as readonly string[]).includes(link.view)) return null;
@@ -114,8 +120,10 @@ export function isAppLinkPath(pathname: string, search = ''): boolean {
  *  customer account then lands, after Create, on the new project's specification with the assistant open in fill mode; a staff
  *  account (which manages projects itself) just gets the dialog.  The link is consumed once: the address bar is set to
  *  `consumeTo`, so Back / reload never creates a second project. */
-export function newProjectIntent(link: AppLink | null, staff: boolean): { openDialog: boolean; openSpecAfterCreate: boolean; consumeTo: string } | null {
+export function newProjectIntent(link: AppLink | null, staff: boolean): { openDialog: boolean; openSpecAfterCreate: boolean; consumeTo: string; handoff?: string } | null {
   if (!link || link.kind !== 'new') return null;
+  // the assistant's hand-off (owner 2026-11-11): no dialog - the project is created with the gathered values and opens at once
+  if (link.handoff) return { openDialog: false, openSpecAfterCreate: true, consumeTo: '/', handoff: link.handoff };
   return { openDialog: true, openSpecAfterCreate: !staff, consumeTo: '/' };
 }
 

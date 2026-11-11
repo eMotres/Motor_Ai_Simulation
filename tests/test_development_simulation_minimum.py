@@ -8,7 +8,7 @@ import pytest
 from fastapi import HTTPException
 
 from motor_ai_sim.development import models, routes, spec_assistant as A, store
-from motor_ai_sim.development.spec_assistant_prompt import SPEC_PROMPT
+from motor_ai_sim.support_prompt import SPEC_SECTION as SPEC_PROMPT
 from tests.test_development_core import _all_unknown_draft, simulation_minimum_fields
 
 OWN = "own@example.test"

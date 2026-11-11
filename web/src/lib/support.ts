@@ -9,7 +9,7 @@
 // ./supportFlow so they can be tested alone.
 import { errorMessageOf } from './supportContext';
 import {
-  chatReplyFrom, type ChatMsg, type ChatReply, type TicketPayload, type TicketType,
+  chatReplyFrom, forServer, fromHistory, type ChatMsg, type ChatReply, type SpecCard, type TicketPayload, type TicketType,
 } from './supportFlow';
 
 export { chatReplyFrom };
@@ -62,16 +62,49 @@ export function conversationId(): string {
   } catch { return ''; }
 }
 
+/** Where the chat runs (owner 2026-11-11: ONE assistant): a project's Specification turns on the spec mode, `fill` its fill mode. */
+export interface AskPlace { projectId?: string; fill?: boolean }
+
 /** Ask the in-app assistant. The backend proxies to the provider (key stays server-side);
  *  `context` is the sanitised session snapshot the model reads as hidden text. */
-export async function askAssistant(messages: ChatMsg[], context?: Record<string, unknown>, lang?: string): Promise<ChatReply> {
+export async function askAssistant(messages: ChatMsg[], context?: Record<string, unknown>, lang?: string, place?: AskPlace): Promise<ChatReply> {
   const r = await fetch(`${API}/api/support/chat`, {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ messages, ...(context ? { context } : {}), ...(lang ? { lang } : {}), ...(conversationId() ? { sid: conversationId() } : {}) }),
+    body: JSON.stringify({
+      messages: forServer(messages), ...(context ? { context } : {}), ...(lang ? { lang } : {}), ...(conversationId() ? { sid: conversationId() } : {}),
+      ...(place?.projectId ? { place: { project_id: place.projectId, view: 'specification' }, fill: place.fill !== false } : {}),
+    }),
   });
   let body: unknown = null;
   try { body = await r.json(); } catch { body = null; }
   const out = chatReplyFrom(r.status, body);
   if (!out) throw new Error(`HTTP ${r.status}`);
   return out;
+}
+
+/** The kept conversation of the signed-in user: of a project's Specification, or the help chat elsewhere. */
+export async function loadConversation(projectId?: string): Promise<ChatMsg[]> {
+  const url = projectId ? `${API}/api/projects/${encodeURIComponent(projectId)}/spec/assistant/history` : `${API}/api/support/history`;
+  const r = await fetch(url);
+  if (!r.ok) throw new Error(`HTTP ${r.status}`);
+  return fromHistory((await r.json()).messages);
+}
+
+/** Clear the user's own view of a conversation (the service archive keeps it). */
+export async function clearConversation(projectId?: string): Promise<void> {
+  const url = projectId ? `${API}/api/projects/${encodeURIComponent(projectId)}/spec/assistant/history` : `${API}/api/support/history`;
+  const r = await fetch(url, { method: 'DELETE' });
+  if (!r.ok) throw new Error(`HTTP ${r.status}`);
+}
+
+/** Create the project from a kept hand-off (after the Platform Agreement, or after a visitor signed up).  The app's fetch layer shows
+ *  the agreement dialog on a 428 and repeats this call once. */
+export async function createFromHandoff(token: string): Promise<{ project: { id: string; title: string }; applied: SpecCard[] }> {
+  const r = await fetch(`${API}/api/support/handoff/${encodeURIComponent(token)}/create`, { method: 'POST' });
+  if (!r.ok) {
+    let detail = `HTTP ${r.status}`;
+    try { detail = errorMessageOf(await r.json(), detail); } catch { /* keep status */ }
+    throw new Error(detail);
+  }
+  return r.json();
 }

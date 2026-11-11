@@ -16,7 +16,7 @@
  */
 import React, { useEffect, useRef, useState } from 'react';
 import {
-  Box, Paper, IconButton, Tabs, Tab, TextField, Chip, CircularProgress, Typography, Tooltip,
+  Box, Paper, IconButton, Tabs, Tab, TextField, Chip, CircularProgress, Typography, Tooltip, Button, FormControlLabel, Switch,
 } from '@mui/material';
 import ChatBubbleOutlineIcon from '@mui/icons-material/ChatBubbleOutline';
 import CloseIcon from '@mui/icons-material/Close';
@@ -25,14 +25,30 @@ import { useTranslation } from 'react-i18next';
 import { useAuth } from '../../contexts/AuthContext';
 import { useUIStore } from '../../stores/uiStore';
 import { APP_VERSION, APP_GIT_SHA } from '../../lib/version';
-import { askAssistant, submitTicket, listMyTickets, type Ticket } from '../../lib/support';
+import { askAssistant, submitTicket, listMyTickets, loadConversation, clearConversation, createFromHandoff, type Ticket } from '../../lib/support';
 import {
-  initialFlow, addUserMessage, receiveReply, editDraft, dismissDraft, runConfirm,
-  type FlowState,
+  initialFlow, addUserMessage, receiveReply, editDraft, dismissDraft, runConfirm, nextStep, updateCard,
+  type ChatReply, type FlowState, type SpecCard,
 } from '../../lib/supportFlow';
 import { buildSupportContext, installFailedCallRecorder } from '../../lib/supportContext';
+import { useAssistantPlace } from '../../lib/assistantPlace';
+import { projectOpenEvent, projectOpenStorageKey } from '../../modules/development/projectOpenIntent';
+import { specAssistantApi } from '../../modules/development/specAssistantApi';
+import { fillEnabled, type Proposal } from '../../modules/development/specAssistant';
 import SupportMarkdown from './SupportMarkdown';
 import TicketDraftCard from './TicketDraftCard';
+import SpecChatCards from './SpecChatCards';
+
+const FILL_KEY = 'specAssistant.fill';
+const readStore = (k: string): string | null => { try { return window.localStorage.getItem(k); } catch { return null; } };
+const writeStore = (k: string, v: string) => { try { window.localStorage.setItem(k, v); } catch { /* storage may be blocked */ } };
+
+/** Open a project's Specification from anywhere: the Projects tab, then the project (the page reads the queued id on mount too). */
+function openProjectSpec(setTab: (tab: never) => void, projectId: string) {
+  setTab('development' as never);
+  try { window.sessionStorage.setItem(projectOpenStorageKey, projectId); } catch { /* the event below still carries the id */ }
+  window.setTimeout(() => window.dispatchEvent(new CustomEvent(projectOpenEvent, { detail: { projectId } })), 0);
+}
 
 const API = (import.meta.env.VITE_API_URL ?? 'http://localhost:8001') as string;
 // Remember failed calls from the first request on, not from the moment the widget opens.
@@ -89,19 +105,101 @@ const SupportWidget: React.FC = () => {
   // a visitor has no tickets tab
   useEffect(() => { if (!user && tab === 'tickets') setTab('ask'); }, [user, tab]);
 
+  // ONE assistant (owner 2026-11-11): inside a project's Specification the same chat works on the form (fill, Undo, submit)
+  // the Projects page stays mounted behind other tabs: the spec mode holds only while that tab is the one shown
+  const placeSpec = useAssistantPlace((s) => s.spec);
+  const spec = activeTab === 'development' ? placeSpec : null;
+  const openRequest = useAssistantPlace((s) => s.openRequest);
+  const setActiveTab = useUIStore((s) => s.setActiveTab) as unknown as (tab: never) => void;
+  const lang = i18n.resolvedLanguage ?? i18n.language;
+  const placeKey = user ? (spec ? `spec:${spec.projectId}` : 'help') : 'visitor';
+  const [canApply, setCanApply] = useState(false);
+  const [fill, setFill] = useState(() => fillEnabled(readStore(FILL_KEY)));
+  const [busyId, setBusyId] = useState<string | null>(null);
+  const [creating, setCreating] = useState(false);
+  const loadedFor = useRef('');
+
+  useEffect(() => { if (openRequest > 0) { setOpen(true); setTab('ask'); } }, [openRequest]);
+  // the kept conversation of this place, loaded when the chat opens there (a visitor keeps only this tab's chat)
+  useEffect(() => {
+    if (!open || !user || loadedFor.current === placeKey) return;
+    loadedFor.current = placeKey;
+    let live = true;
+    loadConversation(spec?.projectId).then((msgs) => { if (live && loadedFor.current === placeKey) setFlow({ msgs, draft: null }); })
+      .catch(() => { if (live) setFlow(initialFlow()); });
+    return () => { live = false; };
+  }, [open, user, placeKey, spec?.projectId]);
+  useEffect(() => {
+    setCanApply(false);
+    if (!spec?.projectId) return;
+    let live = true;
+    specAssistantApi.status(spec.projectId).then((s) => { if (live) setCanApply(!!s.can_apply); }).catch(() => { /* no fill switch */ });
+    return () => { live = false; };
+  }, [spec?.projectId]);
+
+  const afterReply = async (reply: ChatReply) => {
+    const step = nextStep(reply);
+    if (step?.kind === 'open-spec') { loadedFor.current = ''; openProjectSpec(setActiveTab, step.projectId); }
+    else if (step?.kind === 'create') await createNow(step.token);
+    else if (step?.kind === 'reload') spec?.onChanged?.();
+  };
+  const ask = async (msgs: FlowState['msgs']) => {
+    const reply = await askAssistant(msgs, user ? context() : undefined, lang, spec ? { projectId: spec.projectId, fill: fill && canApply } : undefined);
+    setFlow((f) => receiveReply(f, reply));
+    await afterReply(reply);
+  };
+  /** The hand-off waits for the Platform Agreement (or a retry): the create call opens the dialog and is repeated after acceptance. */
+  const createNow = async (token: string) => {
+    if (creating) return;
+    setCreating(true); setFailed(false);
+    try {
+      const made = await createFromHandoff(token);
+      setFlow((f) => ({ ...f, msgs: f.msgs.map((m) => (m.handoff?.token === token ? { ...m, handoff: undefined } : m)) }));
+      loadedFor.current = '';
+      openProjectSpec(setActiveTab, made.project.id);
+    } catch { setFailed(true); }
+    setCreating(false);
+  };
+
   const send = async () => {
     const text = input.trim();
     if (!text || sending) return;
     const next = addUserMessage(flowRef.current, text);
     setFlow(next); setInput(''); setSending(true); setFailed(false);
     try {
-      const reply = await askAssistant(next.msgs, user ? context() : undefined, i18n.resolvedLanguage ?? i18n.language);
-      setFlow((f) => receiveReply(f, reply));
+      await ask(next.msgs);
     } catch {
       setFailed(true);
     } finally {
       setSending(false);
     }
+  };
+  /** In an empty Specification chat: the assistant reads the form and asks the first missing field. */
+  const startSpec = async () => {
+    if (sending) return;
+    setSending(true); setFailed(false);
+    try { await ask([]); } catch { setFailed(true); } finally { setSending(false); }
+  };
+  const clearChat = async () => {
+    try { await clearConversation(spec?.projectId); setFlow(initialFlow()); } catch { setFailed(true); }
+  };
+  const toggleFill = (on: boolean) => { setFill(on); writeStore(FILL_KEY, on ? '1' : '0'); };
+  const cardOp = async (p: Proposal, op: 'undo' | 'apply' | 'dismiss') => {
+    if (!spec) return;
+    setBusyId(p.id); setFailed(false);
+    try {
+      if (op !== 'dismiss') await spec.beforeApply?.();
+      let card: SpecCard;
+      if (op === 'undo') card = (await specAssistantApi.undo(spec.projectId, p.id)).proposal as unknown as SpecCard;
+      else if (op === 'dismiss') card = (await specAssistantApi.dismiss(spec.projectId, p.id)).proposal as unknown as SpecCard;
+      else {
+        const fresh = await specAssistantApi.proposals(spec.projectId);
+        card = (await specAssistantApi.apply(spec.projectId, p.id, fresh.revision)).proposal as unknown as SpecCard;
+      }
+      setFlow((f) => updateCard(f, card));
+      if (op !== 'dismiss') spec.onChanged?.();
+    } catch { setFailed(true); }
+    setBusyId(null);
   };
 
   const confirm = () => { void runConfirm(flowRef.current, submitTicket, context(), setFlow); };
@@ -119,9 +217,7 @@ const SupportWidget: React.FC = () => {
             // on a phone the specification's Back / Next bar fills the bottom of the screen: the bubble sits IN the bar's free right end
             // (mobile audit 2026-11: lifted above the bar it covered the input right above it), never over Next or a field
             // (the wizard stacks below 900 px, a 768 px tablet included: there the bubble sat on Next)
-            '@media (max-width:899.95px)': { 'body:has([data-wizard-bar]) &': { bottom: 7 } },
-            // the floating specification assistant has its input and Send at the bottom right: the bubble sits above them
-            'body:has([data-assistant-floating]) &': { bottom: 112 },
+            'body:has([data-wizard-bar]) &': { bottom: 7 },
           }}
         >
           <ChatBubbleOutlineIcon />
@@ -142,11 +238,23 @@ const SupportWidget: React.FC = () => {
     }}>
       {/* header */}
       <Box sx={{ display: 'flex', alignItems: 'center', px: 1.5, py: 1, bgcolor: 'var(--panel-2)', borderBottom: '1px solid var(--line-soft)' }}>
-        <Typography sx={{ fontSize: 15, fontWeight: 800, color: 'var(--text-0)', flex: 1 }}>{t('title')}</Typography>
+        <Box sx={{ flex: 1, minWidth: 0 }}>
+          <Typography sx={{ fontSize: 15, fontWeight: 800, color: 'var(--text-0)' }}>{t('title')}</Typography>
+          {spec && <Typography data-testid="assistant-place" sx={{ fontSize: 12, color: 'var(--text-2)', overflowWrap: 'anywhere' }}>{t('place.spec', { title: spec.title })}</Typography>}
+        </Box>
+        {user && flow.msgs.length > 0 && tab === 'ask' && (
+          <Tooltip title={t('clearTip')}><Button size="small" data-testid="assistant-clear" onClick={() => void clearChat()} sx={{ textTransform: 'none', fontSize: 12, minWidth: 0 }}>{t('clear')}</Button></Tooltip>
+        )}
         <IconButton size="small" aria-label={t('close')} onClick={() => setOpen(false)} sx={{ color: 'var(--text-3)' }}>
           <CloseIcon sx={{ fontSize: 20 }} />
         </IconButton>
       </Box>
+      {spec && canApply && tab === 'ask' && (
+        <Tooltip title={t('fillTip')} placement="bottom-start">
+          <FormControlLabel sx={{ px: 1.5, m: 0, borderBottom: '1px solid var(--line-soft)' }} label={<Typography sx={{ fontSize: 13 }}>{t('fillForMe')}</Typography>}
+            control={<Switch size="small" data-testid="assistant-fill" checked={fill} onChange={(e) => toggleFill(e.target.checked)} />} />
+        </Tooltip>
+      )}
 
       {user && (
         <Tabs value={tab} onChange={(_, v) => setTab(v)} variant="fullWidth"
@@ -162,16 +270,33 @@ const SupportWidget: React.FC = () => {
           <Box ref={scrollRef} sx={{ flex: 1, overflowY: 'auto', p: 1.5, display: 'flex', flexDirection: 'column', gap: 1 }}>
             <Typography data-testid="ai-notice" sx={{ ...BODY, fontSize: 12, color: 'var(--text-2)' }}>{t('aiNotice', { ns: 'common' })}</Typography>
             <Box sx={{ alignSelf: 'flex-start', maxWidth: '88%', bgcolor: 'var(--line-soft)', color: 'var(--text-0)', px: 1.25, py: 0.85, borderRadius: 1.5, ...BODY }}>
-              {user ? t('greeting') : t('greetingVisitor')}
+              {spec ? t('greetingSpec') : user ? t('greeting') : t('greetingVisitor')}
             </Box>
+            {spec && flow.msgs.length === 0 && !sending && (
+              <Button size="small" variant="outlined" data-testid="assistant-start" onClick={() => void startSpec()} sx={{ alignSelf: 'flex-start', textTransform: 'none', fontSize: 13 }}>{t('start')}</Button>
+            )}
             {flow.msgs.map((m, i) => (
-              <Box key={i} sx={{
-                alignSelf: m.role === 'user' ? 'flex-end' : 'flex-start', maxWidth: '88%',
-                bgcolor: m.role === 'user' ? 'var(--line-accent)' : 'var(--line-soft)', color: 'var(--text-0)',
-                px: 1.25, py: 0.85, borderRadius: 1.5, ...BODY,
-                ...(m.role === 'user' ? { whiteSpace: 'pre-wrap', wordBreak: 'break-word' } : {}),
-              }}>
-                {m.role === 'assistant' ? <SupportMarkdown text={m.content} /> : m.content}
+              <Box key={i} sx={{ alignSelf: m.role === 'user' ? 'flex-end' : 'flex-start', maxWidth: '92%', display: 'flex', flexDirection: 'column' }}>
+                <Box sx={{
+                  bgcolor: m.role === 'user' ? 'var(--line-accent)' : 'var(--line-soft)', color: 'var(--text-0)',
+                  px: 1.25, py: 0.85, borderRadius: 1.5, ...BODY,
+                  ...(m.role === 'user' ? { whiteSpace: 'pre-wrap', wordBreak: 'break-word' } : {}),
+                }}>
+                  {m.role === 'assistant' ? <SupportMarkdown text={m.content} /> : m.content}
+                </Box>
+                {(m.applied?.length || m.proposals?.length) ? (
+                  <SpecChatCards applied={m.applied as unknown as Proposal[]} proposals={m.proposals as unknown as Proposal[]} schema={spec?.schema ?? null}
+                    lang={lang} canApply={canApply} busyId={busyId}
+                    onUndo={(p) => void cardOp(p, 'undo')} onApply={(p) => void cardOp(p, 'apply')} onDismiss={(p) => void cardOp(p, 'dismiss')} />
+                ) : null}
+                {m.handoff?.status === 'sign_up' && m.handoff.path && (
+                  <Button variant="contained" size="small" data-testid="assistant-signup" href={m.handoff.path} sx={{ mt: 0.75, alignSelf: 'flex-start', textTransform: 'none', fontSize: 13 }}>{t('handoff.signUp')}</Button>
+                )}
+                {m.handoff && m.handoff.status !== 'sign_up' && user && (
+                  <Button variant="contained" size="small" data-testid="assistant-create" disabled={creating} onClick={() => void createNow(m.handoff!.token)} sx={{ mt: 0.75, alignSelf: 'flex-start', textTransform: 'none', fontSize: 13 }}>
+                    {creating ? <CircularProgress size={14} /> : t('handoff.create')}
+                  </Button>
+                )}
               </Box>
             ))}
             {draftOpen && (

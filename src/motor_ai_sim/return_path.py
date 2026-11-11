@@ -128,8 +128,13 @@ def safe_app_path(raw) -> Optional[str]:
     for k, v in fields:
         first.setdefault(k, v)      # the first occurrence of a key wins, later ones are ignored
     if path in ("/projects", "/projects/", "/zh-cn/projects", "/zh-cn/projects/"):
-        # the "describe your motor" link of the launch mail: opens the New project dialog (the only query it keeps is new=spec)
-        return ("/zh-cn" if path.startswith("/zh-cn") else "") + "/projects?new=spec" if first.get("new") == "spec" else None
+        # the "describe your motor" link of the launch mail: opens the New project dialog (the only queries it keeps are new=spec
+        # and the assistant's hand-off token, owner 2026-11-11: a visitor's values survive the sign-up)
+        if first.get("new") != "spec":
+            return None
+        hand = first.get("handoff") or ""
+        tail = "&handoff=" + hand if re.match(r"^[A-Za-z0-9_-]{16,64}$", hand) else ""
+        return ("/zh-cn" if path.startswith("/zh-cn") else "") + "/projects?new=spec" + tail
     m = _PROD.match(path)
     if m:
         return _production(m.group(1), m.group(2), m.group(3), first)

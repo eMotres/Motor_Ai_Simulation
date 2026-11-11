@@ -12,7 +12,7 @@ from fastapi.testclient import TestClient
 from motor_ai_sim import auth, users
 from motor_ai_sim.development import spec_assistant as A, spec_assistant_history as HI, spec_proposals as P, store
 from motor_ai_sim.development.routes import router as dev_router
-from motor_ai_sim.development.spec_assistant_prompt import SPEC_PROMPT
+from motor_ai_sim.support_prompt import SPEC_SECTION as SPEC_PROMPT
 from motor_ai_sim.development.spec_assistant_routes import router
 
 H = {"Authorization": "Bearer dev"}
@@ -127,13 +127,17 @@ def test_customer_role_and_fill_off_get_cards_only(env, monkeypatch):
 
 
 def test_customer_decisions_are_never_filled_and_stated_only_fields_need_stated(env, monkeypatch):
+    """Customer decisions are never proposed or assumed; since 2026-11-11 the assistant writes down what the CUSTOMER SAID
+    (basis "stated") so the specification can be finished in the chat.  Commercial fields: never, not even stated."""
     before = _wrapper()["draft"]
     markers = [_marker("6_1", {"prototypes": 3}), _marker("6_2", {"x": 1}), _marker("4_2", {"target_kg": 2}),
                _marker("6_3", {"x": 1}), _marker("quantities", {"x": 1}), _marker("target_price", 5),
-               _marker("6_5", "mutual NDA", basis="stated")]
+               _marker("6_3", {"amount": 9}, basis="stated"), _marker("target_price", 7, basis="stated")]
     out = _fill_turn(monkeypatch, markers)
     assert out["applied"] == [] and out["proposals"] == []
     assert _wrapper()["draft"] == before
+    out = _fill_turn(monkeypatch, [_marker("6_5", "mutual NDA", basis="stated")])
+    assert [p["field_id"] for p in out["applied"]] == ["6_5"] and out["applied"][0]["basis"] == "stated"
     out = _fill_turn(monkeypatch, [_marker("2_1", {"supply_type": "dc_source", "dc_source_V": 50})])
     assert out["applied"] == [] and [p["field_id"] for p in out["proposals"]] == ["2_1"]
     for fid in ("1_1", "key_points", "2_2"):

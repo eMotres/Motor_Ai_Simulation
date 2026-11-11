@@ -272,7 +272,8 @@ test('every assistant says it is one: the same line in the help chat, the specif
   assert.equal(common('en').legal.aiDisclosure, 'AI assistant \u2014 answers can be wrong.');
   assert.equal(common('zh-CN').legal.aiDisclosure, '人工智能助手——回答可能有误。');
   const read = (...p) => readFileSync(join(HERE, '..', '..', ...p), 'utf8');
-  for (const f of [['components', 'support', 'SupportWidget.tsx'], ['modules', 'development', 'components', 'SpecAssistantPanel.tsx'], ['modules', 'designer', 'DesignerTab.tsx']]) {
+  // ONE assistant (2026-11-11): the help chat IS the specification assistant now (SupportWidget in spec mode)
+  for (const f of [['components', 'support', 'SupportWidget.tsx'], ['modules', 'designer', 'DesignerTab.tsx']]) {
     const src = read(...f);
     assert.match(src, /tc\('legal\.aiDisclosure'\)/, f.join('/'));
     assert.match(src, /data-testid="ai-disclosure"/);

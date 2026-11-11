@@ -16,9 +16,27 @@ export const TICKET_TYPES: readonly TicketType[] = ['bug', 'feature', 'question'
 export const MAX_TITLE = 120;
 export const MAX_DESCRIPTION = 4000;
 
-export interface ChatMsg { role: 'user' | 'assistant'; content: string; }
+/** A specification card the assistant left (a proposal or an applied fill); its shape is the server's (development/specAssistant.ts). */
+export interface SpecCard { id: string; field_id: string; status: string; [key: string]: unknown }
+/** What the server did after [[CREATE_SPEC]] (owner 2026-11-11: the assistant creates the specification itself). */
+export interface Handoff { token: string; status: 'agreement_required' | 'sign_up' | 'failed'; path?: string; message?: string }
+export interface ChatMsg {
+  role: 'user' | 'assistant'; content: string;
+  /** spec cards of this reply: fills (with Undo) and proposals (with Apply) */
+  applied?: SpecCard[]; proposals?: SpecCard[];
+  /** the hand-off of this reply, while it still needs the user (agreement, sign-up, retry) */
+  handoff?: Handoff;
+}
 export interface TicketDraft { type: TicketType; title: string; description: string; }
-export interface ChatReply { reply: string; source: string; ticketDraft: TicketDraft | null; }
+export interface ChatReply {
+  reply: string; source: string; ticketDraft: TicketDraft | null;
+  mode?: 'spec' | 'help'; applied?: SpecCard[]; proposals?: SpecCard[];
+  /** the specification was submitted through the chat */
+  submitted?: { version: number; unchanged?: boolean } | null;
+  /** a project the assistant just created, and whether to open its Specification */
+  project?: { id: string; title: string } | null; openSpec?: boolean; handoff?: Handoff | null;
+  sources?: Array<{ url: string; title?: string }>;
+}
 
 /** A draft from the server, or null when it is not a usable one (a title is required). */
 export function normalizeDraft(x: unknown): TicketDraft | null {
@@ -43,12 +61,42 @@ export function normalizeDraft(x: unknown): TicketDraft | null {
  * response WITHOUT one is an error.  The exception is a reply that is only a
  * ticket draft (empty text): the card IS the answer.
  */
+const cards = (x: unknown): SpecCard[] => (Array.isArray(x) ? x : []).filter((c): c is SpecCard =>
+  !!c && typeof c === 'object' && typeof (c as SpecCard).id === 'string' && typeof (c as SpecCard).field_id === 'string');
+const HANDOFF = ['agreement_required', 'sign_up', 'failed'];
+const SIGN_UP_PATH = /^(\/zh-cn)?\/projects\?new=spec&handoff=[A-Za-z0-9_-]{16,64}$/;
+/** A hand-off from the server, kept only when it is usable; a sign-up path must be the app's own /projects?new=spec link. */
+export function normalizeHandoff(x: unknown): Handoff | null {
+  const h = x as Partial<Handoff> | null;
+  if (!h || typeof h !== 'object' || typeof h.token !== 'string' || !/^[A-Za-z0-9_-]{16,64}$/.test(h.token)) return null;
+  if (!HANDOFF.includes(String(h.status))) return null;
+  const path = typeof h.path === 'string' && SIGN_UP_PATH.test(h.path) ? h.path : undefined;
+  if (h.status === 'sign_up' && !path) return null;
+  return { token: h.token, status: h.status as Handoff['status'], ...(path ? { path } : {}), ...(typeof h.message === 'string' ? { message: h.message } : {}) };
+}
+
 export function chatReplyFrom(status: number, body: unknown): ChatReply | null {
-  const b = body as { reply?: unknown; source?: unknown; ticketDraft?: unknown } | null;
+  const b = body as Record<string, unknown> | null;
   const reply = typeof b?.reply === 'string' ? b.reply.trim() : '';
   const ticketDraft = normalizeDraft(b?.ticketDraft);
   if (!reply && !ticketDraft) return null;
-  if (status >= 200 && status < 300) return { reply, source: String(b?.source ?? ''), ticketDraft };
+  if (status >= 200 && status < 300) {
+    const project = b?.project as { id?: unknown; title?: unknown } | undefined;
+    const submitted = b?.submitted as { version?: unknown; unchanged?: unknown } | undefined;
+    const sources = (Array.isArray(b?.sources) ? b.sources : []) as Array<{ url?: unknown; title?: unknown }>;
+    // only what the reply carries: a plain help answer stays {reply, source, ticketDraft}
+    const applied = cards(b?.applied), proposals = cards(b?.proposals), handoff = normalizeHandoff(b?.handoff);
+    const links = sources.filter((x) => typeof x?.url === 'string' && /^https?:\/\//.test(x.url))
+      .map((x) => ({ url: String(x.url), ...(typeof x.title === 'string' ? { title: x.title } : {}) }));
+    return {
+      reply, source: String(b?.source ?? ''), ticketDraft,
+      ...(b?.mode === 'spec' ? { mode: 'spec' as const } : {}),
+      ...(applied.length ? { applied } : {}), ...(proposals.length ? { proposals } : {}),
+      ...(submitted && typeof submitted.version === 'number' ? { submitted: { version: submitted.version, unchanged: !!submitted.unchanged } } : {}),
+      ...(project && typeof project.id === 'string' ? { project: { id: project.id, title: String(project.title ?? project.id) }, openSpec: b?.openSpec === true } : {}),
+      ...(handoff ? { handoff } : {}), ...(links.length ? { sources: links } : {}),
+    };
+  }
   if (status === 429) return { reply, source: String(b?.source ?? 'rate_limited'), ticketDraft: null };
   return null;
 }
@@ -82,7 +130,11 @@ export const addUserMessage = (s: FlowState, text: string): FlowState =>
  *  draft opens the card.  There is one card at a time: a newer draft replaces
  *  the one before it, whatever state that one was in. */
 export function receiveReply(s: FlowState, r: ChatReply): FlowState {
-  const msgs = r.reply ? [...s.msgs, { role: 'assistant' as const, content: r.reply }] : s.msgs;
+  const extra = {
+    ...(r.applied?.length ? { applied: r.applied } : {}), ...(r.proposals?.length ? { proposals: r.proposals } : {}),
+    ...(r.handoff ? { handoff: r.handoff } : {}),
+  };
+  const msgs = r.reply ? [...s.msgs, { role: 'assistant' as const, content: r.reply, ...extra }] : s.msgs;
   if (!r.ticketDraft) return { ...s, msgs };
   return { msgs, draft: { draft: r.ticketDraft, status: 'editing', intro: !r.reply } };
 }
@@ -147,4 +199,38 @@ export async function runConfirm(
   }
   onState(done);
   return done;
+}
+
+// ── the ONE assistant: what a reply asks the widget to do next ─────────────────────────────────────────────────────────────
+export type NextStep =
+  | { kind: 'open-spec'; projectId: string }           // a project was created: open its Specification, the chat goes on there
+  | { kind: 'create'; token: string }                  // the Platform Agreement first: the create call shows the dialog, then retries
+  | { kind: 'reload' }                                 // the form changed (fills or a submit): reload it
+  | null;
+
+export function nextStep(r: ChatReply): NextStep {
+  if (r.project && r.openSpec) return { kind: 'open-spec', projectId: r.project.id };
+  if (r.handoff?.status === 'agreement_required') return { kind: 'create', token: r.handoff.token };
+  if ((r.applied?.length ?? 0) > 0 || r.submitted) return { kind: 'reload' };
+  return null;
+}
+
+/** What goes back to the server as the conversation: role and text only (the cards and the hand-off are the server's own). */
+export const forServer = (msgs: ChatMsg[]): Array<{ role: ChatMsg['role']; content: string }> =>
+  msgs.map((m) => ({ role: m.role, content: m.content }));
+
+/** Rows of a kept conversation (GET history) as chat messages, with the cards of each reply. */
+export function fromHistory(rows: unknown): ChatMsg[] {
+  return (Array.isArray(rows) ? rows : []).flatMap((r) => {
+    const m = r as { role?: unknown; text?: unknown; applied?: unknown; proposals?: unknown };
+    if ((m.role !== 'user' && m.role !== 'assistant') || typeof m.text !== 'string' || !m.text.trim()) return [];
+    const applied = cards(m.applied), proposals = cards(m.proposals);
+    return [{ role: m.role as ChatMsg['role'], content: m.text, ...(applied.length ? { applied } : {}), ...(proposals.length ? { proposals } : {}) }];
+  });
+}
+
+/** Replace one card everywhere in the conversation (after Apply / Undo / Dismiss). */
+export function updateCard(s: FlowState, card: SpecCard): FlowState {
+  const swap = (list?: SpecCard[]) => list?.map((c) => (c.id === card.id ? { ...c, ...card } : c));
+  return { ...s, msgs: s.msgs.map((m) => (m.applied || m.proposals ? { ...m, applied: swap(m.applied), proposals: swap(m.proposals) } : m)) };
 }

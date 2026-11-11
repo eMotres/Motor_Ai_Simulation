@@ -102,7 +102,8 @@ t('an equal copy of the saved draft counts as nothing typed', () => {
 
 t('the assistant Apply reloads without the review dialog, which stays for a real conflict', () => {
   const page = readFileSync(new URL('../components/DevelopmentPage.tsx', import.meta.url), 'utf8');
-  assert.match(page, /beforeApply=\{flushBeforeApply\} onApplied=\{\(\) => \{ void reloadAfterApply\(\); \}\}/);
+  // ONE assistant (2026-11-11): the chat bubble gets the same hooks through the assistant place
+  assert.match(page, /beforeApply: flushBeforeApply,\s*onChanged: \(\) => \{ void reloadAfterApplyRef\.current\(\); \}/);
   assert.match(page, /onReloadDraft=\{\(\) => void reloadDraft\(\)\}/);
 });
 

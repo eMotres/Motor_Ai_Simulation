@@ -9,8 +9,9 @@ POST /api/projects/{id}/spec/proposals/{pid}/undo           spec editors only: r
 GET  /api/projects/{id}/spec/assistant/history              this user's kept conversation (staff: ?user=<email>)
 DELETE /api/projects/{id}/spec/assistant/history            clear this user's conversation
 
-Members of the project reach the assistant when ``DESIGN_AGENT_SPEC_ACCESS=members`` (default ``staff``).  The
-assistant never writes the draft; only ``apply`` does, through the same normalise + revision check as ``PUT /spec``.
+ONE assistant (owner 2026-11-11): the chat bubble talks to ``POST /api/support/chat`` with a ``place`` naming the project, which runs
+the same ``spec_assistant.turn``; the POST route here stays for API callers.  Every member of the project reaches it (staff too).
+The assistant never writes the draft itself; only ``apply`` / fill mode do, through the same normalise + revision check as ``PUT /spec``.
 """
 from __future__ import annotations
 
@@ -63,7 +64,14 @@ async def assistant_turn(request: Request, project_id: str):
         body = {}
     body = body if isinstance(body, dict) else {}
     fill = can_apply and body.get("fill") is not False        # fill mode: on by default for whoever can apply
-    out = A.turn(project_id, project, user, body.get("messages"), body.get("lang"), can_apply=can_apply, fill=fill)
+    base = None
+    try:                                                      # the ONE assistant's prompt for this caller's role (help + spec)
+        from motor_ai_sim.routes import support as S
+        auth = request.headers.get("authorization")
+        base = S.build_system_prompt(S._caller_role(auth), anon=False, authorization=auth, spec=True)
+    except Exception:                                         # noqa: BLE001 - the customer prompt is the fallback
+        base = None
+    out = A.turn(project_id, project, user, body.get("messages"), body.get("lang"), can_apply=can_apply, fill=fill, base_prompt=base)
     _remember(project_id, user, body.get("messages"), out)
     return out
 
@@ -88,11 +96,13 @@ def _remember(project_id: str, user: dict, raw_messages, out: dict) -> None:
         last = next((m for m in reversed(raw_messages) if isinstance(m, dict) and m.get("role") == "user"), None) \
             if isinstance(raw_messages, list) else None
         text = last.get("content") if last and isinstance(last.get("content"), str) else ""
-        AR.log_turn(assistant="spec", conv_id=AR.conv_key("spec", project_id, email), account=email, project_id=project_id,
-                    page="development.specification", user_text=text, reply=out.get("reply", ""), model=out.get("model", ""),
-                    source=out.get("source", ""), error="provider error" if out.get("source") == "error" else "",
+        AR.log_turn(assistant="assistant", context="spec", conv_id=AR.conv_key("spec", project_id, email), account=email,
+                    project_id=project_id, page="development.specification", user_text=text, reply=out.get("reply", ""),
+                    model=out.get("model", ""), source=out.get("source", ""),
+                    error="provider error" if out.get("source") == "error" else "",
                     fill_mode=out.get("fill_mode"), applied=out.get("applied"), proposed=out.get("proposals"),
-                    refused=out.get("refused"), dropped=out.get("dropped", 0))
+                    refused=out.get("refused"), dropped=out.get("dropped", 0), searches=out.get("searches"),
+                    sources=out.get("sources"))
     except Exception:                                         # noqa: BLE001
         pass
 
@@ -101,7 +111,7 @@ def _event(project_id: str, user: dict, event: str, proposal: dict) -> None:
     try:
         from motor_ai_sim import assistant_archive as AR
         email = str(user.get("email") or "").lower()
-        AR.log_event(assistant="spec", event=event, conv_id=AR.conv_key("spec", project_id, email), account=email,
+        AR.log_event(assistant="assistant", context="spec", event=event, conv_id=AR.conv_key("spec", project_id, email), account=email,
                      project_id=project_id, field_id=str(proposal.get("field_id") or ""), proposal_id=str(proposal.get("id") or ""))
     except Exception:                                         # noqa: BLE001
         pass

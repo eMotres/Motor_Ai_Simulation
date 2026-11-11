@@ -31,7 +31,8 @@ const proposal = (extra = {}) => ({ id: 'p-1', field_id: '4_8', value: { balance
 
 test('every proposal card is labelled as an AI suggestion, in both languages', () => {
   const read = (rel) => readFileSync(new URL(rel, import.meta.url), 'utf8');
-  assert.match(read('../components/SpecAssistantPanel.tsx'), /data-testid="spec-proposal"[\s\S]{0,300}specAssistant\.aiSuggestion/);
+  // ONE assistant (2026-11-11): the cards live in the chat bubble now
+  assert.match(read('../../../components/support/SpecChatCards.tsx'), /data-testid="spec-proposal"[\s\S]{0,300}specAssistant\.aiSuggestion/);
   assert.ok(JSON.parse(read('../../../locales/en/development.json')).specAssistant.aiSuggestion.startsWith('AI suggestion'));
   assert.ok(JSON.parse(read('../../../locales/zh-CN/development.json')).specAssistant.aiSuggestion.startsWith('AI 建议'));
 });
@@ -39,6 +40,15 @@ test('every proposal card is labelled as an AI suggestion, in both languages', (
 test('a structured value shows labelled properties with units and hides ui_hidden ones', () => {
   assert.equal(formatProposalValue(schema, '4_8', { balance_grade: 'G2.5', runout_mm: 0.05, note: 'x' }, 'en'), 'Balance grade: G2.5; Runout: 0.05 mm');
   assert.equal(formatProposalValue(schema, '4_8', { balance_grade: 'G2.5', runout_mm: 0.05 }, 'zh-CN'), '平衡等级: G2.5; 跳动: 0.05 mm');
+});
+
+test('a nested group reads as text and row ids stay hidden (the assistant cards of 2026-11-11 showed [object Object])', () => {
+  const s = { sections: [{ id: '3', fields: [{ id: '3_1', properties: [{ id: 'cooling_medium', label: 'Cooling' },
+    { id: 'airflow', label: 'Airflow', properties: [{ id: 'mode', label: 'Mode' }, { id: 'speed_mps', label: 'Speed', unit: 'm/s' }] }] }] },
+  { id: '1', fields: [{ id: 'key_points', items: { properties: [{ id: 'name', label: 'Point' }, { id: 'speed_rpm', label: 'Speed', unit: 'rpm' }] } }] }] };
+  assert.equal(formatProposalValue(s, '3_1', { cooling_medium: 'air', airflow: { mode: 'Propeller wash', speed_mps: 8.7 } }, 'en'),
+    'Cooling: air; Airflow: Mode: Propeller wash, Speed: 8.7 m/s');
+  assert.equal(formatProposalValue(s, 'key_points', [{ row_id: 'r-1', name: 'Hover', speed_rpm: 2601 }], 'en'), 'Point: Hover; Speed: 2601 rpm');
 });
 
 test('options show their label, ranges and rows read plainly, an unknown field falls back to its value', () => {

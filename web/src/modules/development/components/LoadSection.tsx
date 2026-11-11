@@ -4,6 +4,7 @@ import ChatBubbleOutlineIcon from '@mui/icons-material/ChatBubbleOutline';
 import HourglassFullIcon from '@mui/icons-material/HourglassFull';
 import HourglassEmptyIcon from '@mui/icons-material/HourglassEmpty';
 import PropellerPicker from './PropellerPicker';
+import { RequiredMark } from './specWizard/ui';
 import HelpTip from '../../../components/common/HelpTip';
 import { isValidLoadCurve, shaftPowerW } from '../missionProfileState';
 import type { LoadDraft, LoadType } from '../missionProfileState';
@@ -29,7 +30,7 @@ export default function LoadSection({ value, canEdit = true, engineerView = fals
   const unsupported = value.load_type === 'marine_propeller' || value.load_type === 'water_jet';
   const unknownControl = (field: string) => { const unknown = status[field] === 'not_known_yet'; if (!unknown && filled(field)) return null; return <Tooltip title={t('wizard.notKnownYet')}><span><IconButton size="small" aria-label={t('wizard.notKnownYet')} aria-pressed={unknown} disabled={!canEdit} onClick={() => setUnknown(field, !unknown)} sx={{ p: 0.2, color: unknown ? 'warning.main' : 'var(--text-4)' }}>{unknown ? <HourglassFullIcon sx={{ fontSize: 15 }} /> : <HourglassEmptyIcon sx={{ fontSize: 15 }} />}</IconButton></span></Tooltip>; };
   const reviewButton = (field: string) => { const ref = `fields.${field}`, open = getOpenReviewCount?.(ref) ?? 0; return onReview && open > 0 ? <Tooltip title={`${t('fieldReview')} (${open})`}><IconButton size="small" aria-label={t('fieldReview')} onClick={() => onReview(ref)} sx={{ p: 0.3, color: 'primary.main' }}><ChatBubbleOutlineIcon sx={{ fontSize: 14 }} /><Box component="span" sx={{ fontSize: 10, ml: 0.2 }}>{open}</Box></IconButton></Tooltip> : null; };
-  const fieldLabel = (field: string, text: string, required = false, noReview = false, noUnknown = false) => <Stack direction="row" alignItems="center" spacing={0.3} sx={{ mb: 0.5 }}><Typography sx={{ color: 'var(--text-2)', fontSize: 11, fontWeight: 700 }}>{text}{required && <Box component="span" sx={{ color: 'error.main' }}> *</Box>}</Typography>{!noUnknown && unknownControl(field)}{!noReview && reviewButton(field)}</Stack>;
+  const fieldLabel = (field: string, text: string, required = false, noReview = false, noUnknown = false) => <Stack direction="row" alignItems="center" spacing={0.3} sx={{ mb: 0.5 }}><Typography sx={{ color: 'var(--text-2)', fontSize: 11, fontWeight: 700 }}>{text}{required && <RequiredMark tip={t('wizard.requiredMark')} />}</Typography>{!noUnknown && unknownControl(field)}{!noReview && reviewButton(field)}</Stack>;
   return <Stack spacing={1.3}>
     <Box><Stack spacing={1.2}>
       <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', md: 'repeat(2,minmax(0,1fr))' }, gap: '12px' }}>

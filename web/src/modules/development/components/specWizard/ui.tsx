@@ -9,6 +9,11 @@ import { CONTINUOUS, type KeyPointDuration } from '../../keyPoints';
 
 export const TOUCH = 44;
 
+/** The required-field mark (owner 2026-11-11: the customer must SEE what has to be filled): a red asterisk with a "required" tooltip. */
+export function RequiredMark({ tip }: { tip: string }) {
+  return <Tooltip title={tip} enterTouchDelay={0} disableInteractive><Box component="span" data-required-mark aria-label={tip} sx={{ color: 'error.main', fontWeight: 700, cursor: 'help' }}> *</Box></Tooltip>;
+}
+
 /** One card of a step: an optional title (with a tooltip and a trailing action) above its content. */
 export function StepCard({ id, title, tip, action, accent, children, cardColumn }: { id?: string; title?: string; tip?: string; action?: React.ReactNode; accent?: string; children: React.ReactNode; cardColumn?: string }) {
   return <Paper component="section" elevation={0} id={id} aria-label={title} sx={{ '--spec-col': cardColumn, p: { xs: '14px', md: '20px' }, minWidth: 0, scrollMarginTop: 12, bgcolor: 'var(--panel)', border: '1px solid var(--line)', borderRadius: '14px', boxShadow: 'none' }}>

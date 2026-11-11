@@ -1,5 +1,6 @@
-import { useEffect, useRef, useState } from 'react';
-import { Alert, Box, Button, IconButton, LinearProgress, Stack, Tooltip, Typography, useMediaQuery } from '@mui/material';
+import { Fragment, useEffect, useRef, useState } from 'react';
+import { Alert, Box, Button, Chip, IconButton, LinearProgress, Stack, Tooltip, Typography, useMediaQuery } from '@mui/material';
+import { localized } from './reviewSummary';
 import { readView, writeView } from '../../../../lib/viewMemory';
 import ChatBubbleOutlineIcon from '@mui/icons-material/ChatBubbleOutline';
 import CheckIcon from '@mui/icons-material/Check';
@@ -12,8 +13,7 @@ import { overallProgress, stepCommentRefs, stepIndexForField } from './steps';
 import { TOUCH } from './ui';
 import { NARROW } from '../../../../lib/narrowLayout';
 
-/** Below the wide layout (no step list on the left, a tablet too) the help bubble docks in the bar's right end. */
-const WIZARD_STACKED = '@media (max-width:899.95px)';
+// The assistant's chat bubble docks in the Back / Next bar's free right end at every width (2026-11-11: on a desktop it covered Next).
 
 export interface SpecWizardProps {
   project: ProjectSummary;
@@ -92,6 +92,8 @@ export default function SpecWizard(p: SpecWizardProps) {
   }, [step, revealField]);
 
   const progress = overallProgress(completeness);
+  const simMissing = completeness?.simulation_missing ?? [];
+  const fieldName = (id: string) => { const f = fieldSteps.flatMap((s) => s.fields).find((x) => x.id === id); return f ? localized(f.short_label ?? f.label, env.lang) : id; };
   const sectionComments = p.messages.filter((m) => !m.resolved && stepCommentRefs(current).includes(m.field_ref ?? ''));
   const stepEnv: StepEnv = { ...env, goToStep: onStep, revealField, groupOpen, onGroupOpen };
   const openComments = p.messages.filter((m) => !m.resolved && !!m.field_ref);
@@ -109,6 +111,12 @@ export default function SpecWizard(p: SpecWizardProps) {
         <LinearProgress variant="determinate" value={progress.pct} aria-hidden sx={{ height: 8, borderRadius: 4, bgcolor: 'var(--app-bg)' }} />
       </Box>
     </Tooltip>
+    {/* the simulation minimum (owner 2026-11-11: the customer sees what blocks Submit): a chip that jumps to the first missing field */}
+    {simMissing.length > 0
+      ? <Tooltip title={<>{tr('wizard.review.simulationMissing')}{simMissing.map((m) => <Fragment key={m.field}><br />• {fieldName(m.field_id)}</Fragment>)}</>}>
+          <Chip data-testid="sim-minimum" color="warning" variant="outlined" onClick={() => reveal(simMissing[0].field_id)} label={tr('wizard.simMissingCount', { count: simMissing.length })} sx={{ minHeight: 32, fontWeight: 600 }} />
+        </Tooltip>
+      : completeness?.simulation_ready ? <Chip data-testid="sim-minimum" color="success" variant="outlined" label={tr('wizard.simReady')} sx={{ minHeight: 32 }} /> : null}
     <Typography role="status" sx={{ fontSize: 12.5, display: 'flex', alignItems: 'center', gap: 0.6, color: saveError ? 'error.main' : saving ? 'var(--text-3)' : 'success.main', whiteSpace: 'nowrap' }}>
       {!saveError && !saving && <CheckIcon sx={{ fontSize: 15 }} />}{saveError ? tr('saveFailedShort') : saving ? tr('saving') : tr('wizard.saved')}
     </Typography>
@@ -148,7 +156,7 @@ export default function SpecWizard(p: SpecWizardProps) {
         {saveError && <Alert severity="error" action={<><Button color="inherit" size="small" onClick={p.onRetrySave}>{tr('retrySave')}</Button><Button color="inherit" size="small" onClick={p.onReloadDraft}>{tr('reloadDraft')}</Button></>}>{tr('saveFailed', { reason: saveError })}</Alert>}
         {/* Phone (mobile audit 2026-11): the step counter is already in the step bar above, so the bar keeps Back and Next on one line
             each, and its right end is left free for the help bubble (SupportWidget sits there instead of over the fields). */}
-        <Stack data-wizard-bar direction="row" alignItems="center" spacing={1.5} sx={{ position: 'sticky', bottom: 0, zIndex: 2, bgcolor: 'var(--panel)', border: '1px solid var(--line)', borderRadius: '14px', px: 1.5, py: 1, boxShadow: '0 -4px 12px rgba(0,0,0,.06)', [WIZARD_STACKED]: { pr: '72px' } }}>
+        <Stack data-wizard-bar direction="row" alignItems="center" spacing={1.5} sx={{ position: 'sticky', bottom: 0, zIndex: 2, bgcolor: 'var(--panel)', border: '1px solid var(--line)', borderRadius: '14px', px: 1.5, py: 1, boxShadow: '0 -4px 12px rgba(0,0,0,.06)', pr: '72px' }}>
           <Button variant="outlined" disabled={!back} onClick={() => onStep(step - 1)} sx={{ minHeight: 48, px: 2.5, textTransform: 'none', borderRadius: '12px', flexShrink: 0 }}>{tr('previous')}</Button>
           <Typography sx={{ flex: 1, textAlign: 'center', fontSize: 13, color: 'var(--text-3)', [NARROW]: { display: 'none' } }}>{isReview ? tr(current.title) : tr('wizard.stepOf', { step: step + 1, total: fieldSteps.length })}</Typography>
           {!isReview && next && <Button variant="contained" onClick={() => onStep(step + 1)} sx={{ minHeight: 48, px: 3, textTransform: 'none', borderRadius: '12px', fontWeight: 600, minWidth: 0, [NARROW]: { flex: 1, px: 1.5 } }}><Box component="span" sx={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{tr(next.kind === 'review' ? 'wizard.toReview' : 'wizard.nextTo', { title: tr(next.title) })}</Box></Button>}

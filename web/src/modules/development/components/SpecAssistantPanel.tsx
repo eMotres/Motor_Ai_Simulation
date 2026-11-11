@@ -3,16 +3,18 @@
  * The in-app support assistant, in spec mode, asks about the missing design-critical fields and PROPOSES values with a
  * one-line reason.  A proposal is a card (field, value with unit, reason, the recalculations it triggers); nothing is
  * written to the specification until a spec editor (the project owner or an admin) presses Apply.  Everybody else sees
- * the card with "the project owner applies".  The chat lives in this browser tab (the server is stateless).
+ * the card with "the project owner applies".  Owner 2026-11-11: with "Fill the form for me" on (default for whoever can apply) the
+ * server applies the valid values at once and the panel shows an applied card with Undo; the conversation is kept on the server
+ * (per project and user) and loaded when the panel opens.
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Box, Button, CircularProgress, IconButton, Paper, TextField, Tooltip, Typography } from '@mui/material';
+import { Box, Button, Chip, CircularProgress, FormControlLabel, IconButton, Paper, Switch, TextField, Tooltip, Typography } from '@mui/material';
 import CloseIcon from '@mui/icons-material/Close';
 import SendIcon from '@mui/icons-material/Send';
 import SmartToyOutlinedIcon from '@mui/icons-material/SmartToyOutlined';
 import { useTranslation } from 'react-i18next';
 import type { DevelopmentSchema } from '../types';
-import { applyFailure, cardAction, cardView, historyForServer, langOf, openProposals, type ChatMessage, type Proposal } from '../specAssistant';
+import { applyFailure, basisOf, cardAction, cardView, fillEnabled, filledState, fromStored, historyForServer, langOf, openProposals, type ChatMessage, type Proposal } from '../specAssistant';
 import { specAssistantApi, SpecAssistantError, type AssistantStatus } from '../specAssistantApi';
 
 interface Props {
@@ -29,13 +31,9 @@ interface Props {
 }
 
 const OPEN_KEY = 'specAssistant.open';
-const chatKey = (id: string) => `specAssistant.chat.${id}`;
+const FILL_KEY = 'specAssistant.fill';
 const readStore = (k: string): string | null => { try { return window.localStorage.getItem(k); } catch { return null; } };
 const writeStore = (k: string, v: string) => { try { window.localStorage.setItem(k, v); } catch { /* storage may be blocked */ } };
-const readChat = (id: string): ChatMessage[] => {
-  try { const raw = window.sessionStorage.getItem(chatKey(id)); const v = raw ? JSON.parse(raw) : []; return Array.isArray(v) ? v : []; } catch { return []; }
-};
-const writeChat = (id: string, m: ChatMessage[]) => { try { window.sessionStorage.setItem(chatKey(id), JSON.stringify(m.slice(-40))); } catch { /* ignore */ } };
 
 export default function SpecAssistantPanel({ projectId, schema, lang, beforeApply, onApplied, docked = false }: Props) {
   const { t } = useTranslation('development');
@@ -43,7 +41,8 @@ export default function SpecAssistantPanel({ projectId, schema, lang, beforeAppl
   const ui = langOf(lang);
   const [status, setStatus] = useState<AssistantStatus | null>(null);
   const [open, setOpen] = useState(() => readStore(OPEN_KEY) === '1');
-  const [messages, setMessages] = useState<ChatMessage[]>(() => readChat(projectId));
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [fill, setFill] = useState(() => fillEnabled(readStore(FILL_KEY)));
   const [proposals, setProposals] = useState<Proposal[]>([]);
   const [canApply, setCanApply] = useState(false);
   const [text, setText] = useState('');
@@ -63,26 +62,41 @@ export default function SpecAssistantPanel({ projectId, schema, lang, beforeAppl
 
   useEffect(() => {
     token.current += 1;
-    setStatus(null); setProposals([]); setError(''); setMessages(readChat(projectId));
+    setStatus(null); setProposals([]); setError(''); setMessages([]);
     let live = true;
     specAssistantApi.status(projectId).then((s) => { if (live) { setStatus(s); setCanApply(s.can_apply); } }).catch(() => { if (live) setStatus({ allowed: false, can_apply: false, configured: false }); });
     return () => { live = false; };
   }, [projectId]);
   useEffect(() => { if (status?.allowed && open) void refresh(); }, [status?.allowed, open, refresh]);
+  // the kept conversation: loaded from the server whenever the panel is (re)opened
+  useEffect(() => {
+    if (!status?.allowed || !open) return undefined;
+    let live = true;
+    specAssistantApi.history(projectId).then((h) => { if (live) setMessages(fromStored(h.messages)); }).catch(() => { /* keep what is shown */ });
+    return () => { live = false; };
+  }, [status?.allowed, open, projectId]);
   useEffect(() => { bottom.current?.scrollIntoView?.({ block: 'end' }); }, [messages.length, sending, proposals.length, open]);
 
+  // asked to open by the deep link after Create (/projects?new=spec): open, fill mode on
+  useEffect(() => {
+    const onOpen = () => { setOpen(true); setFill(true); };
+    window.addEventListener('specAssistant:open', onOpen);
+    return () => window.removeEventListener('specAssistant:open', onOpen);
+  }, []);
   const toggle = (next: boolean) => { setOpen(next); writeStore(OPEN_KEY, next ? '1' : '0'); };
 
   const send = async (typed: string) => {
     if (sending) return;
     const content = typed.trim();
     const next = content ? [...messages, { role: 'user' as const, content }] : messages;
-    if (content) { setMessages(next); writeChat(projectId, next); setText(''); }
+    if (content) { setMessages(next); setText(''); }
     setSending(true); setError('');
     try {
-      const turn = await specAssistantApi.turn(projectId, historyForServer(next), ui);
-      const after = [...next, { role: 'assistant' as const, content: turn.reply }];
-      setMessages(after); writeChat(projectId, after);
+      const turn = await specAssistantApi.turn(projectId, historyForServer(next), ui, fill && canApply);
+      const filled = turn.applied ?? [];
+      const after = [...next, { role: 'assistant' as const, content: turn.reply, ...(filled.length ? { applied: filled } : {}) }];
+      setMessages(after);
+      if (filled.length) onApplied();
       await refresh();
     } catch (e) {
       setError(e instanceof SpecAssistantError && e.status === 403 ? t('specAssistant.closed') : t('specAssistant.failed'));
@@ -104,6 +118,23 @@ export default function SpecAssistantPanel({ projectId, schema, lang, beforeAppl
     await refresh();
     setBusyId(null);
   };
+  const undo = async (p: Proposal) => {
+    setBusyId(p.id); setError('');
+    try {
+      await beforeApply?.();
+      await specAssistantApi.undo(projectId, p.id);
+      setMessages((rows) => rows.map((m) => (m.applied ? { ...m, applied: m.applied.map((a) => (a.id === p.id ? { ...a, status: 'undone' as const } : a)) } : m)));
+      onApplied();
+    } catch (e) {
+      setError(t(e instanceof SpecAssistantError && e.status === 409 ? 'specAssistant.undoFailed' : 'specAssistant.applyFailed'));
+    }
+    setBusyId(null);
+  };
+  const clearChat = async () => {
+    setError('');
+    try { await specAssistantApi.clearHistory(projectId); setMessages([]); } catch { setError(t('specAssistant.applyFailed')); }
+  };
+  const toggleFill = (on: boolean) => { setFill(on); writeStore(FILL_KEY, on ? '1' : '0'); };
   const dismiss = async (p: Proposal) => {
     setBusyId(p.id); setError('');
     try { await specAssistantApi.dismiss(projectId, p.id); } catch (e) {
@@ -132,8 +163,19 @@ export default function SpecAssistantPanel({ projectId, schema, lang, beforeAppl
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, px: 1.5, py: 0.8, borderBottom: '1px solid var(--line-soft)' }}>
         <SmartToyOutlinedIcon sx={{ fontSize: 18 }} />
         <Tooltip title={t('specAssistant.tip')}><Typography sx={{ flex: 1, fontWeight: 700, fontSize: 14 }}>{t('specAssistant.title')}</Typography></Tooltip>
+        {messages.length > 0 && (
+          <Tooltip title={t('specAssistant.clearTip')}>
+            <Button size="small" data-testid="spec-assistant-clear" onClick={() => void clearChat()} sx={{ textTransform: 'none', fontSize: 11.5, minWidth: 0 }}>{t('specAssistant.clear')}</Button>
+          </Tooltip>
+        )}
         <IconButton size="small" aria-label={t('specAssistant.close')} onClick={() => toggle(false)}><CloseIcon sx={{ fontSize: 18 }} /></IconButton>
       </Box>
+      {canApply && (
+        <Tooltip title={t('specAssistant.fillTip')} placement="bottom-start">
+          <FormControlLabel sx={{ px: 1.5, m: 0 }} label={<Typography sx={{ fontSize: 12.5 }}>{t('specAssistant.fillForMe')}</Typography>}
+            control={<Switch size="small" data-testid="spec-assistant-fill" checked={fill} onChange={(e) => toggleFill(e.target.checked)} />} />
+        </Tooltip>
+      )}
       <Typography data-testid="ai-notice" sx={{ fontSize: 11.5, color: 'text.secondary', px: 1.5, py: 0.4 }}>{t('aiNotice', { ns: 'common' })}</Typography>
       {cards.length > 0 && (
         <Box sx={{ maxHeight: '45%', overflowY: 'auto', p: 1, display: 'flex', flexDirection: 'column', gap: 1, borderBottom: '1px solid var(--line-soft)' }}>
@@ -171,8 +213,25 @@ export default function SpecAssistantPanel({ projectId, schema, lang, beforeAppl
         )}
         {messages.map((m, i) => (
           <Box key={i} sx={{ display: 'flex', justifyContent: m.role === 'user' ? 'flex-end' : 'flex-start', my: 0.8 }}>
-            <Box sx={{ bgcolor: m.role === 'user' ? 'action.selected' : 'transparent', borderRadius: 2, px: m.role === 'user' ? 1.2 : 0, py: m.role === 'user' ? 0.7 : 0,
-              maxWidth: '92%', fontSize: 13, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{m.content}</Box>
+            <Box sx={{ maxWidth: '92%' }}>
+              <Box sx={{ bgcolor: m.role === 'user' ? 'action.selected' : 'transparent', borderRadius: 2, px: m.role === 'user' ? 1.2 : 0, py: m.role === 'user' ? 0.7 : 0,
+                fontSize: 13, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{m.content}</Box>
+              {(m.applied ?? []).map((a) => {
+                const c = cardView(a, schema, ui);
+                const state = filledState(a, canApply);
+                const basis = basisOf(a);
+                return (
+                  <Box key={a.id} data-testid="spec-applied" sx={{ mt: 0.6, border: '1px solid var(--line)', borderLeft: `3px solid ${basis === 'assumed' ? '#f59e0b' : '#16a34a'}`, borderRadius: 1, p: 0.8, bgcolor: 'var(--panel-2)' }}>
+                    <Typography sx={{ fontWeight: 700, fontSize: 12.5 }}>{t('specAssistant.filled')}: {c.title}</Typography>
+                    <Typography sx={{ fontSize: 13 }}>{c.proposed}</Typography>
+                    <Chip size="small" label={t(basis === 'stated' ? 'specAssistant.basisStated' : basis === 'derived' ? 'specAssistant.basisDerived' : 'specAssistant.basisAssumed')}
+                      color={basis === 'assumed' ? 'warning' : 'default'} sx={{ height: 18, fontSize: 10.5, mt: 0.3 }} />
+                    {state === 'undo' && <Button size="small" data-testid="spec-undo" disabled={busyId !== null} onClick={() => void undo(a)} sx={{ textTransform: 'none', ml: 0.5 }}>{busyId === a.id ? <CircularProgress size={14} /> : t('specAssistant.undo')}</Button>}
+                    {state === 'undone' && <Typography sx={{ fontSize: 11.5, fontStyle: 'italic' }}>{t('specAssistant.undone')}</Typography>}
+                  </Box>
+                );
+              })}
+            </Box>
           </Box>
         ))}
         {sending && <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, my: 1 }}><CircularProgress size={13} /><Typography sx={{ fontSize: 12, color: 'text.secondary' }}>{t('specAssistant.working')}</Typography></Box>}

@@ -21,6 +21,7 @@ export const PROJECT_VIEWS = ['specification', 'motors', 'messages', 'notes', 'd
 export type ProjectViewId = (typeof PROJECT_VIEWS)[number];
 
 export type AppLink =
+  | { kind: 'new'; zh: boolean }
   | { kind: 'production'; die: string; config: string; tab?: ProductionTabId; item?: string; since?: string; ids?: string[] }
   | { kind: 'project'; id: string; view?: ProjectViewId; die?: string; config?: string; item?: string };
 
@@ -39,7 +40,11 @@ export function parseAppLink(pathname: string, search = ''): AppLink | null {
   const item = q.get('item');
   if (item !== null && !ITEM.test(item)) return null;
 
-  const prod = /^\/production\/([^/]+)\/([^/]+)(?:\/([a-z]+))?\/?$/.exec(pathname);
+  // /projects?new=spec (and under /zh-cn/): the "describe your motor" link of the launch mail
+  const fresh = /^(\/zh-cn)?\/projects\/?$/i.exec(pathname);
+  if (fresh) return q.get('new') === 'spec' ? { kind: 'new', zh: !!fresh[1] } : null;
+
+  const prod =/^\/production\/([^/]+)\/([^/]+)(?:\/([a-z]+))?\/?$/.exec(pathname);
   if (prod) {
     const tab = prod[3];
     if (tab !== undefined && !(PRODUCTION_TABS as readonly string[]).includes(tab)) return null;
@@ -73,6 +78,7 @@ export function parseAppLink(pathname: string, search = ''): AppLink | null {
 
 /** The canonical path (+ query) of a link; null when a part is not valid. */
 export function appLinkPath(link: AppLink): string | null {
+  if (link.kind === 'new') return `${link.zh ? '/zh-cn' : ''}/projects?new=spec`;
   if (link.kind === 'project') {
     if (!PROJECT_ID.test(link.id) || link.id.length > 64) return null;
     if (link.view && !(PROJECT_VIEWS as readonly string[]).includes(link.view)) return null;
@@ -99,8 +105,18 @@ export function appLinkPath(link: AppLink): string | null {
 }
 
 /** Is this address-bar path an app link at all (cheap test for the sign-in dialog and the router)? */
-export function isAppLinkPath(pathname: string): boolean {
+export function isAppLinkPath(pathname: string, search = ''): boolean {
+  if (/^(\/zh-cn)?\/projects\/?$/i.test(pathname)) return new URLSearchParams(search).get('new') === 'spec';
   return /^\/(production\/[^/]+\/[^/]+(\/[a-z]+)?|projects\/[^/]+(\/[a-z]+)?)\/?$/.test(pathname);
+}
+
+/** What the Projects page does with a `/projects?new=spec` link (owner 2026-11-11): every account gets the New project dialog; a
+ *  customer account then lands, after Create, on the new project's specification with the assistant open in fill mode; a staff
+ *  account (which manages projects itself) just gets the dialog.  The link is consumed once: the address bar is set to
+ *  `consumeTo`, so Back / reload never creates a second project. */
+export function newProjectIntent(link: AppLink | null, staff: boolean): { openDialog: boolean; openSpecAfterCreate: boolean; consumeTo: string } | null {
+  if (!link || link.kind !== 'new') return null;
+  return { openDialog: true, openSpecAfterCreate: !staff, consumeTo: '/' };
 }
 
 /** The path to hand to the sign-up (`next`) when the visitor is on a valid link right now; undefined otherwise. */

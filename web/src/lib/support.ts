@@ -52,12 +52,22 @@ export async function listMyTickets(): Promise<Ticket[]> {
   return ((await r.json()).tickets ?? []) as Ticket[];
 }
 
+/** A random id of this browser tab's help conversation (never derived from the IP or the account): the server groups the turns of one
+ *  conversation by it for service analysis. */
+export function conversationId(): string {
+  try {
+    let id = window.sessionStorage.getItem('support.sid');
+    if (!id) { id = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 12)}`; window.sessionStorage.setItem('support.sid', id); }
+    return id;
+  } catch { return ''; }
+}
+
 /** Ask the in-app assistant. The backend proxies to the provider (key stays server-side);
  *  `context` is the sanitised session snapshot the model reads as hidden text. */
 export async function askAssistant(messages: ChatMsg[], context?: Record<string, unknown>, lang?: string): Promise<ChatReply> {
   const r = await fetch(`${API}/api/support/chat`, {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ messages, ...(context ? { context } : {}), ...(lang ? { lang } : {}) }),
+    body: JSON.stringify({ messages, ...(context ? { context } : {}), ...(lang ? { lang } : {}), ...(conversationId() ? { sid: conversationId() } : {}) }),
   });
   let body: unknown = null;
   try { body = await r.json(); } catch { body = null; }

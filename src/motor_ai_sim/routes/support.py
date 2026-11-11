@@ -1064,6 +1064,26 @@ def _deliver(reply: str, source: str, *, anon: bool, messages: list[dict],
     return out
 
 
+def _archive_turn(body: dict, authorization: Optional[str], anon: bool, messages: list, out: dict) -> None:
+    """Keep the turn for service analysis (owner 2026-11-11): the visitor's text and our reply, the page name, the model and any
+    error - never the system prompt or the hidden context.  A visitor is keyed by the random session id their browser made up,
+    never by the IP.  Never raises."""
+    try:
+        from motor_ai_sim import assistant_archive as AR
+        acct = ""
+        if not anon:
+            from motor_ai_sim.auth import caller_identity
+            acct = str(caller_identity(authorization).get("id") or "").lower()
+        raw_ctx = body.get("context") if isinstance(body.get("context"), dict) else {}
+        page = str(raw_ctx.get("tab") or raw_ctx.get("tabLabel") or "")
+        AR.log_turn(assistant="support", conv_id=AR.conv_key("support", AR.valid_sid(body.get("sid")) or acct or "nosid"),
+                    account=acct, page=page, user_text=_visitor_turn(messages), reply=out.get("reply", ""),
+                    model=out.get("model", ""), source=out.get("source", ""),
+                    error=out.get("detail", "") or ("error" if out.get("source") == "error" else ""))
+    except Exception:                                        # noqa: BLE001
+        pass
+
+
 @router.post("/chat")
 def chat(request: Request, body: dict = Body(default={}),
          authorization: Optional[str] = Header(default=None)):
@@ -1083,8 +1103,10 @@ def chat(request: Request, body: dict = Body(default={}),
     except Exception:                                        # pragma: no cover
         ua = ""
     ip = client_ip(request) if anon else ""
-    deliver = lambda reply, source, **kw: _deliver(          # noqa: E731
-        reply, source, anon=anon, messages=messages, ip=ip, ua=ua, **kw)
+    def deliver(reply, source, **kw):
+        out = _deliver(reply, source, anon=anon, messages=messages, ip=ip, ua=ua, **kw)
+        _archive_turn(body, authorization, anon, messages, out)
+        return out
 
     # The limiters sit in front of the provider call and nowhere else: they must
     # bound what is SPENT, and a refusal never reaches the provider.

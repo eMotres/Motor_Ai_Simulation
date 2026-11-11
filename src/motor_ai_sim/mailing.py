@@ -35,13 +35,16 @@ log = logging.getLogger(__name__)
 DEFAULT_CAMPAIGN = "launch_2026-10-19"
 DEFAULT_BASE_URL = "https://aerostator.com"
 OPEN_URL = {"en": "https://aerostator.com", "zh-CN": "https://aerostator.com/zh-cn/"}
+#: The launch campaign button (owner 2026-11-11): signs in / registers if needed, then opens the New project dialog and, after Create, the
+#: specification with the assistant (web: lib/appLink.ts `newProjectIntent`; the mail template uses {{spec_url}}).
+SPEC_URL = {"en": "https://aerostator.com/projects?new=spec", "zh-CN": "https://aerostator.com/zh-cn/projects?new=spec"}
 #: The in-app Privacy Policy (legal_texts.py), in the language of the message.
 PRIVACY_URL = {"en": "https://aerostator.com/privacy", "zh-CN": "https://aerostator.com/zh-cn/privacy"}
 BRAND = "AeroStator"
 COMPANY_FOOTER = "MOTRES d.o.o., Kotnikova 34, 1000 Ljubljana, Slovenia"
 _CAMPAIGN_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 _PLACEHOLDER_RE = re.compile(r"\{\{\s*([a-z_]+)\s*\}\}")
-KNOWN_VARS = ("hello", "email", "open_url", "prefs_url", "unsubscribe_url", "privacy_url")
+KNOWN_VARS = ("hello", "email", "open_url", "spec_url", "prefs_url", "unsubscribe_url", "privacy_url")
 #: Stop a real run after this many failures in a row (a dead SMTP login must not be hammered).
 MAX_CONSECUTIVE_FAILURES = 5
 
@@ -174,7 +177,7 @@ def render(campaign: str, lang: str, *, email: str, name: str, base_url: str = D
     """The subject, plain text and HTML of one e-mail for one account (personal preference and unsubscribe links inside)."""
     lang = CP.norm_lang(lang)
     subject, body, footer = load_template(campaign, lang)
-    values = {"hello": hello(name, lang), "email": email, "open_url": OPEN_URL[lang],
+    values = {"hello": hello(name, lang), "email": email, "open_url": OPEN_URL[lang], "spec_url": SPEC_URL[lang],
               "prefs_url": CP.prefs_url(base_url, email, lang),
               "unsubscribe_url": CP.prefs_url(base_url, email, lang, action="unsubscribe"), "privacy_url": PRIVACY_URL[lang]}
     body, footer = _fill(body, values), _fill(footer, values)

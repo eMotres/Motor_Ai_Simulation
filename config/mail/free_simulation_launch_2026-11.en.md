@@ -12,7 +12,7 @@ All simulations on AeroStator are now free: electromagnetic, thermal and mechani
 
 The deal is stated up front: in FREE mode we train our own AI models on the engineering data of your projects, never on personal data, and your projects stay confidential. PRIVATE mode excludes all AI training. Details are in the [Terms of Use](https://aerostator.com/terms).
 
-=> [Open AeroStator]({{open_url}})
+=> [Describe your motor]({{spec_url}})
 
 The AeroStator team, MOTRES d.o.o.
 

@@ -12,7 +12,7 @@ AeroStator 上的所有仿真现已免费：永磁电机和发电机的电磁、
 
 我们事先说明交换条件：在免费模式下，我们使用您项目中的工程数据训练我们自有的人工智能模型，绝不使用个人数据，您的项目保持保密。私有模式完全不进行人工智能训练。详见[《使用条款》](https://aerostator.com/zh-cn/terms)。
 
-=> [打开 AeroStator]({{open_url}})
+=> [描述您的电机]({{spec_url}})
 
 AeroStator 团队，MOTRES d.o.o.
 

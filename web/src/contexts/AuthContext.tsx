@@ -149,7 +149,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const shareDialogShown = React.useRef(false);
   useEffect(() => {
     if (shareDialogShown.current || !resolved || user || !enforced) return;
-    if (!isAppLinkPath(window.location.pathname)) return;
+    if (!isAppLinkPath(window.location.pathname, window.location.search)) return;
     try { rememberReturnTo(window.sessionStorage, window.location.pathname, window.location.search); } catch { /* storage blocked */ }
     shareDialogShown.current = true;
     setLoginOpts({ mode: 'signin' });

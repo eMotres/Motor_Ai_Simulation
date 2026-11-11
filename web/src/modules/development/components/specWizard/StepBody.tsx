@@ -1,3 +1,4 @@
+import type React from 'react';
 import { Box, Button, Stack, Typography } from '@mui/material';
 import { readLoadDraft } from '../../loadDraftAdapter';
 import { cardColumnMin } from '../../specGrid';
@@ -16,7 +17,19 @@ export default function StepBody({ env, step }: { env: StepEnv; step: WizardStep
   const loadType = readLoadDraft(draft).load_type;
   const coolingField = steps.flatMap((s) => s.fields).find((f) => f.id === '3_1');
 
-  const renderById = (f: SpecificationField) => {
+  // values the assistant filled (server marks them in draft.provenance.assistant_fills until the user changes them)
+  const fills = ((draft as unknown as { provenance?: { assistant_fills?: Record<string, { basis?: string; reason?: string }> } }).provenance?.assistant_fills) ?? {};
+  const marked = (id: string, node: React.ReactNode) => {
+    const fill = fills[id];
+    if (!fill) return node;
+    const assumed = fill.basis === 'assumed';
+    return <Box key={`${id}-fill`} data-testid="assistant-fill-mark" data-basis={fill.basis ?? 'assumed'} sx={{ borderLeft: '3px solid', borderLeftColor: assumed ? 'warning.main' : 'success.main', pl: 1 }}>
+      {node}
+      <Typography sx={{ fontSize: 11.5, color: assumed ? 'warning.main' : 'text.secondary' }}>{tr(assumed ? 'specAssistant.assumedMark' : 'specAssistant.filledMark')}</Typography>
+    </Box>;
+  };
+  const renderById = (f: SpecificationField) => marked(f.id, renderRaw(f));
+  const renderRaw = (f: SpecificationField) => {
     switch (f.id) {
       case 'load_type': return <Box key={f.id}>{fields.renderLoadType(coolingField)}</Box>;
       case '2_1': return <Box key={f.id}>{fields.renderBattery(f)}</Box>;

@@ -33,6 +33,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
   import { MotorOpenActions } from '../MotorOpenActions';
 import { createErrorText, createPayload, createReady } from '../createProject';
   import { VariantControls } from './VariantControls';
+  import { OrderMotorButton } from './OrderMotorButton';
   import SpecAssistantPanel from './SpecAssistantPanel';
   import ProjectDocuments from './ProjectDocuments';
   import ProjectProductions from './ProjectProductions';
@@ -743,6 +744,7 @@ export default function DevelopmentPage() {
             </Stack>
             {live && selected && <VariantControls projectId={selected.id} motor={live} staff={canManageGlobally} busy={busy} t={tr} showAll={showAllVersions}
               onChanged={async () => { await loadProjectMotors(selected.id, projectToken.current); }} />}
+            {live && selected && <OrderMotorButton projectId={selected.id} motor={live} canOrder={canEditProject} t={tr} lang={lang} />}
             {live && selected && <ProjectMotorTests projectId={selected.id} motor={live} showAll={showAllVersions} t={tr} />}
             {live && <ActivityChip rows={activityRows} motor={live} t={tr} />}
             {live && <Stack direction="row" spacing={0.5} alignItems="center">

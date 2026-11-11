@@ -71,6 +71,8 @@ ACTIONS = frozenset({
     "cad.params", "cad.rebuild",
     # agent drafts (MCP Stage 3) — cross-account reads/writes
     "agent_design.read", "agent_design.delete",
+    # a customer asked to order a motor of a development project (no price is involved)
+    "project.order_request",
     # the log itself
     "audit.read", "audit.pseudonymise",
     # retention

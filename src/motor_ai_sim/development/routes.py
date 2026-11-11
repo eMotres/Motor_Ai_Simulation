@@ -521,10 +521,13 @@ def _notify_staff(subject: str, project_id: str, user: dict) -> None:
         log.warning("project mail to staff failed for %s", project_id, exc_info=True)
 
 
-def create_project_for(user: dict, body: dict, *, audit_details: dict | None = None) -> dict:
+def create_project_for(user: dict, body: dict, *, audit_details: dict | None = None, auto_named: bool = False) -> dict:
     """The work of ``POST /api/projects`` for a resolved caller (the web session, or an MCP agent acting for its owner -
     ``spec_order.create_order``): the stored project record.  Raises ``HTTPException`` (428 agreement, 429 limit, 422, 409)."""
     staff = access.is_engineer(user)
+    if staff and auto_named:
+        # the assistant creates the project for staff too: named like a customer's, then from its specification
+        body = {"title": self_service.NEW_PROJECT_TITLE, "customer_org": body.get("customer_org")}
     platform_agreement.require_accepted(user)
     _require_data_agreement(user)
     if not staff:
@@ -542,12 +545,13 @@ def create_project_for(user: dict, body: dict, *, audit_details: dict | None = N
     if requested_id:
         ids = iter([requested_id])
     else:
-        ids = self_service.candidate_ids(str(body.get("title") or "") if staff else self_service.new_project_seed())
+        ids = self_service.candidate_ids(str(body.get("title") or "") if staff and not auto_named
+                                         else self_service.new_project_seed())
     project = None
     for project_id in ids:
         try:
             project = models.project_record(project_id, body, _email(user))
-            if not staff:
+            if not staff or auto_named:
                 project["auto_title"] = True
                 project["owner_engineer"] = ""           # nobody is in charge yet; Motres staff see every project and pick it up
             store.create_project(project)

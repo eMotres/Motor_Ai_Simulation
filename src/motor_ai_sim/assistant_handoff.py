@@ -150,7 +150,7 @@ def create_for(user: dict, token: str) -> dict:
     from motor_ai_sim.development import routes as R, spec_assistant_history as H, spec_proposals as P
     email = str(user.get("email") or "").strip().lower()
     rec = get(token, email)
-    project = R.create_project_for(user, {}, audit_details={"via": "assistant"})
+    project = R.create_project_for(user, {}, audit_details={"via": "assistant"}, auto_named=True)
     pid = project["id"]
     drop(token)
     got = apply_values(pid, rec.get("values") or [], email, rec.get("lang") or "en")

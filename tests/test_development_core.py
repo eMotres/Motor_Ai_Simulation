@@ -150,7 +150,17 @@ def test_schema_covers_checklist_mission_and_production():
     assert {c["id"] for c in mission["columns"]} == {"phase", "torque_Nm", "speed_rpm", "duration_s", "battery_voltage_V"}
 
 
-def _all_unknown_draft():
+def simulation_minimum_fields() -> dict:
+    """The answers of the simulation minimum (owner 2026-11-11): "not known yet" cannot satisfy them."""
+    filled = lambda value: {"status": "filled", "value": value}  # noqa: E731
+    return {"key_points": filled([{"name": "Continuous", "torque_Nm": 10, "speed_rpm": 3000, "duration_s": "continuous"}]),
+            "1_6": filled({"maximum_rpm": 4000}), "2_1": filled({"voltage_nominal_V": 48}),
+            "3_1": filled({"cooling_medium": "air"}), "3_2": filled({"temperature_max_C": 40}),
+            "3_3": filled("Closed, IP54")}
+
+
+def _all_unknown_draft(simulation: bool = True):
+    """Every field "not known yet" - except the simulation minimum, which must be real answers to submit."""
     fields = {}
     production = {}
     for section in models.schema()["sections"]:
@@ -159,6 +169,8 @@ def _all_unknown_draft():
                 continue
             target = production if section["id"] == "production" else fields
             target[field["id"]] = {"value": None, "status": "not_known_yet"}
+    if simulation:
+        fields.update(simulation_minimum_fields())
     return {"schema_version": 2, "fields": fields, "mission_profile": [], "mission_profile_status": "not_known_yet",
             "production": production}
 

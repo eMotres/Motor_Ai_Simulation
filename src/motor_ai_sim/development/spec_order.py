@@ -598,7 +598,7 @@ def _need(error: dict, lang: str) -> dict:
     field = _lookup(fid) or {}
     label = _text(field.get("label"), lang) or fid
     item = {"field": path, "field_id": fid, "label": label, "reason": message,
-            "accepts_not_known_yet": bool(field.get("allow_not_known_yet"))}
+            "accepts_not_known_yet": bool(field.get("allow_not_known_yet")) and not error.get("simulation")}
     sub = _sub_spec(field, path[len(fid):]) if path != fid else None
     if sub:
         sub_label = _text(sub.get("label"), lang)
@@ -634,7 +634,9 @@ def completeness_view(draft: dict) -> dict:
     c = models.completeness(draft)
     return {"complete": bool(c.get("complete")), "required": c.get("total_required", 0),
             "answered": c.get("answered", 0), "not_known_yet": c.get("unknown", 0),
-            "missing": c.get("missing", 0), "invalid": c.get("invalid", 0)}
+            "missing": c.get("missing", 0), "invalid": c.get("invalid", 0),
+            "simulation_ready": bool(c.get("simulation_ready")),
+            "simulation_missing": [m["field"] for m in c.get("simulation_missing", [])]}
 
 
 def answers_view(draft: dict) -> dict:

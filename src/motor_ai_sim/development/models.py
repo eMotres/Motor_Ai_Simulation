@@ -1024,6 +1024,96 @@ def key_point_errors(draft: dict) -> list[dict]:
     return errors
 
 
+# ── the simulation minimum (owner 2026-11-11) ────────────────────────────────────────────────────────────────────────
+# A specification is not submitted while the minimum needed to MODEL the machine is missing.  "Not known yet" does NOT
+# satisfy these fields (everything else keeps the usual rule).  Keep this list as short as it is:
+#   operating point (key_points, or the legacy S1 point 1_4: torque, speed, duration), maximum speed (1_6),
+#   voltage basis (2_1 supply; a generator may give 2_13 output voltage + its definition instead),
+#   cooling medium (3_1) + the one condition that medium needs (air: 3_2 maximum ambient; liquid: inlet; underwater: water),
+#   housing (3_3).
+SIMULATION_MINIMUM_NOTE = "needed for the simulation (cannot be 'not known yet')"
+
+
+def _filled_value(fields: dict, field_id: str):
+    answer = fields.get(field_id)
+    if isinstance(answer, dict) and answer.get("status") == "filled":
+        return answer.get("value")
+    return None
+
+
+def _is_number(value: Any) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
+
+
+def _is_generator(fields: dict) -> bool:
+    mode = _filled_value(fields, "1_2")
+    return isinstance(mode, str) and ("generator" in mode.lower() or "发电机" in mode)
+
+
+def simulation_minimum_errors(draft: dict) -> list[dict]:
+    """What is still missing to simulate the machine, as submit-style errors ``{field, section, message, simulation}``.
+    Schema v2 only (a v1 draft has no key points / cooling split and keeps the old rules)."""
+    draft = with_defaults(draft)
+    if int(draft.get("schema_version", 1)) < 2:
+        return []
+    fields = draft.get("fields") or {}
+    out: list[dict] = []
+
+    def need(field: str, section: str, what: str) -> None:
+        out.append({"field": field, "section": section, "message": f"{what} - {SIMULATION_MINIMUM_NOTE}", "simulation": True})
+
+    # operating point(s): a stored list, or the legacy S1 point, with a name, torque, speed and a duration
+    if key_points_stored(draft):
+        answer = fields[KEY_POINTS_FIELD]
+        rows = answer.get("value") if answer.get("status") == "filled" else None
+        usable = isinstance(rows, list) and any(not key_point_row_errors(r, i) for i, r in enumerate(rows) if isinstance(r, dict))
+    else:
+        legacy = _filled_value(fields, "1_4")  # the S1 point: speed and torque (or power, from which the torque follows)
+        usable = (isinstance(legacy, dict) and _worst_number(legacy.get("speed_rpm")) is not None
+                  and (_worst_number(legacy.get("torque_Nm")) is not None or _worst_number(legacy.get("power_W")) is not None))
+    if not usable:
+        need(KEY_POINTS_FIELD, "1", "Operating point (torque, speed, duration)")
+    # maximum speed
+    speed = _filled_value(fields, "1_6")
+    if not (isinstance(speed, dict) and _worst_number(speed.get("maximum_rpm")) is not None):
+        need("1_6", "1", "Maximum speed")
+    # voltage basis: the supply, or - for a generator - the AC output voltage with its definition
+    supply = fields.get("2_1")
+    if not (isinstance(supply, dict) and supply.get("status") == "filled" and _answer_complete(supply, _field_map(2)["2_1"][1])):
+        output = _filled_value(fields, "2_13")
+        if not _is_generator(fields):
+            need("2_1", "2", "Power supply voltage")
+        elif not (isinstance(output, dict) and _is_number(output.get("ac_min_V"))
+                  and output.get("basis") in ("line_line_rms", "line_line_peak", "phase_rms")):
+            need("2_13", "2", "Supply voltage, or the generator output voltage with its definition (RMS or peak, line or phase)")
+    # cooling medium and the one condition its medium needs
+    cooling = _filled_value(fields, "3_1")
+    medium = cooling_medium(cooling)[0] if isinstance(cooling, dict) else None
+    if medium is None:
+        need("3_1", "3", "Cooling (air, liquid or underwater)")
+    elif thermal_basis(draft)["temperature_C"] is None:
+        if medium == "air":
+            need("3_2.temperature_max_C", "3", "Maximum ambient temperature")
+        elif medium == "liquid":
+            need("3_1.inlet_temperature_C", "3", "Coolant inlet temperature")
+        else:
+            need("3_1.water_temperature_C", "3", "Water temperature")
+    # housing
+    housing = _filled_value(fields, "3_3")
+    if not ((isinstance(housing, str) and housing.strip()) or (isinstance(housing, dict) and housing)):
+        need("3_3", "3", "Housing (open / closed, IP rating)")
+    return out
+
+
+def simulation_missing(draft: dict) -> list[dict]:
+    """The page / assistant view of ``simulation_minimum_errors``: ``[{field, field_id, section, label, message}]``."""
+    out = []
+    for error in simulation_minimum_errors(draft):
+        out.append({"field": error["field"], "field_id": str(error["field"]).split(".")[0], "section": error["section"],
+                    "message": error["message"], "label": error["message"].split(" - ")[0]})
+    return out
+
+
 def completeness(draft: dict) -> dict:
     draft = with_defaults(draft)
     schema_version = int(draft.get("schema_version", 1))
@@ -1073,8 +1163,10 @@ def completeness(draft: dict) -> dict:
         section_stats[section_id] = {"filled": section_answered + section_unknown, "filled_known": section_filled,
                                      "answered": section_answered, "required": len(ids), "total_required": len(ids),
                                      "unknown": section_unknown, "complete": section_answered + section_unknown == len(ids)}
+    sim_missing = simulation_missing(draft)
     return {"total_required": total, "filled_required": answered + unknown, "filled_known": filled, "answered": answered, "unknown": unknown,
-            "missing": missing, "invalid": invalid, "sections": section_stats, "complete": total == answered + unknown}
+            "missing": missing, "invalid": invalid, "sections": section_stats, "complete": total == answered + unknown,
+            "simulation_ready": not sim_missing, "simulation_missing": sim_missing}
 
 
 def validation_errors(draft: dict) -> list[dict]:
@@ -1135,6 +1227,12 @@ def validation_errors(draft: dict) -> list[dict]:
                         errors.append({"field": fid, "section": sid, "message": "Enter at least one relevant value"})
     errors.extend(cooling_load_errors(draft))
     errors.extend(ordered_pair_errors(draft))
+    for sim in simulation_minimum_errors(draft):  # the simulation minimum: "not known yet" is refused here
+        # a filled but incomplete answer already carries its own, more exact errors (`2_1.voltage_nominal_V`, `key_points[0].name`)
+        if any(str(e.get("field", "")).startswith((sim["field"] + ".", sim["field"] + "[")) for e in errors):
+            continue
+        errors = [e for e in errors if e.get("field") != sim["field"]]
+        errors.append(sim)
     if int(draft.get("schema_version", 1)) >= 2:
         from motor_ai_sim.inverter import controller_catalog
         battery = controller_catalog.battery_vs_controller(draft)  # a pack above the linked controller's supply maximum

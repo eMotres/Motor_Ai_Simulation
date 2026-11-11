@@ -273,7 +273,8 @@ def test_needs_input_rows_say_what_and_why(env):
     rows = {n["field"]: n for n in out["needs_input"]}
     assert set(rows) == {"1_1", "1_2", "key_points", "1_6", "2_1", "2_4", "3_1", "3_2", "3_3", "4_1", "4_2", "4_6",
                          "6_2", "mission_profile"}
-    assert all(r["label"] and r["reason"] and r["accepts_not_known_yet"] for r in rows.values())
+    sim = {"key_points", "1_6", "2_1", "3_1", "3_3"}               # the simulation minimum (owner 2026-11-11): never "not known yet"
+    assert all(r["label"] and r["reason"] and r["accepts_not_known_yet"] is (k not in sim) for k, r in rows.items())
     pid = out["project_id"]
     upd = _payload(_call(env["c"], tok, "update_spec", {"project_id": pid, "revision": out["revision"], "answers": {
         "key_points": [{"name": "Cruise", "speed_rpm": 4000, "duration_s": "continuous"}],
@@ -282,7 +283,7 @@ def test_needs_input_rows_say_what_and_why(env):
     torque = rows["key_points[0].torque_Nm"]
     assert torque["label"] == "Key operating points - Torque" and torque["unit"] == "N·m"
     inlet = rows["3_1.inlet_temperature_C"]                    # liquid cooling needs the coolant inlet temperature
-    assert inlet["unit"] == "°C" and "Required" in inlet["reason"]
+    assert inlet["unit"] == "°C" and "inlet temperature" in inlet["reason"] and inlet["accepts_not_known_yet"] is False
     assert "3_2" not in rows                                    # the ambient temperature is asked for air cooling only
 
 

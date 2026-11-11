@@ -17,6 +17,9 @@ def _all_unknown_draft():
             if field["id"] == "mission_profile":
                 continue
             (production if section["id"] == "production" else fields)[field["id"]] = {"value": None, "status": "not_known_yet"}
+    fields.update({"1_6": {"status": "filled", "value": {"maximum_rpm": 4000}}, "2_1": {"status": "filled", "value": {"voltage_nominal_V": 48}},
+                   "3_1": {"status": "filled", "value": {"cooling_medium": "air"}}, "3_2": {"status": "filled", "value": {"temperature_max_C": 40}},
+                   "3_3": {"status": "filled", "value": "Closed, IP54"}})  # the rest of the simulation minimum; the tests set the key points
     return {"schema_version": 2, "fields": fields, "mission_profile": [], "mission_profile_status": "not_known_yet",
             "production": production}
 
@@ -119,7 +122,9 @@ def test_empty_list_and_unknown_marker():
     assert empty["fields"]["key_points"]["status"] == "missing"
     assert [e["field"] for e in _errors(empty)] == ["key_points"] and models.completeness(empty)["complete"] is False
     unknown = _draft_with(copy.deepcopy(FOUR), status="not_known_yet")
-    assert _errors(unknown) == [] and models.completeness(unknown)["complete"] is True
+    # "not known yet" still completes the form, but it no longer submits: operating points are part of the simulation minimum
+    assert [e["field"] for e in _errors(unknown)] == ["key_points"] and models.completeness(unknown)["complete"] is True
+    assert models.completeness(unknown)["simulation_ready"] is False
     assert unknown["fields"]["1_4"]["status"] == "not_known_yet"
 
 

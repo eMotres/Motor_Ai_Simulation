@@ -24,6 +24,9 @@ export default function ReviewStep({ env, completeness, submitErrors, submitConf
   const openCount = open.length;
   const submittedDate = submittedInfo?.at ? new Date(submittedInfo.at).toLocaleDateString(lang === 'zh-CN' ? 'zh-CN' : 'en-GB', { year: 'numeric', month: 'short', day: 'numeric' }) : '';
   const noChanges = !!submittedInfo && !submittedInfo.changed;
+  // the simulation minimum (owner 2026-11-11): while the server says it is not met, Submit stays off and the missing fields are listed
+  const simMissing = completeness?.simulation_missing ?? [];
+  const simBlocked = simMissing.length > 0;
   const cards = fieldSteps.map((step) => ({ step, index: steps.indexOf(step), items: reviewItems(step, draft, { lang, t: tr, profile }) })).filter((c) => c.items.length > 0);
   return <Stack spacing={2.5} sx={{ minWidth: 0 }}>
     <Stack direction={{ xs: 'column', md: 'row' }} spacing={2} alignItems={{ md: 'flex-end' }}>
@@ -31,9 +34,12 @@ export default function ReviewStep({ env, completeness, submitErrors, submitConf
         <Typography component="h1" tabIndex={-1} sx={{ fontSize: { xs: 22, md: 26 }, fontWeight: 700, color: 'var(--text-0)', outline: 'none' }}>{tr(openCount ? 'wizard.review.headingOpen' : 'wizard.review.headingReady')}</Typography>
         <Typography role="status" sx={{ fontSize: 14, color: 'var(--text-2)', mt: 0.5 }}>{tr('wizard.reviewCounts', { answered: completeness?.answered ?? 0, unknown: openIn('unknown'), missing: openIn('missing'), invalid: openIn('invalid') })}</Typography>
       </Box>
-      {canSubmitSpec(canEditSpec) && <Tooltip title={noChanges ? tr('wizard.review.noChangesTip') : <>{tr('wizard.submitTip')}<br />{tr('wizard.reviewHint')}</>}><span style={{ alignSelf: 'flex-start' }}><Button variant="contained" disabled={submitBusy || noChanges} onClick={onSubmit} sx={{ minHeight: 52, px: 3.5, fontSize: 16, fontWeight: 600, textTransform: 'none', borderRadius: '12px' }}>{noChanges ? tr('wizard.review.noChanges', { version: submittedInfo!.version }) : tr(openCount ? 'wizard.review.submitOpen' : 'wizard.review.submit', { count: openCount })}</Button></span></Tooltip>}
+      {canSubmitSpec(canEditSpec) && <Tooltip title={simBlocked ? tr('wizard.review.simulationTip') : noChanges ? tr('wizard.review.noChangesTip') : <>{tr('wizard.submitTip')}<br />{tr('wizard.reviewHint')}</>}><span style={{ alignSelf: 'flex-start' }}><Button variant="contained" disabled={submitBusy || noChanges || simBlocked} onClick={onSubmit} sx={{ minHeight: 52, px: 3.5, fontSize: 16, fontWeight: 600, textTransform: 'none', borderRadius: '12px' }}>{noChanges ? tr('wizard.review.noChanges', { version: submittedInfo!.version }) : tr(openCount ? 'wizard.review.submitOpen' : 'wizard.review.submit', { count: openCount })}</Button></span></Tooltip>}
     </Stack>
     <DeliveryConflict env={env} />
+    {simBlocked && <Alert severity="warning" data-testid="simulation-missing"><Typography sx={{ fontSize: 14, fontWeight: 600 }}>{tr('wizard.review.simulationMissing')}</Typography>
+      <Stack direction="row" useFlexGap flexWrap="wrap" gap={0.5} sx={{ mt: 0.5 }}>{simMissing.map((m) => { const f = fieldOf(m.field_id); const name = f ? localized(f.short_label ?? f.label, lang) : m.field_id;
+        return <Button key={m.field} size="small" data-field={m.field} onClick={() => onReveal(m.field_id)} sx={{ minHeight: TOUCH, textTransform: 'none' }}>{name}</Button>; })}</Stack></Alert>}
     {submittedInfo && <Alert severity={noChanges ? 'success' : 'info'} data-testid="spec-submitted-state">{tr(noChanges ? 'wizard.review.submittedLine' : 'wizard.review.submittedChanged', { version: submittedInfo.version, date: submittedDate })}</Alert>}
     {submittedVersion != null && <Alert severity="success" data-testid="spec-submitted">{tr('submitDone', { version: submittedVersion })}</Alert>}
     {submitErrors.map((x, i) => <Alert key={i} severity="error" action={i === 0 && submitConflict ? <Button color="inherit" size="small" onClick={onReload}>{tr('reloadDraft')}</Button> : undefined}>{x}</Alert>)}

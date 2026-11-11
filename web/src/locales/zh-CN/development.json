@@ -245,6 +245,8 @@
       "submittedChanged": "已提交：版本 {version}，{date}。之后的修改尚未提交。",
       "noChanges": "已提交，自版本 {version} 以来无修改",
       "noChangesTip": "修改任一答案后即可提交新版本。",
+      "simulationMissing": "仿真所需，请填写：",
+      "simulationTip": "在提供仿真所需数据之前无法提交（“暂不清楚”不算）。",
       "stillOpen": "待完成",
       "later": "稍后回答",
       "at": "于",

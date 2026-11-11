@@ -15,6 +15,7 @@ Dry-run is the default everywhere; nothing here sends unless the caller passes `
 """
 from __future__ import annotations
 
+import hashlib
 import html
 import json
 import logging
@@ -87,6 +88,35 @@ def _fill(md: str, values: dict) -> str:
 # -- Markdown -> text / HTML (a small, safe subset) ----------------------------------------------
 
 _LINK_RE = re.compile(r"\[([^\]]+)\]\((https?://[^)\s]+)\)")
+#: ``![alt text](image:<name>)`` on its own line: a PNG from ``<template dir>/images/<name>.<lang>.png`` (else ``.en.png``),
+#: EMBEDDED in the message as an inline part (``cid:``).  Nothing is fetched from a server when the mail is opened (no tracking),
+#: and an external ``<img src="http...">`` is never written.
+_IMAGE_RE = re.compile(r"^!\[([^\]]+)\]\(image:([a-z0-9_]+)\)\s*$")
+IMAGE_WIDTH = 552
+
+
+@dataclass
+class InlineImage:
+    cid: str
+    data: bytes
+    filename: str
+    alt: str
+
+
+def load_image(name: str, lang: str, alt: str) -> InlineImage:
+    """The PNG of a template image line, in the message's language, with a content id stable for the same bytes."""
+    d = template_dir() / "images"
+    p = d / f"{name}.{lang}.png"
+    if not p.is_file():
+        p = d / f"{name}.en.png"
+    if not p.is_file():
+        raise ValueError(f"template image not found: images/{name}.{lang}.png")
+    data = p.read_bytes()
+    return InlineImage(f"{name}.{lang}.{hashlib.sha256(data).hexdigest()[:12]}@aerostator.com", data, p.name, alt)
+
+
+def _images(md: str, lang: str) -> list[InlineImage]:
+    return [load_image(m.group(2), lang, m.group(1)) for m in (_IMAGE_RE.match(x.strip()) for x in md.split("\n")) if m]
 _BUTTON_RE = re.compile(r"^=>\s*\[([^\]]+)\]\((https?://[^)\s]+)\)\s*$")
 
 
@@ -99,6 +129,10 @@ def _inline(s: str) -> str:
 def _to_text(md: str) -> str:
     out = []
     for line in md.split("\n"):
+        im = _IMAGE_RE.match(line.strip())
+        if im:
+            out.append(f"[{im.group(1)}]")
+            continue
         b = _BUTTON_RE.match(line.strip())
         if b:
             out.append(f"{b.group(1)}: {b.group(2)}")
@@ -109,7 +143,7 @@ def _to_text(md: str) -> str:
     return "\n".join(out)
 
 
-def _to_html(md: str, size: str = "15px") -> str:
+def _to_html(md: str, size: str = "15px", images: Optional[dict] = None) -> str:
     out: list[str] = []
     para: list[str] = []
     in_list = False
@@ -126,10 +160,18 @@ def _to_html(md: str, size: str = "15px") -> str:
     for raw in md.split("\n"):
         line = raw.rstrip()
         bm = _BUTTON_RE.match(line.strip())
+        im = _IMAGE_RE.match(line.strip())
         hm = re.match(r"^(#{1,3})\s+(.*)$", line)
         lm = re.match(r"^\s*[-*]\s+(.*)$", line)
         if not line.strip():
             flush()
+        elif im:
+            flush()
+            img = (images or {}).get(im.group(2))
+            if img is None:
+                raise ValueError(f"template image {im.group(2)!r} was not loaded")
+            out.append(f'<img src="cid:{img.cid}" alt="{html.escape(img.alt, quote=True)}" width="{IMAGE_WIDTH}" '
+                       f'style="display:block;width:100%;max-width:{IMAGE_WIDTH}px;height:auto;border:0;margin:4px 0 18px">')
         elif bm:
             flush()
             out.append('<table role="presentation" cellpadding="0" cellspacing="0" style="margin:6px 0 20px"><tr>'
@@ -161,6 +203,7 @@ class Rendered:
     text: str
     html: str
     lang: str
+    images: list = field(default_factory=list)
 
 
 def hello(name: str, lang: str) -> str:
@@ -179,6 +222,7 @@ def render(campaign: str, lang: str, *, email: str, name: str, base_url: str = D
               "unsubscribe_url": CP.prefs_url(base_url, email, lang, action="unsubscribe"), "privacy_url": PRIVACY_URL[lang]}
     body, footer = _fill(body, values), _fill(footer, values)
     text = f"{_to_text(body)}\n\n--\n{_to_text(footer)}\n" if footer else _to_text(body) + "\n"
+    images = _images(body, lang)
     html_doc = f"""<!doctype html>
 <html lang="{lang}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="color-scheme" content="light"><title>{html.escape(subject)}</title></head>
@@ -187,13 +231,13 @@ def render(campaign: str, lang: str, *, email: str, name: str, base_url: str = D
 <table role="presentation" width="600" cellpadding="0" cellspacing="0" bgcolor="#ffffff" style="max-width:600px;width:100%;background:#ffffff;border-radius:8px">
 <tr><td bgcolor="#0f172a" style="background:#0f172a;color:#ffffff;padding:16px 24px;font-size:18px;font-weight:bold;border-radius:8px 8px 0 0">{BRAND}</td></tr>
 <tr><td style="padding:24px">
-{_to_html(body)}
+{_to_html(body, images={i.filename.split(".")[0]: i for i in images})}
 </td></tr>
 <tr><td style="padding:16px 24px;border-top:1px solid #e5e7eb;color:#6b7280">
 {_to_html(footer, "12px")}
 </td></tr></table></td></tr></table></body></html>
 """
-    return Rendered(subject, text, html_doc, lang)
+    return Rendered(subject, text, html_doc, lang, images)
 
 
 def build_message(campaign: str, lang: str, *, email: str, name: str, base_url: str = DEFAULT_BASE_URL,
@@ -213,6 +257,11 @@ def build_message(campaign: str, lang: str, *, email: str, name: str, base_url: 
     msg["List-Id"] = f"{BRAND} announcements <announce.{sender.split('@')[-1].strip('> ') or 'aerostator.com'}>"
     msg.set_content(r.text)
     msg.add_alternative(r.html, subtype="html")
+    if r.images:
+        html_part = msg.get_payload()[1]
+        for img in r.images:
+            html_part.add_related(img.data, maintype="image", subtype="png", cid=f"<{img.cid}>", filename=img.filename,
+                                  disposition="inline")
     return msg
 
 

@@ -9,8 +9,8 @@ shows the electromagnetic, thermal and displacement maps the landing page alread
 
 * ``web/public/landing/core-l12.webp`` and the three ``web/public/landing/*-map/field`` pictures - CIANO14 40 L12, a public
   catalogue motor (``scripts/landing_images.py``);
-* ``config/mail/images/src/aerostator-core.png`` and ``ciano14-40-l12.png`` - trimmed copies of the renders on the public
-  emotres.com home page.
+* ``config/mail/images/src/aerostator-core.png``, ``ciano14-40-l12.png`` and ``ciano42-150-30.png`` - trimmed copies of the renders on the public
+  emotres.com pages (home, /shop/ciano-150-30/).
 
 Never a customer or project motor.  No prices, dates or customer data.  The mailer embeds the PNG in the message (``cid:``),
 so nothing is fetched from a server when the mail is opened.
@@ -24,7 +24,7 @@ from PIL import Image, ImageDraw, ImageFilter, ImageFont
 ROOT = Path(__file__).resolve().parents[1]
 OUT = ROOT / "config" / "mail" / "images"
 LANDING = ROOT / "web" / "public" / "landing"
-HERO = [OUT / "src" / "ciano14-40-l12.png", OUT / "src" / "aerostator-core.png", LANDING / "core-l12.webp"]
+HERO = [OUT / "src" / "ciano14-40-l12.png", OUT / "src" / "aerostator-core.png", OUT / "src" / "ciano42-150-30.png"]
 MAPS = [LANDING / "em-field.webp", LANDING / "thermal-map.webp", LANDING / "rotor-displacement.webp"]
 
 NAVY, NAVY2, BLUE, RED = (1, 36, 76), (8, 64, 128), (0, 125, 254), (252, 12, 20)

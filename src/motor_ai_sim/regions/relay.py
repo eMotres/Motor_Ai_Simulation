@@ -42,6 +42,7 @@ MAX_MAIL_RCPT = 100
 #: Largest LLM request (system + messages, or text to translate), in characters.
 MAX_LLM_CHARS = 200_000
 MAX_LLM_TOKENS = 8192
+MAX_WEB_SEARCH = 3
 MAIL_TIMEOUT_S = 25.0
 LLM_TIMEOUT_S = 100.0
 #: EU-side caps, per UTC day / per minute, for the whole peer (the per-user / per-IP limiters run where the person is).
@@ -125,13 +126,24 @@ def _llm_size(system: str, messages: List[Dict[str, Any]]) -> int:
     return len(system or "") + sum(len(str(m.get("content") or "")) for m in messages)
 
 
-def support_complete(messages: List[Dict[str, Any]], system: str, max_tokens: int = 2048) -> Tuple[str, str]:
-    """-> ``(text, model)`` from the provider that answers the help chat on EU."""
+def support_answer(messages: List[Dict[str, Any]], system: str, max_tokens: int = 2048, *, web_search: int = 0) -> Dict[str, Any]:
+    """-> ``{text, model, searches, sources}`` from the provider that answers the help chat on EU (``web_search`` = searches
+    offered; the per-account cap was checked where the person is)."""
     if _llm_size(system, messages) > MAX_LLM_CHARS:
         raise RelayError("request too large for the relay")
-    ans = _ask("llm", {"v": 1, "purpose": "support", "system": system, "messages": messages,
-                       "max_tokens": min(int(max_tokens), MAX_LLM_TOKENS)}, LLM_TIMEOUT_S)
-    return str(ans.get("text") or ""), str(ans.get("model") or "")
+    req = {"v": 1, "purpose": "support", "system": system, "messages": messages, "max_tokens": min(int(max_tokens), MAX_LLM_TOKENS)}
+    if web_search > 0:
+        req["web_search"] = min(int(web_search), MAX_WEB_SEARCH)
+    ans = _ask("llm", req, LLM_TIMEOUT_S)
+    return {"text": str(ans.get("text") or ""), "model": str(ans.get("model") or ""),
+            "searches": [str(q)[:200] for q in ans.get("searches") or []][:MAX_WEB_SEARCH],
+            "sources": [s for s in ans.get("sources") or [] if isinstance(s, dict)][:12]}
+
+
+def support_complete(messages: List[Dict[str, Any]], system: str, max_tokens: int = 2048) -> Tuple[str, str]:
+    """-> ``(text, model)`` from the provider that answers the help chat on EU."""
+    ans = support_answer(messages, system, max_tokens)
+    return ans["text"], ans["model"]
 
 
 def translate(text: str, src_lang: str, tgt_lang: str) -> Tuple[str, str]:
@@ -203,22 +215,21 @@ def _usage(obj: Any) -> Tuple[int, int]:
     return g("input_tokens", "prompt_tokens"), g("output_tokens", "completion_tokens")
 
 
-def _support_llm(system: str, messages: List[Dict[str, Any]], max_tokens: int) -> Tuple[str, str, int, int]:
-    """The same provider choice as the help chat on EU (``support._effective``)."""
+def _support_llm(system: str, messages: List[Dict[str, Any]], max_tokens: int, web_search: int = 0) -> Tuple[str, str, int, int, Dict[str, Any]]:
+    """The same provider choice as the help chat on EU (``support._effective``); the last item carries the searches and sources."""
     from motor_ai_sim.routes import support as S
     eff = S._effective()
     if eff["provider"] == "gemini" and eff["gemini"]["key"]:
         g = eff["gemini"]
         text = S._call_provider(lambda: S._gemini_reply(messages, g["key"], g["model"], system))
-        return str(text or ""), g["model"], 0, 0
+        return str(text or ""), g["model"], 0, 0, {}
     if eff["provider"] == "anthropic":
         a = eff["anthropic"]
         client = S._anthropic_client(a["key"])
         if client is not None:
-            resp = S._call_provider(lambda: client.messages.create(
-                model=a["model"], max_tokens=max_tokens, system=system, messages=messages))
-            tin, tout = _usage(resp)
-            return next((b.text for b in resp.content if b.type == "text"), ""), a["model"], tin, tout
+            ans = S.anthropic_answer(client, a["model"], system, messages, max_tokens=max_tokens, web_search=web_search)
+            extra = {k: ans[k] for k in ("searches", "sources") if ans.get(k)}
+            return ans["text"], a["model"], ans["tokens_in"], ans["tokens_out"], extra
     raise RuntimeError("no provider configured")
 
 
@@ -262,8 +273,9 @@ def execute_llm(payload: Dict[str, Any]) -> Dict[str, Any]:
     try:
         if purpose == "support":
             mt = max(1, min(int(p.get("max_tokens") or 2048), MAX_LLM_TOKENS))
-            text_out, model, tin, tout = _support_llm(system, messages, mt)
-            out.update(text=text_out, model=model)
+            ws = max(0, min(int(p.get("web_search") or 0), MAX_WEB_SEARCH))
+            text_out, model, tin, tout, extra = _support_llm(system, messages, mt, ws)
+            out.update(text=text_out, model=model, **extra)
         else:
             from motor_ai_sim.production import translate as T
             payload_t = T._payload(text, str(p.get("src")), str(p.get("tgt")))

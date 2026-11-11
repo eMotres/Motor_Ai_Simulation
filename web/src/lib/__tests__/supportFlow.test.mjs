@@ -147,3 +147,38 @@ t('chatReplyFrom: a draft-only reply is an answer; a 429 never carries a draft',
   const limited = F.chatReplyFrom(429, { reply: 'Slow down', ticketDraft: DRAFT });
   assert.equal(limited.ticketDraft, null);
 });
+
+// ── the ONE assistant (owner 2026-11-11): spec cards, the hand-off to a new specification, the kept conversation ──────────────
+const TOKEN = 'AbCdEfGhIjKlMnOpQrSt12';
+t('a spec reply keeps its cards on the message; the next step opens the new project or the agreement', () => {
+  const body = { reply: 'Filled.', source: 'claude', mode: 'spec', applied: [{ id: 'p-1', field_id: '1_6', status: 'applied' }], submitted: { version: 2 } };
+  const r = F.chatReplyFrom(200, body);
+  assert.equal(r.mode, 'spec');
+  assert.deepEqual(r.submitted, { version: 2, unchanged: false });
+  const s = F.receiveReply(F.addUserMessage(F.initialFlow(), 'yes, submit'), r);
+  assert.equal(s.msgs[1].applied[0].field_id, '1_6');
+  assert.deepEqual(F.nextStep(r), { kind: 'reload' });
+  const made = F.chatReplyFrom(200, { reply: 'Created.', project: { id: 'p-42', title: 'Drone motor' }, openSpec: true });
+  assert.deepEqual(F.nextStep(made), { kind: 'open-spec', projectId: 'p-42' });
+  const gate = F.chatReplyFrom(200, { reply: 'Agreement first.', handoff: { token: TOKEN, status: 'agreement_required' } });
+  assert.deepEqual(F.nextStep(gate), { kind: 'create', token: TOKEN });
+  assert.equal(F.nextStep(F.chatReplyFrom(200, { reply: 'Hi' })), null);
+});
+
+t('a visitor sign-up hand-off must be our own /projects?new=spec link; anything else is dropped', () => {
+  const ok = F.normalizeHandoff({ token: TOKEN, status: 'sign_up', path: `/projects?new=spec&handoff=${TOKEN}` });
+  assert.equal(ok.path, `/projects?new=spec&handoff=${TOKEN}`);
+  assert.equal(F.normalizeHandoff({ token: TOKEN, status: 'sign_up', path: 'https://evil.test/projects?new=spec' }), null);
+  assert.equal(F.normalizeHandoff({ token: 'short', status: 'failed' }), null);
+  assert.equal(F.normalizeHandoff({ token: TOKEN, status: 'whatever' }), null);
+});
+
+t('the conversation goes to the server as text only; a kept history comes back with its cards; a card updates everywhere', () => {
+  const msgs = [{ role: 'user', content: 'hi' }, { role: 'assistant', content: 'ok', applied: [{ id: 'p-1', field_id: '3_2', status: 'applied' }] }];
+  assert.deepEqual(F.forServer(msgs), [{ role: 'user', content: 'hi' }, { role: 'assistant', content: 'ok' }]);
+  const rows = F.fromHistory([{ role: 'user', text: 'hi' }, { role: 'assistant', text: 'ok', applied: [{ id: 'p-1', field_id: '3_2', status: 'applied' }] }, { role: 'x', text: 'no' }]);
+  assert.equal(rows.length, 2);
+  assert.equal(rows[1].applied[0].id, 'p-1');
+  const s = F.updateCard({ msgs: rows, draft: null }, { id: 'p-1', field_id: '3_2', status: 'undone' });
+  assert.equal(s.msgs[1].applied[0].status, 'undone');
+});

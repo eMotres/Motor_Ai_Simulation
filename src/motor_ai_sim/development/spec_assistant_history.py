@@ -68,6 +68,47 @@ def load(project_id: str, email: str) -> list[dict]:
     return out
 
 
+# ── the help chat outside a project (owner 2026-11-11: ONE assistant, one kept conversation) ─────────────────────────────────
+# A signed-in user's chat on any page that is not a project's Specification: ``<identity>/assistant_history/<sha256(email)[:16]>.json``,
+# same rows.  When the assistant creates a project from it, the conversation is carried into that project's history.
+
+def _general_path(email: str):
+    from motor_ai_sim.account_lifecycle import identity_dir
+    return identity_dir() / "assistant_history" / f"{hashlib.sha256(email.strip().lower().encode('utf-8')).hexdigest()[:16]}.json"
+
+
+def append_general(email: str, rows: list[dict]) -> None:
+    if not rows or not email.strip():
+        return
+    from motor_ai_sim import json_store
+    from motor_ai_sim.private_files import ensure_private_dir
+    new = [_row(r["role"], r["text"]) for r in rows]
+    path = _general_path(email)
+    ensure_private_dir(path.parent)
+
+    def mutate(doc):
+        doc = doc if isinstance(doc, dict) else _doc()
+        msgs = doc.setdefault("messages", [])
+        msgs.extend(new)
+        del msgs[:-MAX_STORED]
+        return doc
+
+    json_store.mutate_json(path, mutate, default=_doc())
+
+
+def load_general(email: str) -> list[dict]:
+    from motor_ai_sim import json_store
+    doc = json_store.read_json(_general_path(email), _doc()) if email.strip() else _doc()
+    rows = [m for m in (doc.get("messages") if isinstance(doc, dict) else []) or [] if isinstance(m, dict)]
+    return [{k: m.get(k) for k in ("id", "role", "text", "at")} | {"proposals": [], "applied": []} for m in rows]
+
+
+def clear_general(email: str) -> None:
+    from motor_ai_sim import json_store
+    if email.strip():
+        json_store.atomic_write_json(_general_path(email), _doc())
+
+
 def readable_by(user: dict, target_email: str) -> bool:
     """A user reads their own history; staff (admin / engineer) read anyone's."""
     from motor_ai_sim.development import access

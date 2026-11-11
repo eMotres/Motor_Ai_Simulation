@@ -40,5 +40,18 @@
     "empty": "No tickets yet. Tell me about a problem or an idea and I will prepare one.",
     "loadFailed": "Could not load your tickets."
   },
-  "geminiNotice": "Runs on Google Gemini. Google may use help-chat messages to improve its services. Do not enter confidential information."
+  "geminiNotice": "Runs on Google Gemini. Google may use help-chat messages to improve its services. Do not enter confidential information.",
+  "greetingSpec": "I am working on this specification with you: I fill what follows from your answers and from data, ask only for what is still missing, and submit it when you say so.",
+  "start": "Start with the specification",
+  "clear": "Clear",
+  "clearTip": "Clears this conversation from your view; it is kept for service improvement under our Privacy Policy.",
+  "fillForMe": "Fill the form for me",
+  "fillTip": "On: the values I am sure of go straight into the form, each with its basis and an Undo. Off: I only propose cards you apply yourself.",
+  "place": {
+    "spec": "In the specification: {title}"
+  },
+  "handoff": {
+    "signUp": "Sign up and create the specification with these values",
+    "create": "Create the specification with these values"
+  }
 }

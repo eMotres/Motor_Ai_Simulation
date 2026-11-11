@@ -31,7 +31,8 @@ const proposal = (extra = {}) => ({ id: 'p-1', field_id: '4_8', value: { balance
 
 test('every proposal card is labelled as an AI suggestion, in both languages', () => {
   const read = (rel) => readFileSync(new URL(rel, import.meta.url), 'utf8');
-  assert.match(read('../components/SpecAssistantPanel.tsx'), /data-testid="spec-proposal"[\s\S]{0,300}specAssistant\.aiSuggestion/);
+  // ONE assistant (2026-11-11): the cards live in the chat bubble now
+  assert.match(read('../../../components/support/SpecChatCards.tsx'), /data-testid="spec-proposal"[\s\S]{0,300}specAssistant\.aiSuggestion/);
   assert.ok(JSON.parse(read('../../../locales/en/development.json')).specAssistant.aiSuggestion.startsWith('AI suggestion'));
   assert.ok(JSON.parse(read('../../../locales/zh-CN/development.json')).specAssistant.aiSuggestion.startsWith('AI 建议'));
 });

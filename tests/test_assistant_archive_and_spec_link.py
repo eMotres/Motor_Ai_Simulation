@@ -50,7 +50,9 @@ def test_archive_is_append_only_redacted_and_keeps_no_hidden_context(arch):
     rows = [json.loads(x) for x in files[0].read_text(encoding="utf-8").splitlines()]
     assert len(rows) == 4 and rows[0]["assistant"] == "spec" and rows[0]["fill_mode"] is True
     assert "sk-abcdefghijklmnop1234" not in files[0].read_text(encoding="utf-8") and "[redacted-key]" in rows[0]["user_text"]
-    assert not any("system" in r or "context" in r or "snapshot" in r for r in rows)
+    assert not any("system" in r or "snapshot" in r for r in rows)
+    assert all(r.get("context") in ("help", "spec") for r in rows)          # a label of where the chat ran, never the hidden context
+    assert all(r.get("time") and r["time"] == r["iso"] for r in rows)         # every record carries its time (11-11: time was null)
     assert rows[0]["applied"][0]["field_id"] == "2_1" and rows[0]["refused"] == ["6_1"]
     assert rows[2]["anon"] is True and rows[2]["account"] == ""            # a visitor: no account, keyed by a random session id, no IP field
     assert not any("ip" in r for r in rows)
@@ -73,10 +75,12 @@ def test_support_chat_archives_visitors_by_session_id_and_accounts_by_email(arch
     support._archive_turn({"sid": "abcdef123456", "context": {"tab": "motors"}}, None, True, msgs, {"reply": "Open Motors.", "source": "claude", "model": "m"})
     monkeypatch.setattr(auth, "caller_identity", lambda authorization=None: {"id": "Anna@Example.test", "role": "user"})
     support._archive_turn({"sid": "bad sid!"}, "Bearer x", False, msgs, {"reply": "ok", "source": "error", "detail": "provider down"})
-    rows = list(AR.iter_records(assistant="support"))
-    assert rows[0]["anon"] and rows[0]["account"] == "" and rows[0]["page"] == "motors" and rows[0]["conv_id"] == AR.conv_key("support", "abcdef123456")
+    rows = list(AR.iter_records(assistant="support"))                        # the help context, old and new records alike
+    assert rows[0]["anon"] and rows[0]["account"] == "" and rows[0]["page"] == "motors" and rows[0]["conv_id"] == AR.conv_key("assistant", "abcdef123456")
+    assert rows[0]["assistant"] == "assistant" and rows[0]["context"] == "help" and rows[0]["time"]
     assert rows[1]["account"] == "anna@example.test" and rows[1]["error"] == "provider down"
-    assert rows[1]["conv_id"] == AR.conv_key("support", "anna@example.test")      # an invalid session id is ignored, never the IP
+    assert rows[1]["conv_id"] == AR.conv_key("assistant", "anna@example.test")      # an invalid session id is ignored, never the IP
+    assert list(AR.iter_records(context="help")) == rows and list(AR.iter_records(assistant="spec")) == []
 
 
 def test_admin_api_lists_filters_opens_counts_and_audits(arch):

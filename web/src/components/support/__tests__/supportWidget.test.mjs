@@ -55,7 +55,9 @@ test('the draft card: editable type, title and description; Send and Dismiss', (
 
 test('Send goes through the confirm flow with the context; nothing is filed from the chat call', () => {
   assert.match(widget, /runConfirm\(flowRef\.current, submitTicket, context\(\), setFlow\)/);
-  assert.match(widget, /askAssistant\(next\.msgs, user \? context\(\) : undefined, i18n\.resolvedLanguage \?\? i18n\.language\)/);
+  // ONE assistant (2026-11-11): the context rides only for a signed-in caller; inside a Specification the place (project, fill mode) too
+  assert.match(widget, /askAssistant\(msgs, user \? context\(\) : undefined, lang, spec \? \{ projectId: spec\.projectId, fill: fill && canApply \} : undefined\)/);
+  assert.match(widget, /await ask\(next\.msgs\)/);
   assert.doesNotMatch(widget, /t\('demo'\)/);
   assert.match(widget, /installFailedCallRecorder\(/);
   assert.ok(!/submitTicket\(/.test(widget.replace('runConfirm(flowRef.current, submitTicket', '')), 'submitTicket is only reachable through runConfirm');

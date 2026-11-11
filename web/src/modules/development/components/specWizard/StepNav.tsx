@@ -17,6 +17,9 @@ function Marker({ index, state, current }: { index: number; state: StepState; cu
   return <Box aria-hidden component="span" sx={{ ...base, border: '2px', borderStyle: state === 'optional' ? 'dashed' : 'solid', borderColor: 'var(--line)', color: 'var(--text-3)' }}>{index + 1}</Box>;
 }
 
+/** Required answers of a step still open (missing or invalid; "answer later" counts as answered for the highlight). */
+export const openRequired = (p: { missing: number; invalid: number }): number => (p.missing ?? 0) + (p.invalid ?? 0);
+
 /** Vertical stepper (desktop): each step with one line of what it covers and its state. */
 export function StepList({ steps, draft, current, onSelect, tr }: { steps: WizardStep[]; draft: SpecDraft; current: number; onSelect: (i: number) => void; tr: T }) {
   return <Box component="nav" aria-label={tr('wizard.stepsNav')} sx={{ display: 'flex', flexDirection: 'column', gap: 0.5 }}>
@@ -24,13 +27,16 @@ export function StepList({ steps, draft, current, onSelect, tr }: { steps: Wizar
       const p = step.kind === 'review' ? null : stepProgress(step, draft);
       const state: StepState = p?.state ?? 'empty';
       const active = i === current;
-      return <Tooltip key={step.id} title={tr(step.summary)} placement="right" describeChild enterDelay={400}><ButtonBase onClick={() => onSelect(i)} aria-current={active ? 'step' : undefined} aria-label={`${tr(step.title)}${p ? `, ${tr(`wizard.state.${state}`)}` : ''}`}
-        sx={{ display: 'flex', alignItems: 'center', gap: 1.5, textAlign: 'left', justifyContent: 'flex-start', minHeight: 48, px: 1.5, py: 1, borderRadius: '10px', bgcolor: active ? 'var(--panel)' : 'transparent', boxShadow: active ? '0 1px 2px rgba(0,0,0,.12)' : 'none', color: 'var(--text-0)', '&:hover': { bgcolor: 'var(--panel)' }, '&:focus-visible': { outline: '2px solid', outlineColor: 'primary.main' } }}>
+      // owner 2026-11-11: a step that still misses required answers is highlighted, with how many
+      const open = p ? openRequired(p) : 0;
+      return <Tooltip key={step.id} title={tr(step.summary)} placement="right" describeChild enterDelay={400}><ButtonBase onClick={() => onSelect(i)} aria-current={active ? 'step' : undefined} aria-label={`${tr(step.title)}${p ? `, ${tr(`wizard.state.${state}`)}` : ''}${open ? `, ${tr('wizard.stepMissing', { count: open })}` : ''}`}
+        data-step-missing={open || undefined}
+        sx={{ display: 'flex', alignItems: 'center', gap: 1.5, textAlign: 'left', justifyContent: 'flex-start', minHeight: 48, px: 1.5, py: 1, borderRadius: '10px', bgcolor: active ? 'var(--panel)' : 'transparent', boxShadow: active ? '0 1px 2px rgba(0,0,0,.12)' : 'none', color: 'var(--text-0)', borderLeft: '3px solid', borderLeftColor: open ? 'error.main' : 'transparent', '&:hover': { bgcolor: 'var(--panel)' }, '&:focus-visible': { outline: '2px solid', outlineColor: 'primary.main' } }}>
         <Marker index={i} state={state} current={active} />
         <Box component="span" sx={{ display: 'flex', flexDirection: 'column', minWidth: 0, flex: 1 }}>
           <Typography component="span" sx={{ fontSize: 14, fontWeight: active ? 600 : 500, lineHeight: 1.3 }}>{tr(step.title)}</Typography>
         </Box>
-        {p && p.required > 0 && <Typography component="span" sx={{ fontSize: 11.5, color: 'var(--text-3)', fontVariantNumeric: 'tabular-nums' }}>{p.answered}/{p.required}</Typography>}
+        {p && p.required > 0 && <Typography component="span" sx={{ fontSize: 11.5, color: open ? 'error.main' : 'var(--text-3)', fontWeight: open ? 700 : 400, fontVariantNumeric: 'tabular-nums' }}>{p.answered}/{p.required}</Typography>}
       </ButtonBase></Tooltip>;
     })}
   </Box>;
@@ -51,12 +57,15 @@ export function StepBar({ steps, draft, current, onSelect, tr }: { steps: Wizard
       <ExpandMoreIcon sx={{ color: 'var(--text-3)' }} />
     </ButtonBase>
     <Box aria-hidden sx={{ display: 'flex', gap: '3px', px: 1.5, pb: 1 }}>
-      {steps.map((s, i) => { const st = s.kind === 'review' ? 'empty' : stepProgress(s, draft).state; return <Box key={s.id} sx={{ flex: 1, height: 4, borderRadius: 2, bgcolor: i === current ? 'primary.main' : st === 'done' ? 'success.main' : st === 'partial' ? 'var(--text-4)' : 'var(--line)' }} />; })}
+      {steps.map((s, i) => { const pr = s.kind === 'review' ? null : stepProgress(s, draft); const st = pr?.state ?? 'empty'; const open = pr ? openRequired(pr) : 0;
+        return <Box key={s.id} sx={{ flex: 1, height: 4, borderRadius: 2, bgcolor: i === current ? 'primary.main' : st === 'done' ? 'success.main' : open ? 'error.main' : st === 'partial' ? 'var(--text-4)' : 'var(--line)' }} />; })}
     </Box>
     <Menu anchorEl={anchor} open={!!anchor} onClose={() => setAnchor(null)}>
-      {steps.map((s, i) => <MenuItem key={s.id} selected={i === current} onClick={() => { setAnchor(null); onSelect(i); }} sx={{ minHeight: TOUCH, gap: 1.5 }}>
-        <Marker index={i} state={s.kind === 'review' ? 'empty' : stepProgress(s, draft).state} current={i === current} />{tr(s.title)}
-      </MenuItem>)}
+      {steps.map((s, i) => { const pr = s.kind === 'review' ? null : stepProgress(s, draft); const open = pr ? openRequired(pr) : 0;
+        return <MenuItem key={s.id} selected={i === current} onClick={() => { setAnchor(null); onSelect(i); }} sx={{ minHeight: TOUCH, gap: 1.5 }}>
+          <Marker index={i} state={pr?.state ?? 'empty'} current={i === current} /><Box component="span" sx={{ flex: 1 }}>{tr(s.title)}</Box>
+          {pr && pr.required > 0 && <Typography component="span" sx={{ fontSize: 12, color: open ? 'error.main' : 'var(--text-3)', fontWeight: open ? 700 : 400 }}>{pr.answered}/{pr.required}</Typography>}
+        </MenuItem>; })}
     </Menu>
   </Box>;
 }

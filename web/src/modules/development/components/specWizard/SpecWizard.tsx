@@ -1,5 +1,6 @@
-import { useEffect, useRef, useState } from 'react';
-import { Alert, Box, Button, IconButton, LinearProgress, Stack, Tooltip, Typography, useMediaQuery } from '@mui/material';
+import { Fragment, useEffect, useRef, useState } from 'react';
+import { Alert, Box, Button, Chip, IconButton, LinearProgress, Stack, Tooltip, Typography, useMediaQuery } from '@mui/material';
+import { localized } from './reviewSummary';
 import { readView, writeView } from '../../../../lib/viewMemory';
 import ChatBubbleOutlineIcon from '@mui/icons-material/ChatBubbleOutline';
 import CheckIcon from '@mui/icons-material/Check';
@@ -92,6 +93,8 @@ export default function SpecWizard(p: SpecWizardProps) {
   }, [step, revealField]);
 
   const progress = overallProgress(completeness);
+  const simMissing = completeness?.simulation_missing ?? [];
+  const fieldName = (id: string) => { const f = fieldSteps.flatMap((s) => s.fields).find((x) => x.id === id); return f ? localized(f.short_label ?? f.label, env.lang) : id; };
   const sectionComments = p.messages.filter((m) => !m.resolved && stepCommentRefs(current).includes(m.field_ref ?? ''));
   const stepEnv: StepEnv = { ...env, goToStep: onStep, revealField, groupOpen, onGroupOpen };
   const openComments = p.messages.filter((m) => !m.resolved && !!m.field_ref);
@@ -109,6 +112,12 @@ export default function SpecWizard(p: SpecWizardProps) {
         <LinearProgress variant="determinate" value={progress.pct} aria-hidden sx={{ height: 8, borderRadius: 4, bgcolor: 'var(--app-bg)' }} />
       </Box>
     </Tooltip>
+    {/* the simulation minimum (owner 2026-11-11: the customer sees what blocks Submit): a chip that jumps to the first missing field */}
+    {simMissing.length > 0
+      ? <Tooltip title={<>{tr('wizard.review.simulationMissing')}{simMissing.map((m) => <Fragment key={m.field}><br />• {fieldName(m.field_id)}</Fragment>)}</>}>
+          <Chip data-testid="sim-minimum" color="warning" variant="outlined" onClick={() => reveal(simMissing[0].field_id)} label={tr('wizard.simMissingCount', { count: simMissing.length })} sx={{ minHeight: 32, fontWeight: 600 }} />
+        </Tooltip>
+      : completeness?.simulation_ready ? <Chip data-testid="sim-minimum" color="success" variant="outlined" label={tr('wizard.simReady')} sx={{ minHeight: 32 }} /> : null}
     <Typography role="status" sx={{ fontSize: 12.5, display: 'flex', alignItems: 'center', gap: 0.6, color: saveError ? 'error.main' : saving ? 'var(--text-3)' : 'success.main', whiteSpace: 'nowrap' }}>
       {!saveError && !saving && <CheckIcon sx={{ fontSize: 15 }} />}{saveError ? tr('saveFailedShort') : saving ? tr('saving') : tr('wizard.saved')}
     </Typography>

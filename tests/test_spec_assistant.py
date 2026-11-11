@@ -13,7 +13,7 @@ from fastapi.testclient import TestClient
 from motor_ai_sim import auth, users
 from motor_ai_sim.development import spec_assistant as A, spec_proposals as P, store
 from motor_ai_sim.development.routes import router as dev_router
-from motor_ai_sim.development.spec_assistant_prompt import NO_PRICE_RULE as P_NO_PRICE_RULE, SPEC_PROMPT
+from motor_ai_sim.support_prompt import NO_PRICE_RULE as P_NO_PRICE_RULE, SPEC_SECTION as SPEC_PROMPT
 from motor_ai_sim.development.spec_assistant_routes import router
 
 H = {"Authorization": "Bearer dev"}
@@ -187,11 +187,13 @@ def test_invalid_markers_are_dropped_not_raised(env):
 # -- turn, context, prompt ----------------------------------------------------
 
 def test_prompt_carries_the_owner_rules():
+    """ONE assistant (2026-11-11): the spec section comes after the customer prompt, which carries the no-money rule."""
+    from motor_ai_sim.support_prompt import USER_PROMPT
     low = SPEC_PROMPT.lower()
-    assert P_NO_PRICE_RULE in SPEC_PROMPT and "customer decisions" in low and "section 6" in low and "mass target" in low
+    assert P_NO_PRICE_RULE in USER_PROMPT and "customer decisions" in low and "section 6" in low and "mass target" in low
     assert "(assumed, to confirm)" in SPEC_PROMPT
-    assert "one field" in low and "short" in low and "chinese" in low
-    assert "you never change the specification" in low
+    assert "one at a time" in low and "short" in low and "chinese" in low
+    assert "the server adds that line itself" in low and "never propose or assume" in low
 
 
 def test_context_lists_missing_fields_with_shapes_and_hides_customer_decisions(env):
@@ -291,14 +293,14 @@ def test_daily_cap_blocks_before_the_provider(env, monkeypatch):
 # -- routes and access --------------------------------------------------------
 
 def test_default_access_is_staff_only_and_members_opens_it(env, monkeypatch):
+    """ONE assistant (2026-11-11): every member of the project (and staff) gets the spec mode; only a spec editor applies."""
     c, as_ = env["client"], env["as"]
     monkeypatch.setattr(A, "complete", lambda m, s: ("Hello", "gemini", "m"))
     assert A.access_mode() == "staff"
     as_("cust@example.test", "user")
     st = c.get("/api/projects/alpha/spec/assistant", headers=H).json()
-    assert st["allowed"] is False and st["can_apply"] is False
-    assert c.post("/api/projects/alpha/spec/assistant", headers=H, json={"messages": []}).status_code == 403
-    assert c.get("/api/projects/alpha/spec/proposals", headers=H).status_code == 403
+    assert st["allowed"] is True and st["can_apply"] is False
+    assert A.may_use({"email": "stranger@example.test", "role": "user"}, store.get_project("alpha")) is False
     as_("eng@example.test", "engineer")                       # staff, not the project owner
     st = c.get("/api/projects/alpha/spec/assistant", headers=H).json()
     assert st["allowed"] is True and st["can_apply"] is False
@@ -356,8 +358,8 @@ def test_the_prompt_says_what_happens_after_the_specification():
     """Launch 2026-11: users submit the specification and MOTRES engineers simulate it free of charge; the assistant says
     so, never starts a simulation, and points data-use questions to the Platform Agreement instead of explaining modes."""
     low = SPEC_PROMPT.lower()
-    assert "submit specification" in low and "motres engineers then run the simulation" in low
+    assert "submits the specification" in low and "engineers run the simulation" in low
     assert "free of charge" in low and "motors & results" in low
-    assert "does not start a simulation itself" in low and "you cannot start one" in low
+    assert "you cannot start a simulation" in low and "[[submit_spec]]" in low and "confirms in this chat" in low
     assert "https://aerostator.com/mcp" in SPEC_PROMPT and "/platform-agreement" in SPEC_PROMPT
     assert "PRIVATE" not in SPEC_PROMPT and "paid" not in low

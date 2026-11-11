@@ -102,7 +102,8 @@ from fastapi.responses import JSONResponse
 
 from motor_ai_sim import support_catalog, support_context
 from motor_ai_sim.support_prompt import (
-    FULL_UI_ROLES, NO_PRICE_RULE, STAFF_PROMPT, TICKET_PROTOCOL, USER_PROMPT, prompt_for_role,
+    CREATE_SPEC_PROTOCOL, DATA_RULES, FULL_UI_ROLES, NO_PRICE_RULE, STAFF_PROMPT, TICKET_PROTOCOL, USER_PROMPT, prompt_for_role,
+    web_search_note,
 )
 
 logger = logging.getLogger(__name__)
@@ -674,6 +675,130 @@ def _call_provider(fn, *, attempts: int = 2, pause: Optional[float] = None):
             time.sleep(_RETRY_PAUSE_S if pause is None else pause)
 
 
+# ── the one provider call (help chat, spec mode, the relay's EU side) ────────────────────────────────────────────────────────
+#: Web lookup (owner 2026-11-11: «если агент не найдёт ответа на сервере, пусть ищет в интернете»): Anthropic's server-side web
+#: search tool, offered to SIGNED-IN callers only, a few searches per turn and a per-account daily cap; never for visitors.
+WEB_SEARCH_PER_TURN = 3
+WEB_SEARCH_DAY_MAX = 20
+#: Models with the dynamic-filtering variant; the others (Haiku 5.5 among them) get the basic tool.
+_WEB_DYNAMIC_PREFIXES = ("claude-opus-5", "claude-opus-4-8", "claude-opus-4-7", "claude-opus-4-6", "claude-sonnet-5",
+                         "claude-sonnet-4-6", "claude-fable", "claude-mythos")
+
+
+def web_search_tool(model: str, uses: int) -> dict:
+    kind = "web_search_20260209" if str(model or "").startswith(_WEB_DYNAMIC_PREFIXES) else "web_search_20250305"
+    return {"type": kind, "name": "web_search", "max_uses": max(1, int(uses))}
+
+
+def _block_get(b, key, default=None):
+    return b.get(key, default) if isinstance(b, dict) else getattr(b, key, default)
+
+
+def anthropic_answer(client, model: str, system: str, messages: list[dict], *, max_tokens: int = 2048,
+                     web_search: int = 0) -> dict:
+    """One Messages call, with the web_search tool when ``web_search`` > 0: ``{text, searches, sources, tokens_in, tokens_out}``.
+    Every text block is joined (a searched answer comes in several, with citations); the searches (queries) and the result URLs are
+    returned for the archive.  A paused turn (the server-side loop's own limit) is resumed once."""
+    kw = {"tools": [web_search_tool(model, web_search)]} if web_search > 0 else {}
+    resp = _call_provider(lambda: client.messages.create(model=model, max_tokens=max_tokens, system=system, messages=messages, **kw))
+    blocks = list(_block_get(resp, "content", []) or [])
+    if web_search > 0 and _block_get(resp, "stop_reason") == "pause_turn":
+        again = messages + [{"role": "assistant", "content": blocks}]
+        resp = _call_provider(lambda: client.messages.create(model=model, max_tokens=max_tokens, system=system, messages=again, **kw))
+        blocks += list(_block_get(resp, "content", []) or [])
+    text = "".join(str(_block_get(b, "text", "") or "") for b in blocks if _block_get(b, "type") == "text").strip()
+    searches, sources = [], []
+    for b in blocks:
+        kind = _block_get(b, "type")
+        if kind == "server_tool_use" and _block_get(b, "name") == "web_search":
+            q = _block_get(b, "input", {}) or {}
+            searches.append(str(q.get("query") if isinstance(q, dict) else q)[:200])
+        elif kind == "web_search_tool_result":
+            content = _block_get(b, "content", [])
+            for r in content if isinstance(content, list) else []:      # an error result is an object, not a list
+                url = str(_block_get(r, "url", "") or "")
+                if url.startswith(("http://", "https://")) and url not in [s["url"] for s in sources]:
+                    sources.append({"url": url[:300], "title": str(_block_get(r, "title", "") or "")[:200]})
+    usage = _block_get(resp, "usage")
+    return {"text": text, "searches": searches, "sources": sources[:12],
+            "tokens_in": int(_block_get(usage, "input_tokens", 0) or 0) if usage is not None else 0,
+            "tokens_out": int(_block_get(usage, "output_tokens", 0) or 0) if usage is not None else 0}
+
+
+def provider_answer(messages: list[dict], system: str, *, web_search: int = 0, max_tokens: int = 2048) -> dict:
+    """``{text, source, model, searches, sources}`` from the configured provider (relay, Gemini behind its guard, Anthropic);
+    ``source == "mock"`` when none is configured.  Raises on a provider failure (the caller answers it)."""
+    from motor_ai_sim.regions import relay as _RL
+    if _RL.relay_enabled():
+        ans = _RL.support_answer(messages, system, max_tokens, web_search=web_search)
+        return {"text": ans.get("text") or "", "source": "claude", "model": ans.get("model") or "",
+                "searches": ans.get("searches") or [], "sources": ans.get("sources") or []}
+    eff = _effective()
+    if eff["provider"] == "gemini" and eff["gemini"]["key"]:
+        g = eff["gemini"]
+        text = _call_provider(lambda: _gemini_reply(messages, g["key"], g["model"], system))
+        return {"text": text or "", "source": "gemini", "model": g["model"], "searches": [], "sources": []}
+    if eff["provider"] == "anthropic":
+        a = eff["anthropic"]
+        client = _anthropic_client(a["key"])
+        if client is not None:
+            out = anthropic_answer(client, a["model"], system, messages, max_tokens=max_tokens, web_search=web_search)
+            return {**out, "source": "claude", "model": a["model"]}
+    return {"text": "", "source": "mock", "model": "", "searches": [], "sources": []}
+
+
+def _web_usage_file():
+    from pathlib import Path
+
+    from motor_ai_sim import users as U
+    return Path(U._USERS_FILE).parent / ".support_web_search_day.json"
+
+
+def _web_day_max() -> int:
+    try:
+        return max(0, int(os.environ.get("SUPPORT_WEB_SEARCH_DAY_MAX") or WEB_SEARCH_DAY_MAX))
+    except ValueError:
+        return WEB_SEARCH_DAY_MAX
+
+
+def web_search_budget(ident: str, now: Optional[float] = None) -> int:
+    """How many web searches this account may run this turn (0: a visitor, the cap is used up, or it is switched off)."""
+    import hashlib
+
+    from motor_ai_sim import json_store
+    if not ident:
+        return 0
+    day = time.strftime("%Y-%m-%d", time.gmtime(time.time() if now is None else now))
+    key = hashlib.sha256(str(ident).strip().lower().encode("utf-8")).hexdigest()
+    try:
+        doc = json_store.read_json(_web_usage_file(), {})
+    except Exception:                                        # noqa: BLE001
+        return 0
+    used = int(((doc.get("counts") or {}) if isinstance(doc, dict) and doc.get("day") == day else {}).get(key) or 0)
+    return max(0, min(WEB_SEARCH_PER_TURN, _web_day_max() - used))
+
+
+def charge_web_search(ident: str, n: int, now: Optional[float] = None) -> None:
+    """Record ``n`` searches an account ran (hash of the address only, today's rows only).  Never raises."""
+    import hashlib
+
+    from motor_ai_sim import json_store
+    if not ident or n <= 0:
+        return
+    day = time.strftime("%Y-%m-%d", time.gmtime(time.time() if now is None else now))
+    key = hashlib.sha256(str(ident).strip().lower().encode("utf-8")).hexdigest()
+
+    def _mut(doc):
+        rows = doc.get("counts") if isinstance(doc, dict) and doc.get("day") == day else None
+        rows = rows if isinstance(rows, dict) else {}
+        rows[key] = int(rows.get(key) or 0) + int(n)
+        return {"day": day, "counts": rows}
+    try:
+        json_store.mutate_json(_web_usage_file(), _mut, default={})
+    except Exception as e:                                   # noqa: BLE001
+        logger.warning("support: the web-search counter is unavailable (%s)", type(e).__name__)
+
+
 def _sanitize(raw, *, max_turns: int = _MAX_TURNS, max_chars: int = 4000) -> list[dict]:
     """Coerce the client payload into a clean alternating-friendly message list.
 
@@ -943,7 +1068,7 @@ def _is_anonymous(authorization: Optional[str]) -> bool:
 
 
 def build_system_prompt(role: str, *, anon: bool, context: Optional[dict] = None,
-                        authorization: Optional[str] = None) -> str:
+                        authorization: Optional[str] = None, spec: bool = False) -> str:
     """Everything the model is told for one call.
 
     * a visitor: the customer prompt + the visitor note + the
@@ -959,7 +1084,8 @@ def build_system_prompt(role: str, *, anon: bool, context: Optional[dict] = None
     if anon:
         block = support_catalog.published_motors_block(None, visitor=True)
         sp = _effective_prompt("anon")
-        return sp + VISITOR_NOTE + ("" if NO_PRICE_RULE in sp else "\n" + NO_PRICE_RULE) + ("\n\n" + block if block else "")
+        return (sp + VISITOR_NOTE + ("" if NO_PRICE_RULE in sp else "\n" + NO_PRICE_RULE) + ("\n\n" + block if block else "")
+                + "\n\n" + DATA_RULES + "\n\n" + CREATE_SPEC_PROTOCOL + "\n" + VISITOR_CREATE_NOTE)
     sp = _effective_prompt(role)
     if NO_PRICE_RULE not in sp and str(role or "").lower() not in FULL_UI_ROLES:
         sp += "\n\n" + NO_PRICE_RULE
@@ -968,7 +1094,15 @@ def build_system_prompt(role: str, *, anon: bool, context: Optional[dict] = None
     block = support_catalog.published_motors_block(authorization)
     if block:
         sp += "\n\n" + block
+    if not spec:                                 # spec mode adds the data rules and the spec section itself (spec_assistant.turn)
+        sp += "\n\n" + DATA_RULES + "\n\n" + CREATE_SPEC_PROTOCOL
     return sp + support_context.render_for_model(context or {}, role=role)
+
+
+#: A visitor has no account to create a project in: the server keeps the values and shows a sign-up button that carries them.
+VISITOR_CREATE_NOTE = ("- This caller has NO account yet: [[CREATE_SPEC]] does not create a project for them; the server keeps the "
+                       "values and shows a button that goes through the free sign-up and then opens the specification with them. "
+                       "Say that in one sentence.")
 
 
 _UNAVAILABLE_REPLY = {
@@ -1067,7 +1201,8 @@ def _deliver(reply: str, source: str, *, anon: bool, messages: list[dict],
 def _archive_turn(body: dict, authorization: Optional[str], anon: bool, messages: list, out: dict) -> None:
     """Keep the turn for service analysis (owner 2026-11-11): the visitor's text and our reply, the page name, the model and any
     error - never the system prompt or the hidden context.  A visitor is keyed by the random session id their browser made up,
-    never by the IP.  Never raises."""
+    never by the IP.  ONE assistant: ``assistant="assistant"`` with ``context="help"`` here (the spec mode logs ``"spec"``).
+    Never raises."""
     try:
         from motor_ai_sim import assistant_archive as AR
         acct = ""
@@ -1076,12 +1211,116 @@ def _archive_turn(body: dict, authorization: Optional[str], anon: bool, messages
             acct = str(caller_identity(authorization).get("id") or "").lower()
         raw_ctx = body.get("context") if isinstance(body.get("context"), dict) else {}
         page = str(raw_ctx.get("tab") or raw_ctx.get("tabLabel") or "")
-        AR.log_turn(assistant="support", conv_id=AR.conv_key("support", AR.valid_sid(body.get("sid")) or acct or "nosid"),
+        AR.log_turn(assistant="assistant", context="help",
+                    conv_id=AR.conv_key("assistant", AR.valid_sid(body.get("sid")) or acct or "nosid"),
                     account=acct, page=page, user_text=_visitor_turn(messages), reply=out.get("reply", ""),
                     model=out.get("model", ""), source=out.get("source", ""),
-                    error=out.get("detail", "") or ("error" if out.get("source") == "error" else ""))
+                    error=out.get("detail", "") or ("error" if out.get("source") == "error" else ""),
+                    applied=out.get("applied"), proposed=out.get("proposals"), searches=out.get("searches"),
+                    sources=out.get("sources"), project_id=str((out.get("project") or {}).get("id") or ""))
     except Exception:                                        # noqa: BLE001
         pass
+
+
+_CREATED = {
+    "en": "I created the project «{title}» and filled {n} fields of its specification: {fields}. The Specification is open now; "
+          "every value shows its basis and can be undone.",
+    "zh-CN": "我已创建项目「{title}」，并填写了规格书的 {n} 个字段：{fields}。规格书现已打开，每个值都标明了依据，并可撤销。",
+}
+_HANDOFF_LINES = {
+    "agreement_required": {"en": "Before the project starts, the Platform Agreement needs your acceptance - I am opening it now.",
+                           "zh-CN": "项目开始前需要您接受平台协议，我现在为您打开。"},
+    "sign_up": {"en": "Sign up (free) with the button below and the specification opens with these values.",
+                "zh-CN": "请通过下方按钮免费注册，注册后规格书会带着这些数值打开。"},
+    "failed": {"en": "I could not create the project just now; the values are kept for two hours - press the button below to try again.",
+               "zh-CN": "暂时无法创建项目；这些数值会保留两小时，请按下方按钮重试。"},
+}
+
+
+def _lang2(lang: Any) -> str:
+    return "zh-CN" if str(lang or "").lower().startswith("zh") else "en"
+
+
+def _marker_values(found: list[dict]) -> list[dict]:
+    """The model's SPEC_PROPOSAL markers of a help-chat reply as hand-off values (validated when they are applied)."""
+    import re as _re
+    out = []
+    for f in found:
+        fid = str(f.get("field") or "").strip().strip("\"'")
+        if not fid:
+            continue
+        basis = str(f.get("basis") or "assumed").strip().lower()
+        nky = str(f.get("status") or "").strip().lower().replace(" ", "_") in ("not_known_yet", "unknown")
+        reason = " ".join(str(f.get("reason") or "").split())
+        out.append({"field": fid, "value": f.get("value"), "reason": reason, "basis": basis if basis in ("stated", "derived", "assumed")
+                    else "assumed", "answer_status": "not_known_yet" if nky else "filled",
+                    "sources": _re.findall(r"https?://[^\s)\]\"'<>,;]+", reason)})
+    return out
+
+
+def _handoff(found: list[dict], est: Optional[dict], messages: list[dict], reply: str, *, anon: bool, request: Request,
+             lang: str) -> tuple[dict, str]:
+    """[[CREATE_SPEC]] in a help-chat reply: keep the values; for a signed-in user create the project at once.  -> (fields for the
+    answer, one server line for the reply)."""
+    from fastapi import HTTPException
+
+    from motor_ai_sim import assistant_estimate as E, assistant_handoff as HO
+    values = E.spec_values(est, lang)
+    have = {v["field"] for v in values}
+    values += [v for v in _marker_values(found) if v["field"] not in have]       # the catalogue's numbers win over the model's
+    conv = [{"role": m["role"], "text": m["content"]} for m in messages] + [{"role": "assistant", "text": reply}]
+    zh = "/zh-cn" if lang == "zh-CN" else ""
+    if anon:
+        token = HO.put(values, conv, account="", lang=lang)
+        return ({"handoff": {"token": token, "status": "sign_up", "path": f"{zh}/projects?new=spec&handoff={token}", "values": len(values)}},
+                _HANDOFF_LINES["sign_up"][lang])
+    from motor_ai_sim.development import access as DA
+    user = DA.require_signed_in(request)
+    token = HO.put(values, conv, account=str(user.get("email") or ""), lang=lang)
+    try:
+        made = HO.create_for(user, token)
+    except HTTPException as exc:
+        detail = exc.detail if isinstance(exc.detail, dict) else {}
+        if exc.status_code == 428:
+            return {"handoff": {"token": token, "status": "agreement_required"}}, _HANDOFF_LINES["agreement_required"][lang]
+        msg = str(detail.get("message") or exc.detail or "")
+        return {"handoff": {"token": token, "status": "failed", "message": msg[:300]}}, (msg or _HANDOFF_LINES["failed"][lang])
+    except Exception as exc:                                  # noqa: BLE001 - the reply still goes out
+        logger.warning("support: hand-off create failed (%s: %s)", type(exc).__name__, str(exc)[:160])
+        return {"handoff": {"token": token, "status": "failed"}}, _HANDOFF_LINES["failed"][lang]
+    from motor_ai_sim.development import spec_assistant as A
+    names = "; ".join(A._label(made["project"]["id"], p["field_id"], lang) for p in made["applied"]) or "-"
+    line = _CREATED[lang].format(title=made["project"]["title"], n=len(made["applied"]), fields=names)
+    return {"project": made["project"], "applied": made["applied"], "proposals": made["open"], "openSpec": True}, line
+
+
+def _spec_chat(request: Request, body: dict, authorization: Optional[str], role: str, project_id: str) -> Optional[dict]:
+    """The chat inside a project's Specification: the spec mode of the ONE assistant (``spec_assistant.turn``).  ``None`` when the
+    caller may not use it there (the help mode answers then)."""
+    from fastapi import HTTPException
+
+    from motor_ai_sim.development import access as DA, spec_assistant as A, spec_assistant_routes as SR
+    try:
+        user, project, _ = DA.require_project(request, project_id)
+    except HTTPException:
+        return None
+    if not A.may_use(user, project):
+        return None
+    can_apply = DA.can_edit_spec(user, project)
+    ctx = support_context.sanitize_context(body.get("context"))
+    base = build_system_prompt(role, anon=False, context=ctx, authorization=authorization, spec=True)
+    ident = str(user.get("email") or "").lower()
+    web = web_search_budget(ident)
+    out = A.turn(project_id, project, user, body.get("messages"), _ui_lang(body), can_apply=can_apply,
+                 fill=can_apply and body.get("fill") is not False, base_prompt=base, web_search=web)
+    charge_web_search(ident, len(out.get("searches") or []))
+    reply, draft = parse_ticket_draft(out.get("reply") or "")
+    out["reply"] = reply or out.get("reply") or ""
+    if draft is not None:
+        out["ticketDraft"] = draft
+    out.update(mode="spec", projectId=project_id, can_apply=can_apply)
+    SR._remember(project_id, user, body.get("messages"), out)
+    return out
 
 
 @router.post("/chat")
@@ -1094,7 +1333,9 @@ def chat(request: Request, body: dict = Body(default={}),
         max_turns=ANON_MAX_TURNS if anon else _MAX_TURNS,
         max_chars=ANON_MAX_CHARS if anon else 4000,
     )
-    if not messages:
+    place = body.get("place") if isinstance(body.get("place"), dict) else {}
+    project_id = str(place.get("project_id") or "").strip().lower()
+    if not messages and not (project_id and not anon):
         return {"reply": "Hi! How can I help you with the motor simulator?", "source": "mock"}
 
     ua = ""
@@ -1111,9 +1352,11 @@ def chat(request: Request, body: dict = Body(default={}),
     # The limiters sit in front of the provider call and nowhere else: they must
     # bound what is SPENT, and a refusal never reaches the provider.
     from motor_ai_sim import platform_agreement as _PA
-    if not anon and not _PA.is_staff(role):
+    ident = ""
+    if not anon:
         from motor_ai_sim.auth import caller_identity
         ident = str(caller_identity(authorization).get("id") or "")
+    if not anon and not _PA.is_staff(role):
         if ident and not _charge_account(ident):
             logger.warning("support: signed-in chat REFUSED (account_day)")
             return JSONResponse(
@@ -1134,37 +1377,36 @@ def chat(request: Request, body: dict = Body(default={}),
                 headers={"Retry-After": str(_RETRY_AFTER[hit])},
             )
 
+    # ONE assistant: inside a project's Specification the spec mode answers (fill mode, markers, Undo, submit on confirmation)
+    if project_id and not anon:
+        spec_out = _spec_chat(request, body, authorization, role, project_id)
+        if spec_out is not None:
+            return spec_out
+        if not messages:
+            return {"reply": "Hi! How can I help you with the motor simulator?", "source": "mock"}
+
     eff = _effective()
     provider = eff["provider"]
     ui_lang = _ui_lang(body)
-    # Regions stage 2: a server without provider keys asks the EU peer (the limiters above already ran HERE).
+    lang = _lang2(ui_lang)
     from motor_ai_sim.regions import relay as _RL
     relayed = _RL.relay_enabled()
     if provider == "none" and not relayed:
         return deliver(_mock_reply(messages, ui_lang), "mock")
 
+    from motor_ai_sim import assistant_estimate as E
+    from motor_ai_sim.development import spec_assistant as A
+    est = None
+    try:
+        est = E.estimate(m["content"] for m in messages if m["role"] == "user")
+    except Exception as exc:                                  # noqa: BLE001 - no estimate is not a failed answer
+        logger.warning("support: propeller estimate failed (%s: %s)", type(exc).__name__, str(exc)[:160])
+    web = 0 if anon else web_search_budget(ident)
     ctx = {} if anon else support_context.sanitize_context(body.get("context"))
     sp = build_system_prompt(role, anon=anon, context=ctx, authorization=authorization)
+    sp += "\n\n" + web_search_note(web) + ("\n\n" + E.render_for_model(est) if est else "")
     try:
-        if relayed:
-            text, rmodel = _RL.support_complete(messages, sp, 2048)
-            return deliver(text or "(no reply)", "claude", model=rmodel)
-        if provider == "gemini":
-            g = eff["gemini"]
-            if not g["key"]:
-                return deliver(_mock_reply(messages, ui_lang), "mock")
-            text = _call_provider(
-                lambda: _gemini_reply(messages, g["key"], g["model"], sp))
-            return deliver(text or "(no reply)", "gemini", model=g["model"])
-        # anthropic
-        a = eff["anthropic"]
-        client = _anthropic_client(a["key"])
-        if client is None:
-            return deliver(_mock_reply(messages, ui_lang), "mock")
-        resp = _call_provider(lambda: client.messages.create(
-            model=a["model"], max_tokens=2048, system=sp, messages=messages))
-        text = next((b.text for b in resp.content if b.type == "text"), "")
-        return deliver(text or "(no reply)", "claude", model=a["model"])
+        ans = provider_answer(messages, sp, web_search=web)
     except Exception as e:
         msg = str(e)
         rate_limited = "429" in msg or "quota" in msg.lower() or "RESOURCE_EXHAUSTED" in msg
@@ -1183,6 +1425,70 @@ def chat(request: Request, body: dict = Body(default={}),
              if rate_limited else
              f"Sorry — I couldn't answer just now. Please try again, or {where}."),
             "error", detail=msg[:200])
+    if ans.get("source") == "mock":
+        return deliver(_mock_reply(messages, ui_lang), "mock")
+    charge_web_search(ident, len(ans.get("searches") or []))
+    text, flags = A.take_flags(ans.get("text") or "")
+    text, found = A.parse_proposals(text)
+    extra: dict = {}
+    if ans.get("searches"):
+        extra.update(searches=ans["searches"], sources=ans.get("sources") or [])
+    if flags.get("create"):
+        try:
+            more, line = _handoff(found, est, messages, text, anon=anon, request=request, lang=lang)
+            extra.update(more)
+            text = f"{text}\n\n{line}".strip() if line else text
+        except Exception as exc:                              # noqa: BLE001 - the reply still goes out
+            logger.warning("support: hand-off failed (%s: %s)", type(exc).__name__, str(exc)[:160])
+    out = deliver(text or "(no reply)", ans.get("source") or "claude", model=ans.get("model") or "", **extra)
+    if not anon and ident and out.get("source") not in ("rate_limited", "mock", "error"):
+        try:
+            from motor_ai_sim.development import spec_assistant_history as H
+            last = _visitor_turn(messages)
+            H.append_general(ident, ([{"role": "user", "text": last}] if last else []) + [{"role": "assistant", "text": out["reply"]}])
+        except Exception:                                    # noqa: BLE001 - the history is a convenience
+            pass
+    return out
+
+
+@router.get("/history")
+def chat_history(request: Request):
+    """The signed-in user's kept help conversation (outside a project's Specification)."""
+    from motor_ai_sim.development import access as DA, spec_assistant_history as H
+    user = DA.require_signed_in(request)
+    return {"messages": H.load_general(str(user.get("email") or ""))}
+
+
+@router.delete("/history")
+def chat_history_clear(request: Request):
+    """Clear the user's own view of the help conversation (the service archive keeps it, see ``assistant_archive``)."""
+    from motor_ai_sim.development import access as DA, spec_assistant_history as H
+    user = DA.require_signed_in(request)
+    H.clear_general(str(user.get("email") or ""))
+    return {"messages": []}
+
+
+@router.post("/handoff/{token}/create")
+def handoff_create(request: Request, token: str):
+    """Create the project from a kept hand-off as the signed-in caller (after the Platform Agreement, or after a visitor signed up
+    with the hand-off link).  The create path's 428 / 429 pass through, so the app's agreement dialog repeats this call."""
+    from fastapi import HTTPException
+
+    from motor_ai_sim import assistant_handoff as HO
+    from motor_ai_sim.development import access as DA
+    user = DA.require_signed_in(request)
+    try:
+        made = HO.create_for(user, token)
+    except HO.HandoffError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    try:
+        from motor_ai_sim import assistant_archive as AR
+        email = str(user.get("email") or "").lower()
+        AR.log_event(assistant="assistant", event="handoff_create", conv_id=AR.conv_key("assistant", email), account=email,
+                     project_id=made["project"]["id"])
+    except Exception:                                        # noqa: BLE001
+        pass
+    return {**made, "openSpec": True}
 
 
 # -- user tickets (bug / feature / question / account) -----------------------

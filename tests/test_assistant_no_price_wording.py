@@ -13,7 +13,7 @@ import pytest
 
 from motor_ai_sim import support_prompt as SP
 from motor_ai_sim.development import spec_assistant as A
-from motor_ai_sim.development import spec_assistant_prompt as PR
+PR = SP                  # ONE assistant (2026-11-11): the specification part lives in support_prompt too
 from motor_ai_sim.routes import support
 
 MONEY = re.compile(r"\b(prices?|pricing|priced|quotes?|quotations?|quoting|budgets?|costs?|costing|fees?|discounts?|invoices?|"
@@ -21,7 +21,7 @@ MONEY = re.compile(r"\b(prices?|pricing|priced|quotes?|quotations?|quoting|budge
 
 
 def money_words(text: str) -> list[str]:
-    return [m.group(0) for m in MONEY.finditer(text.replace(SP.NO_PRICE_RULE, "").replace(PR.NO_PRICE_RULE, ""))]
+    return [m.group(0) for m in MONEY.finditer(text.replace(SP.NO_PRICE_RULE, ""))]
 
 
 @pytest.fixture()
@@ -30,15 +30,16 @@ def no_overrides(monkeypatch):
     monkeypatch.setattr(support.support_catalog, "published_motors_block", lambda *a, **k: "")
 
 
-@pytest.mark.parametrize("text", [SP.USER_PROMPT, SP.TICKET_PROTOCOL, support.VISITOR_NOTE, PR.SPEC_PROMPT, PR.KICKOFF],
-                         ids=["user", "ticket", "visitor", "spec", "kickoff"])
+@pytest.mark.parametrize("text", [SP.USER_PROMPT, SP.TICKET_PROTOCOL, support.VISITOR_NOTE, SP.SPEC_SECTION, SP.KICKOFF, SP.DATA_RULES,
+                                  SP.CREATE_SPEC_PROTOCOL, support.VISITOR_CREATE_NOTE],
+                         ids=["user", "ticket", "visitor", "spec", "kickoff", "data", "create", "visitor_create"])
 def test_no_money_word_in_a_customer_prompt(text):
     assert money_words(text) == []
 
 
 def test_the_checker_finds_money_words():
     assert money_words("Ask for the Target price / budget and a quote.") == ["price", "budget", "quote"]
-    assert money_words(SP.NO_PRICE_RULE + PR.NO_PRICE_RULE) == []
+    assert money_words(SP.NO_PRICE_RULE) == []
 
 
 def test_the_prompts_as_the_route_builds_them(no_overrides):
@@ -57,9 +58,9 @@ def test_the_rule_is_there_under_a_custom_prompt(monkeypatch):
 
 
 def test_the_specification_prompt_no_longer_asks_for_money():
-    low = PR.SPEC_PROMPT.replace(PR.NO_PRICE_RULE, "").lower()
+    low = SP.SPEC_SECTION.lower()
     assert "target budget" not in low and "prices" not in low and "commercial" not in low
-    assert "PRIVATE" not in PR.SPEC_PROMPT
+    assert "PRIVATE" not in SP.SPEC_SECTION
 
 
 @pytest.mark.parametrize("lang", ["en", "zh-CN"])

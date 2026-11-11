@@ -1,15 +1,17 @@
 """Append-only archive of assistant conversations, for our own analysis and interface work (owner 2026-11-11).
 
-Covers the specification assistant (``spec``) and the in-app help assistant (``support``: signed-in callers, and anonymous
-visitors keyed by a random session id the browser makes up - never by IP).  One JSONL file per UTC day beside the identity
+Covers the ONE in-app assistant (owner 2026-11-11: help chat and specification assistant merged): records written since then carry
+``assistant: "assistant"`` and ``context: "help" | "spec"``; older records carry ``assistant: "spec"`` or ``"support"`` and are read as
+that context (signed-in callers, and anonymous visitors keyed by a random session id the browser makes up - never by IP).  One JSONL file per UTC day beside the identity
 store: ``<identity>/assistant_conversations/YYYY-MM-DD.jsonl``, written only by :func:`log_turn` / :func:`log_event` (no update or
 delete API).  A user's "Clear conversation" only clears THEIR view (the project's ``spec_assistant/`` history file); this archive
 is not touched by it.
 
 A line is one of
 
-* ``kind: "turn"``  - ``{ts, iso, kind, assistant, conv_id, account, anon, project_id, page, user_text, reply, model, source,
-  error, fill_mode, applied: [{field_id, basis, proposal_id}], proposed: [{field_id}], refused: [field_id], dropped}``;
+* ``kind: "turn"``  - ``{ts, iso, time, kind, assistant, context, conv_id, account, anon, project_id, page, user_text, reply, model,
+  source, error, fill_mode, applied: [{field_id, basis, proposal_id, sources?}], proposed: [{field_id}], refused: [field_id], dropped,
+  searches: [query], sources: [{url, title}]}`` (``searches`` / ``sources``: the web lookups of that turn);
 * ``kind: "event"`` - ``{..., event: "undo" | "dismiss" | ..., field_id, proposal_id}``.
 
 What is NOT stored: the system prompt, the specification snapshot or the support context the model reads (hidden context), and
@@ -36,7 +38,10 @@ from motor_ai_sim.private_files import ensure_private_dir, open_private
 
 log = logging.getLogger(__name__)
 
-ASSISTANTS = ("spec", "support")
+ASSISTANTS = ("spec", "support", "assistant")
+#: The context of a record: new records name it, old ones are read from their assistant (spec -> spec, support -> help).
+CONTEXTS = ("help", "spec")
+_LEGACY_CONTEXT = {"spec": "spec", "support": "help"}
 MAX_TEXT = 8000
 _SID = re.compile(r"^[A-Za-z0-9_-]{8,64}$")
 _LOCK = store_lock(lambda: archive_dir() / ".lock")
@@ -75,9 +80,21 @@ def _path(day: str) -> Path:
     return archive_dir() / f"{day}.jsonl"
 
 
+def context_of(rec: dict) -> str:
+    """``help`` or ``spec`` for any record, old or new."""
+    c = rec.get("context")
+    return c if c in CONTEXTS else _LEGACY_CONTEXT.get(str(rec.get("assistant") or ""), "help")
+
+
+def _stamp(now: float) -> dict:
+    """Every record's time, written by the archive itself (the 2026-11-11 records had ``time: null`` where readers looked)."""
+    iso = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now))
+    return {"ts": round(now, 3), "iso": iso, "time": iso}
+
+
 def _write(rec: dict) -> None:
     now = time.time()
-    rec = {"ts": round(now, 3), "iso": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now)), **rec}
+    rec = {**{k: v for k, v in rec.items() if k not in ("ts", "iso", "time")}, **_stamp(now)}
     p = _path(rec["iso"][:10])
     try:
         with _LOCK:
@@ -91,23 +108,30 @@ def _write(rec: dict) -> None:
 def log_turn(*, assistant: str, conv_id: str, account: str = "", project_id: str = "", page: str = "", user_text: str = "",
              reply: str = "", model: str = "", source: str = "", error: str = "", fill_mode: Optional[bool] = None,
              applied: Optional[List[dict]] = None, proposed: Optional[List[dict]] = None, refused: Optional[List[str]] = None,
-             dropped: int = 0) -> None:
+             dropped: int = 0, context: str = "", searches: Optional[List[str]] = None, sources: Optional[List[dict]] = None) -> None:
     if assistant not in ASSISTANTS:
         return
-    _write({"kind": "turn", "assistant": assistant, "conv_id": conv_id, "account": (account or "").strip().lower()[:200],
+    ctx = context if context in CONTEXTS else _LEGACY_CONTEXT.get(assistant, "help")
+    _write({"kind": "turn", "assistant": assistant, "context": ctx, "conv_id": conv_id, "account": (account or "").strip().lower()[:200],
             "anon": not account, "project_id": project_id[:64], "page": str(page or "")[:80],
             "user_text": redact(user_text), "reply": redact(reply), "model": str(model or "")[:80], "source": str(source or "")[:30],
             "error": str(error or "")[:200], "fill_mode": fill_mode,
-            "applied": [{"field_id": str(a.get("field_id")), "basis": a.get("basis"), "proposal_id": a.get("id")} for a in applied or []],
+            "applied": [{"field_id": str(a.get("field_id")), "basis": a.get("basis"), "proposal_id": a.get("id"),
+                         **({"sources": list(a["sources"])[:5]} if a.get("sources") else {})} for a in applied or []],
+            "searches": [redact(q)[:200] for q in searches or []][:10],
+            "sources": [{"url": str(x.get("url") or "")[:300], "title": redact(x.get("title"))[:200]}
+                        for x in sources or [] if isinstance(x, dict) and x.get("url")][:12],
             "proposed": [{"field_id": str(a.get("field_id")), "proposal_id": a.get("id")} for a in proposed or []],
             "refused": [str(f)[:60] for f in refused or []], "dropped": int(dropped)})
 
 
 def log_event(*, assistant: str, event: str, conv_id: str = "", account: str = "", project_id: str = "", field_id: str = "",
-              proposal_id: str = "") -> None:
+              proposal_id: str = "", context: str = "") -> None:
     if assistant not in ASSISTANTS:
         return
-    _write({"kind": "event", "assistant": assistant, "event": event[:30], "conv_id": conv_id, "account": (account or "").strip().lower()[:200],
+    ctx = context if context in CONTEXTS else _LEGACY_CONTEXT.get(assistant, "spec" if project_id else "help")
+    _write({"kind": "event", "assistant": assistant, "context": ctx, "event": event[:30], "conv_id": conv_id,
+            "account": (account or "").strip().lower()[:200],
             "project_id": project_id[:64], "field_id": field_id[:60], "proposal_id": proposal_id[:40]})
 
 
@@ -127,8 +151,12 @@ def _days(date_from: str, date_to: str) -> List[Path]:
 
 
 def iter_records(*, assistant: str = "", project: str = "", account: str = "", date_from: str = "", date_to: str = "",
-                 conv_id: str = "") -> Iterator[dict]:
+                 conv_id: str = "", context: str = "") -> Iterator[dict]:
+    """Records matching the filters.  ``assistant`` keeps its old meaning for the admin filters: ``spec`` = the specification
+    context, ``support`` = the help context (whether the record is old or from the one assistant); ``assistant`` = new records only.
+    Every record comes out with ``context`` and ``time`` set (old ones get them from their assistant / ``iso``)."""
     account = account.strip().lower()
+    want_ctx = context or {"spec": "spec", "support": "help"}.get(assistant, "")
     for p in _days(date_from, date_to):
         with _LOCK:
             lines = p.read_text(encoding="utf-8", errors="replace").splitlines()
@@ -137,9 +165,15 @@ def iter_records(*, assistant: str = "", project: str = "", account: str = "", d
                 r = json.loads(ln)
             except ValueError:
                 continue
-            if not isinstance(r, dict):
+            if not isinstance(r, dict) or not r.get("iso"):
                 continue
-            if assistant and r.get("assistant") != assistant:
+            r.setdefault("time", r.get("iso"))
+            if not r.get("time"):
+                r["time"] = r["iso"]
+            r["context"] = context_of(r)
+            if want_ctx and r["context"] != want_ctx:
+                continue
+            if assistant == "assistant" and r.get("assistant") != "assistant":
                 continue
             if project and r.get("project_id") != project:
                 continue
@@ -155,7 +189,7 @@ def conversations(**flt: Any) -> List[dict]:
     rows: Dict[str, dict] = {}
     for r in iter_records(**flt):
         c = rows.setdefault(r.get("conv_id") or "?", {
-            "conv_id": r.get("conv_id"), "assistant": r.get("assistant"), "account": r.get("account") or "",
+            "conv_id": r.get("conv_id"), "assistant": r.get("assistant"), "context": r.get("context"), "account": r.get("account") or "",
             "project_id": r.get("project_id") or "", "first": r["iso"], "last": r["iso"], "turns": 0, "filled": 0,
             "proposed": 0, "errors": 0})
         c["last"] = r["iso"]

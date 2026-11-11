@@ -34,7 +34,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createErrorText, createPayload, createReady } from '../createProject';
   import { VariantControls } from './VariantControls';
   import { OrderMotorButton } from './OrderMotorButton';
-  import SpecAssistantPanel from './SpecAssistantPanel';
+  import { useAssistantPlace } from '../../../lib/assistantPlace';
+  import { createFromHandoff } from '../../../lib/support';
   import ProjectDocuments from './ProjectDocuments';
   import ProjectProductions from './ProjectProductions';
   import CostEstimateWizard from './costEstimate/CostEstimateWizard';
@@ -101,6 +102,7 @@ export default function DevelopmentPage() {
   const markedUpToRef = useRef('');
   const [visibleTick, setVisibleTick] = useState(0);
   const [createOpen, setCreateOpen] = useState(false);
+  const requestAssistantOpen = useAssistantPlace((s) => s.requestOpen);
   const [inviteOpen, setInviteOpen] = useState(false);
   const [linkOpen, setLinkOpen] = useState(false);
   const [renameTo, setRenameTo] = useState<string | null>(null);   // the rename dialog of staff: open while not null
@@ -331,6 +333,15 @@ export default function DevelopmentPage() {
         openSpecAfterCreate.current = intent.openSpecAfterCreate;
         setCreateOpen(intent.openDialog);
         try { window.history.replaceState(window.history.state, '', intent.consumeTo); } catch { /* no history */ }
+        if (intent.handoff) {
+          // the assistant's hand-off after a sign-up: create the project with the gathered values, open its Specification and the chat
+          void createFromHandoff(intent.handoff).then(async (made) => {
+            openSpecAfterCreate.current = false;
+            await refreshProjects();
+            window.dispatchEvent(new CustomEvent(projectOpenEvent, { detail: { projectId: made.project.id } }));
+            requestAssistantOpen();
+          }).catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)));
+        }
       }
       return;
     }
@@ -445,6 +456,17 @@ export default function DevelopmentPage() {
       if (unsaved) void enqueueSave(project, draft, token).catch(() => {});
     } catch { if (projectToken.current === token) setError(tr('reloadFailed')); }
   };
+  // ONE assistant (owner 2026-11-11): while a project's Specification is shown, the chat bubble works on it (fill, Undo, submit)
+  const reloadAfterApplyRef = useRef(reloadAfterApply);
+  reloadAfterApplyRef.current = reloadAfterApply;
+  const setAssistantSpec = useAssistantPlace((s) => s.setSpec);
+  const specShown = view === 'specification' && !!selected && !!spec;
+  useEffect(() => {
+    if (!specShown || !selected) { setAssistantSpec(null); return undefined; }
+    setAssistantSpec({ projectId: selected.id, title: selected.title, schema, beforeApply: flushBeforeApply,
+      onChanged: () => { void reloadAfterApplyRef.current(); } });
+    return () => setAssistantSpec(null);
+  }, [specShown, selected?.id, selected?.title, schema, flushBeforeApply, setAssistantSpec]);
   const confirmReload = () => {
     if (!reloadPreview || reloadPreview.token !== projectToken.current || reloadPreview.project !== currentProjectRef.current) return;
     const { fresh, project } = reloadPreview;
@@ -622,11 +644,11 @@ export default function DevelopmentPage() {
       const p = await developmentApi.create(createPayload(canManageGlobally, { title, org, id: projectId }));
       const openSpec = openSpecAfterCreate.current && !canManageGlobally;
       openSpecAfterCreate.current = false;
-      if (openSpec) {                                // the assistant panel opens in fill mode on the new project's first specification step
-        try { window.localStorage.setItem('specAssistant.open', '1'); window.localStorage.setItem('specAssistant.fill', '1'); } catch { /* storage blocked */ }
+      if (openSpec) {                                // the assistant opens in fill mode on the new project's first specification step
+        try { window.localStorage.setItem('specAssistant.fill', '1'); } catch { /* storage blocked */ }
       }
       setCreateOpen(false); setTitle(''); setOrg(''); setProjectId(''); await refreshProjects(); await loadProject(p);
-      if (openSpec) { setView('specification'); setStep(0); window.dispatchEvent(new CustomEvent('specAssistant:open')); }
+      if (openSpec) { setView('specification'); setStep(0); requestAssistantOpen(); }
     }
     catch (e) { setError(createErrorText(e, tr)); } finally { setBusy(false); }
   };
@@ -735,7 +757,7 @@ export default function DevelopmentPage() {
         env={{ tr, lang, draft: draftRef.current, profile, spec, steps: sections, canEditSpec, busy, migrationBusy, updateDraft, fields, fieldErrors: { ...fieldErrors, ...rejected } }}
         history={<VersionHistory versions={versions} onCompare={(a, b) => { setCompareVersions([a, b]); setVersionA(versions.find((v) => v.version === a) ?? null); setVersionB(versions.find((v) => v.version === b) ?? null); }} t={tr} />}
         banner={canEditSpec && (spec.schema_version ?? 1) < 2 ? <Alert severity="warning" action={<Button color="inherit" size="small" disabled={migrationBusy || saving} onClick={() => void requestMigrationPreview()}>{tr('migration.action')}</Button>}>{tr('migration.body')}</Alert> : null}
-        assistant={(docked) => <SpecAssistantPanel projectId={selected.id} schema={schema} lang={lang} docked={docked} beforeApply={flushBeforeApply} onApplied={() => { void reloadAfterApply(); }} />} />}
+        assistant={() => null} />}
     </Box>}
     {view === 'motors' && <Box>
       <Box sx={{ display: 'flex', alignItems: 'center', mb: 1 }}><Box sx={{ flex: 1 }}><HelpTip title={tr('motorsTip')} /></Box>{canManageGlobally && <Button size="small" startIcon={<AddIcon />} onClick={async () => { if (selected) { try { setPicker(await developmentApi.motorPicker(selected.id)); setLinkOpen(true); } catch (e) { setError(e instanceof Error ? e.message : String(e)); } } }}>{tr('linkMotor')}</Button>}</Box>

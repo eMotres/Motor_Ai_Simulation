@@ -44,10 +44,12 @@ export function optionLabels(options: ReadonlyArray<string | number | { value?: 
 export function longestOptionChars(options: ReadonlyArray<string | number | { value?: string | number; label?: unknown }> | undefined): number {
   return optionLabels(options).reduce((n, label) => Math.max(n, labelChars(label)), 0);
 }
-/** CSS min width of a select / autocomplete: at least as wide as its longest option (plus the arrow and padding); capped. */
+/** CSS min width of a select / autocomplete: at least as wide as its longest option (plus the arrow and padding); capped, and never
+ *  wider than its column: a CSS min-width beats max-width, so without the `min(100%, ...)` a long menu pushed the input out of its
+ *  card on a phone (mobile audit 2026-11: "Application" and "Mode and rotation" were cut off at 360 px). */
 export function optionsMinWidth(options: ReadonlyArray<string | number | { value?: string | number; label?: unknown }> | undefined, cap = 46): string | undefined {
   const chars = Math.min(cap, longestOptionChars(options));
-  return chars > 0 ? `calc(${chars}ch + 60px)` : undefined;
+  return chars > 0 ? `min(100%, calc(${chars}ch + 60px))` : undefined;
 }
 type Shape = Pick<SchemaProperty, 'options' | 'suggestions'> & { choices?: SchemaField['choices']; properties?: SchemaProperty[]; items?: { properties?: SchemaProperty[] } };
 /** Every menu label of a field and of its properties (recursively). */

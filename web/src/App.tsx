@@ -712,7 +712,9 @@ function App() {
       <PanelHeaderProvider>
       <CssBaseline />
       <UpdateBanner />
-      <Box sx={{ display: 'flex', flexDirection: 'column', height: '100vh', overflow: 'hidden' }}>
+      {/* 100dvh where the browser has it (mobile audit 2026-11): on a phone 100vh is the height WITHOUT the address bar, so the
+          bottom of every page - the specification's Back / Next bar, a chat's input - sat under the browser's own toolbar */}
+      <Box sx={{ display: 'flex', flexDirection: 'column', height: '100vh', '@supports (height: 100dvh)': { height: '100dvh' }, overflow: 'hidden' }}>
 
         {/* ── AppBar ── */}
         <AppBar
@@ -720,11 +722,12 @@ function App() {
           elevation={0}
           sx={{ backgroundColor: 'background.paper', borderBottom: '1px solid', borderColor: 'divider', flexShrink: 0 }}
         >
-          <Toolbar variant="dense" sx={{ gap: 1, flexWrap: 'wrap', py: 0.5, minHeight: 'auto' }}>
+          {/* phone: ONE row (mobile audit 2026-11: the theme switch wrapped onto a second row of its own and took 40 px from every page) */}
+          <Toolbar variant="dense" sx={{ gap: 1, flexWrap: { xs: 'nowrap', sm: 'wrap' }, py: 0.5, minHeight: 'auto', px: { xs: 1, sm: 3 }, columnGap: { xs: 0.5, sm: 1 } }}>
             <BrandLogo size={28} />
-            <Typography variant="h6" sx={{ mr: 1, letterSpacing: 0.3, whiteSpace: 'nowrap', fontSize: { xs: '1.05rem', sm: '1.25rem' } }}>
+            <Typography variant="h6" sx={{ mr: 1, letterSpacing: 0.3, whiteSpace: 'nowrap', fontSize: { xs: '1.05rem', sm: '1.25rem' }, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' }}>
               AeroStator{' '}
-              <Box component="span" sx={{ fontWeight: 300, opacity: 0.7 }}>Core</Box>
+              <Box component="span" sx={{ fontWeight: 300, opacity: 0.7, display: { xs: 'none', sm: 'inline' } }}>Core</Box>
             </Typography>
             {/* Phone width: the version badge and the connection chip leave the bar so brand, account and theme fit. */}
             <Box sx={{ display: { xs: 'none', sm: 'contents' } }}>

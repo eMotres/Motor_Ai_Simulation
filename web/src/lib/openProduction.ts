@@ -5,10 +5,11 @@
 import { useUIStore } from '../stores/uiStore';
 
 export const OPEN_PRODUCTION_EVENT = 'motres:open-production';
-export interface OpenProductionDetail { die: string; config: string }
+/** `from`: the top tab it was opened from (a project): the production's back arrow and the browser's Back return there */
+export interface OpenProductionDetail { die: string; config: string; from?: string }
 
-export function openProduction(die: string, config: string): void {
+export function openProduction(die: string, config: string, from?: string): void {
   try { window.localStorage.setItem('production.last.v1', JSON.stringify({ die, config })); } catch { /* storage off */ }
-  try { window.dispatchEvent(new CustomEvent<OpenProductionDetail>(OPEN_PRODUCTION_EVENT, { detail: { die, config } })); } catch { /* no events */ }
+  try { window.dispatchEvent(new CustomEvent<OpenProductionDetail>(OPEN_PRODUCTION_EVENT, { detail: { die, config, ...(from ? { from } : {}) } })); } catch { /* no events */ }
   useUIStore.getState().setActiveTab('production' as never);
 }

@@ -539,10 +539,17 @@ const BomTable: React.FC<BomTableProps> = ({
       {/* Main BOM Table */}
       {/* overflow 'clip' (not 'hidden'): keeps the rounded corners without becoming a scroll box, so the header can stick */}
       {/* Phone: the table keeps readable columns and the Paper scrolls sideways (the sticky header gives way there). */}
-      <Paper sx={{ bgcolor: 'var(--panel-2)', border: '1px solid var(--line-soft)', borderRadius: 1.5, overflow: 'clip', [NARROW]: { overflowX: 'auto' } }}>
-        <Table size="small" sx={{ [NARROW]: { minWidth: 720 }, '& td, & th': { borderColor: 'var(--line-soft)', fontSize: 12.5, py: 0.6 },
+      {/* Desktop (audit 2026-11): with prices shown the table is wider than a 1440 px screen, and 'clip' cut its last columns off;
+          sideways it now overflows into the page's own scroller (the header still sticks), up and down it is still clipped */}
+      <Paper sx={{ bgcolor: 'var(--panel-2)', border: '1px solid var(--line-soft)', borderRadius: 1.5, overflowY: 'clip', overflowX: 'visible', [NARROW]: { overflowX: 'auto' } }}>
+        <Table size="small" sx={{ '& td, & th': { borderColor: 'var(--line-soft)', fontSize: 12.5, py: 0.6 },
           // the column header stays visible under the fixed tab menu while the page scrolls (owner 2026-10-17)
-          '& thead th': { position: 'sticky', top: STICKY_TABS_PX, zIndex: 15, bgcolor: 'var(--panel)' } }}>
+          '& thead th': { position: 'sticky', top: STICKY_TABS_PX, zIndex: 15, bgcolor: 'var(--panel)' },
+          // the part title keeps a readable width: it broke one letter per line ("Stat / or / cor / e") on every screen (audit 2026-11)
+          '& th:nth-of-type(2), & td:nth-of-type(2)': { minWidth: 140 },
+          // phone: the Paper is the sideways scroller, so a sticky header stuck 33 px into it and covered the first row; there it
+          // stays in place (mobile audit 2026-11)
+          [NARROW]: { minWidth: 720, '& thead th': { position: 'static' } } }}>
           <TableHead>
             <TableRow sx={{ bgcolor: 'var(--panel)' }}>
               <TableCell sx={{ width: 40 }}>#</TableCell>

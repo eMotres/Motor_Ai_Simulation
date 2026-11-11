@@ -86,11 +86,11 @@ test('min width grows with the longest option, in either language', () => {
   assert.equal(labelChars('螺旋桨滑流'), 10);                       // a CJK character is about two characters wide
   const options = [{ value: 'Still air', label: { en: 'Still air', 'zh-CN': '静止空气' } }, { value: 'Propeller wash', label: { en: 'Propeller wash', 'zh-CN': '螺旋桨滑流' } }];
   assert.equal(longestOptionChars(options), 14);                    // "Propeller wash" (EN) vs 螺旋桨滑流 (10)
-  assert.equal(optionsMinWidth(options), 'calc(14ch + 60px)');
+  assert.equal(optionsMinWidth(options), 'min(100%, calc(14ch + 60px))');   // never wider than its column (phone)
   assert.ok(longestOptionChars([{ value: 'x', label: { en: 'Fan', 'zh-CN': '这是一个非常非常长的中文选项文字' } }]) > 16);
   assert.equal(optionsMinWidth([]), undefined);
   assert.equal(optionsMinWidth([1, 2, 3]), undefined);               // numeric menus are short
-  assert.equal(optionsMinWidth(['x'.repeat(200)]), 'calc(46ch + 60px)'); // capped
+  assert.equal(optionsMinWidth(['x'.repeat(200)]), 'min(100%, calc(46ch + 60px))'); // capped
   assert.deepEqual(optionLabels(['a', 3, { value: 'v', label: 'L' }]), ['a', 'L', 'v']);
 });
 

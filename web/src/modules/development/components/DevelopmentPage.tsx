@@ -2,6 +2,8 @@ import { matchesFieldReference } from '../reviewPresentation';
 import { accumulateHighlight, firstUnreadIndex, refreshUnread, unreadFor, unreadIdsOf, unreadLabel } from '../../../lib/unreadMessages';
 import { useUnreadCounts } from '../../../lib/useUnreadMessages';
 import { pageVisible } from '../../../lib/pageVisible';
+import { useHistoryLevel } from '../../../lib/historyLevels';
+import { useUIStore } from '../../../stores/uiStore';
 import SubTabs from '../../../components/common/SubTabs';
 import { HeaderRight, HeaderTabs } from '../../../components/common/PanelHeader';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -325,7 +327,7 @@ export default function DevelopmentPage() {
     if (user?.email) viewRestoredFor.current = user.email;       // the link wins over the remembered project
     try { sessionStorage.setItem('development.openProject', link.id); } catch { /* the event below still carries the id */ }
     window.dispatchEvent(new CustomEvent(projectOpenEvent, { detail: { projectId: link.id } }));
-    try { if (appLinkPath(link) === window.location.pathname + window.location.search) window.history.replaceState(null, '', '/'); } catch { /* no history */ }
+    try { if (appLinkPath(link) === window.location.pathname + window.location.search) window.history.replaceState(window.history.state, '', '/'); } catch { /* no history */ }
   }, []);
   useEffect(() => {
     const openProject = async (projectId: string | null | undefined): Promise<boolean> => {
@@ -662,6 +664,11 @@ export default function DevelopmentPage() {
   const rejectedNote = Object.keys(rejected).length
     ? tr('saveRejected.title', { fields: Object.keys(rejected).map((id) => { const f = sections.flatMap((s) => s.fields).find((x) => x.id === id); return f ? label(f.short_label ?? f.label) : id; }).join(', ') })
     : '';
+  // UP one level, the same from the back arrow in the fixed header row, the button above the project and the browser's Back
+  const backToList = async () => { try { await flushSave(); setSelected(null); setSpec(null); setPendingProjectStatus(null); void refreshProjects(); } catch { setError(tr('saveFailedShort')); } };
+  // the phone's / browser's Back closes the open project instead of leaving the app (lib/historyLevels); only while this tab is shown
+  const tabShown = (useUIStore((s) => s.activeTab) as string) === 'development';
+  useHistoryLevel(!!selected && tabShown, () => { void backToList(); });
   if (loading) return <Box sx={{ p: 3, display: 'flex', gap: 1, alignItems: 'center' }}><CircularProgress size={18} /><Typography>{tr('loading')}</Typography></Box>;
   if (!selected) return <Box sx={{ p: 2.5, overflowY: 'auto', height: '100%' }}>
     <HeaderRight tab="development"><HelpTip title={tr('titleTip')} /><ViewModeToggle mode={viewMode} onChange={setViewMode} /><Button size="small" startIcon={<AddIcon />} onClick={() => setCreateOpen(true)}>{tr('newProject')}</Button></HeaderRight>
@@ -670,12 +677,18 @@ export default function DevelopmentPage() {
     <CreateDialog open={createOpen} busy={busy} staff={canManageGlobally} title={title} org={org} id={projectId} onTitle={setTitle} onOrg={setOrg} onId={setProjectId} onClose={() => setCreateOpen(false)} onSubmit={() => void submitCreate()} t={tr} />
   </Box>;
   return <Box sx={{ p: 2, overflowY: 'auto', height: '100%', width: '100%' }}>
-    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1.5, flexWrap: 'wrap' }}><Button size="small" startIcon={<ArrowBackIcon />} onClick={async () => { try { await flushSave(); setSelected(null); setSpec(null); setPendingProjectStatus(null); void refreshProjects(); } catch { setError(tr('saveFailedShort')); } }}>{tr('back')}</Button><Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, flex: 1, minWidth: 0, [NARROW]: { flex: '1 1 100%' } }}><Tooltip title={selected.customer_org || ''}><Typography sx={{ fontSize: 17, fontWeight: 800, color: 'var(--text-0)' }}>{selected.title}</Typography></Tooltip>{canManageGlobally && <Tooltip title={tr('renameProjectTip')}><IconButton size="small" data-testid="rename-project" aria-label={tr('renameProject')} disabled={busy} onClick={() => setRenameTo(selected.title)} sx={{ color: 'var(--text-3)' }}><EditOutlinedIcon sx={{ fontSize: 16 }} /></IconButton></Tooltip>}</Box>{view !== 'specification' && <Chip size="small" label={tr('completeness', { filled: completeCounts.filled, total: completeCounts.total })} />}{!canEditSpec && view !== 'specification' && <Tooltip title={tr('specReadOnlyTip')}><Chip size="small" label={tr('specReadOnly')} /></Tooltip>}<HelpTip title={tr(canManageGlobally ? 'projectStatusTip' : 'projectStatusTipCustomer')} />{canManageGlobally && allowedProjectStatuses(canManageGlobally, selected.status).length > 1 ? <><Typography sx={{ fontSize: 12, color: 'var(--text-2)' }}>{tr('statusLabel')}</Typography><Select size="small" value={selected.status} disabled={busy} onChange={(e) => setPendingProjectStatus(proposeProjectStatus(selected.id, selected.status, e.target.value as ProjectSummary['status']))} aria-label={tr('statusLabel')}>{allowedProjectStatuses(canManageGlobally, selected.status).map((s) => <MenuItem key={s} value={s}>{tr(`status.${s}`)}</MenuItem>)}</Select></> : <Typography sx={{ fontSize: 12, color: 'var(--text-2)' }}>{tr('statusLabel')}: {statusText(selected.status)}</Typography>}{!canManageGlobally && canEditProject && ['spec', 'design', 'simulation'].includes(selected.status) && <Button size="small" disabled={busy} onClick={() => setPendingProjectStatus(proposeProjectStatus(selected.id, selected.status, 'closed'))}>{tr('closeProject')}</Button>}</Box>
+    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1.5, flexWrap: 'wrap' }}><Button size="small" startIcon={<ArrowBackIcon />} onClick={() => void backToList()}>{tr('back')}</Button><Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, flex: 1, minWidth: 0, [NARROW]: { flex: '1 1 100%' } }}><Tooltip title={selected.customer_org || ''}><Typography sx={{ fontSize: 17, fontWeight: 800, color: 'var(--text-0)' }}>{selected.title}</Typography></Tooltip>{canManageGlobally && <Tooltip title={tr('renameProjectTip')}><IconButton size="small" data-testid="rename-project" aria-label={tr('renameProject')} disabled={busy} onClick={() => setRenameTo(selected.title)} sx={{ color: 'var(--text-3)' }}><EditOutlinedIcon sx={{ fontSize: 16 }} /></IconButton></Tooltip>}</Box>{view !== 'specification' && <Chip size="small" label={tr('completeness', { filled: completeCounts.filled, total: completeCounts.total })} />}{!canEditSpec && view !== 'specification' && <Tooltip title={tr('specReadOnlyTip')}><Chip size="small" label={tr('specReadOnly')} /></Tooltip>}<HelpTip title={tr(canManageGlobally ? 'projectStatusTip' : 'projectStatusTipCustomer')} />{canManageGlobally && allowedProjectStatuses(canManageGlobally, selected.status).length > 1 ? <><Typography sx={{ fontSize: 12, color: 'var(--text-2)' }}>{tr('statusLabel')}</Typography><Select size="small" value={selected.status} disabled={busy} onChange={(e) => setPendingProjectStatus(proposeProjectStatus(selected.id, selected.status, e.target.value as ProjectSummary['status']))} aria-label={tr('statusLabel')}>{allowedProjectStatuses(canManageGlobally, selected.status).map((s) => <MenuItem key={s} value={s}>{tr(`status.${s}`)}</MenuItem>)}</Select></> : <Typography sx={{ fontSize: 12, color: 'var(--text-2)' }}>{tr('statusLabel')}: {statusText(selected.status)}</Typography>}{!canManageGlobally && canEditProject && ['spec', 'design', 'simulation'].includes(selected.status) && <Button size="small" disabled={busy} onClick={() => setPendingProjectStatus(proposeProjectStatus(selected.id, selected.status, 'closed'))}>{tr('closeProject')}</Button>}</Box>
     {selected.cover_version && <ProjectCover projectId={selected.id} version={selected.cover_version} height={140} alt={selected.title} sx={{ mb: 1.5 }} />}
     {canEditSpec && <DigestSettings target={{ kind: 'project', id: selected.id }} />}
     
     {error && <Alert severity="error" sx={{ mb: 1 }}>{error}</Alert>}
     <HeaderTabs tab="development">
+      {/* the way up stays in the fixed header row (mobile audit 2026-11): on a phone the "All projects" button above scrolls away */}
+      <Box sx={{ display: 'flex', alignItems: 'center', minWidth: 0 }}>
+      <Tooltip title={tr('back')}>
+        <IconButton size="small" aria-label={tr('back')} data-testid="project-back" onClick={() => void backToList()} sx={{ flexShrink: 0 }}><ArrowBackIcon sx={{ fontSize: 18 }} /></IconButton>
+      </Tooltip>
+      <Box sx={{ minWidth: 0, flex: 1 }}>
       <SubTabs value={view} onChange={(v) => void openTab(v)} ariaLabel={selected.title} items={[
         { id: 'specification', label: tr('tabs.specification') },
         { id: 'motors', label: tr('tabs.motors') },
@@ -690,6 +703,8 @@ export default function DevelopmentPage() {
         // ADMIN ONLY (owner 2026-11-02): the project cost estimate; never for the customer, a viewer, the factory or an agent
         ...(isAdmin ? [{ id: 'cost' as const, label: tr('tabs.cost') }] : []),
       ]} />
+      </Box>
+      </Box>
     </HeaderTabs>
     {(view === 'specification' || view === 'motors') && selected && <ProjectStatusBar data={activity} t={tr} />}
     {view === 'specification' && <Box sx={{ minWidth: 0 }}>

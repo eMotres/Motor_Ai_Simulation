@@ -61,7 +61,7 @@ export function BigNumber({ label, unit, value, onChange, disabled, error, ariaL
     <DecimalField size="small" fullWidth value={value ?? ''} error={error} disabled={disabled} placeholder={placeholder}
       onValue={(next) => onChange(next === '' ? null : next)}
       slotProps={{
-        htmlInput: { 'aria-label': ariaLabel, inputMode: 'decimal' },
+        htmlInput: { 'aria-label': ariaLabel, inputMode: 'decimal', ...(big ? { className: 'input-large' } : {}) },
         input: { endAdornment: unit ? <InputAdornment position="end" sx={{ '& .MuiTypography-root': { fontSize: 12.5, color: 'var(--text-3)' } }}>{unit}</InputAdornment> : undefined },
       }}
       sx={{ '& .MuiInputBase-root': { minHeight: big ? 52 : TOUCH, borderRadius: '10px' }, '& .MuiInputBase-input': { fontSize: big ? 20 : 16, fontWeight: 600, fontVariantNumeric: 'tabular-nums', pr: '4px' } }} />
@@ -86,7 +86,7 @@ export function LinkedNumber({ label, unitSlot, value, onCommit, disabled, error
         if (parsed === 'empty') onCommit(null);
         else if (parsed !== 'partial') onCommit(parsed);
       }}
-      slotProps={{ htmlInput: { 'aria-label': ariaLabel, inputMode: 'decimal', autoComplete: 'off' } }}
+      slotProps={{ htmlInput: { 'aria-label': ariaLabel, inputMode: 'decimal', autoComplete: 'off', className: 'input-large' } }}
       sx={{ '& .MuiInputBase-root': { minHeight: 48, borderRadius: '10px' }, '& .MuiInputBase-input': { fontSize: 18, fontWeight: 600, fontVariantNumeric: 'tabular-nums', px: 1.25 } }} />
   </Box>;
 }

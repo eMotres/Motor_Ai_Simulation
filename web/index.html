@@ -7,7 +7,9 @@
     <link rel="apple-touch-icon" sizes="180x180" href="/brand/apple-touch-icon.png" />
     <link rel="manifest" href="/manifest.webmanifest" />
     <meta name="theme-color" content="#f7f6f3" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!-- interactive-widget: on Android the on-screen keyboard shrinks the page (100dvh), so the field being typed in and the
+         specification's Back / Next bar stay above the keyboard instead of under it (mobile audit 2026-11; iOS ignores it) -->
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, interactive-widget=resizes-content" />
     <!-- Theme before first paint: the app is LIGHT unless the visitor chose dark (theme.ts
          loadThemeMode, key app.themeMode).  The pre-rendered block and index.css both key on
          html[data-theme]; neither follows the OS colour scheme, so nothing flips on mount. -->

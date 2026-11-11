@@ -36,7 +36,7 @@ const ProposalsPanel: React.FC<{ proposals: Proposal[]; parts: Part[]; ctx: Prod
             <Typography sx={{ fontSize: 13, fontWeight: 700, color: 'var(--text-0)' }}>{t('proposals.new')}</Typography>
             <HelpTip title={t('proposals.tip')} />
             <Box sx={{ flex: 1 }} />
-            <TextField select size="small" label={t('proposals.forPart')} value={partId} onChange={(e) => setPartId(e.target.value)} sx={{ minWidth: 220 }}>
+            <TextField select size="small" label={t('proposals.forPart')} value={partId} onChange={(e) => setPartId(e.target.value)} sx={{ minWidth: 'min(220px, 100%)' }}>
               <MenuItem value="">{t('proposals.general')}</MenuItem>
               {parts.map((p) => <MenuItem key={p.id} value={p.id}>{p.name.en || p.name.zh}</MenuItem>)}
             </TextField>

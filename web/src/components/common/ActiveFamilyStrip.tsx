@@ -1044,7 +1044,12 @@ const ActiveFamilyStrip: React.FC = () => {
         return (
           <Typography sx={{ fontSize: 12, color: 'var(--text-2)',
                             fontVariantNumeric: 'tabular-nums' }}>
-            <b style={{ color: 'var(--text-1)' }}>{ctx.die}</b>
+            {/* the die name is the way UP to the catalog (mobile audit 2026-11: configuration -> die -> catalog) */}
+            <Tooltip title="Motors catalog">
+              <b role="link" tabIndex={0} data-testid="strip-die-to-catalog" style={{ color: 'var(--text-1)', cursor: 'pointer', textDecoration: 'underline dotted', textUnderlineOffset: 3 }}
+                onClick={() => useUIStore.getState().setActiveTab('motors' as never)}
+                onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); useUIStore.getState().setActiveTab('motors' as never); } }}>{ctx.die}</b>
+            </Tooltip>
             {' / '}{drifted2
               ? <Tooltip title={tip}><span style={{ cursor: 'help' }}>{cfgEl}</span></Tooltip>
               : cfgEl}

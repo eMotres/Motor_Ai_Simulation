@@ -257,7 +257,7 @@ export function useSpecFields(c: SpecFieldsContext) {
     return <Box id={`spec-field-${f.id}`} sx={{ minWidth: 0, p: '10px 12px', border: '1px solid var(--line-soft)', borderRadius: '8px', bgcolor: 'var(--panel-2)' }}>
       {choice && <>
         {head}
-        <ToggleButtonGroup exclusive size="small" value={type} disabled={locked} aria-label={label(f.short_label ?? f.label)} onChange={(_, v: SupplyType | null) => { if (v) setAnswer(f, withSupplyType(obj, v)); }} sx={{ mb: 1.25 }}>
+        <ToggleButtonGroup exclusive size="small" value={type} disabled={locked} aria-label={label(f.short_label ?? f.label)} onChange={(_, v: SupplyType | null) => { if (v) setAnswer(f, withSupplyType(obj, v)); }} sx={{ mb: 1.25, [NARROW]: phoneSwitchGrid }}>
           {(['battery', 'dc_source', ...(hasAc ? ['ac_mains'] : [])] as SupplyType[]).map((v) => <ToggleButton key={v} value={v} sx={{ px: 1.75, py: 0.6, minHeight: 36, fontSize: 13, textTransform: 'none', color: 'var(--text-2)', borderColor: 'var(--line)', '&.Mui-selected': { bgcolor: 'primary.main', color: 'primary.contrastText', '&:hover': { bgcolor: 'primary.dark' } } }}>{tr(`wizard.supply.${v}`)}</ToggleButton>)}
         </ToggleButtonGroup>
       </>}
@@ -283,6 +283,12 @@ export function useSpecFields(c: SpecFieldsContext) {
   };
   const propertyGrid = { ...specGridSx, [NARROW]: { gridTemplateColumns: 'minmax(0,1fr)' } } as const;
   const switchButton = { textTransform: 'none', px: 1.5, py: 0.4, fontSize: 12 } as const;
+  /** Phone width (mobile audit 2026-11): a one-line switch hid its last choices off the card (Turbine / Shaft, AC mains); below
+   *  768 px it becomes a grid of equal, separate buttons of touch height, every choice visible. */
+  const phoneSwitchGrid = {
+    display: 'grid', width: '100%', gridTemplateColumns: 'repeat(auto-fill, minmax(104px, 1fr))', gap: '6px',
+    '& .MuiToggleButtonGroup-grouped': { minHeight: 44, m: 0, border: '1px solid var(--line) !important', borderRadius: '8px !important', whiteSpace: 'normal', lineHeight: 1.2 },
+  } as const;
   /** 3_1 as a switch Air / Liquid / Underwater (`cooling_medium`) under the chosen load: a medium the load cannot run in
    *  is disabled (an air propeller never runs under water), each medium shows its own conditions (+ the airflow the load
    *  still blows over a liquid-cooled housing) and the airflow menu offers only what the load makes. The other media's
@@ -388,8 +394,8 @@ export function useSpecFields(c: SpecFieldsContext) {
     return <Box id="spec-field-load_type" sx={{ minWidth: 0 }}>
       {labelRow(typeField, false, fieldRequired(typeField, draftRef.current), typeUnknown)}
       {/* ONE line: short visible names (the full name and a finer stored type are in the tooltip); on a narrow screen the row scrolls inside itself */}
-      <Box sx={{ overflowX: 'auto', maxWidth: '100%' }}>
-        <ToggleButtonGroup size="small" exclusive value={group ?? (load.load_type === 'unknown' ? null : load.load_type)} disabled={!canEditSpec || busy || migrationBusy || typeUnknown} onChange={(_, next: LoadType | null) => choose(next)} aria-label={label(typeField.label)} sx={{ flexWrap: 'nowrap', width: 'max-content' }}>{loadSwitchChoices(load.load_type).map((type) => <ToggleButton key={type} value={type} title={[tr(`load.types.${type}`), type === group && finer ? finer : ''].filter(Boolean).join(' · ')} sx={{ ...switchButton, px: 1, flex: '0 0 auto', whiteSpace: 'nowrap' }}>{tr(`load.short.${type}`, { defaultValue: tr(`load.types.${type}`) })}</ToggleButton>)}</ToggleButtonGroup>
+      <Box sx={{ overflowX: 'auto', maxWidth: '100%', [NARROW]: { overflowX: 'visible' } }}>
+        <ToggleButtonGroup size="small" exclusive value={group ?? (load.load_type === 'unknown' ? null : load.load_type)} disabled={!canEditSpec || busy || migrationBusy || typeUnknown} onChange={(_, next: LoadType | null) => choose(next)} aria-label={label(typeField.label)} sx={{ flexWrap: 'nowrap', width: 'max-content', [NARROW]: phoneSwitchGrid }}>{loadSwitchChoices(load.load_type).map((type) => <ToggleButton key={type} value={type} title={[tr(`load.types.${type}`), type === group && finer ? finer : ''].filter(Boolean).join(' · ')} sx={{ ...switchButton, px: 1, flex: '0 0 auto', whiteSpace: 'nowrap' }}>{tr(`load.short.${type}`, { defaultValue: tr(`load.types.${type}`) })}</ToggleButton>)}</ToggleButtonGroup>
       </Box>
       {answerLater(typeField, typeUnknown, false)}
     </Box>;

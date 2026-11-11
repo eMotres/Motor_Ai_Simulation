@@ -25,10 +25,11 @@ const AuthButton: React.FC = () => {
       <>
         <NewsletterLinkHandler />
         <LanguageSwitcher variant="button" />
+        {/* one line on a 360 px phone (it broke into "Sign / in") */}
         <Button size="small" variant="outlined"
           startIcon={<LoginIcon sx={{ fontSize: 16 }} />}
           onClick={() => signIn().catch(() => {})}
-          sx={{ textTransform: 'none', fontSize: '0.75rem' }}>
+          sx={{ textTransform: 'none', fontSize: '0.75rem', whiteSpace: 'nowrap', flexShrink: 0 }}>
           {t('account.signIn')}
         </Button>
       </>

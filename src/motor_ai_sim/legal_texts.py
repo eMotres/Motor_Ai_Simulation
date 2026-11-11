@@ -64,7 +64,7 @@ log = logging.getLogger(__name__)
 
 #: The version of the Terms of Use, the Privacy Policy and the public Platform Agreement a sign-up accepts.  One number for the set: a
 #: change of any of them is a new version of all (the texts reference each other).
-TERMS_VERSION = "v0.7"
+TERMS_VERSION = "v0.8"
 PRIVACY_VERSION = TERMS_VERSION
 AGREEMENT_PUBLIC_VERSION = TERMS_VERSION
 #: First terms version that carries the FREE-mode data use: an account that accepted it may be trained on (platform_agreement.training_allowed).

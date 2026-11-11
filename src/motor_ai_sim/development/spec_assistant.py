@@ -10,8 +10,16 @@ every marker out of the text (parsed, malformed or unclosed) and ``take_proposal
 ``spec_proposals.create`` (single-field schema validation); an invalid one is dropped with a log line.  Nothing is
 written to the draft: the project owner applies a proposal with a button.
 
+FILL MODE (owner 2026-11-11): when the user can apply proposals (``can_edit_spec``: the project owner or an admin) and the
+panel's "Fill the form for me" switch is on, ``take_proposals(..., fill_email=...)`` applies each valid proposal at once with
+``spec_proposals.fill`` (= the Apply button's code path: same validation, revision, audit) and marks it ``assistant`` with its
+basis; the user sees an applied card with Undo.  Customer decisions are refused for everybody; the application, the key
+operating points and the supply voltage are filled only when the basis is "stated" (``P.STATED_ONLY``), otherwise they stay
+cards.  A user who cannot apply, or switched fill off, gets proposal cards as before.
+
 Access (``DESIGN_AGENT_SPEC_ACCESS``): ``staff`` (default - admins and engineers) or ``members`` (also every member
-of the project).  The conversation lives in the browser (like the support widget); the server is stateless.
+of the project).  The conversation is kept per project and user (``spec_assistant_history``); the model's context takes the last
+``MAX_TURNS`` turns of what the panel sends.
 """
 from __future__ import annotations
 
@@ -31,13 +39,17 @@ log = logging.getLogger(__name__)
 
 MAX_TURNS = 20
 MAX_CHARS = 2000
-MAX_MARKERS = 3
+MAX_MARKERS = 3                  # proposal cards per reply
+MAX_MARKERS_FILL = 8             # markers per reply in fill mode
 ASSUMED_TAG = {"en": "(assumed, to confirm)", "zh-CN": "（假设，待确认）"}
 REPLIES = {
     "unavailable": {"en": "The assistant is not available right now. You can fill in the form yourself.", "zh-CN": "助手暂时无法使用，您可以直接填写表单。"},
     "failed": {"en": "Sorry - I could not answer just now. Please try again in a minute.", "zh-CN": "抱歉，暂时无法回答，请稍后再试。"},
     "see_below": {"en": "(see the proposal below)", "zh-CN": "（请查看下方建议）"},
     "no_reply": {"en": "(no reply)", "zh-CN": "（无回复）"},
+    "filled_below": {"en": "(filled in the form - see below)", "zh-CN": "（已填入表单，见下方）"},
+    "filled": {"en": "Filled in the form", "zh-CN": "已填入表单"},
+    "cards": {"en": "Waiting as proposal cards (not applied)", "zh-CN": "以建议卡片等待确认（未应用）"},
 }
 #: Commercial fields: the model never hears of them, not even to ask (owner: no price or quote talk with a customer during design).
 HIDDEN_FROM_MODEL = frozenset({"6_3", "target_price"})
@@ -119,26 +131,78 @@ def parse_proposals(reply: str) -> tuple[str, list[dict]]:
     return clean, found
 
 
-def take_proposals(project_id: str, found: list[dict], lang: str) -> list[dict]:
-    """Validate and store the parsed markers; the invalid ones are dropped (logged), never raised."""
-    stored: list[dict] = []
+def _label(project_id: str, field_id: str, lang: str) -> str:
+    try:
+        version = P.schema_version_of(P.draft_wrapper(project_id))
+        _, field = P.field_info(field_id, version)
+        return _lab(field.get("short_label") or field.get("label"), lang) or field_id
+    except Exception:                                         # noqa: BLE001
+        return field_id
+
+
+def process_markers(project_id: str, found: list[dict], lang: str, *, fill_email: Optional[str] = None) -> dict:
+    """Validate and store the parsed markers; ``{"open": [...], "applied": [...]}``.  The invalid ones are dropped (logged), never
+    raised.  With ``fill_email`` (fill mode: the caller may apply) a stored proposal is applied at once through ``P.fill``; one
+    that cannot be (customer decision never gets this far; a stated-only field without basis "stated"; a stale or no longer valid
+    draft) stays an open card."""
+    cap = MAX_MARKERS_FILL if fill_email else MAX_MARKERS
+    opened: list[dict] = []
+    applied: list[dict] = []
+    refused: list[str] = []
+    dropped = 0
+    count = 0
     for fields in found:
-        if len(stored) >= MAX_MARKERS:
-            log.warning("spec assistant: proposal for %r dropped (more than %d in one reply)", fields.get("field"), MAX_MARKERS)
+        if count >= cap:
+            log.warning("spec assistant: proposal for %r dropped (more than %d in one reply)", fields.get("field"), cap)
+            dropped += 1
             continue
         field_id = str(fields.get("field") or "").strip().strip("\"'")
         reason = " ".join(str(fields.get("reason") or "").split())
         basis = str(fields.get("basis") or "assumed").strip().lower()
+        if basis not in ("stated", "derived", "assumed"):
+            basis = "assumed"
         tag = ASSUMED_TAG.get(lang, ASSUMED_TAG["en"])
-        if basis not in ("stated", "derived") and "assumed" not in reason.lower() and "假设" not in reason:
+        if basis == "assumed" and "assumed" not in reason.lower() and "假设" not in reason:
             reason = f"{reason} {tag}".strip() if reason else ""
         try:
             if "value" not in fields:
                 raise P.ProposalError("no value")
-            stored.append(P.create(project_id, field_id, fields["value"], reason))
+            prop = P.create(project_id, field_id, fields["value"], reason, basis=basis)
         except Exception as exc:                              # noqa: BLE001 - a bad marker must never fail the reply
             log.warning("spec assistant: proposal for %r dropped (%s)", field_id, str(exc)[:160])
-    return stored
+            dropped += 1
+            try:
+                section, _ = P.field_info(field_id, P.schema_version_of(P.draft_wrapper(project_id)))
+                if P.refusal(field_id, section["id"]):
+                    refused.append(field_id)
+            except Exception:                                 # noqa: BLE001
+                pass
+            continue
+        count += 1
+        if fill_email and not (field_id in P.STATED_ONLY and basis != "stated"):
+            try:
+                done = P.fill(project_id, prop, fill_email)
+                applied.append(done["proposal"])
+                continue
+            except Exception as exc:                          # noqa: BLE001 - stays a card
+                log.warning("spec assistant: fill of %r not applied, kept as a card (%s)", field_id, str(exc)[:160])
+        opened.append(prop)
+    return {"open": opened, "applied": applied, "refused": refused, "dropped": dropped}
+
+
+def take_proposals(project_id: str, found: list[dict], lang: str, *, fill_email: Optional[str] = None) -> list[dict]:
+    """``process_markers`` -> the proposals still open (cards).  Without ``fill_email`` that is every valid marker."""
+    return process_markers(project_id, found, lang, fill_email=fill_email)["open"]
+
+
+def server_notes(project_id: str, applied: list[dict], opened: list[dict], lang: str) -> str:
+    """What the SERVER confirms, appended to the reply: the model's own words never claim a fill (owner 2026-11-11)."""
+    lines: list[str] = []
+    if applied:
+        lines.append(f"{REPLIES['filled'][lang]}: " + "; ".join(_label(project_id, p["field_id"], lang) for p in applied) + ".")
+    if applied and opened:
+        lines.append(f"{REPLIES['cards'][lang]}: " + "; ".join(_label(project_id, p["field_id"], lang) for p in opened) + ".")
+    return "\n".join(lines)
 
 
 # ── the context the server hands the model ───────────────────────────────────
@@ -185,7 +249,7 @@ def _compact(value: Any, limit: int = 220) -> str:
     return text if len(text) <= limit else text[:limit] + "..."
 
 
-def build_context(project: dict, wrapper: dict, proposals: list[dict], *, lang: str, can_apply: bool) -> str:
+def build_context(project: dict, wrapper: dict, proposals: list[dict], *, lang: str, can_apply: bool, fill: bool = False) -> str:
     """The read-only SPECIFICATION CONTEXT block of the system prompt.  Everything a user typed (the project title, the answers, the waiting
     proposals) sits inside one fence with a per-call random id, as one-line JSON, labelled as untrusted data: it cannot close the fence."""
     version = P.schema_version_of(wrapper)
@@ -232,7 +296,10 @@ def build_context(project: dict, wrapper: dict, proposals: list[dict], *, lang: 
         f"UI language: {'Chinese (zh-CN)' if lang == 'zh-CN' else 'English'}.  Schema version {version}.",
         f"Required fields: answered {comp.get('answered', 0)}, not known yet {comp.get('unknown', 0)}, "
         f"missing {comp.get('missing', 0)}, incomplete {comp.get('invalid', 0)} of {comp.get('total_required', 0)}.",
-        ("The user CAN apply proposals." if can_apply else
+        ("FILL MODE IS ON: your SPEC_PROPOSAL markers are applied to the form by the server at once (the user can undo each). "
+         "Write the marker only for a value you are sure of; the server tells the user what it filled, so do not announce it yourself."
+         if fill else "The user CAN apply proposals (FILL MODE IS OFF: your markers become proposal cards)."
+         if can_apply else
          "The user CANNOT apply proposals (only the project owner or an admin can); say so once if relevant."),
         "",
         "REQUIRED fields still missing (id label [unit]: value shape):",
@@ -334,8 +401,11 @@ def _clean_messages(raw: Any) -> list[dict]:
     return out
 
 
-def turn(project_id: str, project: dict, user: dict, raw_messages: Any, raw_lang: Any, *, can_apply: bool) -> dict:
-    """One assistant turn: ``{reply, proposals, source, model}``.  Never raises for a provider failure."""
+def turn(project_id: str, project: dict, user: dict, raw_messages: Any, raw_lang: Any, *, can_apply: bool,
+         fill: bool = False) -> dict:
+    """One assistant turn: ``{reply, proposals, applied, source, model}``.  Never raises for a provider failure.  ``fill`` (fill
+    mode) only counts for a caller who ``can_apply``."""
+    fill = bool(fill and can_apply)
     lang = lang_of(raw_lang)
     messages = _clean_messages(raw_messages)
     if not messages or messages[-1]["role"] != "user":
@@ -344,18 +414,24 @@ def turn(project_id: str, project: dict, user: dict, raw_messages: Any, raw_lang
     if not _charge(email):
         return {"reply": "The assistant has reached its daily limit for your account - please try again tomorrow."
                 if lang == "en" else "今日助手使用次数已达上限，请明天再试。",
-                "proposals": [], "source": "rate_limited"}
+                "proposals": [], "applied": [], "source": "rate_limited"}
     wrapper = P.draft_wrapper(project_id)
-    context = build_context(project, wrapper, P.list_proposals(project_id, "open"), lang=lang, can_apply=can_apply)
+    context = build_context(project, wrapper, P.list_proposals(project_id, "open"), lang=lang, can_apply=can_apply, fill=fill)
     try:
         text, source, model = complete(messages, SPEC_PROMPT + "\n\n" + context)
     except AssistantUnavailable:
-        return {"reply": REPLIES["unavailable"][lang], "proposals": [], "source": "mock"}
+        return {"reply": REPLIES["unavailable"][lang], "proposals": [], "applied": [], "source": "mock"}
     except Exception as exc:                                  # noqa: BLE001 - a provider failure is an answer, not a 500
         log.warning("spec assistant: provider call failed (%s: %s)", type(exc).__name__, str(exc)[:160])
-        return {"reply": REPLIES["failed"][lang], "proposals": [], "source": "error"}
+        return {"reply": REPLIES["failed"][lang], "proposals": [], "applied": [], "source": "error"}
     clean, found = parse_proposals(text)
-    stored = take_proposals(project_id, found, lang) if found else []
+    got = process_markers(project_id, found, lang, fill_email=email if fill else None) if found else {"open": [], "applied": [], "refused": [], "dropped": 0}
+    stored, applied = got["open"], got["applied"]
     if not clean:
-        clean = REPLIES["see_below" if stored else "no_reply"][lang]
-    return {"reply": clean, "proposals": P.with_current(project_id, stored), "source": source, "model": model}
+        clean = REPLIES["filled_below" if applied else "see_below" if stored else "no_reply"][lang]
+    note = server_notes(project_id, applied, stored, lang)
+    if note:
+        clean = f"{clean}\n\n{note}"
+    return {"reply": clean, "proposals": P.with_current(project_id, stored), "applied": P.with_current(project_id, applied),
+            "source": source, "model": model,
+            "refused": got["refused"], "dropped": got["dropped"], "fill_mode": fill}

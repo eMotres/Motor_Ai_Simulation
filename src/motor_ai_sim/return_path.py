@@ -127,6 +127,9 @@ def safe_app_path(raw) -> Optional[str]:
     first: dict = {}
     for k, v in fields:
         first.setdefault(k, v)      # the first occurrence of a key wins, later ones are ignored
+    if path in ("/projects", "/projects/", "/zh-cn/projects", "/zh-cn/projects/"):
+        # the "describe your motor" link of the launch mail: opens the New project dialog (the only query it keeps is new=spec)
+        return ("/zh-cn" if path.startswith("/zh-cn") else "") + "/projects?new=spec" if first.get("new") == "spec" else None
     m = _PROD.match(path)
     if m:
         return _production(m.group(1), m.group(2), m.group(3), first)

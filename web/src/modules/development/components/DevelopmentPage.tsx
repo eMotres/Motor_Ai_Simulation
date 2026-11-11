@@ -65,7 +65,7 @@ import { createErrorText, createPayload, createReady } from '../createProject';
   import { NARROW } from '../../../lib/narrowLayout';
   import { clearView, readView, writeView } from '../../../lib/viewMemory';
   import { developmentViewScope, parseDevelopmentView, restorableView, type DevelopmentView } from '../viewState';
-  import { appLinkPath, parseAppLink, type AppLink } from '../../../lib/appLink';
+  import { appLinkPath, newProjectIntent, parseAppLink, type AppLink } from '../../../lib/appLink';
   import DigestSettings from '../../../components/digest/DigestSettings';
 type ViewTab = 'specification' | 'motors' | 'messages' | 'notes' | 'documents' | 'production' | 'timeline' | 'quote' | 'cost';
 const DEFAULT_DRAFT: SpecDraft = { schema_version: 2, fields: {}, mission_profile: [], production: {} };
@@ -318,11 +318,22 @@ export default function DevelopmentPage() {
   // the link names.  Read from the address bar once at mount; the link then leaves the bar (a reload goes back to the remembered view).
   const linkTarget = useRef<Extract<AppLink, { kind: 'project' }> | null>(null);
   const linkRead = useRef(false);
+  const openSpecAfterCreate = useRef(false);        // set by /projects?new=spec for a customer account: after Create open the specification + assistant
   useEffect(() => {
     if (linkRead.current) return;
     linkRead.current = true;
     let link: AppLink | null = null;
     try { link = parseAppLink(window.location.pathname, window.location.search); } catch { /* no window */ }
+    if (link && link.kind === 'new') {
+      // /projects?new=spec (the launch mail's "Describe your motor"): the New project dialog; consumed at once so Back / reload cannot make a second project
+      const intent = newProjectIntent(link, canManageGlobally);
+      if (intent) {
+        openSpecAfterCreate.current = intent.openSpecAfterCreate;
+        setCreateOpen(intent.openDialog);
+        try { window.history.replaceState(window.history.state, '', intent.consumeTo); } catch { /* no history */ }
+      }
+      return;
+    }
     if (!link || link.kind !== 'project') return;
     linkTarget.current = link;
     if (user?.email) viewRestoredFor.current = user.email;       // the link wins over the remembered project
@@ -609,7 +620,13 @@ export default function DevelopmentPage() {
     try {
       // a customer sends only the title and company: the server makes the id and the account becomes the project owner
       const p = await developmentApi.create(createPayload(canManageGlobally, { title, org, id: projectId }));
+      const openSpec = openSpecAfterCreate.current && !canManageGlobally;
+      openSpecAfterCreate.current = false;
+      if (openSpec) {                                // the assistant panel opens in fill mode on the new project's first specification step
+        try { window.localStorage.setItem('specAssistant.open', '1'); window.localStorage.setItem('specAssistant.fill', '1'); } catch { /* storage blocked */ }
+      }
       setCreateOpen(false); setTitle(''); setOrg(''); setProjectId(''); await refreshProjects(); await loadProject(p);
+      if (openSpec) { setView('specification'); setStep(0); window.dispatchEvent(new CustomEvent('specAssistant:open')); }
     }
     catch (e) { setError(createErrorText(e, tr)); } finally { setBusy(false); }
   };

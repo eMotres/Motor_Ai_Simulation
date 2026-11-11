@@ -7,10 +7,10 @@ export type Lang = 'en' | 'zh-CN';
 export interface ProposalRecalc { needed: boolean; kind: 'thermal_mechanics' | 'mechanics' | 'none'; text: { en: string; 'zh-CN': string } }
 export interface Proposal {
   id: string; field_id: string; value: unknown; reason: string; recalc: ProposalRecalc; by: string; created_at: string;
-  status: 'open' | 'applied' | 'dismissed'; applied_by?: string | null; applied_revision?: number | null;
-  current?: { value: unknown; status: string };
+  status: 'open' | 'applied' | 'dismissed' | 'undone'; applied_by?: string | null; applied_revision?: number | null;
+  current?: { value: unknown; status: string }; basis?: string | null; via?: string | null;
 }
-export interface ChatMessage { role: 'user' | 'assistant'; content: string }
+export interface ChatMessage { role: 'user' | 'assistant'; content: string; applied?: Proposal[] }
 type Obj = Record<string, unknown>;
 
 export const langOf = (raw: string | undefined | null): Lang => String(raw ?? '').toLowerCase().startsWith('zh') ? 'zh-CN' : 'en';
@@ -111,7 +111,7 @@ export const openProposals = (rows: Proposal[]): Proposal[] =>
 
 /** The chat history the server accepts: alternating roles from a user turn, bounded (the server cuts it again). */
 export function historyForServer(messages: ChatMessage[], max = 20): ChatMessage[] {
-  const out = messages.filter((m) => (m.role === 'user' || m.role === 'assistant') && m.content.trim()).slice(-max);
+  const out = messages.filter((m) => (m.role === 'user' || m.role === 'assistant') && m.content.trim()).map((m) => ({ role: m.role, content: m.content })).slice(-max);
   while (out.length && out[0].role !== 'user') out.shift();
   return out;
 }
@@ -127,3 +127,28 @@ export function applyFailure(status: number, detail: unknown): { key: string; re
   if (status === 422) return { key: 'specAssistant.invalid', reload: true };
   return { key: 'specAssistant.applyFailed', reload: false };
 }
+
+/** How the assistant knows a filled value: the customer said it, it was derived, or it is an assumption to confirm. */
+export type Basis = 'stated' | 'derived' | 'assumed';
+export function basisOf(p: Pick<Proposal, 'reason'> & { basis?: string | null }): Basis {
+  if (p.basis === 'stated' || p.basis === 'derived' || p.basis === 'assumed') return p.basis;
+  return /assumed|假设/i.test(p.reason ?? '') ? 'assumed' : 'derived';
+}
+
+/** What an applied (filled) card offers: Undo while the fill stands and the viewer may edit, otherwise just its state. */
+export type FilledState = 'undo' | 'filled' | 'undone' | 'gone';
+export function filledState(p: Pick<Proposal, 'status'>, canApply: boolean): FilledState {
+  if (p.status === 'undone') return 'undone';
+  if (p.status !== 'applied') return 'gone';
+  return canApply ? 'undo' : 'filled';
+}
+
+/** A stored server-side message (`{id, role, text, applied}`) as the panel's chat message. */
+export interface StoredMessage { id?: string; role: 'user' | 'assistant'; text: string; applied?: Proposal[]; proposals?: Proposal[] }
+export function fromStored(rows: StoredMessage[]): ChatMessage[] {
+  return (rows ?? []).filter((m) => (m.role === 'user' || m.role === 'assistant') && typeof m.text === 'string')
+    .map((m) => ({ role: m.role, content: m.text, ...(m.applied?.length ? { applied: m.applied } : {}) }));
+}
+
+/** "Fill the form for me": on unless the user switched it off. */
+export const fillEnabled = (stored: string | null): boolean => stored !== '0';

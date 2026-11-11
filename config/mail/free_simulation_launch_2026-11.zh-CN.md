@@ -15,7 +15,7 @@ Subject: AeroStator：描述您的电机，我们免费为您仿真
 
 我们事先说明交换条件：在免费模式下，我们使用您的项目及其仿真中的工程数据训练我们自有的人工智能模型，绝不使用个人数据，您的项目保持保密。私有模式完全不进行人工智能训练。在您首次创建项目时，您须接受[《平台协议》](https://aerostator.com/zh-cn/platform-agreement)；详见[《使用条款》](https://aerostator.com/zh-cn/terms)。
 
-=> [打开 AeroStator]({{open_url}})
+=> [描述您的电机]({{spec_url}})
 
 AeroStator 团队，MOTRES d.o.o.
 

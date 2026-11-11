@@ -74,7 +74,7 @@ ACTIONS = frozenset({
     # a customer asked to order a motor of a development project (no price is involved)
     "project.order_request",
     # the log itself
-    "audit.read", "audit.pseudonymise",
+    "audit.read", "audit.pseudonymise", "assistant_conv.read", "assistant_conv.export",
     # retention
     "retention.run",
     # applicant verification (motor_ai_sim.verification): queue / case reads, decisions, the uploaded documents

@@ -1,6 +1,6 @@
 // Calls of the specification assistant (routes in development/spec_assistant_routes.py).  Same fetch convention as
 // `api.ts`: the app's global fetch layer adds the sign-in.
-import type { ChatMessage, Proposal } from './specAssistant';
+import type { ChatMessage, Proposal, StoredMessage } from './specAssistant';
 
 const API = (import.meta.env.VITE_API_URL ?? 'http://localhost:8001') as string;
 const enc = encodeURIComponent;
@@ -24,12 +24,15 @@ async function call<T>(method: string, path: string, body?: unknown): Promise<T>
 const p = (id: string) => `/api/projects/${enc(id)}/spec`;
 
 export interface AssistantStatus { allowed: boolean; can_apply: boolean; configured: boolean }
-export interface AssistantTurn { reply: string; proposals: Proposal[]; source: string; model?: string }
+export interface AssistantTurn { reply: string; proposals: Proposal[]; applied?: Proposal[]; source: string; model?: string }
 export interface ProposalList { proposals: Proposal[]; revision: number; can_apply: boolean }
 
 export const specAssistantApi = {
   status: (id: string) => call<AssistantStatus>('GET', `${p(id)}/assistant`),
-  turn: (id: string, messages: ChatMessage[], lang: string) => call<AssistantTurn>('POST', `${p(id)}/assistant`, { messages, lang }),
+  turn: (id: string, messages: ChatMessage[], lang: string, fill = false) => call<AssistantTurn>('POST', `${p(id)}/assistant`, { messages, lang, fill }),
+  history: (id: string) => call<{ messages: StoredMessage[] }>('GET', `${p(id)}/assistant/history`),
+  clearHistory: (id: string) => call<{ messages: StoredMessage[] }>('DELETE', `${p(id)}/assistant/history`),
+  undo: (id: string, proposalId: string) => call<{ proposal: Proposal; revision: number }>('POST', `${p(id)}/proposals/${enc(proposalId)}/undo`),
   proposals: (id: string) => call<ProposalList>('GET', `${p(id)}/proposals`),
   apply: (id: string, proposalId: string, revision: number) => call<{ proposal: Proposal; revision: number }>('POST', `${p(id)}/proposals/${enc(proposalId)}/apply`, { revision }),
   dismiss: (id: string, proposalId: string) => call<{ proposal: Proposal }>('POST', `${p(id)}/proposals/${enc(proposalId)}/dismiss`),

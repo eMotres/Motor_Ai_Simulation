@@ -15,7 +15,7 @@ On AeroStator you can now describe the motor or generator you need in a specific
 
 The deal is stated up front: in FREE mode we train our own AI models on the engineering data of your project and its simulation, never on personal data, and your project stays confidential. PRIVATE mode excludes all AI training. When you create your first project you accept the [Platform Agreement](https://aerostator.com/platform-agreement); details are in the [Terms of Use](https://aerostator.com/terms).
 
-=> [Open AeroStator]({{open_url}})
+=> [Describe your motor]({{spec_url}})
 
 The AeroStator team, MOTRES d.o.o.
 

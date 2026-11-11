@@ -13,7 +13,7 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Request
 
 from motor_ai_sim import platform_agreement, users
-from motor_ai_sim.development import access, models, self_service, store, unread
+from motor_ai_sim.development import access, models, self_service, spec_proposals, store, unread
 from motor_ai_sim.development.motors import _metric_projection
 from motor_ai_sim.development.quote_routes import quote_shared
 from motor_ai_sim.development.timeline_routes import timeline_ready
@@ -639,7 +639,13 @@ def get_spec(request: Request, project_id: str):
             stored_draft = controller_catalog.link_catalog_controller(stored_draft)
         except Exception:  # noqa: BLE001 - an unreadable catalogue must never hide the specification
             pass
-    return {"draft": _customer_spec({"draft": stored_draft})["draft"] if not access.is_engineer(user) else stored_draft,
+    shown = _customer_spec({"draft": stored_draft})["draft"] if not access.is_engineer(user) else copy.deepcopy(stored_draft)
+    fills = spec_proposals.live_fills(wrapper)        # values the assistant filled and the user has not changed since
+    if fills:
+        shown.setdefault("provenance", {})["assistant_fills"] = fills
+    elif isinstance(shown.get("provenance"), dict):
+        shown["provenance"].pop("assistant_fills", None)
+    return {"draft": shown,
             "revision": wrapper.get("revision", 0), "version": wrapper.get("version"), "schema_version": schema_version,
             "schema": models.schema(int(schema_version)), "completeness": models.completeness(wrapper.get("draft", {})), "versions": [_customer_spec(v) for v in versions],
             "submitted": _submitted_state(project_id, wrapper)}
@@ -797,6 +803,12 @@ def save_spec_for(user: dict, project_id: str, body: dict, *, audit_details: dic
             return
         if not access.is_engineer(user):
             draft["provenance"] = copy.deepcopy(current.get("draft", {}).get("provenance", {}))
+        else:                                             # the page only ever sees a trimmed copy of the assistant's fills: keep the stored one
+            kept = (current.get("draft", {}).get("provenance") or {}).get("assistant_fills")
+            prov = draft.setdefault("provenance", {})
+            prov.pop("assistant_fills", None)
+            if kept:
+                prov["assistant_fills"] = copy.deepcopy(kept)
         draft["schema_version"] = persisted_version
         current.update({"draft": draft, "schema_version": persisted_version, "revision": current_revision + 1, "updated_at": models.now()})
         result["saved"] = copy.deepcopy(current)

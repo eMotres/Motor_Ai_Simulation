@@ -19,14 +19,17 @@ from typing import Any
 
 from motor_ai_sim.development import models, store
 
-STATUSES = ("open", "applied", "dismissed")
+STATUSES = ("open", "applied", "dismissed", "undone")
 MAX_REASON = 300
 MAX_OPEN = 40
 
 #: Customer decisions: the assistant asks, it never proposes (owner 2026-10-27).  Whole sections 6 (project and
 #: commercial) and production, the mass target and the target budget.
 CUSTOMER_SECTIONS = frozenset({"6", "production", "mission_profile"})
-CUSTOMER_FIELDS = frozenset({"4_2", "6_3"})
+CUSTOMER_FIELDS = frozenset({"4_2", "6_3", "target_price"})
+#: Fields the assistant may FILL only when the customer stated the value (basis "stated"): the application, the key
+#: operating points and the supply voltage are never invented (owner 2026-11-11).  Otherwise the proposal stays a card.
+STATED_ONLY = frozenset({"1_1", "key_points", "1_4", "1_5", "2_1", "2_2"})
 #: Version-2 fields the specification derives from the key operating points (S1 and peak point).
 DERIVED_V2 = frozenset({"1_4", "1_5"})
 
@@ -206,7 +209,7 @@ def with_current(project_id: str, proposals: list[dict]) -> list[dict]:
     return out
 
 
-def create(project_id: str, field_id: str, value: Any, reason: str, *, by: str = "assistant") -> dict:
+def create(project_id: str, field_id: str, value: Any, reason: str, *, by: str = "assistant", basis: str | None = None) -> dict:
     """Validate and store a proposal.  A newer proposal for the same field replaces the open one (dismissed as
     ``superseded``).  Raises ``ProposalError`` for an invalid one - nothing is stored then."""
     reason = " ".join(str(reason or "").split())
@@ -220,6 +223,8 @@ def create(project_id: str, field_id: str, value: Any, reason: str, *, by: str =
     proposal = {"id": "p-" + secrets.token_hex(5), "field_id": field_id, "value": answer["value"], "reason": reason,
                 "recalc": recalc_for(field_id, section["id"]), "by": by, "created_at": models.now(),
                 "status": "open", "applied_by": None, "applied_revision": None}
+    if basis:
+        proposal["basis"] = basis
 
     def mutate(doc: dict) -> None:
         rows = doc.setdefault("proposals", [])
@@ -260,11 +265,15 @@ def dismiss(project_id: str, proposal_id: str, actor_email: str) -> dict:
     return result["proposal"]
 
 
-def apply(project_id: str, proposal_id: str, actor_email: str, expected_revision: int) -> dict:
+def apply(project_id: str, proposal_id: str, actor_email: str, expected_revision: int, *, via: str | None = None) -> dict:
     """Write the proposal's value into the draft through the SAME normalise + revision rules as ``PUT /spec`` and mark
     it applied.  Raises ``LookupError`` (no such proposal), ``ProposalConflict`` (stale revision, already closed) or
     ``ProposalError`` (the value no longer validates against the current draft).  Returns ``{proposal, revision,
-    draft, completeness}``."""
+    draft, completeness}``.
+
+    ``via="assistant"`` is the assistant's fill mode: the SAME code path, plus the answer that was there before is kept on the
+    proposal (``previous``, for Undo) and ``draft.provenance.assistant_fills[field]`` records the basis (stated / derived /
+    assumed), the reason and who asked, so the form can mark the value."""
     out: dict = {}
 
     def mutate_proposals(doc: dict) -> None:
@@ -298,6 +307,11 @@ def apply(project_id: str, proposal_id: str, actor_email: str, expected_revision
                 return
             draft["provenance"] = copy.deepcopy((current.get("draft") or {}).get("provenance", {}))
             draft["schema_version"] = version
+            out["previous"] = current_answer(current, field_id, version)
+            if via:
+                draft["provenance"].setdefault("assistant_fills", {})[field_id] = {
+                    "proposal_id": proposal_id, "basis": prop.get("basis") or "assumed", "reason": prop.get("reason", ""),
+                    "by": actor_email.lower(), "at": models.now(), "revision": revision + 1, "value": answer["value"]}
             current.update({"draft": draft, "schema_version": version, "revision": revision + 1,
                             "updated_at": models.now()})
             out["saved"] = copy.deepcopy(current)
@@ -305,7 +319,9 @@ def apply(project_id: str, proposal_id: str, actor_email: str, expected_revision
         store.mutate_json(project_id, "draft.json", mutate_draft, default=_empty_wrapper())
         if out.get("saved") is not None:
             prop.update(status="applied", applied_by=actor_email.lower(), applied_at=models.now(),
-                        applied_revision=out["saved"]["revision"])
+                        applied_revision=out["saved"]["revision"], previous=out.get("previous"))
+            if via:
+                prop["via"] = via
             out["proposal"] = copy.deepcopy(prop)
 
     store.mutate_json(project_id, _FILE, mutate_proposals, default=_doc())
@@ -321,6 +337,106 @@ def apply(project_id: str, proposal_id: str, actor_email: str, expected_revision
     from motor_ai_sim.development import self_service
     self_service.refresh_title(project_id, saved.get("draft") or {})
     store.append_audit(project_id, actor_email, "spec.proposal.apply", "spec_proposal", proposal_id,
+                       {"field": out["proposal"]["field_id"], "revision": saved["revision"]} | ({"via": via} if via else {}))
+    return {"proposal": out["proposal"], "revision": saved["revision"], "draft": saved["draft"],
+            "completeness": models.completeness(saved["draft"])}
+
+
+def fill(project_id: str, proposal: dict, actor_email: str) -> dict:
+    """Apply a freshly created proposal for the assistant's fill mode: the Apply button's ``apply`` at the current revision
+    (one retry when the draft moved under us).  Raises like ``apply``; the caller leaves the proposal as a card then."""
+    last: ProposalConflict | None = None
+    for _ in range(2):
+        revision = int(draft_wrapper(project_id).get("revision", 0))
+        try:
+            return apply(project_id, proposal["id"], actor_email, revision, via="assistant")
+        except ProposalConflict as exc:
+            if exc.revision < 0:
+                raise
+            last = exc
+    raise last or ProposalConflict("Draft changed", -1)
+
+
+def undo(project_id: str, proposal_id: str, actor_email: str) -> dict:
+    """Restore the answer a filled proposal replaced.  Refused (``ProposalConflict``) when the proposal is not an applied
+    fill or the field was changed since (the newer value is the user's).  Returns ``{proposal, revision, draft, completeness}``."""
+    out: dict = {}
+
+    def mutate_proposals(doc: dict) -> None:
+        prop = next((p for p in doc.get("proposals", []) if p.get("id") == proposal_id), None)
+        if prop is None:
+            out["missing"] = True
+            return
+        if prop.get("status") != "applied" or prop.get("via") != "assistant":
+            out["closed"] = f"proposal is {prop.get('status')}, not an applied fill"
+            return
+        field_id = prop["field_id"]
+        previous = prop.get("previous") or {"value": None, "status": "missing"}
+
+        def mutate_draft(current: dict) -> None:
+            version = schema_version_of(current)
+            section, _ = field_info(field_id, version)
+            if current_answer(current, field_id, version).get("value") != prop.get("value"):
+                out["changed"] = True
+                return
+            trial = copy.deepcopy(current.get("draft") or {})
+            trial["schema_version"] = version
+            area = _answer_area(trial, section["id"])
+            if previous.get("status") == "missing" or not models._value_present(previous.get("value")):
+                area.pop(field_id, None)
+            else:
+                area[field_id] = previous
+            try:
+                draft = models.normalize_draft(trial, schema_version=version)
+            except (ValueError, TypeError) as exc:
+                out["invalid"] = str(exc)
+                return
+            draft["provenance"] = copy.deepcopy((current.get("draft") or {}).get("provenance", {}))
+            (draft["provenance"].get("assistant_fills") or {}).pop(field_id, None)
+            draft["schema_version"] = version
+            revision = int(current.get("revision", 0)) + 1
+            current.update({"draft": draft, "schema_version": version, "revision": revision, "updated_at": models.now()})
+            out["saved"] = copy.deepcopy(current)
+
+        store.mutate_json(project_id, "draft.json", mutate_draft, default=_empty_wrapper())
+        if out.get("saved") is not None:
+            prop.update(status="undone", undone_by=actor_email.lower(), undone_at=models.now())
+            out["proposal"] = copy.deepcopy(prop)
+
+    store.mutate_json(project_id, _FILE, mutate_proposals, default=_doc())
+    if out.get("missing"):
+        raise LookupError("proposal not found")
+    if out.get("closed"):
+        raise ProposalConflict(out["closed"], -1)
+    if out.get("changed"):
+        raise ProposalConflict("The field was changed since; the newer value is kept", -1)
+    if out.get("invalid"):
+        raise ProposalError(out["invalid"])
+    saved = out["saved"]
+    from motor_ai_sim.development import self_service
+    self_service.refresh_title(project_id, saved.get("draft") or {})
+    store.append_audit(project_id, actor_email, "spec.proposal.undo", "spec_proposal", proposal_id,
                        {"field": out["proposal"]["field_id"], "revision": saved["revision"]})
     return {"proposal": out["proposal"], "revision": saved["revision"], "draft": saved["draft"],
             "completeness": models.completeness(saved["draft"])}
+
+
+def live_fills(wrapper: dict) -> dict:
+    """The assistant's fills that still describe the form: ``{field: {basis, reason, at, proposal_id}}``, only where the
+    stored answer still equals what the assistant wrote (a value the user edited since is the user's and loses the mark)."""
+    draft = (wrapper or {}).get("draft") or {}
+    fills = (draft.get("provenance") or {}).get("assistant_fills")
+    if not isinstance(fills, dict):
+        return {}
+    version = schema_version_of(wrapper)
+    out = {}
+    for field_id, info in fills.items():
+        if not isinstance(info, dict):
+            continue
+        try:
+            same = current_answer(wrapper, field_id, version).get("value") == info.get("value")
+        except ProposalError:
+            same = False
+        if same:
+            out[field_id] = {k: info.get(k) for k in ("proposal_id", "basis", "reason", "at")}
+    return out

@@ -287,6 +287,12 @@ def test_admin_project_routes_require_admin_and_return_management_summary(projec
     assert create_events[-1]["action"] == "create"
     assert client.post("/api/admin/projects", json={
         "id": "beta", "title": "Again", "customer_org": "Synthetic Labs"}).status_code == 409
+    # owner 2026-11-11: nobody types an id - without one it comes from the title, with a suffix when taken
+    auto = client.post("/api/admin/projects", json={"title": "Hydro Gen 80", "customer_org": "Synthetic Labs"})
+    assert auto.status_code == 200 and auto.json()["id"] == "hydro-gen-80"
+    again = client.post("/api/admin/projects", json={"title": "Hydro Gen 80", "customer_org": "Synthetic Labs"})
+    assert again.status_code == 200 and again.json()["id"] == "hydro-gen-80-2"
+    assert client.post("/api/admin/projects", json={"customer_org": "Synthetic Labs"}).status_code == 422
 
     monkeypatch.setattr(users, "get_user", lambda email: {"email": email, "disabled": False})
     response = client.post("/api/admin/projects/alpha/members",
@@ -645,3 +651,4 @@ def test_pending_invite_is_claimed_by_a_verified_sign_in(project_root, monkeypat
     project = store.get_project("alpha")
     assert {"email": "late@example.test", "role": "owner"} in project["members"]
     assert project["pending_invites"] == []
+

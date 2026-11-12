@@ -132,3 +132,25 @@ def test_the_spec_assistant_is_unavailable_with_only_an_unpaid_gemini_key(cfg, m
     monkeypatch.setattr(support, "_gemini_reply", lambda *a, **k: pytest.fail("Gemini must not be called"))
     with pytest.raises(A.AssistantUnavailable):
         A.complete([{"role": "user", "content": "hi"}], "sys")
+
+
+def test_answer_leaves_room_for_thinking_and_reads_past_the_thinking_block(monkeypatch):
+    """2026-11-12: the model thinks first and thinking counts against max_tokens; at 2048 the reply lost its form markers."""
+    from types import SimpleNamespace as NS
+
+    from motor_ai_sim.routes import support as S
+    seen = {}
+
+    class Messages:
+        def create(self, **kw):
+            seen.update(kw)
+            return NS(content=[NS(type="thinking", thinking=""), NS(type="text", text="Done. [[SPEC_PROPOSAL field=1_1 value=\"x\"]]")],
+                      stop_reason="end_turn", usage=NS(input_tokens=1, output_tokens=1))
+
+    monkeypatch.delenv("SUPPORT_EFFORT", raising=False)
+    out = S.anthropic_answer(NS(messages=Messages()), "claude-haiku-5-5", "sys", [{"role": "user", "content": "hi"}])
+    assert seen["max_tokens"] >= 8192 and "extra_body" not in seen
+    assert out["text"].startswith("Done.") and "SPEC_PROPOSAL" in out["text"]
+    monkeypatch.setenv("SUPPORT_EFFORT", "low")
+    S.anthropic_answer(NS(messages=Messages()), "claude-haiku-5-5", "sys", [{"role": "user", "content": "hi"}])
+    assert seen["extra_body"] == {"output_config": {"effort": "low"}}

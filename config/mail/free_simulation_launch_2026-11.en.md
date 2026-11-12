@@ -9,6 +9,7 @@ On AeroStator you can now describe the motor or generator you need in a specific
 ## How it works
 
 - **Start a development project** and fill in the specification: your operating points, supply voltage, space and cooling. The specification assistant helps you with every field.
+- **Or just tell the assistant what you need**, for example: *"I need a motor for a 42" propeller, help me fill in the specification."*
 - **Invite your engineers and manufacturers** to the project.
 - **Bring your AI agent.** AeroStator speaks MCP (https://aerostator.com/mcp): your agent can browse the catalogue, check motor suitability, and fill in and submit the specification for you.
 - **We simulate the motor** from your specification and share the results in the project.

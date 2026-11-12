@@ -181,7 +181,9 @@ const SupportWidget: React.FC = () => {
     try { await ask([]); } catch { setFailed(true); } finally { setSending(false); }
   };
   const clearChat = async () => {
-    try { await clearConversation(spec?.projectId); setFlow(initialFlow()); } catch { setFailed(true); }
+    if (sending) return;
+    setSending(true);   // a message typed while the clear is on its way would be wiped with the old chat
+    try { await clearConversation(spec?.projectId); setFlow(initialFlow()); } catch { setFailed(true); } finally { setSending(false); }
   };
   const toggleFill = (on: boolean) => { setFill(on); writeStore(FILL_KEY, on ? '1' : '0'); };
   const cardOp = async (p: Proposal, op: 'undo' | 'apply' | 'dismiss') => {

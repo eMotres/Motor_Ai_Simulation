@@ -694,26 +694,40 @@ def _block_get(b, key, default=None):
     return b.get(key, default) if isinstance(b, dict) else getattr(b, key, default)
 
 
-def anthropic_answer(client, model: str, system: str, messages: list[dict], *, max_tokens: int = 2048,
+#: Room for one answer.  The current models think before they answer (adaptive thinking is on by default) and the thinking
+#: counts against ``max_tokens``: at 2048 a reply with form markers was cut off after its first marker (2026-11-12).
+ANSWER_MAX_TOKENS = 8192
+
+
+def _effort_kw() -> dict:
+    """``SUPPORT_EFFORT`` (low | medium | high) sets the model's effort; unset keeps the model's own default."""
+    e = (os.environ.get("SUPPORT_EFFORT") or "").strip().lower()
+    return {"extra_body": {"output_config": {"effort": e}}} if e in ("low", "medium", "high") else {}
+
+
+def anthropic_answer(client, model: str, system: str, messages: list[dict], *, max_tokens: int = ANSWER_MAX_TOKENS,
                      web_search: int = 0) -> dict:
     """One Messages call, with the web_search tool when ``web_search`` > 0: ``{text, searches, sources, tokens_in, tokens_out}``.
     Every text block is joined (a searched answer comes in several, with citations); the searches (queries) and the result URLs are
     returned for the archive.  A paused turn (the server-side loop's own limit) is resumed once."""
     kw = {"tools": [web_search_tool(model, web_search)]} if web_search > 0 else {}
+    eff = _effort_kw()
     try:
-        resp = _call_provider(lambda: client.messages.create(model=model, max_tokens=max_tokens, system=system, messages=messages, **kw))
+        resp = _call_provider(lambda: client.messages.create(model=model, max_tokens=max_tokens, system=system, messages=messages, **kw, **eff))
     except Exception as e:                                   # noqa: BLE001
         # web search switched off for the organisation (or the model): answer without it rather than not at all
         if not kw or getattr(e, "status_code", None) not in (400, 403):
             raise
         logger.warning("support: the web_search tool was refused (%s) - answering without it", str(e)[:160])
         kw, web_search = {}, 0
-        resp = _call_provider(lambda: client.messages.create(model=model, max_tokens=max_tokens, system=system, messages=messages))
+        resp = _call_provider(lambda: client.messages.create(model=model, max_tokens=max_tokens, system=system, messages=messages, **eff))
     blocks = list(_block_get(resp, "content", []) or [])
     if web_search > 0 and _block_get(resp, "stop_reason") == "pause_turn":
         again = messages + [{"role": "assistant", "content": blocks}]
-        resp = _call_provider(lambda: client.messages.create(model=model, max_tokens=max_tokens, system=system, messages=again, **kw))
+        resp = _call_provider(lambda: client.messages.create(model=model, max_tokens=max_tokens, system=system, messages=again, **kw, **eff))
         blocks += list(_block_get(resp, "content", []) or [])
+    if _block_get(resp, "stop_reason") == "max_tokens":
+        logger.warning("support: the answer of %s was cut off at max_tokens=%d", model, max_tokens)
     text = "".join(str(_block_get(b, "text", "") or "") for b in blocks if _block_get(b, "type") == "text").strip()
     searches, sources = [], []
     for b in blocks:
@@ -733,7 +747,7 @@ def anthropic_answer(client, model: str, system: str, messages: list[dict], *, m
             "tokens_out": int(_block_get(usage, "output_tokens", 0) or 0) if usage is not None else 0}
 
 
-def provider_answer(messages: list[dict], system: str, *, web_search: int = 0, max_tokens: int = 2048) -> dict:
+def provider_answer(messages: list[dict], system: str, *, web_search: int = 0, max_tokens: int = ANSWER_MAX_TOKENS) -> dict:
     """``{text, source, model, searches, sources}`` from the configured provider (relay, Gemini behind its guard, Anthropic);
     ``source == "mock"`` when none is configured.  Raises on a provider failure (the caller answers it)."""
     from motor_ai_sim.regions import relay as _RL

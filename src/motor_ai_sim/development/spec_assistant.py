@@ -400,9 +400,10 @@ def complete(messages: list[dict], system_prompt: str) -> tuple[str, str, str]:
     """(reply, source, model) from the support assistant's provider (already guarded: an unpaid Gemini key never gets here,
     ``S._effective`` swapped it for Anthropic or "none").  Raises ``AssistantUnavailable`` when there is none."""
     from motor_ai_sim.regions import relay as RL
+    from motor_ai_sim.routes import support as S0
     if RL.relay_enabled():                       # regions stage 2: no provider key here, the EU peer answers
         try:
-            text, model = RL.support_complete(messages, system_prompt, 2048)
+            text, model = RL.support_complete(messages, system_prompt, S0.ANSWER_MAX_TOKENS)
         except RL.RelayError as e:
             raise AssistantUnavailable(str(e)) from None
         return text, "claude", model
@@ -415,9 +416,7 @@ def complete(messages: list[dict], system_prompt: str) -> tuple[str, str, str]:
         a = eff["anthropic"]
         client = S._anthropic_client(a["key"])
         if client is not None:
-            resp = S._call_provider(lambda: client.messages.create(
-                model=a["model"], max_tokens=2048, system=system_prompt, messages=messages))
-            return next((b.text for b in resp.content if b.type == "text"), ""), "claude", a["model"]
+            return S.anthropic_answer(client, a["model"], system_prompt, messages)["text"], "claude", a["model"]
     raise AssistantUnavailable("no provider configured")
 
 

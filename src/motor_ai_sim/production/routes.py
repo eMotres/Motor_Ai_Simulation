@@ -1328,13 +1328,11 @@ async def upload_document(request: Request, die: str, config: str):
     return doc
 
 
-@router.get("/{die}/{config}/files/{file_id}")
-def download_file(request: Request, die: str, config: str, file_id: str):
-    """Download one production file.  Logged in the SAME traced download log as the full 3-D / STEP files
-    (model3d.log_download: who, company, NDA basis, sha256, IP) plus the production audit."""
-    import datetime
-    from motor_ai_sim import model3d as M
-    user, _production, _role, viewer = access.require_reader(request, die, config)
+def _authorized_file(request: Request, die: str, config: str, file_id: str):
+    """The caller and the stored path of one production file, after the SAME checks for every way of reading it (download, 3-D view):
+    a member (the factory with its NDA), an admin, or a project viewer (only the files of visible documents, and only with the NDA);
+    an internal document stays hidden from the factory.  404 for anything else."""
+    user, production, _role, viewer = access.require_reader(request, die, config)
     if viewer is not None:
         # a project viewer: only the files of visible documents and of customer-visible threads, and only with the NDA
         if not store.valid_file_id(file_id) or file_id not in project_link.viewer_file_ids(die, config):
@@ -1342,13 +1340,20 @@ def download_file(request: Request, die: str, config: str, file_id: str):
         denial = access.viewer_download_denial(request)
         if denial is not None:
             raise HTTPException(status_code=403, detail=denial, headers={"code": "nda_required"})
-    elif not _file_download_allowed(file_id, die, config, user, _production):
+    elif not _file_download_allowed(file_id, die, config, user, production):
         raise HTTPException(status_code=404, detail="File not found")
     path = store.read_uploaded_file(die, config, file_id)
     if path is None:
         raise HTTPException(status_code=404, detail="File not found")
-    data = path.read_bytes()
-    name = _original_name(die, config, file_id) or file_id
+    return user, production, path
+
+
+def _trace_file_read(request: Request, user: dict, die: str, config: str, file_id: str, name: str, data: bytes,
+                     kind: str = "production_file") -> None:
+    """Log one read of a production file in the traced model3d download log (who, company, NDA basis, sha256, IP) and in the production
+    audit.  A log that cannot be written refuses the read (503), exactly as for a download."""
+    import datetime
+    from motor_ai_sim import model3d as M
     # the download log names the account by its e-mail: the production identity carries it as `email`, model3d reads `id`
     ident = {**user, "id": _email(user) or str(user.get("id") or "")}
     rec = users.get_user(ident["id"]) or {}
@@ -1364,18 +1369,117 @@ def download_file(request: Request, die: str, config: str, file_id: str):
         M.log_download(dict(download_id=M.new_download_id(now), user=ident["id"], email=who_for["email"],
                             name=M.customer_name(ident, rec), role=user.get("role"), company=who_for["company"],
                             nda=basis["type"] != "internal", nda_basis=basis, die=die, config=config,
-                            motor_id="%s/%s" % (die, config), kind="production_file", file=name, source_file=file_id,
+                            motor_id="%s/%s" % (die, config), kind=kind, file=name, source_file=file_id,
                             sha256=M.sha256_bytes(data), bytes=len(data), ip=ip,
                             user_agent=request.headers.get("user-agent", "")[:300]))
     except OSError as ex:
-        log.error("production: download log not writable (%s) - download refused", ex)
+        log.error("production: download log not writable (%s) - read refused", ex)
         raise HTTPException(status_code=503, detail="Download log unavailable; try again later.")
-    _audit(_email(user), die, config, "download", "document", file_id, {"file": name})
+    _audit(_email(user), die, config, "download" if kind == "production_file" else "view", "document", file_id, {"file": name})
+
+
+@router.get("/{die}/{config}/files/{file_id}")
+def download_file(request: Request, die: str, config: str, file_id: str):
+    """Download one production file.  Logged in the SAME traced download log as the full 3-D / STEP files
+    (model3d.log_download: who, company, NDA basis, sha256, IP) plus the production audit."""
+    from motor_ai_sim import model3d as M
+    user, _production, path = _authorized_file(request, die, config, file_id)
+    data = path.read_bytes()
+    name = _original_name(die, config, file_id) or file_id
+    _trace_file_read(request, user, die, config, file_id, name, data)
     safe = M.ascii_text(name, 120).replace('"', "") or file_id
     from urllib.parse import quote
     return Response(content=data, media_type="application/octet-stream",
                     headers={"Content-Disposition": "attachment; filename=\"%s\"; filename*=UTF-8''%s" % (safe, quote(name)),
                              "Cache-Control": "no-store"})
+
+
+@router.get("/{die}/{config}/files/{file_id}/model.glb")
+async def step_file_view(request: Request, die: str, config: str, file_id: str):
+    """The 3-D view of a STEP file of this production (owner 2026-11-12: tooling parts are shown, not only linked).
+
+    The STEP is converted to GLB once (production/step_glb.py) and the result is cached in ``viewcache/`` next to the files.  The
+    caller needs exactly what the STEP download needs (``_authorized_file``), the read is traced like a download, and nothing is
+    served without a signed-in account.  A file that is not a STEP is refused (422)."""
+    from motor_ai_sim.production import step_glb
+    user, _production, path = _authorized_file(request, die, config, file_id)
+    if path.stat().st_size > step_glb.MAX_STEP_BYTES:
+        raise HTTPException(status_code=413, detail="This STEP file is too large for the 3-D view; download it instead.")
+    with path.open("rb") as fh:
+        head = fh.read(64)
+    if not step_glb.looks_like_step(head):
+        raise HTTPException(status_code=422, detail="This file is not a STEP file.")
+    name = _original_name(die, config, file_id) or file_id
+    await run_in_threadpool(_trace_file_read, request, user, die, config, file_id, name, path.read_bytes(), "production_step_view")
+    cache_dir = store.path_for(die, config) / "viewcache"
+    try:
+        glb = await run_in_threadpool(step_glb.glb_for_step, path, file_id, cache_dir)
+    except step_glb.StepConversionError as ex:
+        raise HTTPException(status_code=ex.status, detail=ex.detail)
+    return Response(content=glb, media_type="model/gltf-binary", headers={"Cache-Control": "no-store"})
+
+
+#: file kinds the part-files view knows, by extension (anything else stays a plain document in the Documents tab)
+_VIEW_KIND = {".pdf": "pdf", ".png": "image", ".jpg": "image", ".jpeg": "image", ".webp": "image", ".gif": "image",
+              ".step": "step", ".stp": "step"}
+_VIEW_ORDER = {"pdf": 0, "image": 1, "step": 2}
+
+
+def _part_files(die: str, config: str, user: dict, production: dict, list_name: str) -> list[dict]:
+    """The drawings (PDF, picture) and the STEP of every part of one BOM list, for the caller: the part's own ``drawing_files`` and
+    ``optional_step`` plus the documents tagged with the part, each file once, the superseded ones left out, and only what the caller
+    may download (an internal document is hidden from the factory) and what is on disk."""
+    bom_rows = (store.load_file(die, config, _bom_file(list_name)) or {}).get("rows", [])
+    parts = {str(p.get("id")): p for p in (store.load_file(die, config, "parts.json") or {}).get("parts", []) if isinstance(p, dict)}
+    docs = [d for d in (store.load_file(die, config, "documents.json") or {}).get("documents", []) if isinstance(d, dict)]
+    blocked = set() if _sees_internal(user, production) else _internal_file_ids(die, config)
+    out: list[dict] = []
+    for row in bom_rows:
+        pid = str(row.get("part_id") or "")
+        part = parts.get(pid)
+        if part is None or any(o["part_id"] == pid for o in out):
+            continue
+        found: dict[str, dict] = {}
+
+        def add(file_id: Any, name: Any, forced: Optional[str] = None) -> None:
+            fid = str(file_id or "")
+            if not fid or fid in found or not _file_download_allowed(fid, die, config, user, production, blocked):
+                return
+            nm = str(name or _original_name(die, config, fid) or "")
+            if nm.startswith("[superseded"):
+                return
+            kind = forced or _VIEW_KIND.get(PurePosixPath(nm.lower()).suffix)
+            if kind is None or store.read_uploaded_file(die, config, fid) is None:
+                return
+            found[fid] = {"file_id": fid, "name": nm or fid, "kind": kind}
+
+        for d in part.get("drawing_files") or []:
+            if isinstance(d, dict):
+                add(d.get("file_id"), d.get("name"), "pdf" if d.get("kind") == "pdf" else None)
+        step = part.get("optional_step")
+        if isinstance(step, dict):
+            add(step.get("file_id"), step.get("name"), "step")
+        for d in docs:
+            if str(d.get("part_id") or "") == pid and not d.get("step_id"):
+                add(d.get("file_id"), d.get("name") or d.get("filename"))
+        # the same drawing can be stored twice (the part and a document row): keep the first of each kind and name
+        seen_names: set = set()
+        files = []
+        for f in sorted(found.values(), key=lambda f: _VIEW_ORDER[f["kind"]]):
+            key = (f["kind"], f["name"])
+            if key not in seen_names:
+                seen_names.add(key)
+                files.append(f)
+        out.append({"part_id": pid, "files": files})
+    return out
+
+
+@router.get("/{die}/{config}/part_files")
+def get_part_files(request: Request, die: str, config: str):
+    """Per part of the BOM list (``?list=tooling`` for the tooling order list): its drawings and STEP file, ready for the viewer
+    (owner 2026-11-12: the Tooling tab shows them).  A STEP opens in 3-D at ``files/<file_id>/model.glb``."""
+    user, production = access.require_member_with_full_view(request, die, config)
+    return {"parts": _part_files(die, config, user, production, _list_name(request))}
 
 
 def _original_name(die: str, config: str, file_id: str) -> Optional[str]:

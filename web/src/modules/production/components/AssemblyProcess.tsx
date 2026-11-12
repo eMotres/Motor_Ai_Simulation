@@ -6,6 +6,7 @@
  */
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import ProcessView from './ProcessView';
+import { DocPreview } from './FilePreview';
 import {
   Box, Button, Chip, Dialog, DialogActions, DialogContent, DialogTitle, MenuItem, Paper, TextField, Typography,
 } from '@mui/material';
@@ -15,8 +16,8 @@ import '@xyflow/react/dist/style.css';
 import dagre from '@dagrejs/dagre';
 import { useTranslation } from 'react-i18next';
 import { useContentLang } from './BilingualText';
-import { displayText, stepModelFamilies } from '../helpers';
-import { downloadFile, fileObjectUrl, openFileInNewWindow, productionApi } from '../api';
+import { displayText, extOf, IMAGE_EXT, stepModelFamilies } from '../helpers';
+import { fileObjectUrl, openFileInNewWindow, productionApi } from '../api';
 import type { AssemblyStep, Bilingual, DocumentRec, Part, ProcessSection, ProdCtx } from '../types';
 import { UnifiedViewer, type PartGroup } from '../../viewer3d';
 
@@ -151,9 +152,6 @@ const StepModel3D: React.FC<{ ctx: ProdCtx; steps: AssemblyStep[]; step: Assembl
   );
 };
 
-const IMAGE_EXT = ['png', 'jpg', 'jpeg', 'webp', 'gif'];
-const extOf = (name: string) => (name.split('.').pop() || '').toLowerCase();
-
 /** One posted picture as a thumbnail (the file needs the session header, so it is fetched as a blob). */
 const StepThumb: React.FC<{ ctx: ProdCtx; doc: DocumentRec; onError: (e: string) => void }> = ({ ctx, doc, onError }) => {
   const [url, setUrl] = useState<string | null>(null);
@@ -171,42 +169,6 @@ const StepThumb: React.FC<{ ctx: ProdCtx; doc: DocumentRec; onError: (e: string)
       {url ? <img src={url} alt={doc.name} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
         : <Typography sx={{ fontSize: 10, color: 'var(--text-4)' }}>…</Typography>}
     </Box>
-  );
-};
-
-/** One drawing / document shown IN the page (owner 2026-10-18: "show the content of these files on the page, so
- *  everything is visible and can be downloaded"): a PDF in the browser's viewer, a picture as an image, with
- *  full-screen and download buttons.  The file needs the session header, so it is fetched as a typed blob. */
-const DocPreview: React.FC<{ ctx: ProdCtx; doc: DocumentRec; onError: (e: string) => void }> = ({ ctx, doc, onError }) => {
-  const { t } = useTranslation('production');
-  const ext = extOf(doc.name);
-  const kind = ext === 'pdf' ? 'pdf' : IMAGE_EXT.includes(ext) ? 'image' : null;
-  const [url, setUrl] = useState<string | null>(null);
-  useEffect(() => {
-    if (!kind) return undefined;
-    let dead = false; let u: string | null = null;
-    const type = kind === 'pdf' ? 'application/pdf' : `image/${ext === 'jpg' ? 'jpeg' : ext}`;
-    void fileObjectUrl(ctx.die, ctx.config, doc.file_id)
-      .then((blobUrl) => fetch(blobUrl).then((r) => r.blob()).then((b) => { URL.revokeObjectURL(blobUrl); return URL.createObjectURL(new Blob([b], { type })); }))
-      .then((x) => { if (dead) URL.revokeObjectURL(x); else { u = x; setUrl(x); } })
-      .catch((e) => onError(String(e)));
-    return () => { dead = true; if (u) URL.revokeObjectURL(u); };
-  }, [ctx.die, ctx.config, doc.file_id, kind, ext, onError]);
-  const btn = { textTransform: 'none', fontSize: 11.5, py: 0, minHeight: 0 } as const;
-  return (
-    <Paper variant="outlined" sx={{ bgcolor: 'var(--panel-2)', borderRadius: 1.5, overflow: 'hidden' }}>
-      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, px: 1.25, py: 0.6, borderBottom: kind ? '1px solid var(--line-soft)' : 'none' }}>
-        <Typography sx={{ fontSize: 12.5, fontWeight: 700, flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{doc.name}</Typography>
-        {kind && <Button size="small" sx={btn} onClick={() => void openFileInNewWindow(ctx.die, ctx.config, doc.file_id, ext === 'jpeg' ? 'jpg' : ext).catch((e) => onError(String(e)))}>
-          {t('process.fullScreen', 'Full screen')}</Button>}
-        <Button size="small" variant="outlined" sx={btn} onClick={() => void downloadFile(ctx.die, ctx.config, doc.file_id, doc.name).catch((e) => onError(String(e)))}>
-          {t('process.downloadFile', 'Download')}</Button>
-      </Box>
-      {kind === 'pdf' && (url
-        ? <Box component="iframe" src={`${url}#view=FitH&navpanes=0&pagemode=none`} title={doc.name} sx={{ display: 'block', width: '100%', height: { xs: 360, md: 560 }, border: 0, bgcolor: '#fff' }} />
-        : <Typography sx={{ fontSize: 11, color: 'var(--text-4)', p: 1.5 }}>…</Typography>)}
-      {kind === 'image' && url && <Box component="img" src={url} alt={doc.name} sx={{ display: 'block', maxWidth: '100%', maxHeight: 560, mx: 'auto', bgcolor: '#fff' }} />}
-    </Paper>
   );
 };
 

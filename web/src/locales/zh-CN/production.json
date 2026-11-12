@@ -121,6 +121,19 @@
     "lineTotalTooling": "单项合计（数量 × 单价）",
     "toolingTip": "工装/夹具订购清单：数量为总数，价格不乘以电机台数；价格的查看权限与电机物料清单相同。"
   },
+  "toolingFiles": {
+    "title": "图纸与三维",
+    "tip": "每个工装零件的图纸及其 STEP 文件的三维视图。拖动旋转，滚轮缩放，“主页”按钮使零件适合窗口。",
+    "none": "该零件暂无图纸或 STEP 文件。",
+    "noneAny": "暂无工装图纸或 STEP 文件。",
+    "expandAll": "全部展开",
+    "collapseAll": "全部收起",
+    "toggle": "显示或隐藏 {name} 的文件",
+    "drawing": "图纸",
+    "model3d": "三维视图",
+    "model3dLost": "三维视图已丢失，请刷新页面",
+    "downloadStep": "下载 STEP"
+  },
   "bomExcel": {
     "upload": "上传 Excel",
     "download": "下载 Excel",

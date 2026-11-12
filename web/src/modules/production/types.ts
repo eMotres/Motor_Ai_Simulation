@@ -394,6 +394,18 @@ export interface TranslationRef {
 }
 
 /** Everything a panel needs to know about who is looking at which production. */
+/** One file of a part for the Tooling tab: a drawing (pdf / picture) or the STEP file (shown in 3-D at files/<id>/model.glb). */
+export interface PartFile {
+  file_id: string;
+  name: string;
+  kind: 'pdf' | 'image' | 'step';
+}
+
+export interface PartFiles {
+  part_id: string;
+  files: PartFile[];
+}
+
 export interface ProdCtx {
   die: string;
   config: string;

@@ -49,3 +49,23 @@ t('an unknown step or a cycle gives a finite answer', () => {
   const loop = [step('a', ['b'], ['Coil 1']), step('b', ['a'], ['Shaft 1'])];
   assert.deepEqual(H.stepModelFamilies(loop, 'a'), { own: ['Coils'], context: ['Shaft'] });
 });
+
+// -- Tooling tab file cards (helpers.ts: drawingStem, toolingFileRows) ---------------------------------------------------
+
+t('a drawing PDF and its PNG render share one stem', () => {
+  assert.equal(H.drawingStem('coil_press_base_CIANO14_40_L20_2026-11-06.pdf'), H.drawingStem('coil_press_base_CIANO14_40_L20_2026-11-06.PNG'));
+  assert.notEqual(H.drawingStem('base.pdf'), H.drawingStem('press.pdf'));
+  assert.equal(H.drawingStem('no_extension'), 'no_extension');
+});
+
+t('tooling file cards follow the BOM rows, once each, empty when the server named no files', () => {
+  const rows = [{ part_id: 'a' }, { part_id: 'b' }, { part_id: 'a' }, { part_id: 'c' }];
+  const data = [
+    { part_id: 'c', files: [{ file_id: 'f3', name: 'c.step', kind: 'step' }] },
+    { part_id: 'a', files: [{ file_id: 'f1', name: 'a.pdf', kind: 'pdf' }] },
+    { part_id: 'gone', files: [{ file_id: 'f9', name: 'x.pdf', kind: 'pdf' }] },
+  ];
+  assert.deepEqual(H.toolingFileRows(rows, data).map((x) => [x.part_id, x.files.length]), [['a', 1], ['b', 0], ['c', 1]]);
+  assert.deepEqual(H.toolingFileRows([], data), []);
+  assert.deepEqual(H.toolingFileRows(rows, []).map((x) => x.files.length), [0, 0, 0]);
+});

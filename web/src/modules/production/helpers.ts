@@ -1,7 +1,7 @@
 // Pure helpers of the Production module (no React, no I/O): revision numbers, bilingual display, caller standing.
 // Imported by __tests__/helpers.test.mjs (Node >= 22.18 strips the types).
 import type {
-  AssemblyNode, AssemblyStep, AssemblyTree, Bilingual, BomRow, CallerRole, CostRow, CostSummary, CurrencyTotals, ExtraCost, Lang, Member, Part, Production, Revision, Thread, TranslationStatus,
+  AssemblyNode, AssemblyStep, AssemblyTree, Bilingual, BomRow, CallerRole, CostRow, CostSummary, CurrencyTotals, ExtraCost, Lang, Member, Part, PartFiles, Production, Revision, Thread, TranslationStatus,
 } from './types';
 
 // -- revisions --------------------------------------------------------------------------------------------------------
@@ -751,3 +751,26 @@ export function threadChoices(threads: readonly Thread[], parts: readonly Part[]
   if (!viewer) return parts.map((p) => ({ key: p.id, label: p.name.en || p.name.zh }));
   return threads.filter((t) => !!t.part_id).map((t) => ({ key: t.part_id as string, label: t.part_name?.en || t.part_name?.zh || (t.part_id as string) }));
 }
+
+// -- tooling files ------------------------------------------------------------------------------------------------------
+
+/** A drawing's name without its extension, lower case, so "press_2026-11-06.pdf" and "press_2026-11-06.PNG" are one drawing. */
+export const drawingStem = (name: string): string => name.replace(/\.[A-Za-z0-9]{1,5}$/, '').trim().toLowerCase();
+
+/** The Tooling tab's file cards in the order of the tooling BOM: one entry per BOM row (a part listed twice once), with the server's files
+ *  for it (empty when the server named none).  Rows the server answered for but the BOM does not list are not shown. */
+export function toolingFileRows(rows: readonly Pick<BomRow, 'part_id'>[], data: readonly PartFiles[]): PartFiles[] {
+  const byPart = new Map(data.map((d) => [d.part_id, d.files]));
+  const seen = new Set<string>();
+  const out: PartFiles[] = [];
+  for (const r of rows) {
+    if (seen.has(r.part_id)) continue;
+    seen.add(r.part_id);
+    out.push({ part_id: r.part_id, files: byPart.get(r.part_id) ?? [] });
+  }
+  return out;
+}
+
+/** Picture file extensions the page can show, and the lower-case extension of a file name. */
+export const IMAGE_EXT = ['png', 'jpg', 'jpeg', 'webp', 'gif'];
+export const extOf = (name: string): string => (name.split('.').pop() || '').toLowerCase();

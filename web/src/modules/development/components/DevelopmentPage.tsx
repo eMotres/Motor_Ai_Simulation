@@ -96,6 +96,8 @@ export default function DevelopmentPage() {
   const [error, setError] = useState('');
   const [view, setView] = useState<ViewTab>('specification');
   const [viewMode, setViewMode] = useViewMode(VIEW_MODE_KEYS.development, 'cards');
+  // a closed project leaves the list; the box brings the closed ones back (owner 2026-11-12)
+  const [showClosed, setShowClosed] = useState(false);
   const unreadCounts = useUnreadCounts();
   const projectUnread = (p: ProjectSummary) => unreadFor(unreadCounts, 'projects', p.id, p.unread_messages);
   const [shownUnread, setShownUnread] = useState<ReadonlySet<string>>(new Set());   // messages that were unread when the thread was opened
@@ -711,9 +713,9 @@ export default function DevelopmentPage() {
   useHistoryLevel(!!selected && tabShown, () => { void backToList(); });
   if (loading) return <Box sx={{ p: 3, display: 'flex', gap: 1, alignItems: 'center' }}><CircularProgress size={18} /><Typography>{tr('loading')}</Typography></Box>;
   if (!selected) return <Box sx={{ p: 2.5, overflowY: 'auto', height: '100%' }}>
-    <HeaderRight tab="development"><HelpTip title={tr('titleTip')} /><ViewModeToggle mode={viewMode} onChange={setViewMode} /><Button size="small" startIcon={<AddIcon />} onClick={() => setCreateOpen(true)}>{tr('newProject')}</Button></HeaderRight>
+    <HeaderRight tab="development">{projects.some((p) => p.status === 'closed') && <FormControlLabel sx={{ mr: 0.5 }} control={<Checkbox size="small" data-testid="projects-show-closed" checked={showClosed} onChange={(e) => setShowClosed(e.target.checked)} />} label={<Typography sx={{ fontSize: 12 }}>{tr('showClosed')}</Typography>} />}<HelpTip title={tr('titleTip')} /><ViewModeToggle mode={viewMode} onChange={setViewMode} /><Button size="small" startIcon={<AddIcon />} onClick={() => setCreateOpen(true)}>{tr('newProject')}</Button></HeaderRight>
     {error && <Alert severity="error" sx={{ mb: 1 }}>{error}</Alert>}
-    {projects.length === 0 ? <Typography sx={{ color: 'var(--text-3)', fontSize: 13 }}>{tr('noProjects')}</Typography> : <ProjectOverview projects={projects} mode={viewMode} unread={projectUnread} email={user?.email ?? ''} language={lang} onOpen={(p) => void loadProject(p)} t={tr} />}
+    {projects.length === 0 ? <Typography sx={{ color: 'var(--text-3)', fontSize: 13 }}>{tr('noProjects')}</Typography> : <ProjectOverview projects={showClosed ? projects : projects.filter((p) => p.status !== 'closed')} mode={viewMode} unread={projectUnread} email={user?.email ?? ''} language={lang} onOpen={(p) => void loadProject(p)} t={tr} />}
     <CreateDialog open={createOpen} busy={busy} staff={canManageGlobally} title={title} org={org} id={projectId} onTitle={setTitle} onOrg={setOrg} onId={setProjectId} onClose={() => setCreateOpen(false)} onSubmit={() => void submitCreate()} t={tr} />
   </Box>;
   return <Box sx={{ p: 2, overflowY: 'auto', height: '100%', width: '100%' }}>

@@ -39,3 +39,11 @@ test('the Documents tab wires the grouping with an accessible toggle', () => {
   assert.match(src, /data-testid="documents-revision-group"/);
   assert.match(src, /aria-expanded=\{open\}/);
 });
+
+test('unlabelled files on top do not close the newest named revision', () => {
+  const g = groupByRevision([d(1, ''), d(2, 'R06'), d(3, 'R05')]);
+  assert.equal(isGroupOpen(g, '', {}), true);
+  assert.equal(isGroupOpen(g, 'R06', {}), true);
+  assert.equal(isGroupOpen(g, 'R05', {}), false);
+  assert.equal(isGroupOpen(g, 'R06', { R06: false }), false);
+});

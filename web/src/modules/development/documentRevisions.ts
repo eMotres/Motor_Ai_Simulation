@@ -14,8 +14,11 @@ export function groupByRevision<T extends { revision?: string | null }>(docs: T[
   return groups;
 }
 
-/** Default state: the first group is open, the others closed; `toggled` holds the user's explicit choices. */
+/** Default state: the first group (and the first named one, when unlabelled files lead the list) is open, the others closed; `toggled` holds the user's explicit choices. */
 export function isGroupOpen(groups: { key: string }[], key: string, toggled: Record<string, boolean>): boolean {
   if (key in toggled) return toggled[key];
-  return groups.length > 0 && groups[0].key === key;
+  if (!groups.length) return false;
+  if (groups[0].key === key) return true;
+  // loose files without a revision sit on top after a plain upload: the newest named revision stays open too
+  return groups[0].key === '' && groups.length > 1 && groups[1].key === key;
 }

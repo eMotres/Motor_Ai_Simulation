@@ -140,8 +140,11 @@ RUN set -eu; \
 
 COPY src/ src/
 # Geometry tab "Full" (owner 2026-10-15): a CAD-only edit is validated with the CAD template's own pre-check (cad_params.py loads this
-# one pure-Python file by path).  Without it saving an edit is refused loudly (503), nothing else breaks.
+# pure-Python file by path, with the siblings it imports).  Without it saving an edit is refused loudly (503), nothing else breaks.
 COPY cad/motor_templates/segmented_flatwire/health.py cad/motor_templates/segmented_flatwire/health.py
+# health.py imports common.py at module level: every such sibling is copied too (tests/test_cad_precheck_load.py fails when one
+# is missing here).  The template __init__ and the FreeCAD modules stay out of this image.
+COPY cad/motor_templates/segmented_flatwire/common.py cad/motor_templates/segmented_flatwire/common.py
 # GET /api/version reads the repo-root VERSION three parents above api.py, i.e.
 # /app/VERSION — never copied, so the API reported "0.0.0" and the frontend's
 # skew check compared 0.1.9 against it and would have flagged a mismatch on

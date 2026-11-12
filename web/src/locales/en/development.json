@@ -334,6 +334,8 @@
     "archived": "Archived",
     "member": "Project member",
     "revisionPlaceholder": "Rev",
+    "noRevision": "No revision",
+    "revisionGroupTip": "Show or hide the documents of this revision",
     "tooLarge": "{name}: larger than 200 MB",
     "coverSet": "Use as project cover",
     "coverClear": "Remove project cover",

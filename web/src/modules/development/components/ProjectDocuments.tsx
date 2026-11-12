@@ -6,6 +6,8 @@ import UploadFileIcon from '@mui/icons-material/UploadFile';
 import DownloadIcon from '@mui/icons-material/Download';
 import ArchiveOutlinedIcon from '@mui/icons-material/ArchiveOutlined';
 import UnarchiveOutlinedIcon from '@mui/icons-material/UnarchiveOutlined';
+import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
+import ChevronRightIcon from '@mui/icons-material/ChevronRight';
 import StarIcon from '@mui/icons-material/Star';
 import StarBorderIcon from '@mui/icons-material/StarBorder';
 import ImageOutlinedIcon from '@mui/icons-material/ImageOutlined';
@@ -13,6 +15,7 @@ import HelpTip from '../../../components/common/HelpTip';
 import { NARROW } from '../../../lib/narrowLayout';
 import { developmentApi, downloadProjectDocument, downloadProjectDocumentsZip } from '../api';
 import type { DocumentFolder, ProjectDocument } from '../types';
+import { groupByRevision, isGroupOpen } from '../documentRevisions';
 import { formatBytes, isCoverImage, MAX_DOCUMENT_BYTES } from '../documentsModel';
 
 const FOLDERS: DocumentFolder[] = ['kicad', 'fabrication', 'bom', '3d', 'docs'];
@@ -33,6 +36,7 @@ export default function ProjectDocuments({ projectId, language, t, onCoverChange
   const [showInternal, setShowInternal] = useState(false);   // the server says who is MOTRES staff: a customer never marks or sees internal
   const [showArchived, setShowArchived] = useState(false);
   const [filter, setFilter] = useState<DocumentFolder | 'all'>('all');
+  const [toggled, setToggled] = useState<Record<string, boolean>>({});   // revision group -> explicit open/closed; reset per project
   const [busy, setBusy] = useState('');
   const [error, setError] = useState('');
   const [dragging, setDragging] = useState(false);
@@ -55,6 +59,7 @@ export default function ProjectDocuments({ projectId, language, t, onCoverChange
     } catch (e) { if (projectRef.current === id) setError(msg(e)); }
   }, [projectId, showArchived]);
   useEffect(() => { setDocs([]); setError(''); void load(); }, [load]);
+  useEffect(() => { setToggled({}); }, [projectId]);
 
   const uploadFiles = async (files: File[]) => {
     if (!canEdit || !files.length) return;
@@ -95,11 +100,39 @@ export default function ProjectDocuments({ projectId, language, t, onCoverChange
   const run = async (action: () => Promise<unknown>) => { setError(''); try { await action(); } catch (e) { setError(msg(e)); } };
 
   const shown = docs.filter((d) => filter === 'all' || d.folder === filter);
+  const groups = groupByRevision(shown);
   const dateOf = (iso: string) => { const d = new Date(iso); return Number.isNaN(d.getTime()) ? '' : d.toLocaleDateString(language); };
   const onDrop = (e: React.DragEvent) => {
     e.preventDefault(); setDragging(false);
     void uploadFiles(Array.from(e.dataTransfer.files));
   };
+
+  const renderRow = (d: ProjectDocument) => <TableRow key={d.id} hover sx={d.archived ? { opacity: 0.55 } : undefined}>
+    <TableCell sx={{ maxWidth: 320, overflowWrap: 'anywhere' }}>
+      {d.name}{d.archived && <Chip size="small" label={t('documents.archived')} sx={{ ml: 0.5, height: 16, fontSize: 10 }} />}
+    </TableCell>
+    <TableCell>{canEdit
+      ? <Select size="small" variant="standard" value={d.folder} onChange={(e) => void patch(d, { folder: e.target.value as DocumentFolder })} sx={{ fontSize: 12.5 }}>
+        {FOLDERS.map((f) => <MenuItem key={f} value={f}>{t(`documents.folders.${f}`)}</MenuItem>)}
+      </Select>
+      : t(`documents.folders.${d.folder}`)}</TableCell>
+    <TableCell>{canEdit
+      ? <RevisionField value={d.revision} placeholder={t('documents.revisionPlaceholder')} onCommit={(revision) => void patch(d, { revision })} />
+      : d.revision}</TableCell>
+    <TableCell align="right" sx={{ whiteSpace: 'nowrap' }}>{formatBytes(d.size, language)}</TableCell>
+    <TableCell>{d.uploader || t('documents.member')}</TableCell>
+    <TableCell sx={{ whiteSpace: 'nowrap' }}>{dateOf(d.uploaded_at)}</TableCell>
+    {showInternal && <TableCell><Switch size="small" checked={d.internal} onChange={(e) => void patch(d, { internal: e.target.checked })} inputProps={{ 'aria-label': t('documents.colInternal') }} /></TableCell>}
+    <TableCell align="right" sx={{ whiteSpace: 'nowrap' }}>
+      <Tooltip title={t('documents.download')}><IconButton size="small" aria-label={t('documents.download')} onClick={() => void run(() => downloadProjectDocument(projectId, d))}><DownloadIcon fontSize="small" /></IconButton></Tooltip>
+      {canEdit && !d.archived && (d.is_cover
+        ? <Tooltip title={t('documents.coverClear')}><IconButton size="small" color="primary" aria-label={t('documents.coverClear')} onClick={() => void clearCover()}><StarIcon fontSize="small" /></IconButton></Tooltip>
+        : (!d.internal && isCoverImage(d.name)) && <Tooltip title={t('documents.coverSet')}><IconButton size="small" aria-label={t('documents.coverSet')} onClick={() => void setCover(d.id)}><StarBorderIcon fontSize="small" /></IconButton></Tooltip>)}
+      {canEdit && (d.archived
+        ? <Tooltip title={t('documents.restore')}><IconButton size="small" aria-label={t('documents.restore')} onClick={() => void patch(d, { archived: false })}><UnarchiveOutlinedIcon fontSize="small" /></IconButton></Tooltip>
+        : <Tooltip title={t('documents.archive')}><IconButton size="small" aria-label={t('documents.archive')} onClick={() => void run(async () => { await developmentApi.archiveDocument(projectId, d.id); await load(); })}><ArchiveOutlinedIcon fontSize="small" /></IconButton></Tooltip>)}
+    </TableCell>
+  </TableRow>;
 
   return <Box
     onDragOver={(e) => { if (canEdit) { e.preventDefault(); setDragging(true); } }}
@@ -141,32 +174,26 @@ export default function ProjectDocuments({ projectId, language, t, onCoverChange
           <TableCell />
         </TableRow></TableHead>
         <TableBody>
-          {shown.map((d) => <TableRow key={d.id} hover sx={d.archived ? { opacity: 0.55 } : undefined}>
-            <TableCell sx={{ maxWidth: 320, overflowWrap: 'anywhere' }}>
-              {d.name}{d.archived && <Chip size="small" label={t('documents.archived')} sx={{ ml: 0.5, height: 16, fontSize: 10 }} />}
-            </TableCell>
-            <TableCell>{canEdit
-              ? <Select size="small" variant="standard" value={d.folder} onChange={(e) => void patch(d, { folder: e.target.value as DocumentFolder })} sx={{ fontSize: 12.5 }}>
-                {FOLDERS.map((f) => <MenuItem key={f} value={f}>{t(`documents.folders.${f}`)}</MenuItem>)}
-              </Select>
-              : t(`documents.folders.${d.folder}`)}</TableCell>
-            <TableCell>{canEdit
-              ? <RevisionField value={d.revision} placeholder={t('documents.revisionPlaceholder')} onCommit={(revision) => void patch(d, { revision })} />
-              : d.revision}</TableCell>
-            <TableCell align="right" sx={{ whiteSpace: 'nowrap' }}>{formatBytes(d.size, language)}</TableCell>
-            <TableCell>{d.uploader || t('documents.member')}</TableCell>
-            <TableCell sx={{ whiteSpace: 'nowrap' }}>{dateOf(d.uploaded_at)}</TableCell>
-            {showInternal && <TableCell><Switch size="small" checked={d.internal} onChange={(e) => void patch(d, { internal: e.target.checked })} inputProps={{ 'aria-label': t('documents.colInternal') }} /></TableCell>}
-            <TableCell align="right" sx={{ whiteSpace: 'nowrap' }}>
-              <Tooltip title={t('documents.download')}><IconButton size="small" aria-label={t('documents.download')} onClick={() => void run(() => downloadProjectDocument(projectId, d))}><DownloadIcon fontSize="small" /></IconButton></Tooltip>
-              {canEdit && !d.archived && (d.is_cover
-                ? <Tooltip title={t('documents.coverClear')}><IconButton size="small" color="primary" aria-label={t('documents.coverClear')} onClick={() => void clearCover()}><StarIcon fontSize="small" /></IconButton></Tooltip>
-                : (!d.internal && isCoverImage(d.name)) && <Tooltip title={t('documents.coverSet')}><IconButton size="small" aria-label={t('documents.coverSet')} onClick={() => void setCover(d.id)}><StarBorderIcon fontSize="small" /></IconButton></Tooltip>)}
-              {canEdit && (d.archived
-                ? <Tooltip title={t('documents.restore')}><IconButton size="small" aria-label={t('documents.restore')} onClick={() => void patch(d, { archived: false })}><UnarchiveOutlinedIcon fontSize="small" /></IconButton></Tooltip>
-                : <Tooltip title={t('documents.archive')}><IconButton size="small" aria-label={t('documents.archive')} onClick={() => void run(async () => { await developmentApi.archiveDocument(projectId, d.id); await load(); })}><ArchiveOutlinedIcon fontSize="small" /></IconButton></Tooltip>)}
-            </TableCell>
-          </TableRow>)}
+          {groups.length < 2 ? shown.map(renderRow) : groups.map((g) => {
+            const open = isGroupOpen(groups, g.key, toggled);
+            const label = g.key || t('documents.noRevision');
+            return <React.Fragment key={`rev:${g.key}`}>
+              <TableRow>
+                <TableCell colSpan={showInternal ? 8 : 7} sx={{ p: 0, bgcolor: 'var(--panel)' }}>
+                  <Tooltip title={t('documents.revisionGroupTip')}>
+                    <Box component="button" type="button" data-testid="documents-revision-group" aria-expanded={open}
+                      onClick={() => setToggled((m) => ({ ...m, [g.key]: !open }))}
+                      sx={{ display: 'flex', alignItems: 'center', gap: 0.75, width: '100%', px: 1, py: 0.75, border: 0, bgcolor: 'transparent', color: 'inherit', font: 'inherit', fontWeight: 700, textAlign: 'left', cursor: 'pointer' }}>
+                      {open ? <ExpandMoreIcon fontSize="small" /> : <ChevronRightIcon fontSize="small" />}
+                      <span>{label}</span>
+                      <Chip size="small" label={g.docs.length} sx={{ height: 16, fontSize: 10 }} />
+                    </Box>
+                  </Tooltip>
+                </TableCell>
+              </TableRow>
+              {open && g.docs.map(renderRow)}
+            </React.Fragment>;
+          })}
           {!shown.length && <TableRow><TableCell colSpan={showInternal ? 8 : 7}>
             <Stack alignItems="center" sx={{ py: 3, color: 'var(--text-3)' }}>
               <Typography sx={{ fontSize: 13 }}>{canEdit ? t('documents.dropHere') : t('documents.empty')}</Typography>

@@ -334,6 +334,8 @@
     "archived": "已归档",
     "member": "项目成员",
     "revisionPlaceholder": "版本",
+    "noRevision": "未标注版本",
+    "revisionGroupTip": "展开或收起此版本的文档",
     "tooLarge": "{name}：超过 200 MB",
     "coverSet": "设为项目封面",
     "coverClear": "移除项目封面",

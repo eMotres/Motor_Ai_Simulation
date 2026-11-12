@@ -3750,6 +3750,7 @@ def _upsert_duty(req: DutyCreate, _w: dict, *, may_move: bool = True) -> dict:
             # duty row.  The die snapshot is the build's identity; a duty may
             # never be saved from a machine the catalog does not describe.
             _die_diffs = []
+            _die_geo = {}
             try:
                 _die_geo = (_load_yaml(_die_file(die), "die")
                             .get("geometry") or {})
@@ -3761,6 +3762,21 @@ def _upsert_duty(req: DutyCreate, _w: dict, *, may_move: bool = True) -> dict:
                         _die_diffs.append("die %s: %s → %s" % (k, dv, lv))
             except HTTPException:
                 pass
+            # NO IMPLICIT DIE (owner 2026-11-12).  When the ONLY die-level difference is the slot width the
+            # configuration's own wire stack derives (wire width / spacing / split / liner - all stored in the
+            # configuration's geometry_overrides, which it just adopted), no input of the lamination differs:
+            # the result belongs to THIS configuration of THIS die.  It used to fork a derived die here.
+            if _die_diffs:
+                try:
+                    _sh = die_shape_diffs(_die_geo, geo)
+                except Exception:                          # noqa: BLE001 - cannot tell = keep the old verdict
+                    _sh = []
+                if _sh and all(x["key"] == "slot_width" for x in _sh):
+                    log.info("family: duty save '%s/%s/%s': the live machine differs from the die only by the "
+                             "slot width its own wire stack derives (%s) - saved into this configuration, "
+                             "no die is created", die, cfg, dname,
+                             "; ".join(f"{x['die']} → {x['live']}" for x in _sh))
+                    _die_diffs = []
             _diffs.extend(_die_diffs)
             # ANOTHER LAMINATION IS ANOTHER DIE (owner 2026-10-30, after three
             # refused "Save to peak" on 'CIANO56 400_80 vadim 5': wire 7 -> 7.5
@@ -3771,8 +3787,13 @@ def _upsert_duty(req: DutyCreate, _w: dict, *, may_move: bool = True) -> dict:
             # the save, the configuration moves to the die the machine IS
             # (reused when one exists, else minted) and the duty is saved there.
             if may_move and _diffs and len(_diffs) == len(_die_diffs):
-                moved = _move_duty_save(die, cfg, dname, geo, _live_build,
-                                        _live_wind, _live_mats)
+                try:
+                    moved = _move_duty_save(die, cfg, dname, geo, _live_build,
+                                            _live_wind, _live_mats)
+                except ImplicitDieRefused as _nd:
+                    log.warning("family: duty save '%s/%s/%s' refused - it would need a new die: %s",
+                                die, cfg, dname, _nd)
+                    raise _new_die_refusal(_nd)
                 if moved:
                     out = _upsert_duty(req.model_copy(update={
                         "die": moved["die"], "config": moved["config"]}), _w,
@@ -4827,6 +4848,31 @@ def _copy_die_documents(src_die: str, dst_die: str) -> list:
     return cfgs
 
 
+class ImplicitDieRefused(Exception):
+    """A transition would have MINTED a die nobody asked for (owner 2026-11-12: "do not create a new die
+    without explicitly saving it").  Raised before anything is written; the callers turn it into a
+    refusal (duty save: 409 ``new_die_requires_explicit_save``) or release the context (geometry save)."""
+
+    def __init__(self, source_die: str, diffs: list):
+        self.source_die, self.diffs = source_die, list(diffs or [])
+        super().__init__("this change makes another lamination than die '%s' (%s)"
+                         % (source_die, "; ".join(_diff_words(self.diffs)) or "no diff"))
+
+
+#: The one refusal code of every implicit die creation (duty save and geometry save).
+NEW_DIE_REQUIRES_EXPLICIT_SAVE = "new_die_requires_explicit_save"
+
+
+def _new_die_refusal(exc: "ImplicitDieRefused") -> HTTPException:
+    return HTTPException(409, detail={
+        "code": NEW_DIE_REQUIRES_EXPLICIT_SAVE,
+        "message": ("the live machine is another lamination than die '%s' (%s).  The application never creates a "
+                    "die by itself: use 'Save as new die' (POST /api/family/save_as_new_die) or duplicate the "
+                    "die, or load this configuration's own build.  Nothing was written or created."
+                    % (exc.source_die, "; ".join(_diff_words(exc.diffs)))),
+        "from_die": exc.source_die, "diffs": _diff_words(exc.diffs)})
+
+
 def _copy_config_into(src_die: str, dst_die: str, cfg: str) -> str:
     """Bring configuration ``cfg`` (materials, parts, notes, duties, stored
     runs) from ``src_die`` into ``dst_die`` — the merge the transition needs
@@ -4866,7 +4912,8 @@ def _copy_config_into(src_die: str, dst_die: str, cfg: str) -> str:
 
 
 def _auto_transition_die(die: str, cfg: Optional[str], duty: Optional[str],
-                         die_doc: dict, live_geo: dict, diffs: list) -> Optional[dict]:
+                         die_doc: dict, live_geo: dict, diffs: list,
+                         allow_create: bool = False) -> Optional[dict]:
     """The transition itself.  Finds (``_matching_die``) or mints
     (``_copy_die_documents``) the die this lamination now IS, moves the
     active configuration/duty into it — same names, same operating point —
@@ -4876,6 +4923,8 @@ def _auto_transition_die(die: str, cfg: Optional[str], duty: Optional[str],
     target = _matching_die(live_geo, exclude=die)
     created = False
     if target is None:
+        if not allow_create:
+            raise ImplicitDieRefused(die, diffs)
         name = _unique_die_name(_check_name(
             _die_transition_name(die, die_doc.get("geometry") or {}, live_geo, diffs),
             "die"))
@@ -5034,7 +5083,8 @@ def _matching_lamination(live_geo: dict, exclude: str) -> Optional[str]:
 
 def _transition_config_to_own_die(die: str, cfg: Optional[str], duty: Optional[str],
                                   die_doc: dict, live_geo: dict, diffs: list,
-                                  others: List[str], reason: str = "shared_die") -> dict:
+                                  others: List[str], reason: str = "shared_die",
+                                  allow_create: bool = False) -> dict:
     """Move the ACTIVE configuration/duty off a die it shares with ``others`` onto a
     die that is the live lamination.  The source die and every configuration in it are
     left exactly as they are (the active one too: its stored results belong to the old
@@ -5043,6 +5093,8 @@ def _transition_config_to_own_die(die: str, cfg: Optional[str], duty: Optional[s
     target = _matching_lamination(live_geo, exclude=die)
     created = False
     if target is None:
+        if not allow_create:
+            raise ImplicitDieRefused(die, diffs)
         name = _unique_die_name(_check_name(
             _die_transition_name(die, die_doc.get("geometry") or {}, live_geo, diffs), "die"))
         at = datetime.now().isoformat(timespec="seconds")
@@ -5171,8 +5223,10 @@ def _move_duty_save(die: str, cfg: str, duty: str, live_geo: dict, live_build: d
                     target, same, die)
         out = {"die": target, "config": same, "duty": duty, "created": False}
     else:
+        # Never mints a die (owner 2026-11-12); ImplicitDieRefused -> 409 from the caller.
         out = _transition_config_to_own_die(die, cfg, duty, d, live_geo, diffs,
-                                            _other_configs(die, cfg), reason="build_differs")
+                                            _other_configs(die, cfg), reason="build_differs",
+                                            allow_create=False)
     out.update({"from_die": die, "from_config": cfg, "diffs": diffs})
     return out
 
@@ -5248,10 +5302,30 @@ def preview_die_transition(saved_geo: dict, prev_geo: Optional[dict] = None) -> 
             "to_die": target, "creates_die": creates, "diffs": _diff_words(diffs)}
 
 
+def _release_instead_of_new_die(die: str, ctx: dict, diffs: list, reason: str,
+                                report: Optional[dict]) -> None:
+    """A geometry save made another lamination and no existing die is it: NO die is minted (owner
+    2026-11-12).  The live machine stays as saved, the context is released (the strip then offers
+    'Save as new die'), the source die is not written."""
+    log.warning("family: '%s/%s' edit makes another lamination (%s) - no die is created; context released, "
+                "the user saves it as a new die explicitly", die, ctx.get("config"), "; ".join(_diff_words(diffs)))
+    try:
+        release_context("the live machine is another lamination than die '%s' (%s) - save it as a new die"
+                        % (die, "; ".join(_diff_words(diffs))))
+    except Exception as _ce:                                # noqa: BLE001 - never fail the save
+        log.warning("family: could not release the context: %s", _ce)
+    if report is not None:
+        report.update({"blocked": True, "released": True, "reason": reason, "from_die": die,
+                       "from_config": ctx.get("config"), "code": NEW_DIE_REQUIRES_EXPLICIT_SAVE,
+                       "diffs": _diff_words(diffs)})
+    return None
+
+
 def sync_active_die_geometry(saved_geo: dict,
                              prev_geo: Optional[dict] = None, *,
                              allow_transition: bool = True,
-                             report: Optional[dict] = None) -> Optional[str]:
+                             report: Optional[dict] = None,
+                             allow_new_die: bool = False) -> Optional[str]:
     """Refresh the ACTIVE die's geometry snapshot after a geometry save.
 
     ``allow_transition=False`` (2026-11-09): a save that WOULD move the active configuration to another
@@ -5330,7 +5404,9 @@ def sync_active_die_geometry(saved_geo: dict,
             return None
         try:
             out = _auto_transition_die(die, ctx.get("config"), ctx.get("duty"),
-                                       d, geo, _diffs)
+                                       d, geo, _diffs, allow_create=allow_new_die)
+        except ImplicitDieRefused:
+            return _release_instead_of_new_die(die, ctx, _diffs, "die_identity", report)
         except Exception:                      # noqa: BLE001 — the save already happened
             log.exception("family: auto-transition failed for die '%s' — "
                           "releasing the context rather than leaving it "
@@ -5395,7 +5471,9 @@ def sync_active_die_geometry(saved_geo: dict,
                 return None
             try:
                 out = _transition_config_to_own_die(die, ctx.get("config"), ctx.get("duty"),
-                                                    d, geo, _shape, _others)
+                                                    d, geo, _shape, _others, allow_create=allow_new_die)
+            except ImplicitDieRefused:
+                return _release_instead_of_new_die(die, ctx, _shape, "shared_die", report)
             except Exception:                  # noqa: BLE001 - the save already happened
                 log.exception("family: moving '%s/%s' off the shared die failed - the die "
                               "snapshot is left as it was", die, ctx.get("config"))

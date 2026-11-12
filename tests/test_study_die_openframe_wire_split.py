@@ -33,6 +33,15 @@ from tests.test_die_shared_snapshot_guard import (DIE, GEO, _activate, _bytes,  
 # 1. a duplicated die is never linked to the source die's project
 # ─────────────────────────────────────────────────────────────────────────────
 
+@pytest.fixture(autouse=True)
+def _explicit_new_die(monkeypatch):
+    """These tests pin the transition mechanics; a die is minted only on the EXPLICIT flag now
+    (owner 2026-11-12), so every call here carries it.  The default is pinned in test_no_implicit_die.py."""
+    _orig = fam.sync_active_die_geometry
+    monkeypatch.setattr(fam, "sync_active_die_geometry",
+                        lambda *a, **k: _orig(*a, **{"allow_new_die": True, **k}))
+
+
 @pytest.fixture()
 def customer_project(tmp_path, monkeypatch):
     monkeypatch.setenv("MOTRES_PROJECTS_ROOT", str(tmp_path / "projects"))
@@ -213,7 +222,7 @@ def test_a_refused_transition_creates_nothing_and_reports_it(dies):
     assert _bytes(dies) == before and _names(dies) == names and _ctx() == ctx
 
 
-def test_the_default_still_transitions_and_the_report_names_the_new_die(dies):
+def test_the_explicit_flag_still_transitions_and_the_report_names_the_new_die(dies):
     _activate("L100")
     report: dict = {}
     new = fam.sync_active_die_geometry(dict(LIVE_EDIT), prev_geo=dict(GEO), report=report)

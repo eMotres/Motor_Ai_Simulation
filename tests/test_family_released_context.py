@@ -55,6 +55,15 @@ OWNER_RECORD = {"die": None, "config": None, "duty": None,
                 "at": "2026-09-20T12:47:08"}
 
 
+@pytest.fixture(autouse=True)
+def _explicit_new_die(monkeypatch):
+    """These tests pin the transition mechanics; a die is minted only on the EXPLICIT flag now
+    (owner 2026-11-12), so every call here carries it.  The default is pinned in test_no_implicit_die.py."""
+    _orig = fam.sync_active_die_geometry
+    monkeypatch.setattr(fam, "sync_active_die_geometry",
+                        lambda *a, **k: _orig(*a, **{"allow_new_die": True, **k}))
+
+
 def _live(poles_per_segment: int = 8, **geo_extra) -> dict:
     geo = dict(DIE_GEO)
     geo["num_poles_per_segment"] = poles_per_segment
@@ -321,7 +330,7 @@ def test_auto_transition_never_writes_the_locked_source_die(dies, live):
     live(8)
     new_geo = dict(DIE_GEO, num_poles_per_segment=8, num_poles=16)
     out = fam._auto_transition_die(DIE, CFG, DUTY, d, new_geo,
-                                   fam.die_identity_diffs(DIE_GEO, new_geo))
+                                   fam.die_identity_diffs(DIE_GEO, new_geo), allow_create=True)
     assert out["created"] is True and out["die"] != DIE
     assert d_path.read_bytes() == before_die
     assert (dies / DIE / f"{CFG}.yaml").read_bytes() == before_cfg

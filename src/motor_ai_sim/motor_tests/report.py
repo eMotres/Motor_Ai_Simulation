@@ -1,8 +1,8 @@
 """The "Tests vs simulation" section of the motor report (docx and pdf build the same rows from here).
 
 Only when the configuration has tests.  Who gets it: the report route (``routes.report.build_for``) decides once per
-build with :func:`viewer_may_see` - admins, global engineers and production owner / engineer members always; anybody
-else only when the configuration's ``tests_visible_to_customer`` flag is on.  A build outside a request (scripts, the
+build with :func:`viewer_may_see` - admins, global engineers and production owner / engineer members only (owner 2026-11-12: the model comparison is
+never shown to customers, whatever ``tests_visible_to_customer`` says).  A build outside a request (scripts, the
 owner's CLI) includes it.
 """
 from __future__ import annotations
@@ -32,8 +32,8 @@ def viewer_may_see(authorization: Optional[str], die: str, cfg: str) -> bool:
         from motor_ai_sim.motor_tests import store
         if not store.exists(die, cfg):
             return False
-        if bool((store.load(die, cfg).get("settings") or {}).get("tests_visible_to_customer")):
-            return True
+        # owner 2026-11-12: the comparison with the simulation stays with our own engineers - the customer flag
+        # (tests_visible_to_customer) no longer opens this section
         from motor_ai_sim import auth
         user = auth.resolve_user(authorization) if authorization else None
         if not user:

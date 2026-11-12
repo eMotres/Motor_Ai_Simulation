@@ -47,6 +47,7 @@
     "filledMark": "Filled by the assistant."
   },
   "loading": "Loading projects…",
+  "showClosed": "Show closed",
   "noProjects": "No projects yet. Start one with New project.",
   "newProject": "New project",
   "newProjectTip": "Next you enter the requirements of the motor; Motres engineers then simulate it for you. The project gets its name from them.",

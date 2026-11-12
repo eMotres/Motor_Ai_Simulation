@@ -47,6 +47,7 @@
     "filledMark": "由助手填写。"
   },
   "loading": "正在加载项目…",
+  "showClosed": "显示已关闭的项目",
   "noProjects": "还没有项目。请点击“新建项目”开始。",
   "newProject": "新建项目",
   "newProjectTip": "下一步填写电机需求，随后由 Motres 工程师为您仿真。项目名称将根据需求自动生成。",

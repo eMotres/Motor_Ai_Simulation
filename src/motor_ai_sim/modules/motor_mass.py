@@ -31,6 +31,12 @@ import yaml
 
 from motor_ai_sim.fscache import read_yaml as _fsc_read_yaml
 
+
+def _ro_yaml(path):
+    """A yaml file parsed once per version, WITHOUT the per-call deep copy: for readers that only look at it (the catalog tree
+    asks for the mass of every configuration on every request; a copy of a 2 MB configuration each time was seconds)."""
+    return _fsc_read_yaml(path, copy_=False)
+
 log = logging.getLogger(__name__)
 
 #: compute_masses key -> (card part name, assignment key, role)
@@ -127,8 +133,8 @@ def config_build(die: str, config: str, *, dies_dir: Optional[os.PathLike] = Non
     if ddir is None or not (ddir / f"{config}.yaml").is_file():
         return None
     try:
-        geo = dict((_fsc_read_yaml(ddir / "die.yaml") or {}).get("geometry") or {})
-        geo.update((_fsc_read_yaml(ddir / f"{config}.yaml") or {}).get("geometry_overrides") or {})
+        geo = dict((_ro_yaml(ddir / "die.yaml") or {}).get("geometry") or {})
+        geo.update((_ro_yaml(ddir / f"{config}.yaml") or {}).get("geometry_overrides") or {})
         return {"L_mm": float(geo["motor_length"]), "N": float(geo["num_wires_per_slot"]), "wireH_mm": float(geo["wire_height"])}
     except (KeyError, TypeError, ValueError):
         return None
@@ -238,7 +244,7 @@ def config_cad_variant(ddir: Optional[os.PathLike], config: str) -> str:
     if ddir is None:
         return "full"
     try:
-        cy = _fsc_read_yaml(Path(ddir) / f"{config}.yaml") or {}
+        cy = _ro_yaml(Path(ddir) / f"{config}.yaml") or {}
     except Exception:                                                      # noqa: BLE001
         return "full"
     v = str(cy.get("cad_variant") or "full").strip().lower()
@@ -250,7 +256,7 @@ def _config_says_variant(ddir: Optional[os.PathLike], config: str) -> bool:
     if ddir is None:
         return False
     try:
-        cy = _fsc_read_yaml(Path(ddir) / f"{config}.yaml") or {}
+        cy = _ro_yaml(Path(ddir) / f"{config}.yaml") or {}
     except Exception:                                                      # noqa: BLE001
         return False
     return bool(str(cy.get("cad_variant") or "").strip())
@@ -290,7 +296,7 @@ def config_cad_mass(ddir: Optional[os.PathLike], config: str) -> Optional[Dict[s
     if ddir is None:
         return None
     try:
-        cy = _fsc_read_yaml(Path(ddir) / f"{config}.yaml") or {}
+        cy = _ro_yaml(Path(ddir) / f"{config}.yaml") or {}
         v = cy.get(CAD_MASS_KEY)
         return validate_cad_mass(v) if v else None
     except Exception:                                                      # noqa: BLE001 - an unreadable value is no value
@@ -425,7 +431,7 @@ def die_part_choices(die_dir: Optional[os.PathLike]) -> Dict[str, str]:
         return {}
     f = Path(die_dir) / "die.yaml"
     try:
-        doc = _fsc_read_yaml(f) or {}
+        doc = _ro_yaml(f) or {}
     except Exception:                                                      # noqa: BLE001
         return {}
     pm = doc.get("part_materials") or {}
@@ -546,7 +552,7 @@ def _full_mass_impl(die: str, config: str, *, dies_dir: Optional[os.PathLike] = 
         return _FULL_CACHE[key]
     app = {p.key: p for p in mm.parts}
     try:
-        cy = _fsc_read_yaml((ddir / f"{config}.yaml")) or {}
+        cy = _ro_yaml((ddir / f"{config}.yaml")) or {}
     except Exception:                                                      # noqa: BLE001
         cy = {}
     em_mats = cy.get("materials") or {}
@@ -799,7 +805,7 @@ def bom_extra_parts(die: str, config: str, *, cad_dir: Optional[os.PathLike] = N
 def config_bearing_cards(die_dir: Path, config: str) -> List[str]:
     """Bearing cards named by the configuration (its mechanical description when no CAD BOM exists)."""
     try:
-        cy = _fsc_read_yaml((die_dir / f"{config}.yaml")) or {}
+        cy = _ro_yaml((die_dir / f"{config}.yaml")) or {}
     except Exception:                                                      # noqa: BLE001
         return []
     br = cy.get("bearings") or {}
@@ -819,7 +825,7 @@ def full_part_list(die: str, config: str, *, dies_dir: Optional[os.PathLike] = N
     choices = die_part_choices(ddir)
     rows: List[MotorPart] = list(fm.parts)
     try:
-        cy = _fsc_read_yaml((ddir / f"{config}.yaml")) or {}
+        cy = _ro_yaml((ddir / f"{config}.yaml")) or {}
     except Exception:                                                      # noqa: BLE001
         cy = {}
     have = {p.key for p in rows}

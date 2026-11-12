@@ -77,9 +77,13 @@ number can always say which solver made it.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
+import threading
+import time
+from collections import OrderedDict
 from contextlib import contextmanager
 from contextvars import ContextVar
 from datetime import datetime
@@ -746,7 +750,7 @@ def _die_configs(results: Dict[str, Any], die: str) -> Dict[str, Any]:
     return out
 
 
-def index(die: str) -> Dict[str, Dict[str, Dict[str, Any]]]:
+def index(die: str, *, shared: bool = False) -> Dict[str, Dict[str, Dict[str, Any]]]:
     """Every stored answer this die has, ``{configuration: {duty: {kind: …}}}``.
 
     THE POINT IS THE READ COUNT.  :func:`get` answers for ONE configuration and
@@ -760,22 +764,117 @@ def index(die: str) -> Dict[str, Dict[str, Dict[str, Any]]]:
     shallowest on top, first hit wins PER DUTY — so a caller cannot see one
     answer here and a different one there.  ``{}`` on anything unreadable: the
     catalog degrades to the row it drew before this store existed.
+
+    ``shared=True`` reads each layer through the parsed-store memo
+    (:func:`_shared_results`) instead of parsing the file again: the 13 MB store
+    was parsed once PER DIE of the catalog tree (owner 2026-11-12, tree 10-24 s).
+    What comes back then POINTS INTO the memo and must be treated as read-only.
     """
+    _read = _shared_results if shared else _read_store
     out: Dict[str, Dict[str, Dict[str, Any]]] = {}
     try:
         from motor_ai_sim.motor_access import read_through_allowed
         memo: Dict[str, bool] = {}
         for p in _fallback_stores(die):
-            for cfg, duties in _die_configs(_read_store(p), die).items():
+            for cfg, duties in _die_configs(_read(p), die).items():
                 if cfg not in memo:
                     memo[cfg] = read_through_allowed(str(die), cfg)
                 if memo[cfg]:
                     out.setdefault(cfg, {}).update(duties)
-        for cfg, duties in _die_configs(_read_store(store_path()), die).items():
+        for cfg, duties in _die_configs(_read(store_path()), die).items():
             out.setdefault(cfg, {}).update(duties)
     except Exception:                                       # noqa: BLE001
         return {}
     return out
+
+
+# ---------------------------------------------------------------------------
+# The parsed store, kept per version of the file (catalog tree speed-up)
+# ---------------------------------------------------------------------------
+
+#: Parsed ``results`` blocks, newest last: ``{path: (stamp, parsed_at_ns, results, digests|None)}``.  A store is
+#: rewritten whenever a worker finishes a job, so it is parsed once per VERSION here, not once per die per request.
+_STORE_MEMO: "OrderedDict[str, Tuple[Any, int, Dict[str, Any], Optional[Dict[Tuple[str, str], str]]]]" = OrderedDict()
+_STORE_MEMO_MAX = 4
+_STORE_MEMO_LOCK = threading.Lock()
+#: a store written less than this long before it was parsed is parsed again (a same-size rewrite inside one filesystem
+#: time tick must never be served from the memo) - the rule ``fscache`` follows
+_FRESH_NS = 2_000_000_000
+_RECENT_PARSE_NS = 500_000_000
+
+
+def _stamp(p: Path) -> Optional[Tuple[int, int, int]]:
+    try:
+        st = os.stat(p)
+    except OSError:
+        return None
+    return (st.st_mtime_ns, st.st_size, st.st_ino)
+
+
+def _memo_entry(p: Path) -> Tuple[Dict[str, Any], Optional[Tuple[int, int, int]]]:
+    """``(results, stamp)`` of one store from the memo, parsing it when the file changed.  ``({}, None)`` when absent."""
+    st = _stamp(p)
+    if st is None:
+        return {}, None
+    key = str(p)
+    with _STORE_MEMO_LOCK:
+        hit = _STORE_MEMO.get(key)
+        # trusted when the file was already old when parsed, or was parsed a moment ago (the many lookups of ONE request:
+        # without the second clause a store written in the last two seconds was parsed once per configuration)
+        if hit is not None and hit[0] == st and (hit[1] - st[0] >= _FRESH_NS or time.time_ns() - hit[1] < _RECENT_PARSE_NS):
+            _STORE_MEMO.move_to_end(key)
+            return hit[2], st
+    res = _read_store(p)                                    # parse OUTSIDE the lock
+    with _STORE_MEMO_LOCK:
+        _STORE_MEMO[key] = (st, time.time_ns(), res, None)
+        _STORE_MEMO.move_to_end(key)
+        while len(_STORE_MEMO) > _STORE_MEMO_MAX:
+            _STORE_MEMO.popitem(last=False)
+    return res, st
+
+
+def _shared_results(p: Path) -> Dict[str, Any]:
+    """The ``results`` block of a store, parsed once per version of the file.  READ-ONLY: callers never mutate it."""
+    return _memo_entry(p)[0]
+
+
+def _store_digests(p: Path) -> Dict[Tuple[str, str], str]:
+    """``{(die key, configuration): digest}`` of one store, computed once per version of the file.
+
+    The digest is of the CONFIGURATION'S rows, so a worker finishing a job for one machine changes the digest of that
+    machine's configuration only and the catalog tree rebuilds that one row (owner 2026-11-12)."""
+    res, st = _memo_entry(p)
+    key = str(p)
+    with _STORE_MEMO_LOCK:
+        hit = _STORE_MEMO.get(key)
+        if hit is not None and hit[3] is not None and hit[0] == st:
+            return hit[3]
+    out: Dict[Tuple[str, str], str] = {}
+    for die_key, node in res.items():
+        if not isinstance(node, dict):
+            continue
+        for cfg, duties in node.items():
+            blob = json.dumps(duties, separators=(",", ":"), default=str).encode("utf-8")
+            out[(str(die_key), str(cfg))] = hashlib.blake2b(blob, digest_size=12).hexdigest()
+    with _STORE_MEMO_LOCK:
+        hit = _STORE_MEMO.get(key)
+        if hit is not None and hit[0] == st:
+            _STORE_MEMO[key] = (hit[0], hit[1], hit[2], out)
+    return out
+
+
+def config_digest(die: str, cfg: str) -> Optional[tuple]:
+    """What :func:`index` ``(die)[cfg]`` is built from, as a small comparable value: for every store that could answer, its
+    path and the digest of this configuration's rows in it (``""`` = none).  ``None`` on anything unreadable - the caller
+    then never reuses a built row."""
+    try:
+        out = []
+        for p in store_paths(str(die)):
+            dg = _store_digests(p)
+            out.append((str(p), tuple(dg.get((k, str(cfg)), "") for k in dict.fromkeys((_plain_die(die), str(die))))))
+        return tuple(out)
+    except Exception:                                       # noqa: BLE001
+        return None
 
 
 def rename(die: str, cfg: str, old: str, new: str) -> bool:

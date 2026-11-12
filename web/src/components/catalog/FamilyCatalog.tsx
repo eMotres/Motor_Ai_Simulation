@@ -23,6 +23,7 @@ import MoreVertIcon from '@mui/icons-material/MoreVert';
 import PublicOutlinedIcon from '@mui/icons-material/PublicOutlined';
 import LockOutlinedIcon from '@mui/icons-material/LockOutlined';
 import { useUIStore } from '../../stores/motorStore';
+import { thumbOf, type DieThumbs } from '../../lib/dieThumbs';
 import MotorThumbnail from './MotorThumbnail';
 import StartProject from './StartProject';
 import MotorRevisionText from '../common/MotorRevisionText';
@@ -44,7 +45,7 @@ import {
   IDLE as RING_IDLE, newRunId, ringBusy, ringDone, ringFail, ringPoll,
   ringStart, ringTip, type ReportProgressInfo, type ReportRing,
 } from './reportProgress';
-import { fetchFamilyTree, SIGN_IN_NOTE } from '../../lib/familyTree';
+import { fetchDieThumbs, fetchFamilyTree, SIGN_IN_NOTE } from '../../lib/familyTree';
 import { pageVisible } from '../../lib/pageVisible';
 import { useTranslation } from 'react-i18next';
 import { nsT } from '../../i18n/nsT';
@@ -180,7 +181,8 @@ interface Cfg {
 interface Die {
   name: string; locked: boolean; created?: string;
   slots: number; poles: number; stator_diameter: number;
-  thumb_svg?: string | null; configs: Cfg[];
+  /** older servers still send the drawing here; since 2026-11-12 it comes from GET /api/family/thumbs (lib/dieThumbs) */
+  thumb_svg?: string | null; has_thumb?: boolean; configs: Cfg[];
   /** how many of its configurations have a full passport card */
   cards?: number; config_count?: number;
   /** "workspace" | "published" | "shared" — absent when layering is off
@@ -340,6 +342,8 @@ const FamilyCatalog: React.FC<{
   // load now says so and RETRIES until the backend answers.
   const [loadFailed, setLoadFailed] = useState(false);
   const [treeLoaded, setTreeLoaded] = useState(false);   // the tree has answered once
+  // the dies' cross-section drawings: a separate request since 2026-11-12 (they were two thirds of the tree)
+  const [thumbs, setThumbs] = useState<DieThumbs | null>(null);
   // The backend's one-line reason for an empty catalog (a signed-in account
   // with no motors granted yet) — an empty page tells that user nothing.
   const [note, setNote] = useState<string | null>(null);
@@ -351,6 +355,7 @@ const FamilyCatalog: React.FC<{
     try {
       const t = await fetchFamilyTree({ fresh });
       setDies((t.dies as Die[]) || []);
+      void fetchDieThumbs().then(setThumbs);
       // The server's can_write = "may write a copy into MY workspace" (true for every
       // registered account); the UI's = may write the SHARED config (admin / local dev).
       setCanWrite(uiCanWrite(t.can_write, canWriteServer()));
@@ -886,7 +891,7 @@ const FamilyCatalog: React.FC<{
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.2, flexWrap: 'wrap' }}>
             <Box sx={{ flexShrink: 0, lineHeight: 0 }}>
               <MotorThumbnail slots={die.slots} poles={die.poles} size={56}
-                thumbSvg={die.thumb_svg ?? undefined} />
+                thumbSvg={thumbOf(die, thumbs)} />
             </Box>
             <Typography sx={{ fontSize: 13, fontWeight: 700, color: 'var(--text-1)' }}>
               {die.name}

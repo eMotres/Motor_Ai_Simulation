@@ -1,8 +1,11 @@
 /**
  * Which motor picture an overview tile shows (owner 2026-10-28).  The picture is the catalog's own `MotorThumbnail`, fed by the
- * dies of `GET /api/family/tree` (slot / pole counts and the stored cross-section SVG): no new request, no new rendering.
+ * dies of `GET /api/family/tree` (slot / pole counts) and the stored cross-section SVGs of `GET /api/family/thumbs` (lib/dieThumbs):
+ * no new rendering.
  * Pure functions, no React, no window: `node --test` imports this file.
  */
+
+import { thumbOf, type DieThumbs } from './dieThumbs.ts';
 
 export interface DieThumb { name: string; slots: number; poles: number; thumbSvg?: string }
 export type DieIndex = Map<string, DieThumb>;
@@ -13,13 +16,13 @@ export const dieKey = (name: unknown): string => String(name ?? '').trim().toLow
 const count = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) && v > 0 ? Math.round(v) : null);
 
 /** The dies of the tree answer by name; anything without usable slot / pole counts is left out (no picture rather than a wrong one). */
-export function indexDies(dies: readonly unknown[] | null | undefined): DieIndex {
+export function indexDies(dies: readonly unknown[] | null | undefined, thumbs?: DieThumbs | null): DieIndex {
   const out: DieIndex = new Map();
   for (const d of dies ?? []) {
     const x = d as { name?: unknown; slots?: unknown; poles?: unknown; thumb_svg?: unknown } | null;
     const slots = count(x?.slots), poles = count(x?.poles);
     if (!x || typeof x.name !== 'string' || !x.name || slots === null || poles === null) continue;
-    out.set(dieKey(x.name), { name: x.name, slots, poles, thumbSvg: typeof x.thumb_svg === 'string' && x.thumb_svg ? x.thumb_svg : undefined });
+    out.set(dieKey(x.name), { name: x.name, slots, poles, thumbSvg: thumbOf(x, thumbs) });
   }
   return out;
 }

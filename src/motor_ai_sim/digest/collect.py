@@ -208,6 +208,28 @@ def stored_results(die: str, config: str) -> dict:
     return out
 
 
+def test_duty_names(die: str, config: str) -> set:
+    """Names of the configuration's bench-test / validation duties (``duty_kind``: ``kind: "test"``, e.g. the Tests "Compute
+    it" points, and the legacy ``noload_*`` reproductions).  Owner 2026-11-12: the comparison with the model belongs to
+    our engineers - a computed TEST point is never a "new result" line of the customer digest.  An unreadable
+    configuration gives an empty set (the name rule in :func:`_is_test_result` still applies)."""
+    try:
+        import yaml
+        from motor_ai_sim.duty_kind import is_test_duty
+        from motor_ai_sim.routes import family
+        cfg = yaml.safe_load(family._cfg_file(die, config).read_text(encoding="utf-8")) or {}
+        return {str(x.get("name")) for x in cfg.get("duties") or [] if isinstance(x, dict) and is_test_duty(x)}
+    except Exception:                                        # noqa: BLE001 - a display filter must never stop the digest
+        return set()
+
+
+def _is_test_result(duty: str, tests: set) -> bool:
+    """A test point: flagged in the configuration, or named the way Tests "Compute it" names its duties (``test <rpm> rpm
+    ...``) or the legacy no-load reproductions (``noload_*``) - so a duty whose entry is gone or unreadable stays out too."""
+    n = str(duty or "").strip().lower()
+    return str(duty) in tests or n.startswith("test ") or n.startswith("noload_")
+
+
 def headline(kinds: dict) -> str:
     """The few numbers worth a line (the owner report's own lines): torque, power, efficiency, hottest winding / magnet, rotor SF.
 
@@ -221,7 +243,8 @@ def _motor_key(die: Any, config: Any) -> str:
 
 
 def collect_project(project: dict, start: float, end: float, *,
-                    results: Callable[[str, str], dict] = stored_results) -> list[Item]:
+                    results: Callable[[str, str], dict] = stored_results,
+                    tests: Callable[[str, str], set] = test_duty_names) -> list[Item]:
     pid = str(project.get("id") or "")
     links = {_motor_key(m.get("die"), m.get("config")): m for m in project.get("linked_motors") or [] if isinstance(m, dict)}
 
@@ -307,7 +330,10 @@ def collect_project(project: dict, start: float, end: float, *,
             by_duty = results(die, config)
         except Exception:                                    # noqa: BLE001 - a broken ledger must not stop the digest
             by_duty = {}
+        test_names = tests(die, config) if by_duty else set()
         for duty, kinds in sorted(by_duty.items()):
+            if _is_test_result(duty, test_names):
+                continue                                     # a bench-test point: Production -> Tests only
             fresh = {}
             for k in RESULT_KINDS:
                 row = kinds.get(k)

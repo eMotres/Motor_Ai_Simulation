@@ -36,6 +36,9 @@ export const DEFAULT_GA_ID = 'G-R2325XYL2S';
 export const DEFAULT_UMAMI_WEBSITE_ID = '8fe8df44-5870-4f08-bfc4-16a79aa44f17';
 /** Same-origin mount of the Umami public endpoints (nginx); the dashboard is not exposed. */
 export const UMAMI_HOST = '/stats';
+/** Umami page-view tags: a signed-in account or a visitor (the server reads them in routes/admin_analytics.py). */
+export const UMAMI_TAG_MEMBER = 'member';
+export const UMAMI_TAG_VISITOR = 'visitor';
 
 export const CONSENT_STORAGE_KEY = 'analytics.consent';
 
@@ -131,6 +134,8 @@ export function createAnalytics(d: AnalyticsDeps) {
   let umamiStarted = false;
   let umamiReady = false;
   let lastPath: string | null = null;
+  // Umami counts every visitor; the tag splits them so Admin > Analytics can show the not-signed-in ones (no user id is sent)
+  let signedIn = false;
   const listeners = new Set<() => void>();
   const emit = () => listeners.forEach((l) => { try { l(); } catch { /* listener bug */ } });
 
@@ -189,7 +194,7 @@ export function createAnalytics(d: AnalyticsDeps) {
   function umamiSend(path: string) {
     try {
       // keep Umami's own fields, replace the URL with the path (no query, no hash)
-      d.win.umami?.track((props: Record<string, unknown>) => ({ ...props, url: path }));
+      d.win.umami?.track((props: Record<string, unknown>) => ({ ...props, url: path, tag: signedIn ? UMAMI_TAG_MEMBER : UMAMI_TAG_VISITOR }));
     } catch { /* a broken tracker must never break the app */ }
   }
 
@@ -236,6 +241,8 @@ export function createAnalytics(d: AnalyticsDeps) {
       }
       emit();
     },
+    /** Is the page viewed by a signed-in account?  Set before pageView(); only the tag 'member' / 'visitor' leaves the browser. */
+    setSignedIn(v: boolean) { signedIn = !!v; },
     /** Path only; the caller builds it with pageViewPath().  Held back until consent + load. */
     pageView(path: string) {
       if (path === lastPath) return;

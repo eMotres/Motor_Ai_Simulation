@@ -218,10 +218,14 @@ test('Umami page views: path only, held until the tracker is ready, no duplicate
   r.runIdle();
   assert.equal(sent.length, 0, 'not before the script has loaded');
   r.umamiScripts()[0].onload();
-  assert.deepEqual(sent, [{ url: '/motors', title: 'T', website: 'w' }]);
+  assert.deepEqual(sent, [{ url: '/motors', title: 'T', website: 'w', tag: 'visitor' }]);
   r.a.pageView('/motors');
   r.a.pageView('/compare');
   assert.deepEqual(sent.map((x) => x.url), ['/motors', '/compare']);
+  // a signed-in account's views carry the tag 'member' (never an id): Admin > Analytics splits visitors on it
+  r.a.setSignedIn(true);
+  r.a.pageView('/projects');
+  assert.deepEqual(sent[2], { url: '/projects', title: 'T', website: 'w', tag: 'member' });
   assert.doesNotMatch(JSON.stringify(sent), /SECRET|@|[?#]/);
 });
 

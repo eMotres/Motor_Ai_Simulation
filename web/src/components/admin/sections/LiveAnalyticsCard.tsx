@@ -243,6 +243,11 @@ export const LiveAnalyticsCard: React.FC = () => {
                   </TableBody>
                 </Table>
               )}
+              {(data.anonymous.member_countries?.length ?? 0) > 0 && (
+                <Typography data-testid="live-member-countries" sx={{ fontSize: 11, color: 'var(--text-2)', mt: 0.75 }}>
+                  {t('analytics.live.memberCountries', { list: data.anonymous.member_countries!.slice(0, 5).map((c) => `${countryName(c.name, i18n.language)} ${c.count}`).join(', ') })}
+                </Typography>
+              )}
             </Paper>
 
             {/* Anonymous Visitors (Umami) */}

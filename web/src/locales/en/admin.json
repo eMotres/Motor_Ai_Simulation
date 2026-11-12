@@ -91,7 +91,7 @@
     "error": "Could not load analytics.",
     "live": {
       "title": "Real-time Activity",
-      "totalOnline": "{total} online ({signedIn} signed in, {anonymous} anonymous)",
+      "totalOnline": "{total} online ({signedIn} signed in, {anonymous} not signed in)",
       "autoRefresh": "Auto-refreshes every 10 s",
       "sessionsLine": "Active now (5 min): {active} · open sessions: {open}",
       "sessionsTip": "Signed-in sessions with user input in the last 5 minutes, and web sessions still open. A session closes after {minutes} min with no input and no computation running.",
@@ -100,7 +100,7 @@
       "signedInTitle": "Active Signed-in Users",
       "noActiveUsers": "No signed-in users active in the last 5 minutes.",
       "tab": "Tab",
-      "anonymousTitle": "Anonymous Visitors",
+      "anonymousTitle": "Visitors, not signed in",
       "umamiUnconfigured": "Umami not configured; anonymous live tracking unavailable.",
       "activeVisitorsNow": "active in the last 5 minutes",
       "topPages30m": "Top pages (30 min)",
@@ -116,7 +116,8 @@
       "eventNda": "NDA signed",
       "eventRun": "Run started",
       "eventAdminAction": "Admin action",
-      "eventPageView": "Page view"
+      "eventPageView": "Page view",
+      "memberCountries": "Signed-in page views in the last 30 min came from: {list}"
     }
   },
   "activity": {
@@ -152,7 +153,9 @@
       "sweep": "Optimization",
       "comparePoints": "Compare",
       "cost": "Cost",
-      "admin": "Admin"
+      "admin": "Admin",
+      "development": "Projects",
+      "production": "Production"
     }
   },
   "verification": {
@@ -261,7 +264,11 @@
     "noCandidates": "No removal candidates",
     "manageMotors": "Open Motors dialog",
     "grantsUpdated": "Motor grants updated",
-    "role": { "customer": "Customer", "engineer": "Engineer", "owner": "Owner" }
+    "role": {
+      "customer": "Customer",
+      "engineer": "Engineer",
+      "owner": "Owner"
+    }
   },
   "production": {
     "title": "Production access",
@@ -273,8 +280,16 @@
     "colStatus": "Production",
     "colMembers": "Members",
     "none": "None",
-    "status": { "active": "Active", "paused": "Paused", "archived": "Archived" },
-    "role": { "owner": "Owner", "engineer": "Engineer", "oem": "OEM producer" },
+    "status": {
+      "active": "Active",
+      "paused": "Paused",
+      "archived": "Archived"
+    },
+    "role": {
+      "owner": "Owner",
+      "engineer": "Engineer",
+      "oem": "OEM producer"
+    },
     "noNda": "{count, plural, one {# without NDA} other {# without NDA}}",
     "noNdaTip": "OEM members without a signed NDA cannot open the production: {list}",
     "noNdaOne": "No signed NDA: cannot open the production",

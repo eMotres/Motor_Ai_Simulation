@@ -49,9 +49,17 @@ class FakeLiveUmami:
         if path == f"/api/websites/{SITE}/active":
             self.active_calls += 1
             return httpx.Response(200, json={"visitors": self.active_count})
+        if path == f"/api/websites/{SITE}/stats":
+            # not-signed-in visitors of the last 5 min come from the stats of the page views tagged "visitor"
+            self.active_calls += 1
+            self.stats_tags = getattr(self, "stats_tags", []) + [req.url.params.get("tag")]
+            return httpx.Response(200, json={"visitors": {"value": self.active_count}, "pageviews": {"value": 9}})
         if path == f"/api/websites/{SITE}/metrics":
             self.metrics_calls += 1
             typ = req.url.params.get("type")
+            self.metric_tags = getattr(self, "metric_tags", set()) | {(typ, req.url.params.get("tag"))}
+            if req.url.params.get("tag") == "member" and typ == "country":
+                return httpx.Response(200, json=[{"x": "SG", "y": 3}])
             if typ in ("path", "url"):
                 return httpx.Response(200, json=[{"x": "/motors", "y": 14}, {"x": "/compare", "y": 8}])
             if typ == "country":
@@ -143,6 +151,9 @@ def test_payload_structure_and_no_ip_privacy(env, headers, tmp_path, monkeypatch
     anon = data["anonymous"]
     assert anon["configured"] is True
     assert anon["active"] == 7
+    # 2026-11-12: Umami counts every browser; the card reads only the views tagged "visitor", the signed-in ones apart
+    assert anon["member_countries"] == [{"name": "SG", "count": 3}]
+    assert set(fake.stats_tags) == {"visitor"} and ("path", "visitor") in fake.metric_tags and ("country", "visitor") in fake.metric_tags
     assert len(anon["pages"]) > 0
     assert len(anon["countries"]) > 0
 

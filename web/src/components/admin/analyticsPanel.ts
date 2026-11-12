@@ -29,6 +29,8 @@ export interface LiveAnonymous {
   active: number;
   pages: AnalyticsRow[];
   countries: AnalyticsRow[];
+  /** countries of the signed-in page views of the last 30 min (no account is named) */
+  member_countries?: AnalyticsRow[];
 }
 
 export type LiveEventType =

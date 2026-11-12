@@ -3,7 +3,7 @@
 Record (stored and returned as is)::
 
     {"id", "kind": "parameters" | "free_run" | "load", "date": "YYYY-MM-DD", "title", "operator",
-     "instrument", "profile", "note",
+     "instrument", "profile", "note", "note_internal" (our engineers only; omitted when empty),
      "conditions": {"ambient_c", "humidity_pct", "rotor": "in" | "out", "state", "temp_point",
                     "magnet_temp_c", "winding_temp_c"},
      "leads": {"count", "length_mm", "awg" | "area_mm2"},          # the cables between the winding and the meter
@@ -294,8 +294,10 @@ def _curves(v: Any) -> List[Dict[str, Any]]:
     return out
 
 
-def normalize(raw: Any, *, who: str, previous: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-    """A clean record from a request body; ``previous`` keeps id / created_* on an edit."""
+def normalize(raw: Any, *, who: str, previous: Optional[Dict[str, Any]] = None,
+              allow_internal: bool = True) -> Dict[str, Any]:
+    """A clean record from a request body; ``previous`` keeps id / created_* on an edit.  ``allow_internal`` False (the
+    factory adds a test) drops ``note_internal`` silently."""
     if not isinstance(raw, dict):
         raise TestInputError("a JSON object is expected")
     kind = _choice(raw.get("kind") if previous is None else (raw.get("kind") or previous.get("kind")), KINDS, "kind")
@@ -325,6 +327,9 @@ def normalize(raw: Any, *, who: str, previous: Optional[Dict[str, Any]] = None) 
         "conditions": _conditions(raw.get("conditions")),
         "documents": docs,
     }
+    internal = _text(raw.get("note_internal"), "note_internal", MAX_NOTE) if allow_internal else ""
+    if internal:
+        rec["note_internal"] = internal
     leads = _leads(raw.get("leads"))
     if leads:
         rec["leads"] = leads

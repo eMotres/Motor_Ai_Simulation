@@ -37,15 +37,17 @@ const lcrText = (rows: TestRecord['lcr']) => (rows ?? []).map((r) =>
 
 export const TestEditor: React.FC<{
   open: boolean; die: string; config: string; kind: TestKind; record?: TestRecord | null; documents: Docs;
+  /** the internal-note field: only for users who can edit (the factory adds tests but never sees or sets it) */
+  showInternal?: boolean;
   onClose: () => void; onSaved: () => void;
-}> = ({ open, die, config, kind, record, documents, onClose, onSaved }) => {
+}> = ({ open, die, config, kind, record, documents, showInternal = false, onClose, onSaved }) => {
   const { t } = useTranslation('production');
   const tt = (k: string, o?: Record<string, unknown>) => t(`tests.editor.${k}`, o);
   const r = record ?? null;
   const c = r?.conditions ?? {};
   const [f, setF] = useState<Record<string, string>>(() => ({
     date: r?.date ?? new Date().toISOString().slice(0, 10), title: str(r?.title), operator: str(r?.operator),
-    instrument: str(r?.instrument), profile: str(r?.profile), note: str(r?.note),
+    instrument: str(r?.instrument), profile: str(r?.profile), note: str(r?.note), noteInternal: str(r?.note_internal),
     ambient: str(c.ambient_c), humidity: str(c.humidity_pct), state: str(c.state), rotor: c.rotor ?? 'in',
     magnetTemp: str(c.magnet_temp_c), leadsLength: str(r?.leads?.length_mm), leadsAwg: str(r?.leads?.awg),
     leadsArea: str(r?.leads?.area_mm2),
@@ -68,6 +70,7 @@ export const TestEditor: React.FC<{
   const body = (): Partial<TestRecord> => {
     const out: Record<string, unknown> = {
       kind, date: f.date, title: f.title, operator: f.operator, instrument: f.instrument, profile: f.profile, note: f.note,
+      ...(showInternal ? { note_internal: f.noteInternal } : {}),
       documents: docs,
       conditions: {
         ambient_c: num(f.ambient), humidity_pct: num(f.humidity), state: f.state || undefined,
@@ -195,6 +198,7 @@ export const TestEditor: React.FC<{
               </Tooltip>
             )}
             {tf('note', { w: 420, multiline: true })}
+            {showInternal && tf('noteInternal', { w: 420, multiline: true, tip: tt('noteInternalTip') })}
           </Box>
           {err && <Alert severity="error" sx={{ fontSize: 12.5 }}>{err}</Alert>}
         </Stack>

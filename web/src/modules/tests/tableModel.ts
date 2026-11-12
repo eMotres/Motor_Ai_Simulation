@@ -82,11 +82,47 @@ export function tabOfGroup(kind: TestKind, groupKey: string): TestTab {
 
 /** The tabs a record appears in: one per tab that one of its groups maps to; a record with no group at all stays in its
  *  kind's default tab (so it, its edit / delete buttons and its raw data are always reachable). */
-export function recordTabs(kind: TestKind, cmp: TestCompare | undefined | null): TestTab[] {
+export function recordTabs(kind: TestKind, cmp: TestCompare | undefined | null, rec?: TestRecord): TestTab[] {
   const out = new Set<TestTab>();
   for (const g of cmp?.groups ?? []) out.add(tabOfGroup(kind, g.key));
+  // measured-only view (no comparison in the payload): a parameters record goes where its measurements are
+  if (!out.size && rec && kind === 'parameters') {
+    if (rec.resistance?.pairs?.length) out.add('resistance');
+    if (rec.inductance?.pairs?.length) out.add('inductance');
+    if (hasOtherParameters(rec)) out.add('parameters');
+  }
   if (!out.size) out.add(defaultTabOfKind(kind));
   return Array.from(out);
+}
+
+const hasOtherParameters = (rec: TestRecord) =>
+  !!(rec.lcr?.length || rec.insulation?.length || rec.hipot?.length || rec.surge?.length || rec.weight?.length
+    || rec.dimensions?.length || rec.cogging);
+
+/** The measured values of a parameters record for one tab, as plain lines (the project view has no comparison):
+ *  `key` is the `tests.group.*` label, `text` the numbers. */
+export function measuredLines(rec: TestRecord, tab: TestTab): Array<{ key: string; params: Record<string, unknown>; text: string }> {
+  const out: Array<{ key: string; params: Record<string, unknown>; text: string }> = [];
+  const pairs = (a: PairValue[] | undefined, k: 'value_mohm' | 'value_uh', unit: string) =>
+    (a ?? []).map((p) => `${p.pair}: ${fmtValue(p[k] ?? null)} ${unit}`).join(' · ');
+  if (rec.kind !== 'parameters') return out;
+  if (tab === 'resistance' && rec.resistance?.pairs?.length) {
+    out.push({ key: 'resistance', params: { temp_c: rec.resistance.temp_c ?? '' }, text: pairs(rec.resistance.pairs, 'value_mohm', 'mΩ') });
+  }
+  if (tab === 'inductance' && rec.inductance?.pairs?.length) {
+    out.push({ key: 'inductance', params: {}, text: pairs(rec.inductance.pairs, 'value_uh', 'µH') });
+  }
+  if (tab === 'parameters') {
+    if (rec.lcr?.length) out.push({ key: 'lcr', params: {}, text: rec.lcr.map((r) => `${r.pair} ${r.quantity} ${fmtValue(r.value)} ${r.unit ?? ''}`.trim()).join(' · ') });
+    if (rec.insulation?.length) out.push({ key: 'insulation', params: {}, text: rec.insulation.map((r) => `${fmtValue(r.voltage_v)} V: ${r.more_than ? '> ' : ''}${fmtValue(r.resistance_mohm)} MΩ`).join(' · ') });
+    if (rec.hipot?.length) out.push({ key: 'hipot', params: {}, text: rec.hipot.map((r) => `${fmtValue(r.voltage_v)} V${r.leakage_ma != null ? `, ${fmtValue(r.leakage_ma)} mA` : ''}`).join(' · ') });
+    if (rec.surge?.length) out.push({ key: 'surge', params: {}, text: rec.surge.map((r) => `${fmtValue(r.voltage_v)} V ${r.result}`).join(' · ') });
+    const mass = [...(rec.weight ?? []).map((w) => `${w.what}: ${fmtValue(w.mass_g)} g`),
+      ...(rec.dimensions ?? []).map((d) => `${d.what}: ${fmtValue(d.value_mm)} mm`)];
+    if (mass.length) out.push({ key: 'mass', params: {}, text: mass.join(' · ') });
+    if (rec.cogging) out.push({ key: 'cogging', params: {}, text: rec.cogging.pkpk_nm != null ? `${fmtValue(rec.cogging.pkpk_nm)} N·m pk-pk` : '…' });
+  }
+  return out;
 }
 
 const KV_KT_GROUPS = ['kv_kt', 'kv_kt_ex'];
@@ -101,8 +137,9 @@ export function cmpForTab(cmp: TestCompare | undefined | null, kind: TestKind, t
 }
 
 /** The records shown in one tab, newest first. */
-export function testsOfTab(tests: TestRecord[], compare: Record<string, TestCompare | undefined>, tab: TestTab): TestRecord[] {
-  return tests.filter((t) => recordTabs(t.kind, compare[t.id]).includes(tab))
+export function testsOfTab(tests: TestRecord[], compare: Record<string, TestCompare | undefined>, tab: TestTab,
+  measuredOnly = false): TestRecord[] {
+  return tests.filter((t) => recordTabs(t.kind, compare[t.id], measuredOnly ? t : undefined).includes(tab))
     .sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0));
 }
 

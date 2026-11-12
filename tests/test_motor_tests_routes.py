@@ -198,8 +198,11 @@ def test_project_view_engineers_and_owner_always_customer_only_behind_the_flag(p
     for who in ("engineer", "owner"):
         r = _get(client, who)
         assert r.status_code == 200 and r.json()["can"] == {"add": False, "edit": False, "settings": False}
-        row = r.json()["compare"]["test_a"]["groups"][0]["rows"][0]
-        assert row["model"] == pytest.approx(16.0)                 # 2 x 8 mOhm at 20 C, read from the yaml summary
+        if who == "engineer":                                       # the model comparison is ours (owner 2026-11-12)
+            row = r.json()["compare"]["test_a"]["groups"][0]["rows"][0]
+            assert row["model"] == pytest.approx(16.0)             # 2 x 8 mOhm at 20 C, read from the yaml summary
+        else:
+            assert "compare" not in r.json()
     assert _get(client, "customer").status_code == 404
     assert _get(client, "stranger").status_code == 404
     assert _get(client, "customer", "").json() == {"motors": []}
@@ -234,3 +237,85 @@ def test_audit_line_is_written_with_its_change_and_never_for_a_refused_one(tmp_p
         MTS.mutate("D", "C", refuse, audit=lambda r: {"action": "never"})
     assert [a["action"] for a in MTS.read_audit("D", "C")] == ["create"]
     assert [t["id"] for t in MTS.load("D", "C")["tests"]] == ["t1"]
+
+
+# ── internal note and the comparison with the model: our side only (owner 2026-11-12) ───────────────────────
+
+INTERNAL = "internal: magnets from batch 7"
+
+
+def _add_with_internal(client, h):
+    r = client.post(BASE + "/tests", headers=h[ENGINEER], json={**PARAM_TEST, "note": "public", "note_internal": INTERNAL})
+    assert r.status_code == 200, r.text
+    assert r.json()["note_internal"] == INTERNAL
+    return r.json()["id"]
+
+
+def test_note_internal_is_validated_like_note(env):
+    client, h = env
+    bad = client.post(BASE + "/tests", headers=h[ENGINEER], json={**PARAM_TEST, "note_internal": "x" * 4001})
+    assert bad.status_code == 422 and "note_internal" in bad.json()["detail"]
+    empty = client.post(BASE + "/tests", headers=h[ENGINEER], json=PARAM_TEST)
+    assert "note_internal" not in empty.json()
+
+
+def test_note_internal_seen_by_admin_and_engineer_not_by_the_factory(env):
+    client, h = env
+    tid = _add_with_internal(client, h)
+    for who in (ADMIN, ENGINEER):
+        t = client.get(BASE, headers=h[who]).json()["tests"][0]
+        assert t["id"] == tid and t["note_internal"] == INTERNAL
+    oem = client.get(BASE, headers=h[OEM_NDA])
+    assert oem.status_code == 200
+    assert "note_internal" not in oem.json()["tests"][0] and oem.json()["tests"][0]["note"] == "public"
+    assert INTERNAL not in oem.text
+    # the stored record keeps it
+    assert MTS.load(DIE, CONFIG)["tests"][0]["note_internal"] == INTERNAL
+    # the factory keeps the comparison with the model (today's behaviour)
+    assert "compare" in oem.json() and "model" in oem.json() and "tips" in oem.json()
+
+
+def test_the_factory_cannot_set_note_internal(env):
+    client, h = env
+    r = client.post(BASE + "/tests", headers=h[OEM_NDA], json={**PARAM_TEST, "note_internal": "secret"})
+    assert r.status_code == 200 and "note_internal" not in r.json()
+    assert "note_internal" not in MTS.load(DIE, CONFIG)["tests"][0]
+
+
+def test_project_viewer_on_the_production_route_sees_no_internal_note_and_no_model(env, monkeypatch):
+    from motor_ai_sim.production import project_link
+    client, h = env
+    _add_with_internal(client, h)
+    # the stranger is a member of the project that links this motor (project owner: tests visible without the flag)
+    monkeypatch.setattr(project_link, "viewer_context",
+                        lambda email, die, config: {"project_id": "p", "project_role": "owner"} if email == NON_MEMBER else None)
+    eng = client.get(BASE, headers=h[ENGINEER]).json()
+    assert "compare" in eng and "model" in eng and "tips" in eng and "motor_mass" in eng
+    v = client.get(BASE, headers=h[NON_MEMBER])
+    assert v.status_code == 200, v.text
+    body = v.json()
+    assert "note_internal" not in body["tests"][0] and INTERNAL not in v.text
+    for key in ("compare", "model", "tips"):
+        assert key not in body
+    assert body["can"] == {"add": False, "edit": False, "settings": False}
+
+
+def test_project_route_hides_note_and_model_from_outsiders_but_not_from_global_engineers(project):
+    client, _store = project
+    MTS.mutate("die", "opt1", lambda d: d["tests"][0].update(note="public", note_internal=INTERNAL))
+    MTS.mutate("die", "opt1", lambda d: d["tests"][0].setdefault("weight", []).append({"what": "motor", "mass_g": 1500.0}))
+    eng = _get(client, "engineer")
+    assert eng.status_code == 200
+    assert eng.json()["tests"][0]["note_internal"] == INTERNAL and "compare" in eng.json() and "model" in eng.json()
+    for who in ("owner", "customer"):
+        if who == "customer":
+            MTS.mutate("die", "opt1", lambda d: d["settings"].update(tests_visible_to_customer=True))
+        r = _get(client, who)
+        assert r.status_code == 200, r.text
+        body = r.json()
+        assert INTERNAL not in r.text and "note_internal" not in body["tests"][0]
+        assert body["tests"][0]["note"] == "public"
+        for key in ("compare", "model", "tips"):
+            assert key not in body
+        assert body["motor_mass"] == {"kg": 1.5, "basis": "weighed"}      # the measured mass stays
+        assert "action" not in r.text                                       # no compute actions

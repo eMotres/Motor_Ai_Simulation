@@ -37,6 +37,15 @@ GEO = {"stator_diameter": 400.0, "num_seg": 8, "num_slots_per_segment": 6,
        "wire_height": 1.2, "num_wires_per_slot": 10, "motor_length": 100}
 
 
+@pytest.fixture(autouse=True)
+def _explicit_new_die(monkeypatch):
+    """These tests pin the transition mechanics; a die is minted only on the EXPLICIT flag now
+    (owner 2026-11-12), so every call here carries it.  The default is pinned in test_no_implicit_die.py."""
+    _orig = fam.sync_active_die_geometry
+    monkeypatch.setattr(fam, "sync_active_die_geometry",
+                        lambda *a, **k: _orig(*a, **{"allow_new_die": True, **k}))
+
+
 def _cfg_doc(name: str, **overrides) -> dict:
     ov = {"motor_length": 100, "wire_width": 6.6, "wire_spacing_x": 0.2,
           "insulation_thickness": 0.3, "wire_height": 1.2, "num_wires_per_slot": 10}

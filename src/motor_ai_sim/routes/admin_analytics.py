@@ -330,19 +330,31 @@ def fetch_active_signed_in_users(window_s: float = 300.0, now: Optional[float] =
         con.close()
 
 
+#: The web tracker tags every page view (web/src/lib/analytics.ts): Umami itself counts every browser, signed in or not, so
+#: without the tag the "anonymous" card showed the admin's own /admin pages and country (2026-11-12).
+TAG_VISITOR = "visitor"
+TAG_MEMBER = "member"
+
+
 def fetch_umami_live(c: httpx.Client, base: str, site: str, user: str, pw: str) -> dict:
-    """Anonymous visitors: active count + last 30 min top pages and countries."""
+    """Visitors who are NOT signed in (page views tagged ``visitor``): active in the last 5 min, top pages and countries of the
+    last 30 min; plus the countries of the signed-in page views (``member_countries``; no account is named there)."""
     end_ms = int(time.time() * 1000)
     start_30m = end_ms - 30 * 60 * 1000
-    window = {"startAt": start_30m, "endAt": end_ms}
+    window = {"startAt": start_30m, "endAt": end_ms, "tag": TAG_VISITOR}
 
-    # 1. Active count
+    # 1. Active count: /active counts every browser, so the not-signed-in ones come from the tagged stats of the last 5 min
     try:
-        act = _get(c, base, user, pw, f"/api/websites/{site}/active", {})
-        active_count = int(_num(act.get("x") if isinstance(act, dict) and act.get("x") is not None
-                                else (act.get("visitors") if isinstance(act, dict) else act)))
+        stats = _get(c, base, user, pw, f"/api/websites/{site}/stats",
+                     {"startAt": end_ms - 5 * 60 * 1000, "endAt": end_ms, "tag": TAG_VISITOR})
+        active_count = int(_num(stats.get("visitors"))) if isinstance(stats, dict) else 0
     except Exception:
         active_count = 0
+    try:
+        member_countries = shape_metric(_get(c, base, user, pw, f"/api/websites/{site}/metrics",
+                                             {"startAt": start_30m, "endAt": end_ms, "tag": TAG_MEMBER, "type": "country", "limit": 10}))
+    except Exception:
+        member_countries = []
 
     # 2. Pages in last 30 min
     try:
@@ -399,6 +411,7 @@ def fetch_umami_live(c: httpx.Client, base: str, site: str, user: str, pw: str) 
         "active": active_count,
         "pages": pages,
         "countries": countries,
+        "member_countries": member_countries,
         "page_view_events": page_view_events,
     }
 

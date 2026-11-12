@@ -91,7 +91,7 @@
     "error": "无法加载统计数据。",
     "live": {
       "title": "实时动态",
-      "totalOnline": "{total} 人在线（{signedIn} 已登录，{anonymous} 匿名）",
+      "totalOnline": "{total} 人在线（{signedIn} 已登录，{anonymous} 未登录）",
       "sessionsLine": "当前活跃（5 分钟）：{active} · 打开的会话：{open}",
       "sessionsTip": "最近 5 分钟内有用户操作的已登录会话数，以及仍处于打开状态的网页会话数。会话在 {minutes} 分钟无操作且无计算运行后关闭。",
       "autoRefresh": "每 10 秒自动刷新",
@@ -100,7 +100,7 @@
       "signedInTitle": "当前在线登录用户",
       "noActiveUsers": "过去 5 分钟内无活跃登录用户。",
       "tab": "当前标签",
-      "anonymousTitle": "匿名访客",
+      "anonymousTitle": "未登录访客",
       "umamiUnconfigured": "未配置 Umami；匿名实时统计不可用。",
       "activeVisitorsNow": "过去 5 分钟内活跃",
       "topPages30m": "热门页面（30 分钟）",
@@ -116,7 +116,8 @@
       "eventNda": "签署保密协议",
       "eventRun": "启动计算",
       "eventAdminAction": "管理员操作",
-      "eventPageView": "页面浏览"
+      "eventPageView": "页面浏览",
+      "memberCountries": "最近 30 分钟已登录用户的访问来自：{list}"
     }
   },
   "activity": {
@@ -152,7 +153,9 @@
       "sweep": "优化",
       "comparePoints": "对比",
       "cost": "成本",
-      "admin": "管理"
+      "admin": "管理",
+      "development": "项目",
+      "production": "生产"
     }
   },
   "verification": {
@@ -261,7 +264,11 @@
     "noCandidates": "没有建议移除的授权",
     "manageMotors": "打开电机授权对话框",
     "grantsUpdated": "电机授权已更新",
-    "role": { "customer": "客户", "engineer": "工程师", "owner": "所有者" }
+    "role": {
+      "customer": "客户",
+      "engineer": "工程师",
+      "owner": "所有者"
+    }
   },
   "production": {
     "title": "生产权限",
@@ -273,8 +280,16 @@
     "colStatus": "生产项目",
     "colMembers": "成员",
     "none": "无",
-    "status": { "active": "进行中", "paused": "已暂停", "archived": "已归档" },
-    "role": { "owner": "负责人", "engineer": "工程师", "oem": "OEM 生产方" },
+    "status": {
+      "active": "进行中",
+      "paused": "已暂停",
+      "archived": "已归档"
+    },
+    "role": {
+      "owner": "负责人",
+      "engineer": "工程师",
+      "oem": "OEM 生产方"
+    },
     "noNda": "{count} 人未签 NDA",
     "noNdaTip": "未签署保密协议的 OEM 成员无法打开生产项目：{list}",
     "noNdaOne": "未签署 NDA：无法打开生产项目",

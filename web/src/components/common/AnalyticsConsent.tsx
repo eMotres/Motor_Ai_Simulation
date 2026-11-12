@@ -3,6 +3,7 @@ import { Box, Button, Link, Paper, Typography } from '@mui/material';
 import { useTranslation } from 'react-i18next';
 import { useUIStore } from '../../stores/uiStore';
 import { privacyUrl } from '../../lib/localAuth';
+import { useAuth } from '../../contexts/AuthContext';
 import {
   getAnalytics, pageViewPath, OPEN_COOKIE_SETTINGS_EVENT, type AnalyticsState,
 } from '../../lib/analytics';
@@ -30,11 +31,15 @@ const AnalyticsConsent: React.FC = () => {
   const state = useAnalyticsState();
   const [reopened, setReopened] = React.useState(false);
   const activeTab = useUIStore((s) => s.activeTab);
+  const { user, resolved } = useAuth();
 
   React.useEffect(() => { a.start(); }, [a]);
   React.useEffect(() => {
+    // wait until the session is known: a signed-in account's first page must not count as a visitor's
+    if (!user && !resolved) return;
+    a.setSignedIn(!!user);
     a.pageView(pageViewPath(window.location.pathname, activeTab));
-  }, [a, activeTab]);
+  }, [a, activeTab, user, resolved]);
   React.useEffect(() => {
     const open = () => setReopened(true);
     window.addEventListener(OPEN_COOKIE_SETTINGS_EVENT, open);

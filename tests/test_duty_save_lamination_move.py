@@ -98,66 +98,69 @@ def _ctx() -> dict:
     return json.loads(fam._ctx_file().read_text(encoding="utf-8"))
 
 
-def test_a_wider_slot_on_a_single_configuration_die_saves_on_its_own_die(dies):
-    before = _bytes(dies)
+def test_a_wider_slot_is_saved_into_the_existing_configuration_and_creates_no_die(dies):
+    """Owner 2026-11-12: no die without an explicit save.  The derived slot width is the configuration's
+    own wire stack (geometry_overrides); the result goes into THIS configuration of THIS die."""
     out = _save()
-    assert _bytes(dies) == before                       # vadim 5 and its L100 untouched
-    new = out["die"]
-    assert new != DIE and _names(dies) == {DIE, new}
-    tr = out["transitioned"]
-    assert (tr["from_die"], tr["from_config"]) == (DIE, CFG)
-    assert [x["key"] for x in tr["diffs"]] == ["slot_width"]
-    assert tr["diffs"][0]["die"] == pytest.approx(7.74) and tr["diffs"][0]["live"] == pytest.approx(8.24)
-    # the duty landed in the moved configuration (same name), with the live build adopted
-    assert out["config"] == CFG
-    c = _yaml(dies / new / f"{out['config']}.yaml")
-    assert c["die"] == new
+    assert _names(dies) == {DIE}                        # no die was created
+    assert "transitioned" not in out and out.get("die", DIE) == DIE
+    assert sorted(p.name for p in (dies / DIE).glob("*.yaml")) == [f"{CFG}.yaml", "die.yaml"]
+    c = _yaml(dies / DIE / f"{CFG}.yaml")
     assert c["geometry_overrides"]["wire_width"] == 7.5
     assert c["geometry_overrides"]["num_wires_per_slot"] == 15
     peak = next(x for x in c["duties"] if x["name"] == "peak")
     assert peak["current_arms"] == 420.0
-    # the new die stamps the live lamination: its slot is 8.24
-    nd = _yaml(dies / new / "die.yaml")
-    assert fam.die_shape_diffs(nd["geometry"], LIVE_GEO) == []
-    assert nd["derived_from"]["die"] == DIE
+    assert "derived_from" not in _yaml(dies / DIE / "die.yaml")
     ctx = _ctx()
-    assert (ctx["die"], ctx["config"], ctx["duty"]) == (new, out["config"], "peak")
-    assert ctx["transitioned_from"]["reason"] == "build_differs"
+    assert (ctx["die"], ctx["config"]) == (DIE, CFG) and "transitioned_from" not in ctx
 
 
-def test_the_next_save_stays_on_the_moved_die(dies):
-    first = _save()
-    again = _save(first["die"], first["config"])
-    assert "transitioned" not in again
-    assert again["die"] == first["die"] and _names(dies) == {DIE, first["die"]}
+def test_the_next_save_stays_on_the_same_die(dies):
+    _save()
+    again = _save()
+    assert "transitioned" not in again and _names(dies) == {DIE}
 
 
 def test_an_existing_die_with_this_build_takes_the_duty(dies):
-    """The orchestrator built 'vadim 6 / L90-2x3ph-Al2O3-15t' by hand for this machine."""
+    """A real lamination change (magnet height) and an existing die that already IS this lamination with this
+    build: the duty goes into it - nothing is created."""
     six = "CIANO56 400_80 vadim 6"
-    _write(dies / six / "die.yaml", {"name": six, "locked": False, "geometry": dict(LIVE_GEO)})
+    shape = dict(LIVE_GEO, magnet_height=23.0)
+    _write(dies / six / "die.yaml", {"name": six, "locked": False, "geometry": dict(shape)})
     _write(dies / six / "L90-2x3ph-Al2O3-15t.yaml",
            _cfg_doc("L90-2x3ph-Al2O3-15t", die=six, **EDIT))
-    before = _bytes(dies)
-    out = _save()
+    live = {"geometry": dict(shape), "simulation": {"current_a": 420.0, "rpm": 3000.0, "gamma_deg": 22.0,
+                                                    "mode": "motor"},
+            "winding": {"connection": "8S"}, "materials": dict(MATS)}
+    import pytest as _p
+    mp = _p.MonkeyPatch()
+    mp.setattr(fam, "_live_cfg", lambda: live)
+    try:
+        before = _bytes(dies)
+        out = _save()
+    finally:
+        mp.undo()
     assert (out["die"], out["config"]) == (six, "L90-2x3ph-Al2O3-15t")
     assert _names(dies) == {DIE, six}
-    assert sorted(p.name for p in (dies / six).glob("*.yaml")) == ["L90-2x3ph-Al2O3-15t.yaml", "die.yaml"]
     assert _bytes(dies) == before                       # source untouched
     c = _yaml(dies / six / "L90-2x3ph-Al2O3-15t.yaml")
     assert next(x for x in c["duties"] if x["name"] == "peak")["current_arms"] == 420.0
-    assert _ctx()["die"] == six and _ctx()["transitioned_from"]["die"] == DIE
 
 
-def test_an_existing_die_of_this_lamination_gets_a_copy_when_no_configuration_matches(dies):
-    six = "CIANO56 400_80 vadim 6"
-    _write(dies / six / "die.yaml", {"name": six, "locked": False, "geometry": dict(LIVE_GEO)})
-    _write(dies / six / "L90-other.yaml", _cfg_doc("L90-other", die=six, **dict(EDIT, num_wires_per_slot=12)))
-    out = _save()
-    assert out["die"] == six and out["config"] not in ("L90-other",)
-    assert _names(dies) == {DIE, six}
-    c = _yaml(dies / six / f"{out['config']}.yaml")
-    assert c["geometry_overrides"]["num_wires_per_slot"] == 15
+def test_a_real_lamination_change_is_refused_and_creates_nothing(dies, monkeypatch):
+    """magnet_height is a die input: no existing die is that lamination -> 409 with the new code, nothing written."""
+    live = {"geometry": dict(LIVE_GEO, magnet_height=23.0),
+            "simulation": {"current_a": 420.0, "rpm": 3000.0, "gamma_deg": 22.0, "mode": "motor"},
+            "winding": {"connection": "8S"}, "materials": dict(MATS)}
+    monkeypatch.setattr(fam, "_live_cfg", lambda: live)
+    before = _bytes(dies)
+    with pytest.raises(HTTPException) as e:
+        _save()
+    assert e.value.status_code == 409
+    assert e.value.detail["code"] == fam.NEW_DIE_REQUIRES_EXPLICIT_SAVE
+    assert "save_as_new_die" in e.value.detail["message"]
+    assert _bytes(dies) == before and _names(dies) == {DIE}
+    assert _ctx()["die"] == DIE
 
 
 def test_a_locked_configuration_still_refuses(dies):
@@ -165,7 +168,7 @@ def test_a_locked_configuration_still_refuses(dies):
     before = _bytes(dies)
     with pytest.raises(HTTPException) as e:
         _save()
-    assert e.value.status_code == 409 and "die slot_width" in str(e.value.detail)
+    assert e.value.status_code == 409 and "wire_width" in str(e.value.detail)
     assert _bytes(dies) == before and _names(dies) == {DIE}
     assert _ctx()["die"] == DIE
 

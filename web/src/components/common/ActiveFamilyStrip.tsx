@@ -549,7 +549,11 @@ const ActiveFamilyStrip: React.FC = () => {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ die: tDie, config: targetConfig, duty: dutyBody }),
       });
-      if (!r.ok) throw new Error((await r.json()).detail ?? `HTTP ${r.status}`);
+      if (!r.ok) {
+        // a structured refusal ({code, message}, e.g. new_die_requires_explicit_save) is shown by its message
+        const dj = (await r.json().catch(() => ({}))).detail;
+        throw new Error(typeof dj === 'string' ? dj : (dj?.message ?? `HTTP ${r.status}`));
+      }
       // The save may have AUTO-RENAMED the configuration (M1-L200 -> M1-L220
       // when the stack changed) — the result recording must follow the NEW
       // name, or it 404s and the fresh run's numbers are silently lost

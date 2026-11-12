@@ -740,6 +740,8 @@
       "rowsParsed": "{count} rows",
       "documents": "Documents",
       "note": "Note",
+      "noteInternal": "Internal note",
+      "noteInternalTip": "Seen only by our engineers; hidden from the factory and from project members",
       "save": "Save",
       "cancel": "Cancel"
     },

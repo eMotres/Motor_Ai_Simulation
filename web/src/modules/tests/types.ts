@@ -21,6 +21,8 @@ export interface TestRecord {
   kind: TestKind;
   date: string;
   title?: string; operator?: string; instrument?: string; profile?: string; note?: string;
+  /** our engineers only (owner 2026-11-12): absent for the factory, project members and every outsider */
+  note_internal?: string;
   conditions?: TestConditions;
   leads?: TestLeads;
   documents?: string[];
@@ -109,11 +111,12 @@ export interface TestsPayload {
   settings: { tests_visible_to_customer?: boolean };
   can: { add: boolean; edit: boolean; settings: boolean };
   tests: TestRecord[];
-  compare: Record<string, TestCompare>;
+  /** absent (with `model` and `tips`) in the project view for anyone but our engineers: the measured data only */
+  compare?: Record<string, TestCompare>;
   /** the mass of the per-mass columns: weighed whole motor, whole motor from CAD, or active parts only */
   motor_mass?: { kg: number; basis: 'weighed' | 'stated' | 'cad' | 'active' } | null;
-  model: { available: boolean; duties: number; noload: string[]; magnet?: string | null; has_bearings: boolean;
+  model?: { available: boolean; duties: number; noload: string[]; magnet?: string | null; has_bearings: boolean;
     end3d?: End3dProvenance | null };
-  tips: Record<string, string>;
+  tips?: Record<string, string>;
   documents?: Array<{ id: string; file_id: string; name: string }>;
 }

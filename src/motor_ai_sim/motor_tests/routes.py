@@ -61,12 +61,26 @@ def _entry(who: str, action: str, test_id: str, snapshot: Optional[Dict[str, Any
             "snapshot": snapshot or {}}
 
 
+def _strip_internal(tests: List[Any]) -> List[Any]:
+    """The records without ``note_internal`` (a copy; the stored ones are untouched)."""
+    return [{k: v for k, v in t.items() if k != "note_internal"} if isinstance(t, dict) else t for t in tests]
+
+
 def _payload(die: str, config: str, *, can: Dict[str, bool], documents: Optional[List[Dict[str, Any]]] = None,
-             model_die: Optional[str] = None) -> Dict[str, Any]:
+             model_die: Optional[str] = None, internal: bool = True, model_view: bool = True) -> Dict[str, Any]:
+    """``internal`` False: no ``note_internal``.  ``model_view`` False (project outsiders): NO model data at all - no
+    ``compare``, no ``model`` block, no tips, and ``motor_mass`` from the bench weighing only."""
     doc = store.load(die, config)
+    tests = doc.get("tests") or []
+    if not internal:
+        tests = _strip_internal(tests)
+    if not model_view:
+        return {"die": die, "config": config, "settings": doc.get("settings") or {}, "can": can, "tests": tests,
+                "motor_mass": comparison.motor_mass(doc, {}),
+                **({"documents": documents} if documents is not None else {})}
     model = model_source.collect(model_die or die, config)
     return {"die": die, "config": config, "settings": doc.get("settings") or {}, "can": can,
-            "tests": doc.get("tests") or [], "compare": comparison.compare_all(doc, model),
+            "tests": tests, "compare": comparison.compare_all(doc, model),
             "motor_mass": comparison.motor_mass(doc, model),
             "model": {"available": bool(model.get("available")), "duties": len(model.get("duties") or []),
                       "noload": [r.get("duty") for r in model.get("noload") or []],
@@ -93,7 +107,8 @@ def get_tests(request: Request, die: str, config: str, response: Response):
         DS.append_audit(viewer["project_id"], A.email(ctx["user"]), "motor.tests.read", "motor", f"{die}/{config}")
     return _payload(die, config, can={"add": bool(ctx["can_add"]), "edit": bool(ctx["can_edit"]),
                                       "settings": bool(ctx["can_edit"])},
-                    documents=_documents(die, config, ctx))
+                    documents=_documents(die, config, ctx), internal=bool(ctx["internal"]),
+                    model_view=bool(ctx["model_view"]))
 
 
 @router.post("/{die}/{config}/tests")
@@ -103,13 +118,14 @@ async def add_test(request: Request, die: str, config: str):
     A.require_add(ctx)
     who = A.email(ctx["user"])
     try:
-        rec = models.normalize(await _body(request), who=who)
+        # the factory cannot set the internal note: it is dropped silently
+        rec = models.normalize(await _body(request), who=who, allow_internal=bool(ctx["internal"]))
     except models.TestInputError as e:
         raise HTTPException(422, detail=str(e))
     _check_documents(rec, _documents(die, config, ctx))
     store.mutate(die, config, lambda d: d["tests"].append(rec),
                  audit=lambda _r: _entry(who, "create", rec["id"], {"after": rec}))
-    return rec
+    return rec if ctx["internal"] else _strip_internal([rec])[0]
 
 
 def _find(doc: Dict[str, Any], test_id: str) -> Dict[str, Any]:
@@ -260,4 +276,6 @@ def project_tests(project_id: str, request: Request, response: Response, die: Op
         raise HTTPException(404, detail="No tests")
     if not staff:
         DS.append_audit(project_id, A.email(user), "motor.tests.read", "motor", f"{key_die}/{cfg_name}")
-    return _payload(key_die, cfg_name, can={"add": False, "edit": False, "settings": False}, model_die=open_die)
+    # the project view is the customer's: the internal note and everything from the model stay with our own engineers
+    return _payload(key_die, cfg_name, can={"add": False, "edit": False, "settings": False}, model_die=open_die,
+                    internal=A.is_global_staff(user), model_view=A.is_global_staff(user))

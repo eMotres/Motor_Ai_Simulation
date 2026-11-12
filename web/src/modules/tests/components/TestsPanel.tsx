@@ -25,7 +25,7 @@ import { useAuth } from '../../../contexts/AuthContext';
 import { testsApi } from '../api';
 import TestMedia from './TestMedia';
 import {
-  cmpForTab, columnsFor, computeProgress, defaultTab, kindOfTab, loadPlotOptions, loadPlotRows, loadTable, otherBlocks, foldedHeight, shortHead, commonNotes, ownNotes, pointNotes, LOAD_TABLE_MAX_PX, TABLE_ROW_PX,
+  cmpForTab, columnsFor, measuredLines, computeProgress, defaultTab, kindOfTab, loadPlotOptions, loadPlotRows, loadTable, otherBlocks, foldedHeight, shortHead, commonNotes, ownNotes, pointNotes, LOAD_TABLE_MAX_PX, TABLE_ROW_PX,
   loadSeriesOptions, missingActions, perSpeedSeries, pickQuantity, simulationCurves, usesSpeedPlots,
   normalizeTab, perMass, rawPowerKw, testFiles, powerSummary, quantitySeries, summary, tableBlocks, testsOfTab, unitLabel, type LoadPlotKey, type TableBlock,
 } from '../tableModel';
@@ -399,7 +399,11 @@ export const TestsPanel: React.FC<{
   if (!data) return null;
   const can = data.can;
   const sub = chosenSub ?? defaultTab(data.tests);
-  const list = testsOfTab(data.tests, data.compare, sub);
+  // no comparison in the payload (project view for anyone but our engineers): measured data only, no model panels
+  const compareMap = data.compare ?? {};
+  const measuredOnly = !data.compare;
+  const tips = data.tips ?? {};
+  const list = testsOfTab(data.tests, compareMap, sub, measuredOnly);
   const docName = new Map((data.documents ?? []).map((d) => [d.id, d]));
   const power = powerSummary(data.tests);
   const massTip = data.motor_mass
@@ -427,9 +431,9 @@ export const TestsPanel: React.FC<{
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1, flexWrap: 'wrap' }}>
         <SubTabs value={sub} onChange={setSub} ariaLabel={t('tests.tab')}
           items={TEST_TABS.map((k) => ({ id: k, tip: t(`tests.tabsTip.${k}`),
-            label: `${t(`tests.tabs.${k}`)} (${k === 'power' ? power.length : testsOfTab(data.tests, data.compare, k).length})` }))} />
+            label: `${t(`tests.tabs.${k}`)} (${k === 'power' ? power.length : testsOfTab(data.tests, compareMap, k, measuredOnly).length})` }))} />
         <Box sx={{ flex: 1 }} />
-        {!data.model.available && (
+        {data.model && !data.model.available && (
           <Tooltip title={t('tests.modelMissingTip')}><Chip size="small" label={t('tests.modelMissing')} sx={{ fontSize: 11 }} /></Tooltip>
         )}
         {can.settings && (
@@ -501,7 +505,7 @@ export const TestsPanel: React.FC<{
         ))}
       {sub !== 'power' && list.length === 0 && <Typography sx={{ fontSize: 12, color: 'var(--text-3)' }}>{t('tests.none')}</Typography>}
       {list.map((rec) => {
-        const cmp = cmpForTab(data.compare[rec.id], rec.kind, sub);       // only this tab's groups
+        const cmp = cmpForTab(compareMap[rec.id], rec.kind, sub);       // only this tab's groups
         const s = summary(cmp);
         const missing = canCompute ? missingActions(cmp) : [];
         const details = [rec.instrument, rec.profile, rec.conditions?.state].filter(Boolean);
@@ -541,6 +545,7 @@ export const TestsPanel: React.FC<{
                     <Typography sx={{ fontSize: 11.5, color: 'var(--text-3)' }}>{rec.operator || rec.created_by}</Typography>
                   </Tooltip>
                   {rec.note && <Tooltip title={rec.note}><NotesIcon sx={{ fontSize: 16, color: 'var(--text-3)' }} /></Tooltip>}
+                  {rec.note_internal && <Tooltip title={`${t('tests.editor.noteInternal')}: ${rec.note_internal}`}><NotesIcon sx={{ fontSize: 16, color: '#f59e0b' }} /></Tooltip>}
                   {plain.map((d) => (
                     <Chip key={d.id} size="small" label={d.name} sx={{ height: 18, fontSize: 10.5 }}
                       onClick={onOpenDocument ? () => onOpenDocument(d.file_id, d.name) : undefined} />
@@ -553,7 +558,12 @@ export const TestsPanel: React.FC<{
                     </Tooltip>
                   )}
                 </Box>
-                <CompareTable cmp={cmp} tips={data.tips} />
+                {measuredOnly && measuredLines(rec, sub).map((l) => (
+                  <Typography key={l.key} sx={{ fontSize: 12, color: 'var(--text-1)', mb: 0.3 }}>
+                    <b>{t(`tests.group.${l.key}`, { ...l.params })}</b>{': '}{l.text}
+                  </Typography>
+                ))}
+                <CompareTable cmp={cmp} tips={tips} />
                 <RawRows rec={rec} />
               </Box>
             )}
@@ -563,6 +573,7 @@ export const TestsPanel: React.FC<{
       {editing && (
         <TestEditor open die={die} config={config} kind={editing.rec?.kind ?? kindOfTab(sub)} record={editing.rec}
           documents={(data.documents ?? []).map((d) => ({ id: d.id, name: d.name }))}
+          showInternal={can.edit}
           onClose={() => setEditing(null)} onSaved={() => { setEditing(null); void reload(); }} />
       )}
       <Dialog open={!!toCompute} onClose={() => setToCompute(null)}>

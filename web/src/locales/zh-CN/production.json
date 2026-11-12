@@ -740,6 +740,8 @@
       "rowsParsed": "{count} 行",
       "documents": "文件",
       "note": "备注",
+      "noteInternal": "内部备注",
+      "noteInternalTip": "仅我方工程师可见；对工厂和项目成员隐藏",
       "save": "保存",
       "cancel": "取消"
     },

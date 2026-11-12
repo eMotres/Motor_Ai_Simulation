@@ -619,3 +619,13 @@ t('Tests opens on Power when there is a load test to list, else on Resistance', 
   assert.equal(M.defaultTab([{ ...load, rows: [] }]), 'resistance');   // nothing the Power list could show
   assert.equal(M.defaultTab([]), 'resistance');
 });
+
+t('measured-only view (no comparison in the payload): a parameters record lands on its own tabs with plain lines', () => {
+  const rec = { id: 'a', kind: 'parameters', date: '2026-01-01',
+    resistance: { temp_c: 20, pairs: [{ pair: '1-2', value_mohm: 17 }] }, weight: [{ what: 'motor', mass_g: 1500 }] };
+  assert.deepEqual(M.recordTabs('parameters', undefined, rec).sort(), ['parameters', 'resistance']);
+  assert.deepEqual(M.recordTabs('parameters', undefined), ['parameters']);          // today's fallback is unchanged
+  assert.equal(M.measuredLines(rec, 'resistance')[0].text, '1-2: 17.00 mΩ');
+  assert.equal(M.measuredLines(rec, 'parameters')[0].key, 'mass');
+  assert.deepEqual(M.measuredLines({ ...rec, kind: 'load' }, 'resistance'), []);
+});

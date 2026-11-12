@@ -23,6 +23,23 @@ from motor_ai_sim.production import models as PM
 
 
 def resolve(request: Request, die: str, config: str) -> Dict[str, Any]:
+    """Adds two flags (owner 2026-11-12) to the access context: ``internal`` (our own side: a global admin or engineer,
+    or a production ``owner`` / ``engineer`` member) sees ``note_internal`` and the comparison with the simulation; the
+    factory (``oem``) keeps the comparison but never the internal note; a project viewer sees neither."""
+    ctx = _resolve(request, die, config)
+    internal = (bool(ctx.get("admin")) or is_global_staff(ctx["user"])
+                or (ctx.get("viewer") is None and ctx.get("role") in ("owner", "engineer")))
+    ctx["internal"] = internal
+    ctx["model_view"] = internal or (ctx.get("viewer") is None and ctx.get("role") == "oem")
+    return ctx
+
+
+def is_global_staff(user: Dict[str, Any]) -> bool:
+    from motor_ai_sim.development import access as DA
+    return DA.is_engineer(user)
+
+
+def _resolve(request: Request, die: str, config: str) -> Dict[str, Any]:
     user = PA.require_signed_in(request)
     if PA.is_admin(user):
         production = PA.load_production(die, config)

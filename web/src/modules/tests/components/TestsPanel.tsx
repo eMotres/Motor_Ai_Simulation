@@ -25,7 +25,7 @@ import { useAuth } from '../../../contexts/AuthContext';
 import { testsApi } from '../api';
 import TestMedia from './TestMedia';
 import {
-  cmpForTab, columnsFor, measuredLines, computeProgress, defaultTab, kindOfTab, loadPlotOptions, loadPlotRows, loadTable, otherBlocks, foldedHeight, shortHead, commonNotes, ownNotes, pointNotes, LOAD_TABLE_MAX_PX, TABLE_ROW_PX,
+  cmpForTab, columnsFor, measuredLines, measuredSeries, computeProgress, defaultTab, kindOfTab, loadPlotOptions, loadPlotRows, loadTable, otherBlocks, foldedHeight, shortHead, commonNotes, ownNotes, pointNotes, LOAD_TABLE_MAX_PX, TABLE_ROW_PX,
   loadSeriesOptions, missingActions, perSpeedSeries, pickQuantity, simulationCurves, usesSpeedPlots,
   normalizeTab, perMass, rawPowerKw, testFiles, powerSummary, quantitySeries, summary, tableBlocks, testsOfTab, unitLabel, type LoadPlotKey, type TableBlock,
 } from '../tableModel';
@@ -81,13 +81,14 @@ function useWide(): [React.RefObject<HTMLDivElement | null>, boolean] {
 
 /** A load sweep with two or more rows at some speed (owner 2026-11-04): one line per speed against torque or current.
  *  A plot selector (torque vs current by default); the model values, where the model has the point, as dashed lines. */
-function SpeedLoadChart({ cmp, height }: { cmp: TestCompare | undefined; height: number }) {
+function SpeedLoadChart({ cmp, height, measured = false }: { cmp: TestCompare | undefined; height: number; measured?: boolean }) {
   const { t } = useTranslation('production');
   const rows = loadPlotRows(cmp);
   const curves = simulationCurves(cmp);
   const note = cmp?.series?.simulation_note ?? '';
   const options = loadPlotOptions(rows, curves);
-  const [sel, setSel] = useState<string>('torque_current');
+  // the measured view opens on the first plot of the menu (a heat run: winding temperature over time)
+  const [sel, setSel] = useState<string>(measured ? (options[0] ?? 'torque_current') : 'torque_current');
   const key = (options.find((k) => k === sel) ?? options[0]) as LoadPlotKey | undefined;
   const plot = key ? perSpeedSeries(rows, key, curves) : null;
   if (!key || !plot) return null;
@@ -95,7 +96,7 @@ function SpeedLoadChart({ cmp, height }: { cmp: TestCompare | undefined; height:
     <Box data-testid="tests-load-speed-series">
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.6, height: 24, mb: 0.5 }}>
         <Typography sx={{ fontSize: 11.5, fontWeight: 700, color: 'var(--text-2)' }}>{t('tests.series.label')}</Typography>
-        <HelpTip title={t('tests.series.tipSpeeds')} />
+        <HelpTip title={t(measured ? 'tests.series.tipMeasuredSpeeds' : 'tests.series.tipSpeeds')} />
         {note && <HelpTip title={note} />}
         <Select size="small" value={key} onChange={(e) => setSel(String(e.target.value))}
           sx={{ height: 24, fontSize: 11.5, minWidth: 200, '& .MuiSelect-select': { py: 0, pl: 1 } }}
@@ -114,7 +115,7 @@ function SpeedLoadChart({ cmp, height }: { cmp: TestCompare | undefined; height:
 /** The chart beside a load sweep's per-point tables (owner 2026-10-27): x = rpm, a compact selector above it picks the
  *  plotted quantity (torque, efficiencies, DC current / power, shaft power, temperatures), measured dots plus the model
  *  curve where the model has the point.  Full height of the tables beside it (capped), sticky while they scroll. */
-function LoadSeriesChart({ cmp, tips, height }: { cmp: TestCompare | undefined; tips: Record<string, string>; height: number }) {
+function LoadSeriesChart({ cmp, tips, height, measured = false }: { cmp: TestCompare | undefined; tips: Record<string, string>; height: number; measured?: boolean }) {
   const { t } = useTranslation('production');
   const options = loadSeriesOptions(cmp);
   const [sel, setSel] = useState<string>('torque');
@@ -125,7 +126,7 @@ function LoadSeriesChart({ cmp, tips, height }: { cmp: TestCompare | undefined; 
     <Box data-testid="tests-load-series">
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.6, height: 24, mb: 0.5 }}>
         <Typography sx={{ fontSize: 11.5, fontWeight: 700, color: 'var(--text-2)' }}>{t('tests.series.label')}</Typography>
-        <HelpTip title={t('tests.series.tip')} />
+        <HelpTip title={t(measured ? 'tests.series.tipMeasured' : 'tests.series.tip')} />
         <Select size="small" value={q.key} onChange={(e) => setSel(String(e.target.value))}
           sx={{ height: 24, fontSize: 11.5, minWidth: 150, '& .MuiSelect-select': { py: 0, pl: 1 } }}
           inputProps={{ 'aria-label': t('tests.series.label') }}>
@@ -135,7 +136,7 @@ function LoadSeriesChart({ cmp, tips, height }: { cmp: TestCompare | undefined; 
             </MenuItem>
           ))}
         </Select>
-        {q.tip && <HelpTip title={t(`tests.tip.${q.tip}`, { defaultValue: tips[q.tip] ?? '' })} />}
+        {!measured && q.tip && <HelpTip title={t(`tests.tip.${q.tip}`, { defaultValue: tips[q.tip] ?? '' })} />}
       </Box>
       <SeriesChart key={q.key} series={quantitySeries(q)} height={height} />
     </Box>
@@ -291,9 +292,27 @@ function CompareTable({ cmp, tips }: { cmp: TestCompare | undefined; tips: Recor
   );
 }
 
-function RawRows({ rec }: { rec: TestRecord }) {
+/** Measured-only view (project view without a comparison): the bench rows as plots, no model value anywhere. */
+function MeasuredCharts({ rec }: { rec: TestRecord }) {
+  const cmp = React.useMemo<TestCompare | undefined>(() => {
+    const series = rec.kind === 'load' || rec.kind === 'free_run' ? measuredSeries(rec) : null;
+    return series ? { test_id: rec.id, kind: rec.kind, model_available: false, groups: [], series } : undefined;
+  }, [rec]);
+  if (!cmp) return null;
+  const rows = loadPlotRows(cmp);
+  const perSpeed = usesSpeedPlots(rows, []) && loadPlotOptions(rows, []).length > 0;
+  return (
+    <Box sx={{ mb: 1, maxWidth: 760 }} data-testid="tests-measured-charts">
+      {perSpeed
+        ? <SpeedLoadChart cmp={cmp} height={260} measured />
+        : <LoadSeriesChart cmp={cmp} tips={{}} height={260} measured />}
+    </Box>
+  );
+}
+
+function RawRows({ rec, defaultOpen = false }: { rec: TestRecord; defaultOpen?: boolean }) {
   const { t } = useTranslation('production');
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(defaultOpen);
   if (!rec.rows?.length) return null;
   const cols = Array.from(new Set([...columnsFor(rec.kind), ...rec.rows.flatMap((r) => Object.keys(r))]))
     .filter((c) => rec.rows!.some((r) => r[c] !== undefined))
@@ -563,8 +582,9 @@ export const TestsPanel: React.FC<{
                     <b>{t(`tests.group.${l.key}`, { ...l.params })}</b>{': '}{l.text}
                   </Typography>
                 ))}
+                {measuredOnly && <MeasuredCharts rec={rec} />}
                 <CompareTable cmp={cmp} tips={tips} />
-                <RawRows rec={rec} />
+                <RawRows rec={rec} defaultOpen={measuredOnly && (rec.kind === 'load' || rec.kind === 'free_run')} />
               </Box>
             )}
           </Paper>

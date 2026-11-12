@@ -1,7 +1,7 @@
 // Tests section — the pure table model: formatting, delta levels, the flattened measured | model | delta rows, the short
 // note of a row, and the parser of pasted bench rows.  No React, no network (node --test drives it).
 import type {
-  CompareGroup, CompareRow, CreateDutyAction, JobRow, LoadPlotRow, LoadSeriesQuantity, SimulationCurve, TestCompare, TestKind, TestRecord, TestTab,
+  CompareGroup, CompareRow, CreateDutyAction, JobRow, LoadPlotRow, LoadSeries, LoadSeriesPoint, PairValue, LoadSeriesQuantity, SimulationCurve, TestCompare, TestKind, TestRecord, TestTab,
 } from './types';
 import { TEST_TABS } from './types.ts';
 
@@ -249,6 +249,95 @@ export function pickQuantity(options: LoadSeriesQuantity[], key: string | null |
 export function quantitySeries(q: LoadSeriesQuantity): GroupSeries {
   return { unit: q.unit, points: q.points.map((p) => ({ rpm: p.rpm, measured: p.measured, model: p.model,
     delta: p.delta_pct ?? null, current: p.current ?? null })) };
+}
+
+// ── measured-only series (project view without a comparison) ────────────────────────────────────────────────────────
+
+/** True when the rows are one hold at one speed: rpm within +-3 % of the mean and `duration_s` never decreasing in stored
+ *  order, so `duration_s` is the time since the hold began (a step-hold sweep restarts it at every step). */
+function isSingleHold(rows: Array<Record<string, number>>): boolean {
+  const rpms = rows.map((r) => finite(r.rpm)).filter((v): v is number => v !== null);
+  if (!rpms.length) return false;
+  const mean = rpms.reduce((a, b) => a + b, 0) / rpms.length;
+  if (!(mean > 0) || rpms.some((v) => Math.abs(v - mean) > 0.03 * mean)) return false;
+  let last = -Infinity;
+  for (const r of rows) {
+    const d = finite(r.duration_s);
+    if (d === null) continue;
+    if (d < last) return false;
+    last = d;
+  }
+  return last > -Infinity;
+}
+
+function quantityOf(key: string, label: string, unit: string, tip: string | null,
+  pts: Array<{ rpm: number; current?: number | null; v: number | null }>): LoadSeriesQuantity | null {
+  const points: LoadSeriesPoint[] = pts.filter((p) => p.v !== null)
+    .map((p) => ({ rpm: p.rpm, current: p.current ?? null, measured: p.v, model: null, delta_pct: null }))
+    .sort((a, b) => a.rpm - b.rpm);
+  return points.length ? { key, label, unit, tip, points } : null;
+}
+
+/** What the server builds for a load / free-run record with no model, formed from the stored rows alone (the project view
+ *  for customers carries no comparison).  Every model value is null.  Null when nothing can be plotted. */
+export function measuredSeries(rec: TestRecord): LoadSeries | null {
+  const rows = rec.rows ?? [];
+  if (!rows.length) return null;
+  const OMEGA = Math.PI / 30;
+  if (rec.kind === 'load') {
+    const hold = isSingleHold(rows);
+    // one hold at one speed: its rows are one line of the per-speed plots (the logged rpm jitters by a few rpm), at the
+    // hold's mean speed rounded to 10 rpm; the rpm of the table and of the rpm chart stays as logged
+    const holdRpm = hold ? (() => { const v = rows.map((r) => finite(r.rpm)).filter((x): x is number => x !== null);
+      return Math.round(v.reduce((s, x) => s + x, 0) / v.length / 10) * 10; })() : null;
+    const plot: LoadPlotRow[] = [];
+    const base: Array<{ rpm: number; current: number | null; r: Record<string, number> }> = [];
+    for (const r of rows) {
+      const rpm = finite(r.rpm);
+      if (rpm === null) continue;
+      const tMin = finite(r.time_min) ?? (hold && finite(r.duration_s) !== null ? (r.duration_s as number) / 60 : null);
+      const current = finite(r.i_phase_a);
+      plot.push({ rpm: holdRpm ?? rpm, current, torque: finite(r.torque_nm), v_dc: finite(r.v_dc_v), i_dc: finite(r.i_dc_a), time_min: tMin,
+        t_winding: finite(r.temp_winding_c), t_magnet: finite(r.temp_magnet_c), t_housing: finite(r.temp_housing_c), model: {} });
+      base.push({ rpm, current, r });
+    }
+    const q = (key: string, label: string, unit: string, tip: string, f: (r: Record<string, number>, rpm: number) => number | null) =>
+      quantityOf(key, label, unit, tip, base.map((b) => ({ rpm: b.rpm, current: b.current, v: f(b.r, b.rpm) })));
+    const quantities = [
+      q('torque', 'Torque', 'N·m', 'load', (r) => finite(r.torque_nm)),
+      q('eff', 'Efficiency', '%', 'load', (r) => finite(r.eff_pct)),
+      q('eff_system', 'System efficiency', '%', 'eff_system', (r, rpm) => {
+        const t = finite(r.torque_nm); const v = finite(r.v_dc_v); const i = finite(r.i_dc_a);
+        if (t === null || !rpm || !v || !i) return null;
+        const pIn = Math.abs(v * i);
+        if (!(pIn > 0)) return null;
+        const pMech = Math.abs(t) * rpm * OMEGA;
+        return pMech > 0 ? 100 * Math.min(pIn, pMech) / Math.max(pIn, pMech) : 0;
+      }),
+      q('i_dc', 'DC current', 'A', 'load', (r) => finite(r.i_dc_a)),
+      q('p_dc', 'DC power', 'W', 'load', (r) => { const v = finite(r.v_dc_v); const i = finite(r.i_dc_a); return v === null || i === null ? null : v * i; }),
+      q('p_shaft', 'Shaft power', 'W', 'load', (r, rpm) => { const t = finite(r.torque_nm); return t === null || !rpm ? null : t * rpm * OMEGA; }),
+      q('t_winding', 'Winding temperature', 'C', 'load', (r) => finite(r.temp_winding_c)),
+      q('t_magnet', 'Magnet temperature', 'C', 'load', (r) => finite(r.temp_magnet_c)),
+      q('t_housing', 'Housing temperature', 'C', 'load', (r) => finite(r.temp_housing_c)),
+    ].filter((x): x is LoadSeriesQuantity => x !== null);
+    if (!quantities.length) return null;
+    plot.sort((a, b) => a.rpm - b.rpm);
+    return { x: 'rpm', quantities, points: plot };
+  }
+  if (rec.kind === 'free_run') {
+    const base = rows.flatMap((r) => { const rpm = finite(r.rpm); return rpm === null ? [] : [{ rpm, r }]; });
+    const q = (key: string, label: string, unit: string, f: (r: Record<string, number>) => number | null) =>
+      quantityOf(key, label, unit, null, base.map((b) => ({ rpm: b.rpm, v: f(b.r) })));
+    const quantities = [
+      q('noload_loss', 'No-load loss', 'W', (r) => finite(r.shaft_power_w)),
+      q('emf_peak', 'EMF peak', 'V', (r) => { const v = finite(r.v_ll_pp_v); return v === null ? null : v / 2; }),
+      q('emf_rms', 'EMF rms', 'V', (r) => finite(r.v_ll_rms_v)),
+      q('temperature', 'Temperature', 'C', (r) => finite(r.temp_c) ?? finite(r.magnet_temp_c)),
+    ].filter((x): x is LoadSeriesQuantity => x !== null);
+    return quantities.length ? { x: 'rpm', quantities } : null;
+  }
+  return null;
 }
 
 // ── per-speed load plots (x = torque or current, one line per speed) ─────────────────────────────────────────────────

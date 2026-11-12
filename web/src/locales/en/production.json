@@ -561,7 +561,11 @@
         "p_shaft": "Shaft power",
         "t_winding": "Winding temperature",
         "t_magnet": "Magnet temperature",
-        "t_housing": "Housing temperature"
+        "t_housing": "Housing temperature",
+        "noload_loss": "No-load loss",
+        "emf_peak": "EMF peak",
+        "emf_rms": "EMF rms",
+        "temperature": "Temperature"
       },
       "plot": {
         "t_winding_time": "Winding temperature vs time",
@@ -581,7 +585,9 @@
       "modelSuffix": "simulation",
       "tipSpeeds": "One line per speed, straight segments between the rows. Solid = as logged, dashed = Simulation (hollow dots = simulation points of a stored duty).",
       "rpm": "{rpm} rpm",
-      "pointSuffix": "simulation point"
+      "pointSuffix": "simulation point",
+      "tipMeasured": "Bench values as recorded; pick the quantity above.",
+      "tipMeasuredSpeeds": "One line per speed, straight segments between the rows, as recorded. Pick the plot above."
     },
     "basis": {
       "emf_3d": "magnets at {mag} °C",

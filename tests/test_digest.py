@@ -1088,3 +1088,18 @@ def test_auto_send_refuses_a_group_that_is_not_in_auto_mode_and_smtp_must_be_con
     rows = {r["scope"]: r for r in AP.run_daily(T0, results=d["results"], scopes=[PSCOPE])}
     assert rows[PSCOPE]["auto"]["code"] == "smtp_not_configured" and rows[PSCOPE]["auto"]["status"] == "blocked"
     assert d["delivered"] == [] and d["DS"].load_draft(did)["status"] == "pending"
+
+
+def test_computed_test_points_are_never_new_results_of_the_customer_digest(d):
+    """Owner 2026-11-12: a point computed for the Tests comparison (kind "test", or named "test <rpm> rpm ...") is the
+    comparison with the model - it stays in Production -> Tests and never reaches the project digest."""
+    from motor_ai_sim.digest import collect as C
+    base = d["results"]("x", "L12")
+    row = {"em_run": {"computed_at": base["cruise"]["em_run"]["computed_at"], "numbers": {"T_avg_Nm": 91.7}}}
+    many = dict(base, **{"test 4301 rpm 136.1 A": row, "noload_3021": row, "bench point": row})
+    items = C.collect_project(d["PS"].get_project(PID), T0 - 7200, T0, results=lambda die, cfg: many,
+                              tests=lambda die, cfg: {"bench point"})
+    lines = [i.en for i in items if i.kind == "results"]
+    assert any(x.startswith("cruise:") for x in lines)
+    assert not any(x.startswith(("test 4301", "noload_3021", "bench point")) for x in lines), lines
+    assert C._is_test_result("Test 700 rpm 5.3 A", set()) and not C._is_test_result("cruise", set())

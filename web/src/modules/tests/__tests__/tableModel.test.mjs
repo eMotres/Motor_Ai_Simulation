@@ -629,3 +629,75 @@ t('measured-only view (no comparison in the payload): a parameters record lands 
   assert.equal(M.measuredLines(rec, 'parameters')[0].key, 'mass');
   assert.deepEqual(M.measuredLines({ ...rec, kind: 'load' }, 'resistance'), []);
 });
+
+// ── measured-only series (project view without a comparison) ──────────────────────────────────────────────────────────
+const noModel = (s) => {
+  for (const q of s.quantities) for (const p of q.points) { assert.equal(p.model, null); assert.equal(p.delta_pct, null); }
+  for (const p of s.points ?? []) assert.deepEqual(p.model, {});
+};
+
+t('measuredSeries: load sweep gives the backend quantities, sorted by rpm, no model', () => {
+  const rec = { id: 'a', kind: 'load', date: '', rows: [
+    { rpm: 3000, torque_nm: 10, i_phase_a: 50, v_dc_v: 100, i_dc_a: 20, temp_housing_c: 40, temp_winding_c: 60, duration_s: 30 },
+    { rpm: 1000, torque_nm: 12, i_phase_a: 50, v_dc_v: 100, i_dc_a: 15, temp_housing_c: 35, temp_winding_c: 50, duration_s: 30 },
+    { torque_nm: 1 }] };
+  const s = M.measuredSeries(rec);
+  noModel(s);
+  assert.deepEqual(s.points.map((p) => p.rpm), [1000, 3000]);
+  assert.equal(s.points[0].current, 50);
+  assert.equal(s.points[0].time_min, null);                       // two different speeds: no duration fallback
+  const keys = s.quantities.map((q) => q.key);
+  assert.deepEqual(keys, ['torque', 'eff_system', 'i_dc', 'p_dc', 'p_shaft', 't_winding', 't_housing']);
+  const pd = s.quantities.find((q) => q.key === 'p_dc');
+  assert.equal(pd.points[0].measured, 1500);
+  const ps = s.quantities.find((q) => q.key === 'p_shaft');
+  assert.ok(Math.abs(ps.points[0].measured - 12 * 1000 * Math.PI / 30) < 1e-9);
+  const es = s.quantities.find((q) => q.key === 'eff_system');
+  assert.ok(Math.abs(es.points[1].measured - 100 * Math.min(2000, 10 * 3000 * Math.PI / 30) / Math.max(2000, 10 * 3000 * Math.PI / 30)) < 1e-9);
+});
+
+t('measuredSeries: heat run at one speed takes time from duration_s', () => {
+  const rows = [0, 120, 600, 1252].map((d, i) => ({ rpm: 4300 + i, torque_nm: 5, i_phase_a: 80, temp_winding_c: 46 + 25 * i, duration_s: d }));
+  const s = M.measuredSeries({ id: 'h', kind: 'load', date: '', rows });
+  noModel(s);
+  assert.deepEqual(s.points.map((p) => p.time_min), [0, 2, 10, 1252 / 60]);
+  // the jittering rpm of one hold is one line of the per-speed plots (winding temperature over time)
+  assert.deepEqual(s.points.map((p) => p.rpm), [4300, 4300, 4300, 4300]);
+  assert.ok(M.isPerSpeedSweep(s.points));
+  assert.ok(M.loadPlotOptions(s.points).includes('t_winding_time'));
+  assert.equal(s.quantities[0].points[3].rpm, 4303);              // the rpm chart keeps the logged speed
+  const two = M.measuredSeries({ id: 'h2', kind: 'load', date: '', rows: [
+    { rpm: 4300, torque_nm: 5, temp_winding_c: 40, duration_s: 0 }, { rpm: 4300, torque_nm: 5, temp_winding_c: 100, duration_s: 1356 }] });
+  assert.equal(two.points[1].time_min, 1356 / 60);
+  // an explicit time_min wins
+  const t2 = M.measuredSeries({ id: 'h3', kind: 'load', date: '', rows: [{ rpm: 4300, time_min: 7, duration_s: 600, torque_nm: 1 }] });
+  assert.equal(t2.points[0].time_min, 7);
+});
+
+t('measuredSeries: step-hold sweeps never use duration_s as time', () => {
+  // speed changes by more than 3 %
+  const sweep = [1000, 2000, 3000].map((rpm) => ({ rpm, torque_nm: 5, duration_s: 30 }));
+  assert.ok(M.measuredSeries({ id: 's', kind: 'load', date: '', rows: sweep }).points.every((p) => p.time_min === null));
+  // same speed but duration_s restarts (steps of a hold sweep at one speed, different currents)
+  const steps = [30, 30, 20, 30].map((d, i) => ({ rpm: 3000, i_phase_a: 20 * (i + 1), torque_nm: 5, duration_s: d }));
+  assert.ok(M.measuredSeries({ id: 's2', kind: 'load', date: '', rows: steps }).points.every((p) => p.time_min === null));
+});
+
+t('measuredSeries: free-run quantities over rpm, no model', () => {
+  const rows = [{ rpm: 2000, shaft_power_w: 40, v_ll_pp_v: 60, v_ll_rms_v: 21, temp_c: 25 },
+    { rpm: 1000, shaft_power_w: 12, v_ll_pp_v: 30, v_ll_rms_v: 10.5, temp_c: 24 }];
+  const s = M.measuredSeries({ id: 'f', kind: 'free_run', date: '', rows });
+  noModel(s);
+  assert.deepEqual(s.quantities.map((q) => q.key), ['noload_loss', 'emf_peak', 'emf_rms', 'temperature']);
+  assert.deepEqual(s.quantities[1].points.map((p) => [p.rpm, p.measured]), [[1000, 15], [2000, 30]]);
+  assert.equal(s.quantities[0].unit, 'W');
+  const ramp = M.measuredSeries({ id: 'r', kind: 'free_run', date: '', rows: [{ rpm: 500, shaft_power_w: 3, magnet_temp_c: 30 }, { rpm: 900, shaft_power_w: 7, magnet_temp_c: 33 }] });
+  assert.deepEqual(ramp.quantities.map((q) => q.key), ['noload_loss', 'temperature']);
+});
+
+t('measuredSeries: nothing to plot gives null', () => {
+  assert.equal(M.measuredSeries({ id: 'n', kind: 'load', date: '' }), null);
+  assert.equal(M.measuredSeries({ id: 'n', kind: 'load', date: '', rows: [] }), null);
+  assert.equal(M.measuredSeries({ id: 'n', kind: 'free_run', date: '', rows: [{ shaft_power_w: 3 }] }), null);
+  assert.equal(M.measuredSeries({ id: 'n', kind: 'resistance', date: '', rows: [{ rpm: 1 }] }), null);
+});

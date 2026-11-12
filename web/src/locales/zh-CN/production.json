@@ -561,7 +561,11 @@
         "p_shaft": "轴功率",
         "t_winding": "绕组温度",
         "t_magnet": "磁钢温度",
-        "t_housing": "机壳温度"
+        "t_housing": "机壳温度",
+        "noload_loss": "空载损耗",
+        "emf_peak": "反电动势峰值",
+        "emf_rms": "反电动势有效值",
+        "temperature": "温度"
       },
       "plot": {
         "t_winding_time": "绕组温度随时间变化",
@@ -581,7 +585,9 @@
       "modelSuffix": "仿真",
       "tipSpeeds": "每个转速一条线，各行之间为直线段。实线 = 记录值，虚线 = 仿真（空心点 = 已存工况的仿真点）。",
       "rpm": "{rpm} rpm",
-      "pointSuffix": "仿真点"
+      "pointSuffix": "仿真点",
+      "tipMeasured": "按记录显示的台架数值；请在上方选择要绘制的量。",
+      "tipMeasuredSpeeds": "每个转速一条线，行与行之间为直线段，按记录显示。请在上方选择曲线。"
     },
     "basis": {
       "emf_3d": "磁钢 {mag} °C",

@@ -65,6 +65,7 @@
   "statusLabel": "Project status",
   "status": {
     "spec": "Specification",
+    "spec_submitted": "Specification submitted",
     "design": "Design",
     "simulation": "Simulation",
     "quote": "Quote",
@@ -91,6 +92,7 @@
     "stepMissing": "{count} required still missing",
     "simMissingCount": "Simulation minimum: {count} missing",
     "simReady": "Simulation minimum complete",
+    "submittedBanner": "Version {version} submitted on {date}. Your motor is being prepared for the calculation; the results will appear under Motors & results.",
     "reviewCounts": "Answered: {answered} · Unknown: {unknown} · Missing: {missing} · Invalid: {invalid}",
     "counts": "Answered {answered}/{required} · Unknown {unknown} · Missing {missing} · Invalid {invalid}",
     "completenessBuckets": "Answered {answered} · Unknown {unknown} · Missing/invalid {missingInvalid}",

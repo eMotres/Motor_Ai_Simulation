@@ -65,6 +65,7 @@
   "statusLabel": "项目状态",
   "status": {
     "spec": "规格",
+    "spec_submitted": "规格书已提交",
     "design": "设计",
     "simulation": "仿真",
     "quote": "报价",
@@ -91,6 +92,7 @@
     "stepMissing": "还有 {count} 个必填项未填写",
     "simMissingCount": "仿真最低要求：缺少 {count} 项",
     "simReady": "仿真最低要求已满足",
+    "submittedBanner": "第 {version} 版已于 {date} 提交。您的电机正在准备计算；结果将显示在“电机与结果”下。",
     "reviewCounts": "已回答：{answered} · 未知：{unknown} · 缺失：{missing} · 无效：{invalid}",
     "counts": "已回答 {answered}/{required} · 未知 {unknown} · 缺失 {missing} · 无效 {invalid}",
     "completenessBuckets": "已回答 {answered} · 未知 {unknown} · 缺失/无效 {missingInvalid}",

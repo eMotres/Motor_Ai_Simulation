@@ -6,6 +6,8 @@ export interface ProjectSummary {
   members: ProjectMember[]; linked_motors: Array<{ die: string; config: string }>;
   grant_removal_candidates?: Array<{ email: string; die: string; config: string; reason: string }>;
   can_edit?: boolean; can_edit_spec?: boolean; completeness?: Completeness; notes?: string;
+  /** newest submitted specification version (derived by the server; `at` is an ISO UTC stamp); null = none submitted */
+  spec_submitted?: { version: number; at: string | null } | null;
   /** project-thread messages the caller has not read (list and detail answers) */
   unread_messages?: number;
   /** cache key of the cover image (GET /api/projects/{id}/cover); null = the project has none */

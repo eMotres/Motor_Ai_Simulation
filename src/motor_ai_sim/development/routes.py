@@ -112,6 +112,27 @@ def _customer_spec(value: dict) -> dict:
     return out
 
 
+def _spec_submitted(project_id: str):
+    """The newest submitted specification version as ``{version, at}`` (``at`` = ISO UTC stamp), or None.  One small index file; it is a
+    derived marker (the stored status is untouched): the web shows stage "spec" + this as "Specification submitted", and an automatic
+    calculation launcher can find newly submitted specifications by it."""
+    try:
+        versions = store.load_json(project_id, "spec/index.json", {"versions": []}).get("versions") or []
+        latest = max((v for v in versions if isinstance(v, dict) and isinstance(v.get("version"), int)),
+                     key=lambda v: v["version"], default=None)
+        if not latest:
+            return None
+        at = None
+        try:
+            t = datetime.fromisoformat(str(latest.get("created_at")).replace("Z", "+00:00"))
+            at = (t.replace(tzinfo=timezone.utc) if t.tzinfo is None else t.astimezone(timezone.utc)).isoformat()
+        except (TypeError, ValueError):
+            pass
+        return {"version": latest["version"], "at": at}
+    except Exception:                                       # noqa: BLE001 - a marker never breaks the list
+        return None
+
+
 def _summary(project: dict, user: dict) -> dict:
     role = access.membership(_email(user), project)
     engineer = access.is_engineer(user) or role in ("owner", "engineer")
@@ -137,6 +158,7 @@ def _summary(project: dict, user: dict) -> dict:
     # the project timeline (owner 2026-11-03): only a flag here; plan and forecast live in GET /{id}/timeline
     projection["timeline_ready"] = timeline_ready(user, project)
     projection["completeness"] = models.completeness(draft.get("draft", {}))
+    projection["spec_submitted"] = _spec_submitted(project["id"])
     if access.is_engineer(user):         # the internal notes are MOTRES staff's: a customer who owns the project never gets them (owner 2026-11-06)
         projection["notes"] = project.get("notes", "")
     # Only expose the current caller's member record to customers.
@@ -933,6 +955,9 @@ def submit_spec_for(user: dict, project_id: str, raw_revision: Any, *, audit_det
         submitted.update({"version": version, "current": current})
     if not submitted.get("unchanged"):
         _notify_staff(f"Specification v{submitted['version']['version']} submitted", project_id, user)
+        # the submitter's own confirmation (owner 2026-11-12): customers and staff alike, never blocks the submit
+        from motor_ai_sim.development import spec_confirmation
+        spec_confirmation.notify_submitter(user, project_id, submitted["version"], store.get_project(project_id) or {})
     return submitted
 
 

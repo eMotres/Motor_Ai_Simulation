@@ -11,6 +11,7 @@ import StepBody from './StepBody';
 import { StepBar, StepList } from './StepNav';
 import { overallProgress, stepCommentRefs, stepIndexForField } from './steps';
 import { TOUCH } from './ui';
+import { submittedDate } from '../../projectStage';
 import { NARROW } from '../../../../lib/narrowLayout';
 
 // The assistant's chat bubble docks in the Back / Next bar's free right end at every width (2026-11-11: on a desktop it covered Next).
@@ -131,6 +132,7 @@ export default function SpecWizard(p: SpecWizardProps) {
     '& .MuiToggleButton-root': { minHeight: TOUCH },
     '@media (pointer: coarse)': { '& .MuiIconButton-root': { minWidth: TOUCH, minHeight: TOUCH } },
   }}>
+    {p.submittedInfo && !p.submittedInfo.changed && <Alert severity="success" data-testid="spec-submitted-banner">{tr('wizard.submittedBanner', { version: p.submittedInfo.version, date: submittedDate(p.submittedInfo.at, env.lang) })}</Alert>}
     {header}
     <Box sx={{ display: 'flex', gap: 3, alignItems: 'flex-start', minWidth: 0 }}>
       {wide && <Box sx={{ width: 260, flex: '0 0 260px', position: 'sticky', top: 8 }}><StepList steps={steps} draft={draft} current={step} onSelect={onStep} tr={tr} /></Box>}

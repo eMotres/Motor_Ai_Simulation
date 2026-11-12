@@ -21,13 +21,18 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import logging
 import math
 import os
+import sys
+import types
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from motor_ai_sim import part_tree as PT
 from motor_ai_sim.cad_param_labels import labels as _labels
+
+_log = logging.getLogger(__name__)
 
 #: the block of a die configuration that carries the CAD-only edits
 OVERRIDES_KEY = "cad_overrides"
@@ -299,10 +304,18 @@ def rows(built: Dict[str, Dict[str, Any]], overrides: Dict[str, Any], kit: bool 
 # ---------------------------------------------------------------------------
 
 _PRECHECK = None
+#: the template folder is loaded under this synthetic package name, so that ``health.py`` can import its sibling files
+#: (``from .common import ...``) without running the template's ``__init__`` (which is the FreeCAD side of the template)
+_TEMPLATE_PKG = "motres_cad_template"
 
 
 def load_precheck():
-    """The template's pre-check function ``precheck(g)``, loaded from its file, or None when the deployment has no template.
+    """The template's pre-check function ``precheck(g)``, loaded from its file, or None when the deployment has no usable template.
+
+    ``health.py`` is pure Python at module level and imports its sibling ``common.py`` relatively, so the folder is registered
+    as a package first.  Every file ``health.py`` imports at module level must be shipped with it (``deploy/Dockerfile.api``;
+    ``tests/test_cad_precheck_load.py`` holds the two together).  A template that is present but does not load is logged with
+    its traceback and reported as unavailable (the caller refuses the edit with a 503 instead of failing with a 500).
 
     ``MOTRES_CAD_TEMPLATE_DIR`` overrides the location (tests)."""
     global _PRECHECK
@@ -313,10 +326,24 @@ def load_precheck():
     path = Path(base) / "health.py"
     if not path.is_file():
         return None
-    spec = importlib.util.spec_from_file_location("motres_cad_health", str(path))
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)                                       # health.py imports math only at module level
-    _PRECHECK = mod.precheck
+    name = _TEMPLATE_PKG + ".health"
+    for k in [k for k in sys.modules if k == _TEMPLATE_PKG or k.startswith(_TEMPLATE_PKG + ".")]:
+        del sys.modules[k]
+    pkg = types.ModuleType(_TEMPLATE_PKG)
+    pkg.__path__ = [str(Path(base))]
+    sys.modules[_TEMPLATE_PKG] = pkg
+    try:
+        spec = importlib.util.spec_from_file_location(name, str(path))
+        mod = importlib.util.module_from_spec(spec)
+        sys.modules[name] = mod
+        spec.loader.exec_module(mod)
+        pre = mod.precheck
+    except Exception:                                                  # noqa: BLE001 - a broken template must not become a 500
+        _log.exception("the CAD template pre-check at %s does not load", path)
+        for k in [k for k in sys.modules if k == _TEMPLATE_PKG or k.startswith(_TEMPLATE_PKG + ".")]:
+            del sys.modules[k]
+        return None
+    _PRECHECK = pre
     return _PRECHECK
 
 

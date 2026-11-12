@@ -19,6 +19,7 @@ config exists here, so nothing already working can be broken by this layer.
 """
 from __future__ import annotations
 
+import hashlib
 import logging
 import re
 from datetime import datetime
@@ -2222,25 +2223,9 @@ class DutyCreate(BaseModel):
 
 # ── tree ─────────────────────────────────────────────────────────────────────
 
-#: The tree, memoised per ACCESS (mode + granted dies + admin) and keyed by a
-#: signature of every file it is built from.  It is not an HTTP cache — the
-#: response stays `no-store` and per-account — it is the YAML parse that goes:
-#: 30 die/configuration files carrying 13 inline SVG thumbnails took ~0.7 s to
-#: parse per request (measured 2026-09-13), and the Motors tab asked for the
-#: tree once per Ø section at once, so the tab "loaded" for the sum of them.
-#: A changed grant is a different key; a changed file is a different signature.
-#:
-#: Stage 2 put the workspace id INTO the key (`_key` below) and Stage 3 moves
-#: the store itself into that workspace: the id stays in the key as the audit
-#: (``tests/test_workspace_state.py`` walks every live store and refuses a key
-#: that does not start with the workspace it was produced under), and the
-#: container is now per workspace and BOUNDED — it was an unbounded dict, and
-#: its key carries an access mode plus the grant list, so a server with many
-#: accounts grew one parsed catalog per distinct grant set, forever.
-#: CAP 8: one entry per (access mode × client filter) a single account can
-#: produce, which is four, doubled for head-room.
-_TREE_CACHE_MAX = 8
-_TREE_CACHE = _WS.ws_map("family.tree_cache", _TREE_CACHE_MAX, lru_on_read=True)
+#: The tree is built row by row from cached rows (``_TREE_CACHE`` below ``_build_config_row``); the whole-tree memo it replaces
+#: was keyed by access and dropped by any changed file.  ``_tree_signature`` stays: it is the stat-only picture of every file
+#: the tree reads, used by the freshness tests.
 
 
 def _tree_signature(with_catalog: bool) -> tuple:
@@ -2374,11 +2359,344 @@ def _die_source_of(die_dir) -> str:
         return "private"
 
 
+def _build_config_row(die: dict, c: dict, name: str, _dr_cfg: dict) -> dict:
+    """One configuration's catalog row, from the die document, the configuration document and the stored solver answers of
+    THIS configuration.  Pure: no caller, no access - what ``tree`` caches per configuration (see ``_config_row``)."""
+    ov = c.get("geometry_overrides") or {}
+    w = c.get("winding") or {}
+    _bsigs = _build_sigs(die, c)
+    _bsig = _bsigs[0]
+    _role, _role_src = _config_role(c)
+    _apps, _apps_err = config_applications(c)
+    return {
+        "name": name,
+        # What the machine is for (owner 2026-10-13): the first entry is the
+        # default.  `application_set` False = the yaml has no usable list (Admin
+        # flags it); `applications_error` names a malformed value.
+        "applications": _apps,
+        "application": default_application(_apps),
+        "application_set": bool(_apps),
+        "applications_error": _apps_err,
+        # Derived from the duties, not from the creation-time toggle —
+        # see `_config_role`.  `role_stored` is kept beside it so a
+        # stale yaml value is visible rather than silently replaced.
+        "role": _role,
+        "role_source": _role_src,
+        "role_stored": str(c.get("role") or "motor"),
+        "locked": bool(c.get("locked", False)),
+        "stack_mm": ov.get("motor_length"),
+        # Legacy data guard: an L-named configuration whose stored
+        # stack contradicts the name (an L15 holding 13 mm).  New
+        # writes can no longer mint these; existing ones get flagged
+        # so the catalog shows the lie instead of repeating it.
+        "name_stack_mismatch": bool(_lname_fix(name,
+                                               ov.get("motor_length"))),
+        "wire_height_mm": ov.get("wire_height"),
+        "wire_width_mm": ov.get("wire_width"),
+        "turns": ov.get("num_wires_per_slot"),
+        "connection": w.get("connection"),
+        # 6 = two in-phase 3-phase sets: the duty table quotes the
+        # current PER SET (owner 2026-10-29); stored values stay both sets
+        "phases": 6 if str(w.get("phases") or "3").strip() == "6" else 3,
+        "star_delta": w.get("star_delta") or "star",
+        "magnet": (c.get("materials") or {}).get("magnet"),
+        "steel": (c.get("materials") or {}).get("stator_core"),
+        # {} on an ordinary build; a frameless one names the parts the
+        # customer supplies, so the catalog row can say so.
+        "parts": c.get("parts") or {},
+        "build_sig": _bsig,
+        # Every stamp that names this same build (`_build_sigs`): a
+        # stored result is "older build" only when its stamp is none
+        # of these (web lib/simPoints.isStale, catalogCardStaleness).
+        "build_sig_aliases": list(_bsigs),
+        # The mode the Motors row shows and loads (owner 2026-10-13);
+        # `default_duty_stored` is what the yaml says, kept visible
+        # when it names a duty that no longer exists.
+        "default_duty": config_rated_duty(
+            c, _cls := config_classes(c, _dr_cfg)),
+        "default_duty_stored": c.get("default_duty"),
+        # The duty the yaml names, when the row shows a CONTINUOUS one
+        # in its place because it is short-time (owner 2026-10-19).
+        "default_duty_configured": config_default_duty(c),
+        "battery": c.get("battery"),
+        # The bearings, exactly the way the battery rides here: a
+        # property of the MACHINE, so the catalog row, the Mechanical
+        # tab and the datasheet all read one yaml.
+        "bearings": c.get("bearings"),
+        # The Controller tab's own settings (owner 2026-09-22): one
+        # physical inverter box per configuration, same footing as the
+        # battery above.  `None` when no controller has ever been
+        # saved — the catalog chip (when built) and the Controller
+        # tab both read that as "nothing saved yet", never an error.
+        "controller": c.get("controller"),
+        # The no-load cogging torque of the configuration (owner 2026-10-26): pk-pk, half-amplitude, share of
+        # the continuous torque, `stale` when the build moved.  Absent when none is saved.
+        **({"cogging": _cg} if (_cg := _cogging_view(die, c, _dr_cfg, _bsigs)) else {}),
+        "duties": [
+            {"name": d.get("name"), "mode": d.get("mode", "motor"),
+             # "test" = a bench-test / validation point: the public Motors row, its mode list and the
+             # public datasheet leave it out (``duty_kind``); absent on an ordinary duty
+             **({"kind": TEST_DUTY_KIND} if is_test_duty(d) else {}),
+             "saved_at": d.get("saved_at"),
+             "current_arms": d.get("current_arms"), "rpm": d.get("rpm"),
+             "gamma_deg": d.get("gamma_deg"),
+             # per duty since 2026-09-13; older duties: the run's summary
+             "star_delta": (d.get("star_delta")
+                            or (d.get("summary") or {}).get("star_delta")),
+             "torque_nm": d.get("torque_nm"), "power_kw": d.get("power_kw"),
+             "note": d.get("note", ""), "result": _with_mech_loss(d),
+             # What the machine DOES with this point (S1 / S2 / S3 /
+             # segments) — a handful of numbers, so the catalog row can
+             # say "S3 ED 25 % · 60 s" without a second request.  None
+             # on every duty saved before the cycle existed, which reads
+             # as the continuous duty they were always assumed to be.
+             "duty_cycle": d.get("duty_cycle"),
+             # Every excitation this duty has been run and SAVED at —
+             # descriptions only, never a payload (the tree is fetched
+             # on every catalog render).  Empty list = a duty that has
+             # only ever been saved the way duties always were.
+             "primary_drive": _primary_drive(d),
+             "runs": _run_rows(_bsigs, d),
+             # HOW LONG MAY IT RUN (2026-09-17).  Absent — never null —
+             # on a duty with no coupled record, on a record older than
+             # the feature, and on a point inside every limit it has.
+             # `_time_to_limit_row` says why each of those is an answer.
+             **_time_to_limit_kv(
+                 (_dr_cfg.get(str(d.get("name") or "")) or {})
+                 .get("coupled")),
+             # THE CONTINUOUS (S1) RATING (2026-09-21) — the other chip
+             # beside it, same presence rule and same data path:
+             # `_continuous_rating_row` says why "no key" is an answer.
+             **_continuous_rating_kv(
+                 (_dr_cfg.get(str(d.get("name") or "")) or {})
+                 .get("coupled")),
+             # SHORT-TIME OR CONTINUOUS (owner 2026-10-19), with the
+             # label every page prints.  Absent when nothing says.
+             **_duty_class_kv(str(d.get("name") or ""),
+                              _cls.get(str(d.get("name") or "")))}
+            for d in (c.get("duties") or [])
+        ],
+    }
+
+
+#: What the tree keeps per DIE and per CONFIGURATION (owner 2026-11-12: ``GET /api/family/tree`` took 10-24 s and sent 3.4 MB).
+#:
+#: The whole-tree memo of before was dropped by ANY changed file - and the duty-results store (13 MB) is rewritten each time the
+#: worker finishes a job - and then every die was parsed and built again, the store once per die.  Now a configuration's ROW is
+#: kept against the files it is built from (its own yaml, the die's yaml, and the digest of THIS configuration's rows in the
+#: duty-results store), so one changed file rebuilds one row and a finished job rebuilds the rows of the machine it solved.
+#:
+#: THE ROWS CARRY NO ACCESS.  What the caller may see (the die gate, the exhibit filter, the per-configuration gate) is applied
+#: on every request, over rows that are the same for everybody - so one account can never be served rows built for another's
+#: access.  The only caller-dependent input of a row is the stored solver answers when layers sit behind the caller's workspace
+#: (``duty_results.index`` asks ``read_through_allowed``); then the caller's access is part of the key (``_row_caller_key``).
+_TREE_CACHE_MAX = 2048
+_TREE_CACHE = _WS.ws_map("family.tree_cache", _TREE_CACHE_MAX, lru_on_read=True)
+
+
+def _file_stamp(p: Path) -> Optional[tuple]:
+    try:
+        st = p.stat()
+    except OSError:
+        return None
+    return (st.st_mtime_ns, st.st_size)
+
+
+def _row_caller_key(_acc: dict) -> Any:
+    """The part of the caller a BUILT row can depend on: nothing, unless layering is on (then the stored answers of a die the
+    caller reads out of their own workspace are filtered by what they may see behind it)."""
+    if not _ws_layering():
+        return None
+    return (str(_acc.get("mode")), tuple(sorted(str(x) for x in (_acc.get("dies") or ()))),
+            tuple(sorted(str(x) for x in (_acc.get("configs") or ()))), _acc.get("email"), bool(_acc.get("is_admin")))
+
+
+def _die_head(dd: Path, die_name: str) -> Optional[dict]:
+    """The die-level fields of the tree row, kept against ``die.yaml``'s stamp: ``{"stamp", "geo", "fields", "thumb_svg",
+    "thumb_tag"}``.  ``None`` only when the file cannot be stat-ed (the caller then loads it and lets it fail loudly)."""
+    stamp = _file_stamp(dd / "die.yaml")
+    key = ("die", str(dd), die_name, _WS.workspace().id, _WS.is_verified_admin_request())
+    hit = _TREE_CACHE.get(key)
+    if stamp is not None and hit is not None and hit["stamp"] == stamp:
+        return hit
+    die = _load_yaml(dd / "die.yaml", "die")
+    geo = die.get("geometry") or {}
+    svg = die.get("thumb_svg")
+    head = {
+        "stamp": stamp, "geo": geo, "svg": svg if isinstance(svg, str) and svg else None,
+        "thumb_tag": hashlib.sha1(svg.encode("utf-8")).hexdigest()[:16] if isinstance(svg, str) and svg else "",
+        "fields": {
+            "locked": bool(die.get("locked", True)),
+            # OPEN (the die sits in the public repository's data set) or PRIVATE (every other
+            # place: private data set, shared catalog, a workspace copy) - the one quiet
+            # marker the Motors list shows on every row (owner 2026-10-27).  Same rule as the
+            # admin Motors-access table: ``open`` only for a die that lives in the open set.
+            "source": _die_source_of(dd),
+            "created": die.get("created"),
+            "slots": geo.get("num_slots"), "poles": geo.get("num_poles"),
+            "stator_diameter": geo.get("stator_diameter"),
+        },
+    }
+    if stamp is not None:
+        _TREE_CACHE[key] = head
+    return head
+
+
+def _config_row(dd: Path, die_name: str, cf: Path, caller_key: Any, dr_die) -> dict:
+    """The catalog row of one configuration: from the cache when the files it is built from are unchanged, else built.
+
+    ``dr_die`` is a zero-argument callable giving the die's stored solver answers (``duty_results.index``): it is only called
+    on a rebuild, so a request that rebuilds nothing never touches the 13 MB store."""
+    from motor_ai_sim import duty_results as _dr
+    sig = (_file_stamp(dd / "die.yaml"), _file_stamp(cf), _dr.config_digest(die_name, cf.stem))
+    key = ("cfg", str(dd), die_name, cf.stem, _WS.workspace().id, _WS.is_verified_admin_request(), caller_key)
+    hit = _TREE_CACHE.get(key)
+    cacheable = sig[0] is not None and sig[1] is not None and sig[2] is not None
+    if cacheable and hit is not None and hit[0] == sig:
+        return hit[1]
+    die = _load_yaml(dd / "die.yaml", "die")
+    c = _load_yaml(cf, "configuration")
+    row = _build_config_row(die, c, cf.stem, dr_die().get(cf.stem) or {})
+    if cacheable:
+        _TREE_CACHE[key] = (sig, row)
+    return row
+
+
+_PASSPORTED_MEMO: dict = {}
+
+
+def _passported_geos(path: Path) -> list:
+    """``exhibit.load_passported_geos`` parsed once per version of ``motor_catalog.json`` (the anonymous tree parsed it per
+    request).  RAISES like the original when the file is missing or unreadable."""
+    st = _file_stamp(path)
+    hit = _PASSPORTED_MEMO.get(str(path))
+    if st is not None and hit is not None and hit[0] == st:
+        return hit[1]
+    from motor_ai_sim import exhibit as _exh
+    geos = _exh.load_passported_geos(path)
+    if st is not None:
+        _PASSPORTED_MEMO[str(path)] = (st, geos)
+        if len(_PASSPORTED_MEMO) > 16:
+            _PASSPORTED_MEMO.pop(next(iter(_PASSPORTED_MEMO)))
+    return geos
+
+
+def _tree_dies(_acc: dict, *, heads_only: bool = False) -> tuple:
+    """The dies of the tree for an already resolved access answer.
+
+    ``heads_only`` builds no configuration rows: ``[{"name", "svg", "thumb_tag"}]`` of the dies the caller sees, in tree order
+    (the pictures route - the pictures are not part of the tree itself).  Returns ``(dies, had_entries)``."""
+    out: list = []
+    _entries = _iter_die_entries()
+    if not _entries:
+        return out, False
+    # ── Public exhibit: WORKING configurations only (user 2026-08-25) ────────
+    # A motor an ANONYMOUS visitor cannot open in Configure (no FEM passport
+    # yet) is a half-baked exhibit — hide it.  A die is exhibit-visible when a
+    # characterised catalog card describes the same machine (slots, poles, OD,
+    # magnet height).  Signed-in accounts are judged by their grants instead.
+    _client_filter = _acc["mode"] == MODE_ANONYMOUS
+    _passported: list = []
+    if _client_filter:
+        try:
+            _passported = _passported_geos(_ws_root_f() / "motor_catalog.json")
+        except Exception:
+            _passported = []      # no catalog → hide nothing rather than all
+            _client_filter = False
+
+    def _die_is_client_ready(g: dict) -> bool:
+        from motor_ai_sim import exhibit as _exh
+        return _exh.die_is_client_ready(g, _passported)
+
+    _caller_key = _row_caller_key(_acc)
+    from motor_ai_sim import duty_results as _dr
+    for _e in _entries:
+        dd = Path(str(_e["dir"]))
+        _die_name, _layer = str(_e["name"]), str(_e["layer"])
+        # A signed-in non-admin sees its granted dies and nothing else — with
+        # ALL their configurations and duties, exactly as an admin would.
+        # Grants gate the SHARED catalog only: a die in this workspace is the
+        # caller's own, and a PUBLISHED one is open to every registered account.
+        # A die the OWNER marked "public" or "selected clients" (motor_access
+        # die-level access, distinct from a per-user grant) is visible the same
+        # way — may_see_die is the single gate every other route already uses.
+        if (_acc["mode"] == MODE_GRANTED and _die_name not in _acc["dies"]
+                and (not _ws_layering() or _layer == _WS.LAYER_SHARED)
+                and not may_see_die(_acc, _die_name)):
+            continue
+        # The community layer is for people who signed in.  The anonymous
+        # exhibit stays exactly the passport-filtered shared set it always was.
+        if _layer == _WS.LAYER_PUBLISHED and _acc["mode"] == MODE_ANONYMOUS:
+            continue
+        head = _die_head(dd, _die_name)
+        if _client_filter and not _die_is_client_ready(head["geo"]):
+            continue
+        if heads_only:
+            out.append({"name": _die_name, "svg": head["svg"], "thumb_tag": head["thumb_tag"]})
+            continue
+        # Every stored solver answer this die has, read ONCE and only when a row has to be built - never
+        # `duty_results.get()` per configuration, which re-reads the whole JSON of every layer each time.
+        _dr_box: list = []
+
+        def _dr_die(_d=_die_name, _box=_dr_box):
+            if not _box:
+                _box.append(_dr.index(_d, shared=True))      # read-only: rows only look at it
+            return _box[0]
+
+        cfgs = []
+        for cf in sorted(dd.glob("*.yaml")):
+            if cf.name == "die.yaml":
+                continue
+            # A configuration the caller may not see (motor_access.config_visible:
+            # a PRIVATE one without its grant, or an "inherit" one of a die that is
+            # visible only through ANOTHER configuration) is not a row at all: not
+            # listed, not counted (config_count / cards below are computed from
+            # what is left).  The caller's own workspace copy is theirs (layering
+            # on), whatever the file says.
+            if not may_see_config_file(_acc, _die_name, cf.stem, cf, layer=_layer):
+                continue
+            cfgs.append(_config_row(dd, _die_name, cf, _caller_key, _dr_die))
+        out.append({
+            "name": _die_name,
+            # Which layer answered, and whose work it is — the web tab that
+            # draws a "Community" section is a later stage, but the tree must
+            # already say so or the frontend has to guess from the name.  Only
+            # with multi-user ON: a single-user tree is byte-identical to
+            # Stage 1's, keys included.
+            **({"layer": _layer, "owner": _e["owner"] or None,
+                "read_only": _layer != _WS.LAYER_WORKSPACE}
+               if _ws_layering() else {}),
+            **head["fields"],
+            # The cross-section drawing is NOT in the tree (owner 2026-11-12: it was 2 of its 3.4 MB): `GET /api/family/thumbs`
+            # carries it, the page draws the picture when that answers.  `has_thumb` says whether there is one.
+            "has_thumb": head["svg"] is not None,
+            "configs": cfgs,
+        })
+    return out, True
+
+
 @router.get("/tree")
 def tree(response: Response, authorization: str = Header(default=None)):
     from motor_ai_sim.construction_privacy import may_see_full_construction
     return tree_for_access(response, catalog_access(authorization),
                            full_construction=may_see_full_construction(authorization))
+
+
+@router.get("/thumbs")
+def tree_thumbs(authorization: str = Header(default=None), if_none_match: str = Header(default=None)):
+    """The cross-section drawings of the dies the tree lists for THIS caller: ``{"thumbs": {die: svg}}``.
+
+    They left ``GET /api/family/tree`` (owner 2026-11-12: two thirds of its 3.4 MB) so the catalog can draw its rows first.
+    The dies are chosen by the very code the tree uses (``_tree_dies``), so this never names a die the tree does not.
+    Revalidated with an ETag, so a page that already has them pays one 304."""
+    from fastapi.responses import JSONResponse
+    heads, _had = _tree_dies(catalog_access(authorization), heads_only=True)
+    etag = '"' + hashlib.sha1("|".join(f"{h['name']}:{h['thumb_tag']}" for h in heads).encode("utf-8")).hexdigest()[:20] + '"'
+    headers = {"Cache-Control": "private, no-cache", "Vary": "Authorization", "ETag": etag}
+    if if_none_match and etag in {x.strip()[2:] if x.strip().startswith("W/") else x.strip()
+                                  for x in if_none_match.split(",")}:
+        return Response(status_code=304, headers=headers)
+    return JSONResponse({"thumbs": {h["name"]: h["svg"] for h in heads if h["svg"]}}, headers=headers)
 
 
 def tree_for_access(response: Response, _acc: dict, *, with_mass: bool = True,
@@ -2408,254 +2726,16 @@ def tree_for_access(response: Response, _acc: dict, *, with_mass: bool = True,
     _can_write = _can_write_catalog(_acc)
     response.headers["Cache-Control"] = "no-store"
     response.headers["Vary"] = "Authorization"
-    out = []
-    _entries = _iter_die_entries()
-    if not _entries:
-        return {"dies": out, "can_write": _can_write}
-    # ── Public exhibit: WORKING configurations only (user 2026-08-25) ────────
-    # A motor an ANONYMOUS visitor cannot open in Configure (no FEM passport
-    # yet) is a half-baked exhibit — hide it.  A die is exhibit-visible when a
-    # characterised catalog card describes the same machine (slots, poles, OD,
-    # magnet height).  Signed-in accounts are judged by their grants instead.
-    _client_filter = _acc["mode"] == MODE_ANONYMOUS
-    _passported: list = []
-    if _client_filter:
-        try:
-            from motor_ai_sim import exhibit as _exh
-            _passported = _exh.load_passported_geos(_ws_root_f() / "motor_catalog.json")
-        except Exception:
-            _passported = []      # no catalog → hide nothing rather than all
-            _client_filter = False
-
-    def _die_is_client_ready(g: dict) -> bool:
-        from motor_ai_sim import exhibit as _exh
-        return _exh.die_is_client_ready(g, _passported)
-
-    # The WORKSPACE is part of the key since Stage 2: two accounts with the
-    # same access mode see two different catalogs, and a memo that could not
-    # tell them apart is precisely the cross-user leak this migration exists to
-    # prevent.  (The signature would usually catch it; "usually" is not a
-    # guarantee worth resting a customer's machine on.)
-    #
-    # Two GRANTED accounts with the SAME (empty) grant list used to be the same
-    # cache entry — fine until die-level "selected clients" access (2026-09-29)
-    # made two such accounts see different catalogs anyway (one is on a die's
-    # client list, the other is not). Only widen the key when that mode is
-    # actually in play, so the common case (no selected-clients dies at all)
-    # keeps the same cap-8 cache it always had.
-    from motor_ai_sim import motor_access as _ma
-    _sel_present = _acc["mode"] == MODE_GRANTED and any(
-        v.get("visibility") == _ma.VIS_SELECTED for v in _ma.all_die_access().values())
-    # PRIVATE configurations (owner 2026-10-15): the rows differ per account that
-    # holds a config grant, and admin differs from an ``all``-granted account
-    # (both are mode ALL) - both belong in the key or one would be served the
-    # other's memo.
-    _cfg_grants = tuple(sorted(str(x) for x in (_acc.get("configs") or ())))
-    _key = (str(_acc["mode"]), tuple(sorted(str(x) for x in (_acc.get("dies") or ()))),
-            _can_write, _client_filter, _WS.workspace().id,
-            _WS.is_verified_admin_request(),
-            _acc.get("email") if _sel_present else None,
-            bool(_acc.get("is_admin")), _cfg_grants)
-    _sig = _tree_signature(_client_filter)
-    _hit = _TREE_CACHE.get(_key)
-    if _sig and _hit is not None and _hit[0] == _sig:
-        res = {"dies": _stamp_cards(_hit[1], with_mass, full_construction),
-               "can_write": _can_write}
-        if not _hit[1] and _acc["mode"] == MODE_GRANTED:
-            res["note"] = "no motors granted yet — ask the vendor"
-            res["note_code"] = "no_motors_granted"          # the page shows its own "start a project" line (owner 2026-11-06)
-        return res
-
-    for _e in _entries:
-        dd = Path(str(_e["dir"]))
-        _die_name, _layer = str(_e["name"]), str(_e["layer"])
-        # A signed-in non-admin sees its granted dies and nothing else — with
-        # ALL their configurations and duties, exactly as an admin would.
-        # Grants gate the SHARED catalog only: a die in this workspace is the
-        # caller's own, and a PUBLISHED one is open to every registered account.
-        # A die the OWNER marked "public" or "selected clients" (motor_access
-        # die-level access, distinct from a per-user grant) is visible the same
-        # way — may_see_die is the single gate every other route already uses.
-        if (_acc["mode"] == MODE_GRANTED and _die_name not in _acc["dies"]
-                and (not _ws_layering() or _layer == _WS.LAYER_SHARED)
-                and not may_see_die(_acc, _die_name)):
-            continue
-        # The community layer is for people who signed in.  The anonymous
-        # exhibit stays exactly the passport-filtered shared set it always was.
-        if _layer == _WS.LAYER_PUBLISHED and _acc["mode"] == MODE_ANONYMOUS:
-            continue
-        die = _load_yaml(dd / "die.yaml", "die")
-        geo = die.get("geometry") or {}
-        if _client_filter and not _die_is_client_ready(geo):
-            continue
-        # Every stored solver answer this die has, read ONCE — never
-        # `duty_results.get()` per configuration, which re-reads the whole JSON
-        # of every layer each time (a twelve-configuration die would parse the
-        # same file twelve times, on a request the Motors tab makes per render).
-        # `_tree_signature` stats the same stores, so the memo above falls the
-        # moment a coupled run writes one.
-        from motor_ai_sim import duty_results as _dr
-        _dr_die = _dr.index(_die_name)
-        cfgs = []
-        for cf in sorted(dd.glob("*.yaml")):
-            if cf.name == "die.yaml":
-                continue
-            # A configuration the caller may not see (motor_access.config_visible:
-            # a PRIVATE one without its grant, or an "inherit" one of a die that is
-            # visible only through ANOTHER configuration) is not a row at all: not
-            # listed, not counted (config_count / cards below are computed from
-            # what is left).  The caller's own workspace copy is theirs (layering
-            # on), whatever the file says.
-            if not may_see_config_file(_acc, _die_name, cf.stem, cf, layer=_layer):
-                continue
-            c = _load_yaml(cf, "configuration")
-            _dr_cfg = _dr_die.get(cf.stem) or {}
-            ov = c.get("geometry_overrides") or {}
-            w = c.get("winding") or {}
-            _bsigs = _build_sigs(die, c)
-            _bsig = _bsigs[0]
-            _role, _role_src = _config_role(c)
-            _apps, _apps_err = config_applications(c)
-            cfgs.append({
-                "name": cf.stem,
-                # What the machine is for (owner 2026-10-13): the first entry is the
-                # default.  `application_set` False = the yaml has no usable list (Admin
-                # flags it); `applications_error` names a malformed value.
-                "applications": _apps,
-                "application": default_application(_apps),
-                "application_set": bool(_apps),
-                "applications_error": _apps_err,
-                # Derived from the duties, not from the creation-time toggle —
-                # see `_config_role`.  `role_stored` is kept beside it so a
-                # stale yaml value is visible rather than silently replaced.
-                "role": _role,
-                "role_source": _role_src,
-                "role_stored": str(c.get("role") or "motor"),
-                "locked": bool(c.get("locked", False)),
-                "stack_mm": ov.get("motor_length"),
-                # Legacy data guard: an L-named configuration whose stored
-                # stack contradicts the name (an L15 holding 13 mm).  New
-                # writes can no longer mint these; existing ones get flagged
-                # so the catalog shows the lie instead of repeating it.
-                "name_stack_mismatch": bool(_lname_fix(cf.stem,
-                                                       ov.get("motor_length"))),
-                "wire_height_mm": ov.get("wire_height"),
-                "wire_width_mm": ov.get("wire_width"),
-                "turns": ov.get("num_wires_per_slot"),
-                "connection": w.get("connection"),
-                # 6 = two in-phase 3-phase sets: the duty table quotes the
-                # current PER SET (owner 2026-10-29); stored values stay both sets
-                "phases": 6 if str(w.get("phases") or "3").strip() == "6" else 3,
-                "star_delta": w.get("star_delta") or "star",
-                "magnet": (c.get("materials") or {}).get("magnet"),
-                "steel": (c.get("materials") or {}).get("stator_core"),
-                # {} on an ordinary build; a frameless one names the parts the
-                # customer supplies, so the catalog row can say so.
-                "parts": c.get("parts") or {},
-                "build_sig": _bsig,
-                # Every stamp that names this same build (`_build_sigs`): a
-                # stored result is "older build" only when its stamp is none
-                # of these (web lib/simPoints.isStale, catalogCardStaleness).
-                "build_sig_aliases": list(_bsigs),
-                # The mode the Motors row shows and loads (owner 2026-10-13);
-                # `default_duty_stored` is what the yaml says, kept visible
-                # when it names a duty that no longer exists.
-                "default_duty": config_rated_duty(
-                    c, _cls := config_classes(c, _dr_cfg)),
-                "default_duty_stored": c.get("default_duty"),
-                # The duty the yaml names, when the row shows a CONTINUOUS one
-                # in its place because it is short-time (owner 2026-10-19).
-                "default_duty_configured": config_default_duty(c),
-                "battery": c.get("battery"),
-                # The bearings, exactly the way the battery rides here: a
-                # property of the MACHINE, so the catalog row, the Mechanical
-                # tab and the datasheet all read one yaml.
-                "bearings": c.get("bearings"),
-                # The Controller tab's own settings (owner 2026-09-22): one
-                # physical inverter box per configuration, same footing as the
-                # battery above.  `None` when no controller has ever been
-                # saved — the catalog chip (when built) and the Controller
-                # tab both read that as "nothing saved yet", never an error.
-                "controller": c.get("controller"),
-                # The no-load cogging torque of the configuration (owner 2026-10-26): pk-pk, half-amplitude, share of
-                # the continuous torque, `stale` when the build moved.  Absent when none is saved.
-                **({"cogging": _cg} if (_cg := _cogging_view(die, c, _dr_cfg, _bsigs)) else {}),
-                "duties": [
-                    {"name": d.get("name"), "mode": d.get("mode", "motor"),
-                     # "test" = a bench-test / validation point: the public Motors row, its mode list and the
-                     # public datasheet leave it out (``duty_kind``); absent on an ordinary duty
-                     **({"kind": TEST_DUTY_KIND} if is_test_duty(d) else {}),
-                     "saved_at": d.get("saved_at"),
-                     "current_arms": d.get("current_arms"), "rpm": d.get("rpm"),
-                     "gamma_deg": d.get("gamma_deg"),
-                     # per duty since 2026-09-13; older duties: the run's summary
-                     "star_delta": (d.get("star_delta")
-                                    or (d.get("summary") or {}).get("star_delta")),
-                     "torque_nm": d.get("torque_nm"), "power_kw": d.get("power_kw"),
-                     "note": d.get("note", ""), "result": _with_mech_loss(d),
-                     # What the machine DOES with this point (S1 / S2 / S3 /
-                     # segments) — a handful of numbers, so the catalog row can
-                     # say "S3 ED 25 % · 60 s" without a second request.  None
-                     # on every duty saved before the cycle existed, which reads
-                     # as the continuous duty they were always assumed to be.
-                     "duty_cycle": d.get("duty_cycle"),
-                     # Every excitation this duty has been run and SAVED at —
-                     # descriptions only, never a payload (the tree is fetched
-                     # on every catalog render).  Empty list = a duty that has
-                     # only ever been saved the way duties always were.
-                     "primary_drive": _primary_drive(d),
-                     "runs": _run_rows(_bsigs, d),
-                     # HOW LONG MAY IT RUN (2026-09-17).  Absent — never null —
-                     # on a duty with no coupled record, on a record older than
-                     # the feature, and on a point inside every limit it has.
-                     # `_time_to_limit_row` says why each of those is an answer.
-                     **_time_to_limit_kv(
-                         (_dr_cfg.get(str(d.get("name") or "")) or {})
-                         .get("coupled")),
-                     # THE CONTINUOUS (S1) RATING (2026-09-21) — the other chip
-                     # beside it, same presence rule and same data path:
-                     # `_continuous_rating_row` says why "no key" is an answer.
-                     **_continuous_rating_kv(
-                         (_dr_cfg.get(str(d.get("name") or "")) or {})
-                         .get("coupled")),
-                     # SHORT-TIME OR CONTINUOUS (owner 2026-10-19), with the
-                     # label every page prints.  Absent when nothing says.
-                     **_duty_class_kv(str(d.get("name") or ""),
-                                      _cls.get(str(d.get("name") or "")))}
-                    for d in (c.get("duties") or [])
-                ],
-            })
-        out.append({
-            "name": _die_name,
-            # Which layer answered, and whose work it is — the web tab that
-            # draws a "Community" section is a later stage, but the tree must
-            # already say so or the frontend has to guess from the name.  Only
-            # with multi-user ON: a single-user tree is byte-identical to
-            # Stage 1's, keys included.
-            **({"layer": _layer, "owner": _e["owner"] or None,
-                "read_only": _layer != _WS.LAYER_WORKSPACE}
-               if _ws_layering() else {}),
-            "locked": bool(die.get("locked", True)),
-            # OPEN (the die sits in the public repository's data set) or PRIVATE (every other
-            # place: private data set, shared catalog, a workspace copy) - the one quiet
-            # marker the Motors list shows on every row (owner 2026-10-27).  Same rule as the
-            # admin Motors-access table: ``open`` only for a die that lives in the open set.
-            "source": _die_source_of(dd),
-            "created": die.get("created"),
-            "slots": geo.get("num_slots"), "poles": geo.get("num_poles"),
-            "stator_diameter": geo.get("stator_diameter"),
-            "thumb_svg": die.get("thumb_svg"),
-            "configs": cfgs,
-        })
-    if _sig:
-        _TREE_CACHE[_key] = (_sig, out)
-    res = {"dies": _stamp_cards(out, with_mass, full_construction),
+    dies, _had = _tree_dies(_acc)
+    if not _had:
+        return {"dies": [], "can_write": _can_write}
+    res = {"dies": _stamp_cards(dies, with_mass, full_construction),
            "can_write": _can_write}
-    if not out and _acc["mode"] == MODE_GRANTED:
+    if not dies and _acc["mode"] == MODE_GRANTED:
         # An empty page tells a new account nothing.  ONE line, no wall of
         # text — the catalog renders it where "no dies yet" would go.
         res["note"] = "no motors granted yet — ask the vendor"
-        res["note_code"] = "no_motors_granted"
+        res["note_code"] = "no_motors_granted"          # the page shows its own "start a project" line (owner 2026-11-06)
     return res
 
 

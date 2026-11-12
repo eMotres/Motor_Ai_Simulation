@@ -2,7 +2,7 @@
 import React, { useEffect, useState } from 'react';
 import { Box, Tooltip } from '@mui/material';
 import MotorThumbnail from '../catalog/MotorThumbnail';
-import { fetchFamilyTree } from '../../lib/familyTree';
+import { fetchDieThumbs, fetchFamilyTree } from '../../lib/familyTree';
 import { indexDies, type CardMotor, type DieIndex } from '../../lib/cardMotor';
 
 /** The dies of the catalog, read once through the shared (memoised) tree request while `enabled`; null until it answers or when it cannot be read. */
@@ -11,7 +11,12 @@ export function useDieIndex(enabled: boolean): DieIndex | null {
   useEffect(() => {
     if (!enabled) return undefined;
     let alive = true;
-    fetchFamilyTree().then((t) => { if (alive) setIndex(indexDies(t.dies)); }).catch(() => { /* signed out or offline - no pictures */ });
+    fetchFamilyTree().then((t) => {
+      if (!alive) return;
+      setIndex(indexDies(t.dies));
+      // the drawings come separately (they are not in the tree); the schematic shows until they arrive
+      void fetchDieThumbs().then((th) => { if (alive) setIndex(indexDies(t.dies, th)); });
+    }).catch(() => { /* signed out or offline - no pictures */ });
     return () => { alive = false; };
   }, [enabled]);
   return index;

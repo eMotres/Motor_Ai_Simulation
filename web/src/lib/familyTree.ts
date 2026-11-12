@@ -18,6 +18,8 @@
  *  - the tree stays per-account and `cache: 'no-store'` at the HTTP layer,
  *    exactly as before: nothing here outlives the page or crosses accounts.
  */
+import { readThumbs, type DieThumbs } from './dieThumbs.ts';
+
 const API = import.meta.env.VITE_API_URL ?? 'http://localhost:8001';
 const MEMO_MS = 1500;
 
@@ -39,11 +41,27 @@ export interface FamilyTree {
 let generation = 0;
 let memo: { t: number; gen: number; value: FamilyTree } | null = null;
 let inflight: { gen: number; promise: Promise<FamilyTree> } | null = null;
+let thumbsMemo: { gen: number; promise: Promise<DieThumbs> } | null = null;
+
+/** The die drawings (`GET /api/family/thumbs`), fetched once per tree generation and shared by every caller.  The browser
+ *  revalidates them with an ETag, so a reload costs a 304.  Never rejects: with no answer the pages draw their schematic. */
+export function fetchDieThumbs(opts: { fresh?: boolean } = {}): Promise<DieThumbs> {
+  if (opts.fresh) invalidateFamilyTree();
+  if (thumbsMemo && thumbsMemo.gen === generation) return thumbsMemo.promise;
+  const gen = generation;
+  const promise = fetch(`${API}/api/family/thumbs`)
+    .then(r => (r.ok ? r.json() : null))
+    .then(readThumbs)
+    .catch((): DieThumbs => ({}));
+  thumbsMemo = { gen, promise };
+  return promise;
+}
 
 /** Forget the memoised tree — the next fetch goes to the server. */
 export function invalidateFamilyTree(): void {
   generation += 1;
   memo = null;
+  thumbsMemo = null;
 }
 
 export function fetchFamilyTree(opts: { fresh?: boolean } = {}): Promise<FamilyTree> {

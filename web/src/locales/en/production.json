@@ -121,6 +121,19 @@
     "lineTotalTooling": "Line total (qty x price)",
     "toolingTip": "Tooling / fixtures order list: quantities are totals, no price is multiplied by the number of motors; prices follow the same access rule as the motor BOM."
   },
+  "toolingFiles": {
+    "title": "Drawings and 3-D",
+    "tip": "The drawing of each tooling part and a 3-D view of its STEP file. Drag to rotate, scroll to zoom, Home fits the part.",
+    "none": "No drawing or STEP file for this part yet.",
+    "noneAny": "No tooling drawings or STEP files yet.",
+    "expandAll": "Expand all",
+    "collapseAll": "Collapse all",
+    "toggle": "Show or hide the files of {name}",
+    "drawing": "Drawing",
+    "model3d": "3-D view",
+    "model3dLost": "3-D view lost - reload the page",
+    "downloadStep": "Download STEP"
+  },
   "bomExcel": {
     "upload": "Upload Excel",
     "download": "Download Excel",

@@ -215,6 +215,8 @@ All routes require a signed-in caller. Reads fail NDA gate with 403 `nda_require
 | POST | `/api/production/{die}/{config}/documents` | owner/engineer/admin | Upload document |
 | GET | `/api/production/{die}/{config}/documents` | members / admin | List documents |
 | GET | `/api/production/{die}/{config}/files/{file_id}` | members / admin | Download file (traced) |
+| GET | `/api/production/{die}/{config}/files/{file_id}/model.glb` | same as the download | 3-D view of a STEP file: converted to GLB once (`production/step_glb.py`), cached in `viewcache/`, read traced like a download; 422 for a non-STEP file, 413 over 30 MB |
+| GET | `/api/production/{die}/{config}/part_files?list=tooling` | members / admin (factory with NDA) | Per part of the list: its drawings (pdf, picture) and STEP file the caller may download; the Tooling tab shows them (drawing + rotatable 3-D view) |
 | GET | `/api/production/{die}/{config}/threads` | members / admin | List threads |
 | POST | `/api/production/{die}/{config}/threads` | members / admin | Create general thread |
 | POST | `/api/production/{die}/{config}/threads/{thread_id}/messages` | members / admin | Post message |

@@ -15,6 +15,7 @@ import DiscussionPanel from './DiscussionPanel';
 import DocumentsPanel from './DocumentsPanel';
 import ProductionListPage from './ProductionListPage';
 import ProposalsPanel from './ProposalsPanel';
+import ToolingFiles from './ToolingFiles';
 import { TimelineView } from './TimelineView';
 import TestsPanel from '../../tests/components/TestsPanel';
 import { downloadFile, fetchFileBlob, ProductionApiError, productionApi } from '../api';
@@ -240,6 +241,7 @@ const ProductionPage: React.FC<{ die: string; config: string; onBack: () => void
                 proposals={data.proposals}
                 onPartChanged={reload}
               />
+              <ToolingFiles ctx={toolingCtx} rows={data.toolingBom} parts={data.parts} />
             </>
           )}
           {tab === 'assembly' && <AssemblyProcess ctx={ctx} parts={data.parts} sections={data.process} documents={data.documents} />}

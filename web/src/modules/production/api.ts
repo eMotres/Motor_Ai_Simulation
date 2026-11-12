@@ -2,7 +2,7 @@
 // (docs/PRODUCTION_MODULE_DESIGN.md section 5). The session token is added by the global fetch interceptor.
 import { errorInfo, productionDocumentsZipPath, productionProcessDocumentFilename, productionProcessDocumentPath, productionZipFilename, safeFileName, unwrapList } from './helpers';
 import type {
-  AssemblyProcessView, AssemblyStep, AssemblyTree, Bilingual, BomImportPlan, BomRow, CostRow, CostsData, DocumentRec, ExtraCost, Member, MemberRole, Part, ProcessSection, Production, Proposal, Revision,
+  AssemblyProcessView, AssemblyStep, AssemblyTree, Bilingual, BomImportPlan, BomRow, CostRow, CostsData, DocumentRec, ExtraCost, Member, MemberRole, Part, PartFiles, ProcessSection, Production, Proposal, Revision,
   ProductionAccess, Thread, TranslationRef, Lang, ProcurementData, ProcurementLine, ScheduleData, ScheduleBaseline, TimelineData,
 } from './types';
 
@@ -147,6 +147,11 @@ export async function openFileInNewWindow(die: string, config: string, fileId: s
   }
 }
 
+/** The address of the 3-D view (GLB) of a STEP file of this production: converted on the server once, same access as the STEP download. */
+export function stepViewUrl(die: string, config: string, fileId: string): string {
+  return `${API}${base(die, config)}/files/${enc(fileId)}/model.glb`;
+}
+
 /** The existing 3-D model download of the same motor (same NDA gate). */
 export async function downloadModelStep(die: string, config: string): Promise<void> {
   const r = await fetch(`${API}/api/model3d/${enc(die)}/${enc(config)}/model.step`);
@@ -173,6 +178,9 @@ export const productionApi = {
   updatePart: (die: string, config: string, id: string, patch: Partial<Part>) =>
     call<Part>('PATCH', `${base(die, config)}/parts/${enc(id)}`, patch),
   deletePart: (die: string, config: string, id: string) => call<unknown>('DELETE', `${base(die, config)}/parts/${enc(id)}`),
+
+  /** Per part of the BOM list: its drawings and STEP file (the Tooling tab shows them). */
+  partFiles: async (die: string, config: string, list?: 'tooling') => unwrapList<PartFiles>(await call('GET', `${base(die, config)}/part_files${lq(list)}`), 'parts'),
 
   bom: async (die: string, config: string, list?: 'tooling') => unwrapList<BomRow>(await call('GET', `${base(die, config)}/bom${lq(list)}`), 'rows'),
   saveBom: (die: string, config: string, rows: BomRow[], list?: 'tooling') => call<unknown>('PUT', `${base(die, config)}/bom${lq(list)}`, { rows }),

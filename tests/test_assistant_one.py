@@ -165,6 +165,18 @@ def test_the_help_chat_creates_the_project_and_fills_derived_values(env):
     assert list((account_lifecycle.identity_dir() / "assistant_handoff").glob("*.json")) == []       # a used hand-off is gone
 
 
+def test_staff_get_the_project_created_too(env):
+    """2026-11-12 on aerostator.com: an admin's "yes, create it" answered "title required" (staff kept the empty title)."""
+    env["as"]("eng@example.com", "admin")
+    env["use"](FakeClient(["Values below.\n[[CREATE_SPEC]]"]))
+    out = _chat(env, REQUEST + ", create the specification").json()
+    assert "title required" not in out["reply"] and "I created the project" in out["reply"], out["reply"]
+    from motor_ai_sim.development import store
+    proj = store.get_project(out["project"]["id"])
+    assert proj["auto_title"] is True and proj["owner_engineer"] == ""          # named from its specification, like a customer's
+    assert not proj["id"].startswith("new-project")                             # the private seed, never the bare title
+
+
 def test_agreement_first_then_the_kept_handoff_creates_the_project(env, monkeypatch):
     env["use"](FakeClient(["Values below.\n[[CREATE_SPEC]]"]))
     state = {"accepted": False}

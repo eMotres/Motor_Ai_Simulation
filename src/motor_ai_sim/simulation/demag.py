@@ -76,8 +76,19 @@ def _descriptor(tag: int, idx: np.ndarray, mat: Any) -> Optional[Dict[str, Any]]
     # mu_rec: the two disagree by a few percent (curve 1.083 vs declared 1.05 for
     # F45SH), and the mismatch shows up as spurious PERMANENT loss on a magnet
     # that never left the reversible part of its curve.
-    mu_rec_c = (abs(float(bs[-1] - bs[-2])) / max(abs(float(hs[-1] - hs[-2])), 1e-9) / MU0
-                if hs.size >= 2 else float(mat.mu_r))
+    # Taken as the least-squares slope of the reversible branch (H from 0 down
+    # to 60 % of the knee) when the curve has at least three points there: a
+    # digitised curve's single top segment is the noisiest one. N52UH_150C reads
+    # 1.061 on its top segment against 1.088 over the branch, and that gap booked
+    # 0.8-1.2 % permanent loss on a magnet at no load (HPGS 2026-11-13). Sparse
+    # curves (knee + Br only) keep the top segment, which is their whole branch.
+    rev = hs >= 0.6 * float(knee)
+    if int(rev.sum()) >= 3:
+        mu_rec_c = abs(float(np.polyfit(hs[rev], bs[rev], 1)[0])) / MU0
+    elif hs.size >= 2:
+        mu_rec_c = abs(float(bs[-1] - bs[-2])) / max(abs(float(hs[-1] - hs[-2])), 1e-9) / MU0
+    else:
+        mu_rec_c = float(mat.mu_r)
     return dict(
         tag=int(tag), idx=np.asarray(idx, int), Mx=mat.Mx, My=mat.My, Mm=Mm,
         knee=float(knee), mu_r=float(mat.mu_r), hs=hs, bs=bs,

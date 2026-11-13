@@ -212,6 +212,27 @@ class TestFieldExtraction:
         assert float(dm.br.mean()) == pytest.approx(0.5537, rel=2e-4)
 
 
+    def test_a_noisy_top_segment_books_no_loss_on_the_reversible_branch(self):
+        """A digitised curve whose last segment is shallower than its branch.
+
+        Shaped like N52UH_150C: branch slope 1.09, top segment 1.06. An element
+        sitting mid-branch (-300 kA/m, well above the -730 kA/m knee) is fully
+        reversible and must keep Br; reading the recoil off the top segment alone
+        booked about 0.8 % permanent loss here.
+        """
+        Br0, knee, mu_b = 1.22, -730e3, 1.09
+        hs = [knee * 1.001, knee] + [knee * f for f in (0.8, 0.6, 0.45, 0.3, 0.15, 0.03)]
+        bh = [(hs[0], MU0 * hs[0]), (knee, Br0 + MU0 * mu_b * knee)]
+        bh += [(h, Br0 + MU0 * mu_b * h) for h in hs[2:]]
+        bh += [(0.0, bh[-1][1] - MU0 * 1.06 * bh[-1][0])]       # top segment slope 1.06
+        mat = SimpleNamespace(Mx=Br0 / MU0, My=0.0, mu_r=1.05, bh_curve=bh)
+        dm = MagnetDemag({1: np.arange(4)}, {1: mat}, _Mesh(4), np.ones(4))
+        H = -300e3
+        B = MU0 * 1.05 * H + Br0                                 # solver law at H
+        dm.update(np.full(4, B), np.zeros(4))
+        assert float(dm.br.min()) > 0.999
+
+
 class TestDiagnostics:
     def test_h_first_records_the_pristine_field_only(self):
         """H_first must stay at the FIRST evaluation — it is the reference the

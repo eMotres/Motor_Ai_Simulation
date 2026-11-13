@@ -35,3 +35,16 @@ needs no change (fewer derived dies, no new assumptions).
 `_transition_config_to_own_die` still COPIES a configuration into an EXISTING die that already is the live
 lamination (cases 1-3 with a matching die, no die created). That is a configuration copy into another die,
 not a die creation; it can also be refused if the owner prefers.
+
+## Slot width of a configuration differs from its die: a warning (owner 2026-11-13)
+Case 1 above saves a slot-width-only difference into the configuration. So that this is never silent,
+`config_slot_mismatch` (`routes/family.py`) compares the slot width the die derives with the one the
+configuration's wire stack derives (wire width / split / spacing, liner). A difference above
+`SLOT_MISMATCH_WARN_MM` (0.005 mm, the micron rounding of a round-wire proxy stack) is reported, never refused:
+
+- `POST /api/family/duty` answers `warnings: [{code: "slot_width_differs_from_die", die_slot_mm, config_slot_mm, message}]`;
+- `GET /api/family/context` carries `slot_mismatch` (same object, `null` when the slot is the die's);
+- the active-motor strip shows one line `slot 3.667 mm ≠ die 3.24 mm` with the message as a tooltip, and
+  repeats it in the "saved to ..." line.
+
+Tests: `tests/test_slot_mismatch_warning.py`.

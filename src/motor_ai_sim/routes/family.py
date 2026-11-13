@@ -3562,6 +3562,16 @@ def upsert_duty(req: DutyCreate, _w: dict = Depends(require_catalog_write)):
     return _upsert_duty(req, _w)
 
 
+def _with_slot_warning(out: dict, cfg_doc: dict) -> dict:
+    """A duty save's answer, with ``warnings: [...]`` when the configuration's slot is not its die's
+    (:func:`config_slot_mismatch`).  The save itself is never refused for it."""
+    w = _config_slot_warning(str(out.get("die") or ""), str(out.get("config") or ""), cfg_doc)
+    if w:
+        out["warnings"] = [w]
+        log.warning("family: %s", w["message"])
+    return out
+
+
 def _upsert_duty(req: DutyCreate, _w: dict, *, may_move: bool = True) -> dict:
     """``POST /duty``.  ``may_move``: a save whose live machine is another
     LAMINATION than the configuration's die (only die-level differences) moves
@@ -3956,8 +3966,8 @@ def _upsert_duty(req: DutyCreate, _w: dict, *, may_move: bool = True) -> dict:
                      "L-number follows the defined stack", die, _oldn, cfg)
             log.info("family: duty '%s/%s/%s' saved (%s, %.1f Arms @ %.0f rpm, γ=%.2f°)",
                      die, cfg, dname, d.mode, d.current_arms, d.rpm, d.gamma_deg)
-            return {"ok": True, "die": die, "config": cfg, "renamed_to": cfg,
-                    "drive": _drive, "primary": _is_primary}
+            return _with_slot_warning({"ok": True, "die": die, "config": cfg, "renamed_to": cfg,
+                                       "drive": _drive, "primary": _is_primary}, c)
     _save_yaml(p, c)
     log.info("family: duty '%s/%s/%s' saved (%s, %.1f Arms @ %.0f rpm, γ=%.2f°, "
              "%s run, %s)", die, cfg, dname, d.mode, d.current_arms, d.rpm,
@@ -3966,7 +3976,8 @@ def _upsert_duty(req: DutyCreate, _w: dict, *, may_move: bool = True) -> dict:
     # `drive` / `primary` let the caller say WHERE the save went instead of a
     # bare tick: a PWM save that quietly left the sine numbers standing is
     # correct but indistinguishable from one that did nothing.
-    return {"ok": True, "die": die, "config": cfg, "drive": _drive, "primary": _is_primary}
+    return _with_slot_warning({"ok": True, "die": die, "config": cfg, "drive": _drive,
+                               "primary": _is_primary}, c)
 
 
 @router.post("/duty_result")
@@ -5008,6 +5019,45 @@ def _derived_slot_width(geo: dict) -> Optional[float]:
         v = derived_geometry(dict(geo or {})).get("slot_width")
         return float(v) if isinstance(v, (int, float)) else None
     except Exception:                                       # noqa: BLE001 - cannot tell = no difference
+        return None
+
+
+#: Two slot widths closer than this are the same slot: the round-wire proxy stack is rounded to the
+#: micron (6 x 0.421 + 11 x 0.05218 + 0.14 = 3.23998 for a 3.24 slot), far below any stamping tolerance.
+SLOT_MISMATCH_WARN_MM = 0.005
+SLOT_DIFFERS_FROM_DIE = "slot_width_differs_from_die"
+
+
+def config_slot_mismatch(die: str, cfg: str, die_geo: dict, overrides: dict) -> Optional[dict]:
+    """A WARNING (never a refusal) when configuration ``cfg`` derives another slot width than its die.
+
+    The slot is cut into the lamination, but its width is DERIVED from configuration keys (wire width /
+    split / spacing, liner thickness), so a configuration can carry a wire stack that asks for a slot the
+    die does not have.  Since the no-implicit-die rule (owner 2026-11-12) such a result is saved into the
+    configuration instead of forking a die - silently, which is the trap of 2026-11-12: a round-wire
+    proxy with a 3.667 mm pocket lived on the 3.24 mm die 'CIANO28 80_11 vadim 3' and every cogging number
+    was computed on a slot the lamination does not have (owner 2026-11-13: "add a warning").
+    ``{code, message, die, config, die_slot_mm, config_slot_mm}`` or None.  Pure."""
+    die_geo = dict(die_geo or {})
+    dsw = _derived_slot_width(die_geo)
+    csw = _derived_slot_width({**die_geo, **{k: v for k, v in dict(overrides or {}).items() if v is not None}})
+    if dsw is None or csw is None or abs(dsw - csw) <= SLOT_MISMATCH_WARN_MM:
+        return None
+    dsw, csw = round(dsw, 3), round(csw, 3)
+    return {"code": SLOT_DIFFERS_FROM_DIE, "die": die, "config": cfg,
+            "die_slot_mm": dsw, "config_slot_mm": csw,
+            "message": (f"slot width {csw} mm of configuration '{cfg}' (from its wire, spacing and liner) is "
+                        f"not the {dsw} mm slot of die '{die}': the results are computed on a slot this "
+                        "lamination does not have.  Fit the wire stack to the die's slot, or save the "
+                        "machine as a new die.")}
+
+
+def _config_slot_warning(die: str, cfg: str, cfg_doc: dict) -> Optional[dict]:
+    """:func:`config_slot_mismatch` for a stored configuration; None when the die cannot be read."""
+    try:
+        die_geo = _load_yaml(_die_file(die), "die").get("geometry") or {}
+        return config_slot_mismatch(die, cfg, die_geo, (cfg_doc or {}).get("geometry_overrides") or {})
+    except Exception:                                       # noqa: BLE001 - a warning never breaks a save or a read
         return None
 
 
@@ -6163,6 +6213,10 @@ def context(response: Response, authorization: str = Header(default=None)):
         # so refreshing the tab still explains why the strip's name changed
         # (cleared only by the next /activate, which stamps a fresh context).
         "transitioned_from": ctx.get("transitioned_from"),
+        # This configuration's wire stack derives another slot width than its die has (owner 2026-11-13):
+        # the strip's one-line warning.  None = the slot is the die's.
+        "slot_mismatch": config_slot_mismatch(die, cfg, d.get("geometry") or {},
+                                              c.get("geometry_overrides") or {}),
         # The supply this machine is designed around.  The Simulation tab's PWM
         # source prefills V_bus from it: a DC-link voltage typed by hand is a
         # number nobody checks against the pack that is actually there, and the

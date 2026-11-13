@@ -5098,7 +5098,8 @@ def die_shape_diffs(die_geo: dict, live_geo: dict) -> list:
             out.append({"key": k, "label": _DIE_KEY_LABELS.get(k, k.replace("_", " ")),
                         "die": dv, "live": lv})
     dsw, lsw = _built_slot_width(die_geo), _built_slot_width(live_geo)
-    if dsw is not None and lsw is not None and abs(dsw - lsw) > 1e-6:
+    # the same tolerance as the slot warning: stacks that differ by a rounding micron are one pocket
+    if dsw is not None and lsw is not None and abs(dsw - lsw) > SLOT_MISMATCH_WARN_MM:
         out.append({"key": "slot_width", "label": _SHAPE_KEY_LABELS["slot_width"],
                     "die": round(dsw, 6), "live": round(lsw, 6)})
     # `stator_outer_notches` is NOT here: it is a configuration key

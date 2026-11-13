@@ -56,3 +56,12 @@ def test_missing_input_means_no_verdict():
     a = _geo(4.0, 0.1, 0.1)
     b = {k: v for k, v in _geo(4.5, 0.1, 0.1).items() if k != "wire_width"}
     assert _slot_diffs(a, b) == []
+
+
+def test_a_rounding_micron_is_not_another_lamination():
+    # a round-wire proxy stack is rounded to the micron: 1 um apart is the same pocket (the slot warning's tolerance)
+    a, b = _geo(4.0, 0.1, 0.1), _geo(4.001, 0.1, 0.1)
+    assert 0 < abs(fam._built_slot_width(a) - fam._built_slot_width(b)) < fam.SLOT_MISMATCH_WARN_MM
+    assert _slot_diffs(a, b) == []
+    c = _geo(4.0 + 2 * fam.SLOT_MISMATCH_WARN_MM, 0.1, 0.1)
+    assert len(_slot_diffs(a, c)) == 1

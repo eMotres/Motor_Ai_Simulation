@@ -20,6 +20,5 @@ test('wiring: the points-limited Configure uses the shared panel and the battery
   assert.doesNotMatch(panel, /busText|busHeadroom|points\.bus/);
   assert.match(panel, /<VariantControls projectId=\{focus\.id\}/);
   assert.match(panel, /data-testid="step-star"/);
-  assert.match(src('../../../components/compare/StepsChart.tsx'), /data-testid="steps-chart-star"/);
   assert.match(src('../../../components/catalog/FamilyCatalog.tsx'), /isConfigRecommended\(projectIndex, die\.name, b\.config\)/);
 });

@@ -60,6 +60,9 @@ def test_missing_input_means_no_verdict():
 
 def test_a_rounding_micron_is_not_another_lamination():
     # a round-wire proxy stack is rounded to the micron: 1 um apart is the same pocket (the slot warning's tolerance)
+    # Live catalog check of 2026-11-13 (92 configurations, read-only): with this tolerance exactly ONE configuration
+    # changes its verdict, in the intended direction - built pocket equal to its die's (3.24 mm) while the derived
+    # number differed (3.292 against 3.34); without the tolerance a 0.001 mm stack difference would have been reported.
     a, b = _geo(4.0, 0.1, 0.1), _geo(4.001, 0.1, 0.1)
     assert 0 < abs(fam._built_slot_width(a) - fam._built_slot_width(b)) < fam.SLOT_MISMATCH_WARN_MM
     assert _slot_diffs(a, b) == []

@@ -138,7 +138,7 @@ def test_a_die_with_only_the_active_configuration_still_adopts(dies):
 
 
 def test_a_wider_derived_slot_moves_the_configuration(dies):
-    """L110 with a ceramic liner: insulation 0.3 -> 0.37 gives slot 7.74 on a die stamped 7.6."""
+    """L110 with a ceramic liner: insulation 0.3 -> 0.37 gives a built pocket 7.54 on a die cut 7.4 (derived 7.74 / 7.6, one wire_spacing_x wider)."""
     (dies / DIE / "L110.yaml").write_text(yaml.safe_dump(
         _cfg_doc("L110", insulation_thickness=0.37), sort_keys=False), encoding="utf-8")
     _activate("L110")
@@ -149,7 +149,7 @@ def test_a_wider_derived_slot_moves_the_configuration(dies):
     assert _bytes(dies) == before
     tf = _ctx()["transitioned_from"]
     assert [x["key"] for x in tf["diffs"]] == ["slot_width"]
-    assert tf["diffs"][0]["die"] == pytest.approx(7.6) and tf["diffs"][0]["live"] == pytest.approx(7.74)
+    assert tf["diffs"][0]["die"] == pytest.approx(7.4) and tf["diffs"][0]["live"] == pytest.approx(7.54)   # the BUILT pocket
     assert tf["others"] == ["L100"]
     # the new die stamps the configuration's slot: a duty save there no longer reads "build differs"
     ng = _die(dies, target)["geometry"]

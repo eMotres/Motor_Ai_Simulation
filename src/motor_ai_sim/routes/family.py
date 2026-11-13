@@ -5012,16 +5012,6 @@ def _auto_transition_die(die: str, cfg: Optional[str], duty: Optional[str],
 _SHAPE_KEY_LABELS: Dict[str, str] = {"slot_width": "slot width (wire + insulation)"}
 
 
-def _derived_slot_width(geo: dict) -> Optional[float]:
-    """The slot width ``geo`` DERIVES (wire column + 2 spacings + 2 liner), or None when it lacks an input."""
-    try:
-        from motor_ai_sim.geometry.motor_geometry import derived_geometry
-        v = derived_geometry(dict(geo or {})).get("slot_width")
-        return float(v) if isinstance(v, (int, float)) else None
-    except Exception:                                       # noqa: BLE001 - cannot tell = no difference
-        return None
-
-
 #: Two pockets closer than this are the same pocket: the round-wire proxy stack is rounded to the
 #: micron (6 x 0.421 + 10 x 0.05218 + 0.14 + 0.05218 = 3.23998 for a 3.24 pocket), far below any stamping tolerance.
 SLOT_MISMATCH_WARN_MM = 0.005
@@ -5087,7 +5077,9 @@ def die_shape_diffs(die_geo: dict, live_geo: dict) -> list:
     """``[{key, label, die, live}]`` - where ``live_geo`` is another LAMINATION than ``die_geo``.
 
     Every die-level INPUT key (not a configuration key, not a derived copy, not an
-    unused knob: ``is_compared_geometry_input``), plus the DERIVED slot width: it is a
+    unused knob: ``is_compared_geometry_input``), plus the BUILT coil pocket
+    (:func:`_built_slot_width`, what the builders really cut - NOT
+    ``derived_geometry()["slot_width"]``, which carries one more ``wire_spacing_x``): it is a
     function of configuration keys (wire width / split / spacing, liner thickness),
     but the slot is cut into the lamination, so a configuration whose slot is wider
     than its die's is not on that die (the duty save refuses it: "build differs",
@@ -5105,8 +5097,9 @@ def die_shape_diffs(die_geo: dict, live_geo: dict) -> list:
         if abs(float(dv) - float(lv)) > 1e-6 * max(1.0, abs(float(dv))):
             out.append({"key": k, "label": _DIE_KEY_LABELS.get(k, k.replace("_", " ")),
                         "die": dv, "live": lv})
-    dsw, lsw = _derived_slot_width(die_geo), _derived_slot_width(live_geo)
-    if dsw is not None and lsw is not None and abs(dsw - lsw) > 1e-6:
+    dsw, lsw = _built_slot_width(die_geo), _built_slot_width(live_geo)
+    # the same tolerance as the slot warning: stacks that differ by a rounding micron are one pocket
+    if dsw is not None and lsw is not None and abs(dsw - lsw) > SLOT_MISMATCH_WARN_MM:
         out.append({"key": "slot_width", "label": _SHAPE_KEY_LABELS["slot_width"],
                     "die": round(dsw, 6), "live": round(lsw, 6)})
     # `stator_outer_notches` is NOT here: it is a configuration key

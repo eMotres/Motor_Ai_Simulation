@@ -38,8 +38,10 @@ not a die creation; it can also be refused if the owner prefers.
 
 ## Slot width of a configuration differs from its die: a warning (owner 2026-11-13)
 Case 1 above saves a slot-width-only difference into the configuration. So that this is never silent,
-`config_slot_mismatch` (`routes/family.py`) compares the slot width the die derives with the one the
-configuration's wire stack derives (wire width / split / spacing, liner). A difference above
+`config_slot_mismatch` (`routes/family.py`) compares the coil pocket the builders cut for the die with the one
+they cut for the configuration's wire stack: `column + 2 x insulation_thickness + wire_spacing_x`
+(`cadquery_geometry` `slot_w`, `iron_template` `coil_w`). This is NOT `derived_geometry()["slot_width"]`, which is
+one `wire_spacing_x` wider; `die_shape_diffs` still compares that derived number. A difference above
 `SLOT_MISMATCH_WARN_MM` (0.005 mm, the micron rounding of a round-wire proxy stack) is reported, never refused:
 
 - `POST /api/family/duty` answers `warnings: [{code: "slot_width_differs_from_die", die_slot_mm, config_slot_mm, message}]`;

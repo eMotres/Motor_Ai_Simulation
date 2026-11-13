@@ -5022,33 +5022,55 @@ def _derived_slot_width(geo: dict) -> Optional[float]:
         return None
 
 
-#: Two slot widths closer than this are the same slot: the round-wire proxy stack is rounded to the
-#: micron (6 x 0.421 + 11 x 0.05218 + 0.14 = 3.23998 for a 3.24 slot), far below any stamping tolerance.
+#: Two pockets closer than this are the same pocket: the round-wire proxy stack is rounded to the
+#: micron (6 x 0.421 + 10 x 0.05218 + 0.14 + 0.05218 = 3.23998 for a 3.24 pocket), far below any stamping tolerance.
 SLOT_MISMATCH_WARN_MM = 0.005
 SLOT_DIFFERS_FROM_DIE = "slot_width_differs_from_die"
 
 
-def config_slot_mismatch(die: str, cfg: str, die_geo: dict, overrides: dict) -> Optional[dict]:
-    """A WARNING (never a refusal) when configuration ``cfg`` derives another slot width than its die.
+def _built_slot_width(geo: dict) -> Optional[float]:
+    """The coil pocket the builders actually CUT into the lamination [mm], or None when an input is missing.
 
-    The slot is cut into the lamination, but its width is DERIVED from configuration keys (wire width /
-    split / spacing, liner thickness), so a configuration can carry a wire stack that asks for a slot the
-    die does not have.  Since the no-implicit-die rule (owner 2026-11-12) such a result is saved into the
+    ``column + 2 x insulation_thickness + wire_spacing_x`` with ``column = N x wire_width +
+    (N - 1) x STRIP_GAP_FACTOR x wire_spacing_x`` (``cadquery_geometry``: ``slot_w = wire_col_w + ins_w*2 +
+    wire_d_x``; ``iron_template``: the same ``coil_w``).  NOT ``derived_geometry()["slot_width"]``, which is
+    one ``wire_spacing_x`` wider (the wire pitch the slot has to accept): two wire stacks can agree in one
+    number and differ in the other, and the iron follows this one."""
+    try:
+        from motor_ai_sim.winding import STRIP_GAP_FACTOR as _gf
+        g = dict(geo or {})
+        ww, wsx, ins = float(g["wire_width"]), float(g["wire_spacing_x"]), float(g["insulation_thickness"])
+        try:
+            n = max(1, int(round(float(g.get("wire_split") or 1))))
+        except (TypeError, ValueError):
+            n = 1
+        col = ww if n <= 1 else n * ww + (n - 1) * _gf * wsx
+        return col + 2.0 * ins + wsx
+    except Exception:                                       # noqa: BLE001 - cannot tell = no verdict
+        return None
+
+
+def config_slot_mismatch(die: str, cfg: str, die_geo: dict, overrides: dict) -> Optional[dict]:
+    """A WARNING (never a refusal) when configuration ``cfg`` cuts another coil pocket than its die.
+
+    The pocket is cut into the lamination, but its width follows configuration keys (wire width / split /
+    spacing, liner thickness), so a configuration can carry a wire stack that asks for a pocket the die
+    does not have.  Since the no-implicit-die rule (owner 2026-11-12) such a result is saved into the
     configuration instead of forking a die - silently, which is the trap of 2026-11-12: a round-wire
     proxy with a 3.667 mm pocket lived on the 3.24 mm die 'CIANO28 80_11 vadim 3' and every cogging number
-    was computed on a slot the lamination does not have (owner 2026-11-13: "add a warning").
+    was computed on a pocket the lamination does not have (owner 2026-11-13: "add a warning").
     ``{code, message, die, config, die_slot_mm, config_slot_mm}`` or None.  Pure."""
     die_geo = dict(die_geo or {})
-    dsw = _derived_slot_width(die_geo)
-    csw = _derived_slot_width({**die_geo, **{k: v for k, v in dict(overrides or {}).items() if v is not None}})
+    dsw = _built_slot_width(die_geo)
+    csw = _built_slot_width({**die_geo, **{k: v for k, v in dict(overrides or {}).items() if v is not None}})
     if dsw is None or csw is None or abs(dsw - csw) <= SLOT_MISMATCH_WARN_MM:
         return None
     dsw, csw = round(dsw, 3), round(csw, 3)
     return {"code": SLOT_DIFFERS_FROM_DIE, "die": die, "config": cfg,
             "die_slot_mm": dsw, "config_slot_mm": csw,
-            "message": (f"slot width {csw} mm of configuration '{cfg}' (from its wire, spacing and liner) is "
-                        f"not the {dsw} mm slot of die '{die}': the results are computed on a slot this "
-                        "lamination does not have.  Fit the wire stack to the die's slot, or save the "
+            "message": (f"coil pocket {csw} mm of configuration '{cfg}' (from its wire, spacing and liner) is "
+                        f"not the {dsw} mm pocket of die '{die}': the results are computed on a slot this "
+                        "lamination does not have.  Fit the wire stack to the die's pocket, or save the "
                         "machine as a new die.")}
 
 
@@ -6213,7 +6235,7 @@ def context(response: Response, authorization: str = Header(default=None)):
         # so refreshing the tab still explains why the strip's name changed
         # (cleared only by the next /activate, which stamps a fresh context).
         "transitioned_from": ctx.get("transitioned_from"),
-        # This configuration's wire stack derives another slot width than its die has (owner 2026-11-13):
+        # This configuration's wire stack cuts another coil pocket than its die has (owner 2026-11-13):
         # the strip's one-line warning.  None = the slot is the die's.
         "slot_mismatch": config_slot_mismatch(die, cfg, d.get("geometry") or {},
                                               c.get("geometry_overrides") or {}),

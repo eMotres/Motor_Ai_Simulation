@@ -5005,7 +5005,16 @@ def get_fem_transient(
     waveform:            Optional[str] = None,  # ← custom_current: JSON array of [θ_e_deg, i_A]
                                           #   samples of the phase-A TERMINAL current over ONE
                                           #   electrical period (B/C = the same shape shifted
-                                          #   ∓120°el), linearly interpolated, ≤20k points
+                                          #   ∓120°el), linearly interpolated, ≤20k points.
+                                          #   θ_e is the DRIVE frame, NOT the rotor's electrical
+                                          #   angle: θ_e = pole_pairs·rotor_angle_deg + gamma_deg
+                                          #   + daxis_deg (the run's d-axis offset, `daxis_deg` in
+                                          #   the result) — the angle the sine drive's cos() takes,
+                                          #   so a sampled I·cos(θ_e) reproduces drive=current.
+                                          #   A curve sampled against a no-load run's electrical
+                                          #   angle φ = pole_pairs·rotor_angle_deg is applied
+                                          #   daxis_deg + gamma_deg away from it: to impose i(φ),
+                                          #   send θ_e = φ + daxis_deg + gamma_deg.
     i_block:             float = 0.0,     # ← bldc_current: FLAT-TOP terminal current of the 120°
                                           #   block [A].  Not an rms: a 120° block of amplitude I
                                           #   has rms I·√(2/3), so the copper-loss-matched

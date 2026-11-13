@@ -124,6 +124,31 @@ def test_imposed_current_sources_apply_the_waveform_at_the_step_angle():
     assert bl.ramp_deg == pytest.approx(360.0 / 48.0)
 
 
+def test_custom_current_angle_is_the_drive_frame_not_the_rotor_electrical_angle():
+    """The documented reference (routes/simulation.py ``waveform``, pwm.CustomCurrentSource): sample angle
+    theta_e = pole_pairs * rotor_angle + gamma + daxis.  A curve read against the rotor's electrical angle
+    phi = pole_pairs * rotor_angle is therefore imposed daxis + gamma away from it (60 deg here) - measured
+    on the 24s28p CILN28 die, pinned so the documentation and the code cannot drift apart again."""
+    from motor_ai_sim.simulation.drive import Excitation
+
+    gamma = 15.0
+    # A one-sample-wide pulse at theta_e = 90 deg: where it lands says which frame the angle is in.
+    wf = [(float(x), 100.0 if x == 90 else 0.0) for x in range(0, 360)]
+    cu = make_source("custom_current", **_common(waveform=wf, gamma_deg=gamma))
+    phi_hit = 90.0 - DAXIS - gamma                       # rotor electrical angle at which the pulse is applied
+    assert cu.sampled.currents(phi_hit / POLE_PAIRS)["A"] == pytest.approx(100.0)
+    assert cu.sampled.currents(90.0 / POLE_PAIRS)["A"] == pytest.approx(0.0)   # NOT at phi = 90
+
+    # ...and a sampled I*cos(theta_e) is the stock sine drive, angle for angle.
+    ipk = 60.0 * math.sqrt(2.0)
+    cosw = [(x * 1.0, ipk * math.cos(math.radians(x))) for x in range(360)]
+    cc = make_source("custom_current", **_common(waveform=cosw, gamma_deg=gamma)).sampled
+    sine = Excitation(pole_pairs=POLE_PAIRS, daxis_deg=DAXIS, i_peak=ipk, gamma_deg=gamma)
+    for rot in (0.0, 3.3, 17.0, 41.9):
+        for ph in "ABC":
+            assert cc.currents(rot)[ph] == pytest.approx(sine.currents(rot)[ph], abs=1e-2 * ipk)
+
+
 def test_bldc_block_is_unusable_until_the_step_count_is_final():
     """Its ramp is one TIME STEP wide, and that is only known after the snap."""
     raw = make_source("bldc_current", **_common(i_block=50.0))

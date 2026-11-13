@@ -90,6 +90,7 @@ import uuid
 from abc import ABC, abstractmethod
 from collections import OrderedDict
 from contextlib import contextmanager
+import contextvars
 from contextvars import ContextVar
 from dataclasses import asdict, dataclass, field
 from enum import IntEnum
@@ -551,8 +552,8 @@ def current_run_id() -> Optional[str]:
 class _Waiter:
     """One blocked caller (blocking mode) or one parked job (202 mode)."""
 
-    __slots__ = ("record", "work", "ws", "who", "claimed", "done", "result",
-                 "error")
+    __slots__ = ("record", "work", "ws", "who", "ctx", "claimed", "done",
+                 "result", "error")
 
     def __init__(self, record: JobRecord,
                  work: Optional[Callable[[], Any]] = None) -> None:
@@ -560,6 +561,7 @@ class _Waiter:
         self.work = work
         self.ws = None          # the Workspace a parked job must be run in
         self.who = None
+        self.ctx = None         # a parked job's copy of the submitter's context
         self.claimed = False
         self.done = threading.Event()
         self.result: Any = None
@@ -736,6 +738,16 @@ class InProcessQueue(JobQueue):
                 # context and would otherwise solve the owner's machine.
                 w.ws = _WSP.workspace()
                 w.who = _WSP.caller()
+                # ...and in a COPY of the submitter's whole context, taken
+                # here.  A ``job-worker`` thread is long-lived: a ContextVar a
+                # job sets in the thread's own context (the transient route
+                # sets its ``mat=`` override in its body) stayed set for the
+                # NEXT job that thread ran, and the request's own vars (the
+                # router dependency's ``mat=``, record / dry-run) never reached
+                # the work at all.  Same rule as
+                # ``workspace.WorkspaceThreadPoolExecutor``: one fresh copy per
+                # job, never one context shared by two.
+                w.ctx = contextvars.copy_context()
                 self._ensure_workers()
                 self._cv.notify_all()
                 accepted = JobAccepted(record)
@@ -784,13 +796,21 @@ class InProcessQueue(JobQueue):
 
     def _run_admitted_inner(self, w: _Waiter, inline: bool) -> Any:
         rec = w.record
-        try:
+
+        def _body():
             with _WSP.use_workspace(w.ws) if (not inline and w.ws is not None) \
                     else _nullctx():
                 with _WSP.use_caller(w.who) if (not inline and w.who is not None) \
                         else _nullctx():
                     with _job_context(rec):
-                        w.result = w.work()
+                        return w.work()
+
+        try:
+            # A parked job (202 mode) runs in ITS submitter's context copy, so
+            # nothing it sets outlives it on this worker thread; a blocking
+            # caller is already in its own request's context.
+            w.result = (w.ctx.run(_body) if (not inline and w.ctx is not None)
+                        else _body())
         except JobCancelled:
             with self._cv:
                 self._finish_locked(rec, JobState.CANCELLED)

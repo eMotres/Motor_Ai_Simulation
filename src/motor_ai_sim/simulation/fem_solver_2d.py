@@ -4658,7 +4658,9 @@ def _fem_transient_sliding_band_once(
                                      # see simulation/pwm.py); the effective value is reported.
     waveform=None,                   # custom_current: [(θ_e_deg, i_A)] samples of the phase-A
                                      # TERMINAL current over one electrical period (B/C = the same
-                                     # shape shifted ∓120°el), linearly interpolated.
+                                     # shape shifted ∓120°el), linearly interpolated.  θ_e is the
+                                     # drive frame, pole_pairs·rotor_angle + gamma + daxis — NOT
+                                     # the rotor's electrical angle (pwm.CustomCurrentSource).
     inverter_nonideal=None,          # drive="inverter" (Controller Stage 2): the device's own
                                      # non-ideality, as the Controller module resolved it —
                                      # {r_ds_ohm, v_sd_v0_V, v_sd_rd_ohm, dead_time_s, …} per LEG
@@ -15794,7 +15796,8 @@ def em_transient_eval(
     v_bus_real: float = 0.0,         # inverter: the PHYSICAL link when v_bus is the model bus
     f_switch: float = 0.0,           # pwm_voltage: carrier [Hz] (snapped, see simulation/pwm.py)
     inverter_nonideal=None,          # inverter: the device's per-leg non-ideality (Controller)
-    waveform=None,                   # custom_current: [(θ_e_deg, i_A)] over one electrical period
+    waveform=None,                   # custom_current: [(θ_e_deg, i_A)] over one electrical period,
+                                     # θ_e = pole_pairs·rotor_angle + gamma + daxis (drive frame)
     i_block: float = 0.0,            # bldc_current: flat-top block amplitude [A terminal]
     excitation=None,                 # an ExcitationSource OBJECT instead of the five named
                                      # drives — an external controller / co-simulation

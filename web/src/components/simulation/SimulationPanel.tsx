@@ -2293,8 +2293,10 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
                   endAdornment: <HelpTip title={
                     'JSON array of [electrical angle °, terminal phase current A] over ONE '
                     + 'electrical period; B and C are the same shape shifted ∓120°el and the '
-                    + 'samples are linearly interpolated. γ still rotates it against the rotor, '
-                    + 'so a sampled cos() reproduces the sine-current drive exactly. Up to 20k '
+                    + 'samples are linearly interpolated. The angle is the drive frame, '
+                    + 'pole pairs·rotor angle + γ + d-axis offset (daxis_deg in the result), not the '
+                    + 'rotor’s electrical angle: a curve read off a no-load run must be shifted by '
+                    + 'daxis_deg + γ. A sampled cos() reproduces the sine-current drive exactly. Up to 20k '
                     + 'points; gaps wider than 30° (the wrap counts) are refused.'} /> }} />
               <Box sx={{ display: 'flex', gap: 0.5, alignItems: 'center' }}>
                 <Button size="small" variant="outlined" fullWidth

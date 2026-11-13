@@ -971,6 +971,16 @@ class CustomCurrentSource:
     The samples are TERMINAL phase current [A]; the per-coil value the solver
     drives is divided by the winding's parallel paths, again exactly as
     ``I_phase_rms`` is.
+
+    THE SAMPLE ANGLE IS NOT THE ROTOR'S ELECTRICAL ANGLE.  ``theta_e`` is
+    ``pole_pairs * rotor_angle_deg + gamma_deg + daxis_deg``; the rotor's own
+    electrical angle (what a no-load run's ``rotor_angle_deg`` times the pole
+    pairs gives) is ``phi = pole_pairs * rotor_angle_deg``.  So a curve read off
+    a no-load run against ``phi`` and pasted unchanged is imposed
+    ``daxis_deg + gamma_deg`` away from where it was read (60 deg on a die
+    whose d-axis offset is 60 deg).  To impose ``i(phi)``, send the samples at
+    ``theta_e = phi + daxis_deg + gamma_deg``; ``daxis_deg`` is in every
+    transient result.
     """
 
     pole_pairs: int

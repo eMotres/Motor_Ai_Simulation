@@ -94,7 +94,14 @@ interface Ctx {
   // from another lamination (a wider slot) was saved on the die it is.
   transitioned_from?: { die: string; at?: string | null; diffs?: DieDiff[] | null;
                         reason?: string | null; others?: string[] | null } | null;
+  // This configuration's wire stack derives another slot width than its die has
+  // (owner 2026-11-13): a warning, never a refusal.  null = the slot is the die's.
+  slot_mismatch?: SlotMismatch | null;
 }
+interface SlotMismatch { code: string; message: string; die_slot_mm: number; config_slot_mm: number }
+/** The strip's one short line for it ("slot 3.667 mm ≠ die 3.24 mm"); the tooltip carries the message. */
+export const slotMismatchLine = (w: Pick<SlotMismatch, 'die_slot_mm' | 'config_slot_mm'>) =>
+  `slot ${w.config_slot_mm} mm ≠ die ${w.die_slot_mm} mm`;
 
 const readLS = (k: string, d: any) => {
   try { const v = localStorage.getItem('sim.' + k); return v == null ? d : JSON.parse(v); }
@@ -745,7 +752,11 @@ const ActiveFamilyStrip: React.FC = () => {
             ? ` (${driveLabel(drive)} run stored — now this duty's primary)`
             : ` (${driveLabel(drive)} run stored; primary sine result kept)`)
         : '';
-      setMsg(`✓ saved to ${tDie} / ${cfgName} / ${tDuty}${extra}${where}`);
+      // a save the backend accepted WITH a warning (the configuration's slot is not its die's) says so
+      const slotWarn = (Array.isArray(rj?.warnings) ? rj.warnings : [])
+        .find((w: any) => w?.code === 'slot_width_differs_from_die');
+      setMsg(`✓ saved to ${tDie} / ${cfgName} / ${tDuty}${extra}${where}`
+        + (slotWarn ? ` — ⚠ ${slotMismatchLine(slotWarn)}` : ''));
       setBuildClash(null);
       // The run is in the duty now: nothing finished on screen is unsaved any more
       // (lib/unsavedWork - what the load guard asks about).
@@ -1104,6 +1115,16 @@ const ActiveFamilyStrip: React.FC = () => {
                     + `(its die keeps its own cross-section), so the duty was saved on the die it is`
                   : '')
             + `; the original die '${ctx.transitioned_from.die}' is untouched.`} />
+        </Box>
+      )}
+      {/* The configuration's wire stack asks for a slot its die does not have (owner
+          2026-11-13).  One short line + HelpTip (the UI rule). */}
+      {ctx.slot_mismatch && (
+        <Box sx={{ display: 'inline-flex', alignItems: 'center', gap: 0.25 }}>
+          <Typography component="span" sx={{ fontSize: 11, color: '#f59e0b' }}>
+            {`⚠ ${slotMismatchLine(ctx.slot_mismatch)}`}
+          </Typography>
+          <HelpTip title={ctx.slot_mismatch.message} />
         </Box>
       )}
       {/* This browser's panel was CAUGHT UP with a duty loaded somewhere else.

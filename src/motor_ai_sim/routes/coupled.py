@@ -847,6 +847,14 @@ def _note_solved_build(body: Dict[str, Any]) -> bool:
         return False
 
 
+def _od_channel_preflight(body: Dict[str, Any]) -> None:
+    """Seawater through the OD notches needs notches: a 422 from the thermal
+    route's own check, in a second, rather than after the electromagnetic run."""
+    from motor_ai_sim.routes import thermal as th
+    polys, motor, _ov = th._live_polys(body.get("geo"))
+    th.stator_od_channel_geometry(dict(motor.parameters), stator=polys.get("stator"))
+
+
 def _pole_pairs(body: Dict[str, Any]) -> int:
     """The machine's pole pairs, honouring this request's geometry override."""
     from motor_ai_sim.config import get_config
@@ -5840,6 +5848,8 @@ def _run(body: Dict[str, Any],
             "Thermal tab (or send thermal_settings) and run again." % issue,
             ["thermal_settings"], code="no_thermal_boundary")
     cooling = cooling_fields(settings)
+    if cooling.get("stator_od_cooling") == "sleeve_channels":
+        _od_channel_preflight(body)
 
     # ── HOLD THE DUTY'S TORQUE (owner 2026-10-27) ───────────────────────────
     # Resolved before the history key and before any solve: an impossible

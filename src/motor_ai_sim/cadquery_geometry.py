@@ -731,6 +731,106 @@ def stator_od_contact(geo: Dict, stator=None) -> Optional[Dict[str, float]]:
     return _out(theta / half * circ, "closed form (notch walls at x = ±cut_x, OD fillet)")
 
 
+def measure_od_notches(stator, R: float,
+                       rel_tol: float = 1e-4) -> Optional[List[Dict[str, float]]]:
+    """Every notch of a one-piece stator polygon's EXTERIOR, as flow geometry.
+
+    A notch is one run of exterior vertices off the OD circle, between two
+    vertices on it (the same ``rel_tol`` test as ``measure_od_contact``, so the
+    openings and the contact arcs share their ends).  Per notch, in mm / mm²:
+    ``iron_perimeter_mm`` (the walls, root and corner fillets the water wets on
+    the iron), ``sleeve_width_mm`` (the arc of the sleeve closing the notch),
+    ``area_mm2`` (the polygon of the run plus the circular segment up to the
+    OD), ``r_root_mm`` (the deepest point) and ``theta_mid_rad`` /
+    ``theta_half_rad`` (where the opening sits).  ``[]`` for a contour with no
+    notch; ``None`` when the input is not one polygon (a stator cut into pieces
+    has an exterior that runs round the bore too, which is not a notch)."""
+    import math as _m
+    if stator is None or getattr(stator, "is_empty", True) or not R or R <= 0:
+        return None
+    if getattr(stator, "geom_type", "") != "Polygon":
+        return None
+    cs = list(stator.exterior.coords)[:-1]
+    r_lo = float(R) * (1.0 - rel_tol)
+    on = [_m.hypot(x, y) >= r_lo for x, y in cs]
+    if not any(on):
+        return None
+    start = on.index(True)
+    out: List[Dict[str, float]] = []
+    a, run = start, []
+    for k in range(1, len(cs) + 1):
+        j = (start + k) % len(cs)
+        if not on[j]:
+            run.append(j)
+            continue
+        if run:
+            pts = [cs[a]] + [cs[i] for i in run] + [cs[j]]
+            per = sum(_m.hypot(x1 - x0, y1 - y0)
+                      for (x0, y0), (x1, y1) in zip(pts[:-1], pts[1:]))
+            area = 0.5 * abs(sum(x0 * y1 - x1 * y0 for (x0, y0), (x1, y1)
+                                 in zip(pts, pts[1:] + pts[:1])))
+            th = abs(_m.atan2(cs[a][0] * cs[j][1] - cs[a][1] * cs[j][0],
+                              cs[a][0] * cs[j][0] + cs[a][1] * cs[j][1]))
+            out.append({
+                "iron_perimeter_mm": float(per),
+                "sleeve_width_mm": float(R * th),
+                "area_mm2": float(area + 0.5 * R * R * (th - _m.sin(th))),
+                "r_root_mm": float(min(_m.hypot(*cs[i]) for i in run)),
+                "theta_mid_rad": float(_m.atan2(cs[a][1] + cs[j][1],
+                                                cs[a][0] + cs[j][0])),
+                "theta_half_rad": float(0.5 * th)})
+        a, run = j, []
+    return out
+
+
+def stator_od_notches(geo: Dict, stator=None) -> Optional[Dict[str, Any]]:
+    """The OD notches of this cross-section as axial water channels — measured
+    on the builder's own stator polygon (``stator``, or built here).
+
+    Returns ``{"notched", "n_notches", "area_per_notch_mm2", "area_total_mm2",
+    "iron_perimeter_per_notch_mm", "sleeve_width_per_notch_mm",
+    "wetted_perimeter_per_notch_mm", "hydraulic_diameter_mm", "depth_mm",
+    "opening_spans_rad", "basis"}`` for the WHOLE ring (per-notch values are the mean over the
+    notches, all alike by the machine's symmetry).  ``notched`` False with
+    ``n_notches`` 0 when the flag is off (smooth OD); ``None`` when the outline
+    cannot be measured.  ``D_h = 4·A / (iron + sleeve side)``: the sleeve is a
+    wall of the channel, wet like the iron."""
+    from motor_ai_sim.geometry.motor_geometry import derived_geometry
+
+    if not _outer_notches(geo):
+        return {"notched": False, "n_notches": 0,
+                "basis": "no notches: the whole OD circle"}
+    if stator is None:
+        try:
+            import io as _io
+            import contextlib as _cl
+            with _cl.redirect_stdout(_io.StringIO()):
+                _cm = CadQueryMotor()
+                _cm.set_parameters(dict(geo))
+                stator = _cm.get_2d_polygons(rotor_angle_deg=0.0).get("stator")
+        except Exception:                          # noqa: BLE001
+            return None
+    R = derived_geometry(geo).get("stator_outer_radius") or geo.get("stator_outer_radius")
+    items = measure_od_notches(stator, float(R or 0.0))
+    if not items:
+        return None
+    n = len(items)
+    area = sum(i["area_mm2"] for i in items)
+    iron = sum(i["iron_perimeter_mm"] for i in items) / n
+    width = sum(i["sleeve_width_mm"] for i in items) / n
+    return {"notched": True, "n_notches": n,
+            "area_per_notch_mm2": float(area / n),
+            "area_total_mm2": float(area),
+            "iron_perimeter_per_notch_mm": float(iron),
+            "sleeve_width_per_notch_mm": float(width),
+            "wetted_perimeter_per_notch_mm": float(iron + width),
+            "hydraulic_diameter_mm": float(4.0 * (area / n) / (iron + width)),
+            "depth_mm": float(float(R) - min(i["r_root_mm"] for i in items)),
+            "opening_spans_rad": [(i["theta_mid_rad"], i["theta_half_rad"])
+                                  for i in items],
+            "basis": "measured on the stator polygon"}
+
+
 def _magnet_side_local(rotor_or: float, magnet_r: float, num_poles: int,
                        fill_down: float, fill_up: float, down_h: float,
                        up_gap: float):

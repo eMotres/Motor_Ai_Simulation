@@ -782,6 +782,16 @@ def file_version(name: str) -> Optional[str]:
     return m.group(1) if m else None
 
 
+def is_superseded(doc: Any) -> bool:
+    """A document replaced in a published revision (``status: superseded``) or archived by hand under the older "[superseded ..." name."""
+    return isinstance(doc, dict) and (doc.get("status") == "superseded" or str(doc.get("name") or doc.get("filename") or "").startswith("[superseded"))
+
+
+def bilingual_has_text(c: Any) -> bool:
+    """A change line with some text in some language."""
+    return isinstance(c, dict) and any(str(c.get(k) or "").strip() for k in ("en", "zh"))
+
+
 def _norm_change(c: Any) -> dict:
     out = normalize_bilingual(c)
     pid = (c or {}).get("part_id") if isinstance(c, dict) else None
@@ -800,9 +810,11 @@ def _norm_files(raw: Any) -> dict:
         v = raw.get(key)
         return [dict(x) for x in v if isinstance(x, dict)] if isinstance(v, list) else []
 
-    rel = raw.get("released")
-    return {"new": rows("new"), "superseded": rows("superseded"),
-            "released": [str(x) for x in rel] if isinstance(rel, list) else []}
+    rel, relf = raw.get("released"), raw.get("released_files")
+    out = {"new": rows("new"), "superseded": rows("superseded"), "released": [str(x) for x in rel] if isinstance(rel, list) else []}
+    if isinstance(relf, list):
+        out["released_files"] = [str(x) for x in relf]          # the file ids the guard protects (store.released_files)
+    return out
 
 
 def normalize_revision(raw: dict) -> dict:

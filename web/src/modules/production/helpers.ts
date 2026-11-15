@@ -803,3 +803,8 @@ export function alertSummary(alert: { recipients: ReadonlyArray<{ mail: string }
   return { total: rec.length, sent: rec.filter((r) => r.mail === 'sent').length, failed: rec.filter((r) => r.mail === 'failed').length,
     notConfigured: rec.filter((r) => r.mail === 'not_configured').length };
 }
+
+
+/** The question asked before a SUPERSEDED file is opened or downloaded (the server's sentence, then the question in both languages). */
+export const supersededPrompt = (detail: string): string =>
+  `${detail}\n\nOpen it anyway, only to look at it? / 仍要打开吗（仅供查看）？`;

@@ -294,7 +294,10 @@
     "newSince": "New since {date}: {n}",
     "selected": "Shared selection: {n}",
     "showAll": "Show all",
-    "clear": "Clear"
+    "clear": "Clear",
+    "superseded": "Superseded",
+    "supersededBy": "Superseded by {name} (revision {rev})",
+    "supersededTip": "Replaced in a published revision. Do not make parts to it; the file is kept for reference."
   },
   "unread": {
     "tip": "{count} unread messages",

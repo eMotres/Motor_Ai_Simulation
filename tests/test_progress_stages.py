@@ -382,3 +382,99 @@ def test_a_transient_run_publishes_its_stages_as_the_solver_reports(
     assert end["running"] is False
     assert {s["state"] for s in end["stages"]} <= {"done", "skipped"}
     assert [s["state"] for s in end["stages"]][-1] == "done"     # post
+
+
+# ── the time-periodic (TDM) preparation counts passes, never a frame plan (owner 2026-11-16) ──
+# Recorded from the CIANO28 80_12 / L12-F475 run (worker log 23:08:27 - 23:09:55): d-axis calibration of 24 frames,
+# then "TDM Newton 0 / 1 / 2" (rrel 3e-2 -> 1.7e-5 -> 6.9e-7), then the reported period.  The strip showed
+# "Preparation 23 / 576+ frames ... ETA >= 2650 s": 576 = 4 x 144 was the march plan.
+TDM_NEWTON = ("eddy warm-up (time-periodic steady state, TDM): Newton %d, residual %.1e")
+
+
+def _tdm_stream(stages, t0=1000.0):
+    """The recorded stream with its times: returns the stage after each report."""
+    seen = []
+    for d in range(1, 24):
+        S.observe(stages, d, 24, CAL, now=t0 + d * 0.5)
+    seen.append(("cal", S.public(stages, now=t0 + 12)[0]["done"], S.eta_s(stages, now=t0 + 12)))
+    for k, (dt, r) in enumerate(((20.0, 3e-2), (50.0, 1.7e-5), (80.0, 6.9e-7))):
+        S.observe(stages, None, None, TDM_NEWTON % (k, r), now=t0 + dt)
+        pub = S.public(stages, now=t0 + dt)[0]
+        seen.append((k, pub["done"], pub["planned"], pub["unit"], S.eta_s(stages, now=t0 + dt)))
+    return seen
+
+
+def test_a_tdm_run_counts_passes_and_never_shows_the_march_plan():
+    stages = S.plan_em(eddy=True, demag=True, planned_final=144, planned_prepass=0)
+    seen = _tdm_stream(stages)
+    assert stages[0]["planned"] != 576
+    # after the calibration frames: no ETA from a frame rate that does not exist
+    assert seen[0][2] is None or seen[0][2] < 100
+    k0, k1, k2 = seen[1:]
+    assert k0[3] == "passes" and k0[1] == 1 and k0[2] == 3            # pass 1 of about 3
+    assert k0[4] is None                                              # one report: no pass time yet
+    assert (k1[1], k1[2]) == (2, 3)
+    # pass time (80 - 20) / (1 - 0)... measured between reports: 30 s per pass, 1 pass left, 0 s into it
+    assert k1[4] == pytest.approx(30.0)
+    assert (k2[1], k2[2]) == (3, 4)                                   # never claims "3 of 3" while a pass can follow
+    assert k2[4] is not None and k2[4] <= 30.0                        # never the 2650 s of the frame plan
+
+
+def test_the_guess_never_reaches_the_wire_as_a_frame_total():
+    stages = S.plan_em(eddy=True, demag=True, planned_final=144, planned_prepass=0)
+    S.observe(stages, None, None, TDM_NEWTON % (0, 3e-2), now=5.0)
+    pub = S.public(stages, now=6.0)
+    prep = next(s for s in pub if s["key"] == "prepare")
+    assert prep["unit"] == "passes" and prep["adaptive"] is True and prep["planned"] <= 4
+    S.finalize(stages, now=7.0)
+    prep = next(s for s in S.public(stages, now=8.0) if s["key"] == "prepare")
+    assert prep["done"] == prep["planned"] == 1                       # snaps to what it took
+
+
+def test_a_second_orbit_after_the_demag_prepass_adds_its_passes():
+    stages = S.plan_em(eddy=True, demag=True, planned_final=144, planned_prepass=0)
+    for k in range(3):
+        S.observe(stages, None, None, TDM_NEWTON % (k, 1e-3), now=10.0 * (k + 1))
+    S.observe(stages, None, None, TDM_NEWTON % (0, 1e-3), now=50.0)   # numbering restarts
+    prep = S.public(stages, now=51.0)[0]
+    assert prep["done"] == 4 and prep["planned"] >= 4
+
+
+def test_a_rejected_tdm_attempt_that_is_marched_counts_frames_again():
+    stages = S.plan_em(eddy=True, demag=False, planned_final=144, planned_prepass=0)
+    S.observe(stages, None, None, TDM_NEWTON % (0, 3e-2), now=5.0)
+    S.observe(stages, -30, 70, WARM, now=6.0)
+    prep = S.public(stages, now=7.0)[0]
+    assert prep["unit"] == "frames"
+
+
+def test_the_route_plan_for_a_tdm_run_has_no_frame_guess(monkeypatch):
+    from motor_ai_sim.routes import simulation as R
+    monkeypatch.delenv("SB_EDDY_METHOD", raising=False)
+    assert R._plan_tdm_expected(True) is True
+    assert R._plan_tdm_expected(False) is False
+    monkeypatch.setenv("SB_EDDY_METHOD", "march")
+    assert R._plan_tdm_expected(True) is False
+
+
+def test_the_transient_endpoint_does_not_extrapolate_a_frame_plan_during_a_tdm_pass(sim):
+    """The owner's screenshot: step 23 after 90 s against a total of 576 gave ETA 2650 s.  During a TDM pass the
+    endpoint answers the stage ETA (measured pass time) or unknown (0) - never the flat step/total extrapolation."""
+    import time as _t
+    now = _t.time()
+    stages = S.plan_em(eddy=True, demag=True, planned_final=144, planned_prepass=0)
+    S.observe(stages, 23, 24, CAL, now=now - 80)
+    S.observe(stages, None, None, TDM_NEWTON % (0, 3e-2), now=now - 40)
+    cur = {"running": True, "step": 23, "total": 576, "elapsed_s": 0.0, "eta_s": 0.0, "ts_start": now - 90.4,
+           "phase": TDM_NEWTON % (0, 3e-2), "composition": "", "stages": stages}
+    sim._fem_transient_progress["current"] = cur
+    try:
+        out = _poll(sim)
+        assert out["eta_s"] == 0.0                                    # one report: unknown, not 2650
+        assert out["stages"][0]["unit"] == "passes"
+        S.observe(stages, None, None, TDM_NEWTON % (1, 1.7e-5), now=now - 10)
+        out = _poll(sim)
+        assert 0 < out["eta_s"] < 100                                 # 30 s per pass, one pass left
+    finally:
+        sim._fem_transient_progress["current"] = {"running": False, "step": 0, "total": 0, "elapsed_s": 0.0,
+                                                  "eta_s": 0.0, "ts_start": 0.0, "phase": "idle", "composition": ""}

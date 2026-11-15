@@ -636,9 +636,9 @@
     "elapsed": "elapsed",
     "eta": "ETA",
     "adaptiveHint": "Adaptive: the total grows until the stage settles.",
-    "count": "{done} / {planned} {unit, select, steps {steps} other {frames}}",
-    "countGrowing": "{done} / {planned}+ {unit, select, steps {steps} other {frames}}",
-    "countOpen": "{done} {unit, select, steps {steps} other {frames}}",
+    "count": "{done} / {planned} {unit, select, steps {steps} passes {passes} other {frames}}",
+    "countGrowing": "{done} / {planned}+ {unit, select, steps {steps} passes {passes} other {frames}}",
+    "countOpen": "{done} {unit, select, steps {steps} passes {passes} other {frames}}",
     "state": {
       "pending": "waiting",
       "running": "running",

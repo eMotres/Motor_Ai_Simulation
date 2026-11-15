@@ -3893,6 +3893,20 @@ _fem_transient_keyed = _weakref.WeakValueDictionary()
 _fem_transient_keyed_guard = _threading.Lock()
 
 
+def _plan_tdm_expected(eddy: bool) -> bool:
+    """Will this transient's eddy steady state be reached by the time-periodic (TDM) solve?  The same resolution
+    the solver starts from (argument-free: SB_EDDY_METHOD, else the config's simulation.eddy_method, else "tdm");
+    a TDM request the solver then refuses is marched and its own frame counts replace the plan."""
+    if not eddy:
+        return False
+    try:
+        from motor_ai_sim.config import get_config as _get_cfg
+        from motor_ai_sim.simulation.time_periodic import resolve_eddy_method
+        return resolve_eddy_method(None, dict((_get_cfg() or {}).get("simulation") or {})) == "tdm"
+    except Exception:                   # noqa: BLE001 - a plan guess never fails a run
+        return False
+
+
 def _transient_lock_for(sb_key):
     """The lock a transient solve holds.
 
@@ -4576,6 +4590,11 @@ async def get_fem_transient_progress(run_id: str = ""):
         _eta_st = _PSTG.eta_s(p.get("stages"))
     except Exception:                  # noqa: BLE001 — the old ETA then
         _eta_st = None
+    # A time-periodic (TDM) orbit solve counts Newton passes, not frames: the flat step / total below belongs to a
+    # march plan this run will not have, so its extrapolated ETA must never be shown (owner 2026-11-16: "576+
+    # frames, ETA 2650 s" for a 90 s run).  The stage ETA (measured pass time) or "unknown" (0) is the answer.
+    _tdm_running = any(isinstance(s_, dict) and s_.get("_tdm") and s_.get("state") == "running"
+                       for s_ in (p.get("stages") or []))
     # The stage list (progress_stages) is bookkeeping while the solve writes it;
     # what goes on the wire is its public shape, beside the flat fields below.
     p = {**p, "stages": _PSTG.public(p.get("stages"))}
@@ -4600,6 +4619,8 @@ async def get_fem_transient_progress(run_id: str = ""):
         per_step = elapsed / raw_step
         eta = (per_step * max(0, total - raw_step) if _eta_st is None
                else float(_eta_st))
+        if _tdm_running:
+            eta = 0.0 if _eta_st is None else float(_eta_st)
         return _PROG._with_queue({
             **p,
             "elapsed_s": round(elapsed, 1),
@@ -6028,8 +6049,11 @@ def get_fem_transient(
                 # the preparation's first guess, before the solver counts:
                 # an eddy warm-up of ~2 periods and a demag pre-pass of 2
                 # (burn-in + verification, the image history transferred)
-                planned_prepass=int(n_steps_per_period) * (
-                    (2 if eddy else 0) + (2 if demag else 0))),
+                # A time-periodic (TDM, the default) eddy run has no warm-up march at all: its preparation is a few
+                # Newton passes over the whole orbit, so a frame guess (576 = 4 x 144) would be a total it never
+                # reaches.  Unknown (0) until the solver reports; a march fallback then counts its own frames.
+                planned_prepass=(0 if _plan_tdm_expected(bool(eddy)) else int(n_steps_per_period) * (
+                    (2 if eddy else 0) + (2 if demag else 0)))),
         }
         def _sb_cancel_only(*_a, **_k):
             if run_id and _JOBS.is_cancelled(run_id):

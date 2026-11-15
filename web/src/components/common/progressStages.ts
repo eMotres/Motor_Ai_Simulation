@@ -24,7 +24,7 @@ export interface ProgressStage {
    *  yet, and it may GROW while the stage runs. */
   planned: number;
   adaptive: boolean;
-  /** "frames" (FEM frames) or "steps" (coupled runs). */
+  /** "frames" (FEM frames), "steps" (coupled runs) or "passes" (Newton passes of the time-periodic solve). */
   unit?: string;
   elapsed_s: number;
   /** The solver's own breakdown ("2×36 settle + 8 pre-roll + 144 reported"). */
@@ -87,9 +87,9 @@ export function stageCount(s: ProgressStage): StageCount {
   return { kind: 'exact', done, planned: Math.max(planned, done) };
 }
 
-/** `unit` → the ICU `select` branch the locale files use ("steps" or frames). */
-export function stageUnit(s: Pick<ProgressStage, 'unit'>): 'steps' | 'frames' {
-  return s.unit === 'steps' ? 'steps' : 'frames';
+/** `unit` → the ICU `select` branch the locale files use ("steps", "passes" or frames). */
+export function stageUnit(s: Pick<ProgressStage, 'unit'>): 'steps' | 'passes' | 'frames' {
+  return s.unit === 'steps' ? 'steps' : s.unit === 'passes' ? 'passes' : 'frames';
 }
 
 /** Keys with their own tooltip text in the locale files; anything else the

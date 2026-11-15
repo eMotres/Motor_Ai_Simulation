@@ -87,6 +87,15 @@ blade:
   polars: {source: neuralfoil | xfoil_table | measured | flatplate_model, re_ref: 80000}   # optional
 ```
 
+Optional `blade.design_bounds: {<variable name>: {lo: .., hi: ..}}` (manufacturing limits, supplied by the owner of the geometry; never
+invented) is read only by `propeller_bemt.design_variables`.
+
+Polar tables (`blade.polars.source: xfoil_table | measured`) are CSV files under `config/propellers/_polars/<airfoil>/*.csv`:
+header lines `# airfoil: <id>`, `# re: <Reynolds>`, `# source: <where the numbers come from>`, then `alpha_deg,cl,cd` rows
+(strictly increasing alpha inside +-90 deg, at least 5 rows). Several Reynolds numbers per airfoil are interpolated in log Re. No
+airfoil data file ships yet. `polars.source: flatplate_model` (or no `polars`) selects an ESTIMATED flat-plate + Viterna polar and every
+result carries the flag `polar_estimated`.
+
 `Propeller.blade` holds the parsed block (SI units, `src/motor_ai_sim/propeller_blade.py`), `Propeller.bemt_ready` is true when the
 block is complete and `geometry.blades` is given. A missing number is never filled in; a malformed block makes that file fail to load
 (logged and skipped like any bad catalogue file) with the field named.

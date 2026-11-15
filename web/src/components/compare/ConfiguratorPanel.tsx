@@ -78,7 +78,7 @@ import { buildModePresets, baseModeLabel, matchesMode, presetButtons, type ModeP
 import { seedBase, stampKnobs, readStampedKnobs, restoreMisfit, reconcilePlan, type Misfit } from '../../lib/configureRestore';
 import { APPLICATIONS, cleanApplications, coolingForApplication, hasApplicationSwitch, selectedApplication } from '../../lib/applications';
 import {
-  physicalRanges, narrowRange, speedLimit, withSpeedCaps, type SpeedLimit, speedRequestAccepted, overflows, lineVoltageWarning,
+  physicalRanges, narrowRange, availStack, speedLimit, withSpeedCaps, type SpeedLimit, speedRequestAccepted, overflows, lineVoltageWarning,
   readOverrides, writeOverrides, speedLimitNote, propellerCurrentNote, RANGES_LS_V2, WIRE_STEP_MM, DEFAULT_MODULATION,
   sliderCurrentCap, boardMarker, type CurrentCap,
   type KnobKey, type KRange, type Overrides, type PhysRange, type LimitBasis, type BearingSpeed,
@@ -1054,7 +1054,7 @@ const ConfiguratorPanel: React.FC = () => {
     }
     if (k === 'N') {
       return { text: tx('configureLimits.nFit', { max: mx }), tip: tx('configureLimits.nFitTip', {
-        wire: fmt(knobs.wireH_mm, 1), avail: fmt(ref.fit.slotHeight_mm - 2 * ref.fit.insulation_mm, 2) }) };
+        wire: fmt(knobs.wireH_mm, 1), avail: fmt(availStack(ref.fit), 2) }) };
     }
     if (k === 'wireH_mm') {
       return { text: tx('configureLimits.wireFit', { min: fmt(ranges.wireH_mm.min, 1), max: mx, n: knobs.N }),
@@ -1857,7 +1857,7 @@ ${s1Text.text}` : '';
   // spacing) must fit between the two insulation layers.  Each slider's max is
   // derived from the OTHER knob's current value, so the winding can never
   // overflow the slot (which would push coils across the air gap).
-  const availStack_mm  = ref.fit.slotHeight_mm - 2 * ref.fit.insulation_mm;
+  const availStack_mm  = availStack(ref.fit);
   const rowPitch_mm    = knobs.wireH_mm + ref.fit.wireSpacingY_mm;   // one wire row + its radial gap
   const stackHeight_mm = knobs.N * rowPitch_mm;
   const overFit   = overflows(ref.fit, knobs.N, knobs.wireH_mm);

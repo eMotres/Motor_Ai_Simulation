@@ -161,6 +161,8 @@ export interface RangePassport {
 /** The slot geometry (referencePassports `fit`). */
 export interface SlotFit {
   slotHeight_mm: number; insulation_mm: number; wireSpacingY_mm: number;
+  /** clearance of the stack's bore-side edge to the bore circle (geometry.wire_bore_margin); absent / null = the old "liner on both sides" rule */
+  boreMargin_mm?: number | null;
 }
 
 /** Today's heuristic ranges (the old `rangesForRef`) — the "default" rule. */
@@ -183,7 +185,13 @@ export function defaultRanges(p: RangePassport): Record<KnobKey, KRange> {
 // i.e. N rows of (wire + dy) between two insulation layers.  tests/
 // test_configure_limits.py pins that the two agree.
 
-const avail = (f: SlotFit) => f.slotHeight_mm - 2 * f.insulation_mm;
+/** Radial space the rows' pitch (h + dy) shares: slot - 2 x liner by default; with a stated bore-side clearance
+ *  slot - liner - clearance + dy/2 (the stack is liner + dy/2 + rows x h + (rows - 1) x dy + clearance tall).
+ *  Mirrors winding.wire_height_bound_mm. */
+export const availStack = (f: SlotFit) => (f.boreMargin_mm == null
+  ? f.slotHeight_mm - 2 * f.insulation_mm
+  : f.slotHeight_mm - f.insulation_mm - f.boreMargin_mm + 0.5 * f.wireSpacingY_mm);
+const avail = availStack;
 
 /** How many wire rows of thickness `h` fit the slot. */
 export function fitRows(f: SlotFit, h: number): number {

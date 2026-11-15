@@ -92,7 +92,7 @@ from typing import Any, Mapping, Optional, Tuple
 
 log = logging.getLogger(__name__)
 
-__all__ = ["parse_connection", "n_parallel_from_connection", "connection_label",
+__all__ = ["wire_bore_margin_mm", "wire_height_bound_mm", "bore_floor_offset_mm", "parse_connection", "n_parallel_from_connection", "connection_label",
            "wire_parallel_from_geo", "wire_split_from_geo", "turns_per_coil",
            "n_parallel_effective", "conductors_per_slot", "strip_width_mm",
            "strip_gap_mm", "winding_footprint_mm", "STRIP_GAP_FACTOR",
@@ -140,6 +140,47 @@ def parse_connection(conn: str) -> Tuple[int, int]:
 def n_parallel_from_connection(conn: str) -> int:
     """Parallel paths in ``conn``.  Raises ``ValueError`` on an unreadable label."""
     return parse_connection(conn)[0]
+
+
+def wire_bore_margin_mm(geo: Optional[Mapping[str, Any]]) -> Optional[float]:
+    """``geometry.wire_bore_margin`` [mm]: the clearance between the bore-side EDGE of the wire stack and the stator
+    bore circle.  ``None`` = not set = the rule every machine built before the key existed was drawn and checked with
+    (liner thickness on BOTH radial sides: ``rows x (wire_height + wire_spacing_y) + 2 x insulation <= slot_height``,
+    and the lowest row kept ``insulation`` above the bore).  Absent / None / '' / NaN / negative / unusable = None.
+
+    The liner is open towards the bore, so the bore-side margin is a design number, not a physical need; a machine whose
+    stack stands closer to the bore states it here (the Fusion CIANO10 12_40: 0.042 mm measured on the cut, against
+    a 0.125 mm liner).  The yoke side keeps ``insulation_thickness`` + half a row gap.  ONE reader."""
+    raw = dict(geo or {}).get("wire_bore_margin")
+    if raw is None or raw == "" or isinstance(raw, bool):
+        return None
+    try:
+        v = float(raw)
+    except (TypeError, ValueError):
+        return None
+    if v != v or v < 0.0:
+        return None
+    return v
+
+
+def wire_height_bound_mm(slot_height: float, insulation: float, spacing_y: float, rows: float,
+                         margin: Optional[float] = None) -> float:
+    """Largest ``wire_height`` [mm] for which ``rows`` radial rows fit the slot.
+
+    ``margin`` None (the default for every existing machine): ``(slot - 2 x insulation) / rows - spacing_y``.
+    Set: the stack is ``insulation + spacing_y/2 + rows x h + (rows - 1) x spacing_y + margin`` tall, so
+    ``(slot - insulation - margin + spacing_y/2) / rows - spacing_y``.  The two agree when ``margin`` equals
+    ``insulation + spacing_y/2``."""
+    n = max(1.0, float(rows))
+    if margin is None:
+        return (float(slot_height) - 2.0 * float(insulation)) / n - float(spacing_y)
+    return (float(slot_height) - float(insulation) - float(margin) + 0.5 * float(spacing_y)) / n - float(spacing_y)
+
+
+def bore_floor_offset_mm(insulation: float, margin: Optional[float] = None) -> float:
+    """Distance above the bore circle the LOWEST wire edge must keep (``min_wire_r = inner_r + this``): the liner
+    thickness by default, the stated ``wire_bore_margin`` (less a rounding tolerance) when set."""
+    return float(insulation) if margin is None else max(0.0, float(margin) - 1e-9)
 
 
 def wire_parallel_from_geo(geo: Optional[Mapping[str, Any]]) -> int:

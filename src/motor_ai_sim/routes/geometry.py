@@ -124,7 +124,7 @@ def get_geometry():
             # A FLAG is not filled: its absence IS its default (the notches are
             # stored only when off), and a filled `true` would ride on every
             # `geo=` the browser sends and move every hash taken over it.
-            if _k not in out and _meta.get("type") != "bool":
+            if _k not in out and _meta.get("type") != "bool" and not _meta.get("unset_ok"):
                 out[_k] = _meta.get("min", 1)
         return out
     except Exception as e:

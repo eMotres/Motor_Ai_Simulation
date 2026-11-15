@@ -780,6 +780,9 @@ def generate_passport(
     fit = {
         "slotHeight_mm": float(g.get("slot_height", 0.0) or 0.0),
         "insulation_mm": float(g.get("insulation_thickness", 0.0) or 0.0),
+        # clearance of the wire stack's bore-side edge to the bore circle (geometry.wire_bore_margin); None = not set,
+        # i.e. the liner on both radial sides (winding.wire_bore_margin_mm)
+        "boreMargin_mm": __import__("motor_ai_sim.winding", fromlist=["wire_bore_margin_mm"]).wire_bore_margin_mm(g),
         "wireSpacingY_mm": float(g.get("wire_spacing_y", 0.0) or 0.0),
         "slotWidth_mm": float(g.get("slot_width", 0.0) or 0.0),
         "wireWidth_mm": float(g.get("wire_width", 0.0) or 0.0),

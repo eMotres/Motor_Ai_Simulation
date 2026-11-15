@@ -235,6 +235,23 @@ def test_slot_fit_identity_matches_the_solvers_bound():
             assert fits_rows == fits_solver, (n, h)
 
 
+def test_slot_fit_with_a_bore_margin_matches_the_web_rule():
+    """`wire_bore_margin` (2026-11-15) = clearance of the stack's bore-side edge to the bore circle; the web's
+    `availStack` = slot - liner - clearance + dy/2 (absent: slot - 2 liner).  Absent = the old rule, bit for bit."""
+    base = {"slot_height": 1.842, "insulation_thickness": 0.125, "wire_spacing_y": 0.05}
+    for n in (1, 2, 3):
+        old = gc._wire_height_max({**base, "num_wires_per_slot": n})
+        assert old == pytest.approx((1.842 - 2 * 0.125) / n - 0.05)
+        assert gc._wire_height_max({**base, "num_wires_per_slot": n, "wire_bore_margin": None}) == old
+        # a margin equal to liner + half a row gap IS the old rule
+        assert gc._wire_height_max({**base, "num_wires_per_slot": n, "wire_bore_margin": 0.125 + 0.025}) == pytest.approx(old)
+        new = gc._wire_height_max({**base, "num_wires_per_slot": n, "wire_bore_margin": 0.042})
+        assert new == pytest.approx((1.842 - 0.125 - 0.042 + 0.025) / n - 0.05)
+    # the CIANO10 12_40 stack: two 0.8 mm rows fit with the 0.042 mm clearance measured in Fusion and not without it
+    assert gc._wire_height_max({**base, "num_wires_per_slot": 2, "wire_bore_margin": 0.042}) >= 0.8 - 1e-9
+    assert gc._wire_height_max({**base, "num_wires_per_slot": 2}) < 0.8
+
+
 # ---------------------------------------------------------------------------
 # The phase-current ceiling — the formula, pinned (review 2026-10-05)
 # ---------------------------------------------------------------------------

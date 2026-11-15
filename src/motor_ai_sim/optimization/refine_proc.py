@@ -117,7 +117,8 @@ def _coil_fit(geo: Dict[str, float]) -> tuple:
     nw      = int(geo.get("num_wires_per_slot", 18))
     inner_r = outer_r - core_h - slot_h
     top_y_c = (outer_r - core_h) - ins_w - wire_dy / 2.0
-    min_wire_r = inner_r + ins_w
+    from motor_ai_sim.winding import wire_bore_margin_mm, bore_floor_offset_mm
+    min_wire_r = inner_r + bore_floor_offset_mm(ins_w, wire_bore_margin_mm(geo))
     n_fit = 0
     for step in range(max(0, nw)):
         if top_y_c - step * (wire_h + wire_dy) - wire_h < min_wire_r:

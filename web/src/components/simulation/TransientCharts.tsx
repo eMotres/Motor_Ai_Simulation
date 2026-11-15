@@ -27,6 +27,8 @@ import { lastTransientOf, markLastTransientOf, restoreActiveStoredRun } from '..
 // which builds the same one when it has to make the run its own solve was
 // missing.  See lib/emRunPayload.
 import { buildEmRunPayload } from '../../lib/emRunPayload';
+import { torqueDisplaySign } from '../../lib/torqueSign';
+import { readSimSetting } from '../mechanical/api';
 import { historyNoticeFor, formatHistoryComputedAt } from '../../lib/historyNotice';
 import HistoryPopover, { type HistoryRow } from '../common/HistoryPopover';
 // The EM<->thermal orchestrator.  It changes exactly ONE thing about a Run:
@@ -1069,10 +1071,13 @@ const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onS
 
   // Build chart-friendly row arrays
   // Always show raw samples, including when restoring a legacy filtered run.
+  // Generator mode: the positive braking magnitude, as in the duty table (display only, lib/torqueSign).
+  const tSign = data ? torqueDisplaySign(readSimSetting('opMode', 'motor'), data.T_avg_Nm) : 1;
   const Tshown = React.useMemo(() => {
     if (!data) return [] as number[];
-    return data.T_em_raw_Nm ?? data.T_em_Nm ?? [];
-  }, [data]);
+    const raw = data.T_em_raw_Nm ?? data.T_em_Nm ?? [];
+    return tSign === 1 ? raw : raw.map(v => -v);
+  }, [data, tSign]);
 
   const rows = React.useMemo(() => {
     if (!data) return [];
@@ -1543,7 +1548,7 @@ const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onS
                     </span>
                   : <>{data.n_steps_per_period} steps/period</>} · dt = {(data.dt_s*1e6).toFixed(1)} µs ·
                 T_period = {(data.T_period_s*1e3).toFixed(2)} ms ({data.f_elec_Hz.toFixed(1)} Hz electrical) ·
-                T_avg = {data.T_avg_Nm.toFixed(2)} N·m · {loaded
+                T_avg = {(tSign * data.T_avg_Nm).toFixed(2)} N·m · {loaded
                   ? `ripple = ${ripPct.toFixed(1)} %`
                   : `cogging pk-pk = ${tpp.toFixed(2)} N·m`}
                 {' · '}<span style={{ color: '#fbbf24' }}>raw</span>

@@ -1129,6 +1129,13 @@ def _refuse_infeasible_section(params_dict: dict) -> None:
     cutters collide and the section carries a lobe (owner 2026-10-15).  Never
     drawn, never solved — the message names the limit in user terms.
     """
+    # `wire_omit` on the grid the BUILDER will read (this very dict): a user value that cannot be drawn is a 422 naming the grid,
+    # never a 500 from the mesh builder (live finding 2026-11-15)
+    if params_dict.get("wire_omit") not in (None, "", 0, 0.0):
+        from motor_ai_sim.winding import wire_omit_error
+        _wo = wire_omit_error(params_dict)
+        if _wo:
+            raise reject("infeasible geometry - " + _wo, [param_error("wire_omit", params_dict.get("wire_omit"), "wire_omit_grid", _wo)])
     from motor_ai_sim.geometry_validation import slot_mouth_infeasibility
     bad = slot_mouth_infeasibility(params_dict)
     if bad is None:

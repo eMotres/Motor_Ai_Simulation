@@ -268,6 +268,11 @@ WIRE_OMIT_COLS = 8
 WIRE_OMIT_MAX_ROWS = 6
 
 
+WIRE_OMIT_HINT = ("wire_omit is ONE integer, the sum of 2**(row*%d + col) over the empty positions: (0,0)=1, (0,1)=2, (0,2)=4, (1,0)=%d, (1,1)=%d, "
+                  "(1,2)=%d; row 0 = under the yoke, col 0 = next to the tooth" % (WIRE_OMIT_COLS, 1 << WIRE_OMIT_COLS, 1 << (WIRE_OMIT_COLS + 1),
+                                                                                    1 << (WIRE_OMIT_COLS + 2)))
+
+
 def wire_omit_mask(positions) -> int:
     """The integer for a list of ``(row, col)`` positions (the inverse of :func:`wire_omit_positions`)."""
     m = 0
@@ -286,7 +291,7 @@ def _wire_omit_int(geo: Optional[Mapping[str, Any]]) -> int:
     try:
         f = float(raw)
     except (TypeError, ValueError):
-        raise ValueError(f"wire_omit must be a non-negative integer (empty grid positions as bits); got {raw!r}")
+        raise ValueError(f"wire_omit must be a non-negative integer (empty grid positions as bits; a list is not accepted here); got {raw!r}. {WIRE_OMIT_HINT}")
     n = int(round(f))
     if f != f or n < 0 or abs(f - n) > 1e-9 or n >= (1 << (WIRE_OMIT_COLS * WIRE_OMIT_MAX_ROWS)):
         raise ValueError(f"wire_omit must be a non-negative integer below 2**{WIRE_OMIT_COLS * WIRE_OMIT_MAX_ROWS}; got {raw!r}")
@@ -324,7 +329,7 @@ def wire_omit_error(geo: Optional[Mapping[str, Any]]) -> Optional[str]:
     out = [p for p in pos if p[0] >= rows or p[1] >= split]
     if out:
         return ("wire_omit names position(s) %s outside the %d row(s) x %d strip(s) grid (row 0 = under the yoke, "
-                "column 0 = next to the tooth)" % (", ".join("(%d, %d)" % p for p in out), rows, split))
+                "column 0 = next to the tooth); %s" % (", ".join("(%d, %d)" % p for p in out), rows, split, WIRE_OMIT_HINT))
     try:
         if wire_parallel_from_geo(geo) > 1:
             return "wire_omit needs wire_parallel = 1: strands in hand group whole wire rows"
@@ -335,7 +340,8 @@ def wire_omit_error(geo: Optional[Mapping[str, Any]]) -> Optional[str]:
         per_row[r] = per_row.get(r, 0) + 1
     empty = [r for r, n in per_row.items() if n >= split]
     if empty:
-        return "wire_omit empties the whole wire row %s: a row needs at least one strip" % ", ".join(str(r) for r in sorted(empty))
+        return ("wire_omit empties the whole wire row %s of the %d row(s) x %d strip(s) grid: a row needs at least one strip; %s"
+                % (", ".join(str(r) for r in sorted(empty)), rows, split, WIRE_OMIT_HINT))
     return None
 
 

@@ -706,13 +706,6 @@
       "s1": "S1 额定值：可持续通过 {current} A，限值位于{part}。",
       "air": "冷却风速：{speed} m/s。"
     },
-    "chart": {
-      "title": "各步骤的变化",
-      "switchTip": "为所选模式选择要跟踪的数值。只提供至少两个步骤存有的数值；缺少该数值的步骤显示为断点，不会当作零。"
-    },
-    "series": {
-      "current": "电流"
-    },
     "notComputed": "未计算",
     "noProvenance": "该结果未存储来源信息。",
     "thermal": {

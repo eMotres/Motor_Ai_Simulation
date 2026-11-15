@@ -11,6 +11,27 @@
 # underscore, not starting with a digit.
 #
 # Read on every request — no restart after an edit.
+#
+# PER DIE / PER CONFIGURATION (2026-11-15): an optional `dies:` section after `map:` overrides single keys for ONE machine
+# (the loaded die / configuration), so a Fusion model whose variables mean something else does not break the others:
+#
+#   dies:
+#     "CIANO10 12_40 Ø12 12s10p":
+#       map:
+#         wire_width: wire_height                              # rename: ours <- Fusion's wire_height (tangential strip)
+#         wire_height: wire_width                              # ours <- Fusion's wire_width (radial)
+#         wire_split: num_wires_per_slot                       # Fusion counts the strip COLUMNS here
+#         num_wires_per_slot: {const: 2}                       # no Fusion variable: this value on every import, not exported
+#         wire_spacing_x: {name: wire_spacing_x, scale: 0.6}   # ours = Fusion x 0.6 (N dx / (2N - 1), N = 3); export divides
+#         wire_omit: {const: [[1, 0]]}                         # [row, col] positions -> the wire_omit integer
+#         k_end_by_turns: {const: 1}
+#         wire_bore_margin: {const: 0.04}
+#         slot_hs: {ignore: true}                              # a Fusion variable we neither read nor write
+#       configs:
+#         "<configuration>":
+#           map: {}                                            # overrides the die's entries for this configuration
+#
+# No `dies` section / a die that is not named = the global map above, bit for bit.
 map:
   stator_diameter: stator_diameter
   motor_length: motor_length

@@ -219,6 +219,8 @@ _ABSENT_MEANS: Dict[str, Any] = {
     "wire_split": 1,           # one strip per wire row
     "wire_omit": 0,            # every grid position filled
     "k_end_by_turns": 0,       # the layer-count end-turn rule of the stored machines
+    "magnet_flat": 0,          # the arc-topped magnet of the stored machines
+    "magnet_pocket_clearance": 0.0,   # the pocket is the magnet
 }
 
 # Display names double as file/dir names, so the charset is "safe on every

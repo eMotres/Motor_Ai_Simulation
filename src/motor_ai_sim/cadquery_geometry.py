@@ -733,7 +733,7 @@ def stator_od_contact(geo: Dict, stator=None) -> Optional[Dict[str, float]]:
 
 def _magnet_side_local(rotor_or: float, magnet_r: float, num_poles: int,
                        fill_down: float, fill_up: float, down_h: float,
-                       up_gap: float):
+                       up_gap: float, flat: bool = False):
     """The magnet's +x side in the pole frame (magnet axis on +Y), bottom to
     top: ``(P4, K, C)`` — bottom corner, knee, top corner on r = rotor_or −
     magnet_up_gap.  Fusion's rotor/magnet sketch, constraint for constraint:
@@ -756,7 +756,13 @@ def _magnet_side_local(rotor_or: float, magnet_r: float, num_poles: int,
     The old builder put the knee on the radial line of P4 and the top corner
     itself at the fill_up angle on the TOP arc, which is why the same numbers
     drew a different magnet.  Raises ValueError when even the bottom corner is
-    not below the top arc."""
+    not below the top arc.
+
+    ``flat`` (geometry.magnet_flat = 1, opt-in, owner 2026-11-15 "as is" for the Fusion Ø12): the magnet as the Fusion SKETCH
+    draws it - two straight edges perpendicular to the pole centre line, the bottom one at the distance ``magnet_r`` (Fusion
+    ``rotor_down_r``) and the top one at ``rotor_or - up_gap`` (the 0.10 gap is measured on the centre line), corners on the
+    construction rays through the rotor axis at the ``fill_down`` (bottom) and ``fill_up`` (top) half-angles, straight sides.
+    ``down_h`` plays no part; ``K`` is the midpoint of the side (collinear)."""
     pitch = 2.0 * pi / int(num_poles)
     a_dn = pitch * float(fill_down) / 2.0
     a_up = pitch * float(fill_up) / 2.0
@@ -767,6 +773,10 @@ def _magnet_side_local(rotor_or: float, magnet_r: float, num_poles: int,
             "magnet: its bottom r = %.4f mm is not below its top r = %.4f mm "
             "(rotor OD %.4f - magnet_up_gap %.4g)"
             % (magnet_r, r_top, rotor_or, up_gap))
+    if flat:
+        p4f = (magnet_r * tan(a_dn), magnet_r)
+        cf = (r_top * tan(a_up), r_top)
+        return p4f, (0.5 * (p4f[0] + cf[0]), 0.5 * (p4f[1] + cf[1])), cf
     p4 = (magnet_r * sin(a_dn), magnet_r * cos(a_dn))
     k = (p4[0] + down_h * sin(half), p4[1] + down_h * cos(half))
 
@@ -785,6 +795,66 @@ def _magnet_side_local(rotor_or: float, magnet_r: float, num_poles: int,
     return p4, k, _to_top(k, u)
 
 
+def _magnet_flat(p: Dict) -> bool:
+    """``geometry.magnet_flat``: the magnet is drawn as the Fusion sketch draws it (flat top and bottom edges, corners on the
+    fill rays, top corners rounded, optional pocket clearance).  Absent / None / '' / 0 / unusable = False = every stored
+    machine's builder, bit for bit."""
+    raw = p.get('magnet_flat') if p else None
+    if raw is None or raw == "" or isinstance(raw, bool):
+        return bool(raw)
+    try:
+        f = float(raw)
+    except (TypeError, ValueError):
+        return False
+    return f == f and f != 0.0
+
+
+def _pocket_clearance(p: Dict) -> float:
+    """``geometry.magnet_pocket_clearance`` [mm]: the rotor pocket is the magnet outline offset outward by this much (Fusion
+    ``offset_rotor`` 0.025).  Only with ``magnet_flat``; absent / <= 0 / unusable = 0 = the pocket is the magnet."""
+    if not _magnet_flat(p):
+        return 0.0
+    try:
+        v = float(p.get('magnet_pocket_clearance', 0.0) or 0.0)
+    except (TypeError, ValueError):
+        return 0.0
+    return v if (v == v and v > 0.0) else 0.0
+
+
+def _flat_magnet_poly(pts, fillet_r: float, n_arc: int = 24):
+    """Shapely polygon of the FLAT magnet from its six rotated corners ``(p4, k, c, c', k', p4')`` (counter-clockwise, ``k``
+    collinear): the two TOP corners ``c`` / ``c'`` are rounded with ``fillet_r`` (tangent arcs, clamped to half the shorter
+    edge); the bottom corners stay sharp (the Fusion sketch's 1.866 mm2 section area fits R0.20 on the top pair only)."""
+    from shapely.geometry import Polygon as _SP
+    P = [pts[0], pts[2], pts[3], pts[5]]            # bottom +x, top +x, top -x, bottom -x (k, k' dropped)
+    r = float(fillet_r or 0.0)
+    if r <= 1e-9:
+        return _SP(P)
+    out = []
+    n = len(P)
+    for i, B in enumerate(P):
+        if i not in (1, 2):
+            out.append(B)
+            continue
+        A, C = P[i - 1], P[(i + 1) % n]
+        v1 = (A[0] - B[0], A[1] - B[1]); v2 = (C[0] - B[0], C[1] - B[1])
+        l1 = hypot(*v1); l2 = hypot(*v2)
+        u1 = (v1[0] / l1, v1[1] / l1); u2 = (v2[0] / l2, v2[1] / l2)
+        cos_t = max(-1.0, min(1.0, u1[0] * u2[0] + u1[1] * u2[1]))
+        th = acos(cos_t)
+        d = min(r / tan(th / 2.0), 0.5 * min(l1, l2))
+        rr = d * tan(th / 2.0)
+        T1 = (B[0] + u1[0] * d, B[1] + u1[1] * d)
+        bis = (u1[0] + u2[0], u1[1] + u2[1]); lb = hypot(*bis)
+        bis = (bis[0] / lb, bis[1] / lb)
+        cen = (B[0] + bis[0] * (d / cos(th / 2.0)), B[1] + bis[1] * (d / cos(th / 2.0)))
+        T2 = (B[0] + u2[0] * d, B[1] + u2[1] * d)
+        a1 = atan2(T1[1] - cen[1], T1[0] - cen[0]); a2 = atan2(T2[1] - cen[1], T2[0] - cen[0])
+        da = (a2 - a1 + pi) % (2.0 * pi) - pi           # the short way round
+        out.extend((cen[0] + rr * cos(a1 + da * j / n_arc), cen[1] + rr * sin(a1 + da * j / n_arc)) for j in range(n_arc + 1))
+    return _SP(out)
+
+
 def _magnet_local_from_params(p: Dict):
     """``(mag_local, angle_top)`` — the six corners mp1..mp6 of the magnet in
     the pole frame (+x side bottom→top, then its mirror top→bottom; the shape
@@ -797,7 +867,8 @@ def _magnet_local_from_params(p: Dict):
         int(p['num_poles']), float(p['magnet_fill_down']),
         float(p['magnet_fill_up']),
         float(p.get('magnet_down_height', 0.0) or 0.0),
-        float(p.get('magnet_up_gap', 0.0) or 0.0))
+        float(p.get('magnet_up_gap', 0.0) or 0.0),
+        flat=_magnet_flat(p))
     mag_local = [p4, k, c, (-c[0], c[1]), (-k[0], k[1]), (-p4[0], p4[1])]
     return mag_local, atan2(c[0], c[1])
 
@@ -2133,6 +2204,9 @@ class CadQueryMotor:
             mapped.pop('wire_omit', None)
         if api_params.get('k_end_by_turns') is None:
             mapped.pop('k_end_by_turns', None)
+        for _k in ('magnet_flat', 'magnet_pocket_clearance'):      # opt-in rotor keys: same config-leak guard
+            if api_params.get(_k) is None:
+                mapped.pop(_k, None)
         
         # Pole/slot COUNT is defined by the geometry's magnets/slots: num_poles and
         # num_slots are AUTHORITATIVE.  The segment view (num_seg × *_per_segment) is
@@ -2252,6 +2326,9 @@ class CadQueryMotor:
             updated.pop('wire_omit', None)
         if 'k_end_by_turns' not in mapped_params:
             updated.pop('k_end_by_turns', None)
+        for _k in ('magnet_flat', 'magnet_pocket_clearance'):
+            if _k not in mapped_params:
+                updated.pop(_k, None)
         self.parameters = updated
         
     def get_parameter_hash(self) -> str:
@@ -2594,11 +2671,12 @@ class CadQueryMotor:
         _scale_mm = 2.0 * float(p['stator_outer_radius'])
         try:
             from shapely.geometry import Polygon as _SPoly
-            _mp = _fillet_magnet_top_arc(_SPoly(arc_pts), mag_fill_r,
-                                         rotor_outer_r - mag_up_gap,
-                                         _scale_mm,
-                                         open_top=(float(mag_up_gap) <= 1e-9),
-                                          open_wall=_extended_pocket(p))
+            _mp = (_flat_magnet_poly([p1, p2, p3, p4, p5, p6], mag_fill_r) if _magnet_flat(p)
+                   else _fillet_magnet_top_arc(_SPoly(arc_pts), mag_fill_r,
+                                               rotor_outer_r - mag_up_gap,
+                                               _scale_mm,
+                                               open_top=(float(mag_up_gap) <= 1e-9),
+                                               open_wall=_extended_pocket(p)))
             profile = [(float(x), float(y))
                        for x, y in list(_mp.exterior.coords)[:-1]]
         except Exception as e:                       # noqa: BLE001
@@ -2697,6 +2775,17 @@ class CadQueryMotor:
                 )
                 rotor = rotor.cut(cut_up)
             return rotor
+
+        if _pocket_clearance(p) > 0.0:
+            # magnet_flat + magnet_pocket_clearance: the pocket is the magnet outline offset outward (Fusion offset_rotor)
+            _ml = _magnet_local_from_params(p)[0]
+            for i in range(num_poles):
+                _a = radians(i * pole_angle)
+                _c, _s = cos(_a), sin(_a)
+                _pp = [(x * _c - y * _s, x * _s + y * _c) for x, y in _ml]
+                _off = _flat_magnet_poly(_pp, float(p.get('magnet_fill_radius', 0.0) or 0.0)).buffer(_pocket_clearance(p), join_style=2)
+                rotor = rotor.cut(cq.Workplane("XY").polyline([(float(x), float(y)) for x, y in list(_off.exterior.coords)[:-1]])
+                                  .close().extrude(width + 1))
 
         for i in range(num_poles):
             angle = i * pole_angle
@@ -3134,6 +3223,10 @@ class CadQueryMotor:
         # the rectangular cut above each magnet — matches 3D _create_rotor:
         #   rect(rec_w, -mag_h).translate((-rec_w/2, rotor_outer_r)).rotate(angle)
         _ext_pocket = _extended_pocket(p)
+        _flat = _magnet_flat(p)
+        _clr = _pocket_clearance(p)
+        if _flat and _ext_pocket:
+            raise ValueError("magnet_flat needs rotor_hole < 1 (the straight-sided pocket of rotor_hole >= 1 is built on the arc magnet)")
         mag_angle_up_hole = pole_angle_r * mag_fu * magnet_hole / 2  # radians
         rec_w = 2 * rotor_or * sin(mag_angle_up_hole)
         _rd = _pocket_cut_depth(p)          # see _create_rotor: opening only
@@ -3164,27 +3257,31 @@ class CadQueryMotor:
         for i in range(num_poles):
             a   = i * pole_angle_r
             pts = [_rot(x, y, a) for x, y in mag_local]
-            # The arc stations are GLOBAL (they have to coincide with the
-            # OD/sleeve-bore 256-gon), so they are spliced in after the
-            # rotation, between mp3 (index 2) and mp4 (index 3).
-            pts = (pts[:3]
-                   + _magnet_top_arc_global(mag_r_top, angle_up_m, a)
-                   + pts[3:])
-            mp  = _build_mag_poly(pts, mag_fill_r)
+            if _flat:
+                mp = _flat_magnet_poly(pts, mag_fill_r)       # the Fusion sketch's magnet (see get_2d_polygons)
+            else:
+                # The arc stations are GLOBAL (they have to coincide with the
+                # OD/sleeve-bore 256-gon), so they are spliced in after the
+                # rotation, between mp3 (index 2) and mp4 (index 3).
+                pts = (pts[:3]
+                       + _magnet_top_arc_global(mag_r_top, angle_up_m, a)
+                       + pts[3:])
+                mp  = _build_mag_poly(pts, mag_fill_r)
             if not mp.is_valid:
                 mp = mp.buffer(0)
+            mp_pocket = mp.buffer(_clr, join_style=2) if _clr > 0.0 else mp   # mitre: round-join arc nodes are closer than the weld tolerance and would collapse
 
             if _ext_pocket:
                 hole = _extended_pocket_poly(SPoly, mag_local, rotor_or, a, mp,
                                              node_tol=scale_mm * 1e-9)
             elif _rd <= 0.0:
-                hole = mp        # no opening cut (see _pocket_cut_depth)
+                hole = mp_pocket        # no opening cut (see _pocket_cut_depth)
             else:
                 rect_pts  = [_rot(x, y, a) for x, y in rect_local]
                 rect_poly = SPoly(rect_pts)
                 if not rect_poly.is_valid:
                     rect_poly = rect_poly.buffer(0)
-                hole = _safe_union(mp, rect_poly)
+                hole = _safe_union(mp_pocket, rect_poly)
             if not hole.is_valid:
                 hole = hole.buffer(0)
             hole_polys.append(hole)
@@ -3741,6 +3838,10 @@ class CadQueryMotor:
         # `_extended_pocket`, user 2026-09-06).  Rectangular cut above each
         # magnet, rotor_hole < 1 only:
         _ext_pocket = _extended_pocket(p)
+        _flat = _magnet_flat(p)
+        _clr = _pocket_clearance(p)
+        if _flat and _ext_pocket:
+            raise ValueError("magnet_flat needs rotor_hole < 1 (the straight-sided pocket of rotor_hole >= 1 is built on the arc magnet)")
         mag_angle_up_hole = pole_angle_r * mag_fu * magnet_hole / 2
         rec_w = 2 * rotor_or * sin(mag_angle_up_hole)
         _rd = _pocket_cut_depth(p)          # see _create_rotor: opening only
@@ -3753,25 +3854,31 @@ class CadQueryMotor:
         for i in range(num_poles):
             a   = i * pole_angle_r + theta_r
             pts = [_rot(x, y, a) for x, y in mag_local]
-            # The arc stations are GLOBAL (they have to coincide with the
-            # OD/sleeve-bore 256-gon at THIS rotor angle), so they are spliced
-            # in after the rotation, between mp3 and mp4.
-            pts = (pts[:3]
-                   + _magnet_top_arc_global(mag_r_top, angle_up_m, a)
-                   + pts[3:])
-            mp  = _build_mag_poly(pts, mag_fill_r)
+            if _flat:
+                # the Fusion sketch's magnet: flat top edge (a chord), straight sides, top corners rounded
+                mp = _flat_magnet_poly(pts, mag_fill_r)
+            else:
+                # The arc stations are GLOBAL (they have to coincide with the
+                # OD/sleeve-bore 256-gon at THIS rotor angle), so they are spliced
+                # in after the rotation, between mp3 and mp4.
+                pts = (pts[:3]
+                       + _magnet_top_arc_global(mag_r_top, angle_up_m, a)
+                       + pts[3:])
+                mp  = _build_mag_poly(pts, mag_fill_r)
             if not mp.is_valid: mp = mp.buffer(0)
+            # pocket = the magnet outline offset by the clearance (Fusion offset_rotor); the magnet itself stays
+            mp_pocket = mp.buffer(_clr, join_style=2) if _clr > 0.0 else mp   # mitre: round-join arc nodes are closer than the weld tolerance and would collapse
 
             if _ext_pocket:
                 hole = _extended_pocket_poly(SPoly, mag_local, rotor_or, a, mp,
                                              node_tol=scale_mm * 1e-9)
             elif _rd <= 0.0:
-                hole = mp        # no opening cut (see _pocket_cut_depth)
+                hole = mp_pocket        # no opening cut (see _pocket_cut_depth)
             else:
                 rect_pts = [_rot(x, y, a) for x, y in rect_local]
                 rect_poly = SPoly(rect_pts)
                 if not rect_poly.is_valid: rect_poly = rect_poly.buffer(0)
-                hole = _safe_union(mp, rect_poly)
+                hole = _safe_union(mp_pocket, rect_poly)
             if not hole.is_valid: hole = hole.buffer(0)
             hole_polys.append(hole)
             # Magnet polarity FLIPPED (N↔S vs the old i%2 convention): the rotor

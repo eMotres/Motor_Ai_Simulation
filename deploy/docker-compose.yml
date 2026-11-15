@@ -78,9 +78,9 @@ x-app-common: &app-common
 # memory ceiling of 5 GB each - both colours exist only while an update switches over, so the box's worst case is the
 # worker's 36 GB + 2 x 5 GB = 46 GB of the 64 (stage 1: 40 GB for the one process).
 x-api-fence: &api-fence
-  cpuset: "12-15"
-  cpus: 3
-  mem_limit: 5g
+  cpuset: "${API_CPUSET:-12-15}"
+  cpus: ${API_CPUS:-3}
+  mem_limit: ${API_MEM:-5g}
   cpu_shares: 512
   stop_grace_period: 30s
 
@@ -179,6 +179,9 @@ services:
       MOTRES_INSTANCE: worker
       MOTRES_BUILD_ID: ${WORKER_SHA:-dev}
       WORKER_PORT: "8002"
+      # empty = the code's default (8 / 8); the US server sets bigger numbers in deploy/.env
+      FEM_SCAN_WORKERS_CAP: ${FEM_SCAN_WORKERS_CAP:-}
+      FEM_SOLO_SEED_THREADS_CAP: ${FEM_SOLO_SEED_THREADS_CAP:-}
     healthcheck:
       test: ["CMD", "curl", "-sf", "http://localhost:8002/api/health"]
       interval: 30s
@@ -201,9 +204,12 @@ services:
     #                wins the scheduler and the solver simply runs slower
     # — which is the right trade: a solve that takes 10 % longer is invisible, an
     # ERP request that blocks for a minute is not.
-    cpuset: "0-11"
-    cpus: 12
-    mem_limit: 36g
+    # Per-server fences (opt-in): the numbers above are the EU box's and the defaults.  Another box sets
+    # WORKER_CPUSET / WORKER_CPUS / WORKER_MEM (and API_*, WEB_CPUSET) in its own deploy/.env, e.g. the US server
+    # (9950X, 16 cores / 32 threads, 91 GB): see docs/US_OPTIMISATION_80PCT_2026-11-16.md.
+    cpuset: "${WORKER_CPUSET:-0-11}"
+    cpus: ${WORKER_CPUS:-12}
+    mem_limit: ${WORKER_MEM:-36g}
     cpu_shares: 512
     # `docker stop` of the worker waits for in-flight requests (the blocking solves) this long, then kills.  The deploy
     # script never stops a worker that has a job; this is for the unplanned stop (a host reboot).
@@ -233,7 +239,7 @@ services:
     # nginx over a static bundle: one thread and a quarter of a gigabyte is more
     # than it has ever used, and the same 512 shares as the API keep it behind
     # the ERP under contention (see the api block above).
-    cpuset: "12-13"
-    cpus: 1
+    cpuset: "${WEB_CPUSET:-12-13}"
+    cpus: ${WEB_CPUS:-1}
     mem_limit: 256m
     cpu_shares: 512

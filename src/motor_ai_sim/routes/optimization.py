@@ -672,7 +672,47 @@ _load_eval_cache()   # warm the cache from disk so it survives a backend restart
 #   Workstation → min(8, 12 − 2) = 8.  AX42 container (cpuset 0-11 = all 8
 #   cores, quota 12 CPUs) → min(8, 8 − 2) = 6.
 # FEM_SCAN_WORKERS overrides the rule.
-_SCAN_WORKERS_CAP = 8
+#
+# The cap is a property of the BOX (memory channels), so it is an environment
+# setting with today's number as the default: ``FEM_SCAN_WORKERS_CAP``.  A
+# bigger machine (the US server, 9950X, dual-channel DDR5, 24 threads for the
+# worker) raises it in its own deploy/.env; the EU box keeps 8.  The cap only
+# bounds how many candidates run AT ONCE - which candidates run and what they
+# return are unchanged.
+_DEFAULT_SCAN_WORKERS_CAP = 8
+
+
+def _env_positive_int(name: str, default: int) -> int:
+    """``name`` as an int >= 1, else ``default`` (unset / unreadable / < 1)."""
+    try:
+        v = int(os.environ.get(name, "") or default)
+    except ValueError:
+        return default
+    return v if v >= 1 else default
+
+
+def _scan_workers_cap() -> int:
+    return _env_positive_int("FEM_SCAN_WORKERS_CAP", _DEFAULT_SCAN_WORKERS_CAP)
+
+
+def _sizing_units() -> int:
+    """What the rule counts as "cores": physical cores (default), or every hardware
+    thread the process may run on when ``FEM_SCAN_SMT=1`` (a worker fenced to whole
+    SMT pairs on a box with fast memory - the US server)."""
+    if os.environ.get("FEM_SCAN_SMT", "").strip() == "1":
+        try:
+            return max(1, len(os.sched_getaffinity(0)))
+        except (AttributeError, OSError):
+            return max(1, os.cpu_count() or 1)
+    return _physical_cores_available()
+
+
+def _workers_for(physical_cores: int, cap: int) -> int:
+    """The sizing rule, pure: physical cores - 2, at least 2, at most ``cap``."""
+    return min(cap, max(2, physical_cores - 2))
+
+
+_SCAN_WORKERS_CAP = _scan_workers_cap()
 
 
 def _cgroup_cpu_quota() -> Optional[float]:
@@ -747,7 +787,7 @@ def _scan_worker_count() -> int:
     env = _scan_worker_env_override()
     if env is not None:
         return env
-    return min(_SCAN_WORKERS_CAP, max(2, _physical_cores_available() - 2))
+    return _workers_for(_sizing_units(), _scan_workers_cap())
 _SCAN_WORKERS = _scan_worker_count()   # 8 on the 12-core workstation, 6 on the AX42
 
 
@@ -788,7 +828,7 @@ _opt_job_ids = _itertools_o.count(1)
 
 def _optimizer_worker_budget() -> int:
     """The CPU budget (eval children) all optimizer jobs share."""
-    return min(_SCAN_WORKERS_CAP, max(2, _physical_cores_available() - 2))
+    return _workers_for(_sizing_units(), _scan_workers_cap())
 
 
 def _optimizer_active_jobs() -> int:
@@ -1230,8 +1270,13 @@ def _final_warm_start_enabled() -> bool:
 
 def _solo_seed_threads() -> int:
     """How many threads the sweep's solo first point may use: a third of the
-    machine, capped at 8 — the rest stays free for the user's own solve."""
-    return max(1, min(8, (os.cpu_count() or 8) // 3))
+    machine, capped at 8 (``FEM_SOLO_SEED_THREADS_CAP`` raises the cap on a bigger
+    box) — the rest stays free for the user's own solve."""
+    return _solo_threads_for(os.cpu_count() or 8, _env_positive_int("FEM_SOLO_SEED_THREADS_CAP", 8))
+
+
+def _solo_threads_for(logical_cpus: int, cap: int) -> int:
+    return max(1, min(cap, logical_cpus // 3))
 
 
 #: (mtime_ns, size) -> identity.  Stage 3: per workspace — the file it memoises

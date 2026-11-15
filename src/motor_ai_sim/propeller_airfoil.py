@@ -26,9 +26,9 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 import numpy as np
 import yaml
 
-from motor_ai_sim.propeller import PropellerDataError
+from motor_ai_sim.propeller import PropellerDataError, seeded_config_path
 
-AIRFOIL_DIR = Path(__file__).resolve().parents[2] / "config" / "propellers" / "_airfoils"
+AIRFOIL_DIR = seeded_config_path("propellers", "_airfoils")
 
 #: the limits a manufacturing profile may state; name -> unit.  Order = order of application in ``manufactured_section``.
 LIMIT_UNITS: Dict[str, str] = {

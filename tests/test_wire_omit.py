@@ -135,3 +135,13 @@ def test_absent_means_zero_and_key_is_free_with_wire_split():
     from motor_ai_sim.routes import family
     assert family._ABSENT_MEANS["wire_omit"] == 0 and "wire_omit" in family.FREE_GEO_KEYS
     assert "wire_omit" not in family.EDITABLE_UNDER_DIE_LOCK          # locked with wire_split
+
+
+def test_the_fusion_12_40_coil_side_with_the_bore_margin():
+    """The real thing (stacked on `wire_bore_margin`): 2 rows x 3 on-edge 0.2 x 0.8 strips, five turns, validates."""
+    g = {**G, "wire_height": 0.8, "wire_bore_margin": 0.04, "wire_omit": ONE}
+    res = validate_geometry(g)
+    assert res.ok, [v.code for v in res.violations]
+    assert W.turns_per_coil(g) == 5
+    P = _polys(wire_height=0.8, wire_bore_margin=0.04, wire_omit=ONE)
+    assert len(P["coils"]) == 5 * 12 and all(abs(c.area - 0.16) < 1e-6 for c in P["coils"])

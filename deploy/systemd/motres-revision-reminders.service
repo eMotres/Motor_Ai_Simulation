@@ -1,0 +1,24 @@
+# Production revision reminders (owner 2026-11-15, "this is very important"): a factory member who has not acknowledged a published
+# revision gets ONE reminder mail after 24 h and ONE after 72 h (and the owner's daily report lists every unacknowledged revision).
+#
+# Runs `python -m motor_ai_sim.production.revision_ack --send` inside the api container, once an hour.  Idempotent: a level is sent once
+# per member and revision (recorded on the revision), so a second run, a restart or a host that was down is harmless; a mail that failed
+# is tried again by the next run.  Needs SMTP_USER / SMTP_PASSWORD in /etc/motres/api.env like every other mail; a server without SMTP
+# sends nothing.  The 06:00 owner report run does the same check once a day as a fallback.
+#
+# Setup (orchestrator, on the server):
+#   sudo cp deploy/systemd/motres-revision-reminders.{service,timer} /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now motres-revision-reminders.timer
+# Dry run (prints who would be reminded, sends nothing):
+#   bash /opt/motres/app/deploy/bluegreen.sh exec api python -m motor_ai_sim.production.revision_ack
+
+[Unit]
+Description=AeroStator production revision reminders (unacknowledged after 24 h / 72 h)
+After=docker.service
+
+[Service]
+Type=oneshot
+Nice=10
+WorkingDirectory=/opt/motres/app/deploy
+ExecStart=/bin/bash /opt/motres/app/deploy/bluegreen.sh exec api python -m motor_ai_sim.production.revision_ack --send

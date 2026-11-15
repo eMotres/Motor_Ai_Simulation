@@ -19,7 +19,7 @@ import ToolingFiles from './ToolingFiles';
 import { TimelineView } from './TimelineView';
 import TestsPanel from '../../tests/components/TestsPanel';
 import { downloadFile, fetchFileBlob, ProductionApiError, productionApi } from '../api';
-import { canEditRole, displayText, legacyTab, productionRole, unackedRevisions, VIEWER_TABS, visibleProductionTabs } from '../helpers';
+import { canAckRole, canEditRole, displayText, legacyTab, productionRole, unackedFiles, unackedRevisions, VIEWER_TABS, visibleProductionTabs } from '../helpers';
 import { OPEN_PRODUCTION_EVENT, type OpenProductionDetail } from '../../../lib/openProduction';
 import { shortTitle } from '../../../lib/stripContext.ts';
 import { useTabContextStore } from '../../../stores/tabContextStore';
@@ -206,6 +206,13 @@ const ProductionPage: React.FC<{ die: string; config: string; onBack: () => void
 
       {prod && !loading && (
         <>
+          {/* until the revision is acknowledged this stays on every tab (owner 2026-11-15: nobody read the drawing change) */}
+          {toAck > 0 && canAckRole(ctx.role) && tab !== 'changes' && (
+            <Alert severity="warning" sx={{ fontSize: 12.5, alignItems: 'center', mb: 1 }} data-testid="production-ack-banner"
+              action={<Button size="small" color="inherit" sx={{ textTransform: 'none' }} onClick={() => setTab('changes')}>{t('changes.open')}</Button>}>
+              {t('changes.pageBanner', { count: toAck })}
+            </Alert>
+          )}
 
           {tab === 'bom' && (
             <>
@@ -246,13 +253,13 @@ const ProductionPage: React.FC<{ die: string; config: string; onBack: () => void
           )}
           {tab === 'assembly' && <AssemblyProcess ctx={ctx} parts={data.parts} sections={data.process} documents={data.documents} />}
           {tab === 'timeline' && <TimelineView ctx={ctx} prod={prod} />}
-          {tab === 'documents' && <DocumentsPanel documents={data.documents} parts={data.parts} ctx={ctx} sections={data.process} link={link} onLinkChange={setLink} />}
+          {tab === 'documents' && <DocumentsPanel documents={data.documents} parts={data.parts} ctx={ctx} sections={data.process} link={link} onLinkChange={setLink} unackedFiles={unackedFiles(data.revisions, ctx.email)} />}
           {tab === 'tests' && <TestsPanel die={die} config={config} source={{ kind: 'production' }}
             onOpenDocument={(fileId, name) => { void downloadFile(die, config, fileId, name).catch((e) => setErr(String(e))); }}
             onLoadDocument={(fileId, onProgress) => fetchFileBlob(die, config, fileId, onProgress)} />}
           {tab === 'discussion' && <DiscussionPanel threads={data.threads} parts={data.parts} ctx={ctx} />}
           {tab === 'discussion' && ctx.canEdit && <LegacyProposals proposals={data.proposals} parts={data.parts} />}
-          {tab === 'changes' && <ChangesPanel revisions={data.revisions} currentRevision={prod.current_revision} ctx={ctx} />}
+          {tab === 'changes' && <ChangesPanel revisions={data.revisions} currentRevision={prod.current_revision} ctx={ctx} members={prod.members} />}
           {isAdmin && <Box sx={{ mt: 2 }}><DigestSettings target={{ kind: 'production', die, config }} /></Box>}
         </>
       )}

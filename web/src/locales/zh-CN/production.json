@@ -297,7 +297,8 @@
     "clear": "清除",
     "superseded": "已作废",
     "supersededBy": "已由 {name} 取代（版本 {rev}）",
-    "supersededTip": "已在已发布的版本中被替换。请勿按其制造零件；文件仅保留供参考。"
+    "supersededTip": "已在已发布的版本中被替换。请勿按其制造零件；文件仅保留供参考。",
+    "changedUnacked": "版本 {rev} 中有变更 - 尚未确认"
   },
   "unread": {
     "tip": "{count} 条未读消息",
@@ -360,7 +361,11 @@
     "removeReplace": "移除",
     "newFiles": "新文件",
     "superseded": "已作废 - 请勿使用",
-    "alertLine": "发送于 {date}：已邮件通知 {sent}/{total}{failed, plural, =0 {} other {，失败 #}}{notConfigured, plural, =0 {} other {，未发送 # （此服务器无邮件）}}"
+    "alertLine": "发送于 {date}：已邮件通知 {sent}/{total}{failed, plural, =0 {} other {，失败 #}}{notConfigured, plural, =0 {} other {，未发送 # （此服务器无邮件）}}",
+    "ackRowDone": "{email}：已于 {date} 确认",
+    "ackRowWaiting": "{email}：已等待 {hours} 小时",
+    "pageBanner": "{count, plural, other {# 个已发布的版本}}尚未被您确认：制造前请阅读变更内容并确认。",
+    "open": "打开变更"
   },
   "procurement": {
     "colStatus": "采购状态",

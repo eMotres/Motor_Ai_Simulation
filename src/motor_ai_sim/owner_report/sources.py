@@ -540,7 +540,29 @@ def _fmt_productions(start: float, end: float) -> list:
                 blocks.append(B.Block(f"Production: {group.title_en} [{die} / {config}]", lines, group.path or ""))
         except Exception as exc:                             # noqa: BLE001
             log.warning("owner_report: production %s/%s unreadable (%s)", die, config, exc)
+    blocks += _unacknowledged_revisions(end)
     return blocks
+
+
+def _unacknowledged_revisions(now: float) -> list:
+    """One line per factory member who has not acknowledged a published revision (owner 2026-11-15: a drawing change nobody read cost 100
+    shafts), longest waiting first; reminders are sent by the same daily run (production.revision_ack)."""
+    try:
+        from motor_ai_sim.production import revision_ack as RA
+        rows = RA.report_rows(now)
+    except Exception as exc:                                 # noqa: BLE001
+        log.warning("owner_report: unacknowledged revisions unreadable (%s)", exc)
+        return []
+    if not rows:
+        return []
+    lines = []
+    for r in rows:
+        done = ", ".join("%d h reminder sent" % lv for lv in r["reminders"])
+        text = "Revision %s of %s / %s: NOT acknowledged by %s, %d h since %s%s" % (
+            r["number"], r["die"], r["config"], r["email"], int(r["hours"]), "the alert" if r["alerted"] else "publication (no alert was sent)",
+            (" (" + done + ")") if done else "")
+        lines.append(B.Line(now, text, RP.production_path(r["die"], r["config"], "changes", item=r["number"]) or "", "", "factory"))
+    return [B.Block("Revisions waiting for the factory's acknowledgement", lines[:B.MAX_LINES_PER_BLOCK])]
 
 
 # -- 5. motors -----------------------------------------------------------------------------------------------------------------------

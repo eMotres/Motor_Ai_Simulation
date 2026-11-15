@@ -547,3 +547,47 @@ test('the superseded strings exist in both locales', async () => {
   const rd = (l) => JSON.parse(readFileSync(new URL(`../../../locales/${l}/production.json`, import.meta.url), 'utf8')).docs;
   for (const k of ['superseded', 'supersededBy', 'supersededTip']) assert.ok(rd('en')[k] && rd('zh-CN')[k], k);
 });
+
+// -- acknowledgement tracking (R3, owner 2026-11-15) ----------------------------------------------------------------------------
+const rev = (number, acks, extra = {}) => ({ number, date: '2026-11-10T08:00:00Z', author_email: 'e@x.com', summary: bi('s', 's', 'en', {}), changes: [],
+  acknowledgements: acks.map(([email, time]) => ({ email, time })), ...extra });
+const members = [{ email: 'f2@x.com', role: 'oem' }, { email: 'eng@x.com', role: 'engineer' }, { email: 'F1@x.com', role: 'oem' }, { email: 'own@x.com', role: 'owner' }];
+
+test('ack status: every member once, owner first; only factory members are required; hours count from the alert', () => {
+  const now = Date.parse('2026-11-12T10:30:00Z');
+  const rows = H.ackStatus(members, rev('1.0', [['f1@x.com', '2026-11-11T09:00:00Z']], { alert: { sent_at: '2026-11-10T08:00:00Z', subject: '', recipients: [] } }), now);
+  assert.deepEqual(rows.map((r) => r.email), ['own@x.com', 'eng@x.com', 'F1@x.com', 'f2@x.com']);
+  assert.deepEqual(rows.map((r) => r.required), [false, false, true, true]);
+  assert.equal(rows[2].ackedAt, '2026-11-11T09:00:00Z');                               // matched case-insensitively
+  assert.equal(rows[2].waitingHours, null);                                           // acknowledged: nothing to wait for
+  assert.equal(rows[3].waitingHours, 50);                                             // 2026-11-10 08:00 -> 2026-11-12 10:30
+  assert.equal(rows[0].waitingHours, null);                                           // the owner is not asked
+});
+
+test('ack status counts from the publication when no alert was sent, and never goes negative', () => {
+  const rows = H.ackStatus(members, rev('1.0', []), Date.parse('2026-11-10T07:00:00Z'));
+  assert.equal(rows.find((r) => r.email === 'f2@x.com').waitingHours, 0);
+});
+
+test('files of an unacknowledged revision are marked until it is acknowledged', () => {
+  const r1 = rev('1.1', [], { files: { new: [{ file_id: 'n1', name: 'a_v1.3.pdf', doc_id: 'd2', version: '1.3' }],
+    superseded: [{ file_id: 'o1', name: 'a_v1.2.pdf', doc_id: 'd1', version: '1.2', replaced_by: { doc_id: 'd2', file_id: 'n1', name: 'a_v1.3.pdf', version: '1.3' } }], released: [] } });
+  const r0 = rev('1.0', [['me@x.com', '2026-11-10T09:00:00Z']], { files: { new: [{ file_id: 'old0', name: 'z.pdf', doc_id: 'd0', version: null }], superseded: [], released: [] } });
+  assert.deepEqual(H.unackedFiles([r0, r1], 'me@x.com'), { n1: '1.1', o1: '1.1' });          // 1.0 is acknowledged: its file is not marked
+  assert.deepEqual(H.unackedFiles([r0, r1], 'other@x.com'), { old0: '1.0', n1: '1.1', o1: '1.1' });
+  assert.deepEqual(H.unackedFiles([], 'me@x.com'), {});
+});
+
+test('the page banner and the file chip are wired and their strings exist in both locales', async () => {
+  const { readFileSync } = await import('node:fs');
+  const src = (p) => readFileSync(new URL(p, import.meta.url), 'utf8');
+  assert.match(src('../components/ProductionPage.tsx'), /data-testid="production-ack-banner"/);
+  assert.match(src('../components/ProductionPage.tsx'), /toAck > 0 && canAckRole\(ctx\.role\) && tab !== 'changes'/);
+  assert.match(src('../components/DocumentsPanel.tsx'), /data-testid="doc-unacked"/);
+  assert.match(src('../components/ChangesPanel.tsx'), /data-testid="rev-ack-status"/);
+  const rd = (l) => JSON.parse(src(`../../../locales/${l}/production.json`));
+  for (const k of ['ackRowDone', 'ackRowWaiting', 'pageBanner', 'open']) assert.ok(rd('en').changes[k] && rd('zh-CN').changes[k], k);
+  assert.ok(rd('en').docs.changedUnacked && rd('zh-CN').docs.changedUnacked);
+  const keys = (o, p = '') => Object.entries(o).flatMap(([k, v]) => (v && typeof v === 'object' ? keys(v, p + k + '.') : [p + k]));
+  assert.deepEqual(keys(rd('en')).sort(), keys(rd('zh-CN')).sort());
+});

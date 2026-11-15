@@ -255,3 +255,36 @@ model; (5) no change of a stored die, configuration or catalogue number from thi
 5. Acceptance thresholds for the BEMT (section 4) after the first spread is known.
 6. Track B inputs the owner must give before B3/B5: the design target (thrust/rpm/diameter/blade count), manufacturing method and its limits (minimum thickness, material, tolerances), and whether noise or structural strength enters the objective.
 7. Ownership of the measured propellers for scanning (A1/A3 and B1 both depend on them).
+
+## 8. Own-propeller design tool (owner 2026-11-15): stages P1-P4, multi-objective from the start
+
+Owner: start the software for our own 10 / 11 / 12 / 13 inch propeller (parametric model + a GUI that shows the optimisation
+parameters), and: "not only thrust per unit power, but also more flow near the motor, to improve cooling". Runs after A2, on A1/A2.
+
+**Objectives (two, never merged into one weighted number).**
+1. Thrust per shaft watt at the motor's rated point (under its torque limit and a tip-speed limit).
+2. Cooling air at the motor: axial speed (and swirl) averaged over the radius band the motor occupies behind the hub
+   (`AirField.air_speed_ms` of `bemt-1`, A2). When the thermal link exists (A5) objective 2 becomes the film coefficient / winding
+   temperature of the motor at its duty point; until then the band air speed itself is used and the screen says so.
+The result is a **Pareto front** (non-dominated runs). The cost is stated as data: efficiency lost per m/s gained at the motor, read
+off the front; the owner picks the point on the front.
+
+**Design variables.** Besides the outer-blade set of 6C-3, the inner blade is a design-variable group of its own: hub radius, root
+cut-out, root chord and twist (control points inside r/R < 0.3), hub / spinner shape. The root barely carries thrust but sets the flow
+at the motor, so these variables are the main lever for objective 2.
+
+**Honest limit, kept visible in every result.** The blade-element model is weakest exactly at the root (stall, hub blockage, no hub
+flow: `band_inside_hub_not_modelled` / `band_partly_inside_hub` already flag this in `bemt-1`). Objective 2 is therefore a model value
+that must be checked with the thrust-stand anemometer behind the hub (A6) and, later, with CFD (track B) before it is trusted. The flag
+"root flow not validated" stays on the result, the front and the GUI until both checks exist; a design is never advertised by objective 2 alone.
+
+**Stages.**
+| Stage | Content | Tests |
+|---|---|---|
+| P1 | Parametric blade family 10 / 11 / 12 / 13 in (explicit scaling rule between diameters), variable groups outer / inner, bounds in the geometry file, every candidate a valid `propeller-2` dict; `evaluate()` returns both objectives, the profile with the motor band, constraints; operating points of the 40 mm motors (L12 6S, L20 12S) with torque / rpm limits read-only from the catalog | Candidate validity over random vectors, scaling rule checks, objectives against A2 values, bounds respected |
+| P2 | Routes: list family, get / set variables of a draft, evaluate, sweep one variable; drafts in the user's workspace, never in the shared catalog | Route tests; draft isolation |
+| P3 | GUI page: planform and chord / twist curves live from the variables, inputs with bounds, result tiles (thrust, torque, power, efficiency, air speed at the motor), curves versus rpm with the motor's torque limit, both objectives side by side, radial velocity profile with the motor band marked, Pareto front of the runs with pick-a-point, runs table (variables, objectives, constraints met); 3-D preview if the existing viewer is cheap to reuse; banner "BEMT, generic airfoil polars, not validated" | Front-end tests of the data shaping; EN + zh-CN key sets equal; no caption lines |
+| P4 | Multi-objective optimiser (NSGA-II-type or scalarisation sweeps) over the variables with `bemt-1`; objectives / constraints selectable; every evaluation stored in the shared result record (6C-5) | Optimiser on analytic problems; reproducibility with a seed; the front is non-dominated |
+
+**Inputs from the owner before P3 (not invented):** target thrust and rpm per diameter, blade count, material / manufacturing limits
+(minimum thickness), folding or fixed hub and its interface to our motors.

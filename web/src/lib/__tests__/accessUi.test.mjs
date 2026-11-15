@@ -69,7 +69,7 @@ t('a refused solve (SOLVE_ADMIN_ONLY) has its own one-line reason, even though t
 });
 
 t('view-only simulations: the workbench tabs follow canSolve, no other tab moves', () => {
-  const WORKBENCH = ['simulation', 'mechanical', 'thermal', 'schemas'];
+  const WORKBENCH = ['simulation', 'mechanical', 'thermal', 'schemas', 'propellers'];
   const ctx = (role, isAdmin, canSolve) => ({ signedIn: true, fullUI: A.hasSimulationUI(true, isAdmin, role), isAdmin, canSolve,
     producer: A.productionVisible(true, isAdmin, role) });
   const tabs = (c) => ALL_TABS.filter((id) => A.tabVisible(id, c));
@@ -108,7 +108,7 @@ t('card summary: none / partial / all', () => {
 // -- role "engineer" (owner 2026-10-14): Configure only, or the whole simulation ------------------------------------------
 
 const ALL_TABS = ['motors', 'geometry', 'materials', 'mesh', 'simulation', 'static3d', 'mechanical',
-  'thermal', 'controller', 'schemas', 'sweep', 'comparePoints', 'cost', 'compare', 'model3d', 'production', 'development', 'designer', 'admin'];
+  'thermal', 'controller', 'schemas', 'propellers', 'sweep', 'comparePoints', 'cost', 'compare', 'model3d', 'production', 'development', 'designer', 'admin'];
 
 // what App.tsx computes for a session: signedIn, fullUI (hasSimulationUI) and isAdmin
 const visible = (enforced, isAdmin, role) => {
@@ -122,7 +122,7 @@ t('role user: Motors, Configure, 3D model - nothing else', () => {
 
 t('role engineer: the whole simulation UI, no admin sections, and NO separate 3D model tab (it is Geometry > Full)', () => {
   assert.deepEqual(visible(true, false, 'engineer'), ['motors', 'geometry', 'materials', 'mesh', 'simulation', 'mechanical',
-    'thermal', 'controller', 'schemas', 'comparePoints', 'compare', 'production', 'development']);
+    'thermal', 'controller', 'schemas', 'propellers', 'comparePoints', 'compare', 'production', 'development']);
   assert.equal(visible(true, false, 'engineer').includes('model3d'), false);
   for (const id of ['admin', 'sweep', 'cost', 'static3d']) assert.equal(visible(true, false, 'engineer').includes(id), false, id);
 });

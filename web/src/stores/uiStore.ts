@@ -11,7 +11,7 @@ export type CompKey = 'stator' | 'rotor' | 'magnets' | 'coils' | 'shaft' | 'slee
 // UI State
 interface UIState {
   sidebarOpen: boolean;
-  activeTab: 'motors' | 'geometry' | 'materials' | 'mesh' | 'simulation' | 'static3d' | 'cost' | 'sweep' | 'compare' | 'model3d' | 'admin' | 'schemas';
+  activeTab: 'motors' | 'geometry' | 'materials' | 'mesh' | 'simulation' | 'static3d' | 'cost' | 'sweep' | 'compare' | 'model3d' | 'admin' | 'schemas' | 'propellers';
   showWireframe: boolean;
   showAxes: boolean;
   showGrid: boolean;

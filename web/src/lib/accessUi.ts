@@ -40,7 +40,7 @@ export const TAB_GATES: Readonly<Record<string, TabGate>> = {
   // 'workbench' (owner 2026-11-04): the Simulations workbench - Electromagnetic, Thermal, Mechanical, Schemas - is the simulation UI
   // WHILE the server lets the account start a calculation (/api/me canSolve); view-only otherwise (stored points: the project views).
   motors: 'always', geometry: 'fullUI', materials: 'fullUI', mesh: 'fullUI', simulation: 'workbench',
-  static3d: 'admin', mechanical: 'workbench', thermal: 'workbench', controller: 'fullUI', schemas: 'workbench', sweep: 'admin',
+  static3d: 'admin', mechanical: 'workbench', thermal: 'workbench', controller: 'fullUI', schemas: 'workbench', propellers: 'workbench', sweep: 'admin',
   comparePoints: 'fullUI', cost: 'admin', compare: 'signedIn',
   // "3D model" is the simplified Configure workflow's tab (owner 2026-10-15): look at / rotate the full model, tools + STEP after the NDA.
   // Engineers and admins (the simulation UI) have no separate 3D model tab - the same model, its part tree and the files are in Geometry > Full.

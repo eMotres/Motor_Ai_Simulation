@@ -96,6 +96,7 @@ const MechanicalPanel = lazy(watchChunkImport(() => import('./components/mechani
 const ThermalPanel = lazy(watchChunkImport(() => import('./components/thermal/ThermalPanel')));
 const ControllerPanel = lazy(watchChunkImport(() => import('./components/controller/ControllerPanel')));
 const SystemPanel = lazy(watchChunkImport(() => import('./components/system/SystemPanel')));
+const PropellersPanel = lazy(watchChunkImport(() => import('./components/propellers/PropellersPanel')));
 const SweepConfigPanel = lazy(watchChunkImport(() => import('./components/sweep/SweepConfigPanel')));
 const ComparePanel = lazy(watchChunkImport(() => import('./components/compare/ComparePanel')));
 const CostPanel = lazy(watchChunkImport(() => import('./components/cost/CostPanel')));
@@ -650,6 +651,10 @@ function App() {
     // Schemas (owner 2026-10-14): the view-only graph of how the simulations are chained (modules, data flow,
     // coupling loops; the propeller S1 chain).  Engineer + admin, in the Simulations dropdown; lazy, the graph
     // libraries are only fetched when the tab is opened.
+    // Propellers (owner 2026-11-15): the one page for all propeller work (catalogue, blade-element evaluation, own-propeller designer,
+    // optimisation, later CFD).  Same gate as the other Simulations members (staff with the simulation UI); Configure keeps its own picker.
+    { id: 'propellers', label: 'Propellers', order: 60.5, gate: TAB_GATES.propellers, showViewer: false,
+      render: () => <PropellersPanel /> },
     { id: 'schemas', label: 'Schemas', order: 61, gate: TAB_GATES.schemas, showViewer: false,
       render: () => <SystemPanel /> },
     { id: 'sweep', label: 'Optimization', order: 60, panelId: 'optimization', gate: TAB_GATES.sweep, showViewer: false,

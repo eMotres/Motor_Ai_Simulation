@@ -77,6 +77,7 @@ test('the count never reads done > planned, and an unplanned running stage shows
 test('coupled stages are counted in steps, everything else in frames', () => {
   assert.equal(stageUnit({ unit: 'steps' }), 'steps');
   assert.equal(stageUnit({ unit: 'frames' }), 'frames');
+  assert.equal(stageUnit({ unit: 'passes' }), 'passes');
   assert.equal(stageUnit({}), 'frames');
 });
 

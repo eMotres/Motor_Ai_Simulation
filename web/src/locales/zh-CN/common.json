@@ -636,9 +636,9 @@
     "elapsed": "已用",
     "eta": "预计剩余",
     "adaptiveHint": "自适应：总数会增加，直到该阶段趋稳。",
-    "count": "{done} / {planned} {unit, select, steps {步} other {帧}}",
-    "countGrowing": "{done} / {planned}+ {unit, select, steps {步} other {帧}}",
-    "countOpen": "{done} {unit, select, steps {步} other {帧}}",
+    "count": "{done} / {planned} {unit, select, steps {步} passes {迭代} other {帧}}",
+    "countGrowing": "{done} / {planned}+ {unit, select, steps {步} passes {迭代} other {帧}}",
+    "countOpen": "{done} {unit, select, steps {步} passes {迭代} other {帧}}",
     "state": {
       "pending": "等待",
       "running": "进行中",

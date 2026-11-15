@@ -147,6 +147,13 @@ def classify_em(phase: Optional[str]) -> Optional[str]:
     return None
 
 
+#: The time-periodic (TDM) solve reports its Newton passes by phase label only, no frame counts:
+#: "eddy warm-up (time-periodic steady state, TDM): Newton 1, residual 3.0e-02".
+_RE_TDM = re.compile(r"time-periodic.*\bTDM\b.*\bNewton\s+(\d+)", re.I)
+#: Passes a TDM orbit needs in practice (Newton 0, 1, 2 converged on the CIANO28 run): the first guess of
+#: the pass count, replaced by what the solve really does.
+TDM_TYPICAL_PASSES = 3
+
 _RE_ITER = re.compile(r"^\s*iteration\s+(\d+)\s*/\s*(\d+)", re.I)
 _RE_PWM = re.compile(r"^\s*controller pwm pass\s+(\d+)\s*/\s*(\d+)", re.I)
 
@@ -231,6 +238,10 @@ def observe(stages: Optional[List[Dict[str, Any]]], done: Optional[int],
     if kind == "coupled":
         _observe_coupled(stages, phase, now)
         return
+    hit = _RE_TDM.search(str(phase or ""))
+    if hit and done is None and total is None:
+        _tdm_pass(_enter(stages, "em", "prepare", now), int(hit.group(1)), now)
+        return
     key = classify_em(phase)
     if done is None and total is None:
         if key is not None:
@@ -243,6 +254,24 @@ def observe(stages: Optional[List[Dict[str, Any]]], done: Optional[int],
         key = "final" if (not phase or run is None) else run["key"]
     st = _enter(stages, "em", key, now)
     _counts(stages, st, done, total, phase, composition, now)
+
+
+def _tdm_pass(st: Dict[str, Any], k: int, now: float) -> None:
+    """One report of the time-periodic solve: Newton evaluation ``k`` (0-based) is done.  The preparation then
+    counts PASSES, not frames - the orbit is solved all frames at once, so a frame total (a march plan) is a number
+    this run will never have.  A second orbit (the demag pre-pass re-solves it) restarts the numbering at 0: the
+    passes of the first are kept in the base."""
+    if not st.get("_tdm"):
+        st.update(_tdm=True, _tdm_base=0, _tdm_k0=k, _tdm_t0=now, _tdm_last=k)
+    elif k < int(st.get("_tdm_last", 0)):
+        st["_tdm_base"] = int(st["_tdm_base"]) + int(st["_tdm_last"]) + 1
+        st.update(_tdm_k0=k, _tdm_t0=now)
+    st["_tdm_last"] = k
+    st["_tdm_tl"] = now
+    st["unit"] = "passes"
+    st["adaptive"] = True
+    st["done"] = int(st["_tdm_base"]) + k + 1
+    st["planned"] = max(int(st["_tdm_base"]) + TDM_TYPICAL_PASSES, st["done"] + (1 if k + 1 >= TDM_TYPICAL_PASSES else 0))
 
 
 def _counts(stages, st, done, total, phase, composition, now) -> None:
@@ -303,6 +332,12 @@ def _prepare_counts(st, d, t, phase, now) -> None:
     is already monotonic).  The stage reads calibration + march; the frames of
     each sub-step are kept for the note."""
     st.pop("_first", None)
+    if st.get("_tdm") and (d is not None or t is not None) and _prep_part(phase) != "cal":
+        # a rejected TDM attempt is marched from scratch: frames again, the pass count was not the run
+        for k in ("_tdm", "_tdm_base", "_tdm_k0", "_tdm_t0", "_tdm_last", "_tdm_tl"):
+            st.pop(k, None)
+        st["unit"] = "frames"
+        st["done"] = st["planned"] = 0
     part = _prep_part(phase)
     if part == "cal":
         if d is not None:
@@ -355,6 +390,16 @@ def eta_s(stages: Optional[List[Dict[str, Any]]], *,
         return None
     now = time.time() if now is None else float(now)
     run = next((s for s in stages if s["state"] == "running"), None)
+    if run is not None and run.get("_tdm"):
+        # TDM passes: the measured time of one pass between the first and the last report, times the passes
+        # still expected, less what the running pass has already taken.  A lower bound (the final period's
+        # frames follow, at a rate not known yet); None when there is no second report or nothing is left.
+        n = int(run.get("_tdm_last", 0)) - int(run.get("_tdm_k0", 0))
+        left = int(run.get("planned") or 0) - int(run.get("done") or 0)
+        if n <= 0 or left <= 0:
+            return None
+        per_pass = (float(run["_tdm_tl"]) - float(run["_tdm_t0"])) / n
+        return max(per_pass * left - (now - float(run["_tdm_tl"])), 0.0)
     if run is None or run.get("unit", "frames") != "frames":
         return None
     rate = None

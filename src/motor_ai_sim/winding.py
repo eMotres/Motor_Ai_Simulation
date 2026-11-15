@@ -92,7 +92,9 @@ from typing import Any, Mapping, Optional, Tuple
 
 log = logging.getLogger(__name__)
 
-__all__ = ["wire_bore_margin_mm", "wire_height_bound_mm", "bore_floor_offset_mm", "parse_connection", "n_parallel_from_connection", "connection_label",
+__all__ = ["wire_bore_margin_mm", "wire_height_bound_mm", "bore_floor_offset_mm", "WIRE_OMIT_COLS", "WIRE_OMIT_MAX_ROWS",
+           "wire_omit_mask", "wire_omit_positions", "wire_omit_count", "wire_omit_error",
+           "parse_connection", "n_parallel_from_connection", "connection_label",
            "wire_parallel_from_geo", "wire_split_from_geo", "turns_per_coil",
            "n_parallel_effective", "conductors_per_slot", "strip_width_mm",
            "strip_gap_mm", "winding_footprint_mm", "STRIP_GAP_FACTOR",
@@ -258,10 +260,101 @@ def wire_split_from_geo(geo: Optional[Mapping[str, Any]]) -> int:
     return n
 
 
+#: ``wire_omit`` is ONE integer (it travels through geometry signatures, forms, CSV and JS numbers): bit
+#: ``row * WIRE_OMIT_COLS + col`` set = that grid position of a wire row is EMPTY.  ``row`` 0 is the row under the yoke,
+#: ``col`` 0 is the strip next to the tooth (mirrored on the other side of the slot unit).  8 columns = the largest
+#: ``wire_split``; 6 rows keep every bit below 2**48, exact in a JS number.
+WIRE_OMIT_COLS = 8
+WIRE_OMIT_MAX_ROWS = 6
+
+
+def wire_omit_mask(positions) -> int:
+    """The integer for a list of ``(row, col)`` positions (the inverse of :func:`wire_omit_positions`)."""
+    m = 0
+    for r, c in positions:
+        r, c = int(r), int(c)
+        if not (0 <= r < WIRE_OMIT_MAX_ROWS and 0 <= c < WIRE_OMIT_COLS):
+            raise ValueError(f"wire_omit position ({r}, {c}) is outside {WIRE_OMIT_MAX_ROWS} rows x {WIRE_OMIT_COLS} columns")
+        m |= 1 << (r * WIRE_OMIT_COLS + c)
+    return m
+
+
+def _wire_omit_int(geo: Optional[Mapping[str, Any]]) -> int:
+    raw = dict(geo or {}).get("wire_omit")
+    if raw is None or raw == "" or isinstance(raw, bool):
+        return 0
+    try:
+        f = float(raw)
+    except (TypeError, ValueError):
+        raise ValueError(f"wire_omit must be a non-negative integer (empty grid positions as bits); got {raw!r}")
+    n = int(round(f))
+    if f != f or n < 0 or abs(f - n) > 1e-9 or n >= (1 << (WIRE_OMIT_COLS * WIRE_OMIT_MAX_ROWS)):
+        raise ValueError(f"wire_omit must be a non-negative integer below 2**{WIRE_OMIT_COLS * WIRE_OMIT_MAX_ROWS}; got {raw!r}")
+    return n
+
+
+def wire_omit_positions(geo: Optional[Mapping[str, Any]]):
+    """Sorted ``[(row, col), ...]`` of the EMPTY grid positions of ``geometry.wire_omit`` (absent / 0 = none).
+
+    RAISES ``ValueError`` on anything that is not a valid mask.  Positions outside the ``num_wires_per_slot`` x
+    ``wire_split`` grid are NOT dropped here: :func:`wire_omit_error` names them, and the counts below refuse them,
+    because a silently ignored position is a machine with more turns than the one that was specified."""
+    n = _wire_omit_int(geo)
+    return [(i // WIRE_OMIT_COLS, i % WIRE_OMIT_COLS) for i in range(WIRE_OMIT_COLS * WIRE_OMIT_MAX_ROWS) if (n >> i) & 1]
+
+
+def _grid(geo: Optional[Mapping[str, Any]]):
+    g = dict(geo or {})
+    rows = int(round(float(g.get("num_wires_per_slot", 0) or 0)))
+    return rows, wire_split_from_geo(g)
+
+
+def wire_omit_error(geo: Optional[Mapping[str, Any]]) -> Optional[str]:
+    """Why the empty positions of ``geo`` do not describe a winding, or None.
+
+    Refused: a position outside the rows x strips grid; any empty position with ``wire_parallel`` > 1 (strands in hand
+    group whole rows); a row with no strip left (a radially empty row is not a coil); a machine with no strip at all."""
+    try:
+        pos = wire_omit_positions(geo)
+    except ValueError as e:
+        return str(e)
+    if not pos:
+        return None
+    rows, split = _grid(geo)
+    out = [p for p in pos if p[0] >= rows or p[1] >= split]
+    if out:
+        return ("wire_omit names position(s) %s outside the %d row(s) x %d strip(s) grid (row 0 = under the yoke, "
+                "column 0 = next to the tooth)" % (", ".join("(%d, %d)" % p for p in out), rows, split))
+    try:
+        if wire_parallel_from_geo(geo) > 1:
+            return "wire_omit needs wire_parallel = 1: strands in hand group whole wire rows"
+    except ValueError as e:
+        return str(e)
+    per_row = {}
+    for r, _c in pos:
+        per_row[r] = per_row.get(r, 0) + 1
+    empty = [r for r, n in per_row.items() if n >= split]
+    if empty:
+        return "wire_omit empties the whole wire row %s: a row needs at least one strip" % ", ".join(str(r) for r in sorted(empty))
+    return None
+
+
+def wire_omit_count(geo: Optional[Mapping[str, Any]]) -> int:
+    """Number of EMPTY grid positions per slot side (0 = the full grid).  Raises ``ValueError`` like
+    :func:`wire_omit_error` describes, so no caller counts turns on a grid it cannot draw."""
+    if not _wire_omit_int(geo):
+        return 0
+    err = wire_omit_error(geo)
+    if err:
+        raise ValueError(err)
+    return len(wire_omit_positions(geo))
+
+
+
 def conductors_per_slot(geo: Optional[Mapping[str, Any]]) -> int:
     """PHYSICAL conductors the CAD lays in one slot side.
 
-    ``num_wires_per_slot x wire_split``.  The strips are drawn, meshed and
+    ``num_wires_per_slot x wire_split`` minus the EMPTY grid positions of ``wire_omit``.  The strips are drawn, meshed and
     current-constrained one by one, so this is the polygon count per slot side
     AND the ampere-turn multiplier the winding source is normalised by.  Since
     the strips are SERIES turns each carrying the full branch current, this is
@@ -269,7 +362,7 @@ def conductors_per_slot(geo: Optional[Mapping[str, Any]]) -> int:
     """
     g = dict(geo or {})
     nw = int(round(float(g.get("num_wires_per_slot", 0) or 0)))
-    return nw * wire_split_from_geo(g)
+    return nw * wire_split_from_geo(g) - wire_omit_count(g)
 
 
 def strip_width_mm(geo: Optional[Mapping[str, Any]]) -> float:
@@ -318,7 +411,8 @@ def winding_footprint_mm(geo: Optional[Mapping[str, Any]]) -> float:
 def turns_per_coil(geo: Optional[Mapping[str, Any]]) -> int:
     """SERIES turns of one coil.
 
-    ``(num_wires_per_slot / wire_parallel) x wire_split``.  The slot holds
+    ``(num_wires_per_slot / wire_parallel) x wire_split`` minus the empty grid positions of ``wire_omit`` (those only
+    with ``wire_parallel`` = 1).  The slot holds
     ``num_wires_per_slot`` wire ROWS — that is geometry, and the coating and the
     copper mass are built on it — each row carrying ``wire_split`` strips, and
     those strips are consecutive SERIES turns.  This is the ELECTRICAL turn
@@ -328,7 +422,7 @@ def turns_per_coil(geo: Optional[Mapping[str, Any]]) -> int:
     k = wire_parallel_from_geo(g)
     nw = int(round(float(g.get("num_wires_per_slot", 0) or 0)))
     rows = (nw // k if k else nw)
-    return rows * wire_split_from_geo(g)
+    return rows * wire_split_from_geo(g) - wire_omit_count(g)
 
 
 def n_parallel_effective(n_parallel: Any,

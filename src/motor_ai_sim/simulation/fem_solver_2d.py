@@ -5128,7 +5128,8 @@ def _fem_transient_sliding_band_once(
     # expression downstream is the one that was always there.
     wire_split = _ws_geo(geo)
     n_wires_drawn = int(geo.get("num_wires_per_slot", 14))
-    n_wires = n_wires_drawn * wire_split
+    from motor_ai_sim.winding import wire_omit_count as _om_cnt
+    n_wires = n_wires_drawn * wire_split - _om_cnt(geo)        # minus the EMPTY grid positions (wire_omit)
     turns_per_coil = _turns_per_coil(geo)
     # Physical copper loss (ρ_Cu(coil_temp)·J²·V_cu·k_end, end-winding the 2-D
     # field never sees) is computed a few dozen lines DOWN, right after the CAD

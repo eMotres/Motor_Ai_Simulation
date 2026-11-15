@@ -54,6 +54,9 @@ export interface Passport {
    *  then the turns ratio is off by S.  `Knobs.split` is that machine's own
    *  value; see `turnsFactor`. */
   wire_split0?: number;
+  /** EMPTY wire-grid positions per slot side the base point was measured at (geometry.wire_omit; ABSENT = 0).  Each is one
+   *  series turn fewer: turns = (N/wire_parallel0)·wire_split0 − wire_omit0. */
+  wire_omit0?: number;
   T0_Nm: number;       // base torque at (I0, rpm0)
   /** Base no-load back-EMF at (N0, L0, rpm0), phase, star-equivalent [V].
    *  extraction_rev ≥ 2: the FUNDAMENTAL amplitude (`emf_basis`); older
@@ -241,6 +244,8 @@ export interface Knobs {
    *  which makes the turns ratio the plain row ratio — the behaviour every
    *  caller had before the split existed. */
   split?: number;
+  /** EMPTY wire-grid positions of the machine being configured; ABSENT = the passport's own `wire_omit0` (itself absent = 0). */
+  omit?: number;
   // ── DRIVE (Configure's Sine | PWM menu, owner 2026-10-05).  scaleMotor()
   //    never reads these: the PWM numbers come from the passport's COMPUTED
   //    `pwm_variants` (lib/configuratorDrive.ts), so the sine numbers cannot
@@ -358,13 +363,24 @@ function interp(xs: number[], ys: number[], x: number): number {
  *
  *  Both split values default to 1 when absent — a passport written before the
  *  split, or a caller that has no machine to speak for, is an unsplit build. */
+/** Number of EMPTY wire-grid positions in a `wire_omit` mask (bit row·8+col; absent / 0 / junk = 0). */
+export function omitCount(raw: unknown): number {
+  let x = Math.round(Number(raw));
+  if (!Number.isFinite(x) || x <= 0) return 0;
+  let c = 0;
+  while (x > 0) { c += x % 2; x = Math.floor(x / 2); }
+  return c;
+}
+
 export function turnsFactor(p: Passport, k: Knobs): number {
   if (!p.N0) return 1;
   const kPar0 = Math.max(1, Math.round(p.wire_parallel0 ?? 1));
   const kPar  = kPar0;                    // strands in hand are not a knob
   const s0 = Math.max(1, Math.round(p.wire_split0 ?? 1));
   const s  = Math.max(1, Math.round(k.split ?? s0));
-  return ((k.N / kPar) * s) / ((p.N0 / kPar0) * s0);
+  const o0 = Math.max(0, Math.round(p.wire_omit0 ?? 0));
+  const o  = Math.max(0, Math.round(k.omit ?? o0));
+  return ((k.N / kPar) * s - o) / ((p.N0 / kPar0) * s0 - o0);
 }
 
 /** Instant analytical scaling of a passport to a new (length, turns, wire, I, rpm).

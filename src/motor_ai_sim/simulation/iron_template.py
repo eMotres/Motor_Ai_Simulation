@@ -233,6 +233,13 @@ def stator_half_mesh(p: Dict, density: float = 1.0):
     xc1 = xc0 + wcol
     # x span of every STRIP in a row, left to right — the copper intervals
     # inside [xc0, xc1]; the (N−1) gaps between them are enamel.
+    # EMPTY grid positions (geometry.wire_omit), as (row under the yoke = 0, column next to the tooth = 0)
+    from motor_ai_sim.winding import wire_omit_error as _om_err, wire_omit_positions as _om_pos
+    if p.get("wire_omit"):
+        _e = _om_err(p)
+        if _e:
+            raise ValueError(_e)
+    _omit = frozenset(_om_pos(p)) if p.get("wire_omit") else frozenset()
     strips = [(xc0 + i * (ww + sgap), xc0 + i * (ww + sgap) + ww)
               for i in range(max(1, n_split))]
     x_env0, x_env1 = xt + ins, xs2 - ins
@@ -413,7 +420,11 @@ def stator_half_mesh(p: Dict, density: float = 1.0):
                     yy = y_wb
                     for k in range(nw):
                         if yy - 1e-9 <= ym <= yy + wh + 1e-9:
-                            tg = TAG_COIL
+                            # `wire_omit`: an EMPTY grid position stays coating.  Level k counts from the bore side,
+                            # the winding's row 0 is under the yoke; column 0 is the strip next to the tooth.
+                            _col = next(i for i, (a, b) in enumerate(strips) if a - 1e-9 <= xm <= b + 1e-9)
+                            if (nw - 1 - k, _col) not in _omit:
+                                tg = TAG_COIL
                             break
                         yy += wh + wdy
             row_tags[j] = tg

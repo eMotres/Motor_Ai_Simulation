@@ -540,7 +540,8 @@ def _build_calculator(wb, *, pp: Dict[str, Any], geo: Dict[str, Any],
     # because wp0 and ws0 are fixed by the build and cancel; recorded here so the
     # base section can state the turns the tables were actually measured on.
     ws0 = max(1.0, float(pp.get("wire_split0") or 1))
-    turns0 = (N0 / wp0) * ws0
+    om0 = max(0.0, float(pp.get("wire_omit0") or 0))        # empty wire-grid positions (absent = 0)
+    turns0 = (N0 / wp0) * ws0 - om0
     ldq = pp.get("ldq0") or {}
     cur = pp.get("current") or {}
     lg = pp.get("loss_grid") or {}
@@ -1692,8 +1693,16 @@ def build_datasheet(*, die: str, cfg: str, die_doc: Dict[str, Any],
             "the row is this many strips of wire_width laid side by side and "
             "wired in SERIES, so each strip is a turn: the turn count, the EMF "
             "and Kt multiply by it, the phase resistance by its square", 0)
+    try:
+        from motor_ai_sim.winding import wire_omit_count as _om_cnt
+        _omit = _om_cnt(geo)
+    except ValueError:
+        _omit = 0
+    if _omit:
+        one("Empty wire-grid positions (wire_omit)", _omit,
+            "grid positions of the wire rows x strips that hold no strip: each one is one turn fewer", 0)
     one("Series turns per coil", _turns,
-        "(wire rows ÷ wires in hand) × strips per row — what the EMF, Kt and R "
+        "(wire rows ÷ wires in hand) × strips per row − empty positions — what the EMF, Kt and R "
         "are built on", 0)
     one("Parallel paths (connection)", wind.get("n_parallel") or 1, "", 0)
     one("Conductors in parallel per phase",

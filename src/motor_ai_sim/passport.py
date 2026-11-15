@@ -329,6 +329,10 @@ def generate_passport(
                                       wire_split_from_geo as _ws_geo)
     wireParallel0 = float(_wp_geo(g))
     wireSplit0 = float(_ws_geo(g))
+    # EMPTY wire-grid positions per slot side (geometry.wire_omit): the series turns are
+    # (N0 / wire_parallel0) x wire_split0 - wire_omit0.  Absent = 0 (a passport written before the key).
+    from motor_ai_sim.winding import wire_omit_count as _om_cnt
+    wireOmit0 = float(_om_cnt(g))
     L0 = float(g.get("motor_length", 0) or 0)
     wireH0 = float(g.get("wire_height", 0.0) or 0.0)
     if _mconn:
@@ -682,6 +686,7 @@ def generate_passport(
         # measured on a machine that had neither: read them as 1.
         "wire_parallel0": wireParallel0,
         "wire_split0": wireSplit0,
+        "wire_omit0": wireOmit0,
         # The convention every number below was measured in.  A generator
         # solved as a motor is a different point, so the passport says which.
         "mode0": str(mode or "motor"),

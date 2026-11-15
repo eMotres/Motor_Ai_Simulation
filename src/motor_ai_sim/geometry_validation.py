@@ -1678,6 +1678,13 @@ def validate_parameter_values(geo: Dict[str, Any]) -> List[Dict[str, Any]]:
     # test_geometry_validation.py::TestApiWiring pins ("a mid-edit design must
     # still save").  Refusing it here as well only ever passed those tests
     # because `slot_cut_limits` used to read the STALE derived slot count.
+    # ── the empty grid positions have to describe a winding ──────────────────
+    # `wire_omit` (rows x strips grid positions left empty): in the grid, wire_parallel = 1, no row emptied
+    if geo.get("wire_omit") not in (None, "", 0, 0.0):
+        from motor_ai_sim.winding import wire_omit_error
+        _wo = wire_omit_error(geo)
+        if _wo is not None:
+            _err("wire_omit", geo.get("wire_omit"), _wo)
     _split_fit = split_width_error(geo)
     if _split_fit is not None and _split_fit[0] == "wire_split":
         _fld, _msg, _bound = _split_fit

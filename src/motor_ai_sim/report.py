@@ -289,6 +289,13 @@ def winding_words(geo: Dict[str, Any]) -> str:
         out = "%s turns" % _fmt(n, 0)
     if spl and spl > 1:
         out += ", each strand split into %s strips in series" % _fmt(spl, 0)
+    try:
+        from motor_ai_sim.winding import wire_omit_positions as _om_pos
+        _om = len(_om_pos(geo))
+    except (ValueError, TypeError):
+        _om = 0
+    if _om:
+        out += ", %d grid position(s) empty" % _om
     return out
 
 
@@ -4602,7 +4609,7 @@ def _parse_geo_sig(sig: Any) -> Optional[Dict[str, float]]:
 #: stamp compares as this value; any other input present on one side only is
 #: a mismatch.
 _GEO_SIG_ABSENT_MEANS: Dict[str, float] = {
-    "sleeve_thickness": 0.0, "wire_parallel": 1.0, "wire_split": 1.0,
+    "sleeve_thickness": 0.0, "wire_parallel": 1.0, "wire_split": 1.0, "wire_omit": 0.0,
     # stamped only when the stator OD notches are OFF (`:0`); absent = on
     "stator_outer_notches": 1.0,
 }

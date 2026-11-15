@@ -345,6 +345,17 @@ SCHEMA_FALLBACK: Dict[str, dict] = {
             "blank = the insulation thickness (the liner is open towards the bore). "
             "The yoke side always keeps the insulation thickness"),
     },
+    # OPTIONAL (2026-11-15): EMPTY positions of the wire grid (rows x strips). ONE integer so it travels through
+    # geometry signatures, forms and CSV: bit (row * 8 + col) = that position is empty; row 0 = under the yoke,
+    # column 0 = next to the tooth.  Absent / 0 = the full grid.  winding.wire_omit_mask([(row, col), ...]).
+    "wire_omit": {
+        "label": "Wire grid: empty positions", "unit": "", "type": "int",
+        "min": 0, "max": 281474976710655, "step": 1, "group": "winding", "unset_ok": True,
+        "description": (
+            "empty positions of the wire grid (rows x strips): bit row*8+col is set when that position holds "
+            "no strip; row 0 = under the yoke, column 0 = next to the tooth. 0 = every position filled. "
+            "Needs wire_parallel = 1; a row keeps at least one strip. Example: row 1, column 0 empty = 256"),
+    },
     "sleeve_thickness": {
         "label": "Sleeve thickness", "unit": "mm", "type": "float",
         "min": 0.0, "max": 20.0, "step": 0.05, "group": "rotor",

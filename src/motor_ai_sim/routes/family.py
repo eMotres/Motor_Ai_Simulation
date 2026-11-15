@@ -67,7 +67,7 @@ FREE_GEO_KEYS = (
     "motor_length",
     "wire_width", "wire_height",
     "wire_spacing_x", "wire_spacing_y",
-    "num_wires_per_slot", "wire_split", "wire_parallel",
+    "num_wires_per_slot", "wire_split", "wire_parallel", "wire_omit",
     "insulation_thickness",
     "stator_outer_notches",
 )
@@ -217,6 +217,7 @@ _ABSENT_MEANS: Dict[str, Any] = {
     "sleeve_thickness": 0.0,   # no retaining ring
     "wire_parallel": 1,        # one wire in hand
     "wire_split": 1,           # one strip per wire row
+    "wire_omit": 0,            # every grid position filled
 }
 
 # Display names double as file/dir names, so the charset is "safe on every

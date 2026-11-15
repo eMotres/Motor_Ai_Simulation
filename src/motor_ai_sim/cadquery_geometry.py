@@ -1506,6 +1506,28 @@ def _strip_columns(x0: float, wire_w: float, n_split: int, spacing_x: float):
     return [(x0 + i * (wire_w + gap), wire_w) for i in range(n)]
 
 
+def _omit_set(p: Dict) -> frozenset:
+    """The EMPTY ``(row, col)`` grid positions of ``wire_omit`` (``winding.wire_omit_positions``), empty = none.
+    A mask that does not describe a drawable winding RAISES: a silently ignored position is more turns than specified."""
+    from motor_ai_sim.winding import wire_omit_error, wire_omit_positions
+    if not p.get('wire_omit'):
+        return frozenset()
+    err = wire_omit_error(p)
+    if err:
+        raise ValueError(err)
+    return frozenset(wire_omit_positions(p))
+
+
+def _strip_columns_row(x0: float, wire_w: float, n_split: int, spacing_x: float, row: int, omit: frozenset):
+    """``_strip_columns`` for wire row ``row`` with the EMPTY grid positions removed.  Column 0 is the strip next to
+    the tooth: the +x side counts from its first strip, the -x side (``x0 < 0``) from its last."""
+    cols = _strip_columns(x0, wire_w, n_split, spacing_x)
+    if not omit:
+        return cols
+    n = len(cols)
+    return [c for i, c in enumerate(cols) if (row, (i if x0 > 0 else n - 1 - i)) not in omit]
+
+
 def _strip_span(wire_w: float, n_split: int, spacing_x: float) -> float:
     """Tangential space one turn's strips OCCUPY [mm] — copper AND gaps.
 
@@ -2105,6 +2127,10 @@ class CadQueryMotor:
         # that is silent on it (the same config-leak family as the notch flag above)
         if api_params.get('wire_bore_margin') is None:
             mapped.pop('wire_bore_margin', None)
+        # `wire_omit` is OPTIONAL (absent = the full grid): a config-level value must not leak onto an override that is
+        # silent on it (the same config-leak family as the notch flag above)
+        if api_params.get('wire_omit') is None:
+            mapped.pop('wire_omit', None)
         
         # Pole/slot COUNT is defined by the geometry's magnets/slots: num_poles and
         # num_slots are AUTHORITATIVE.  The segment view (num_seg × *_per_segment) is
@@ -2220,6 +2246,8 @@ class CadQueryMotor:
             updated.pop(STATOR_OUTER_NOTCHES, None)
         if 'wire_bore_margin' not in mapped_params:
             updated.pop('wire_bore_margin', None)
+        if 'wire_omit' not in mapped_params:
+            updated.pop('wire_omit', None)
         self.parameters = updated
         
     def get_parameter_hash(self) -> str:
@@ -2711,6 +2739,7 @@ class CadQueryMotor:
         # Strips per wire row (wire_split): each wire row is drawn as N solids of
         # wire_w with 2·wire_spacing_x between them.
         n_split = _wire_split(p)
+        _omit = _omit_set(p)
         wire_col_w = _strip_span(wire_w, n_split, wire_d_x)
         # Feasibility clamp (match get_2d_polygons / geometry_constraints): the
         # winding must fit the slot or coils overflow the bore onto the rotor.
@@ -2749,7 +2778,7 @@ class CadQueryMotor:
                 # One solid per STRIP on each side.  n_split = 1 gives back the
                 # single full-width rectangle this loop always built.
                 for _x0 in (right_x, -(right_x + wire_col_w)):
-                    for sxs, sw in _strip_columns(_x0, wire_w, n_split, wire_d_x):
+                    for sxs, sw in _strip_columns_row(_x0, wire_w, n_split, wire_d_x, step_y, _omit):
                         pts = [
                             (sxs,      current_y),
                             (sxs + sw, current_y),
@@ -2868,6 +2897,7 @@ class CadQueryMotor:
         # come out as enamel, which is exactly what they are (and what the
         # thermal domains 61-63 need them to be: coating, not slot air).
         n_split = _wire_split(p)
+        _omit = _omit_set(p)
         wire_col_w = _strip_span(wire_w, n_split, wire_dx)
         _wh_max = _wire_height_bound(float(p.get('slot_height', 0.0)), ins_w, wire_dy, num_wires, p)
         if _wh_max > 1e-3 and wire_h > _wh_max:
@@ -2890,7 +2920,7 @@ class CadQueryMotor:
                     lw = []
                     for s in range(n_fit):
                         cy = top_y_c - s * (wire_h + wire_dy)
-                        for sxs, sw in _strip_columns(sx0, wire_w, n_split, wire_dx):
+                        for sxs, sw in _strip_columns_row(sx0, wire_w, n_split, wire_dx, s, _omit):
                             lw.append(SPoly([(sxs, cy), (sxs + sw, cy),
                                              (sxs + sw, cy - wire_h), (sxs, cy - wire_h)]))
                     copper = unary_union(lw)
@@ -2961,6 +2991,7 @@ class CadQueryMotor:
         # Strips per wire — same split the FEM polygons are built with, so the
         # 3-D view shows the conductors the solver actually solved.
         n_split     = _wire_split(p)
+        _omit = _omit_set(p)
         wire_col_w  = _strip_span(wire_w, n_split, wire_dx)
         # ── Feasibility clamp (match get_2d_polygons / geometry_constraints) ──
         # The winding must fit the slot, else coils overflow the bore across the
@@ -3317,14 +3348,14 @@ class CadQueryMotor:
         # N strips of wire_w side by side, so the view shows what the mesher
         # was given (they are all merged into the slot's `coil_i` part, exactly
         # as the wires of a stack always were).
-        _strip_xy = [(sxs, sw)
+        _strip_xy_row = lambda _row: [(sxs, sw)
                      for _sd, sx in ((1, right_x), (-1, -(right_x + wire_col_w)))
-                     for sxs, sw in _strip_columns(sx, wire_w, n_split, wire_dx)]
+                     for sxs, sw in _strip_columns_row(sx, wire_w, n_split, wire_dx, _row, _omit)]
         for i in range(half_slots):
             a = i * radians(slot_angle_deg)
             for step in range(num_wires):
                 cy = top_y_c - step * (wire_h + wire_dy)
-                for sxs, sw in _strip_xy:
+                for sxs, sw in _strip_xy_row(step):
                     pts_local = [(sxs, cy), (sxs + sw, cy),
                                  (sxs + sw, cy - wire_h), (sxs, cy - wire_h)]
                     pts = [_rot(*pt, a) for pt in pts_local]
@@ -3627,6 +3658,7 @@ class CadQueryMotor:
         # origin and the enamel envelope must be built on.  N = 1 makes the two
         # identical and every expression below is the one that was always there.
         n_split     = _wire_split(p)
+        _omit = _omit_set(p)
         wire_col_w  = _strip_span(wire_w, n_split, wire_dx)
         # ── Feasibility clamp (see geometry_constraints.py) ───────────────────
         # The winding must fit the slot, else the coils overflow across the air
@@ -3999,7 +4031,7 @@ class CadQueryMotor:
             for sx0 in (right_x, -(right_x + wire_col_w)):  # +x side, then −x side
                 for step in range(n_fit):
                     cy = top_y_c - step*(wire_h + wire_dy)
-                    for sxs, sw in _strip_columns(sx0, wire_w, n_split, wire_dx):
+                    for sxs, sw in _strip_columns_row(sx0, wire_w, n_split, wire_dx, step, _omit):
                         local = [(sxs, cy), (sxs + sw, cy),
                                  (sxs + sw, cy - wire_h), (sxs, cy - wire_h)]
                         wp = SPoly([_rot(*pt, a) for pt in local])

@@ -552,7 +552,8 @@ def copper_loss_W(p, geo_cfg, I_phase_rms, n_parallel,
     n_split = float(_ws_geo(geo_cfg))
     # CONDUCTORS per slot = wire rows × strips per row.  Both the section the
     # measured copper is shared over and the active volume are built on it.
-    n_wires = float(geo_cfg.get("num_wires_per_slot", 14)) * n_split
+    from motor_ai_sim.winding import wire_omit_count as _om_cnt
+    n_wires = float(geo_cfg.get("num_wires_per_slot", 14)) * n_split - float(_om_cnt(geo_cfg))   # minus the EMPTY grid positions
     wire_area = (float(geo_cfg.get("wire_width", 5.0)) * mm
                  * float(geo_cfg.get("wire_height", 0.6)) * mm)
     n_cond = float(p.num_slots) * n_wires        # conductors in the cross-section

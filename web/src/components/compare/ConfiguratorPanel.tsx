@@ -26,7 +26,7 @@ import { TextPromptDialog, type TextPromptState } from '../common/PromptDialogs'
 import { HeaderRight } from '../common/PanelHeader';
 import { fmt, pctDelta, PANEL, LABEL, MetricTile, LeadCableTile, Tip } from '../common/ResultTiles';
 import {
-  scaleMotor, maxCurrent, turnsFactor, type Passport, type Knobs, type ScaledResult, type PwmVariant,
+  scaleMotor, maxCurrent, turnsFactor, omitCount, type Passport, type Knobs, type ScaledResult, type PwmVariant,
 } from '../../lib/motorScaling';
 import {
   EMPTY_REFERENCE, windingConnections, connLabel, fetchCatalogReferencesAnswer, type ReferenceMotor,
@@ -136,6 +136,7 @@ const baseKnobs = (p: Passport): Knobs => ({
   // The passport's own split until a machine is loaded — the base point IS the
   // measured machine, so the turns ratio starts at 1 (absent = 1 either way).
   split: p.wire_split0 ?? 1,
+  omit: p.wire_omit0 ?? 0,
 });
 
 interface SavedConfig {
@@ -472,6 +473,7 @@ const ConfiguratorPanel: React.FC = () => {
         // are matched by cross-section, not by build) would otherwise be scaled
         // with a turns ratio short by exactly S.
         split: Math.max(1, Math.round(Number(g.wire_split) || 1)),
+        omit: omitCount(g.wire_omit),
         wireH_mm: Number(g.wire_height),
         nP: (() => {
           const mm = conn.match(/(\d+)\s*P/i);          // "2S-2P" -> 2, "4P" -> 4
@@ -504,7 +506,7 @@ const ConfiguratorPanel: React.FC = () => {
       const useCatalogPropRpm = propLoadForMotor && propRpmDefault.rpm != null && propRpmDefault.rpm > 0;
       const matchedId = m?.id ? (catalogIdOf(m.id) ?? m.id) : refId;
       const propSeedKey = useCatalogPropRpm ? `${matchedId}|${propRpmDefault.key}` : '';
-      const sig = `${live.L_mm}|${live.N}|${live.split}|${live.wireH_mm}|${live.nP}|${live.I_A}|${live.rpm}|${propSeedKey}`;
+      const sig = `${live.L_mm}|${live.N}|${live.split}|${live.omit}|${live.wireH_mm}|${live.nP}|${live.I_A}|${live.rpm}|${propSeedKey}`;
       if (liveSigRef.current !== sig
           && Number.isFinite(live.L_mm) && Number.isFinite(live.N)) {
         // Only adopt the live build onto a passport that GENUINELY matches its
@@ -524,6 +526,7 @@ const ConfiguratorPanel: React.FC = () => {
           const adopt = (k0: Knobs): Knobs => ({
             N: live.N || k0.N,
             split: live.split,
+            omit: live.omit,
             L_mm: live.L_mm || k0.L_mm,
             wireH_mm: live.wireH_mm || k0.wireH_mm,
             nP: live.nP || k0.nP,

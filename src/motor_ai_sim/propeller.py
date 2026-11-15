@@ -297,6 +297,12 @@ class Propeller:
     raw: Dict[str, Any] = field(repr=False, default_factory=dict)
     fit_points: List[Dict[str, Any]] = field(repr=False, default_factory=list)
     source_path: str = ""
+    blade: Optional[Any] = field(repr=False, default=None)   # BladeGeometry (propeller-2), else None
+
+    @property
+    def bemt_ready(self) -> bool:
+        """True when a complete blade geometry and the blade count are known (blade-element model input)."""
+        return self.blade is not None and self.blades is not None
 
     @property
     def selectable(self) -> bool:
@@ -341,7 +347,7 @@ def _table_rows(raw: Dict[str, Any]) -> List[Tuple[Dict[str, Any], Dict[str, Any
 
 def _build(raw: Dict[str, Any], path: str) -> Propeller:
     where = path
-    if raw.get("schema") != "propeller-1":
+    if raw.get("schema") not in ("propeller-1", "propeller-2"):
         raise PropellerDataError(f"{where}: unsupported schema {raw.get('schema')!r}")
     pid = str(_require(raw, "id", where))
     g = _require(raw, "geometry", where)
@@ -403,6 +409,13 @@ def _build(raw: Dict[str, Any], path: str) -> Propeller:
     if dq == "torque_measured" and (ct_fit is None or cp_fit is None):
         raise PropellerDataError(f"{where}: data_quality torque_measured but too few usable points")
 
+    # propeller-2 only: the optional blade geometry (propeller_blade.py).  A propeller-1 file, or a
+    # propeller-2 file without a `blade` block, behaves exactly as before.
+    blade = None
+    if raw.get("schema") == "propeller-2" and raw.get("blade") is not None:
+        from motor_ai_sim.propeller_blade import parse_blade
+        blade = parse_blade(raw["blade"], D, where)
+
     return Propeller(
         id=pid, vendor=str(raw.get("vendor") or ""), model=str(raw.get("model") or pid),
         series=str(raw.get("series") or ""), status=str(raw.get("status") or "current"),
@@ -410,7 +423,7 @@ def _build(raw: Dict[str, Any], path: str) -> Propeller:
         pitch_in=(None if g.get("pitch_in") is None else float(g["pitch_in"])),
         blades=(None if g.get("blades") is None else int(g["blades"])),
         data_quality=dq, ct=ct_fit, cp=cp_fit, test_density=rho_t, raw=raw,
-        fit_points=fit_points, source_path=path)
+        fit_points=fit_points, source_path=path, blade=blade)
 
 
 # ---------------------------------------------------------------------------

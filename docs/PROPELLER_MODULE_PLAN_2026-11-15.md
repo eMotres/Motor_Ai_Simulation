@@ -56,13 +56,17 @@ small (Ø 0.2-0.5 m, Re 3e4-2e5) propellers; none of it has been reproduced by u
 
 **Data for M4 and for validating M1.**
 - UIUC Propeller Data Site (Selig et al.): measured static and wind-tunnel data of many small propellers, citation form given on the
-  site **[web: https://m-selig.ae.illinois.edu/props/propDB.html]**. I found NO explicit licence or terms-of-use text there: use
-  requires asking the University (contact on the site) and citing; until answered, treat the data as "read for validation, not
+  site **[web: https://m-selig.ae.illinois.edu/props/propDB.html]**. I found NO explicit licence or terms-of-use text there (only the
+  footer "(c) 1994-2026 UIUC Applied Aerodynamics Group" and a requested citation; the only contact is the webmaster address on the page); use
+  requires asking the University in writing and citing; until answered, treat the data as "read for validation, not
   redistributed in the repository".
-- APC performance files (apcprop.com): APC states the performance data are COMPUTER-GENERATED (vortex-theory-based estimates), not
-  measurements **[web: https://www.apcprop.com/technical-information/file-downloads]**; their terms and conditions were not readable in
-  this session. Consequence: APC files must never be used as "measured" ground truth; the measured APC data are the UIUC ones.
-  Redistribution needs the APC terms read first (*to confirm*).
+- APC performance files (apcprop.com): web search results of other APC pages describe the performance data as computer generated
+  (vortex-theory-based estimates), not measured; this was NOT found on the downloads page, the terms page or the contact page when
+  those were read on 2026-11-15 (https://www.apcprop.com/technical-information/file-downloads, /terms-conditions/, /contact/), so the
+  claim is unconfirmed and APC is asked in writing. Terms page (dated 2003, Landing Products Inc.): site content is copyrighted;
+  download or print is allowed "solely for your own non-commercial use" or to order products; "any other use ... is strictly
+  prohibited, unless authorized". It does not mention the data files by name. Consequence: until APC answers, APC files are not used
+  as "measured" ground truth and are not used or redistributed in a commercial product; the measured APC data are the UIUC ones.
 - Our own measured data: the catalogue's vendor tables (11 torque-measured entries) and the bench run `motres_bench_hq1050_3`.
 
 **Free-software licence rule used in this plan.** A closed commercial product may call a GPL program as a SEPARATE process on a

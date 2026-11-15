@@ -8,7 +8,7 @@ runs the blade-element model at the rpm where the propeller torque meets the mot
 1. thrust per shaft watt;
 2. cooling air: mean axial speed at the disc in the radius band the motor occupies behind the hub (``None`` where the model has no value).
 
-They are two numbers, never one weighted sum.  All the numbers come from ``config/propellers/designs/own_family.yaml``; the bounds, the
+They are two numbers, never one weighted sum.  All the numbers come from ``config/propellers/_designs/own_family.yaml``; the bounds, the
 tip-speed limit, the blade options and the manufacturing limits are editable and marked unconfirmed there.  Every result says
 "BEMT, generic airfoil polars, not validated" and carries the flags of what the model cannot do at the root.
 """
@@ -29,7 +29,7 @@ from motor_ai_sim import propeller_airfoil as af
 from motor_ai_sim import propeller_bemt as pb
 from motor_ai_sim import propeller_inflow as pi
 
-DESIGN_PATH = Path(__file__).resolve().parents[2] / "config" / "propellers" / "designs" / "own_family.yaml"
+DESIGN_PATH = Path(__file__).resolve().parents[2] / "config" / "propellers" / "_designs" / "own_family.yaml"
 N_STATIONS = 12
 BANNER = "BEMT, generic airfoil polars, not validated"
 F_UNCONFIRMED = "design_inputs_unconfirmed"

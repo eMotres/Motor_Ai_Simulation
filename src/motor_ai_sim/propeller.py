@@ -451,7 +451,9 @@ def _files() -> List[Path]:
     out: List[Path] = []
     for d in catalog_dirs():
         if d.is_dir():
-            out += sorted(p for p in d.rglob("*.yaml") if not p.name.startswith("_"))
+            # a file or a FOLDER whose name starts with "_" is not a catalogue entry (_polars, _airfoils, _designs hold other data)
+            out += sorted(p for p in d.rglob("*.yaml")
+                          if not any(part.startswith("_") for part in p.relative_to(d).parts))
     return out
 
 

@@ -9,15 +9,9 @@
  * again — I optimised everything and can't save it").
  *
  * This module holds the PURE half of the fix — what `/api/family/context`
- * says about a released context, turned into the OFFERS the strip draws:
- *
- *   • "Save as NEW die"                — always, when the released die exists
- *     (a copy of it with the new lamination; backend POST /save_as_new_die);
- *   • "Save as new configuration of X" — only when the live machine IS that
- *     lamination again (`live_is_die`), so a configuration of the same die is
- *     the honest place for it;
- *   • "Discard live changes and reload ▶ X / cfg / duty" — when the record
- *     names (or the backend could fill in) the configuration and duty.
+ * says about a released context, turned into the OFFERS the strip draws.
+ * Since 2026-11-16 the strip is ONE short line plus only the buttons that
+ * apply (see `releasedOffers`): an identical screen offers just "Reload".
  *
  * Superseded the same day, for the identity-guard case specifically: a
  * die-defining edit on the ACTIVE die no longer releases the context at all
@@ -55,6 +49,10 @@ export interface ReleasedCtxLike {
   die_exists?: boolean;
   die_diffs?: DieDiff[] | null;
   live_is_die?: boolean | null;
+  /** every stored geometry value of the released configuration equals the screen's (null = unknown) */
+  live_matches_config?: boolean | null;
+  /** who released the context (account), when recorded */
+  by?: string | null;
   live_topology?: { stator_diameter?: number | null; slots?: number | null;
                     poles?: number | null; motor_length?: number | null } | null;
 }
@@ -88,26 +86,39 @@ export function suggestedDieName(ctx: ReleasedCtxLike): string {
   return familyBase(String(ctx.released_from ?? '')) || 'new die';
 }
 
+/** What the released strip says, in one word (locale keys `releasedStrip.*.<kind>`):
+ *  same    — the screen is the stored configuration again, nothing to save;
+ *  edited  — same lamination, but values differ from the stored configuration;
+ *  differs — another lamination (a die-identity key differs);
+ *  foreign — the loaded machine is not a catalog duty. */
+export type ReleasedKind = 'same' | 'edited' | 'differs' | 'foreign';
+
 export interface ReleasedOffers {
-  /** the one-line strip text */
+  kind: ReleasedKind;
+  /** values for the locale strings */
+  vars: { die: string; config: string; changed: string; by: string; when: string };
+  /** the one-line strip text (English source; the strip renders the locale string of `kind`) */
   line: string;
   /** the tooltip behind it */
   tip: string;
-  /** "Save as NEW die (copy of X with the new lamination: …)" */
-  saveNewDie: { label: string; initialName: string; hint: string } | null;
-  /** "Save as new configuration of X" — only when the live machine IS the die */
+  /** "Save as NEW die" — the primary button only when it is the one way to keep the work */
+  saveNewDie: { label: string; initialName: string; hint: string; primary: boolean } | null;
+  /** "Save as new configuration of X" — only when the live machine IS the die and differs from the configuration */
   saveNewConfig: { label: string; die: string; duty: string } | null;
-  /** "Discard live changes and reload ▶ X / cfg / duty" */
+  /** "Reload X / cfg" */
   reload: { label: string; die: string; config: string; duty: string } | null;
-  /** "↩ Re-attach to X / cfg / duty (keep the machine on screen)" — only when
-   *  the live machine IS the die's lamination again; activates the context
-   *  without loading anything (backend POST /reattach). */
+  /** "Re-attach" — only when the screen is the die but no reload is possible (no duty stored);
+   *  activates the context without loading anything (backend POST /reattach). */
   reattach: { label: string; die: string; config: string; duty: string | null } | null;
 }
 
 /**
  * PURE.  The strip's offers for a released context, or null when the strip
  * has nothing to draw (no released die, or a reader who cannot write).
+ *
+ * Owner 2026-11-16: one short line, and no choices that do not apply.  A
+ * screen identical to the stored configuration offers only "Reload" (nothing
+ * creates a copy); the save buttons appear only for real differences.
  */
 export function releasedOffers(ctx: ReleasedCtxLike | null | undefined): ReleasedOffers | null {
   if (!ctx || ctx.active === true) return null;
@@ -119,42 +130,50 @@ export function releasedOffers(ctx: ReleasedCtxLike | null | undefined): Release
   const dieExists = ctx.die_exists !== false;
   const cfg = String(ctx.released_config ?? '').trim();
   const duty = String(ctx.released_duty ?? '').trim();
+  const by = String(ctx.by ?? '').trim();
+  const when = ctx.at ? String(ctx.at).replace('T', ' ').slice(0, 16) : '';
 
-  const line = changed
-    ? `⚠ no die active — the machine on screen is not '${rel}' any more (${changed}); your work is NOT lost — save it as a new die`
-    : liveIsDie
-      ? `⚠ no die active — '${rel}' was released (${ctx.reason ?? 'a whole-machine load'}); the machine on screen is that lamination again`
-      : `⚠ no die active — the loaded machine is not a catalog duty (released from '${rel}')`;
-  const tip = `Context released from '${rel}'${cfg ? ` / ${cfg}` : ''}${duty ? ` / ${duty}` : ''}`
-    + `${ctx.at ? ` at ${String(ctx.at).replace('T', ' ')}` : ''}: `
+  const kind: ReleasedKind = changed ? 'differs'
+    : liveIsDie ? (ctx.live_matches_config === true ? 'same' : 'edited')
+    : 'foreign';
+  const tail = `${by ? ` by ${by}` : ''}${when ? ` at ${when}` : ''}`;
+  const vars = { die: rel, config: cfg, changed, by: by ? ` by ${by}` : '', when: when ? ` at ${when}` : '' };
+
+  const line = kind === 'same'
+    ? `No die attached: ${rel} was detached${tail}. Nothing to save.`
+    : kind === 'edited'
+      ? `No die attached: the screen differs from ${rel}${cfg ? ` / ${cfg}` : ''}.`
+      : kind === 'differs'
+        ? `No die attached: the screen is a new lamination (${changed}).`
+        : 'No die attached: the loaded machine is not a catalog duty.';
+  const tip = `Context released from '${rel}'${cfg ? ` / ${cfg}` : ''}${duty ? ` / ${duty}` : ''}${tail}: `
     + `${ctx.reason ?? 'a whole-machine load outside the catalog'}. `
-    + (changed
-        ? `A die keeps its diameter and slot/pole topology for life, so a machine with ${changed} is a NEW lamination. `
-          + 'Nothing is synced into the catalog until you save it as a new die (the live geometry, its build and the operating point go into it), '
-          + 'or discard the live changes and reload the released duty.'
-        : 'The machine on screen belongs to no die, so nothing is synced into the catalog. Re-attach it to the released die as it is, '
-          + 'save it as a new configuration or a new die, or reload the released duty with ▶.');
+    + (kind === 'same'
+        ? 'The machine on screen is that configuration unchanged, so reloading it loses nothing.'
+        : 'Nothing is synced into the catalog until the machine on screen is saved or the stored duty is reloaded.');
+
+  const canReload = dieExists && !!cfg && !!duty;
+  const reload = canReload ? {
+    label: kind === 'same' ? `Reload ${cfg}` : `Discard changes and reload ${cfg}`,
+    die: rel, config: cfg, duty,
+  } : null;
 
   return {
-    line, tip,
-    saveNewDie: dieExists ? {
-      label: changed
-        ? `＋ Save as NEW die (copy of ${rel} with the new lamination: ${changed})`
-        : `＋ Save as NEW die (copy of ${rel})`,
+    kind, vars, line, tip,
+    saveNewDie: dieExists && (kind === 'differs' || kind === 'foreign') ? {
+      label: 'Save as new die',
       initialName: suggestedDieName(ctx),
+      primary: true,
       hint: 'A new unlocked die from the geometry on screen, one configuration from its build (stack, wire, winding, materials) '
         + 'and one duty at the Simulation tab\'s point; the last run\'s results are recorded into it. The released die is untouched.',
     } : null,
-    saveNewConfig: (liveIsDie && dieExists) ? {
-      label: `＋ Save as new configuration of ${rel}`,
+    saveNewConfig: (kind === 'edited' && dieExists) ? {
+      label: `Save as new configuration of ${rel}`,
       die: rel, duty: duty || 'rated',
     } : null,
-    reload: (dieExists && cfg && duty) ? {
-      label: `↺ Discard live changes and reload ▶ ${rel} / ${cfg} / ${duty}`,
-      die: rel, config: cfg, duty,
-    } : null,
-    reattach: (liveIsDie && dieExists && cfg) ? {
-      label: `↩ Re-attach to ${rel} / ${cfg}${duty ? ` / ${duty}` : ''} (keep the machine on screen)`,
+    reload,
+    reattach: ((kind === 'edited' || (kind === 'same' && !reload)) && dieExists && cfg) ? {
+      label: `Re-attach to ${rel} / ${cfg}${duty ? ` / ${duty}` : ''}`,
       die: rel, config: cfg, duty: duty || null,
     } : null,
   };

@@ -740,5 +740,26 @@
       "version": "版本 {version}"
     },
     "aiDisclosure": "人工智能助手——回答可能有误。"
+  },
+  "releasedStrip": {
+    "line": {
+      "same": "未关联模具：{{die}} 已被取消关联{{by}}{{when}}。无需保存。",
+      "edited": "未关联模具：当前画面与 {{die}} / {{config}} 不同。",
+      "differs": "未关联模具：当前画面是新的叠片（{{changed}}）。",
+      "foreign": "未关联模具：已加载的电机不属于目录中的工况。"
+    },
+    "tip": {
+      "same": "已从 {{die}} 取消关联：{{reason}}。",
+      "edited": "已从 {{die}} 取消关联：{{reason}}。",
+      "differs": "已从 {{die}} 取消关联：{{reason}}。",
+      "foreign": "已从 {{die}} 取消关联：{{reason}}。"
+    },
+    "btn": {
+      "reload": "重新加载 {{config}}",
+      "discardReload": "放弃更改并重新加载 {{config}}",
+      "saveDie": "另存为新模具",
+      "saveConfig": "另存为 {{die}} 的新配置",
+      "reattach": "重新关联到 {{die}} / {{config}}"
+    }
   }
 }

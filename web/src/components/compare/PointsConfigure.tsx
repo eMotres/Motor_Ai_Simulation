@@ -25,7 +25,6 @@ import { watchChunkImport } from '../../lib/chunkReload';
 // the field viewer is three.js: fetched when a stored field map is opened, not with the Configure tab
 const StoredFieldViewer = lazy(watchChunkImport(() => import('./StoredFieldViewer')));
 import StoredPointResults from './StoredPointResults';
-import StepsChart from './StepsChart';
 import StarIcon from '@mui/icons-material/Star';
 import { VariantControls } from '../../modules/development/components/VariantControls';
 import { isRecommended, flagWho } from '../../modules/development/projectFlags';
@@ -180,7 +179,6 @@ const PointsConfigure: React.FC<Props> = ({ view, loadedDuty }) => {
   const panel = current?.panel ?? null;
   const dcBus = useMemo(() => panelDcBus(panel), [panel]);
   const tileName = (id: string) => { const key = configureTileKey(id, current); return key ? tc(key) : t(`points.tile.${id}`); };
-  const showChart = steps.length > 1 && stepIndex >= 0;
   // a block is drawn only when this point has real results for it (owner 2026-10-26): no header, no empty tiles, no placeholder
   const showTiles = useMemo(() => panelRows(panel).length > 0, [panel]);
   const operating = pointOperating(current);
@@ -277,8 +275,7 @@ const PointsConfigure: React.FC<Props> = ({ view, loadedDuty }) => {
           </Box>
         </Box>
 
-        {/* the chart sits next to the tiles (owner 2026-10-26: "move the chart left"): the tile column takes its content width (up to 860 px), the chart the rest */}
-        <Box sx={{ display: 'grid', gridTemplateColumns: { xs: 'minmax(0,1fr)', lg: showChart && showTiles ? 'fit-content(860px) minmax(360px,1fr)' : 'minmax(0,1fr)' }, gap: 1.25, alignItems: 'stretch' }} data-testid="tiles-and-chart">
+        <Box sx={{ display: 'grid', gridTemplateColumns: 'minmax(0,1fr)', gap: 1.25 }} data-testid="tiles">
           {showTiles && panel && <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.75, minWidth: 0 }} data-testid="em-tiles">
             <ResultsPanel panel={panel} />
             {dcBus !== null && (
@@ -291,7 +288,6 @@ const PointsConfigure: React.FC<Props> = ({ view, loadedDuty }) => {
               </Box>
             )}
           </Box>}
-          {showChart && <StepsChart variants={steps} duty={duty} current={stepIndex} onPick={openStep} recommended={steps.map((v) => isRecommended(v))} />}
         </Box>
 
         <StoredPointResults duty={current} />

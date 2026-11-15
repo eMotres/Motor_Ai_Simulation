@@ -83,10 +83,10 @@ function releasedOffers(ctx) {
 
   return {
     kind, vars, line, tip,
-    saveNewDie: dieExists && kind !== 'same' ? {
+    saveNewDie: dieExists && (kind === 'differs' || kind === 'foreign') ? {
       label: 'Save as new die',
       initialName: suggestedDieName(ctx),
-      primary: kind === 'differs' || kind === 'foreign',
+      primary: true,
       hint: 'A new unlocked die from the geometry on screen, one configuration from its build (stack, wire, winding, materials) '
         + 'and one duty at the Simulation tab\'s point; the last run\'s results are recorded into it. The released die is untouched.',
     } : null,
@@ -95,7 +95,7 @@ function releasedOffers(ctx) {
       die: rel, duty: duty || 'rated',
     } : null,
     reload,
-    reattach: (kind === 'same' && !reload && dieExists && cfg) ? {
+    reattach: ((kind === 'edited' || (kind === 'same' && !reload)) && dieExists && cfg) ? {
       label: `Re-attach to ${rel} / ${cfg}${duty ? ` / ${duty}` : ''}`,
       die: rel, config: cfg, duty: duty || null,
     } : null,
@@ -146,14 +146,15 @@ test('identical screen without a stored duty: re-attach is the only button', () 
                                  config: 'L15', duty: null });
 });
 
-test('same lamination but real unsaved differences: save as new configuration is primary, new die is not offered as blue', () => {
+test('same lamination but real unsaved differences: re-attach, save as new configuration, discard', () => {
   const o = releasedOffers({ ...SAME, live_matches_config: false });
   assert.equal(o.kind, 'edited');
   assert.match(o.line, /differs from CIANO14 50 edited \/ L15/);
   assert.ok(o.saveNewConfig);
-  assert.equal(o.saveNewDie.primary, false);
+  assert.equal(o.saveNewDie, null);        // same lamination: a new die is not the way
   assert.equal(o.reload.label, 'Discard changes and reload L15');
-  assert.equal(o.reattach, null);
+  // keep editing the same configuration: re-attach (loads nothing)
+  assert.equal(o.reattach.label, 'Re-attach to CIANO14 50 edited / L15 / rated');
   // an unknown comparison never claims "nothing to save"
   assert.equal(releasedOffers({ ...SAME, live_matches_config: null }).kind, 'edited');
   assert.equal(releasedOffers({ ...SAME, live_matches_config: undefined }).kind, 'edited');

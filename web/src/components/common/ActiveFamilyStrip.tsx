@@ -935,7 +935,7 @@ const ActiveFamilyStrip: React.FC = () => {
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, px: 1.5, py: 0.25,
                  fontSize: 11, color: '#f59e0b', borderBottom: '1px solid var(--line)',
                  flexWrap: 'wrap' }}>
-        <Tooltip title={tc(`releasedStrip.tip.${offers.kind}`, { ...offers.vars, reason: String((ctx as { reason?: string } | null)?.reason ?? ) })}>
+        <Tooltip title={tc(`releasedStrip.tip.${offers.kind}`, { ...offers.vars, reason: String((ctx as { reason?: string } | null)?.reason ?? '') })}>
           <span style={{ cursor: 'help' }}>{tc(`releasedStrip.line.${offers.kind}`, offers.vars)}</span>
         </Tooltip>
         <Box sx={{ flex: 1 }} />

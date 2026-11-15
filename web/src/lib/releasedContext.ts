@@ -160,10 +160,10 @@ export function releasedOffers(ctx: ReleasedCtxLike | null | undefined): Release
 
   return {
     kind, vars, line, tip,
-    saveNewDie: dieExists && kind !== 'same' ? {
+    saveNewDie: dieExists && (kind === 'differs' || kind === 'foreign') ? {
       label: 'Save as new die',
       initialName: suggestedDieName(ctx),
-      primary: kind === 'differs' || kind === 'foreign',
+      primary: true,
       hint: 'A new unlocked die from the geometry on screen, one configuration from its build (stack, wire, winding, materials) '
         + 'and one duty at the Simulation tab\'s point; the last run\'s results are recorded into it. The released die is untouched.',
     } : null,
@@ -172,7 +172,7 @@ export function releasedOffers(ctx: ReleasedCtxLike | null | undefined): Release
       die: rel, duty: duty || 'rated',
     } : null,
     reload,
-    reattach: (kind === 'same' && !reload && dieExists && cfg) ? {
+    reattach: ((kind === 'edited' || (kind === 'same' && !reload)) && dieExists && cfg) ? {
       label: `Re-attach to ${rel} / ${cfg}${duty ? ` / ${duty}` : ''}`,
       die: rel, config: cfg, duty: duty || null,
     } : null,

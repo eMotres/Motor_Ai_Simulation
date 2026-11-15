@@ -459,3 +459,42 @@ t('discussion: active threads list only threads with messages, unread first, the
   assert.equal(H.initialThreadKey([th('pt_a', [])]), '');
   assert.equal(H.initialThreadKey([]), '');
 });
+
+// -- no Proposals tab (owner 2026-11-15) ------------------------------------------------------------------------------------
+test('an old proposals link or remembered tab opens the Discussion; other ids are untouched', () => {
+  assert.equal(H.legacyTab('proposals'), 'discussion');
+  assert.equal(H.legacyTab('changes'), 'changes');
+  assert.equal(H.legacyTab('bom'), 'bom');
+});
+
+test('the Production page has no Proposals tab and no way to raise or decide a proposal, but keeps Discussion, Changes and the read-only history', async () => {
+  const { readFileSync, existsSync } = await import('node:fs');
+  const src = (p) => readFileSync(new URL(p, import.meta.url), 'utf8');
+  const page = src('../components/ProductionPage.tsx');
+  assert.match(page, /const TABS = \[[^\]]*'discussion', 'changes'\] as const/);
+  assert.doesNotMatch(page.match(/const TABS = \[[^\]]*\]/)[0], /proposals/);
+  assert.match(page, /<LegacyProposals proposals=\{data\.proposals\}/);
+  assert.match(page, /ctx\.canEdit && <LegacyProposals/);                      // staff only
+  assert.equal(existsSync(new URL('../components/ProposalsPanel.tsx', import.meta.url)), false);
+  const api = src('../api.ts');
+  assert.doesNotMatch(api, /createProposal|decide:/);                          // nothing in the UI can raise or decide one
+  assert.match(api, /proposals: async/);                                       // the history is still read
+  const legacy = src('../components/LegacyProposals.tsx');
+  assert.doesNotMatch(legacy, /productionApi|Button|TextField/);               // read-only: no controls, no calls
+  assert.doesNotMatch(src('../components/PartCard.tsx'), /[Pp]roposal/);
+});
+
+test('Proposals strings: the tab and creation strings are gone from both locales, the history strings stay, key sets equal', async () => {
+  const { readFileSync } = await import('node:fs');
+  const rd = (l) => JSON.parse(readFileSync(new URL(`../../../locales/${l}/production.json`, import.meta.url), 'utf8'));
+  const en = rd('en'), zh = rd('zh-CN');
+  const keys = (o, p = '') => Object.entries(o).flatMap(([k, v]) => (v && typeof v === 'object' ? keys(v, p + k + '.') : [p + k]));
+  assert.deepEqual(keys(en).sort(), keys(zh).sort());
+  for (const d of [en, zh]) {
+    assert.equal('proposals' in d.tabs, false);
+    for (const k of ['new', 'submit', 'forPart', 'accept', 'reject', 'implement']) assert.equal(k in d.proposals, false, k);
+    for (const k of ['none', 'general', 'linked', 'earlier', 'status']) assert.ok(k in d.proposals, k);
+  }
+  assert.doesNotMatch(en.titleTip, /proposal/i);
+  assert.doesNotMatch(zh.titleTip, /建议|提案/);
+});

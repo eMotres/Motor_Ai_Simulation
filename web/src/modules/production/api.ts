@@ -253,10 +253,6 @@ export const productionApi = {
   },
 
   proposals: async (die: string, config: string) => unwrapList<Proposal>(await call('GET', `${base(die, config)}/proposals`), 'proposals'),
-  createProposal: (die: string, config: string, partId: string | null, text: Bilingual) =>
-    call<Proposal>('POST', `${base(die, config)}/proposals`, { part_id: partId, text }),
-  decide: (die: string, config: string, id: string, action: 'accept' | 'reject' | 'implement', note: Bilingual | null) =>
-    call<Proposal>('POST', `${base(die, config)}/proposals/${enc(id)}/${action}`, note ? { note } : {}),
 
   revisions: async (die: string, config: string) => unwrapList<Revision>(await call('GET', `${base(die, config)}/revisions`), 'revisions'),
   publishRevision: (die: string, config: string, summary: Bilingual, changes: Bilingual[]) =>

@@ -1,6 +1,6 @@
 {
   "title": "Production",
-  "titleTip": "Productions you are a member of: parts, BOM, process, documents, discussion, proposals and changes of one motor.",
+  "titleTip": "Productions you are a member of: parts, BOM, process, documents, discussion and changes of one motor.",
   "loading": "Loading…",
   "none": "No productions yet.",
   "noneTip": "An admin adds you to a production in Admin > Production access.",
@@ -47,7 +47,6 @@
     "process": "Process",
     "documents": "Documents",
     "discussion": "Discussion",
-    "proposals": "Proposals",
     "changes": "Changes",
     "assembly": "Assembly process",
     "tooling": "Tooling",
@@ -97,9 +96,7 @@
     "writeLang": "Write in",
     "linkedDocs": "Linked documents",
     "noLinkedDocs": "No linked documents.",
-    "threadsAndProposals": "Discussion & proposals",
     "noThreads": "No discussions for this part.",
-    "noProposals": "No proposals for this part.",
     "openFull": "Open full screen"
   },
   "bom": {
@@ -322,24 +319,16 @@
   },
   "proposals": {
     "none": "No proposals.",
-    "new": "New proposal",
-    "text": "What should change?",
-    "submit": "Submit",
-    "forPart": "Part",
     "general": "Whole production",
-    "accept": "Accept",
-    "reject": "Reject",
-    "implement": "Mark implemented",
-    "note": "Decision note",
     "linked": "Revision {rev}",
     "by": "{email}",
-    "tip": "A proposal never changes the design by itself; an owner or engineer decides.",
     "status": {
       "open": "Open",
       "accepted": "Accepted",
       "rejected": "Rejected",
       "implemented": "Implemented"
-    }
+    },
+    "earlier": "Earlier proposals, read only ({count})"
   },
   "changes": {
     "none": "No revisions published.",

@@ -774,3 +774,8 @@ export function toolingFileRows(rows: readonly Pick<BomRow, 'part_id'>[], data: 
 /** Picture file extensions the page can show, and the lower-case extension of a file name. */
 export const IMAGE_EXT = ['png', 'jpg', 'jpeg', 'webp', 'gif'];
 export const extOf = (name: string): string => (name.split('.').pop() || '').toLowerCase();
+
+
+/** Tab ids that no longer exist and where an old link / remembered tab goes instead (owner 2026-11-15: no Proposals tab). */
+export const LEGACY_TABS: Readonly<Record<string, string>> = { proposals: 'discussion' };
+export const legacyTab = (id: string): string => LEGACY_TABS[id] ?? id;

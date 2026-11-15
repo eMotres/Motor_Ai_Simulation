@@ -14,12 +14,12 @@ import ChangesPanel from './ChangesPanel';
 import DiscussionPanel from './DiscussionPanel';
 import DocumentsPanel from './DocumentsPanel';
 import ProductionListPage from './ProductionListPage';
-import ProposalsPanel from './ProposalsPanel';
+import LegacyProposals from './LegacyProposals';
 import ToolingFiles from './ToolingFiles';
 import { TimelineView } from './TimelineView';
 import TestsPanel from '../../tests/components/TestsPanel';
 import { downloadFile, fetchFileBlob, ProductionApiError, productionApi } from '../api';
-import { canEditRole, displayText, productionRole, unackedRevisions, VIEWER_TABS, visibleProductionTabs } from '../helpers';
+import { canEditRole, displayText, legacyTab, productionRole, unackedRevisions, VIEWER_TABS, visibleProductionTabs } from '../helpers';
 import { OPEN_PRODUCTION_EVENT, type OpenProductionDetail } from '../../../lib/openProduction';
 import { shortTitle } from '../../../lib/stripContext.ts';
 import { useTabContextStore } from '../../../stores/tabContextStore';
@@ -36,7 +36,8 @@ import type {
 
 // 'process' merged into the Assembly tab (owner 2026-10-18): the graph on top, the process document below it
 // 'tests' (owner 2026-10-26): bench tests of this configuration against the simulation (modules/tests)
-const TABS = ['bom', 'tooling', 'assembly', 'timeline', 'documents', 'tests', 'discussion', 'proposals', 'changes'] as const;
+// 'proposals' (owner 2026-11-15) is gone: Discussion and Changes stay.  An old link or remembered tab 'proposals' opens Discussion (see legacyTab).
+const TABS = ['bom', 'tooling', 'assembly', 'timeline', 'documents', 'tests', 'discussion', 'changes'] as const;
 type TabId = typeof TABS[number];
 
 // Where the user stopped (owner 2026-10-18): the open production and its sub-tab survive a page reload.  Browser
@@ -68,7 +69,7 @@ function appLinkFromAddressBar() {
 
 const ProductionPage: React.FC<{ die: string; config: string; onBack: () => void; /** what the back arrow says (default: All productions) */ backLabel?: string; link?: ProductionLink | null;
   /** the tab a link named (not documents: that one comes with `link`) and the item inside it */
-  initialTab?: TabId; itemId?: string }> = ({ die, config, onBack, backLabel, link: linkProp = null, initialTab, itemId }) => {
+  initialTab?: TabId | 'proposals'; itemId?: string }> = ({ die, config, onBack, backLabel, link: linkProp = null, initialTab, itemId }) => {
   const { t } = useTranslation('production');
   const ui = useContentLang();
   const { user, isAdmin } = useAuth();
@@ -81,9 +82,10 @@ const ProductionPage: React.FC<{ die: string; config: string; onBack: () => void
   const [link, setLink] = useState<ProductionLink | null>(linkProp);
   const [tab, setTabState] = useState<TabId>(() => {
     if (linkProp) return 'documents';
-    if (initialTab) return initialTab;
+    if (initialTab) return legacyTab(initialTab) as TabId;
     const saved = readStore<string>(TAB_KEY(die, config));
-    return saved && (TABS as readonly string[]).includes(saved) ? (saved as TabId) : 'bom';
+    const k = saved ? legacyTab(saved) : null;
+    return k && (TABS as readonly string[]).includes(k) ? (k as TabId) : 'bom';
   });
   const setTab = (v: TabId) => { setTabState(v); writeStore(TAB_KEY(die, config), v); };
   // While the page was entered by a link its address stays that link (reload / copy from the bar both work); leaving the
@@ -219,7 +221,6 @@ const ProductionPage: React.FC<{ die: string; config: string; onBack: () => void
                 shareCostsWithOem={prod.share_costs_with_oem}
                 documents={data.documents}
                 threads={data.threads}
-                proposals={data.proposals}
                 onPartChanged={reload}
               />
             </>
@@ -238,7 +239,6 @@ const ProductionPage: React.FC<{ die: string; config: string; onBack: () => void
                 shareCostsWithOem={prod.share_costs_with_oem}
                 documents={data.documents}
                 threads={data.threads}
-                proposals={data.proposals}
                 onPartChanged={reload}
               />
               <ToolingFiles ctx={toolingCtx} rows={data.toolingBom} parts={data.parts} />
@@ -251,7 +251,7 @@ const ProductionPage: React.FC<{ die: string; config: string; onBack: () => void
             onOpenDocument={(fileId, name) => { void downloadFile(die, config, fileId, name).catch((e) => setErr(String(e))); }}
             onLoadDocument={(fileId, onProgress) => fetchFileBlob(die, config, fileId, onProgress)} />}
           {tab === 'discussion' && <DiscussionPanel threads={data.threads} parts={data.parts} ctx={ctx} />}
-          {tab === 'proposals' && <ProposalsPanel proposals={data.proposals} parts={data.parts} ctx={ctx} />}
+          {tab === 'discussion' && ctx.canEdit && <LegacyProposals proposals={data.proposals} parts={data.parts} />}
           {tab === 'changes' && <ChangesPanel revisions={data.revisions} currentRevision={prod.current_revision} ctx={ctx} />}
           {isAdmin && <Box sx={{ mt: 2 }}><DigestSettings target={{ kind: 'production', die, config }} /></Box>}
         </>

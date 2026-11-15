@@ -2,7 +2,7 @@
  * Part Detail Panel (rendered below the BOM table when a row is clicked).
  * Requirement F: Detailed view of a part including drawing preview + download,
  * optional STEP, description, material, spec, quantity per motor/order, revision,
- * linked documents, discussion thread / proposals, and (for editors) price + edit controls.
+ * linked documents, discussion thread, and (for editors) price + edit controls.
  */
 import React, { useEffect, useState } from 'react';
 import {
@@ -35,7 +35,6 @@ import type {
   Part,
   ProcurementLine,
   ProdCtx,
-  Proposal,
   Receipt,
   Thread,
 } from '../types';
@@ -124,7 +123,6 @@ export interface PartDetailPanelProps {
   procurementLine?: ProcurementLine;
   documents?: DocumentRec[];
   threads?: Thread[];
-  proposals?: Proposal[];
   onCostChange?: (partId: string, unitPrice: number | null, currency: string, note: string | null) => void;
   onProcurementSaved?: () => void;
   onChanged: () => void;
@@ -140,7 +138,6 @@ export const PartDetailPanel: React.FC<PartDetailPanelProps> = ({
   procurementLine,
   documents = [],
   threads = [],
-  proposals = [],
   onCostChange,
   onProcurementSaved,
   onChanged,
@@ -309,10 +306,9 @@ export const PartDetailPanel: React.FC<PartDetailPanelProps> = ({
   const mat = part.material_i18n ? (part.material_i18n[ui] || part.material_i18n.zh) : part.material;
   const spc = part.spec_i18n ? (part.spec_i18n[ui] || part.spec_i18n.zh) : part.spec;
 
-  // Filter linked documents, thread, and proposals
+  // Filter linked documents and the part's thread
   const linkedDocs = documents.filter((d) => d.part_id === part.id);
   const partThread = threads.find((th) => th.part_id === part.id);
-  const partProposals = proposals.filter((p) => p.part_id === part.id);
 
   const unitPrice = costRow?.unit_price ?? null;
   const currency = costRow?.currency || DEFAULT_CURRENCY;
@@ -835,10 +831,10 @@ export const PartDetailPanel: React.FC<PartDetailPanelProps> = ({
         </>
       )}
 
-      {/* Part Discussion & Proposals */}
+      {/* Part Discussion */}
       <Divider sx={{ my: 1.5 }} />
       <Typography sx={{ fontSize: 12, fontWeight: 700, color: 'var(--text-2)', mb: 0.5 }}>
-        {t('tabs.discussion')} & {t('tabs.proposals')}
+        {t('tabs.discussion')}
       </Typography>
 
       {/* Thread messages if any */}
@@ -856,27 +852,6 @@ export const PartDetailPanel: React.FC<PartDetailPanelProps> = ({
       ) : (
         <Typography sx={{ fontSize: 11.5, color: 'var(--text-4)', mb: 1 }}>
           {t('parts.noThreads', 'No discussions for this part.')}
-        </Typography>
-      )}
-
-      {/* Proposals for this part if any */}
-      {partProposals.length > 0 ? (
-        <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.75 }}>
-          {partProposals.map((p) => (
-            <Box key={p.id} sx={{ p: 1, bgcolor: 'var(--panel)', borderRadius: 1 }}>
-              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 0.25 }}>
-                <Chip size="small" label={t(`proposals.status.${p.status}`)} sx={CHIP} />
-                <Typography sx={{ fontSize: 11, color: 'var(--text-3)' }}>
-                  {p.author_email} · {p.created_at.slice(0, 10)}
-                </Typography>
-              </Box>
-              <BilingualText value={p.text} size={12} />
-            </Box>
-          ))}
-        </Box>
-      ) : (
-        <Typography sx={{ fontSize: 11.5, color: 'var(--text-4)' }}>
-          {t('parts.noProposals', 'No proposals for this part.')}
         </Typography>
       )}
 

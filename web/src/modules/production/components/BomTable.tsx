@@ -2,7 +2,7 @@
  * BOM table with cost breakdown, pricing, and integrated part details.
  * Requirement F: The BOM tab is the single place for parts.
  * Clicking any BOM row opens a detail panel BELOW the BOM table with full part information,
- * drawing previews + downloads, optional STEP, linked docs, discussions/proposals, and editor controls.
+ * drawing previews + downloads, optional STEP, linked docs, discussions, and editor controls.
  * Deep link ?part=<id> is supported and preserved.
  */
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
@@ -67,7 +67,6 @@ import type {
   ProcurementData,
   ProcurementLine,
   ProdCtx,
-  Proposal,
   Thread,
 } from '../types';
 import { NARROW } from '../../../lib/narrowLayout';
@@ -137,7 +136,6 @@ interface BomTableProps {
   shareCostsWithOem?: boolean;
   documents?: DocumentRec[];
   threads?: Thread[];
-  proposals?: Proposal[];
   onPartChanged?: () => void;
   /** 'table' = the BOM tab; 'graph' = the Assembly tab (graph + the same detail panel), owner 2026-10-17 */
   view?: 'table' | 'graph';
@@ -151,7 +149,6 @@ const BomTable: React.FC<BomTableProps> = ({
   shareCostsWithOem = false,
   documents = [],
   threads = [],
-  proposals = [],
   view = 'table',
   onPartChanged,
 }) => {
@@ -1043,7 +1040,6 @@ const BomTable: React.FC<BomTableProps> = ({
             procurementLine={procMap.get(selectedPart.id)}
             documents={documents}
             threads={threads}
-            proposals={proposals}
             onCostChange={(partId, price, cur, nt) => {
               handleUnitPriceChange(partId, price !== null ? String(price) : '');
               if (cur) handleCurrencyChange(partId, cur);

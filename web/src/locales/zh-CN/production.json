@@ -1,6 +1,6 @@
 {
   "title": "生产",
-  "titleTip": "您所属的生产项目：一台电机的零件、物料清单、工艺、文件、讨论、建议和变更。",
+  "titleTip": "您所属的生产项目：一台电机的零件、物料清单、工艺、文件、讨论和变更。",
   "loading": "加载中…",
   "none": "暂无生产项目。",
   "noneTip": "管理员会在“管理 > 生产权限”中将您加入生产项目。",
@@ -47,7 +47,6 @@
     "process": "工艺",
     "documents": "文件",
     "discussion": "讨论",
-    "proposals": "建议",
     "changes": "变更",
     "assembly": "装配流程",
     "tooling": "工装",
@@ -97,9 +96,7 @@
     "writeLang": "书写语言",
     "linkedDocs": "关联文档",
     "noLinkedDocs": "暂无关联文档。",
-    "threadsAndProposals": "研讨与设计建议",
     "noThreads": "暂无针对此零件的研讨。",
-    "noProposals": "暂无针对此零件的建议。",
     "openFull": "全屏打开"
   },
   "bom": {
@@ -322,24 +319,16 @@
   },
   "proposals": {
     "none": "暂无建议。",
-    "new": "新建议",
-    "text": "需要更改什么？",
-    "submit": "提交",
-    "forPart": "零件",
     "general": "整个生产项目",
-    "accept": "接受",
-    "reject": "拒绝",
-    "implement": "标记为已实施",
-    "note": "决定说明",
     "linked": "版本 {rev}",
     "by": "{email}",
-    "tip": "建议本身不会更改设计；由负责人或工程师决定。",
     "status": {
       "open": "待处理",
       "accepted": "已接受",
       "rejected": "已拒绝",
       "implemented": "已实施"
-    }
+    },
+    "earlier": "以往的提案（只读）（{count}）"
   },
   "changes": {
     "none": "尚未发布版本。",

@@ -4609,7 +4609,7 @@ def _parse_geo_sig(sig: Any) -> Optional[Dict[str, float]]:
 #: stamp compares as this value; any other input present on one side only is
 #: a mismatch.
 _GEO_SIG_ABSENT_MEANS: Dict[str, float] = {
-    "sleeve_thickness": 0.0, "wire_parallel": 1.0, "wire_split": 1.0, "wire_omit": 0.0,
+    "sleeve_thickness": 0.0, "wire_parallel": 1.0, "wire_split": 1.0, "wire_omit": 0.0, "k_end_by_turns": 0.0,
     # stamped only when the stator OD notches are OFF (`:0`); absent = on
     "stator_outer_notches": 1.0,
 }

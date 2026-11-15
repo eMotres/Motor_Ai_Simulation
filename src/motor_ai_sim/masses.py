@@ -89,7 +89,14 @@ def cad_coil_length(p: Any, geo: Dict[str, Any] | None, coil: Dict[str, Any]) ->
     (``coil_build.coil_parameters``) or explicit ones.  Per layer: two straight legs ``L + coil_straight_extra`` beside the tooth
     at x1 = tooth_width/2 + insulation_thickness + wire_spacing_x/2, a +z end turn of two 90° EDGEWISE bends (the wire's
     ``wire_width`` side lies across the slot; centre-line radius ``wire_beng_r + wire_width/2``) joined by the straight bridge
-    2·(x1 − wire_beng_r), a −z transition to the next layer (the same plan length, one layer pitch lower), and the two leads."""
+    2·(x1 − wire_beng_r), a −z transition to the next layer (the same plan length, one layer pitch lower), and the two leads.
+
+    ``wire_split`` = S > 1 WITH ``k_end_by_turns`` (opt-in; and ``wire_omit``): the coil has T = rows x S - empty positions SERIES turns (``winding.turns_per_coil``
+    at ``wire_parallel`` 1), not ``num_wires_per_slot``.  Strip column c (0 = next to the tooth) stands c x (wire_width + gap)
+    further out, so its bridge is 2·(x1 + c·pitch − wire_beng_r) and every strip bends about the same centre-line radius
+    ``wire_beng_r + wire_width/2`` (the STRIP's width, not the whole column's); the two leads belong to the COIL and are shared
+    by its T turns; the T - 1 transitions are (rows - 1) radial ones (one layer pitch) and the rest tangential (one strip pitch).
+    Without ``k_end_by_turns``, and for S = 1, it is the layer formula above, unchanged."""
     L_mm = float(getattr(p, "stack_length", 0.0)) * 1e3
     g = geo or {}
     tw_mm = _tooth_width_m(p, geo) * 1e3
@@ -102,21 +109,58 @@ def cad_coil_length(p: Any, geo: Dict[str, Any] | None, coil: Dict[str, Any]) ->
     sy_mm = float(g.get("wire_spacing_y", 0.1))
     x1 = tw_mm / 2.0 + ins_mm + sx_mm / 2.0            # inner side of a straight leg
     rb = float(coil["wire_beng_r"])                    # inner bend radius of the flat wire
-    bridge = 2.0 * max(x1 - rb, 0.0)                   # straight bridge between the two bend axes
-    rc = rb + ww_mm / 2.0                              # centre-line radius of an edgewise 90° bend
-    l_end_plus = bridge + math.pi * rc                 # +z end turn: two 90° bends + the bridge
-    pitch = wh_mm + sy_mm                              # −z transition drops one layer pitch
-    l_end_minus = math.sqrt(l_end_plus ** 2 + pitch ** 2)
     extra = float(coil["coil_straight_extra"])
     l_leg = L_mm + extra                               # leg with its axial overhang beyond the core
     lead = float(coil["coil_lead_total"])
-    # 2·N straight legs + N (+z) end turns + (N−1) (−z) transitions + 2 leads
-    total = 2.0 * N * l_leg + N * l_end_plus + (N - 1) * l_end_minus + 2.0 * lead
+    pitch = wh_mm + sy_mm                              # −z transition drops one layer pitch
+    try:
+        from motor_ai_sim.winding import (wire_split_from_geo, strip_gap_mm, wire_omit_positions, wire_omit_error,
+                                          k_end_by_turns)
+        S = wire_split_from_geo(g)
+        by_turns = k_end_by_turns(g)
+    except ValueError:                                 # unusable knob → the unsplit coil
+        S, by_turns = 1, False
+    # OPT-IN (owner 2026-11-15: nothing stored may move): without `k_end_by_turns` a split coil keeps the layer formula
+    # it was always billed with, even though it is not the physics of the grid
+    if S <= 1 or not by_turns:
+        bridge = 2.0 * max(x1 - rb, 0.0)               # straight bridge between the two bend axes
+        rc = rb + ww_mm / 2.0                          # centre-line radius of an edgewise 90° bend
+        l_end_plus = bridge + math.pi * rc             # +z end turn: two 90° bends + the bridge
+        l_end_minus = math.sqrt(l_end_plus ** 2 + pitch ** 2)
+        # 2·N straight legs + N (+z) end turns + (N−1) (−z) transitions + 2 leads
+        total = 2.0 * N * l_leg + N * l_end_plus + (N - 1) * l_end_minus + 2.0 * lead
+        return {
+            "stack_length_mm": L_mm, "turns_per_coil": float(N), "total_coil_length_mm": total,
+            "mean_turn_length_mm": total / N, "active_turn_length_mm": 2.0 * L_mm,
+            "end_turn_plus_mm": l_end_plus, "end_turn_minus_mm": l_end_minus,
+            "bend_centre_radius_mm": rc, "bridge_mm": bridge,
+            "wire_beng_r_mm": rb, "coil_straight_extra_mm": extra, "coil_lead_total_mm": lead,
+        }
+    w_strip = float(g.get("wire_width", 2.5))
+    pitch_x = w_strip + strip_gap_mm(g)                # tangential pitch of the strip columns
+    omit = set()
+    if g.get("wire_omit"):
+        err = wire_omit_error(g)
+        if err:
+            raise ValueError(err)
+        omit = set(wire_omit_positions(g))
+    present = [(r, c) for r in range(N) for c in range(S) if (r, c) not in omit]
+    T = max(len(present), 1)
+    rc = rb + w_strip / 2.0                            # every strip bends about the same centre line
+    bridges = [2.0 * max(x1 + c * pitch_x - rb, 0.0) for _r, c in present] or [2.0 * max(x1 - rb, 0.0)]
+    l_plus = [b + math.pi * rc for b in bridges]
+    sum_plus = sum(l_plus)
+    l_bar = sum_plus / len(l_plus)
+    n_row_tr = min(max(N - 1, 0), T - 1)
+    n_col_tr = (T - 1) - n_row_tr
+    l_minus_row = math.sqrt(l_bar ** 2 + pitch ** 2)
+    l_minus_col = math.sqrt(l_bar ** 2 + pitch_x ** 2)
+    total = 2.0 * T * l_leg + sum_plus + n_row_tr * l_minus_row + n_col_tr * l_minus_col + 2.0 * lead
     return {
-        "stack_length_mm": L_mm, "turns_per_coil": float(N), "total_coil_length_mm": total,
-        "mean_turn_length_mm": total / N, "active_turn_length_mm": 2.0 * L_mm,
-        "end_turn_plus_mm": l_end_plus, "end_turn_minus_mm": l_end_minus,
-        "bend_centre_radius_mm": rc, "bridge_mm": bridge,
+        "stack_length_mm": L_mm, "turns_per_coil": float(T), "total_coil_length_mm": total,
+        "mean_turn_length_mm": total / T, "active_turn_length_mm": 2.0 * L_mm,
+        "end_turn_plus_mm": l_bar, "end_turn_minus_mm": (l_minus_row if n_row_tr else l_minus_col),
+        "bend_centre_radius_mm": rc, "bridge_mm": sum(bridges) / len(bridges),
         "wire_beng_r_mm": rb, "coil_straight_extra_mm": extra, "coil_lead_total_mm": lead,
     }
 

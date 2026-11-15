@@ -92,7 +92,7 @@ from typing import Any, Mapping, Optional, Tuple
 
 log = logging.getLogger(__name__)
 
-__all__ = ["wire_bore_margin_mm", "wire_height_bound_mm", "bore_floor_offset_mm", "WIRE_OMIT_COLS", "WIRE_OMIT_MAX_ROWS",
+__all__ = ["k_end_by_turns", "wire_bore_margin_mm", "wire_height_bound_mm", "bore_floor_offset_mm", "WIRE_OMIT_COLS", "WIRE_OMIT_MAX_ROWS",
            "wire_omit_mask", "wire_omit_positions", "wire_omit_count", "wire_omit_error",
            "parse_connection", "n_parallel_from_connection", "connection_label",
            "wire_parallel_from_geo", "wire_split_from_geo", "turns_per_coil",
@@ -337,6 +337,20 @@ def wire_omit_error(geo: Optional[Mapping[str, Any]]) -> Optional[str]:
     if empty:
         return "wire_omit empties the whole wire row %s: a row needs at least one strip" % ", ".join(str(r) for r in sorted(empty))
     return None
+
+
+def k_end_by_turns(geo: Optional[Mapping[str, Any]]) -> bool:
+    """``geometry.k_end_by_turns``: the end-winding factor counts the coil's real TURNS (rows x strips - empty positions) and
+    bends every strip about its own centre line (``masses.cad_coil_length``).  Absent / None / '' / 0 / unusable = False = the
+    rule every stored machine was billed with (layers only), bit for bit.  Opt-in per machine: switching it on moves k_end and
+    with it R_phase, the copper loss and the copper mass."""
+    raw = dict(geo or {}).get("k_end_by_turns")
+    if raw is None or raw == "" or isinstance(raw, bool):
+        return bool(raw)
+    try:
+        return float(raw) != 0.0 and float(raw) == float(raw)
+    except (TypeError, ValueError):
+        return False
 
 
 def wire_omit_count(geo: Optional[Mapping[str, Any]]) -> int:

@@ -2131,6 +2131,8 @@ class CadQueryMotor:
         # silent on it (the same config-leak family as the notch flag above)
         if api_params.get('wire_omit') is None:
             mapped.pop('wire_omit', None)
+        if api_params.get('k_end_by_turns') is None:
+            mapped.pop('k_end_by_turns', None)
         
         # Pole/slot COUNT is defined by the geometry's magnets/slots: num_poles and
         # num_slots are AUTHORITATIVE.  The segment view (num_seg × *_per_segment) is
@@ -2248,6 +2250,8 @@ class CadQueryMotor:
             updated.pop('wire_bore_margin', None)
         if 'wire_omit' not in mapped_params:
             updated.pop('wire_omit', None)
+        if 'k_end_by_turns' not in mapped_params:
+            updated.pop('k_end_by_turns', None)
         self.parameters = updated
         
     def get_parameter_hash(self) -> str:

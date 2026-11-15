@@ -823,8 +823,9 @@ def _pocket_clearance(p: Dict) -> float:
 
 def _flat_magnet_poly(pts, fillet_r: float, n_arc: int = 24):
     """Shapely polygon of the FLAT magnet from its six rotated corners ``(p4, k, c, c', k', p4')`` (counter-clockwise, ``k``
-    collinear): the two TOP corners ``c`` / ``c'`` are rounded with ``fillet_r`` (tangent arcs, clamped to half the shorter
-    edge); the bottom corners stay sharp (the Fusion sketch's 1.866 mm2 section area fits R0.20 on the top pair only)."""
+    collinear): ALL FOUR corners are rounded with ``fillet_r`` (tangent arcs, clamped to half the shorter edge) - the Fusion
+    sketch of the CIANO10 12_40 rounds the two bottom corners as well (bottom flat +-0.197 -> arc -> (+-0.395, 1.531), live
+    finding 2026-11-15: sharp bottom corners put the contour 0.066 mm off).  ``magnet_flat`` is opt-in and no stored machine uses it."""
     from shapely.geometry import Polygon as _SP
     P = [pts[0], pts[2], pts[3], pts[5]]            # bottom +x, top +x, top -x, bottom -x (k, k' dropped)
     r = float(fillet_r or 0.0)
@@ -833,9 +834,6 @@ def _flat_magnet_poly(pts, fillet_r: float, n_arc: int = 24):
     out = []
     n = len(P)
     for i, B in enumerate(P):
-        if i not in (1, 2):
-            out.append(B)
-            continue
         A, C = P[i - 1], P[(i + 1) % n]
         v1 = (A[0] - B[0], A[1] - B[1]); v2 = (C[0] - B[0], C[1] - B[1])
         l1 = hypot(*v1); l2 = hypot(*v2)

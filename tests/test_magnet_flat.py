@@ -16,7 +16,7 @@ from motor_ai_sim.cadquery_geometry import CadQueryMotor
 
 G = dict(stator_diameter=12, motor_length=40, air_gap=0.1, sleeve_thickness=0, core_thickness=0.7, slot_height=1.842,
          tooth_width=1.0, tooth2_width=0.6, cut_width=1.2, stator_fillet_r=0.5, stator_fillet_r1=0.05,
-         insulation_thickness=0.125, slot_hs=0.11, magnet_height=2.0, magnet_fill_up=0.6, magnet_fill_down=0.85,
+         insulation_thickness=0.125, slot_hs=0.11, magnet_height=2.0, magnet_fill_up=0.608, magnet_fill_down=0.85,
          magnet_fill_radius=0.2, magnet_up_gap=0.1, magnet_down_height=2.0, magnet_lamination=0, rotor_hole=0.7,
          rotor_fill_r=0.0, rotor_house_height=0.258, shaft_height=0.5, num_seg=2, num_slots_per_segment=6,
          num_poles_per_segment=5, num_slots=12, num_poles=10, wire_spacing_y=0.05, wire_width=0.2, wire_height=0.8,
@@ -24,17 +24,17 @@ G = dict(stator_diameter=12, motor_length=40, air_gap=0.1, sleeve_thickness=0, c
 FLAT = dict(magnet_flat=1, magnet_pocket_clearance=0.025)
 
 R_OR, D_BOT, GAP, R_FIL, CLR = 3.358, 1.358, 0.10, 0.20, 0.025
-A_DN, A_UP, A_HOLE = (math.radians(15.3), math.radians(10.8), math.radians(7.56))
+# the Fusion section puts the sharp top corner at x = 0.630 (flat end 0.400 + the R0.20 tangent length), i.e. on the 0.608 * 18 = 10.944 deg ray
+A_DN, A_UP, A_HOLE = (math.radians(15.3), math.radians(10.944), math.radians(7.56))
 
 
 def fusion_magnet():
-    """The sketch: flat edges at 1.358 / 3.258, corners on the 15.3 / 10.8 deg rays, R0.20 on the TOP two corners."""
+    """The sketch: flat edges at 1.358 / 3.258, corners on the 15.3 / 10.944 deg rays, R0.20 on ALL FOUR corners (the bottom pair too:
+    Fusion v24 section, live finding 2026-11-15)."""
     d_top = R_OR - GAP
     xb, xt = D_BOT * math.tan(A_DN), d_top * math.tan(A_UP)
     P = Polygon([(-xb, D_BOT), (xb, D_BOT), (xt, d_top), (-xt, d_top)])
-    rounded = P.buffer(-R_FIL).buffer(R_FIL)                 # every convex corner rounded: a DIFFERENT algorithm from the builder's
-    y0 = 0.5 * (D_BOT + d_top)
-    return rounded.intersection(box(-9, y0, 9, 9)).union(P.intersection(box(-9, -9, 9, y0)))
+    return P.buffer(-R_FIL).buffer(R_FIL)                    # every convex corner rounded: a DIFFERENT algorithm from the builder's
 
 
 def fusion_pocket():
@@ -63,7 +63,7 @@ def _magnet0(P):
 def test_magnet_matches_the_fusion_sketch():
     ref, got = fusion_magnet(), _magnet0(_built(**FLAT))
     assert got.area == pytest.approx(ref.area, rel=0.005)
-    assert abs(got.area - 1.866) / 1.866 < 0.005                       # the section area read from Fusion
+    assert abs(got.area - 1.8656) / 1.8656 < 0.005                      # the section area read from Fusion
     assert got.hausdorff_distance(ref) <= 0.05
     assert got.hausdorff_distance(ref) < 0.005                         # the builder is in fact far inside the acceptance
 
@@ -84,6 +84,22 @@ def test_pocket_matches_the_fusion_sketch():
     assert got.hausdorff_distance(ref) <= 0.05
 
 
+FUSION_SECTION = [(0.197, 1.358), (0.395, 1.531), (0.599, 3.031), (0.400, 3.258)]     # Fusion v24 section, +x half, read off by the production session
+
+
+def test_the_fusion_section_coordinates_lie_on_the_contour():
+    got = _magnet0(_built(**FLAT))
+    ring = got.exterior
+    for x, y in FUSION_SECTION:
+        for sx in (1, -1):
+            assert ring.distance(Point(sx * x, y)) <= 0.05, (sx * x, y)
+    assert got.area == pytest.approx(1.8656, rel=0.005)                # the section area read from Fusion
+    assert got.hausdorff_distance(fusion_magnet()) <= 0.05
+    # the corner is rounded: no vertex at the sharp bottom corner (+-0.3715, 1.358)
+    sharp = Point(D_BOT * math.tan(A_DN), D_BOT)
+    assert min(Point(x, y).distance(sharp) for x, y in ring.coords) > 0.05
+
+
 def test_corners_are_where_the_sketch_puts_them():
     got = _magnet0(_built(**FLAT))
     xs = sorted(got.exterior.coords)
@@ -91,7 +107,7 @@ def test_corners_are_where_the_sketch_puts_them():
     assert min(ys) == pytest.approx(D_BOT, abs=1e-6)                   # the flat bottom edge is at 1.358 on the centre line
     assert max(ys) == pytest.approx(R_OR - GAP, abs=1e-6)              # the flat top edge is 0.10 below the OD on the centre line
     bottom = [x for x, y in got.exterior.coords if abs(y - D_BOT) < 1e-6]
-    assert max(bottom) == pytest.approx(D_BOT * math.tan(A_DN), abs=1e-6)   # bottom corner on the 15.3 deg ray
+    assert max(bottom) == pytest.approx(0.197, abs=0.01)               # the flat bottom ends where the R0.20 arc starts
 
 
 def test_without_the_keys_the_magnet_is_the_stored_one():

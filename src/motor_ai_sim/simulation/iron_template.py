@@ -151,7 +151,8 @@ def stator_unit_frame(p: Dict) -> Dict:
     unit_deg = 360.0 / half_slots                      # 30° for 24 slots
 
     # winding feasibility clamp — MUST mirror cadquery_geometry/get_2d_polygons
-    wh_max = (slot_h - 2.0 * ins_w) / max(1, n_wires) - wire_dy
+    from motor_ai_sim.winding import wire_bore_margin_mm, wire_height_bound_mm
+    wh_max = wire_height_bound_mm(slot_h, ins_w, wire_dy, n_wires, wire_bore_margin_mm(p))
     if wh_max > 1e-3 and wire_h > wh_max:
         wire_h = wh_max
 

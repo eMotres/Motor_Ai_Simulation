@@ -335,6 +335,16 @@ SCHEMA_FALLBACK: Dict[str, dict] = {
             "turns. Must divide num_wires_per_slot exactly. 1 = one wire in "
             "hand."),
     },
+    # OPTIONAL (2026-11-15): absent = the liner thickness, i.e. the old rule "insulation on BOTH radial sides of the
+    # wire stack".  Stored only when a design needs less on the bore side (the liner is open there).
+    "wire_bore_margin": {
+        "label": "Wire bore margin", "unit": "mm", "type": "float",
+        "min": 0.0, "max": 5.0, "step": 0.005, "group": "winding", "unset_ok": True,
+        "description": (
+            "clearance between the bore-side wire row and the stator bore circle; "
+            "blank = the insulation thickness (the liner is open towards the bore). "
+            "The yoke side always keeps the insulation thickness"),
+    },
     "sleeve_thickness": {
         "label": "Sleeve thickness", "unit": "mm", "type": "float",
         "min": 0.0, "max": 20.0, "step": 0.05, "group": "rotor",

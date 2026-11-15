@@ -2309,7 +2309,8 @@ def build_periodic_coil_mesh(geo_cfg: dict, num_slots: int,
     # invalid).  MUST match cadquery_geometry.get_2d_polygons so the copper current
     # mesh and the material-domain polygons agree wire-for-wire.
     _slot_h = float(geo_cfg.get("slot_height", 0.0))
-    _wh_max = (_slot_h - 2.0 * ins_w) / max(1, n_wires) - wire_dy
+    from motor_ai_sim.winding import wire_bore_margin_mm, wire_height_bound_mm
+    _wh_max = wire_height_bound_mm(_slot_h, ins_w, wire_dy, n_wires, wire_bore_margin_mm(geo_cfg))
     if _wh_max > 1e-3 and wire_h > _wh_max:
         wire_h = _wh_max
     core_h  = float(geo_cfg.get("core_thickness", 4.2))

@@ -42,7 +42,8 @@ export interface ReferenceMotor {
   // radial (height) stack varies with the tuned knobs.
   fit: {
     slotHeight_mm: number;     // radial slot height
-    insulation_mm: number;     // slot-liner thickness per radial side (counted ×2)
+    insulation_mm: number;     // slot-liner thickness on the yoke side of the wire stack
+    boreMargin_mm?: number | null; // clearance of the stack's bore-side edge to the bore circle (geometry.wire_bore_margin); absent / null = the liner on both sides
     wireSpacingY_mm: number;   // radial gap between stacked wire rows
     slotWidth_mm: number;
     wireWidth_mm: number;      // fixed conductor width

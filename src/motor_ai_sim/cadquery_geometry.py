@@ -1450,6 +1450,18 @@ def _sleeve_thickness(p: Dict) -> float:
     return t if (_isfinite(t) and t > 0.0) else 0.0
 
 
+def _wire_height_bound(slot_h: float, ins_w: float, dy: float, rows, p: Dict) -> float:
+    """``winding.wire_height_bound_mm`` for this parameter dict (``wire_bore_margin`` absent = the old rule, bit for bit)."""
+    from motor_ai_sim.winding import wire_bore_margin_mm, wire_height_bound_mm
+    return wire_height_bound_mm(slot_h, ins_w, dy, rows, wire_bore_margin_mm(p))
+
+
+def _bore_floor(ins_w: float, p: Dict) -> float:
+    """Distance above the bore circle the lowest wire edge keeps (``winding.bore_floor_offset_mm``)."""
+    from motor_ai_sim.winding import wire_bore_margin_mm, bore_floor_offset_mm
+    return bore_floor_offset_mm(ins_w, wire_bore_margin_mm(p))
+
+
 def _wire_split(p: Dict) -> int:
     """``wire_split`` [-] out of a geometry/parameter dict, or 1.
 
@@ -2089,6 +2101,10 @@ class CadQueryMotor:
         # flag must not leak onto it (the config-leak family, see merge_geo_override).
         from motor_ai_sim.geometry.motor_geometry import merge_outer_notches
         merge_outer_notches(mapped, api_params)
+        # `wire_bore_margin` is OPTIONAL (absent = the old rule): a config-level value must not leak onto an override
+        # that is silent on it (the same config-leak family as the notch flag above)
+        if api_params.get('wire_bore_margin') is None:
+            mapped.pop('wire_bore_margin', None)
         
         # Pole/slot COUNT is defined by the geometry's magnets/slots: num_poles and
         # num_slots are AUTHORITATIVE.  The segment view (num_seg × *_per_segment) is
@@ -2202,6 +2218,8 @@ class CadQueryMotor:
         from motor_ai_sim.geometry.motor_geometry import STATOR_OUTER_NOTCHES
         if STATOR_OUTER_NOTCHES not in mapped_params:
             updated.pop(STATOR_OUTER_NOTCHES, None)
+        if 'wire_bore_margin' not in mapped_params:
+            updated.pop('wire_bore_margin', None)
         self.parameters = updated
         
     def get_parameter_hash(self) -> str:
@@ -2696,7 +2714,7 @@ class CadQueryMotor:
         wire_col_w = _strip_span(wire_w, n_split, wire_d_x)
         # Feasibility clamp (match get_2d_polygons / geometry_constraints): the
         # winding must fit the slot or coils overflow the bore onto the rotor.
-        _wh_max = (float(p.get('slot_height', 0.0)) - 2.0 * ins_w) / max(1, num_wires) - wire_d_y
+        _wh_max = _wire_height_bound(float(p.get('slot_height', 0.0)), ins_w, wire_d_y, num_wires, p)
         if _wh_max > 1e-3 and wire_h > _wh_max:
             wire_h = _wh_max
 
@@ -2851,14 +2869,14 @@ class CadQueryMotor:
         # thermal domains 61-63 need them to be: coating, not slot air).
         n_split = _wire_split(p)
         wire_col_w = _strip_span(wire_w, n_split, wire_dx)
-        _wh_max = (float(p.get('slot_height', 0.0)) - 2.0 * ins_w) / max(1, num_wires) - wire_dy
+        _wh_max = _wire_height_bound(float(p.get('slot_height', 0.0)), ins_w, wire_dy, num_wires, p)
         if _wh_max > 1e-3 and wire_h > _wh_max:
             wire_h = _wh_max
         half_slots = num_slots // 2
         slot_angle_deg = 360.0 / half_slots
         right_x = tooth_w / 2 + ins_w + wire_dx / 2
         top_y_c = (outer_r - core_h) - ins_w - wire_dy / 2
-        min_wire_r = inner_r + ins_w
+        min_wire_r = inner_r + _bore_floor(ins_w, p)
         n_fit = 0
         for step in range(num_wires):
             if top_y_c - step * (wire_h + wire_dy) - wire_h < min_wire_r:
@@ -2947,7 +2965,7 @@ class CadQueryMotor:
         # ── Feasibility clamp (match get_2d_polygons / geometry_constraints) ──
         # The winding must fit the slot, else coils overflow the bore across the
         # air gap onto the rotor (overlapping meshes / invalid cross-section).
-        _wh_max = (float(p.get('slot_height', 0.0)) - 2.0 * ins_w) / max(1, num_wires) - wire_dy
+        _wh_max = _wire_height_bound(float(p.get('slot_height', 0.0)), ins_w, wire_dy, num_wires, p)
         if _wh_max > 1e-3 and wire_h > _wh_max:
             wire_h = _wh_max
 
@@ -3614,7 +3632,7 @@ class CadQueryMotor:
         # The winding must fit the slot, else the coils overflow across the air
         # gap onto the rotor and the FEM solves an invalid cross-section.
         #   wire_height ≤ (slot_height − 2·insulation)/num_wires − wire_spacing_y
-        _wh_max = (float(p.get('slot_height', 0.0)) - 2.0 * ins_w) / max(1, num_wires) - wire_dy
+        _wh_max = _wire_height_bound(float(p.get('slot_height', 0.0)), ins_w, wire_dy, num_wires, p)
         if _wh_max > 1e-3 and wire_h > _wh_max:
             wire_h = _wh_max
 
@@ -3953,7 +3971,7 @@ class CadQueryMotor:
         # into the air gap / rotor.  Stop stacking once a wire would overflow.
         # (Without this, a too-large num_wires·wire_height pushed coils across the
         #  gap onto the rotor → J_z applied in the air gap → invalid FEM.)
-        min_wire_r = inner_r + ins_w
+        min_wire_r = inner_r + _bore_floor(ins_w, p)
         n_fit = 0
         for step in range(num_wires):
             if top_y_c - step*(wire_h + wire_dy) - wire_h < min_wire_r:

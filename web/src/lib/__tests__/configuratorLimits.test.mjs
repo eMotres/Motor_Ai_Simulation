@@ -241,3 +241,18 @@ t('speed caps: the slider range carries the binding basis and every judgement re
   assert.equal(L.speedRequestAccepted(7000, lim.rpm), false);
   assert.equal(L.speedRequestAccepted(6300, lim.rpm), true);
 });
+
+t('slot fit: a stated bore-side clearance replaces the second liner; absent = the old rule (geometry.wire_bore_margin, 2026-11-15)', () => {
+  const f0 = { slotHeight_mm: 1.842, insulation_mm: 0.125, wireSpacingY_mm: 0.05 };
+  assert.ok(Math.abs(L.availStack(f0) - (1.842 - 0.25)) < 1e-12);
+  assert.equal(L.availStack({ ...f0, boreMargin_mm: null }), L.availStack(f0));
+  // a clearance equal to liner + dy/2 is the old rule
+  assert.ok(Math.abs(L.availStack({ ...f0, boreMargin_mm: 0.15 }) - L.availStack(f0)) < 1e-12);
+  const f1 = { ...f0, boreMargin_mm: 0.042 };
+  assert.ok(Math.abs(L.availStack(f1) - (1.842 - 0.125 - 0.042 + 0.025)) < 1e-12);
+  // two 0.8 mm rows (the Fusion 12_40 stack): refused with the liner on both sides, fit with the 0.042 mm clearance
+  assert.equal(L.overflows(f0, 2, 0.8), true);
+  assert.equal(L.overflows(f1, 2, 0.8), false);
+  assert.equal(L.fitRows(f1, 0.8), 2);
+  assert.equal(L.fitRows(f0, 0.8), 1);
+});

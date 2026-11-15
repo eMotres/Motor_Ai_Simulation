@@ -59,8 +59,9 @@ def _wire_height_max(g: Dict[str, Any]) -> float:
     insulation layers (top + bottom).  Mirrors the radial stack in
     cadquery_geometry.get_2d_polygons."""
     nw = max(1.0, _f(g, "num_wires_per_slot", 1))
-    avail = _f(g, "slot_height") - 2.0 * _f(g, "insulation_thickness")
-    return avail / nw - _f(g, "wire_spacing_y")
+    from motor_ai_sim.winding import wire_bore_margin_mm, wire_height_bound_mm
+    return wire_height_bound_mm(_f(g, "slot_height"), _f(g, "insulation_thickness"), _f(g, "wire_spacing_y"), nw,
+                                wire_bore_margin_mm(g))
 
 
 def _sleeve_thickness_max(g: Dict[str, Any]) -> float:

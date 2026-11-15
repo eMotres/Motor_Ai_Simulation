@@ -341,7 +341,7 @@ _CAUSES: Dict[str, List[str]] = {
         "cut_width", "slot_height", "core_thickness", "stator_fillet_r"],
     "winding_clipped_by_slot": [
         "wire_width", "wire_height", "num_wires_per_slot",
-        "slot_height", "wire_spacing_y", "insulation_thickness"],
+        "slot_height", "wire_spacing_y", "insulation_thickness", "wire_bore_margin"],
     "winding_copper_double_counted": [
         "wire_width", "wire_spacing_x", "tooth_width", "tooth2_width",
         "num_slots_per_segment", "num_seg"],
@@ -982,7 +982,12 @@ def validate_polygons(polys: Dict[str, Any],
         if (_nw_h > 0 and _wh_nom and _wh_bound is not None and _slot_h > 0.0
                 and _wh_nom > _wh_bound + 1e-9):
             _dy = _num(p.get("wire_spacing_y")) or 0.0
-            _ins2 = 2.0 * (_num(p.get("insulation_thickness")) or 0.0)
+            from motor_ai_sim.winding import wire_bore_margin_mm as _bore_m
+            _ins1 = _num(p.get("insulation_thickness")) or 0.0
+            _bm = _bore_m(p)
+            # liner on the yoke side + the bore side: a second liner, or (wire_bore_margin set) the stated clearance
+            # less the half row gap the rows pitch already counts
+            _ins2 = _ins1 + (_ins1 if _bm is None else _bm - 0.5 * _dy)
             _needed = _nw_h * (_wh_nom + _dy) + _ins2
             col.add(Violation(
                 code="winding_height_does_not_fit", severity=_SEV_ERROR,
@@ -1486,6 +1491,8 @@ _POSITIVE_MM = (
 )
 _NON_NEGATIVE_MM = (
     "insulation_thickness", "wire_spacing_x", "wire_spacing_y",
+    # absent = the liner thickness (winding.wire_bore_margin_mm); 0 is a legal bore-side margin
+    "wire_bore_margin",
     "magnet_up_gap", "stator_fillet_r", "stator_fillet_r1", "rotor_fill_r",
     # 0 = no radial foot: the magnet is the plain trapezoid from its
     # fill_down corners at the bottom to its fill_up corners at the top — the

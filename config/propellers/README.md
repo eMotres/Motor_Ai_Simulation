@@ -62,6 +62,35 @@ performance:
 notes: [...]
 ```
 
+## Schema `propeller-2` (blade geometry, stage A1 of docs/PROPELLER_MODULE_PLAN_2026-11-15.md)
+
+A superset of `propeller-1`: every `propeller-1` key keeps its meaning, a `propeller-1` file and a `propeller-2` file without
+`blade` behave exactly as before (thrust/torque still come from the tables). The optional `blade` block is the complete
+parametric definition of a blade (read by the blade-element model of a later stage; a CAD generator must rebuild the same surface):
+
+```yaml
+schema: propeller-2
+# ... all propeller-1 keys ...
+blade:
+  geometry_source: measured | published | vendor | inferred   # required
+  source_ref: ...            # required: URL / file / scan id, with access date
+  estimated: false           # inferred => must be true; then `method` is required
+  method: ...
+  hub_radius_mm: 12.0        # required (0 <= hub <= 60 % of the tip radius)
+  root_cutout_mm: 12.0       # optional, default = hub radius, never smaller
+  pitch_axis: 0.25           # optional, fraction of chord from the leading edge the twist is about (default 0.25)
+  interpolation: pchip       # optional, linear | pchip (default pchip): how chord and twist run between stations
+  rotation: cw_from_front    # optional, cw_from_front | ccw_from_front
+  stations:                  # >= 8, r_mm strictly increasing, last >= 90 % of the tip radius (D/2 of geometry)
+    - {r_mm: 30.0, chord_mm: 18.0, twist_deg: 38.0, airfoil: clarky, thickness_rel: 0.08}   # thickness_rel optional
+  sections: {clarky: airfoils/clarky.dat}   # optional: airfoil id -> coordinate file reference (not inlined)
+  polars: {source: neuralfoil | xfoil_table | measured | flatplate_model, re_ref: 80000}   # optional
+```
+
+`Propeller.blade` holds the parsed block (SI units, `src/motor_ai_sim/propeller_blade.py`), `Propeller.bemt_ready` is true when the
+block is complete and `geometry.blades` is given. A missing number is never filled in; a malformed block makes that file fail to load
+(logged and skipped like any bad catalogue file) with the field named.
+
 ## How the numbers are used
 
 - `C_T = T / (rho n^2 D^4)` from thrust and rpm, `C_P = 2 pi tau / (rho n^2 D^5)` (= P / (rho n^3 D^5), P = 2 pi n tau) from the

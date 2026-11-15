@@ -1,6 +1,6 @@
 // Production module — fetch wrappers for /api/production/* and /api/admin/production/*
 // (docs/PRODUCTION_MODULE_DESIGN.md section 5). The session token is added by the global fetch interceptor.
-import { errorInfo, productionDocumentsZipPath, productionProcessDocumentFilename, productionProcessDocumentPath, productionZipFilename, safeFileName, unwrapList } from './helpers';
+import { errorInfo, productionDocumentsZipPath, supersededPrompt, productionProcessDocumentFilename, productionProcessDocumentPath, productionZipFilename, safeFileName, unwrapList } from './helpers';
 import type {
   AssemblyProcessView, AssemblyStep, AssemblyTree, Bilingual, BomImportPlan, BomRow, CostRow, CostsData, DocumentRec, ExtraCost, Member, MemberRole, Part, PartFiles, ProcessSection, Production, Proposal, Revision, RevisionPreview, SupersedePair,
   ProductionAccess, Thread, TranslationRef, Lang, ProcurementData, ProcurementLine, ScheduleData, ScheduleBaseline, TimelineData,
@@ -42,9 +42,25 @@ async function call<T>(method: string, path: string, body?: unknown): Promise<T>
   return j as T;
 }
 
+/** One production file.  A SUPERSEDED file answers 409 `file.superseded` first (owner 2026-11-15: warn before anybody builds to an old
+ *  drawing); the person is asked and only a yes repeats the request with `?confirm=1`.  `preview` (a thumbnail on a card) skips the
+ *  question: the lists already mark the file as superseded. */
+async function fetchProductionFile(die: string, config: string, fileId: string, preview = false): Promise<Response> {
+  const url = `${API}${base(die, config)}/files/${enc(fileId)}`;
+  let r = await fetch(preview ? `${url}?confirm=1` : url);
+  if (r.status === 409) {
+    const j = await r.clone().json().catch(() => null) as { code?: string; detail?: string } | null;
+    if (j?.code === 'file.superseded') {
+      if (typeof window === 'undefined' || !window.confirm(supersededPrompt(String(j.detail ?? '')))) throw new ProductionApiError(409, 'file.superseded', 'cancelled');
+      r = await fetch(`${url}?confirm=1`);
+    }
+  }
+  return r;
+}
+
 /** Download a traced production file (needs the session header, so a plain link would 401). */
 export async function downloadFile(die: string, config: string, fileId: string, name: string): Promise<void> {
-  const r = await fetch(`${API}${base(die, config)}/files/${enc(fileId)}`);
+  const r = await fetchProductionFile(die, config, fileId);
   if (!r.ok) throw new ProductionApiError(r.status, null, `HTTP ${r.status}`);
   const url = URL.createObjectURL(await r.blob());
   const a = document.createElement('a');
@@ -55,7 +71,7 @@ export async function downloadFile(die: string, config: string, fileId: string, 
 
 /** One production file into memory, with the fraction received so far (a test's video on its card). */
 export async function fetchFileBlob(die: string, config: string, fileId: string, onProgress?: (fraction: number) => void): Promise<Blob> {
-  const r = await fetch(`${API}${base(die, config)}/files/${enc(fileId)}`);
+  const r = await fetchProductionFile(die, config, fileId);
   if (!r.ok) throw new ProductionApiError(r.status, null, `HTTP ${r.status}`);
   const total = Number(r.headers.get('content-length')) || 0;
   if (!r.body || !total || !onProgress) return r.blob();
@@ -125,7 +141,7 @@ export async function processDocument(die: string, config: string, lang: 'en' | 
 
 /** A production file as an object URL (drawing preview); the caller revokes it. */
 export async function fileObjectUrl(die: string, config: string, fileId: string): Promise<string> {
-  const r = await fetch(`${API}${base(die, config)}/files/${enc(fileId)}`);
+  const r = await fetchProductionFile(die, config, fileId, true);
   if (!r.ok) throw new ProductionApiError(r.status, null, `HTTP ${r.status}`);
   return URL.createObjectURL(await r.blob());
 }
@@ -135,7 +151,7 @@ export async function fileObjectUrl(die: string, config: string, fileId: string)
 export async function openFileInNewWindow(die: string, config: string, fileId: string, kind: string): Promise<void> {
   const w = window.open('', '_blank');
   try {
-    const r = await fetch(`${API}${base(die, config)}/files/${enc(fileId)}`);
+    const r = await fetchProductionFile(die, config, fileId);
     if (!r.ok) throw new ProductionApiError(r.status, null, `HTTP ${r.status}`);
     const type = kind === 'pdf' ? 'application/pdf' : kind === 'png' ? 'image/png' : kind === 'jpg' ? 'image/jpeg' : (r.headers.get('content-type') || '');
     const url = URL.createObjectURL(new Blob([await r.blob()], { type }));

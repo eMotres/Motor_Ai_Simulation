@@ -991,8 +991,7 @@ def _process_step_images(die: str, config: str, user: dict, production: dict,
     document_file_ids = {str(d.get("file_id")) for d in docs if d.get("file_id")}
     docs = [d for d in docs if _file_download_allowed(
         str(d.get("file_id") or ""), die, config, user, production, blocked_ids)]
-    superseded_file_ids = {str(d.get("file_id")) for d in docs
-                           if d.get("file_id") and str(d.get("name") or d.get("filename") or "").startswith("[superseded")}
+    superseded_file_ids = {str(d.get("file_id")) for d in docs if d.get("file_id") and models.is_superseded(d)}
     part_by_id = {str(p.get("id")): p for p in parts if isinstance(p, dict) and p.get("id")}
     out: dict[int, list[dict]] = {}
 
@@ -1024,7 +1023,7 @@ def _process_step_images(die: str, config: str, user: dict, production: dict,
         # Step photos are a separate view, so retain only their explicit step link.
         for doc in docs:
             name = doc.get("name") or doc.get("filename")
-            if str(name or "").startswith("[superseded"):
+            if models.is_superseded(doc):
                 continue
             is_step_photo = doc.get("step_id") == step.get("id")
             is_current_step_doc = (not doc.get("step_id") and
@@ -1378,12 +1377,42 @@ def _trace_file_read(request: Request, user: dict, die: str, config: str, file_i
     _audit(_email(user), die, config, "download" if kind == "production_file" else "view", "document", file_id, {"file": name})
 
 
+def _superseded_document(die: str, config: str, file_id: str) -> Optional[dict]:
+    return next((d for d in (store.load_file(die, config, "documents.json").get("documents") or [])
+                 if isinstance(d, dict) and d.get("file_id") == file_id and models.is_superseded(d)), None)
+
+
+def _superseded_warning(request: Request, doc: dict):
+    """409 for the app (JSON, code ``file.superseded``: the UI asks the person and repeats with ``?confirm=1``) and a small bilingual page
+    for a browser that opened the link itself."""
+    import html as _html
+    from motor_ai_sim.api_errors import ApiError
+    by = doc.get("superseded_by") if isinstance(doc.get("superseded_by"), dict) else {}
+    name, new, rev = str(doc.get("name") or ""), str(by.get("name") or ""), str(by.get("revision") or "")
+    msg = ("'%s' is SUPERSEDED%s%s. Parts must not be made to a superseded drawing. Download it only to look at it."
+           % (name, (" by '%s'" % new) if new else "", (" (revision %s)" % rev) if rev else ""))
+    if "text/html" in (request.headers.get("accept") or ""):
+        e = _html.escape
+        body = ("<!doctype html><meta charset=utf-8><meta name=viewport content='width=device-width,initial-scale=1'>"
+                "<title>Superseded file / 已作废的文件</title><body style='font-family:sans-serif;max-width:640px;margin:3em auto;padding:0 1em'>"
+                "<h2 style='color:#b45309'>SUPERSEDED / 已作废</h2><p><b>%s</b> is superseded%s%s.<br>Parts must not be made to a superseded drawing.</p>"
+                "<p><b>%s</b> 已作废%s%s。<br>不得按已作废的图纸制造零件。</p>"
+                "<p><a href='?confirm=1'>Download anyway (to look only) / 仍然下载（仅供查看）</a></p></body>"
+                % (e(name), (" by <b>%s</b>" % e(new)) if new else "", (" (revision %s)" % e(rev)) if rev else "",
+                   e(name), ("，由 <b>%s</b> 取代" % e(new)) if new else "", ("（版本 %s）" % e(rev)) if rev else ""))
+        return Response(content=body, status_code=409, media_type="text/html; charset=utf-8", headers={"Cache-Control": "no-store"})
+    raise ApiError(409, "file.superseded", msg, {"file": name, "replaced_by": new, "revision": rev})
+
+
 @router.get("/{die}/{config}/files/{file_id}")
 def download_file(request: Request, die: str, config: str, file_id: str):
     """Download one production file.  Logged in the SAME traced download log as the full 3-D / STEP files
     (model3d.log_download: who, company, NDA basis, sha256, IP) plus the production audit."""
     from motor_ai_sim import model3d as M
     user, _production, path = _authorized_file(request, die, config, file_id)
+    old = _superseded_document(die, config, file_id)
+    if old is not None and request.query_params.get("confirm") != "1":
+        return _superseded_warning(request, old)                    # a superseded file is never handed out without a warning first
     data = path.read_bytes()
     name = _original_name(die, config, file_id) or file_id
     _trace_file_read(request, user, die, config, file_id, name, data)
@@ -1433,6 +1462,7 @@ def _part_files(die: str, config: str, user: dict, production: dict, list_name: 
     parts = {str(p.get("id")): p for p in (store.load_file(die, config, "parts.json") or {}).get("parts", []) if isinstance(p, dict)}
     docs = [d for d in (store.load_file(die, config, "documents.json") or {}).get("documents", []) if isinstance(d, dict)]
     blocked = set() if _sees_internal(user, production) else _internal_file_ids(die, config)
+    sup_ids = {str(d.get("file_id")) for d in docs if d.get("file_id") and models.is_superseded(d)}
     out: list[dict] = []
     for row in bom_rows:
         pid = str(row.get("part_id") or "")
@@ -1443,7 +1473,7 @@ def _part_files(die: str, config: str, user: dict, production: dict, list_name: 
 
         def add(file_id: Any, name: Any, forced: Optional[str] = None) -> None:
             fid = str(file_id or "")
-            if not fid or fid in found or not _file_download_allowed(fid, die, config, user, production, blocked):
+            if not fid or fid in found or fid in sup_ids or not _file_download_allowed(fid, die, config, user, production, blocked):
                 return
             nm = str(name or _original_name(die, config, fid) or "")
             if nm.startswith("[superseded"):
@@ -1597,6 +1627,8 @@ def _archive_candidates(die: str, config: str, user: dict, production: dict) -> 
             candidates[file_id] = {"file_id": file_id, "name": str(name or file_id), "folder": folder}
 
     docs = (store.load_file(die, config, "documents.json") or {}).get("documents", [])
+    superseded_ids = {str(d.get("file_id")) for d in docs if d.get("file_id") and models.is_superseded(d)}      # a replaced file is not bundled
+    blocked_file_ids = blocked_file_ids | superseded_ids
     for doc in docs:
         if isinstance(doc, dict):
             name = doc.get("name") or doc.get("filename") or _original_name(die, config, str(doc.get("file_id") or ""))
@@ -2085,33 +2117,63 @@ def _revision_inputs(body: Any) -> tuple:
     return summary_norm, changes_norm, supersedes
 
 
+def _require_change_line(changes: list, supersedes: list) -> None:
+    """A revision that replaces a file needs at least one change line saying what changed (owner 2026-11-15)."""
+    if supersedes and not any(models.bilingual_has_text(c) for c in changes):
+        raise ValueError("A revision that replaces a file needs at least one change line saying what changed and why.")
+
+
 def _revision_files(die: str, config: str, existing: list, supersedes: list, *, number: str) -> dict:
     """The files a revision brings: ``new`` (non-internal documents uploaded since the previous revision, or all of them for the first),
-    ``superseded`` (old file -> the new one that replaces it) and ``released`` (every non-internal document now: from now on a change
-    to any of them needs a revision).  Raises ValueError with a plain sentence for a bad ``supersedes`` pair."""
+    ``superseded`` (old file -> the new one that replaces it), ``released`` (every non-internal document now) and ``released_files`` (the
+    file ids the store guard protects from now on: a change to any of them needs a revision).  A pair is either
+    ``{old_doc_id, new_doc_id}`` (two documents) or ``{part_id, old_file_id, new_file_id, new_name}`` (a drawing / STEP of a part).
+    Raises ValueError with a plain sentence for a bad pair."""
     docs = [d for d in (store.load_file(die, config, "documents.json").get("documents") or []) if isinstance(d, dict)]
+    parts = {p.get("id"): p for p in (store.load_file(die, config, "parts.json").get("parts") or []) if isinstance(p, dict)}
     by_id = {d.get("id"): d for d in docs}
     last = max((str(r.get("date") or "") for r in existing if isinstance(r, dict)), default="")
-    sup_rows, replaced_new, replaced_old = [], set(), set()
+    sup_rows, replaced_old = [], set()
+
+    def once(key: str, label: str) -> None:
+        if key in replaced_old:
+            raise ValueError("supersedes: %s is replaced twice" % label)
+        replaced_old.add(key)
+
     for pair in supersedes:
+        if "old_file_id" in pair:
+            part = parts.get(str(pair.get("part_id")))
+            old_id, new_id, new_name = str(pair.get("old_file_id")), str(pair.get("new_file_id")), str(pair.get("new_name") or "").strip()
+            if part is None or old_id not in store._part_file_ids(part):
+                raise ValueError("supersedes: file %r is not a drawing or STEP of part %r" % (old_id, pair.get("part_id")))
+            if not new_name or old_id == new_id or not store.valid_file_id(new_id) or store.read_uploaded_file(die, config, new_id) is None:
+                raise ValueError("supersedes: the new file %r must be an uploaded file with a name, different from the old one" % new_id)
+            once(old_id, old_id)
+            old_name = next((str(x.get("name") or "") for x in part.get("drawing_files") or [] if isinstance(x, dict) and str(x.get("file_id")) == old_id), "") \
+                or next((str(d.get("name")) for d in docs if d.get("file_id") == old_id), "") or _original_name(die, config, old_id) or old_id
+            sup_rows.append({"doc_id": None, "file_id": old_id, "name": old_name, "version": models.file_version(old_name), "part_id": part.get("id"),
+                             "replaced_by": {"doc_id": None, "file_id": new_id, "name": new_name, "version": models.file_version(new_name)}})
+            continue
         old, new = by_id.get(str(pair.get("old_doc_id"))), by_id.get(str(pair.get("new_doc_id")))
         if old is None or new is None or old is new:
             raise ValueError("supersedes: both documents must exist and differ (old %r, new %r)" % (pair.get("old_doc_id"), pair.get("new_doc_id")))
-        if old.get("status") == "superseded":
+        if models.is_superseded(old):
             raise ValueError("supersedes: %s is already superseded" % old.get("name"))
-        if old.get("id") in replaced_old:
-            raise ValueError("supersedes: %s is replaced twice" % old.get("name"))
-        replaced_old.add(old.get("id"))
-        replaced_new.add(new.get("id"))
+        once(str(old.get("id")), str(old.get("name")))
         sup_rows.append({"doc_id": old.get("id"), "file_id": old.get("file_id"), "name": old.get("name"),
                          "version": models.file_version(old.get("name")), "part_id": old.get("part_id"),
-                         "replaced_by": {"doc_id": new.get("id"), "name": new.get("name"), "version": models.file_version(new.get("name"))}})
+                         "replaced_by": {"doc_id": new.get("id"), "file_id": new.get("file_id"), "name": new.get("name"),
+                                         "version": models.file_version(new.get("name"))}})
+    old_docs = {r["doc_id"] for r in sup_rows if r.get("doc_id")}
     new_rows = [{"doc_id": d.get("id"), "file_id": d.get("file_id"), "name": d.get("name"), "version": models.file_version(d.get("name")),
                  "part_id": d.get("part_id")}
-                for d in docs if not d.get("internal") and d.get("status") != "superseded"
-                and (not last or str(d.get("uploaded_at") or "") > last) and d.get("id") not in replaced_old]
+                for d in docs if not d.get("internal") and not models.is_superseded(d)
+                and (not last or str(d.get("uploaded_at") or "") > last) and d.get("id") not in old_docs]
+    new_rows += [{"doc_id": None, "file_id": r["replaced_by"]["file_id"], "name": r["replaced_by"]["name"], "version": r["replaced_by"]["version"],
+                  "part_id": r["part_id"]} for r in sup_rows if not r.get("doc_id")]
     released = [d.get("id") for d in docs if not d.get("internal")]
-    return {"new": new_rows, "superseded": sup_rows, "released": released}
+    return {"new": new_rows, "superseded": sup_rows, "released": released,
+            "released_files": sorted(store.current_protected_file_ids(die, config) | {r["replaced_by"]["file_id"] for r in sup_rows if not r.get("doc_id")})}
 
 
 @router.post("/{die}/{config}/revisions/preview")
@@ -2123,6 +2185,7 @@ async def preview_revision(request: Request, die: str, config: str):
     existing = store.load_file(die, config, "revisions.json").get("revisions", [])
     number = models.next_revision_number(existing)
     try:
+        _require_change_line(changes, supersedes)
         files = _revision_files(die, config, existing, supersedes, number=number)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc))
@@ -2171,6 +2234,7 @@ def _publish_revision(die: str, config: str, user: dict, summary: dict, changes:
     Marks the files it supersedes (kept, archived).  Server-side scripts and bulk tools publish through this function too."""
     existing = store.load_file(die, config, "revisions.json").get("revisions", [])
     number = models.next_revision_number(existing)
+    _require_change_line(changes, supersedes or [])
     files = _revision_files(die, config, existing, supersedes or [], number=number)
     revision = models.normalize_revision({
         "number": number,
@@ -2201,17 +2265,47 @@ def _publish_revision(die: str, config: str, user: dict, summary: dict, changes:
 
 
 def _mark_superseded(die: str, config: str, rows: list, number: str) -> None:
-    """Archive the replaced documents as "superseded by ..." (the file stays; downloads warn)."""
-    by = {r["doc_id"]: r for r in rows}
+    """Archive the replaced files as "superseded by ..." (kept, never deleted; downloads warn).  Opens the store's revision scope: this is
+    the one place where a released file may be archived."""
+    doc_rows = {r["doc_id"]: r for r in rows if r.get("doc_id")}
+    part_rows = [r for r in rows if not r.get("doc_id")]
+    with store.revision_scope(die, config):
+        def mark(d):
+            for doc in d.get("documents", []):
+                r = doc_rows.get(doc.get("id")) if isinstance(doc, dict) else None
+                if r:
+                    doc["status"] = "superseded"
+                    doc["archived_at"] = _now()
+                    doc["superseded_by"] = {**r["replaced_by"], "revision": number}
+            by_file = {r["file_id"]: r for r in part_rows}
+            known = set()
+            for doc in d.get("documents", []):      # a document row of the replaced file is archived too
+                r = by_file.get(doc.get("file_id")) if isinstance(doc, dict) else None
+                if r:
+                    known.add(r["file_id"])
+                    doc["status"], doc["archived_at"] = "superseded", doc.get("archived_at") or _now()
+                    doc["superseded_by"] = {**r["replaced_by"], "revision": number}
+            for r in part_rows:                     # a part's drawing leaves the part: keep it visible as a superseded document
+                if r["file_id"] not in known:
+                    doc = models.normalize_document({}, r["file_id"], "system/revision", r["name"], r.get("part_id"))
+                    doc.update({"status": "superseded", "archived_at": _now(), "superseded_by": {**r["replaced_by"], "revision": number}})
+                    d.setdefault("documents", []).append(doc)
+        store.mutate_file(die, config, "documents.json", mark)
+        if part_rows:
+            by_part: dict = {}
+            for r in part_rows:
+                by_part.setdefault(r["part_id"], []).append(r)
 
-    def mut(d):
-        for doc in d.get("documents", []):
-            r = by.get(doc.get("id")) if isinstance(doc, dict) else None
-            if r:
-                doc["status"] = "superseded"
-                doc["archived_at"] = _now()
-                doc["superseded_by"] = {**r["replaced_by"], "revision": number}
-    store.mutate_file(die, config, "documents.json", mut)
+            def swap(d):
+                for p in d.get("parts", []):
+                    for r in by_part.get(p.get("id") if isinstance(p, dict) else None, []):
+                        for df in p.get("drawing_files") or []:
+                            if isinstance(df, dict) and str(df.get("file_id")) == r["file_id"]:
+                                df["file_id"], df["name"] = r["replaced_by"]["file_id"], r["replaced_by"]["name"]
+                        step = p.get("optional_step")
+                        if isinstance(step, dict) and str(step.get("file_id")) == r["file_id"]:
+                            step["file_id"] = r["replaced_by"]["file_id"]
+            store.mutate_file(die, config, "parts.json", swap)
 
 
 def _publish_revision_from_proposal(die: str, config: str, user: dict, proposal: dict) -> str:

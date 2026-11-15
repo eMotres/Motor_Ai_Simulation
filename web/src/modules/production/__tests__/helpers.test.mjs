@@ -524,3 +524,26 @@ test('every new Changes string exists in EN and zh-CN', async () => {
   for (const k of ['review', 'reviewTitle', 'recipients', 'subject', 'cancel', 'sendPublish', 'cannotMail', 'addReplace', 'replaceOld', 'replaceNew', 'newFiles', 'superseded', 'alertLine'])
     assert.ok(en[k] && zh[k], k);
 });
+
+// -- superseded files (R2, owner 2026-11-15) -----------------------------------------------------------------------------------
+test('the question before a superseded file is opened carries the server sentence and both languages', () => {
+  const q = H.supersededPrompt("'a_v1.2.pdf' is SUPERSEDED by 'a_v1.3.pdf' (revision 1.1).");
+  assert.match(q, /SUPERSEDED by 'a_v1.3.pdf'/);
+  assert.match(q, /Open it anyway/);
+  assert.match(q, /仍要打开吗/);
+});
+
+test('every production file read goes through the superseded check, previews skip only the question', async () => {
+  const { readFileSync } = await import('node:fs');
+  const api = readFileSync(new URL('../api.ts', import.meta.url), 'utf8');
+  assert.equal((api.match(/fetchProductionFile\(/g) || []).length, 5);          // the definition + download, blob, object url, new window
+  assert.doesNotMatch(api.replace(/async function fetchProductionFile[\s\S]*?\n}\n/, ''), /\/files\/\$\{enc\(fileId\)\}`\);/);   // no other raw fetch of /files/<id>
+  assert.match(api, /preview \? `\$\{url\}\?confirm=1`/);
+  assert.match(api, /code === 'file\.superseded'/);
+});
+
+test('the superseded strings exist in both locales', async () => {
+  const { readFileSync } = await import('node:fs');
+  const rd = (l) => JSON.parse(readFileSync(new URL(`../../../locales/${l}/production.json`, import.meta.url), 'utf8')).docs;
+  for (const k of ['superseded', 'supersededBy', 'supersededTip']) assert.ok(rd('en')[k] && rd('zh-CN')[k], k);
+});

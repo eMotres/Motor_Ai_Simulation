@@ -171,7 +171,7 @@ def test_superseding_marks_the_old_file_keeps_it_and_refuses_bad_pairs_before_wr
         assert store.load_file(DIE, CFG, "revisions.json")["revisions"] == [] and mail.sent == []
         publish(supersedes=[{"old_doc_id": "doc_1", "new_doc_id": "doc_2"}])
         d1, d2 = store.load_file(DIE, CFG, "documents.json")["documents"]
-        assert d1["status"] == "superseded" and d1["superseded_by"] == {"doc_id": "doc_2", "name": "s_v1.3.pdf", "version": "1.3", "revision": "1.0"}
+        assert d1["status"] == "superseded" and d1["superseded_by"] == {"doc_id": "doc_2", "file_id": "f2", "name": "s_v1.3.pdf", "version": "1.3", "revision": "1.0"}
         assert d1["file_id"] == "f1" and d1["archived_at"] and "status" not in d2                 # kept, not deleted
         with pytest.raises(ValueError):
             publish(supersedes=[{"old_doc_id": "doc_1", "new_doc_id": "doc_2"}])                   # already superseded

@@ -168,6 +168,11 @@ const DocumentsPanel: React.FC<{
                         {d.name}
                       </Box>
                       {isNew && <Chip size="small" label={t('docs.newBadge')} color="primary" sx={{ ml: 1, height: 18, fontSize: 10 }} />}
+                      {d.status === 'superseded' && (
+                        <Chip size="small" color="warning" data-testid="doc-superseded"
+                          label={d.superseded_by ? t('docs.supersededBy', { name: d.superseded_by.name, rev: d.superseded_by.revision }) : t('docs.superseded')}
+                          title={t('docs.supersededTip')} sx={{ ml: 1, height: 18, fontSize: 10 }} />
+                      )}
                     </TableCell>
                     <TableCell>{p ? <PartName name={p.name} size={12.5} /> : <span style={{ color: 'var(--text-4)' }}>{t('docs.general')}</span>}</TableCell>
                     <TableCell sx={{ color: 'var(--text-2)' }}>

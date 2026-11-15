@@ -294,7 +294,10 @@
     "newSince": "自 {date} 起新增：{n}",
     "selected": "分享的文件：{n}",
     "showAll": "显示全部",
-    "clear": "清除"
+    "clear": "清除",
+    "superseded": "已作废",
+    "supersededBy": "已由 {name} 取代（版本 {rev}）",
+    "supersededTip": "已在已发布的版本中被替换。请勿按其制造零件；文件仅保留供参考。"
   },
   "unread": {
     "tip": "{count} 条未读消息",

@@ -54,6 +54,7 @@ class InflowRequest:
     v_inf_ms: float = 0.0
     r_min_m: Optional[float] = None
     r_max_m: Optional[float] = None
+    air_temp_c: Optional[float] = None  # blade-element model: air viscosity and sound speed (default 15 C)
     position: Optional[str] = None      # momentum-1 only
     factor: Optional[float] = None      # momentum-1 only (overrides position)
 
@@ -64,7 +65,7 @@ class Band:
 
     r_min_m: Optional[float]
     r_max_m: Optional[float]
-    axial_ms: float
+    axial_ms: Optional[float]
     swirl_ms: Optional[float]
 
 
@@ -78,7 +79,7 @@ class AirField:
     torque_Nm: float
     shaft_power_W: float
     wake_velocity_ms: float
-    air_speed_ms: float
+    air_speed_ms: Optional[float]      # None = the model has no value for the requested band
     bands: Tuple[Band, ...]
     flags: Tuple[str, ...] = ()
     assumptions: Tuple[str, ...] = ()
@@ -125,10 +126,20 @@ def register_model(model: InflowModel) -> None:
 
 
 def available_models() -> List[str]:
+    _load_optional_models()
     return sorted(_MODELS)
 
 
+def _load_optional_models() -> None:
+    """Import the models that register themselves on import (kept out of the module top: no import cycle)."""
+    try:
+        from motor_ai_sim import propeller_bemt  # noqa: F401
+    except ImportError:                                    # numpy/scipy missing: the model is simply not offered
+        pass
+
+
 def get_model(model_id: str = MODEL_MOMENTUM) -> InflowModel:
+    _load_optional_models()
     m = _MODELS.get(str(model_id))
     if m is None:
         raise InflowModelError("unknown inflow model %r; available: %s" % (model_id, ", ".join(available_models())))

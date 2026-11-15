@@ -6,6 +6,13 @@
     GET /api/propellers/{id}/point            thrust / torque / power / cooling air at an rpm
     GET /api/propellers/{id}/series           the same on an rpm grid (+ housing film h): Configure's hook
     GET /api/propellers/{id}/s1               continuous (S1) limit of a die/config with this prop (signed in)
+    GET  /api/propellers/design/family        the own-propeller family: variables, bounds, operating points (L12 / L20)
+    POST /api/propellers/design/check         validity rules of a design vector
+    POST /api/propellers/design/geometry      the candidate as a propeller-2 dict + per-zone manufacturing report
+    POST /api/propellers/design/evaluate      blade-element evaluation at a motor's torque limit (both objectives)
+    POST /api/propellers/design/sweep         the same with ONE variable changed
+    GET|PUT|DELETE /api/propellers/design/drafts[/{name}]   drafts in the CALLER'S workspace (never the shared catalog)
+    The /design routes are gated like a solve (auth._GATED_PREFIX 'solve:engineer': admin while MOTRES_SOLVE_ADMIN_ONLY is on).
 
 SOLVER ISOLATION: nothing here solves a field or writes anything.  The catalogue
 is read from ``config/propellers/`` (and ``<shared>/propellers/`` on the server)
@@ -24,9 +31,10 @@ from __future__ import annotations
 import logging
 from typing import Any, Dict, Optional
 
-from fastapi import APIRouter, Header, HTTPException, Query
+from fastapi import APIRouter, Body, Header, HTTPException, Query
 
 from motor_ai_sim import propeller as pp
+from motor_ai_sim import propeller_design_api as pda
 
 log = logging.getLogger(__name__)
 
@@ -337,3 +345,82 @@ def get_point(prop_id: str,
                        "t_ambient_c": t_amb, "housing_d_mm": float(housing_d_mm),
                        "model": "cooling_models.outer_air (Churchill–Bernstein cross-flow)"}
     return out
+
+
+# ---------------------------------------------------------------------------
+# Own-propeller designer (stage P2).  Declared BEFORE nothing else matters: '/design/...' has two path segments after the prefix, so
+# the single-segment '/{prop_id}' route above cannot catch it; the three-segment '/{prop_id}/point|series|s1' routes end differently.
+# ---------------------------------------------------------------------------
+
+def _problem(exc: "pda.ApiProblem") -> HTTPException:
+    return HTTPException(status_code=exc.status, detail=exc.detail)
+
+
+@router.get("/design/family")
+def design_family(diameter_in: int = Query(default=10), blades: int = Query(default=2)) -> Dict[str, Any]:
+    try:
+        return pda.family(diameter_in, blades)
+    except pda.ApiProblem as exc:
+        raise _problem(exc)
+
+
+@router.post("/design/check")
+def design_check(body: Dict[str, Any] = Body(...)) -> Dict[str, Any]:
+    try:
+        return pda.check(body.get("vector"))
+    except pda.ApiProblem as exc:
+        raise _problem(exc)
+
+
+@router.post("/design/geometry")
+def design_geometry(body: Dict[str, Any] = Body(...)) -> Dict[str, Any]:
+    try:
+        return pda.geometry(body.get("vector"))
+    except pda.ApiProblem as exc:
+        raise _problem(exc)
+
+
+@router.post("/design/evaluate")
+def design_evaluate(body: Dict[str, Any] = Body(...)) -> Dict[str, Any]:
+    try:
+        return pda.evaluate(body.get("vector"), str(body.get("op") or ""), body.get("v_inf_ms", 0.0))
+    except pda.ApiProblem as exc:
+        raise _problem(exc)
+
+
+@router.post("/design/sweep")
+def design_sweep(body: Dict[str, Any] = Body(...)) -> Dict[str, Any]:
+    try:
+        return pda.sweep(body.get("vector"), str(body.get("op") or ""), str(body.get("variable") or ""), body.get("values"),
+                         body.get("lo"), body.get("hi"), body.get("n", 7))
+    except pda.ApiProblem as exc:
+        raise _problem(exc)
+
+
+@router.get("/design/drafts")
+def design_drafts() -> Dict[str, Any]:
+    return pda.list_drafts()
+
+
+@router.get("/design/drafts/{name}")
+def design_draft_get(name: str) -> Dict[str, Any]:
+    try:
+        return pda.get_draft(name)
+    except pda.ApiProblem as exc:
+        raise _problem(exc)
+
+
+@router.put("/design/drafts/{name}")
+def design_draft_put(name: str, body: Dict[str, Any] = Body(...)) -> Dict[str, Any]:
+    try:
+        return pda.put_draft(name, body.get("vector"), str(body.get("op") or "L12"))
+    except pda.ApiProblem as exc:
+        raise _problem(exc)
+
+
+@router.delete("/design/drafts/{name}")
+def design_draft_delete(name: str) -> Dict[str, Any]:
+    try:
+        return pda.delete_draft(name)
+    except pda.ApiProblem as exc:
+        raise _problem(exc)

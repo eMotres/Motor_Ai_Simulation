@@ -462,6 +462,13 @@ _GATED_PREFIX: list[tuple[str, str, str]] = [
     ("DELETE", "/api/optimization", "admin"),
     ("POST",   "/api/pipeline", "admin"),
     ("POST",   "/api/static3d", "admin"),
+    # The own-propeller designer (Simulations > Propellers, owner 2026-11-15): blade-element evaluations and the caller's own drafts.
+    # Gated like a solve - admin while SOLVE_ADMIN_ONLY is on, an engineer when it is off - and listed BEFORE nothing else: the plain
+    # catalogue routes under /api/propellers stay open for Configure.
+    ("GET",    "/api/propellers/design", "solve:engineer"),
+    ("POST",   "/api/propellers/design", "solve:engineer"),
+    ("PUT",    "/api/propellers/design", "solve:engineer"),
+    ("DELETE", "/api/propellers/design", "solve:engineer"),
 ]
 
 # (HTTP method, path REGEX matched from the start) -> minimum tier, for the routes whose path carries a parameter and that

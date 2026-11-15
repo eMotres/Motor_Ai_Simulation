@@ -1,0 +1,78 @@
+# Parametric family of the own propeller, 10 / 11 / 12 / 13 in (stage P1 of docs/PROPELLER_MODULE_PLAN_2026-11-15.md).
+# EVERY number below is either derived from a stated rule or a PLACEHOLDER marked as such; nothing is a confirmed design value.
+# `confirmed_by: null` means: editable parameter, applied, and flagged "design_inputs_unconfirmed" in every result.
+schema: propeller-design-1
+id: own_family
+diameters_in: [10, 11, 12, 13]
+
+# Scaling rule between the four diameters (explicit): the PLANFORM is geometrically similar - chord/R, twist(r/R), thickness ratio and the
+# airfoil per zone are the same functions of r/R for every diameter, so chord scales with D. EXCEPT: hub radius and root cut-out are
+# absolute (mm; the hub/motor interface does not scale), and every manufacturing minimum is absolute (mm), so the thickness RATIO of a
+# small propeller rises when a minimum governs. The chord Reynolds number is NOT preserved (it grows with D^2 at equal rpm).
+scaling_rule: similar_planform_absolute_hub_and_manufacturing_minima
+
+blades:
+  options: [2, 3]                  # both are to be compared (owner 2026-11-15)
+  confirmed_by: null
+
+# Radial control points (r/R) of chord and twist; a monotone cubic (PCHIP) runs through them, held constant inside the first one.
+control_r_over_R: [0.2, 0.3, 0.45, 0.65, 0.85, 1.0]
+inner_group_max_r_over_R: 0.35     # control points at r/R <= this belong to the inner (root) variable group
+zones:                             # airfoil zones by r/R: [from, to)
+  root: [0.0, 0.35]
+  mid: [0.35, 0.7]
+  tip: [0.7, 1.0001]
+airfoil_options:                   # generic generated sections (NACA 4-digit formula); the library files add to this once their terms are confirmed
+  root: [naca4-4412, naca4-4410, naca4-6412]
+  mid: [naca4-4410, naca4-4408, naca4-6410]
+  tip: [naca4-4408, naca4-4406, naca4-2406]
+
+bounds:                            # placeholders: geometric validity only, no optimum implied
+  basis: geometric_validity_placeholder
+  confirmed_by: null
+  chord_over_R: [0.05, 0.30]       # a blade chord below 5 % R is not a propeller blade of this class; above 30 % R the blades overlap at 3 blades near the root
+  twist_deg: [0.0, 65.0]           # non-negative geometric pitch angle; the 0.2 R point of a 10x5 constant-pitch helix is 39 deg
+  hub_radius_mm: [8.0, 22.0]       # not smaller than a shaft plus a wall, not larger than the 20 mm motor radius plus clearance
+  root_cutout_mm: [8.0, 40.0]      # the blade may start at the hub radius or beyond; 40 mm = 0.31 R of the 13 in propeller
+
+seed:                              # starting design, NOT a recommendation
+  basis: "twist from the constant-pitch helix, theta = atan((H/D) / (pi r/R)) with H/D = 0.5 (a '10x5' pitch ratio); chord/R a generic placeholder"
+  pitch_ratio: 0.5
+  chord_over_R: [0.17, 0.20, 0.21, 0.19, 0.15, 0.09]
+  hub_radius_mm: 10.0
+  root_cutout_mm: 14.0
+  airfoil: {root: naca4-4412, mid: naca4-4410, tip: naca4-4408}
+
+tip_mach_limit:
+  value: 0.6
+  source: "bemt-1 validity limit (HIGH_TIP_MACH); the owner's value is pending"
+  confirmed_by: null
+
+# Operating points: the motors the first propellers are designed for (owner 2026-11-15). Values are the stored RATED duty of the catalog,
+# read read-only on 2026-11-15 (not re-computed). The propeller sets its own rpm: the optimiser works at the speed where the propeller
+# torque meets `torque_limit_Nm`, searched up to `rpm_search_max` (1.3 x the stored rated rpm: a search bound, not a motor limit).
+operating_points:
+  L12:
+    die: CIANO14 40 new
+    config: L12
+    torque_limit_Nm: 0.64
+    rated_rpm_ref: 13628.1
+    rpm_search_max: 17716.5
+    motor_radius_mm: 20.0
+    source: "catalog stored duty 'rated' (propeller S1 point on the HQ1050-3 load line), read 2026-11-15"
+  L20:
+    die: CIANO14 40 new
+    config: L20
+    torque_limit_Nm: 0.82
+    rated_rpm_ref: 13000.0
+    rpm_search_max: 16900.0
+    motor_radius_mm: 20.0
+    source: "catalog stored duty 'rated' (continuous point, 13 in P13x4.4 cooling reference), read 2026-11-15"
+air:
+  temp_c: 15.0
+  rho_kg_m3: 1.225
+  basis: ISA sea level
+
+manufacturing:                     # the profile of propeller_airfoil.py; empty until the factory answers (no default number)
+  process: null
+  limits: {}

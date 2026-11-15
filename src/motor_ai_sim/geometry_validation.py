@@ -1493,6 +1493,7 @@ _NON_NEGATIVE_MM = (
     "insulation_thickness", "wire_spacing_x", "wire_spacing_y",
     # absent = the liner thickness (winding.wire_bore_margin_mm); 0 is a legal bore-side margin
     "wire_bore_margin",
+    "magnet_pocket_clearance",
     "magnet_up_gap", "stator_fillet_r", "stator_fillet_r1", "rotor_fill_r",
     # 0 = no radial foot: the magnet is the plain trapezoid from its
     # fill_down corners at the bottom to its fill_up corners at the top — the
@@ -1685,6 +1686,14 @@ def validate_parameter_values(geo: Dict[str, Any]) -> List[Dict[str, Any]]:
         _wo = wire_omit_error(geo)
         if _wo is not None:
             _err("wire_omit", geo.get("wire_omit"), _wo)
+    # ── the Fusion-style magnet needs the opening pocket (rotor_hole < 1) ─────
+    _mf = _num(geo.get("magnet_flat"))
+    if _mf:
+        _rh = _num(geo.get("rotor_hole"))
+        if _rh is not None and _rh >= 1.0 - 1e-9:
+            _err("magnet_flat", geo.get("magnet_flat"),
+                 "magnet_flat = 1 needs rotor_hole < 1: the straight-sided pocket of rotor_hole >= 1 is built on the "
+                 "arc-topped magnet. Set rotor_hole below 1 or magnet_flat to 0.")
     _split_fit = split_width_error(geo)
     if _split_fit is not None and _split_fit[0] == "wire_split":
         _fld, _msg, _bound = _split_fit

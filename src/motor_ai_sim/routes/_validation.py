@@ -366,6 +366,23 @@ SCHEMA_FALLBACK: Dict[str, dict] = {
             "(wire rows x strips - empty positions) and shares the two leads over them; 0 / blank = the layer-count rule "
             "of the stored machines. Only matters when wire_split > 1"),
     },
+    # OPT-IN (2026-11-15): the magnet as the Fusion sketch draws it.  Absent / 0 = the builder of every stored machine.
+    "magnet_flat": {
+        "label": "Magnet as in Fusion", "unit": "", "type": "int",
+        "min": 0, "max": 1, "step": 1, "group": "rotor", "unset_ok": True,
+        "description": (
+            "1 = the magnet is the Fusion sketch's trapezoid: flat bottom edge at the magnet radius and flat top edge "
+            "magnet_up_gap below the rotor OD on the pole centre line, corners on the rays at magnet_fill_down (bottom) "
+            "and magnet_fill_up (top) x pole pitch / 2, straight sides, top corners rounded with magnet_fill_radius; "
+            "magnet_down_height is not used. Needs rotor_hole < 1. 0 / blank = the arc-topped magnet of the stored machines"),
+    },
+    "magnet_pocket_clearance": {
+        "label": "Magnet pocket clearance", "unit": "mm", "type": "float",
+        "min": 0.0, "max": 0.5, "step": 0.005, "group": "rotor", "unset_ok": True,
+        "description": (
+            "with magnet_flat: the rotor pocket is the magnet outline offset outward by this much on every side "
+            "(Fusion offset_rotor, 0.025); 0 / blank = the pocket is the magnet"),
+    },
     "sleeve_thickness": {
         "label": "Sleeve thickness", "unit": "mm", "type": "float",
         "min": 0.0, "max": 20.0, "step": 0.05, "group": "rotor",

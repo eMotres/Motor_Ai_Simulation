@@ -1,12 +1,12 @@
 /** Revisions (newest first). The acknowledge banner lists revisions this account has not acknowledged yet; owner/engineer/admin publish. */
-import React, { useState } from 'react';
-import { Alert, Box, Button, Chip, Paper, Typography } from '@mui/material';
+import React, { useEffect, useState } from 'react';
+import { Alert, Box, Button, Chip, Dialog, DialogActions, DialogContent, DialogTitle, MenuItem, Paper, Select, Typography } from '@mui/material';
 import { useTranslation } from 'react-i18next';
 import BilingualText, { BilingualInput, useContentLang } from './BilingualText';
 import HelpTip from '../../../components/common/HelpTip';
 import { productionApi } from '../api';
-import { canAckRole, hasAcked, makeBilingual, nextRevision, sortRevisions, unackedRevisions } from '../helpers';
-import type { Lang, ProdCtx, Revision } from '../types';
+import { alertSummary, canAckRole, hasAcked, makeBilingual, nextRevision, replaceableDocs, sortRevisions, supersedePairs, unackedRevisions } from '../helpers';
+import type { DocumentRec, Lang, ProdCtx, Revision, RevisionPreview } from '../types';
 
 const PANEL = { bgcolor: 'var(--panel-2)', border: '1px solid var(--line-soft)', borderRadius: 1.5 } as const;
 
@@ -17,6 +17,10 @@ const ChangesPanel: React.FC<{ revisions: Revision[]; currentRevision: string; c
   const [lang, setLang] = useState<Lang>(ui);
   const [lines, setLines] = useState<string[]>(['']);
   const [err, setErr] = useState<string | null>(null);
+  const [preview, setPreview] = useState<RevisionPreview | null>(null);
+  const [replaces, setReplaces] = useState<Array<{ old: string; new: string }>>([]);
+  const [docs, setDocs] = useState<DocumentRec[]>([]);
+  useEffect(() => { if (ctx.canEdit) productionApi.documents(ctx.die, ctx.config).then((d) => setDocs(replaceableDocs(d))).catch(() => setDocs([])); }, [ctx.canEdit, ctx.die, ctx.config, revisions.length]);
   const sorted = sortRevisions(revisions);
   const pending = canAckRole(ctx.role) ? unackedRevisions(revisions, ctx.email) : [];
   const newest = sorted[0]?.number ?? currentRevision;
@@ -47,17 +51,56 @@ const ChangesPanel: React.FC<{ revisions: Revision[]; currentRevision: string; c
             <BilingualInput key={i} label={t('changes.changeLine')} value={ln} lang={lang}
               onChange={(v, l) => { setLang(l); setLines((a) => a.map((x, k) => (k === i ? v : x))); }} />
           ))}
+          {replaces.map((r, i) => (
+            <Box key={i} sx={{ display: 'flex', gap: 0.75, alignItems: 'center', flexWrap: 'wrap' }} data-testid="changes-replace-row">
+              <Select size="small" displayEmpty value={r.old} sx={{ fontSize: 12, minWidth: 190 }} inputProps={{ 'aria-label': t('changes.replaceOld') }}
+                onChange={(e) => setReplaces((a) => a.map((x, k) => (k === i ? { ...x, old: String(e.target.value) } : x)))}
+                renderValue={(v) => (v ? docs.find((d) => d.id === v)?.name ?? v : t('changes.replaceOld'))}>
+                {docs.map((d) => <MenuItem key={d.id} value={d.id} sx={{ fontSize: 12 }}>{d.name}</MenuItem>)}
+              </Select>
+              <span aria-hidden>→</span>
+              <Select size="small" displayEmpty value={r.new} sx={{ fontSize: 12, minWidth: 190 }} inputProps={{ 'aria-label': t('changes.replaceNew') }}
+                onChange={(e) => setReplaces((a) => a.map((x, k) => (k === i ? { ...x, new: String(e.target.value) } : x)))}
+                renderValue={(v) => (v ? docs.find((d) => d.id === v)?.name ?? v : t('changes.replaceNew'))}>
+                {docs.map((d) => <MenuItem key={d.id} value={d.id} sx={{ fontSize: 12 }}>{d.name}</MenuItem>)}
+              </Select>
+              <Button size="small" sx={{ textTransform: 'none' }} onClick={() => setReplaces((a) => a.filter((_, k) => k !== i))}>{t('changes.removeReplace')}</Button>
+            </Box>
+          ))}
           <Box sx={{ display: 'flex', gap: 1 }}>
             <Button size="small" sx={{ textTransform: 'none' }} onClick={() => setLines((a) => [...a, ''])}>{t('changes.addChange')}</Button>
+            <Button size="small" sx={{ textTransform: 'none' }} disabled={docs.length < 2} onClick={() => setReplaces((a) => [...a, { old: '', new: '' }])}>{t('changes.addReplace')}</Button>
             <Button size="small" variant="contained" disabled={!summary.trim()} sx={{ textTransform: 'none' }}
               onClick={() => void guard(async () => {
-                await productionApi.publishRevision(ctx.die, ctx.config, makeBilingual(summary, lang),
-                  lines.filter((l) => l.trim()).map((l) => makeBilingual(l, lang)));
-                setSummary(''); setLines(['']);
-              })}>{t('changes.publish', { rev: nextRevision(newest) })}</Button>
+                setPreview(await productionApi.previewRevision(ctx.die, ctx.config, makeBilingual(summary, lang),
+                  lines.filter((l) => l.trim()).map((l) => makeBilingual(l, lang)), supersedePairs(replaces)));
+              })}>{t('changes.review', { rev: nextRevision(newest) })}</Button>
           </Box>
         </Paper>
       )}
+      <Dialog open={preview !== null} onClose={() => setPreview(null)} maxWidth="md" fullWidth>
+        <DialogTitle sx={{ fontSize: 15 }}>{t('changes.reviewTitle', { rev: preview?.number ?? '' })}</DialogTitle>
+        <DialogContent data-testid="changes-preview">
+          {preview && !preview.will_send && <Alert severity="info" sx={{ mb: 1, fontSize: 12.5 }}>{t('changes.cannotMail')}</Alert>}
+          <Typography sx={{ fontSize: 12, color: 'var(--text-3)' }}>{t('changes.recipients', { count: preview?.recipients.length ?? 0 })}</Typography>
+          <Box sx={{ display: 'flex', gap: 0.5, flexWrap: 'wrap', my: 0.5 }}>
+            {(preview?.recipients ?? []).map((r) => <Chip key={r.email} size="small" label={`${r.email} · ${t(`role.${r.role}`, { defaultValue: r.role })}`} sx={{ fontSize: 11 }} />)}
+          </Box>
+          <Typography sx={{ fontSize: 12, color: 'var(--text-3)', mt: 1 }}>{t('changes.subject')}</Typography>
+          <Typography sx={{ fontSize: 13, fontWeight: 600 }}>{preview?.subject}</Typography>
+          <Box component="pre" sx={{ mt: 1, p: 1, bgcolor: 'var(--panel)', border: '1px solid var(--line-soft)', borderRadius: 1, fontSize: 12, whiteSpace: 'pre-wrap',
+            wordBreak: 'break-word', maxHeight: 320, overflow: 'auto', fontFamily: 'inherit' }}>{preview?.body}</Box>
+        </DialogContent>
+        <DialogActions>
+          <Button size="small" sx={{ textTransform: 'none' }} onClick={() => setPreview(null)}>{t('changes.cancel')}</Button>
+          <Button size="small" variant="contained" sx={{ textTransform: 'none' }}
+            onClick={() => void guard(async () => {
+              await productionApi.publishRevision(ctx.die, ctx.config, makeBilingual(summary, lang),
+                lines.filter((l) => l.trim()).map((l) => makeBilingual(l, lang)), supersedePairs(replaces));
+              setSummary(''); setLines(['']); setReplaces([]); setPreview(null);
+            })}>{t('changes.sendPublish', { rev: preview?.number ?? '' })}</Button>
+        </DialogActions>
+      </Dialog>
       <Typography sx={{ fontSize: 12, color: 'var(--text-3)' }}>{t('changes.current', { rev: currentRevision })}</Typography>
       {sorted.length === 0 && <Typography sx={{ fontSize: 13, color: 'var(--text-4)' }}>{t('changes.none')}</Typography>}
       {sorted.map((r) => (
@@ -82,6 +125,22 @@ const ChangesPanel: React.FC<{ revisions: Revision[]; currentRevision: string; c
                 tref={{ entity: 'revision', entity_id: r.number, field: `changes.${i}` }} onChanged={ctx.reload} />
             </Box>
           ))}
+          {(r.files?.new.length ?? 0) > 0 && (
+            <Typography sx={{ fontSize: 12, mt: 0.75 }} data-testid="rev-new-files">{t('changes.newFiles')}: {r.files!.new.map((f) => f.name).join(', ')}</Typography>
+          )}
+          {(r.files?.superseded.length ?? 0) > 0 && (
+            <Box sx={{ mt: 0.5 }} data-testid="rev-superseded-files">
+              <Typography sx={{ fontSize: 12, fontWeight: 700, color: '#d97706' }}>{t('changes.superseded')}</Typography>
+              {r.files!.superseded.map((f) => (
+                <Typography key={f.doc_id} sx={{ fontSize: 12 }}>{f.name}{f.replaced_by ? ` → ${f.replaced_by.name}` : ''}</Typography>
+              ))}
+            </Box>
+          )}
+          {r.alert && (
+            <Typography sx={{ fontSize: 11, color: 'var(--text-4)', mt: 0.75 }} data-testid="rev-alert">
+              {t('changes.alertLine', { date: r.alert.sent_at.slice(0, 16).replace('T', ' '), ...alertSummary(r.alert) })}
+            </Typography>
+          )}
         </Paper>
       ))}
     </Box>

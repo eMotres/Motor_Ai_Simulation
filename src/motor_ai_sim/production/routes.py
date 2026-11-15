@@ -23,7 +23,7 @@ from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import Response, StreamingResponse
 
 from motor_ai_sim import auth, model3d, users
-from motor_ai_sim.production import bom_xlsx, store, models, access, unread, project_link
+from motor_ai_sim.production import bom_xlsx, store, models, access, unread, project_link, revision_alert
 from motor_ai_sim.production.access import (
     require_member, require_member_with_full_view,
     require_editor, require_editor_with_full_view,
@@ -2064,20 +2064,80 @@ def list_revisions(request: Request, die: str, config: str):
     return store.load_file(die, config, "revisions.json")
 
 
-@router.post("/{die}/{config}/revisions")
-async def publish_revision(request: Request, die: str, config: str):
-    user, _production = require_editor_with_full_view(request, die, config)
-    body = await _json_or_form(request)
+def _revision_inputs(body: Any) -> tuple:
+    """(summary, changes, supersedes) of a publish / preview request, normalized; 400 for a malformed one."""
     summary = body.get("summary") if isinstance(body, dict) else {}
     changes = body.get("changes") if isinstance(body, dict) else []
+    supersedes = (body.get("supersedes") if isinstance(body, dict) else None) or []
     if not isinstance(summary, dict):
         raise HTTPException(status_code=400, detail="Revision summary required")
     if not isinstance(changes, list):
         changes = []
+    if not isinstance(supersedes, list) or not all(isinstance(x, dict) for x in supersedes):
+        raise HTTPException(status_code=400, detail="supersedes must be a list of {old_doc_id, new_doc_id}")
     summary_norm = models.ensure_translated(models.normalize_bilingual(summary))
-    changes_norm = [models.ensure_translated(models.normalize_bilingual(c)) for c in changes]
-    revision = _publish_revision(die, config, user, summary_norm, changes_norm)
-    return revision
+    changes_norm = []
+    for c in changes:
+        n = models.ensure_translated(models.normalize_bilingual(c))
+        if isinstance(c, dict) and c.get("part_id"):
+            n["part_id"] = str(c["part_id"])[:60]
+        changes_norm.append(n)
+    return summary_norm, changes_norm, supersedes
+
+
+def _revision_files(die: str, config: str, existing: list, supersedes: list, *, number: str) -> dict:
+    """The files a revision brings: ``new`` (non-internal documents uploaded since the previous revision, or all of them for the first),
+    ``superseded`` (old file -> the new one that replaces it) and ``released`` (every non-internal document now: from now on a change
+    to any of them needs a revision).  Raises ValueError with a plain sentence for a bad ``supersedes`` pair."""
+    docs = [d for d in (store.load_file(die, config, "documents.json").get("documents") or []) if isinstance(d, dict)]
+    by_id = {d.get("id"): d for d in docs}
+    last = max((str(r.get("date") or "") for r in existing if isinstance(r, dict)), default="")
+    sup_rows, replaced_new, replaced_old = [], set(), set()
+    for pair in supersedes:
+        old, new = by_id.get(str(pair.get("old_doc_id"))), by_id.get(str(pair.get("new_doc_id")))
+        if old is None or new is None or old is new:
+            raise ValueError("supersedes: both documents must exist and differ (old %r, new %r)" % (pair.get("old_doc_id"), pair.get("new_doc_id")))
+        if old.get("status") == "superseded":
+            raise ValueError("supersedes: %s is already superseded" % old.get("name"))
+        if old.get("id") in replaced_old:
+            raise ValueError("supersedes: %s is replaced twice" % old.get("name"))
+        replaced_old.add(old.get("id"))
+        replaced_new.add(new.get("id"))
+        sup_rows.append({"doc_id": old.get("id"), "file_id": old.get("file_id"), "name": old.get("name"),
+                         "version": models.file_version(old.get("name")), "part_id": old.get("part_id"),
+                         "replaced_by": {"doc_id": new.get("id"), "name": new.get("name"), "version": models.file_version(new.get("name"))}})
+    new_rows = [{"doc_id": d.get("id"), "file_id": d.get("file_id"), "name": d.get("name"), "version": models.file_version(d.get("name")),
+                 "part_id": d.get("part_id")}
+                for d in docs if not d.get("internal") and d.get("status") != "superseded"
+                and (not last or str(d.get("uploaded_at") or "") > last) and d.get("id") not in replaced_old]
+    released = [d.get("id") for d in docs if not d.get("internal")]
+    return {"new": new_rows, "superseded": sup_rows, "released": released}
+
+
+@router.post("/{die}/{config}/revisions/preview")
+async def preview_revision(request: Request, die: str, config: str):
+    """The exact mail the publish would send and who gets it - nothing is written or sent (owner rule: he sees the final text and the
+    recipients first; publishing is sending)."""
+    user, production = require_editor_with_full_view(request, die, config)
+    summary, changes, supersedes = _revision_inputs(await _json_or_form(request))
+    existing = store.load_file(die, config, "revisions.json").get("revisions", [])
+    number = models.next_revision_number(existing)
+    try:
+        files = _revision_files(die, config, existing, supersedes, number=number)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    revision = models.normalize_revision({"number": number, "author_email": _email(user), "summary": summary, "changes": changes, "files": files})
+    return revision_alert.preview(die, config, production, revision)
+
+
+@router.post("/{die}/{config}/revisions")
+async def publish_revision(request: Request, die: str, config: str):
+    user, _production = require_editor_with_full_view(request, die, config)
+    summary_norm, changes_norm, supersedes = _revision_inputs(await _json_or_form(request))
+    try:
+        return await run_in_threadpool(_publish_revision, die, config, user, summary_norm, changes_norm, supersedes=supersedes)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
 
 
 @router.post("/{die}/{config}/revisions/{rev_number}/ack")
@@ -2104,20 +2164,54 @@ async def ack_revision(request: Request, die: str, config: str, rev_number: str)
     raise HTTPException(status_code=404, detail="Revision not found")
 
 
-def _publish_revision(die: str, config: str, user: dict, summary: dict, changes: list) -> dict:
+def _publish_revision(die: str, config: str, user: dict, summary: dict, changes: list, *, supersedes: Optional[list] = None,
+                      notify: bool = True) -> dict:
+    """Publish a revision.  PUBLISHING IS SENDING (owner 2026-11-15): unless ``notify`` is False (tests of the bookkeeping only) the alert
+    goes to every member by mail and into the Discussion, and the record of who was mailed is stored on the revision and in the audit.
+    Marks the files it supersedes (kept, archived).  Server-side scripts and bulk tools publish through this function too."""
     existing = store.load_file(die, config, "revisions.json").get("revisions", [])
     number = models.next_revision_number(existing)
+    files = _revision_files(die, config, existing, supersedes or [], number=number)
     revision = models.normalize_revision({
         "number": number,
         "author_email": _email(user),
         "summary": summary,
         "changes": changes,
+        "files": files,
     })
     store.mutate_file(die, config, "revisions.json", lambda d: d.setdefault("revisions", []).append(revision))
     store.mutate_file(die, config, "production.json", lambda d: d.update({"current_revision": number, "updated_at": _now()}))
+    if files["superseded"]:
+        _mark_superseded(die, config, files["superseded"], number)
     _touch(die, config)
     _audit(_email(user), die, config, "publish_revision", "revision", number, {"revision": revision})
+    if notify:
+        production = store.load_file(die, config, "production.json")
+        alert = revision_alert.deliver(die, config, production, revision, _email(user))
+        def attach(d):                                   # returns None: json_store would take a return value as the new file content
+            for r in d.get("revisions", []):
+                if isinstance(r, dict) and str(r.get("number")) == number:
+                    r["alert"] = alert
+
+        store.mutate_file(die, config, "revisions.json", attach)
+        _audit(_email(user), die, config, "revision_alert", "revision", number,
+               {"recipients": alert["recipients"], "subject": alert["subject"], "thread_id": alert.get("thread_id")})
+        revision = {**revision, "alert": alert}
     return revision
+
+
+def _mark_superseded(die: str, config: str, rows: list, number: str) -> None:
+    """Archive the replaced documents as "superseded by ..." (the file stays; downloads warn)."""
+    by = {r["doc_id"]: r for r in rows}
+
+    def mut(d):
+        for doc in d.get("documents", []):
+            r = by.get(doc.get("id")) if isinstance(doc, dict) else None
+            if r:
+                doc["status"] = "superseded"
+                doc["archived_at"] = _now()
+                doc["superseded_by"] = {**r["replaced_by"], "revision": number}
+    store.mutate_file(die, config, "documents.json", mut)
 
 
 def _publish_revision_from_proposal(die: str, config: str, user: dict, proposal: dict) -> str:

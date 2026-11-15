@@ -773,6 +773,38 @@ def normalize_proposal(raw: dict) -> dict:
     }
 
 
+_FILE_VERSION_RX = re.compile(r"[_\-\s]v(\d+(?:\.\d+)*)(?=\.[A-Za-z0-9]+$|$)", re.IGNORECASE)
+
+
+def file_version(name: str) -> Optional[str]:
+    """The version a file name carries (``shaft_40_v1.3.pdf`` -> ``1.3``), or None.  File names carry their version (owner 2026-11-15)."""
+    m = _FILE_VERSION_RX.search(str(name or ""))
+    return m.group(1) if m else None
+
+
+def _norm_change(c: Any) -> dict:
+    out = normalize_bilingual(c)
+    pid = (c or {}).get("part_id") if isinstance(c, dict) else None
+    if pid:
+        out["part_id"] = str(pid)[:60]
+    return out
+
+
+def _norm_files(raw: Any) -> dict:
+    """``files`` of a revision: ``new`` / ``superseded`` rows ({doc_id, file_id, name, version, part_id, replaced_by...}) and ``released``
+    (ids of every non-internal document that existed when the revision was published: the set a later change may not touch)."""
+    if not isinstance(raw, dict):
+        raw = {}
+
+    def rows(key):
+        v = raw.get(key)
+        return [dict(x) for x in v if isinstance(x, dict)] if isinstance(v, list) else []
+
+    rel = raw.get("released")
+    return {"new": rows("new"), "superseded": rows("superseded"),
+            "released": [str(x) for x in rel] if isinstance(rel, list) else []}
+
+
 def normalize_revision(raw: dict) -> dict:
     if not isinstance(raw, dict):
         raw = {}
@@ -782,17 +814,24 @@ def normalize_revision(raw: dict) -> dict:
     acks = raw.get("acknowledgements") or []
     if not isinstance(acks, list):
         acks = []
-    return {
+    extra: dict = {}
+    if isinstance(raw.get("files"), dict):
+        extra["files"] = _norm_files(raw["files"])
+    if isinstance(raw.get("alert"), dict):
+        extra["alert"] = raw["alert"]
+    out = {
         "number": str(raw.get("number") or "1.0"),
         "date": str(raw.get("date") or _now()),
         "author_email": str(raw.get("author_email") or ""),
         "summary": normalize_bilingual(raw.get("summary")),
-        "changes": [normalize_bilingual(c) for c in changes],
+        "changes": [_norm_change(c) for c in changes],
         "acknowledgements": [{
             "email": str(a.get("email") or ""),
             "time": str(a.get("time") or _now()),
         } for a in acks if isinstance(a, dict) and a.get("email")],
     }
+    out.update(extra)
+    return out
 
 
 def bump_revision(rev: str) -> str:

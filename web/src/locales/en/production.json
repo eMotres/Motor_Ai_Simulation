@@ -343,7 +343,21 @@
     "ackedBy": "Acknowledged by {count}",
     "date": "{date}",
     "by": "by {email}",
-    "tip": "Acknowledge each revision before you build to it."
+    "tip": "Acknowledge each revision before you build to it.",
+    "review": "Review and send revision {rev}",
+    "reviewTitle": "Revision {rev}: this message is sent when you publish",
+    "recipients": "{count, plural, one {# recipient} other {# recipients}}",
+    "subject": "Subject",
+    "cancel": "Cancel",
+    "sendPublish": "Send and publish {rev}",
+    "cannotMail": "This server cannot send e-mail: members will see the notice in the Discussion only.",
+    "addReplace": "Replaces a file",
+    "replaceOld": "Old file",
+    "replaceNew": "New file",
+    "removeReplace": "Remove",
+    "newFiles": "New files",
+    "superseded": "Superseded - do not use",
+    "alertLine": "Sent {date}: {sent} of {total} mailed{failed, plural, =0 {} other {, # failed}}{notConfigured, plural, =0 {} other {, # not sent (no mail on this server)}}"
   },
   "procurement": {
     "colStatus": "Procurement",

@@ -343,7 +343,21 @@
     "ackedBy": "已确认：{count}",
     "date": "{date}",
     "by": "发布人 {email}",
-    "tip": "请在按新版本生产前确认每个版本。"
+    "tip": "请在按新版本生产前确认每个版本。",
+    "review": "检查并发送版本 {rev}",
+    "reviewTitle": "版本 {rev}：发布时将发送此消息",
+    "recipients": "{count, plural, other {# 位收件人}}",
+    "subject": "主题",
+    "cancel": "取消",
+    "sendPublish": "发送并发布 {rev}",
+    "cannotMail": "此服务器无法发送电子邮件：成员只会在讨论区看到通知。",
+    "addReplace": "替换文件",
+    "replaceOld": "旧文件",
+    "replaceNew": "新文件",
+    "removeReplace": "移除",
+    "newFiles": "新文件",
+    "superseded": "已作废 - 请勿使用",
+    "alertLine": "发送于 {date}：已邮件通知 {sent}/{total}{failed, plural, =0 {} other {，失败 #}}{notConfigured, plural, =0 {} other {，未发送 # （此服务器无邮件）}}"
   },
   "procurement": {
     "colStatus": "采购状态",

@@ -498,3 +498,29 @@ test('Proposals strings: the tab and creation strings are gone from both locales
   assert.doesNotMatch(en.titleTip, /proposal/i);
   assert.doesNotMatch(zh.titleTip, /建议|提案/);
 });
+
+// -- revision alerts (owner 2026-11-15) -------------------------------------------------------------------------------------
+test('replace rows: only complete pairs, an old file once, never a file replacing itself', () => {
+  assert.deepEqual(H.supersedePairs([{ old: 'a', new: 'b' }, { old: 'a', new: 'c' }, { old: '', new: 'd' }, { old: 'e', new: 'e' }, { old: 'f', new: '' }, { old: 'g', new: 'h' }]),
+    [{ old_doc_id: 'a', new_doc_id: 'b' }, { old_doc_id: 'g', new_doc_id: 'h' }]);
+  assert.deepEqual(H.supersedePairs([]), []);
+});
+
+test('replaceable files: not internal, not superseded, not a step picture', () => {
+  const docs = [{ id: 1 }, { id: 2, internal: true }, { id: 3, status: 'superseded' }, { id: 4, step_id: 's1' }, { id: 5, internal: false }];
+  assert.deepEqual(H.replaceableDocs(docs).map((d) => d.id), [1, 5]);
+});
+
+test('alert summary counts sent, failed and not-sent mails', () => {
+  assert.deepEqual(H.alertSummary(undefined), { total: 0, sent: 0, failed: 0, notConfigured: 0 });
+  assert.deepEqual(H.alertSummary({ recipients: [{ mail: 'sent' }, { mail: 'failed' }, { mail: 'not_configured' }, { mail: 'sent' }] }), { total: 4, sent: 2, failed: 1, notConfigured: 1 });
+});
+
+test('every new Changes string exists in EN and zh-CN', async () => {
+  const { readFileSync } = await import('node:fs');
+  const rd = (l) => JSON.parse(readFileSync(new URL(`../../../locales/${l}/production.json`, import.meta.url), 'utf8')).changes;
+  const en = rd('en'), zh = rd('zh-CN');
+  assert.deepEqual(Object.keys(en).sort(), Object.keys(zh).sort());
+  for (const k of ['review', 'reviewTitle', 'recipients', 'subject', 'cancel', 'sendPublish', 'cannotMail', 'addReplace', 'replaceOld', 'replaceNew', 'newFiles', 'superseded', 'alertLine'])
+    assert.ok(en[k] && zh[k], k);
+});

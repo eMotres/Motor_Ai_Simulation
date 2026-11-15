@@ -410,3 +410,25 @@ and the GUI shows it. No default number is shipped.
   t_te,min, enforce minimum thickness) with tests.
 - P1 adds the per-zone airfoil variables and the manufacturing constraints; P4 optimises on the manufactured shape with the tolerance-robust objective
   and the structural constraint; P3 shows the per-zone limits and their cost.
+
+### 9.8 Standard production route and blade count (owner request, checked 2026-11-15)
+Owner: mass-produced props of this class use injection moulding of plastic, standard 10 in props look three-bladed; check, and compare 2 and 3 blades.
+Sources are retailer pages, vendor pages and blogs (search summaries), not tests; no Chinese factory-specific source was found.
+- **Process:** injection-moulded glass-fibre-reinforced nylon is the common material for 10 in multirotor props: HQProp MacroQuad 10x5x3 and 10x5.5x3
+  (3 blades, glass-fibre-reinforced nylon, https://www.readymaderc.com/products/details/86483-hqprop-hq-macroquad-prop-10x5-5x3-1cw-1ccw-black-glass-fiber-reinforced-nylon),
+  Gemfan 1051 folding in 2- or 3-blade versions (https://www.myfpvstore.com/nzwi), Gemfan 1050W-3 (reinforced glass-fibre nylon, 3 blades);
+  most FPV props are polycarbonate, reinforced nylon or a blend (https://www.droneblog.com/2-blade-vs-3-blade-prop-drone-which-is-better/ and retailer guides).
+  APC, a long-established maker, injection-moulds long-glass-fibre composite (fibres stay oriented along the span), mould halves milled on CNC machines, only the
+  shaft hole is drilled afterwards (https://www.apcprop.com/technical-information/manufacturing/). A PA66-CF40 compound supplier markets its grade for
+  propellers with blade thickness below 1 mm (vendor claim, https://www.carbonele.com/pa66-cf40-compounds-for-drone-propellers). So injection moulding with CNC-milled steel moulds
+  is the standard route; compression-moulded carbon prepreg is the premium route (larger props, e.g. Mejzlik-type makers).
+- **Blade count:** 3-blade 10 in props are common in the FPV / cinelifter class, but 2-blade versions of the same size exist (Gemfan 1051 both). Our own catalogue
+  has both at 10 and 13 in: 3-blade T-Motor FPV 10x5, HQ1050-3 (bench propeller), FPV 13x10 and 13x12; 2-blade CF 10x3.3 and P13x4.4 (config/propellers).
+  Claims on efficiency disagree and none comes from a controlled same-diameter test in the sources found: one trade source says three blades give the same
+  or slightly better efficiency and about 10-15 % more thrust at the same diameter (circuitdigest.com article), another argues efficiency rises as blade count
+  falls (droneblog.com); neither gives data. Treat both as unverified.
+- **Consequence for the designer:** blade count is a design variable with the values {2, 3} (not a fixed choice). Fair comparison rule: compare 2 and 3 blades
+  at EQUAL diameter and EQUAL thrust (or equal shaft power), each re-optimised (chord and twist), because simply adding a blade at the same chord changes the
+  solidity. The comparison reports thrust per shaft watt, the air speed at the motor band, tip speed, root stress and the moulding constraints (a 3-blade mould is
+  a bigger, more complex tool; the number of blades changes the hub). The 2-vs-3 result of the BEMT is a model value (generic polars, not validated) until the
+  thrust-stand data exist; the stand should test one 2-blade and one 3-blade prop of the same diameter first.

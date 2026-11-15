@@ -104,6 +104,100 @@ def _name_map() -> Dict[str, str]:
     return {}
 
 
+# ── per-die / per-configuration map (2026-11-15) ─────────────────────────────────────────────────────────────────────
+# The global ``map:`` above is one file for every machine.  A model whose Fusion variables mean something else (the CIANO10
+# 12_40: Fusion's ``wire_height`` is OUR ``wire_width``, Fusion's ``num_wires_per_slot`` counts the strip COLUMNS = our
+# ``wire_split``) needs its own entries, WITHOUT touching any other die.  Same file, optional sections:
+#
+#   dies:
+#     "<die name>":
+#       map:                       # overrides the global map for this die
+#         wire_width: wire_height                          # rename (a plain string, as in the global map)
+#         wire_spacing_x: {name: wire_spacing_x, scale: 0.6}   # ours = Fusion x scale  (export: Fusion = ours / scale)
+#         num_wires_per_slot: {const: 2}                   # no Fusion variable: this value on every import, not exported
+#         wire_omit: {const: [[1, 0]]}                     # a list of [row, col] becomes the wire_omit integer
+#         slot_hs: {ignore: true}                          # a Fusion variable we do not take / do not export
+#       configs:
+#         "<configuration>":
+#           map: {...}                                     # overrides the die's map for this configuration
+#
+# No ``dies`` section / a die that is not named = exactly the global behaviour (bit for bit).
+_SPEC_KEYS = {"name", "scale", "const", "ignore"}
+#: optional geometry keys a die may not carry yet (the server owns their schema): importable although absent from the live geometry
+_OPTIONAL_KEYS = frozenset({"wire_bore_margin", "wire_omit", "k_end_by_turns"})
+
+
+def _map_doc() -> Dict[str, Any]:
+    try:
+        if _map_file().is_file():
+            d = yaml.safe_load(_map_file().read_text(encoding="utf-8")) or {}
+            return d if isinstance(d, dict) else {}
+    except Exception:      # noqa: BLE001
+        log.warning("fusion_param_map.yaml unreadable — using identity names", exc_info=True)
+    return {}
+
+
+def _spec_of(key: str, raw: Any) -> Optional[Dict[str, Any]]:
+    """One map entry -> ``{name, scale, const(+has_const), ignore}`` or None when unusable (skipped, never a 500)."""
+    if isinstance(raw, str):
+        return {"name": raw, "scale": 1.0} if _NAME_RE.match(raw) else None
+    if not isinstance(raw, dict) or not (set(raw) <= _SPEC_KEYS):
+        return None
+    if raw.get("ignore"):
+        return {"ignore": True}
+    if "const" in raw:
+        c = raw["const"]
+        if key == "wire_omit" and isinstance(c, (list, tuple)):
+            from motor_ai_sim.winding import wire_omit_mask
+            try:
+                c = wire_omit_mask([(int(a), int(b)) for a, b in c])
+            except (TypeError, ValueError):
+                return None
+        if isinstance(c, bool) or not isinstance(c, (int, float)):
+            return None
+        return {"const": float(c), "has_const": True}
+    name = raw.get("name", key)
+    try:
+        scale = float(raw.get("scale", 1.0))
+    except (TypeError, ValueError):
+        return None
+    if not (isinstance(name, str) and _NAME_RE.match(name)) or not scale or scale != scale:
+        return None
+    return {"name": name, "scale": scale}
+
+
+def _specs(die: Optional[str] = None, config: Optional[str] = None) -> Dict[str, Dict[str, Any]]:
+    """our key -> spec, the global map first, then the die's, then the configuration's (later wins).  ``die`` / ``config``
+    default to the loaded configuration."""
+    doc = _map_doc()
+    base = doc.get("map") if isinstance(doc.get("map"), dict) else {k: v for k, v in doc.items() if k not in ("dies", "map")}
+    out: Dict[str, Dict[str, Any]] = {}
+    for k, v in (base or {}).items():
+        s = _spec_of(str(k), v) if v else None
+        if s:
+            out[str(k)] = s
+    dies = doc.get("dies") if isinstance(doc.get("dies"), dict) else {}
+    if dies:
+        if die is None and config is None:
+            tgt = _coil_target()
+            die, config = ((tgt or {}).get("die"), (tgt or {}).get("config"))
+        blk = dies.get(die) if isinstance(dies.get(die), dict) else None
+        layers = []
+        if blk:
+            layers.append(blk.get("map"))
+            cfgs = blk.get("configs") if isinstance(blk.get("configs"), dict) else {}
+            if isinstance(cfgs.get(config), dict):
+                layers.append(cfgs[config].get("map"))
+        for layer in layers:
+            for k, v in (layer or {}).items() if isinstance(layer, dict) else []:
+                s = _spec_of(str(k), v)
+                if s:
+                    out[str(k)] = s
+                else:
+                    out.pop(str(k), None)          # an unusable override must not leave the global name behind
+    return out
+
+
 #: Primary geometry keys kept OUT of the Fusion export on purpose.
 #
 #: WHY.  `slot_hs` (user 2026-09-14: "throw out slot_hs, we don't use it") is
@@ -131,12 +225,17 @@ def _rows():
     from motor_ai_sim.routes.freecad import _params_rows
     from motor_ai_sim.routes._validation import DERIVED_GEOMETRY_NAMES
     geo = dict(get_config().get("geometry") or {})
-    m = _name_map()
+    specs = _specs()
     out = []
     for k, v, unit, desc in _params_rows(geo):
         if k in DERIVED_GEOMETRY_NAMES or k in FUSION_EXCLUDED_NAMES:
             continue
-        out.append((m.get(k, k), k, v, ("mm" if unit == "mm" else ""), desc))
+        s = specs.get(k)
+        if s is not None and (s.get("ignore") or s.get("has_const")):
+            continue                                # no Fusion variable for this key on this machine
+        name = (s or {}).get("name", k)
+        scale = (s or {}).get("scale", 1.0)
+        out.append((name, k, round(v / scale, 9) if scale != 1.0 else v, ("mm" if unit == "mm" else ""), desc))
     return out
 
 
@@ -259,7 +358,9 @@ async def import_params(file: UploadFile = File(...), dry_run: int = 0,
                             "Name, Unit, Expression, Value, Comment, Favorite "
                             "(Name and Expression are the ones actually read) "
                             "— got %s" % (rdr.fieldnames,))
-    inv = {v: k for k, v in _name_map().items()}       # Fusion name -> our key
+    specs = _specs()
+    inv = {s["name"]: (k, s["scale"]) for k, s in specs.items() if s.get("name")}   # Fusion name -> (our key, scale)
+    ignored_names = {k for k, s in specs.items() if s.get("ignore")}
     geo = dict(get_config().get("geometry") or {})
     from motor_ai_sim.routes._validation import DERIVED_GEOMETRY_NAMES
     vals: Dict[str, float] = {}
@@ -278,7 +379,9 @@ async def import_params(file: UploadFile = File(...), dry_run: int = 0,
         fname = str(r.get(cols["name"]) or "").strip()
         if not fname:
             continue
-        key = inv.get(fname, fname)
+        key, _scale = inv.get(fname, (fname, 1.0))
+        if key in ignored_names:
+            continue
         if key in CONFIG_COIL_KEYS or key == "coil_straight_len":
             unit = r.get(cols.get("unit", ""), "")
             v, why = _parse_expression(r.get(cols["expression"]), unit)
@@ -291,7 +394,7 @@ async def import_params(file: UploadFile = File(...), dry_run: int = 0,
             else:
                 coil_vals[key] = v
             continue
-        if key not in geo:
+        if key not in geo and key not in _OPTIONAL_KEYS:
             unknown.append(fname); continue
         if key in DERIVED_GEOMETRY_NAMES:
             derived.append(key); continue
@@ -300,7 +403,11 @@ async def import_params(file: UploadFile = File(...), dry_run: int = 0,
         v, why = _parse_expression(r.get(cols["expression"]), r.get(cols.get("unit", ""), ""))
         if v is None:
             refused[fname] = why; continue
-        vals[key] = v
+        vals[key] = v * _scale if _scale != 1.0 else v
+    # keys with NO Fusion variable on this machine (``const``): this value on every import
+    consts = {k: s["const"] for k, s in specs.items() if s.get("has_const")}
+    for k, c in consts.items():
+        vals[k] = c
     if coil_straight_len is not None and "coil_straight_extra" not in coil_vals:
         _L = vals.get("motor_length", geo.get("motor_length"))
         try:
@@ -312,17 +419,21 @@ async def import_params(file: UploadFile = File(...), dry_run: int = 0,
         if _why:
             refused[_k] = _why
             coil_vals.pop(_k)
-    changed = {k: v for k, v in vals.items() if abs(float(geo[k]) - float(v)) > 1e-5}
+    changed = {k: v for k, v in vals.items()
+               if geo.get(k) is None or abs(float(geo[k]) - float(v)) > 1e-5}
     out: Dict[str, Any] = {
         "ok": True, "dry_run": bool(dry_run),
         "applied": {k: changed[k] for k in sorted(changed)},
-        "before": {k: geo[k] for k in sorted(changed)},
+        "before": {k: geo.get(k) for k in sorted(changed)},
         "unchanged": sorted(set(vals) - set(changed)),
         "derived_ignored": sorted(set(derived)),
         "excluded_ignored": sorted(set(excluded)),
         "unknown": sorted(unknown),
         "refused": refused,
     }
+    if consts or any(s.get("scale", 1.0) != 1.0 for s in specs.values()):
+        out["map"] = {"constants": {k: consts[k] for k in sorted(consts)},
+                      "scaled": {k: s["scale"] for k, s in sorted(specs.items()) if s.get("scale", 1.0) != 1.0}}
     coil_target = _coil_target() if coil_vals else None
     coil_changed: Dict[str, float] = {}
     if coil_vals:

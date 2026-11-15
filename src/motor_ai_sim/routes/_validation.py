@@ -356,6 +356,16 @@ SCHEMA_FALLBACK: Dict[str, dict] = {
             "no strip; row 0 = under the yoke, column 0 = next to the tooth. 0 = every position filled. "
             "Needs wire_parallel = 1; a row keeps at least one strip. Example: row 1, column 0 empty = 256"),
     },
+    # OPT-IN (2026-11-15): 1 = the end-winding factor counts the coil's real turns (rows x strips - empty positions).
+    # Absent / 0 = the layer-count rule every stored machine was billed with.
+    "k_end_by_turns": {
+        "label": "End turns by turns", "unit": "", "type": "int",
+        "min": 0, "max": 1, "step": 1, "group": "winding", "unset_ok": True,
+        "description": (
+            "1 = the end-winding factor (phase resistance, copper loss, copper mass) counts the coil's real series turns "
+            "(wire rows x strips - empty positions) and shares the two leads over them; 0 / blank = the layer-count rule "
+            "of the stored machines. Only matters when wire_split > 1"),
+    },
     "sleeve_thickness": {
         "label": "Sleeve thickness", "unit": "mm", "type": "float",
         "min": 0.0, "max": 20.0, "step": 0.05, "group": "rotor",

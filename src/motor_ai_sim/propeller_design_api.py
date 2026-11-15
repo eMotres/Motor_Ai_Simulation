@@ -160,6 +160,34 @@ def sweep(vec: Any, op: str, variable: str, values: Optional[List[Any]] = None, 
     return {"variable": variable, "operating_point": op, "rows": rows, "banner": pd.BANNER}
 
 
+def curve(vec: Any, op: str, n: int = 11, v_inf: float = 0.0) -> Dict[str, Any]:
+    """Thrust, torque and power against rpm for the candidate (0.4 to 1.3 x the motor's stored rated rpm), with the motor torque limit."""
+    from motor_ai_sim import propeller_inflow as pi
+    d = _design()
+    v = _clean_vector(vec)
+    if op not in d.operating_points:
+        raise ApiProblem(422, "unknown operating point %r; known: %s" % (op, sorted(d.operating_points)))
+    if not (isinstance(n, int) and not isinstance(n, bool) and 3 <= n <= 21):
+        raise ApiProblem(422, "n must be an integer between 3 and 21")
+    if not (isinstance(v_inf, (int, float)) and math.isfinite(v_inf) and 0.0 <= v_inf <= 60.0):
+        raise ApiProblem(422, "v_inf must be a number between 0 and 60 m/s")
+    viol = pd.check_candidate(d, v)
+    if viol:
+        raise ApiProblem(422, {"message": "invalid candidate", "violations": viol})
+    o = d.operating_points[op]
+    prop = pd.build_propeller(d, v)
+    air = d.raw["air"]
+    rows = []
+    for i in range(n):
+        rpm = o.rated_rpm_ref * (0.4 + 0.9 * i / (n - 1))
+        f = pi.get_model("bemt-1").evaluate(pi.InflowRequest(propeller=prop, rpm=rpm, rho=float(air["rho_kg_m3"]), v_inf_ms=float(v_inf),
+                                                              r_min_m=0.0, r_max_m=o.motor_radius_mm / 1000.0, air_temp_c=float(air["temp_c"])))
+        rows.append({"rpm": rpm, "thrust_N": f.thrust_N, "torque_Nm": f.torque_Nm, "shaft_power_W": f.shaft_power_W,
+                     "air_speed_ms": f.air_speed_ms, "tip_mach": pd._tip_mach(prop.blade.tip_radius_m, rpm, float(air["temp_c"]))})
+    return {"operating_point": op, "torque_limit_Nm": o.torque_limit_Nm, "rated_rpm_ref": o.rated_rpm_ref, "rows": rows,
+            "tip_mach_limit": d.tip_mach_limit, "banner": pd.BANNER}
+
+
 # ---------------------------------------------------------------------------
 # Drafts: the caller's own workspace
 # ---------------------------------------------------------------------------

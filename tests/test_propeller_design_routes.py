@@ -91,6 +91,19 @@ def test_evaluate():
     assert fwd["operating"]["v_inf_ms"] == 10.0
 
 
+def test_curve_against_rpm_with_the_motor_limit():
+    c = client()
+    j = c.post(B + "/curve", json={"vector": seed(), "op": "L12", "n": 5}).json()
+    assert j["torque_limit_Nm"] == 0.64 and len(j["rows"]) == 5 and j["banner"] == pd.BANNER
+    rpms = [r["rpm"] for r in j["rows"]]
+    assert rpms == sorted(rpms) and rpms[0] == pytest.approx(0.4 * 13628.1) and rpms[-1] == pytest.approx(1.3 * 13628.1)
+    t = [r["torque_Nm"] for r in j["rows"]]
+    assert t == sorted(t) and all(x > 0 for x in t)
+    assert j["rows"][-1]["thrust_N"] > j["rows"][0]["thrust_N"]
+    for body in ({"n": 2}, {"n": 50}, {"n": True}, {"op": "L99"}, {"v_inf_ms": -1}):
+        assert c.post(B + "/curve", json={"vector": seed(), "op": "L12", **body}).status_code == 422, body
+
+
 def test_sweep_one_variable():
     c = client()
     j = c.post(B + "/sweep", json={"vector": seed(), "op": "L12", "variable": "blades", "values": [2, 3, 4]}).json()

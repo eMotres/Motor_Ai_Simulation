@@ -8,8 +8,12 @@ import { useEffect, useMemo, useState } from 'react';
 import { Alert, Box, CircularProgress, Paper, Table, TableBody, TableCell, TableHead, TableRow, Tooltip, Typography } from '@mui/material';
 import { useTranslation } from 'react-i18next';
 
+import SubTabs from '../common/SubTabs';
+import { oneOf } from '../../lib/viewMemory';
+import { useRememberedView } from '../../lib/useRememberedView';
 import { catalogRows } from '../../lib/propellersCatalog';
 import type { Quality } from '../../lib/propellersCatalog';
+import DesignerPage from './DesignerPage';
 
 const API = (import.meta.env.VITE_API_URL ?? 'http://localhost:8001') as string;
 
@@ -19,6 +23,7 @@ const QUALITY_COLOR: Record<Quality, string> = {
 
 export default function PropellersPanel() {
   const { t } = useTranslation('simulation');
+  const [view, setView] = useRememberedView<'catalog' | 'designer'>('propellers.view', 'catalog', oneOf(['catalog', 'designer'] as const));
   const [resp, setResp] = useState<unknown>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -37,7 +42,13 @@ export default function PropellersPanel() {
   );
 
   return (
-    <Box sx={{ p: 2, height: '100%', overflow: 'auto' }} data-testid="propellers-panel">
+    <Box sx={{ height: '100%', overflow: 'auto' }} data-testid="propellers-panel">
+      <Box sx={{ px: 2, pt: 1 }}>
+        <SubTabs value={view} onChange={setView} ariaLabel={t('propTabCatalog')} testId="propellers-tabs"
+          items={[{ id: 'catalog', label: t('propTabCatalog') }, { id: 'designer', label: t('propTabDesigner') }]} />
+      </Box>
+      {view === 'designer' ? <DesignerPage /> : (
+      <Box sx={{ p: 2 }}>
       <Paper variant="outlined" sx={{ p: 1.5, borderColor: 'var(--line)' }}>
         <Typography variant="subtitle1" sx={{ fontWeight: 600, mb: 1 }}>{t('propellersCatalog', { count: rows.length })}</Typography>
         {error && <Alert severity="error" sx={{ mb: 1 }}>{t('propellersLoadFailed', { error })}</Alert>}
@@ -72,6 +83,8 @@ export default function PropellersPanel() {
           </Table>
         )}
       </Paper>
+      </Box>
+      )}
     </Box>
   );
 }

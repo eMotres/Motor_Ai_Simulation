@@ -11,6 +11,7 @@
     POST /api/propellers/design/geometry      the candidate as a propeller-2 dict + per-zone manufacturing report
     POST /api/propellers/design/evaluate      blade-element evaluation at a motor's torque limit (both objectives)
     POST /api/propellers/design/sweep         the same with ONE variable changed
+    POST /api/propellers/design/curve         thrust / torque / power against rpm with the motor torque limit
     GET|PUT|DELETE /api/propellers/design/drafts[/{name}]   drafts in the CALLER'S workspace (never the shared catalog)
     The /design routes are gated like a solve (auth._GATED_PREFIX 'solve:engineer': admin while MOTRES_SOLVE_ADMIN_ONLY is on).
 
@@ -393,6 +394,14 @@ def design_sweep(body: Dict[str, Any] = Body(...)) -> Dict[str, Any]:
     try:
         return pda.sweep(body.get("vector"), str(body.get("op") or ""), str(body.get("variable") or ""), body.get("values"),
                          body.get("lo"), body.get("hi"), body.get("n", 7))
+    except pda.ApiProblem as exc:
+        raise _problem(exc)
+
+
+@router.post("/design/curve")
+def design_curve(body: Dict[str, Any] = Body(...)) -> Dict[str, Any]:
+    try:
+        return pda.curve(body.get("vector"), str(body.get("op") or ""), body.get("n", 11), body.get("v_inf_ms", 0.0))
     except pda.ApiProblem as exc:
         raise _problem(exc)
 

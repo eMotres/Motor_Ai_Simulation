@@ -432,3 +432,25 @@ Sources are retailer pages, vendor pages and blogs (search summaries), not tests
   solidity. The comparison reports thrust per shaft watt, the air speed at the motor band, tip speed, root stress and the moulding constraints (a 3-blade mould is
   a bigger, more complex tool; the number of blades changes the hub). The 2-vs-3 result of the BEMT is a model value (generic polars, not validated) until the
   thrust-stand data exist; the stand should test one 2-blade and one 3-blade prop of the same diameter first.
+
+## 10. Design base: the two 40 mm motors (owner 2026-11-15)
+
+Owner: the own propellers are designed first for our two motors, die CIANO14 40 new, configurations L12 ("40_12") and L20 ("40_20").
+Data read (read-only) from the EU catalog on 2026-11-15 through `motres-agent-catalog`; values are the stored RATED duty and the die,
+**not** re-computed here:
+
+| | L12 | L20 |
+|---|---|---|
+| stator diameter / stack length (die) | 40 mm / 12 mm | 40 mm / 20 mm |
+| rated duty (catalog) | 13 628 rpm, 0.640 N m (3-D), 0.91 kW, 48.88 A rms | 13 000 rpm, 0.82 N m, 1.11 kW, 36.97 A rms |
+| basis of the rated point (from the stored note) | propeller S1 point on the HQ1050-3 bench load line, winding 180 C | continuous point, winding 180 C, 13 inch 2-blade P13x4.4 as the cooling reference, air 40 C |
+| pack | 18 V min, 22.2 V nominal (6S) | (not read; 12S per the project name) |
+| efficiency at the rated point (catalog) | 90.7 % | 92.8 % |
+
+Consequences for the designer (stated, not decided):
+- The motor torque limit at its rated speed is the constraint of the optimiser: the propeller must absorb about 0.64 N m (L12) or 0.82 N m (L20) at the rated speed or below.
+  The rated rpm is the speed where the propeller torque meets the continuous limit, so it moves with the propeller; the catalog numbers are the references to compare with.
+- Tip speed at these rpm is high for 10-13 inch props: Mach at the tip is about 0.50 (10 in) to 0.66 (13 in) at 13 000 rpm, above the 0.6 where `bemt-1` raises `high_tip_mach` and
+  where compressibility and noise matter. The tip-speed limit of the optimiser is therefore a real constraint; its value is an owner input.
+- The motor occupies radius 20 mm (stator Ø40): the cooling band of objective 2 is r in [0, 20 mm] behind the hub (more precisely the housing radius, to be taken from the CAD).
+- The load lines on file (HQ1050-3 bench propeller for L12, P13x4.4 for L20) are the first references for the BEMT validation of A3: the catalog already holds measured tables for them.

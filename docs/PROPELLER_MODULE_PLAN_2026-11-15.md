@@ -6,6 +6,21 @@ Basis of every statement is marked: **[code]** read in this repository today, **
 **[web]** looked up in this session (link given), **[est]** an estimate of ours with no measurement behind it.
 Items marked *to confirm* must be checked against the primary source before anything is built on them.
 
+## Decision of the owner (2026-11-15) and the resulting order
+
+Owner, via the coordinator: «let us start with BEMT, and for developing our own propeller move to CFD». This plan is therefore
+ordered as two tracks:
+
+- **Track A (first): the BEMT module** - thrust, torque, axial and swirl velocity by radius, cooling air at the motor band,
+  and a calibration hook for the thrust stand. Sections 1-4 and 6A.
+- **Track B (second, later): CFD as the tool to DESIGN our own propeller** at rotating-blade level (geometry generation, mesh, solver
+  on us1, optimisation loop). It is NOT a checker run next to every BEMT result. Section 5 and 6B.
+- **What track A must already provide for track B** (the interfaces are fixed in track A so that B needs no rework): section 6C.
+
+Reading order for the review: 6A (what is built first), 6C (the contract with B), then 6B. After the coordinator's review, stage A0 may start as PRs.
+Wherever sections 1-5 below say "CFD attached later as a checker of the cooling flow", read it as superseded by this decision; the
+actuator-disc cooling case stays described only as one possible later use of the track B tools.
+
 ## 0. What exists and where it is weak
 
 **[code]** `src/motor_ai_sim/propeller.py`: catalogue of 18 propellers (`config/propellers/`; 11 `torque_measured`,
@@ -75,7 +90,7 @@ Chord/twist/airfoil sources, in order of trust:
 2. **Published geometry**: the UIUC site publishes blade geometry (chord and twist vs. r/R) for many APC and other small propellers
    *to confirm per propeller*; this is the source for the validation set.
 3. **Vendor data**: T-Motor publishes diameter, pitch, blade count only **[doc: PROPELLER_CATALOG_2026-10-05.md]**; no chord/twist. So
-   the 18 catalogue propellers have NO blade geometry today. Stage 2 therefore cannot validate on the catalogue until (1) is done for at least a few of them.
+   the 18 catalogue propellers have NO blade geometry today. Stage A2 therefore cannot validate on the catalogue until (1) is done for at least a few of them.
 4. **Inferred** from D, pitch, blades with a stated generic planform (a class template). Allowed only with `estimated: true`, a
    method note, and the label "generic blade" in every output.
 
@@ -123,9 +138,13 @@ prints both and the spread, and nothing is called "validated" without a stated V
    steps, air temperature and pressure log. **Not yet available; this plan assumes none of its numbers.**
 4. **Independent cross-check of the code.** Run CCBlade or XROTOR (separate program) on 2-3 geometries and compare with our BEMT:
    checks the algorithm, not the physics.
-5. **Regression of today's behaviour.** M0 results are pinned by test before any refactor (section 6, stage 0).
+5. **Regression of today's behaviour.** M0 results are pinned by test before any refactor (section 6A, stage A0).
 
-## 5. CFD, attached later
+## 5. CFD: the design tool of track B (second, later)
+
+Per the owner's decision CFD is used to DESIGN our own propeller, not to check each run. The options below are ordered for that use:
+the rotating-blade (MRF) case is the design workhorse, the actuator-disc case is only the cheap helper (and the one possible later
+cooling-flow study).
 
 Where it would run: on us1 through `motres-agent-job` (**[doc]** server agent rules: no network, job folder only, 1-16 cpus / 8-48 GB per
 job, 25 of 32 threads for all agent jobs). Limitation: the job container is the DEPLOYED APPLICATION image, which has no CFD solver
@@ -157,23 +176,68 @@ the same thrust-stand measurement to be believed.
 
 ## 6. Stages (PR-sized), tests, UI, stored results
 
+### 6A. Track A - BEMT module (first)
+
 | Stage | Content | Tests |
 |---|---|---|
-| 0 | Introduce an interface `InflowModel` (input: propeller, rpm, rho, V_inf, radius band; output: axial/swirl speed per radius band, flags, model id). Momentum model re-implemented behind it, bit-identical. Model id `momentum-1` stamped in the result payload of `air_speed_for_thermal`. | Golden test: all 18 catalogue entries x 5 rpm give exactly today's numbers; existing propeller tests untouched |
-| 1 | Schema `propeller-2` loader + validation; `propeller-1` untouched; docs in `config/propellers/README.md`. No new physics. | Loader tests: v1 file unchanged, v2 without `blade` = v1, bad station order/missing fields refused with a named field |
-| 2 | BEMT kernel (`propeller_bemt.py`), flat-plate+Viterna polar provider, NeuralFoil-or-table provider behind the same interface; static thrust/torque/inflow profile. Not wired to the thermal solver yet. | Analytic limits (zero pitch, ideal-propeller momentum limit), convergence at high induction, symmetry, monotonic C_T(J); cross-check vs. CCBlade/XROTOR output stored as small fixtures |
-| 3 | Validation report script + the first geometry set (UIUC published geometry after the terms question is answered; our scanned props when available). Writes a Markdown report with the spreads of section 4. | Script run on fixtures; report numbers are never asserted as "good", only recomputed |
-| 4 | Forward flight / climb (J sweep) in the same kernel; API field `v_inf`. | Zero-V_inf equals stage 2; wind-tunnel fixtures V2 |
-| 5 | Cooling inflow: radial profile and swirl at the motor band; mapping to the thermal solver as zone speeds (needs `routes/thermal.py` to accept more than one speed, which is a thermal-solver change and its own review) and the position factor re-defined relative to the BEMT hub-radius wake speed. Calibrated factor stored per installation with its basis. | Thermal golden tests unchanged when the model is `momentum-1`; new tests only for the new model |
-| 6 | Thrust-stand calibration: loader for the stand's logs, factor fit with uncertainty, validation on held-out runs. Depends on the thruststand session. | Synthetic log round trip |
-| 7 (decision) | CFD attachment (section 5). | Case generator unit tests; one regression case, run through the job launcher |
+| A0 | Introduce an interface `InflowModel` (input: propeller, rpm, rho, V_inf, radius band; output: axial/swirl speed per radius band, flags, model id). Momentum model re-implemented behind it, bit-identical. Model id `momentum-1` stamped in the result payload of `air_speed_for_thermal`. | Golden test: all 18 catalogue entries x 5 rpm give exactly today's numbers; existing propeller tests untouched |
+| A1 | Schema `propeller-2` loader + validation; `propeller-1` untouched; docs in `config/propellers/README.md`. No new physics. | Loader tests: v1 file unchanged, v2 without `blade` = v1, bad station order/missing fields refused with a named field |
+| A2 | BEMT kernel (`propeller_bemt.py`), flat-plate+Viterna polar provider, NeuralFoil-or-table provider behind the same interface; static thrust/torque/inflow profile. Not wired to the thermal solver yet. | Analytic limits (zero pitch, ideal-propeller momentum limit), convergence at high induction, symmetry, monotonic C_T(J); cross-check vs. CCBlade/XROTOR output stored as small fixtures |
+| A3 | Validation report script + the first geometry set (UIUC published geometry after the terms question is answered; our scanned props when available). Writes a Markdown report with the spreads of section 4. | Script run on fixtures; report numbers are never asserted as "good", only recomputed |
+| A4 | Forward flight / climb (J sweep) in the same kernel; API field `v_inf`. | Zero-V_inf equals stage A2; wind-tunnel fixtures V2 |
+| A5 | Cooling inflow: radial profile and swirl at the motor band; mapping to the thermal solver as zone speeds (needs `routes/thermal.py` to accept more than one speed, which is a thermal-solver change and its own review) and the position factor re-defined relative to the BEMT hub-radius wake speed. Calibrated factor stored per installation with its basis. | Thermal golden tests unchanged when the model is `momentum-1`; new tests only for the new model |
+| A6 | Thrust-stand calibration hook: loader for the stand's logs, factor fit with uncertainty, validation on held-out runs. Depends on the thruststand session. | Synthetic log round trip |
+
+
+### 6C. What track A must already provide for track B (the contract)
+
+Fixed in A so that B never needs a schema or kernel rewrite:
+1. **Geometry schema = the CFD input.** `propeller-2` `blade.stations` (r, chord, twist, airfoil, thickness) plus hub radius, root
+   cut-out, blade count and rotation sense are the COMPLETE parametric definition of a blade. A1 must also state the interpolation
+   rule between stations (spline type, monotone twist/chord), because the CAD generator of track B must rebuild the same surface the
+   BEMT saw. Add in A1 an optional `blade.sections` (airfoil coordinate files per station, referenced, not inlined) and `blade.pitch_axis`
+   (the line the twist is applied about; default quarter chord); without them the CAD surface and the BEMT blade differ.
+2. **Airfoil polars as data, with provenance.** A2 stores polars under `config/propellers/_polars/<airfoil>/<Re>.csv`
+   (alpha, cl, cd, cm), each file stating source (NeuralFoil/XFOIL/measured), Re, Mach, transition setting, and its valid alpha range.
+   The same airfoil coordinates feed the CFD sections, so one airfoil id means one shape in both tools.
+3. **A design-variable set.** A2 publishes `design_variables(propeller) -> list[{name, lo, hi, unit}]`: the radial control points of
+   chord and twist (a small number, e.g. 5-7 points each, with a smooth spline through them), airfoil choice per zone, hub radius,
+   diameter, blade count. Bounds come from manufacturing limits (to be supplied) and are part of the geometry file, not of the optimiser.
+   A candidate is always a valid `propeller-2` dictionary, so any tool can evaluate it.
+4. **A cheap objective function.** A2/A4 expose `evaluate(propeller, rpm, rho, v_inf) -> {thrust, torque, power, efficiency,
+   figure_of_merit, axial/swirl profile, flags}` with a stable, documented signature and a model id. In track B this is the
+   pre-screening level: the optimiser explores with BEMT and only the finalists go to CFD (the multi-fidelity loop).
+5. **A result record format** shared by BEMT and CFD: one JSON per evaluation with the geometry hash, operating point, tool and
+   version, model id, outputs, and `estimated`/`validated_against` fields, so the two fidelities can be compared and the BEMT error
+   against CFD (and against the thrust stand) is a recorded number, not an impression.
+6. **Validation data as shared fixtures** (A3): the measured propellers become the CFD validation set for B1 (the CFD setup must first
+   reproduce measured thrust and torque on props we can scan, before it is trusted on a new design).
+
+### 6B. Track B - CFD for designing our own propeller (second, after A has run on real props)
+
+Starts only when A3 has produced a validation spread and the owner/coordinator agrees. Sizes are PR-sized; compute figures are
+**[est]** and must be replaced by measurements in B1.
+
+| Stage | Content | Tests / acceptance |
+|---|---|---|
+| B0 (decision) | Choose solver and image: OpenFOAM (MRF / sliding mesh, GPL-3, separate process) or SU2 (LGPL-2.1); build a CFD job image for `motres-agent-job` (the deployed app image has no solver); licence check; Gmsh or snappyHexMesh for meshing. | Image builds; a trivial case runs through the launcher with no network |
+| B1 | Reproduce measured data: from a `propeller-2` file generate the blade CAD (CadQuery lofted sections, same station rule as 6C-1), a periodic single-blade-passage mesh with MRF zone, boundary layer settings, solver case; run the static case of a propeller with measured thrust/torque (A3 set). Record mesh-independence (3 meshes) and the error vs. measurement. | Case generator unit tests (geometry hash round trip, mesh quality limits, blade volume vs. CAD); the first measured-vs-CFD table. No design use before this exists |
+| B2 | Post-processing: thrust, torque, efficiency, and the velocity/swirl field behind the hub written into the shared result record; comparison with BEMT per case (the BEMT error becomes a number). | Parser tests on stored solver output; record schema test |
+| B3 | Geometry generation from design variables (6C-3) with validity gates (no self-intersection, minimum thickness, manufacturing bounds); batch case creation. | Property tests over random valid/invalid variable vectors |
+| B4 | Job orchestration on us1: many single-passage cases in parallel inside the 80 % CPU budget, restart/resume, failure classification (diverged, bad mesh), results written to `~/jobs/<tag>/` and collected by the coordinator; nothing written to the catalog from the server. | Dry-run of the orchestration with a stub solver; one real small batch |
+| B5 | Optimisation loop: BEMT-screened candidates (thousands) -> CFD for finalists (tens); surrogate or CMA-ES over the design variables; objective and constraints set by the owner (e.g. efficiency at a rpm/thrust point, noise proxy tip speed, structural limit); every evaluation stored in the shared record format. | Loop test on analytic objectives; a reproducible small design run |
+| B6 | Design hand-over: selected geometry to `propeller-2` (with `geometry_source: designed`), CFD and BEMT numbers attached with their basis, hook to the thrust-stand test of the manufactured prototype. | Schema test; prototype test plan |
+
+Compute estimate for B **[est]**: one single-passage MRF case with 1-2 M cells, 30-90 min on 4 cpus; a design iteration of 20 finalists
+therefore 10-30 cpu-hours, i.e. about an hour of wall time with the 25-thread budget. Full-annulus unsteady runs are not planned.
+What B does NOT replace: the thrust-stand test of a real prototype, and the thermal model of the motor.
 
 **UI** (rules of AGENTS.md): at most ONE short line in Configure, e.g. "Air model: momentum" / "Air model: blade-element", with the
 details (inputs, validated spread, "generic blade" flag, extrapolation warning) in the tooltip. No caption lines, no ranges on screen;
 new strings in EN and the zh-CN mirror.
 
 **Stored results.** Nothing silent: (1) the default stays `momentum-1` until the owner decides otherwise; (2) every thermal result
-carries the air model id and factor already or from stage 0 on (to be located in stage 0: where the result stamp is written); (3) a result
+carries the air model id and factor already or from stage A0 on (to be located in stage A0: where the result stamp is written); (3) a result
 computed with an older model is shown as "computed with <model>", and a change of the model marks dependent results "needs re-run" instead
 of rewriting them; (4) the bench-calibrated 0.53 stays attached to its installation (open frame, Ø40 die L12) and is not overwritten by any new
 model; (5) no change of a stored die, configuration or catalogue number from this module; (6) geometry signatures and result stamps are not touched.
@@ -181,7 +245,9 @@ model; (5) no change of a stored die, configuration or catalogue number from thi
 ## 7. Open questions for the coordinator / owner
 1. Licence confirmations (one line each): CCBlade, XROTOR, QProp, DUST, OpenVSP, NeuralFoil, OpenFOAM, SU2; and a written answer from the
    University of Illinois and from APC on use of their data files.
-2. Who produces blade geometry for the catalogue propellers (scan on the notebook side)? Without it stage 2 can only be validated on UIUC props.
+2. Who produces blade geometry for the catalogue propellers (scan on the notebook side)? Without it stage A2 can only be validated on UIUC props.
 3. Is a CFD image on us1 acceptable (disk, licence review), and who owns it?
-4. Whether the zone-wise air speed (stage 5) may change the thermal solver, or the module must keep delivering one scalar.
+4. Whether the zone-wise air speed (stage A5) may change the thermal solver, or the module must keep delivering one scalar.
 5. Acceptance thresholds for the BEMT (section 4) after the first spread is known.
+6. Track B inputs the owner must give before B3/B5: the design target (thrust/rpm/diameter/blade count), manufacturing method and its limits (minimum thickness, material, tolerances), and whether noise or structural strength enters the objective.
+7. Ownership of the measured propellers for scanning (A1/A3 and B1 both depend on them).

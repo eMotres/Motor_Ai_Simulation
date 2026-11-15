@@ -4489,7 +4489,7 @@ def _read_ctx() -> Optional[dict]:
         return None
 
 
-def release_context(reason: str) -> Optional[str]:
+def release_context(reason: str, by: Optional[str] = None) -> Optional[str]:
     """No die is active any more.  ONE writer for the released state — used by
     /deactivate (Compare, My motors), the die identity guard (a foreign machine
     reached the geometry save) and the preset/classic-catalog load — so the
@@ -4506,6 +4506,9 @@ def release_context(reason: str) -> Optional[str]:
         "released_config": ctx.get("config"),
         "released_duty": ctx.get("duty"),
         "reason": reason,
+        # WHO released it (the caller's account), so the strip can say that
+        # another session did it and not the person looking at the screen.
+        "by": by or None,
         "at": datetime.now().isoformat(timespec="seconds")}), encoding="utf-8")
     log.info("family: context released (%s) — was '%s/%s'",
              reason, ctx.get("die"), ctx.get("config"))
@@ -4523,6 +4526,34 @@ def _read_released() -> Optional[dict]:
     if not isinstance(raw, dict) or raw.get("die") or not raw.get("released_from"):
         return None
     return raw
+
+
+def _same_value(a: Any, b: Any) -> bool:
+    if isinstance(a, bool) or isinstance(b, bool) or not (
+            isinstance(a, (int, float)) and isinstance(b, (int, float))):
+        return a == b
+    return abs(float(a) - float(b)) <= 1e-9 * max(1.0, abs(float(a)), abs(float(b)))
+
+
+def _live_matches_config(die_geo: dict, cfg: Optional[str], die: str, live_geo: dict) -> Optional[bool]:
+    """True when every scalar geometry key of the stored configuration (the
+    die's geometry with the configuration's overrides on top) has the same
+    value on the live machine; None when the configuration cannot be read.
+    Keys the live machine does not carry are not a difference."""
+    if not cfg:
+        return None
+    try:
+        c = _load_yaml(_cfg_file(die, str(cfg)), "configuration")
+    except HTTPException:
+        return None
+    stored = dict(die_geo)
+    stored.update(c.get("geometry_overrides") or {})
+    for k, v in stored.items():
+        if isinstance(v, (dict, list)) or k not in live_geo:
+            continue
+        if not _same_value(v, live_geo[k]):
+            return False
+    return True
 
 
 def released_state() -> Optional[dict]:
@@ -4545,7 +4576,8 @@ def released_state() -> Optional[dict]:
         "released_from": die,
         "released_config": raw.get("released_config"),
         "released_duty": raw.get("released_duty"),
-        "reason": raw.get("reason"), "at": raw.get("at"),
+        "reason": raw.get("reason"), "at": raw.get("at"), "by": raw.get("by"),
+        "live_matches_config": None,
         "die_keys": list(DIE_IDENTITY_KEYS),
         "die_exists": False, "die_diffs": [], "live_is_die": None,
         "live_topology": None,
@@ -4578,6 +4610,8 @@ def released_state() -> Optional[dict]:
     diffs = die_identity_diffs(d.get("geometry") or {}, geo)
     out["die_diffs"] = diffs
     out["live_is_die"] = not diffs
+    out["live_matches_config"] = _live_matches_config(
+        d.get("geometry") or {}, out.get("released_config"), die, geo) if not diffs else False
     try:
         _ns = float(geo.get("num_seg") or 0)
         _sl = geo.get("num_slots") or (_ns * float(geo.get("num_slots_per_segment") or 0))
@@ -5986,7 +6020,8 @@ class Deactivate(BaseModel):
 
 
 @router.post("/deactivate")
-def deactivate(req: Deactivate, _w: dict = Depends(require_catalog_write)):
+def deactivate(req: Deactivate, _w: dict = Depends(require_catalog_write),
+               authorization: str = Header(default=None)):
     """No die is active any more — the editor is about to hold a machine that
     is not a catalog duty (a Compare row, a private "my motor" copy, a preset).
 
@@ -5998,7 +6033,11 @@ def deactivate(req: Deactivate, _w: dict = Depends(require_catalog_write)):
     private copy of the same 85 mm, which the identity guard cannot tell
     apart).  The header strip then says "no die active" instead of lying.
     """
-    was = release_context(req.reason or "whole-machine load outside the catalog")
+    try:
+        _by = str(caller_identity(authorization).get("id") or "") or None
+    except Exception:            # noqa: BLE001 — the name is a courtesy, never a blocker
+        _by = None
+    was = release_context(req.reason or "whole-machine load outside the catalog", by=_by)
     return {"ok": True, "released_from": was}
 
 

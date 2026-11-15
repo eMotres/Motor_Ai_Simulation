@@ -935,8 +935,8 @@ const ActiveFamilyStrip: React.FC = () => {
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, px: 1.5, py: 0.25,
                  fontSize: 11, color: '#f59e0b', borderBottom: '1px solid var(--line)',
                  flexWrap: 'wrap' }}>
-        <Tooltip title={offers.tip}>
-          <span style={{ cursor: 'help' }}>{offers.line}</span>
+        <Tooltip title={tc(`releasedStrip.tip.${offers.kind}`, { ...offers.vars, reason: String((ctx as { reason?: string } | null)?.reason ?? ) })}>
+          <span style={{ cursor: 'help' }}>{tc(`releasedStrip.line.${offers.kind}`, offers.vars)}</span>
         </Tooltip>
         <Box sx={{ flex: 1 }} />
         {msg && (
@@ -944,7 +944,7 @@ const ActiveFamilyStrip: React.FC = () => {
             color: msg.startsWith('✗') ? '#fca5a5' : '#34d399' }}>{msg}</Typography>
         )}
         {offers.saveNewDie && (
-          <Button size="small" variant="contained" disabled={busy}
+          <Button size="small" variant={offers.saveNewDie.primary ? 'contained' : 'outlined'} disabled={busy}
             onClick={async () => {
               // "<family base of the released die> <your suffix> <n>", editable (owner 2026-10-26)
               const src = String((ctx as { released_from?: string } | null)?.released_from ?? '');
@@ -957,8 +957,9 @@ const ActiveFamilyStrip: React.FC = () => {
                 onSubmit: (n) => { void saveAsNewDie(n.trim()); },
               });
             }}
-            sx={{ ...btnSx, bgcolor: '#1d4ed8', '&:hover': { bgcolor: '#2563eb' } }}>
-            {busy ? <CircularProgress size={11} /> : offers.saveNewDie.label}
+            sx={offers.saveNewDie.primary
+              ? { ...btnSx, bgcolor: '#1d4ed8', '&:hover': { bgcolor: '#2563eb' } } : btnSx}>
+            {busy ? <CircularProgress size={11} /> : tc('releasedStrip.btn.saveDie')}
           </Button>
         )}
         {offers.reattach && (
@@ -966,11 +967,11 @@ const ActiveFamilyStrip: React.FC = () => {
             onClick={() => void reattachReleased(offers.reattach!.die, offers.reattach!.config,
                                                  offers.reattach!.duty)}
             sx={{ ...btnSx, bgcolor: '#047857', '&:hover': { bgcolor: '#059669' } }}>
-            {offers.reattach.label}
+            {tc('releasedStrip.btn.reattach', { die: offers.reattach.die, config: offers.reattach.config })}
           </Button>
         )}
         {offers.saveNewConfig && (
-          <Button size="small" variant="outlined" disabled={busy}
+          <Button size="small" variant="contained" disabled={busy}
             onClick={() => setAskCfg({
               title: `Save the machine on screen as a NEW configuration of ${offers.saveNewConfig!.die}`,
               label: 'Configuration name',
@@ -984,11 +985,12 @@ const ActiveFamilyStrip: React.FC = () => {
               onSubmit: (n) => { void saveAsNewConfig(n.trim(), offers.saveNewConfig!); },
             })}
             sx={btnSx}>
-            {offers.saveNewConfig.label}
+            {tc('releasedStrip.btn.saveConfig', { die: offers.saveNewConfig.die })}
           </Button>
         )}
         {offers.reload && (
-          <Button size="small" variant="outlined" color="warning" disabled={busy}
+          <Button size="small" variant={offers.kind === 'same' ? 'contained' : 'outlined'}
+            color={offers.kind === 'same' ? 'primary' : 'warning'} disabled={busy}
             onClick={() => setAskReload({
               title: 'Discard the live changes?',
               body: `The geometry on screen is replaced by ${offers.reload!.die} / ${offers.reload!.config} / ${offers.reload!.duty} as saved in the catalog. Nothing of the current machine is kept — save it as a new die first if you want it.`,
@@ -996,7 +998,7 @@ const ActiveFamilyStrip: React.FC = () => {
               onConfirm: () => { void reloadReleased(offers.reload!.die, offers.reload!.config, offers.reload!.duty); },
             })}
             sx={btnSx}>
-            {offers.reload.label}
+            {tc(offers.kind === 'same' ? 'releasedStrip.btn.reload' : 'releasedStrip.btn.discardReload', { config: offers.reload.config })}
           </Button>
         )}
         <TextPromptDialog state={askDie} onClose={() => setAskDie(null)} />

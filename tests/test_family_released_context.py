@@ -197,6 +197,39 @@ def test_context_says_when_the_live_machine_is_that_die_again(dies, live):
     assert c["die_diffs"] == [] and c["live_is_die"] is True
 
 
+def test_context_says_whether_the_screen_equals_the_stored_configuration(dies, live):
+    """Owner 2026-11-16: an identical screen reads "nothing to save" (one Reload button);
+    a screen with real differences keeps the save offers."""
+    rec = dict(OWNER_RECORD, released_config=CFG, released_duty=DUTY)
+    _ctx_file().write_text(json.dumps(rec), encoding="utf-8")
+    live(7, motor_length=15, wire_height=1.0, num_wires_per_slot=8)
+    assert _context()["live_matches_config"] is True
+    live(7, wire_height=1.1)                    # same lamination, a stored value moved
+    c = _context()
+    assert c["live_is_die"] is True and c["live_matches_config"] is False
+    live(8)                                     # another lamination: never "nothing to save"
+    assert _context()["live_matches_config"] is False
+
+
+def test_context_does_not_guess_when_the_configuration_cannot_be_read(dies, live):
+    live(7)
+    _ctx_file().write_text(json.dumps(dict(OWNER_RECORD, released_config="nope")), encoding="utf-8")
+    assert _context()["live_matches_config"] is None
+
+
+def test_deactivate_records_who_released_the_context(dies, monkeypatch):
+    _write_active()
+    monkeypatch.setattr(fam, "caller_identity", lambda _a=None: {"id": "agent@example.com"})
+    fam.deactivate(fam.Deactivate(reason="CIANO10 12_40: import Fusion v24 geometry for a new die"),
+                   _w={}, authorization="Bearer x")
+    raw = json.loads(_ctx_file().read_text(encoding="utf-8"))
+    assert raw["by"] == "agent@example.com"
+    assert fam.released_state()["by"] == "agent@example.com"
+    # a record written before this existed has no name, and says so
+    _ctx_file().write_text(json.dumps(OWNER_RECORD), encoding="utf-8")
+    assert fam.released_state()["by"] is None
+
+
 def test_context_does_not_fill_a_configuration_when_the_die_has_several(dies, live):
     live(8)
     (dies / DIE / "L20.yaml").write_text(yaml.safe_dump({

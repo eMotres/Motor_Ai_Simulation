@@ -188,6 +188,38 @@ def curve(vec: Any, op: str, n: int = 11, v_inf: float = 0.0) -> Dict[str, Any]:
             "tip_mach_limit": d.tip_mach_limit, "banner": pd.BANNER}
 
 
+def optimize(vec: Any, op: str, pop: Any = 12, generations: Any = 6, seed: Any = 1, objectives: Any = None, free: Any = None,
+             enforce_tip_mach: Any = True, tip_mach_limit: Any = None) -> Dict[str, Any]:
+    """Two-objective optimisation from the given design (diameter and blade count stay).  Synchronous and capped (pop x (generations + 1) <= 200);
+    every evaluation is appended to ``<workspace>/propeller_designs/_runs/<run_id>.jsonl``."""
+    from motor_ai_sim import propeller_optimize as po
+    d = _design()
+    v = _clean_vector(vec)
+    if not isinstance(pop, int) or isinstance(pop, bool) or not isinstance(generations, int) or isinstance(generations, bool) \
+            or not isinstance(seed, int) or isinstance(seed, bool):
+        raise ApiProblem(422, "pop, generations and seed must be integers")
+    if objectives is not None and not (isinstance(objectives, list) and all(isinstance(o, str) for o in objectives)):
+        raise ApiProblem(422, "objectives must be a list of names")
+    if free is not None and not (isinstance(free, list) and all(isinstance(g, str) for g in free)):
+        raise ApiProblem(422, "free must be a list of group names")
+    if not isinstance(enforce_tip_mach, bool):
+        raise ApiProblem(422, "enforce_tip_mach must be true or false")
+    if tip_mach_limit is not None and (isinstance(tip_mach_limit, bool) or not isinstance(tip_mach_limit, (int, float))):
+        raise ApiProblem(422, "tip_mach_limit must be a number")
+    kw: Dict[str, Any] = {"pop": pop, "generations": generations, "seed": seed, "enforce_tip_mach": enforce_tip_mach,
+                          "tip_mach_limit": tip_mach_limit, "store_dir": _draft_dir() / "_runs"}
+    if objectives is not None:
+        kw["objectives"] = objectives
+    if free is not None:
+        kw["free"] = free
+    try:
+        return po.optimize(d, v, op, **kw)
+    except po.OptimizeError as exc:
+        raise ApiProblem(422, str(exc))
+    except pd.DesignError as exc:
+        raise ApiProblem(422, str(exc))
+
+
 # ---------------------------------------------------------------------------
 # Drafts: the caller's own workspace
 # ---------------------------------------------------------------------------

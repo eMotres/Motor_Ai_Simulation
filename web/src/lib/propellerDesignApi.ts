@@ -54,6 +54,11 @@ export const evaluate = (vector: Vector, op: string, signal?: AbortSignal) => ca
 export const getCurve = (vector: Vector, op: string, n = 11) => call<Curve>('POST', '/curve', { vector, op, n });
 export const sweep = (vector: Vector, op: string, variable: string, lo: number, hi: number, n: number) =>
   call<{ rows: SweepRow[] }>('POST', '/sweep', { vector, op, variable, lo, hi, n });
+export interface OptEval { index: number; generation: number; vector: Vector; objectives: Record<string, number | null>; violation: number; note: string;
+  design_id: string | null; rpm: number | null; tip_mach: number | null; constraints_met: boolean; flags: string[] }
+export interface OptResult { run_id: string; front: number[]; evaluations: OptEval[]; elapsed_s: number; objectives: string[]; settings: Record<string, unknown> }
+export const optimize = (vector: Vector, op: string, o: { pop: number; generations: number; seed: number; free: string[]; objectives: string[];
+  enforce_tip_mach: boolean; tip_mach_limit: number | null }) => call<OptResult>('POST', '/optimize', { vector, op, ...o });
 export const listDrafts = () => call<{ drafts: DraftInfo[] }>('GET', '/drafts');
 export const getDraft = (name: string) => call<{ vector: Vector; operating_point: string }>('GET', `/drafts/${encodeURIComponent(name)}`);
 export const putDraft = (name: string, vector: Vector, op: string) => call<{ saved: boolean; valid: boolean }>('PUT', `/drafts/${encodeURIComponent(name)}`, { vector, op });

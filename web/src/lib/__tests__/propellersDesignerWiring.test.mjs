@@ -29,6 +29,8 @@ test('the dynamic key families have an entry for every value the backend can sen
     propConstraint_: ['torque_within_limit', 'tip_mach_within_limit', 'bemt_converged'],
     propZone_: ['root', 'mid', 'tip'],
     propLimit_: ['wall_min_mm', 'thickness_ratio_min', 'le_radius_min_mm', 'te_thickness_min_mm'],
+    propOptFree_: ['outer', 'inner', 'airfoil'],
+    propOptObj_: ['thrust_per_shaft_W', 'cooling_air_axial_ms'],
   };
   for (const [pfx, vals] of Object.entries(fam)) for (const v of vals) { assert.ok(pfx + v in en, pfx + v); assert.ok(pfx + v in zh, pfx + v); }
   for (const k of ['propDesignGroupInner', 'propDesignGroupOuter', 'propDesignGroupAirfoil', 'propDesignGroupTopology']) assert.ok(k in en && k in zh);
@@ -54,4 +56,13 @@ test('a run is added by a deliberate press, never by typing', () => {
   const page = rd('../../components/propellers/DesignerPage.tsx');
   assert.match(page, /onClick=\{onEvaluate\}/);
   assert.equal((page.match(/addRun\(/g) || []).length, 1);          // the one call, inside onEvaluate
+});
+
+test('the optimiser panel calls the backend with the selected objectives and shows the front through the runs view', () => {
+  const page = rd('../../components/propellers/DesignerPage.tsx');
+  assert.match(page, /api\.optimize\(vector, op,/);
+  assert.match(page, /enforce_tip_mach: optTip/);
+  assert.match(page, /data-testid="prop-optimizer"/);
+  assert.match(rd('../propellerDesignApi.ts'), /'\/optimize'/);
+  assert.match(en.propOptTip, /not one weighted number/);
 });

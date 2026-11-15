@@ -5,12 +5,12 @@ import { useTranslation } from 'react-i18next';
 import BilingualText, { BilingualInput, useContentLang } from './BilingualText';
 import HelpTip from '../../../components/common/HelpTip';
 import { productionApi } from '../api';
-import { alertSummary, canAckRole, hasAcked, makeBilingual, nextRevision, replaceableDocs, sortRevisions, supersedePairs, unackedRevisions } from '../helpers';
-import type { DocumentRec, Lang, ProdCtx, Revision, RevisionPreview } from '../types';
+import { ackStatus, alertSummary, canAckRole, hasAcked, makeBilingual, nextRevision, replaceableDocs, sortRevisions, supersedePairs, unackedRevisions } from '../helpers';
+import type { DocumentRec, Lang, Member, ProdCtx, Revision, RevisionPreview } from '../types';
 
 const PANEL = { bgcolor: 'var(--panel-2)', border: '1px solid var(--line-soft)', borderRadius: 1.5 } as const;
 
-const ChangesPanel: React.FC<{ revisions: Revision[]; currentRevision: string; ctx: ProdCtx }> = ({ revisions, currentRevision, ctx }) => {
+const ChangesPanel: React.FC<{ revisions: Revision[]; currentRevision: string; ctx: ProdCtx; members?: Member[] }> = ({ revisions, currentRevision, ctx, members = [] }) => {
   const { t } = useTranslation('production');
   const ui = useContentLang();
   const [summary, setSummary] = useState('');
@@ -133,6 +133,15 @@ const ChangesPanel: React.FC<{ revisions: Revision[]; currentRevision: string; c
               <Typography sx={{ fontSize: 12, fontWeight: 700, color: '#d97706' }}>{t('changes.superseded')}</Typography>
               {r.files!.superseded.map((f) => (
                 <Typography key={f.doc_id} sx={{ fontSize: 12 }}>{f.name}{f.replaced_by ? ` → ${f.replaced_by.name}` : ''}</Typography>
+              ))}
+            </Box>
+          )}
+          {ctx.canEdit && members.length > 0 && (
+            <Box sx={{ display: 'flex', gap: 0.5, flexWrap: 'wrap', mt: 0.75 }} data-testid="rev-ack-status">
+              {ackStatus(members, r, Date.now()).filter((a) => a.required || a.ackedAt).map((a) => (
+                <Chip key={a.email} size="small" color={a.ackedAt ? 'success' : 'warning'} variant="outlined" sx={{ fontSize: 11 }}
+                  label={a.ackedAt ? t('changes.ackRowDone', { email: a.email, date: a.ackedAt.slice(0, 16).replace('T', ' ') })
+                                   : t('changes.ackRowWaiting', { email: a.email, hours: a.waitingHours ?? 0 })} />
               ))}
             </Box>
           )}

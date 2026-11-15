@@ -808,3 +808,40 @@ export function alertSummary(alert: { recipients: ReadonlyArray<{ mail: string }
 /** The question asked before a SUPERSEDED file is opened or downloaded (the server's sentence, then the question in both languages). */
 export const supersededPrompt = (detail: string): string =>
   `${detail}\n\nOpen it anyway, only to look at it? / 仍要打开吗（仅供查看）？`;
+
+
+// -- acknowledgement tracking (owner 2026-11-15) -------------------------------------------------------------------------------
+
+/** Who must acknowledge: the factory (oem) members.  The owner and the engineers see the status but are not asked. */
+export const REQUIRED_ACK_ROLES = ['oem'] as const;
+
+export interface AckRow { email: string; role: string; required: boolean; ackedAt: string | null; waitingHours: number | null }
+
+/** Every member with whether and when they acknowledged ``rev``; ``waitingHours`` counts from the alert (or the publication) for those who
+ *  must acknowledge and have not yet. */
+export function ackStatus(members: readonly Member[], rev: Revision, nowMs: number): AckRow[] {
+  const acks = new Map(rev.acknowledgements.map((a) => [a.email.toLowerCase(), a.time]));
+  const sinceStr = rev.alert?.sent_at ?? rev.date;
+  const since = Date.parse(sinceStr);
+  const order: Record<string, number> = { owner: 0, engineer: 1, oem: 2 };
+  return [...members].sort((a, b) => (order[a.role] ?? 9) - (order[b.role] ?? 9) || a.email.localeCompare(b.email)).map((m) => {
+    const at = acks.get(m.email.toLowerCase()) ?? null;
+    const required = (REQUIRED_ACK_ROLES as readonly string[]).includes(m.role);
+    return { email: m.email, role: m.role, required, ackedAt: at,
+      waitingHours: required && !at && Number.isFinite(since) ? Math.max(0, Math.floor((nowMs - since) / 3_600_000)) : null };
+  });
+}
+
+/** ``file_id -> revision number`` of every file a revision of THIS person's open list brings or retires (so the file can say "changed in
+ *  revision X, not acknowledged" until the revision is acknowledged). */
+export function unackedFiles(revs: readonly Revision[], email: string): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const r of unackedRevisions(revs, email)) {
+    for (const f of r.files?.new ?? []) if (f.file_id && !(f.file_id in out)) out[f.file_id] = r.number;
+    for (const f of r.files?.superseded ?? []) {
+      if (f.file_id && !(f.file_id in out)) out[f.file_id] = r.number;
+      if (f.replaced_by?.file_id && !(f.replaced_by.file_id in out)) out[f.replaced_by.file_id] = r.number;
+    }
+  }
+  return out;
+}

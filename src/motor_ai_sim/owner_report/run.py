@@ -32,6 +32,18 @@ def make_digest_drafts(now: float, *, write: bool = True, send: bool = True) -> 
         return [], f"digests could not be made: {type(exc).__name__}: {str(exc)[:160]}"
 
 
+def send_revision_reminders(now: float) -> str:
+    """The 24 h / 72 h reminder mails to factory members who have not acknowledged a revision (production.revision_ack); returns an error
+    text for the report ("" when fine).  Part of the scheduled run only (the admin "send now" route sends no mail but the report)."""
+    try:
+        from motor_ai_sim.production import revision_ack as RA
+        RA.run_reminders(now)
+        return ""
+    except Exception as exc:                                 # noqa: BLE001 - a reminder problem never stops the report
+        log.warning("owner_report: revision reminders failed (%s: %s)", type(exc).__name__, exc)
+        return f"revision reminders could not be sent: {type(exc).__name__}: {str(exc)[:160]}"
+
+
 def build_report(date: Optional[str] = None, *, now: Optional[float] = None, make_drafts: bool = False,
                  sources: Optional[B.Sources] = None, extra_errors: Optional[list] = None) -> B.Report:
     from motor_ai_sim import auth_email as E
@@ -127,9 +139,10 @@ def run_daily(*, now: Optional[float] = None, date: Optional[str] = None, force:
         st = S.get_state()
         if st.get("last_sent_date") == date and not force:
             return {"status": "already_sent", "date": date, "sent_at": st.get("sent_at")}
+        reminder_err = send_revision_reminders(now) if make_drafts and send_digests else ""
         rows, err = (make_digest_drafts(now, send=send_digests) if make_drafts else ([], ""))
         queue_notice(new_draft_ids(rows, sent_by_run=send_digests))
-        rep = build_report(date, now=now, make_drafts=False, sources=sources, extra_errors=[err] if err else None)
+        rep = build_report(date, now=now, make_drafts=False, sources=sources, extra_errors=[e for e in (err, reminder_err) if e] or None)
         res = S.send_report(rep, deliver=deliver)
         if not res["sent"]:
             return {"status": "failed", "date": date, "error": res["error"], "to": res["to"], "report": rep}

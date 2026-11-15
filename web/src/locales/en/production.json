@@ -297,7 +297,8 @@
     "clear": "Clear",
     "superseded": "Superseded",
     "supersededBy": "Superseded by {name} (revision {rev})",
-    "supersededTip": "Replaced in a published revision. Do not make parts to it; the file is kept for reference."
+    "supersededTip": "Replaced in a published revision. Do not make parts to it; the file is kept for reference.",
+    "changedUnacked": "Changed in revision {rev} - not acknowledged"
   },
   "unread": {
     "tip": "{count} unread messages",
@@ -360,7 +361,11 @@
     "removeReplace": "Remove",
     "newFiles": "New files",
     "superseded": "Superseded - do not use",
-    "alertLine": "Sent {date}: {sent} of {total} mailed{failed, plural, =0 {} other {, # failed}}{notConfigured, plural, =0 {} other {, # not sent (no mail on this server)}}"
+    "alertLine": "Sent {date}: {sent} of {total} mailed{failed, plural, =0 {} other {, # failed}}{notConfigured, plural, =0 {} other {, # not sent (no mail on this server)}}",
+    "ackRowDone": "{email}: acknowledged {date}",
+    "ackRowWaiting": "{email}: waiting {hours} h",
+    "pageBanner": "{count, plural, one {# published revision is} other {# published revisions are}} not acknowledged by you: read what changed and acknowledge it before you build.",
+    "open": "Open Changes"
   },
   "procurement": {
     "colStatus": "Procurement",

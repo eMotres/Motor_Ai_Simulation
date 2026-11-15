@@ -26,7 +26,9 @@ const DocumentsPanel: React.FC<{
   /** the shared link this page was opened with (`since` marks new documents, `ids` narrows the list); null = plain view */
   link?: ProductionLink | null;
   onLinkChange?: (l: ProductionLink | null) => void;
-}> = ({ documents, parts, ctx, sections = [], link = null, onLinkChange }) => {
+  /** file id -> number of the revision that brings or retires it and that this person has not acknowledged */
+  unackedFiles?: Record<string, string>;
+}> = ({ documents, parts, ctx, sections = [], link = null, onLinkChange, unackedFiles = {} }) => {
   const { t } = useTranslation('production');
   const { isAdmin } = useAuth();
   const canShare = canShareLink(ctx.role, isAdmin);
@@ -168,6 +170,10 @@ const DocumentsPanel: React.FC<{
                         {d.name}
                       </Box>
                       {isNew && <Chip size="small" label={t('docs.newBadge')} color="primary" sx={{ ml: 1, height: 18, fontSize: 10 }} />}
+                      {unackedFiles[d.file_id] && (
+                        <Chip size="small" color="warning" variant="outlined" data-testid="doc-unacked"
+                          label={t('docs.changedUnacked', { rev: unackedFiles[d.file_id] })} sx={{ ml: 1, height: 18, fontSize: 10 }} />
+                      )}
                       {d.status === 'superseded' && (
                         <Chip size="small" color="warning" data-testid="doc-superseded"
                           label={d.superseded_by ? t('docs.supersededBy', { name: d.superseded_by.name, rev: d.superseded_by.revision }) : t('docs.superseded')}

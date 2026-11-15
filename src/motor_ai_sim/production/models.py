@@ -831,6 +831,8 @@ def normalize_revision(raw: dict) -> dict:
         extra["files"] = _norm_files(raw["files"])
     if isinstance(raw.get("alert"), dict):
         extra["alert"] = raw["alert"]
+    if isinstance(raw.get("reminders"), list):
+        extra["reminders"] = [x for x in raw["reminders"] if isinstance(x, dict)]
     out = {
         "number": str(raw.get("number") or "1.0"),
         "date": str(raw.get("date") or _now()),

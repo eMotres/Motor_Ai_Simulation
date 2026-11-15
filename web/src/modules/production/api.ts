@@ -2,7 +2,7 @@
 // (docs/PRODUCTION_MODULE_DESIGN.md section 5). The session token is added by the global fetch interceptor.
 import { errorInfo, productionDocumentsZipPath, productionProcessDocumentFilename, productionProcessDocumentPath, productionZipFilename, safeFileName, unwrapList } from './helpers';
 import type {
-  AssemblyProcessView, AssemblyStep, AssemblyTree, Bilingual, BomImportPlan, BomRow, CostRow, CostsData, DocumentRec, ExtraCost, Member, MemberRole, Part, PartFiles, ProcessSection, Production, Proposal, Revision,
+  AssemblyProcessView, AssemblyStep, AssemblyTree, Bilingual, BomImportPlan, BomRow, CostRow, CostsData, DocumentRec, ExtraCost, Member, MemberRole, Part, PartFiles, ProcessSection, Production, Proposal, Revision, RevisionPreview, SupersedePair,
   ProductionAccess, Thread, TranslationRef, Lang, ProcurementData, ProcurementLine, ScheduleData, ScheduleBaseline, TimelineData,
 } from './types';
 
@@ -255,8 +255,12 @@ export const productionApi = {
   proposals: async (die: string, config: string) => unwrapList<Proposal>(await call('GET', `${base(die, config)}/proposals`), 'proposals'),
 
   revisions: async (die: string, config: string) => unwrapList<Revision>(await call('GET', `${base(die, config)}/revisions`), 'revisions'),
-  publishRevision: (die: string, config: string, summary: Bilingual, changes: Bilingual[]) =>
-    call<Revision>('POST', `${base(die, config)}/revisions`, { summary, changes }),
+  /** the exact mail + recipients a publish would send; nothing is sent or written */
+  previewRevision: (die: string, config: string, summary: Bilingual, changes: Bilingual[], supersedes: SupersedePair[] = []) =>
+    call<RevisionPreview>('POST', `${base(die, config)}/revisions/preview`, { summary, changes, supersedes }),
+  /** publishing IS sending: the same message goes to every member and into the Discussion */
+  publishRevision: (die: string, config: string, summary: Bilingual, changes: Bilingual[], supersedes: SupersedePair[] = []) =>
+    call<Revision>('POST', `${base(die, config)}/revisions`, { summary, changes, supersedes }),
   ackRevision: (die: string, config: string, rev: string) =>
     call<Revision>('POST', `${base(die, config)}/revisions/${enc(rev)}/ack`, {}),
 

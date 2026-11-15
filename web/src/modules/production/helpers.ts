@@ -779,3 +779,27 @@ export const extOf = (name: string): string => (name.split('.').pop() || '').toL
 /** Tab ids that no longer exist and where an old link / remembered tab goes instead (owner 2026-11-15: no Proposals tab). */
 export const LEGACY_TABS: Readonly<Record<string, string>> = { proposals: 'discussion' };
 export const legacyTab = (id: string): string => LEGACY_TABS[id] ?? id;
+
+/** The "replaces" rows of the publish form as the request wants them: only complete pairs, an old file once, never a file replacing itself. */
+export function supersedePairs(rows: ReadonlyArray<{ old: string; new: string }>): Array<{ old_doc_id: string; new_doc_id: string }> {
+  const seen = new Set<string>();
+  const out: Array<{ old_doc_id: string; new_doc_id: string }> = [];
+  for (const r of rows) {
+    if (!r.old || !r.new || r.old === r.new || seen.has(r.old)) continue;
+    seen.add(r.old);
+    out.push({ old_doc_id: r.old, new_doc_id: r.new });
+  }
+  return out;
+}
+
+/** Files that can still be replaced or can replace: not internal, not already superseded. */
+export function replaceableDocs<T extends { internal?: boolean; status?: string; step_id?: string | null }>(docs: readonly T[]): T[] {
+  return docs.filter((d) => !d.internal && d.status !== 'superseded' && !d.step_id);
+}
+
+/** One line per recipient of a published alert: who, role and what happened to the mail. */
+export function alertSummary(alert: { recipients: ReadonlyArray<{ mail: string }> } | undefined): { total: number; sent: number; failed: number; notConfigured: number } {
+  const rec = alert?.recipients ?? [];
+  return { total: rec.length, sent: rec.filter((r) => r.mail === 'sent').length, failed: rec.filter((r) => r.mail === 'failed').length,
+    notConfigured: rec.filter((r) => r.mail === 'not_configured').length };
+}

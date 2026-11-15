@@ -333,6 +333,10 @@ export interface DocumentRec {
   internal?: boolean;
   /** a picture posted to one assembly step */
   step_id?: string | null;
+  /** `superseded`: replaced by a newer file in a published revision; the file is kept, downloads warn */
+  status?: 'superseded';
+  superseded_by?: { doc_id: string; name: string; version: string | null; revision: string };
+  archived_at?: string;
 }
 
 export interface Attachment { file_id: string; name: string }
@@ -374,6 +378,18 @@ export interface Proposal {
 }
 
 export interface Acknowledgement { email: string; time: string }
+/** One file a revision brings (`new`) or retires (`superseded`, with `replaced_by`). */
+export interface RevisionFileRow {
+  doc_id: string; file_id: string; name: string; version: string | null; part_id?: string | null;
+  replaced_by?: { doc_id: string; name: string; version: string | null };
+}
+
+/** Who was mailed when the revision was published (publishing sends; owner 2026-11-15). `mail`: sent | failed | not_configured. */
+export interface RevisionAlert {
+  sent_at: string; subject: string; thread_id?: string | null; message_id?: string | null;
+  recipients: Array<{ email: string; role: string; mail: string }>;
+}
+
 export interface Revision {
   number: string;
   date: string;
@@ -381,7 +397,18 @@ export interface Revision {
   summary: Bilingual;
   changes: Bilingual[];
   acknowledgements: Acknowledgement[];
+  files?: { new: RevisionFileRow[]; superseded: RevisionFileRow[]; released: string[] };
+  alert?: RevisionAlert;
 }
+
+/** The exact message the publish would send (nothing is sent or written by asking for it). */
+export interface RevisionPreview {
+  number: string; subject: string; body: string; link: string; will_send: boolean;
+  recipients: Array<{ email: string; role: string }>;
+  files: { new: RevisionFileRow[]; superseded: RevisionFileRow[] };
+}
+
+export interface SupersedePair { old_doc_id: string; new_doc_id: string }
 
 /** Which bilingual field a confirm/retry call addresses. */
 export interface TranslationRef {

@@ -110,6 +110,16 @@ POSITION_NOTES: Dict[str, str] = {
     "behind_hub": "disc-plane value x 0.8 for hub blockage — motor right behind/under the hub (engineering assumption, to be calibrated)",
 }
 
+def seeded_config_path(*parts: str, base: Optional[Path] = None) -> Path:
+    """``<app>/config/<parts>`` in a checkout, ``<app>/config-seed/<parts>`` in the deployed image (deploy/Dockerfile.api keeps config/
+    as a read-only SEED at config-seed and has no config/).  The checkout wins when both exist; when neither does the checkout path is
+    returned so the error names the usual place."""
+    root = Path(base) if base is not None else Path(__file__).resolve().parents[2]
+    repo = root.joinpath("config", *parts)
+    seed = root.joinpath("config-seed", *parts)
+    return repo if repo.exists() or not seed.exists() else seed
+
+
 _REPO_DIR = Path(__file__).resolve().parents[2] / "config" / "propellers"
 #: Overridden by tests; a moved path wins outright (the passport-store rule).
 _DIR: Path = _REPO_DIR

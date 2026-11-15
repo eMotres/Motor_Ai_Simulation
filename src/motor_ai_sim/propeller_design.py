@@ -29,7 +29,7 @@ from motor_ai_sim import propeller_airfoil as af
 from motor_ai_sim import propeller_bemt as pb
 from motor_ai_sim import propeller_inflow as pi
 
-DESIGN_PATH = Path(__file__).resolve().parents[2] / "config" / "propellers" / "_designs" / "own_family.yaml"
+DESIGN_PATH = pp.seeded_config_path("propellers", "_designs", "own_family.yaml")
 N_STATIONS = 12
 BANNER = "BEMT, generic airfoil polars, not validated"
 F_UNCONFIRMED = "design_inputs_unconfirmed"

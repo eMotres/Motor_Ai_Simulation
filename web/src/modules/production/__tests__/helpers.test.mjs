@@ -497,6 +497,7 @@ test('Proposals strings: the tab and creation strings are gone from both locales
   }
   assert.doesNotMatch(en.titleTip, /proposal/i);
   assert.doesNotMatch(zh.titleTip, /建议|提案/);
+});
 
 // -- revision alerts (owner 2026-11-15) -------------------------------------------------------------------------------------
 test('replace rows: only complete pairs, an old file once, never a file replacing itself', () => {

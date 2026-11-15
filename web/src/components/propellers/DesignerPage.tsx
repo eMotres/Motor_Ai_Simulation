@@ -2,7 +2,7 @@
  *  objectives side by side.  Everything is a model value (BEMT, estimated polars, not validated) and the page says so.
  *  Evaluation is a deliberate press: every press and every sweep point becomes a run in the Pareto view. */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Alert, Box, Button, Chip, CircularProgress, MenuItem, Select, TextField, Tooltip, Typography } from '@mui/material';
+import { Alert, Box, Button, Checkbox, Chip, CircularProgress, FormControlLabel, MenuItem, Select, TextField, Tooltip, Typography } from '@mui/material';
 import { useTranslation } from 'react-i18next';
 
 import { frontCost, paretoFront, runLabel, toRun } from '../../lib/propellerDesign';
@@ -34,6 +34,14 @@ export default function DesignerPage() {
   const [sweepLo, setSweepLo] = useState('');
   const [sweepHi, setSweepHi] = useState('');
   const [sweepN, setSweepN] = useState('5');
+  const [optPop, setOptPop] = useState('12');
+  const [optGen, setOptGen] = useState('6');
+  const [optSeed, setOptSeed] = useState('1');
+  const [optFree, setOptFree] = useState<string[]>(['outer', 'inner', 'airfoil']);
+  const [optObj, setOptObj] = useState<string[]>(['thrust_per_shaft_W', 'cooling_air_axial_ms']);
+  const [optTip, setOptTip] = useState(true);
+  const [optTipLimit, setOptTipLimit] = useState('');
+  const [optMsg, setOptMsg] = useState<string | null>(null);
   const nextId = useRef(1);
   const lastRunVector = useRef<Vector | null>(null);
 
@@ -107,6 +115,26 @@ export default function DesignerPage() {
     } catch (e) { setError(t('propError', { error: (e as Error).message })); } finally { setBusy(false); }
   };
 
+  const toggle = (list: string[], x: string, set: (v: string[]) => void) => set(list.includes(x) ? list.filter((y) => y !== x) : [...list, x]);
+
+  const onOptimize = async () => {
+    if (!vector) return;
+    setBusy(true); setOptMsg(null);
+    try {
+      const lim = optTipLimit.trim() === '' ? null : Number(optTipLimit.replace(',', '.'));
+      const res = await api.optimize(vector, op, { pop: Number(optPop), generations: Number(optGen), seed: Number(optSeed), free: optFree,
+        objectives: optObj, enforce_tip_mach: optTip, tip_mach_limit: lim !== null && Number.isFinite(lim) ? lim : null });
+      const fresh: RunRecord[] = res.evaluations.map((e) => ({
+        id: nextId.current++, label: `g${e.generation} #${e.index}${e.note ? ' (' + e.note.split(':')[0] + ')' : ''}`, vector: e.vector, designId: e.design_id ?? '', op,
+        rpm: e.rpm ?? 0, thrust_per_shaft_W: e.objectives.thrust_per_shaft_W ?? null, air_ms: e.objectives.cooling_air_axial_ms ?? null,
+        constraintsMet: e.constraints_met, tipMach: e.tip_mach ?? 0,
+      }));
+      setRuns((rs) => [...rs, ...fresh].slice(-MAX_RUNS));
+      setOptMsg(t('propOptDone', { n: res.evaluations.length, front: res.front.length, s: res.elapsed_s }));
+      setError(null);
+    } catch (e) { setError(t('propError', { error: (e as Error).message })); } finally { setBusy(false); }
+  };
+
   const onChange = (name: string, value: number | string) => setVector((v) => (v ? { ...v, [name]: value } : v));
   const onPick = (r: RunRecord) => {
     setVector({ ...r.vector }); setSelected(r.id);
@@ -170,6 +198,38 @@ export default function DesignerPage() {
               <TextField size="small" label={t('propSweepHi')} value={sweepHi} onChange={(e) => setSweepHi(e.target.value)} sx={{ width: 80 }} />
               <TextField size="small" label={t('propSweepN')} value={sweepN} onChange={(e) => setSweepN(e.target.value)} sx={{ width: 64 }} />
               <Button size="small" variant="outlined" onClick={onSweep} disabled={busy || !sweepLo || !sweepHi}>{t('propSweepRun')}</Button>
+            </Box>
+          </Panel>
+          <Panel title={t('propOpt')} tip={t('propOptTip')}>
+            <Box sx={{ display: 'flex', gap: 0.75, flexWrap: 'wrap', alignItems: 'center' }} data-testid="prop-optimizer">
+              <TextField size="small" label={t('propOptPop')} value={optPop} onChange={(e) => setOptPop(e.target.value)} sx={{ width: 84 }} />
+              <TextField size="small" label={t('propOptGen')} value={optGen} onChange={(e) => setOptGen(e.target.value)} sx={{ width: 84 }} />
+              <TextField size="small" label={t('propOptSeed')} value={optSeed} onChange={(e) => setOptSeed(e.target.value)} sx={{ width: 70 }} />
+            </Box>
+            <Box sx={{ display: 'flex', gap: 1.5, flexWrap: 'wrap', alignItems: 'center', mt: 0.5 }}>
+              <Typography sx={{ fontSize: 12 }}>{t('propOptVary')}</Typography>
+              {['outer', 'inner', 'airfoil'].map((g) => (
+                <FormControlLabel key={g} control={<Checkbox size="small" checked={optFree.includes(g)} onChange={() => toggle(optFree, g, setOptFree)} />}
+                  label={<Typography sx={{ fontSize: 12 }}>{t(`propOptFree_${g}`)}</Typography>} />
+              ))}
+            </Box>
+            <Box sx={{ display: 'flex', gap: 1.5, flexWrap: 'wrap', alignItems: 'center' }}>
+              <Typography sx={{ fontSize: 12 }}>{t('propOptObjectives')}</Typography>
+              {['thrust_per_shaft_W', 'cooling_air_axial_ms'].map((o) => (
+                <FormControlLabel key={o} control={<Checkbox size="small" checked={optObj.includes(o)} onChange={() => toggle(optObj, o, setOptObj)} />}
+                  label={<Typography sx={{ fontSize: 12 }}>{t(`propOptObj_${o}`)}</Typography>} />
+              ))}
+            </Box>
+            <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap', alignItems: 'center' }}>
+              <FormControlLabel control={<Checkbox size="small" checked={optTip} onChange={() => setOptTip(!optTip)} />}
+                label={<Typography sx={{ fontSize: 12 }}>{t('propOptTipMach')}</Typography>} />
+              <Tooltip title={t('propOptTipMachLimitTip')}>
+                <TextField size="small" label={t('propOptTipMachLimit')} value={optTipLimit} placeholder={String(family.tip_mach_limit.value)} onChange={(e) => setOptTipLimit(e.target.value)} sx={{ width: 120 }} />
+              </Tooltip>
+            </Box>
+            <Box sx={{ display: 'flex', gap: 1, alignItems: 'center', mt: 0.5 }}>
+              <Button size="small" variant="contained" onClick={onOptimize} disabled={busy || optFree.length === 0 || optObj.length === 0}>{busy ? t('propOptRunning') : t('propOptRun')}</Button>
+              {optMsg && <Typography sx={{ fontSize: 12 }} data-testid="prop-opt-done">{optMsg}</Typography>}
             </Box>
           </Panel>
           <Panel title={t('propDesignDraftName')} tip={t('propDesignDraftsTip')}>

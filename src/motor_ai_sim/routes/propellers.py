@@ -12,6 +12,7 @@
     POST /api/propellers/design/evaluate      blade-element evaluation at a motor's torque limit (both objectives)
     POST /api/propellers/design/sweep         the same with ONE variable changed
     POST /api/propellers/design/curve         thrust / torque / power against rpm with the motor torque limit
+    POST /api/propellers/design/optimize      NSGA-II over the design variables: the Pareto front of the two objectives (capped, synchronous)
     GET|PUT|DELETE /api/propellers/design/drafts[/{name}]   drafts in the CALLER'S workspace (never the shared catalog)
     The /design routes are gated like a solve (auth._GATED_PREFIX 'solve:engineer': admin while MOTRES_SOLVE_ADMIN_ONLY is on).
 
@@ -402,6 +403,15 @@ def design_sweep(body: Dict[str, Any] = Body(...)) -> Dict[str, Any]:
 def design_curve(body: Dict[str, Any] = Body(...)) -> Dict[str, Any]:
     try:
         return pda.curve(body.get("vector"), str(body.get("op") or ""), body.get("n", 11), body.get("v_inf_ms", 0.0))
+    except pda.ApiProblem as exc:
+        raise _problem(exc)
+
+
+@router.post("/design/optimize")
+def design_optimize(body: Dict[str, Any] = Body(...)) -> Dict[str, Any]:
+    try:
+        return pda.optimize(body.get("vector"), str(body.get("op") or ""), body.get("pop", 12), body.get("generations", 6), body.get("seed", 1),
+                            body.get("objectives"), body.get("free"), body.get("enforce_tip_mach", True), body.get("tip_mach_limit"))
     except pda.ApiProblem as exc:
         raise _problem(exc)
 

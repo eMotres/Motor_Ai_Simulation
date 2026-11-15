@@ -104,6 +104,29 @@ def test_curve_against_rpm_with_the_motor_limit():
         assert c.post(B + "/curve", json={"vector": seed(), "op": "L12", **body}).status_code == 422, body
 
 
+def test_optimize_route_runs_stores_and_validates():
+    def run(tmp):
+        c = client()
+        r = c.post(B + "/optimize", json={"vector": seed(11, 3), "op": "L12", "pop": 4, "generations": 1, "seed": 2})
+        assert r.status_code == 200
+        j = r.json()
+        assert j["banner"] == pd.BANNER and j["operating_point"] == "L12" and j["front"] and j["estimated"] is True
+        assert j["settings"]["pop"] == 4 and j["settings"]["tip_mach_limit_confirmed"] is False
+        stored = tmp / pda.DRAFT_DIR / "_runs" / (j["run_id"] + ".jsonl")
+        assert stored.is_file() and len(stored.read_text().splitlines()) == len(j["evaluations"])
+        assert c.get(B + "/drafts").json() == {"drafts": []}                              # run files are not drafts
+        for body in ({"pop": 3}, {"pop": 20, "generations": 10}, {"generations": "x"}, {"seed": True}, {"objectives": ["nope"]},
+                     {"objectives": "thrust"}, {"free": []}, {"enforce_tip_mach": "yes"}, {"tip_mach_limit": 9}, {"op": "L99"}):
+            payload = {"vector": seed(11, 3), "op": "L12", "pop": 4, "generations": 1}
+            payload.update(body)
+            assert c.post(B + "/optimize", json=payload).status_code == 422, body
+        bad = seed(11, 3)
+        bad["blades"] = 5
+        assert c.post(B + "/optimize", json={"vector": bad, "op": "L12"}).status_code == 422
+
+    with_tmp_drafts(run)
+
+
 def test_sweep_one_variable():
     c = client()
     j = c.post(B + "/sweep", json={"vector": seed(), "op": "L12", "variable": "blades", "values": [2, 3, 4]}).json()
@@ -156,7 +179,7 @@ def test_access_tiers_the_designer_is_a_solve_the_catalogue_stays_open():
     old = os.environ.get("MOTRES_SOLVE_ADMIN_ONLY")
     try:
         os.environ.pop("MOTRES_SOLVE_ADMIN_ONLY", None)
-        for m, p in (("GET", B + "/family"), ("POST", B + "/evaluate"), ("POST", B + "/sweep"), ("PUT", B + "/drafts/x"),
+        for m, p in (("GET", B + "/family"), ("POST", B + "/evaluate"), ("POST", B + "/sweep"), ("POST", B + "/optimize"), ("POST", B + "/curve"), ("PUT", B + "/drafts/x"),
                      ("GET", B + "/drafts"), ("DELETE", B + "/drafts/x")):
             assert auth.required_role(m, p) == "admin", (m, p)
         os.environ["MOTRES_SOLVE_ADMIN_ONLY"] = "0"

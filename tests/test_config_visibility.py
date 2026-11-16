@@ -318,6 +318,7 @@ READ_ROUTES = {          # (method, path template) -> request builder key
     ("GET", "/api/family/datasheet/{die}/{cfg}"): "plain",
     ("GET", "/api/family/duty_results/{die}/{cfg}"): "plain",
     ("GET", "/api/family/duty_fields/{die}/{cfg}"): "plain",
+    ("GET", "/api/designation/motor/{die}/{cfg}"): "plain",
     ("GET", "/api/family/duty_runs/{die}/{cfg}/{duty}"): "plain",
     ("GET", "/api/family/duty_run/{die}/{cfg}/{duty}/{drive}"): "plain",
     ("GET", "/api/family/report/{die}/{cfg}"): "plain",

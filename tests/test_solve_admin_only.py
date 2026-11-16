@@ -292,6 +292,7 @@ DATA_MODULES = frozenset({
     "overview",                         # the owner's Overview: projects, productions, registry links (admins) - computes nothing
     "regions_sync",                     # the signed peer channel of the catalog mirror (extracts, foreign submit / result)
     "optimization_runs",                # stored optimisation runs of a motor: list / open / import a file, solves nothing
+    "designation",                      # the standard motor name read off the stored parameters - computes nothing
 })
 #: Router modules that can compute: every route in them is admin-only or reviewed above.
 COMPUTE_MODULES = frozenset({

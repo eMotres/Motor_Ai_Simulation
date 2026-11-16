@@ -41,7 +41,8 @@ different probe simply computes that eval.
 
 Stop: SIGTERM / SIGINT set the run's cancel flag and kill the running evals,
 exactly as the tab's Stop does; the worker writes its checkpoint and returns.
-Exit code 0 = finished, 3 = stopped (cancel or eval cap), 1 = the run failed,
+Exit code 0 = finished, 3 = stopped (cancel or eval cap), 4 = stopped because an
+eval was killed by the memory limit (exit -9), 1 = the run failed,
 2 = REFUSED before any eval (the message names the missing input).
 """
 from __future__ import annotations
@@ -116,6 +117,14 @@ def build_machine_config(req: Dict[str, Any], req_dir: Path,
     for k in ("connection", "star_delta"):
         if k in wnd and k in sim and k not in (m.get("simulation") or {}):
             sim[k] = wnd[k]
+    # ...and the electrical frequency mirrors the speed (f = rpm * p / 120).
+    msim = m.get("simulation") or {}
+    try:
+        poles = int(g["num_seg"]) * int(g["num_poles_per_segment"])
+    except (KeyError, TypeError, ValueError):
+        poles = int(g.get("num_poles") or 0)
+    if "rpm" in msim and "frequency" not in msim and "frequency" in sim and poles:
+        sim["frequency"] = round(float(msim["rpm"]) * poles / 120.0, 6)
     for lib in LIBRARIES:
         src = base_p.parent / lib
         if src.is_file() and not (state / lib).exists():
@@ -189,6 +198,8 @@ class EvalMemo:
         self.memo: Dict[str, Any] = {}
         self.computed = self.hits = 0
         self.capped = False
+        self.oom = 0
+        self.stopped_for_oom = False
         if path.is_file():
             for ln in path.read_text(encoding="utf-8").splitlines():
                 try:
@@ -230,6 +241,19 @@ class EvalMemo:
                 return {"ok": False, "cancelled": True, "error": "cancelled: eval cap"}
             self.computed += 1
         res = self.orig(overrides, current_a, steps, coil_temp_c, **kw)
+        if isinstance(res, dict) and "exited with code -9" in str(res.get("error") or ""):
+            # SIGKILL from outside = the job's memory limit, as a rule.  The app
+            # files it as a failed design and goes on (an MTPA sweep then picks
+            # its angle from the survivors); a campaign must not.  Stop loudly.
+            self.oom += 1
+            if not self.stopped_for_oom:
+                self.stopped_for_oom = True
+                print("STOP: an eval was killed (exit -9, the memory limit of the job?): "
+                      "fewer workers or more memory; the evals already done stay in "
+                      "the memo", flush=True)
+                with self.O._descent_lock:
+                    self.O._descent_state["cancel"] = True
+                self.O._kill_live_evals("descent")
         if isinstance(res, dict) and not self._transient(res):
             with self.lock:
                 self.memo[k] = res
@@ -393,6 +417,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     say(_progress_line(final, memo))
     say(f"final_validation_status={final.get('final_validation_status')} "
         f"apply_eligible={final.get('apply_eligible')} error={final.get('error')}")
+    if memo.stopped_for_oom:
+        say(f"STOPPED: {memo.oom} eval(s) killed by the memory limit")
+        return 4
     if memo.capped or stopped[0]:
         return 3
     return 1 if final.get("error") else 0

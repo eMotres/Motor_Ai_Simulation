@@ -42,9 +42,22 @@ class RunImport(BaseModel):
     overwrite: bool = False
 
 
+def _context_machine():
+    """die / config of the machine open in this workspace (the stamp every sweep already carries)."""
+    from motor_ai_sim.routes.optimization import _machine_stamp
+    st = _machine_stamp()
+    return st.get("die"), st.get("config")
+
+
 @router.get("")
-def list_saved_runs(die: str, config: str, authorization: str = Header(default=None)):
+def list_saved_runs(die: Optional[str] = None, config: Optional[str] = None,
+                    authorization: str = Header(default=None)):
+    """Saved runs of ``die``/``config``; both omitted = the machine open in this workspace."""
     F = _fam()
+    if not die or not config:
+        die, config = _context_machine()
+        if not die or not config:
+            return {"die": None, "config": None, "runs": []}
     die, config = F._check_name(die, "die"), F._check_name(config, "configuration")
     F._require_die_access(die, authorization, config)
     return {"die": die, "config": config, "runs": RS.list_runs(*_read_dirs(F, die), config=config)}

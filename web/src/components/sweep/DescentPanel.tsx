@@ -18,6 +18,7 @@ import {
 import Scatter3D from './Scatter3D';
 import { useMotorStore } from '../../stores/motorStore';
 import { appliedSaveLine } from '../../lib/appliedAutoSave';
+import SavedRuns from './SavedRuns';
 
 /**
  * Gradient / coordinate descent panel.
@@ -557,6 +558,7 @@ const DescentPanel: React.FC<{ chartsOnly?: boolean }> = ({ chartsOnly = false }
           </Button>
         )}
       </Box>
+      <SavedRuns running={descentRunning} />
 
       {/* ── Controls grouped into labelled sections ── */}
       <Box sx={{ display: 'flex', gap: 2.5, flexWrap: 'wrap', alignItems: 'flex-start', mb: 1.5 }}>

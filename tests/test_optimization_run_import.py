@@ -110,3 +110,13 @@ def test_store_path_is_inside_the_die_folder(tmp_path):
     assert p.parent.parent.parent == tmp_path / DIE
     shutil.move(str(tmp_path / DIE), str(tmp_path / "RENAMED"))
     assert [r["run_id"] for r in RS.list_runs(tmp_path / "RENAMED", config=CFG)] == ["hl-1"]
+
+
+def test_list_without_names_uses_the_open_machine(dies, hdr, monkeypatch):
+    from motor_ai_sim.routes import optimization as O
+    assert _imp(hdr["admin"]).status_code == 200
+    monkeypatch.setattr(O, "_machine_stamp", lambda *a, **k: {"die": DIE, "config": CFG})
+    r = client.get("/api/optimization/runs", headers=hdr["admin"]).json()
+    assert r["die"] == DIE and [x["run_id"] for x in r["runs"]] == ["hl-1"]
+    monkeypatch.setattr(O, "_machine_stamp", lambda *a, **k: {})
+    assert client.get("/api/optimization/runs", headers=hdr["admin"]).json()["runs"] == []

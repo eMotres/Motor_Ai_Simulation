@@ -319,3 +319,25 @@ def test_a_timeout_is_solved_once_more():
         m = H.EvalMemo(O, Path(d) / H.MEMO_FILE, None)
         r = m({"tooth_width": 1.0}, 10.0, 24, 120.0)
         assert r["ok"] and len(calls) == 2 and m.retried == 1 and len(m.memo) == 1
+
+
+def test_cogging_screen_is_opt_in():
+    res = {"T_em_Nm": 0.001, "T_ripple_pct": 4.05e4, "mass_total_kg": 1.0}
+    assert "T_ripple_pct" in (O._nonphysical_result(res) or "")
+    assert O._nonphysical_result(res, skip=("T_ripple_pct",)) is None
+    assert O._scan_pins(630.9, 20.0, True) == {"rpm": 630.9, "magnet_temp_c": 20.0, "cogging_screen": True}
+    assert O._scan_pins(630.9, 20.0) == {"rpm": 630.9, "magnet_temp_c": 20.0}
+    assert "cogging_screen" not in O.prepare_scan(O.ScanRequest(**_sweep_body()))["kwargs"]
+    assert O.prepare_scan(O.ScanRequest(**_sweep_body(cogging_screen=True)))["kwargs"] == {"cogging_screen": True}
+    seen = []
+
+    def fn(ov, cur, *a, **kw):
+        seen.append(kw.get("ripple_pct_gate", "absent"))
+        return _stub(ov, cur, *a, **kw)
+    with _patched_sweep(fn):
+        H.run_sweep(O, _sweep_body(cogging_screen=True), log=lambda m: None, poll_s=0.05)
+    assert seen and set(seen) == {False}
+    seen.clear()
+    with _patched_sweep(fn):
+        H.run_sweep(O, _sweep_body(), log=lambda m: None, poll_s=0.05)
+    assert seen and set(seen) == {"absent"}

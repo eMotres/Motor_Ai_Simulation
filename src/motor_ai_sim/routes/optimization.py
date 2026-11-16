@@ -1359,7 +1359,7 @@ def serial_first_decision(n_tasks: int, n_workers: int, demag: bool,
                   "state" % (int(n_tasks), int(n_workers)))
 
 
-def _nonphysical_result(res: Any) -> Optional[str]:
+def _nonphysical_result(res: Any, skip: Tuple[str, ...] = ()) -> Optional[str]:
     """Reason the metrics of an 'ok' eval are physically impossible, else None.
 
     Bounds are deliberately loose — orders of magnitude, not engineering
@@ -1384,6 +1384,8 @@ def _nonphysical_result(res: Any) -> Optional[str]:
         ("P_loss_total_W",        lambda v: 0.0 <= v < 1e7),
     )
     for key, ok_fn in checks:
+        if key in skip:
+            continue
         v = res.get(key)
         if v is None:
             continue                    # absent metric is the consumer's problem
@@ -1507,6 +1509,7 @@ def _subprocess_eval(overrides: Dict[str, float], current_a: float, steps: int,
                      magnet_temp_c: Optional[float] = None,
                      owner: str = "",
                      threads: Optional[int] = None,
+                     ripple_pct_gate: bool = True,
                      sampling_purpose: Literal["standard", "optimization", "cogging_quality"] =
                      "optimization",
                      optimizer_candidate: bool = True) -> Dict[str, Any]:
@@ -1749,7 +1752,13 @@ def _subprocess_eval(overrides: Dict[str, float], current_a: float, steps: int,
                 # exactly 0.0 — the point then stretched every chart axis).
                 # A non-physical RESULT is a rejected eval, said out loud —
                 # never data.
-                _bad = _nonphysical_result(_res.get("res"))
+                # A cogging screen (opt-in) solves points at ZERO current:
+                # their mean torque is ~0, so a ripple PERCENT is undefined
+                # and can be any size - not a broken postprocess.
+                _bad = _nonphysical_result(
+                    _res.get("res"),
+                    skip=(("T_ripple_pct",) if not ripple_pct_gate
+                          and abs(float(current_a)) == 0.0 else ()))
                 if _bad:
                     log.warning("eval REJECTED (non-physical result): %s | "
                                 "I=%.3g A gamma=%.3g deg overrides=%s",
@@ -2046,6 +2055,10 @@ class ScanRequest(BaseModel):
     # magnet card's own temperature, exactly as before (a cogging screen at
     # 20 °C on a 120 °C card needs it).
     magnet_temp_c: Optional[float] = None
+    # Opt-in cogging screen: points at ZERO current are not rejected for an
+    # out-of-range ripple PERCENT (undefined at ~0 mean torque); their result
+    # is the cogging peak-to-peak in N·m.  Off = the sanity gate as before.
+    cogging_screen: bool = False
     # The BASELINE point (the current motor, un-varied, at operating point 0)
     # is an extra full FEM eval that used to run unconditionally and LAST —
     # the user stopped every sweep at "22/23" to skip it (2026-09-04).  Opt-in.
@@ -2176,7 +2189,7 @@ def _scan_owns(run_id) -> bool:
     return str(_scan_state.get("run_id") or "") == str(run_id or "")
 
 
-def _scan_pins(rpm=None, magnet_temp_c=None) -> Optional[Dict[str, Any]]:
+def _scan_pins(rpm=None, magnet_temp_c=None, cogging_screen=False) -> Optional[Dict[str, Any]]:
     """The eval-cache pins of a Sweep point: its speed, and the magnet
     temperature only when the request set one (so every key of a Sweep
     without it is what it always was)."""
@@ -2185,6 +2198,8 @@ def _scan_pins(rpm=None, magnet_temp_c=None) -> Optional[Dict[str, Any]]:
         pins["rpm"] = float(rpm)
     if magnet_temp_c is not None:
         pins["magnet_temp_c"] = round(float(magnet_temp_c), 2)
+    if cogging_screen:
+        pins["cogging_screen"] = True
     return pins or None
 
 
@@ -2195,7 +2210,7 @@ def _scan_worker(variables, operating_points, steps, coil_temp_c, ripple_max,
                  end_winding=0.0, rotor_eddy=False, hi_fidelity=False,
                  structured_gap=False, airgap_macro=False, iron_template=True,
                  geo_mesh=True, element_order=2, demag=False,
-                 with_baseline=False, magnet_temp_c=None) -> None:
+                 with_baseline=False, magnet_temp_c=None, cogging_screen=False) -> None:
     import numpy as np  # noqa: F401
     from concurrent.futures import wait, FIRST_COMPLETED
     # Workspace-carrying pool — see workspace.WorkspaceThreadPoolExecutor.
@@ -2348,7 +2363,7 @@ def _scan_worker(variables, operating_points, steps, coil_temp_c, ripple_max,
                                  gap_layers, end_winding, rotor_eddy, hi_fidelity, structured_gap, airgap_macro,
                                  iron_template=iron_template, geo_mesh=geo_mesh,
                                  element_order=element_order, demag=demag,
-                                 pins=_scan_pins(rpm, magnet_temp_c),
+                                 pins=_scan_pins(rpm, magnet_temp_c, cogging_screen),
                                  sampling_purpose="optimization",
                                  fp_excludes=_excl)
 
@@ -2397,6 +2412,7 @@ def _scan_worker(variables, operating_points, steps, coil_temp_c, ripple_max,
                                    rpm=oprpm, owner="scan",
                                     threads=_solo_ctx["threads"],
                                     magnet_temp_c=magnet_temp_c,
+                                    **({"ripple_pct_gate": False} if cogging_screen else {}),
                                     sampling_purpose="optimization")
             if _config_fingerprint(tuple(geo_ov)) != fp_before:
                 out = {"ok": False, "error": "source config changed during FEM scan",
@@ -2640,6 +2656,7 @@ def _scan_worker(variables, operating_points, steps, coil_temp_c, ripple_max,
                                        iron_template=iron_template, geo_mesh=geo_mesh,
                                        element_order=element_order, demag=demag,
                                        magnet_temp_c=magnet_temp_c,
+                                       **({"ripple_pct_gate": False} if cogging_screen else {}),
                                        sampling_purpose="optimization")
                 if base_out and base_out.get("ok"):
                     _store_eval(_bck, base_out)
@@ -2858,6 +2875,8 @@ def prepare_scan(req: ScanRequest) -> Dict[str, Any]:
     # absent unless asked: the default worker call is unchanged
     kwargs = ({} if req.magnet_temp_c is None
               else {"magnet_temp_c": float(req.magnet_temp_c)})
+    if req.cogging_screen:
+        kwargs["cogging_screen"] = True
     response = {"started": True, "steps_per_period": steps, "max_geometries": max_geom,
                 "mesh_size_mm": mesh_size, "min_size_mm": min_size}
     return {"variables": variables, "dropped": dropped, "ops": ops, "args": args,

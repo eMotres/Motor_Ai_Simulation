@@ -17,6 +17,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import dataclasses
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -36,6 +37,8 @@ F_UNCONFIRMED = "design_inputs_unconfirmed"
 F_ROOT = "root_flow_not_validated"
 F_HUB = "hub_shape_not_modelled"
 F_AIRFOIL = "airfoil_choice_not_resolved_by_polar"
+F_AIRFOIL_DRAG = "airfoil_drag_not_resolved_by_polar"     # camber_model: the zero-lift angle follows the airfoil, drag and stall do not
+POLAR_CHOICES = ("flatplate_model", "camber_model")
 IN = 0.0254
 
 
@@ -75,6 +78,20 @@ class Design:
     def inputs_unconfirmed(self) -> bool:
         r = self.raw
         return not all(bool(r[k].get("confirmed_by")) for k in ("blades", "bounds", "tip_mach_limit"))
+
+
+def polar_source(d: "Design") -> str:
+    """The section polar of the family: ``polars_source`` in the design file, default ``flatplate_model`` (the stored behaviour)."""
+    return str(d.raw.get("polars_source") or "flatplate_model")
+
+
+def with_polar_source(d: "Design", source: Optional[str]) -> "Design":
+    """A copy of the design using ``source`` (None = unchanged); refused by name when not offered."""
+    if source is None:
+        return d
+    if source not in POLAR_CHOICES:
+        raise DesignError("polar_source must be one of %s, got %r" % (list(POLAR_CHOICES), source))
+    return dataclasses.replace(d, raw=dict(d.raw, polars_source=source))
 
 
 def load_design(path: Path = DESIGN_PATH) -> Design:
@@ -186,7 +203,7 @@ def candidate_to_propeller2(d: Design, vec: Dict[str, Any]) -> Dict[str, Any]:
     blade = {"geometry_source": "inferred", "source_ref": "parametric family %s (propeller_design.py)" % d.id, "estimated": True,
              "method": "parametric blade from design variables; generic generated airfoils; not a measured geometry",
              "hub_radius_mm": float(vec["hub_radius_mm"]), "root_cutout_mm": max(float(vec["root_cutout_mm"]), float(vec["hub_radius_mm"])),
-             "interpolation": "pchip", "pitch_axis": 0.25, "stations": st, "polars": {"source": "flatplate_model"},
+             "interpolation": "pchip", "pitch_axis": 0.25, "stations": st, "polars": {"source": polar_source(d)},
              "manufacturing": man}
     return {"schema": "propeller-2", "id": "own_%din_%db_%s" % (int(vec["diameter_in"]), int(vec["blades"]), h),
             "vendor": "MOTRES", "model": "%d in %d-blade design %s" % (int(vec["diameter_in"]), int(vec["blades"]), h), "status": "design",
@@ -304,7 +321,7 @@ def evaluate_candidate(d: Design, vec: Dict[str, Any], op_name: str, *, v_inf: f
         flags.add("rpm_search_not_converged")
     R_m = prop.blade.tip_radius_m
     mach = _tip_mach(R_m, rpm, temp)
-    flags |= set(res.flags) | {F_ROOT, F_HUB, F_AIRFOIL}
+    flags |= set(res.flags) | {F_ROOT, F_HUB, F_AIRFOIL if polar_source(d) == "flatplate_model" else F_AIRFOIL_DRAG}
     if d.inputs_unconfirmed():
         flags.add(F_UNCONFIRMED)
     flags |= set(d.manufacturing.flags())

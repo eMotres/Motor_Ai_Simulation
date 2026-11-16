@@ -162,6 +162,44 @@ class FlatPlatePolar(PolarProvider):
         return A1 * np.sin(2.0 * ap) + A2 * ca ** 2 / sa, B1 * sa ** 2 + B2 * ca
 
 
+def zero_lift_angle(x, yu, yl) -> float:
+    """Thin-airfoil zero-lift angle [rad] of a section from its camber line z = (yu + yl) / 2 (x/c from 0 to 1):
+    alpha_0 = -(1/pi) * integral_0^pi dz/dx (cos(theta) - 1) d(theta), x = (1 - cos(theta)) / 2; slope piecewise constant
+    between the points, the theta integral exact per segment.  Negative for positive camber (NACA 4412: about -4.2 deg)."""
+    x = np.asarray(x, float)
+    z = 0.5 * (np.asarray(yu, float) + np.asarray(yl, float))
+    th = np.arccos(np.clip(1.0 - 2.0 * x, -1.0, 1.0))
+    slope = np.diff(z) / np.maximum(np.diff(x), 1e-12)
+    g = np.sin(th) - th
+    return float(-np.sum(slope * np.diff(g)) / math.pi)
+
+
+class CamberedPlatePolar(FlatPlatePolar):
+    """ESTIMATED section polar with camber: the flat-plate model evaluated at alpha - alpha_0, alpha_0 from thin-airfoil
+    theory on the section's own camber line (``propeller_airfoil``: generated NACA 4-digit or a library file).  Lift
+    slope, drag and stall are still the generic flat-plate ones; only the zero-lift angle depends on the airfoil."""
+
+    estimated = True
+
+    def __init__(self, aspect_ratio: float = 8.0, alpha_stall_deg: float = FLATPLATE_ALPHA_STALL_DEG):
+        super().__init__(aspect_ratio, alpha_stall_deg)
+        self._a0: Dict[str, float] = {}
+
+    def alpha0(self, airfoil: str) -> float:
+        if airfoil not in self._a0:
+            from motor_ai_sim import propeller_airfoil as _af
+            try:
+                e = _af.get_airfoil(airfoil)
+            except _pp.PropellerDataError as exc:
+                raise BemtError("camber polar: %s" % exc)
+            self._a0[airfoil] = zero_lift_angle(e.x, e.yu, e.yl)
+        return self._a0[airfoil]
+
+    def eval(self, airfoil: str, alpha, Re, mach, thickness):
+        cl, cd, flags = super().eval(airfoil, np.asarray(alpha, float) - self.alpha0(airfoil), Re, mach, thickness)
+        return cl, cd, set(flags) | {"camber_thin_airfoil"}
+
+
 @dataclass(frozen=True)
 class PolarTable:
     airfoil: str
@@ -532,6 +570,8 @@ def polar_for(prop: _pp.Propeller, polar_dir: Optional[Path] = None) -> PolarPro
     ar = max((b.tip_radius_m - b.root_cutout_m) / max(float(np.mean([s.chord_m for s in b.stations])), 1e-9), 1.0)
     if src == "flatplate_model":
         return FlatPlatePolar(ar)
+    if src == "camber_model":
+        return CamberedPlatePolar(ar)
     if src in ("xfoil_table", "measured"):
         tp = TablePolar.from_dir(polar_dir or POLAR_DIR, ar)
         missing = sorted({s.airfoil for s in b.stations} - set(tp.airfoils()))

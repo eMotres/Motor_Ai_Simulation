@@ -7,8 +7,12 @@ the ripple scale and by 90 % of the mean torque.  The checks existed; nothing ac
 ``assess`` reads only numbers the run already carries and returns a verdict; it never changes a result.
 
 * ``ok``      every available check passes.
-* ``warn``    a check fails the solver's own gate (``SELF_CHECK_GATE``, 5 % of the ripple scale): the result is flagged
-              "not verified" and stored with that flag.
+* ``warn``    a check fails: the CENTRED (waveform) part of the ring disagreement is above 5 % of the ripple scale
+              (the solver's ``SELF_CHECK_GATE``), (owner 2026-11-16: ripple accuracy 5 %).  The DC offset between the
+              rings is only reported (``values``) and never warns.  The result is flagged "not verified" and stored with that flag.  A DC offset of
+              a few percent alone (80 mm die: 5 % of the mean at 1 row, 3 % at 2 rows, centred part under 1 % of the
+              ripple) is the estimator offset, not a ripple error, and does not flag.  A payload without the split
+              (stored before it existed) is judged by the old combined number, as before.
 * ``reject``  the ring disagreement is gross (more than half the ripple scale, or the two rings' MEAN torques differ by
               more than a fifth of max(|mean|, ripple pp)): refused unless the caller asks explicitly to store it.
 
@@ -59,11 +63,14 @@ def assess(summary: Optional[dict], payload: Optional[dict] = None) -> dict:
         scale = _num(chk.get("rel_to_ripple_scale"))
     if scale is None:
         scale = _num(_dig(payload, "gap_refinement", "self_check_rel_to_ripple_scale"))
+    ac = _num(chk.get("rel_ac_to_ripple_scale"))
     ct = _dig(payload, "coulomb_torque") or {}
     md, tav, pp = _num(chk.get("mean_diff_Nm")), _num(ct.get("T_avg_coulomb_Nm")), _num(ct.get("T_ripple_pp_coulomb"))
     to_mean = (abs(md) / max(abs(tav or 0.0), abs(pp or 0.0), 1e-12)
                if md is not None and (tav is not None or pp is not None) else None)
     resid = _num(_dig(payload, "power_balance", "residual_rel"))
+    if ac is not None:
+        scale = ac            # judge the waveform part; the DC offset has its own check below
     values = {"ring_disagreement_rel_to_ripple_scale": scale, "ring_mean_diff_rel_to_torque_scale": to_mean,
               "power_balance_residual_rel": resid}
     unchecked = [k for k, v in values.items() if v is None]

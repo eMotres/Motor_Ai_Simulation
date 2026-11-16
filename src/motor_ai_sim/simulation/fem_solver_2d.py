@@ -14484,12 +14484,14 @@ def _fem_transient_sliding_band_once(
     _coul2["layers"] = _ftq2.layers_info
     _coul2["torque_method_requested"] = torque_method
     if _coul2["layer_self_check"].get("ripple_mesh_limited"):
-        log.warning("Coulomb layer self-check: rotor- and stator-side gap rings "
-                    "differ by %.3g N·m = %.1f %% of the ripple scale at %g gap "
-                    "layers/side — the ripple is limited by the air-gap mesh",
-                    _coul2["layer_self_check"]["max_abs_diff_Nm"],
-                    100.0 * _coul2["layer_self_check"]["rel_to_ripple_scale"],
-                    float(gap_layers))
+        _lsc = _coul2["layer_self_check"]
+        log.warning("Coulomb layer self-check: the rotor- and stator-side gap-ring "
+                    "torque estimators disagree by %.3g N·m = %.1f %% of the ripple "
+                    "scale at %g gap layers/side (DC offset %.3g N·m, centred "
+                    "waveform part %.3g N·m = %.1f %% of the ripple scale)",
+                    _lsc["max_abs_diff_Nm"], 100.0 * _lsc["rel_to_ripple_scale"],
+                    float(gap_layers), _lsc["dc_diff_Nm"], _lsc["ac_max_abs_diff_Nm"],
+                    100.0 * (_lsc["rel_ac_to_ripple_scale"] or 0.0))
     if torque_method == "coulomb":
         if _coul2["available"]:
             _T2 = list(_coul2["T_coulomb_series"])

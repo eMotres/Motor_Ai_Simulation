@@ -28,6 +28,9 @@ import { appLinkPath, isAppLinkPath, parseAppLink } from '../../../lib/appLink';
 import { useHistoryLevel } from '../../../lib/historyLevels';
 import { useUIStore } from '../../../stores/uiStore';
 import DigestSettings from '../../../components/digest/DigestSettings';
+import { DisplayStateControl } from '../../../components/common/DisplayStateControl';
+import { productionStateKey } from '../../../lib/displayState';
+import { displayStateApi, useDisplayStates } from '../../../lib/displayStateApi';
 import { productionUnreadKey } from '../../../lib/unreadMessages';
 import { useUnreadCounts } from '../../../lib/useUnreadMessages';
 import type {
@@ -72,8 +75,10 @@ const ProductionPage: React.FC<{ die: string; config: string; onBack: () => void
   initialTab?: TabId | 'proposals'; itemId?: string }> = ({ die, config, onBack, backLabel, link: linkProp = null, initialTab, itemId }) => {
   const { t } = useTranslation('production');
   const ui = useContentLang();
-  const { user, isAdmin } = useAuth();
+  const { user, isAdmin, role: accountRole } = useAuth();
   const email = user?.email ?? '';
+  // Active / Parked / Archived (owner 2026-11-16): staff only, never shown to the factory
+  const { states: displayStates, reload: reloadDisplayStates } = useDisplayStates(isAdmin || accountRole === 'engineer');
   const unreadCounts = useUnreadCounts();
   const unreadDiscussion = unreadCounts?.productions[productionUnreadKey(die, config)] ?? 0;
   const [prod, setProd] = useState<Production | null>(null);
@@ -173,6 +178,8 @@ const ProductionPage: React.FC<{ die: string; config: string; onBack: () => void
           <>
             <Chip size="small" label={t('parts.revision', { rev: prod.current_revision })} sx={{ height: 18, fontSize: 10.5, fontWeight: 700, bgcolor: 'var(--panel)', color: 'var(--text-2)' }} />
             <Chip size="small" label={t(`status.${prod.status}`)} sx={{ height: 18, fontSize: 10.5, fontWeight: 700, bgcolor: 'var(--panel)', color: 'var(--text-2)' }} />
+            {displayStates && <DisplayStateControl rec={displayStates.productions[productionStateKey(die, config)]}
+              onChange={async (next, reason) => { try { await displayStateApi.set({ kind: 'production', die, config }, next, reason); } finally { reloadDisplayStates(); } }} />}
             {role && <Chip size="small" label={t(`role.${role}`)} sx={{ height: 18, fontSize: 10.5, fontWeight: 700, bgcolor: 'var(--panel)', color: 'var(--text-3)' }} />}
             <Box sx={{ minWidth: 0 }}><BilingualText value={prod.title} size={13} canConfirm={ctx.canEdit} die={die} config={config}
               tref={{ entity: 'production', entity_id: `${die}/${config}`, field: 'title' }} onChanged={ctx.reload} /></Box>

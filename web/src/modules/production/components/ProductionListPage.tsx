@@ -19,10 +19,15 @@ import { productionCardMotor } from '../../../lib/cardMotor';
 import { useUnreadCounts } from '../../../lib/useUnreadMessages';
 import type { Production } from '../types';
 import { NARROW } from '../../../lib/narrowLayout';
+import { DisplayStateControl, DisplayStateFilter, WokeBadge } from '../../../components/common/DisplayStateControl';
+import { activityAfter, DISPLAY_FILTERS, filterCounts, filterRows, productionStateKey, stateOf, type DisplayFilter, type DisplayState } from '../../../lib/displayState';
+import { displayStateApi, useDisplayStates } from '../../../lib/displayStateApi';
+import { useRememberedView } from '../../../lib/useRememberedView';
+import { oneOf } from '../../../lib/viewMemory';
 
 const ProductionListPage: React.FC<{ onOpen: (p: Production) => void }> = ({ onOpen }) => {
   const { t } = useTranslation('production');
-  const { user, isAdmin } = useAuth();
+  const { user, isAdmin, role: accountRole } = useAuth();
   const [items, setItems] = useState<Production[] | null>(null);
   const unreadCounts = useUnreadCounts();
   const [viewMode, setViewMode] = useViewMode(VIEW_MODE_KEYS.production, 'list');
@@ -38,10 +43,25 @@ const ProductionListPage: React.FC<{ onOpen: (p: Production) => void }> = ({ onO
   }, [t]);
   useEffect(() => { void load(); }, [load]);
   const unreadOf = (p: Production) => unreadFor(unreadCounts, 'productions', productionUnreadKey(p.die, p.config), p.unread_messages);
+  // Active / Parked / Archived (owner 2026-11-16): staff only; the factory's list stays exactly as before
+  const { states: displayStates, reload: reloadDisplayStates } = useDisplayStates(isAdmin || accountRole === 'engineer');
+  const [displayFilter, setDisplayFilter] = useRememberedView<DisplayFilter>('production.displayFilter', 'active', oneOf(DISPLAY_FILTERS));
+  const stateKey = (p: Production) => productionStateKey(p.die, p.config);
+  const prodState = (p: Production) => stateOf(displayStates?.productions, stateKey(p));
+  const prodWoke = (p: Production) => activityAfter(displayStates?.productions[stateKey(p)], [p.updated_at], unreadOf(p));
+  const setProdState = async (p: Production, next: DisplayState, reason: string) => {
+    try { await displayStateApi.set({ kind: 'production', die: p.die, config: p.config }, next, reason); } catch (e) { setErr(e instanceof Error ? e.message : String(e)); }
+    reloadDisplayStates();
+  };
+  const shown = items && displayStates ? filterRows(items, displayFilter, prodState) : items;
+  const stateExtra = (p: Production) => displayStates
+    ? <><WokeBadge show={prodWoke(p)} /><Box component="span" sx={{ ml: 1 }}><DisplayStateControl rec={displayStates.productions[stateKey(p)]} onChange={(next, reason) => setProdState(p, next, reason)} /></Box></>
+    : null;
 
   return (
     <Box>
       <HeaderRight tab="production">
+        {displayStates && items && <DisplayStateFilter value={displayFilter} onChange={setDisplayFilter} counts={filterCounts(items, prodState, prodWoke)} />}
         <HelpTip title={t('titleTip')} />
         <ViewModeToggle mode={viewMode} onChange={setViewMode} />
         <Button size="small" startIcon={<RefreshIcon sx={{ fontSize: 16 }} />} disabled={loading} onClick={() => void load()}
@@ -57,7 +77,7 @@ const ProductionListPage: React.FC<{ onOpen: (p: Production) => void }> = ({ onO
       )}
       {!loading && !err && items && items.length > 0 && viewMode === 'cards' && (
         <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(260px,1fr))', gap: 1.5 }}>
-          {items.map((p) => {
+          {(shown ?? []).map((p) => {
             const role = productionRole(p, user?.email ?? '', isAdmin);
             const unread = unreadOf(p);
             const motor = productionCardMotor(p, dieIndex);
@@ -65,6 +85,7 @@ const ProductionListPage: React.FC<{ onOpen: (p: Production) => void }> = ({ onO
               <Paper key={`${p.die}/${p.config}`} tabIndex={0} onClick={() => onOpen(p)} onKeyDown={(e) => { if (e.target === e.currentTarget && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); onOpen(p); } }}
                 sx={{ position: 'relative', p: 1.8, minHeight: motor ? 118 : undefined, cursor: 'pointer', bgcolor: 'var(--panel-2)', border: '1px solid var(--line-soft)', '&:hover': { borderColor: 'primary.main' } }}>
                 <Typography sx={{ fontWeight: 700, color: 'var(--text-0)' }}>{p.die} / {p.config}<RevisionLabel rev={p.product_revision?.rev} /><UnreadBadge count={unread} /></Typography>
+                {displayStates && <Box sx={{ mt: 0.5 }} onClick={(e) => e.stopPropagation()}>{stateExtra(p)}</Box>}
                 <Box sx={{ pr: motor ? 9 : 0 }}>   {/* keeps the text clear of the picture in the corner */}
                   <Box sx={{ mt: 0.5 }}><BilingualText value={p.title} size={12} /></Box>
                   <Box sx={{ mt: 1.2, display: 'flex', alignItems: 'center', gap: 0.75, flexWrap: 'wrap' }}>
@@ -96,12 +117,12 @@ const ProductionListPage: React.FC<{ onOpen: (p: Production) => void }> = ({ onO
               </TableRow>
             </TableHead>
             <TableBody>
-              {items.map((p) => {
+              {(shown ?? []).map((p) => {
                 const role = productionRole(p, user?.email ?? '', isAdmin);
                 const unread = unreadOf(p);
                 return (
                   <TableRow key={`${p.die}/${p.config}`} hover tabIndex={0} sx={{ cursor: 'pointer' }} onClick={() => onOpen(p)} onKeyDown={(e) => { if (e.target === e.currentTarget && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); onOpen(p); } }}>
-                    <TableCell sx={{ color: 'var(--text-0)', fontWeight: 600 }}>{p.die} / {p.config}<RevisionLabel rev={p.product_revision?.rev} /><UnreadBadge count={unread} /></TableCell>
+                    <TableCell sx={{ color: 'var(--text-0)', fontWeight: 600 }}>{p.die} / {p.config}<RevisionLabel rev={p.product_revision?.rev} /><UnreadBadge count={unread} />{stateExtra(p)}</TableCell>
                     <TableCell><BilingualText value={p.title} size={12.5} /></TableCell>
                     <TableCell align="right">{p.order_quantity}</TableCell>
                     <TableCell align="center">{p.current_revision}</TableCell>

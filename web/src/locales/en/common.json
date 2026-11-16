@@ -761,5 +761,19 @@
       "saveConfig": "Save as new configuration of {die}",
       "reattach": "Re-attach to {die} / {config}"
     }
+  },
+  "displayState": {
+    "active": "Active",
+    "parked": "Parked",
+    "archived": "Archived",
+    "all": "All",
+    "woke": "new",
+    "reason": "Reason",
+    "cancel": "Cancel",
+    "save": "Save",
+    "setTip": "Set by {by} on {at}. Reason: {reason}. Only our side sees this; the customer and the factory see the object as before.",
+    "defaultTip": "Shown from the status. Parked and archived objects are hidden from the lists, never changed; they stay hidden until set back to Active.",
+    "wokeTip": "{count} hidden objects with activity since they were hidden",
+    "wokeRowTip": "Activity since it was hidden. It stays here until set back to Active."
   }
 }

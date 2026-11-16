@@ -109,6 +109,7 @@ from motor_ai_sim.routes.wire_stock import router as wire_stock_router
 from motor_ai_sim.routes.propellers import router as propellers_router
 from motor_ai_sim.routes.optimization import router as optimization_router
 from motor_ai_sim.routes.optimization_runs import router as optimization_runs_router
+from motor_ai_sim.routes.display_state import router as display_state_router
 from motor_ai_sim.routes.presets import router as presets_router
 from motor_ai_sim.routes.catalog import router as catalog_router
 from motor_ai_sim.routes.catalog_cards import router as catalog_cards_router
@@ -388,6 +389,7 @@ app.include_router(wire_stock_router)
 app.include_router(propellers_router)
 app.include_router(optimization_router)
 app.include_router(optimization_runs_router)   # /api/optimization/runs: saved optimisation runs per motor
+app.include_router(display_state_router)   # /api/display-state: Active / Parked / Archived for staff lists
 app.include_router(presets_router)
 app.include_router(catalog_cards_router)   # before the motor catalog: /api/catalog/cards/*
 app.include_router(catalog_router)

@@ -21,6 +21,8 @@ export interface ProjectOverviewProps {
   onOpen: (p: ProjectSummary) => void;
   /** the page's translator (development namespace) */
   t: (key: string, opts?: Record<string, unknown>) => any;
+  /** staff only: the Active / Parked / Archived control and badge of a row (nothing for a customer) */
+  rowExtra?: (p: ProjectSummary) => React.ReactNode;
 }
 
 const numbers = (p: ProjectSummary) => {
@@ -49,7 +51,7 @@ const Bar: React.FC<{ filled: number; total: number }> = ({ filled, total }) => 
   </Box>
 );
 
-const ProjectOverview: React.FC<ProjectOverviewProps> = ({ projects, mode, unread, email, language, onOpen, t }) => {
+const ProjectOverview: React.FC<ProjectOverviewProps> = ({ projects, mode, unread, email, language, onOpen, t, rowExtra }) => {
   const dieIndex = useDieIndex(mode === 'cards');   // the catalog's dies, for the motor picture of each card
   const { isAdmin, role } = useAuth();
   // a customer never reads the name of the commercial stage (no price talk while designing)
@@ -75,7 +77,7 @@ const ProjectOverview: React.FC<ProjectOverviewProps> = ({ projects, mode, unrea
               const c = numbers(p), n = unread(p), role = memberRoleOf(p, email);
               return (
                 <TableRow key={p.id} hover tabIndex={0} sx={{ cursor: 'pointer' }} onClick={() => onOpen(p)} onKeyDown={keyOpen(() => onOpen(p))}>
-                  <TableCell sx={{ color: 'var(--text-0)', fontWeight: 600 }}>{p.title}<UnreadBadge count={n} /></TableCell>
+                  <TableCell sx={{ color: 'var(--text-0)', fontWeight: 600 }}>{p.title}<UnreadBadge count={n} />{rowExtra && <Box component="span" sx={{ ml: 1 }}>{rowExtra(p)}</Box>}</TableCell>
                   <TableCell sx={{ color: 'var(--text-2)' }}>{p.customer_org}</TableCell>
                   <TableCell align="center"><Chip size="small" label={statusLabel(p.status, p.spec_submitted)} sx={{ height: 18, fontSize: 10.5, fontWeight: 700, bgcolor: 'var(--panel)', color: 'var(--text-2)' }} /></TableCell>
                   <TableCell>
@@ -111,6 +113,7 @@ const ProjectOverview: React.FC<ProjectOverviewProps> = ({ projects, mode, unrea
             </Box>
             <Box sx={{ pr: corner ? 9 : 0 }}>   {/* keeps the text clear of the picture in the corner */}
               <Typography sx={{ color: 'var(--text-3)', fontSize: 12, mt: 0.5 }}>{p.customer_org}</Typography>
+              {rowExtra && <Box sx={{ mt: 0.75 }}>{rowExtra(p)}</Box>}
               {/* with a picture in the corner the label and the bar stack (owner 2026-10-28: side by side the bar shrank to a stub) */}
               <Box sx={{ mt: 1.2, display: 'flex', flexDirection: corner ? 'column' : 'row', alignItems: corner ? 'stretch' : 'center', gap: corner ? 0.5 : 1 }}>
                 <Typography sx={{ fontSize: 11, color: 'var(--text-2)', whiteSpace: 'nowrap' }}>{t('completeness', { filled: c.filled, total: c.total })}</Typography>

@@ -6,8 +6,8 @@
   housekeeping: only staff (admin / engineer) get it.  A customer or the factory never gets an INCOMPLETE designation
   (one with "?"): ``designation`` is null for them and no segment is sent; staff see it, marked incomplete.
   ``other_names``: the stored results of this motor that were computed for another designation (each result keeps the
-  name it was computed for, #724), for staff and members alike, since they are the caller's own results.  Only beside a
-  complete designation: against a "?" every stamp would read as different.
+  name it was computed for, #724).  Staff only, like ``checks``: whether a customer is told that a result was computed for
+  another name is the owner's decision.  Only beside a complete designation: against a "?" every stamp would differ.
 
 The public help page "How to read a MOTRES motor name" decodes a typed name in the browser (``web/src/lib/motorDesignation.ts``,
 the same grammar as :func:`motor_designation.parse`), so it needs no route and works without sign-in.
@@ -37,7 +37,7 @@ def motor_designation(die: str, cfg: str, response: Response, authorization: Opt
         out.pop("checks", None)
         if not out["complete"]:
             return {"die": die, "config": cfg, "designation": None, "complete": False}
-    out["other_names"] = _other_names(die, cfg, out) if out["complete"] else []
+    out["other_names"] = _other_names(die, cfg, out) if out["complete"] and staff else []
     return {"die": die, "config": cfg, **out}
 
 

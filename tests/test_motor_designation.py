@@ -235,17 +235,22 @@ def test_result_marks_group_the_results_computed_for_another_name():
     assert MD.result_marks(None, results) == [] and MD.result_marks(now, {}) == []
 
 
-def test_members_see_their_results_computed_for_another_name_and_an_incomplete_name_carries_none(route, monkeypatch):
+def test_staff_see_results_computed_for_another_name_customers_and_the_factory_do_not(route, monkeypatch):
+    """Coordinator review of #725: whether a customer is told his results were computed for another name is the owner's
+    decision; staff only, like ``checks``."""
     from motor_ai_sim import duty_results as DR
     client, state = route
     stored = {"C": {"rated": {"em": {"designation": "CILN28 200_65 17F4SY", "computed_at": "t1"}}}}
     monkeypatch.setattr(DR, "index", lambda die, shared=False: stored)
-    for who in ("admin", "member", "oem"):
+    for who in ("admin", "eng"):
         assert _get(client, who)["other_names"] == [{"computed_for": "CILN28 200_65 17F4SY", "now": "CILN28 200_65 15F4SY",
                                                      "results": [{"duty": "rated", "kind": "em", "computed_at": "t1"}]}]
+    for who in ("member", "oem"):
+        body = _get(client, who)
+        assert body["designation"] == "CILN28 200_65 15F4SY" and not body.get("other_names")
     state.update(die_name="100 mm mid-torque", cfg_name="L15", kw=dict(steel="SMC1"))
     assert _get(client, "admin")["other_names"] == []                      # against a "?" every stamp would differ
     monkeypatch.setattr(DR, "index", lambda *a, **k: (_ for _ in ()).throw(OSError("store unreadable")))
     state.update(die_name="CILN28 vadim", cfg_name="G2-L65-17t", kw=dict(length=65, rows=15))
-    body = _get(client, "member")
+    body = _get(client, "admin")
     assert body["designation"] == "CILN28 200_65 15F4SY" and body["other_names"] == []

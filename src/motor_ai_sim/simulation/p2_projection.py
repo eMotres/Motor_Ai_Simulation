@@ -163,6 +163,40 @@ class SlipProjection:
                 es = self.edge_dof(int(Sn[i]), int(Sn[i + 1]))
                 if em is not None and es is not None:
                     _cut_e.append((int(es), int(em), float(_bc_sign)))
+            # The consecutive-in-radius walk above pairs the edge (Mn[i], Mn[i+1]) with (Sn[i], Sn[i+1]).  At the slip
+            # circle the two halves each own a copy of the same radius, and floating-point ties let the walk step
+            # rotor-metal -> STATOR copy: no mesh edge there, the cut edges beside the slip ring were skipped and their
+            # midpoint dofs left free (2026-11-16, CIANO28 80_12: the rotor-side Coulomb ring read +0.04 N.m).  Weld,
+            # from the mesh's own edges, every cut edge the walk missed; a cut edge with no partner is counted.
+            _have_m = {c[1] for c in _cut_e}
+            _have_s = {c[0] for c in _cut_e}
+            _mpos = {int(v): i for i, v in enumerate(Mn)}
+            _spos = {int(v): i for i, v in enumerate(Sn)}
+            _extra, _unm = [], 0
+            for (_va, _vb), _fi in self._emap.items():
+                _d = int(fdof[_fi])
+                if _va in _mpos and _vb in _mpos:
+                    if _d in _have_m:
+                        continue
+                    _o = self.edge_dof(int(Sn[_mpos[_va]]), int(Sn[_mpos[_vb]]))
+                    if _o is None:
+                        _unm += 1
+                    else:
+                        _extra.append((int(_o), _d, float(_bc_sign)))
+                elif _va in _spos and _vb in _spos:
+                    if _d in _have_s:
+                        continue
+                    _o = self.edge_dof(int(Mn[_spos[_va]]), int(Mn[_spos[_vb]]))
+                    if _o is None:
+                        _unm += 1
+                    else:
+                        _extra.append((_d, int(_o), float(_bc_sign)))
+            _extra = sorted(set(_extra))
+            _cut_e.extend(_extra)
+            self.n_cut_e_rescued = len(_extra)
+            self.n_cut_e_unmatched = _unm
+        self.n_cut_e_rescued = getattr(self, "n_cut_e_rescued", 0)
+        self.n_cut_e_unmatched = getattr(self, "n_cut_e_unmatched", 0)
         self._cut_v = _cut_v
         self._cut_e = _cut_e
         self.n_cut_v = len(_cut_v)

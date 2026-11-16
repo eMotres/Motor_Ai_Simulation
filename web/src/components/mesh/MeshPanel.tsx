@@ -1203,7 +1203,10 @@ const MeshPanel: React.FC = () => {
               </Tooltip>
             </Box>
 
-            {/* Periodic (template-copy) mesh toggle */}
+            {/* Periodic (template-copy) mesh toggle.  Hidden while the geometry-driven mesh is on: that mesher builds
+                the pole and slot cells itself and never reads pole_copy (audit 2026-11-16, two identical meshes), so the
+                switch would promise an effect it does not have.  The stored value is kept and still sent. */}
+            {!geoMesh && (
             <Box sx={{ mt: 1.5 }}>
               <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 0.5 }}>
                 <Typography sx={{ fontSize: 12, color: 'var(--text-2)' }}>
@@ -1224,6 +1227,7 @@ const MeshPanel: React.FC = () => {
                 </ToggleButtonGroup>
               </Tooltip>
             </Box>
+            )}
 
             {/* The "Rebuild mesh" button is gone: every setting above
                 auto-rebuilds (debounced) and auto-persists — a build

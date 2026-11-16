@@ -9,8 +9,8 @@ the ripple scale and by 90 % of the mean torque.  The checks existed; nothing ac
 * ``ok``      every available check passes.
 * ``warn``    a check fails the solver's own gate (``SELF_CHECK_GATE``, 5 % of the ripple scale): the result is flagged
               "not verified" and stored with that flag.
-* ``reject``  the ring disagreement is gross (more than half the ripple scale, or more than a quarter of the mean
-              torque): the result is refused unless the caller asks explicitly to store it anyway.
+* ``reject``  the ring disagreement is gross (more than half the ripple scale, or the two rings' MEAN torques differ by
+              more than a fifth of max(|mean|, ripple pp)): refused unless the caller asks explicitly to store it.
 
 Missing inputs are never read as a pass or a fail: a check that cannot be evaluated is listed under ``unchecked``.
 """
@@ -20,7 +20,7 @@ from typing import Any, Optional
 
 WARN_REL_TO_SCALE = 0.05      # = virtual_work_torque.SELF_CHECK_GATE
 REJECT_REL_TO_SCALE = 0.5
-REJECT_REL_TO_MEAN = 0.25
+REJECT_RING_MEAN_DIFF = 0.2
 WARN_POWER_RESIDUAL_REL = 0.10
 
 
@@ -59,9 +59,12 @@ def assess(summary: Optional[dict], payload: Optional[dict] = None) -> dict:
         scale = _num(chk.get("rel_to_ripple_scale"))
     if scale is None:
         scale = _num(_dig(payload, "gap_refinement", "self_check_rel_to_ripple_scale"))
-    to_mean = _num(chk.get("rel_to_mean"))
+    ct = _dig(payload, "coulomb_torque") or {}
+    md, tav, pp = _num(chk.get("mean_diff_Nm")), _num(ct.get("T_avg_coulomb_Nm")), _num(ct.get("T_ripple_pp_coulomb"))
+    to_mean = (abs(md) / max(abs(tav or 0.0), abs(pp or 0.0), 1e-12)
+               if md is not None and (tav is not None or pp is not None) else None)
     resid = _num(_dig(payload, "power_balance", "residual_rel"))
-    values = {"ring_disagreement_rel_to_ripple_scale": scale, "ring_disagreement_rel_to_mean": to_mean,
+    values = {"ring_disagreement_rel_to_ripple_scale": scale, "ring_mean_diff_rel_to_torque_scale": to_mean,
               "power_balance_residual_rel": resid}
     unchecked = [k for k, v in values.items() if v is None]
     reasons, status = [], "ok"
@@ -73,11 +76,11 @@ def assess(summary: Optional[dict], payload: Optional[dict] = None) -> dict:
         status = "warn"
         reasons.append("the field power balance is off by %.0f %%" % (100 * resid))
     if ((scale is not None and scale > REJECT_REL_TO_SCALE)
-            or (to_mean is not None and to_mean > REJECT_REL_TO_MEAN)):
+            or (to_mean is not None and to_mean > REJECT_RING_MEAN_DIFF)):
         status = "reject"
         reasons.append("gross gap-ring disagreement (%s) - the torque cannot be trusted"
                        % ", ".join(s for s in (
                            "%.0f %% of the ripple scale" % (100 * scale) if scale is not None else "",
-                           "%.0f %% of the mean torque" % (100 * to_mean) if to_mean is not None else "") if s))
+                           "ring means differ by %.0f %% of the torque" % (100 * to_mean) if to_mean is not None else "") if s))
     return {"status": status, "verified": status == "ok", "reasons": reasons, "unchecked": unchecked,
             "values": values}

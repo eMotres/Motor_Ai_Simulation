@@ -761,5 +761,19 @@
       "saveConfig": "另存为 {die} 的新配置",
       "reattach": "重新关联到 {die} / {config}"
     }
+  },
+  "displayState": {
+    "active": "进行中",
+    "parked": "暂停",
+    "archived": "已归档",
+    "all": "全部",
+    "woke": "新动态",
+    "reason": "原因",
+    "cancel": "取消",
+    "save": "保存",
+    "setTip": "由 {by} 于 {at} 设置。原因：{reason}。仅我方可见；客户和工厂看到的内容不变。",
+    "defaultTip": "根据状态显示。暂停和已归档的对象只是在列表中隐藏，不会被修改；在重新设为进行中之前一直隐藏。",
+    "wokeTip": "{count} 个隐藏对象在隐藏后有新动态",
+    "wokeRowTip": "隐藏后有新动态。在重新设为进行中之前仍留在这里。"
   }
 }

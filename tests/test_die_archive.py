@@ -200,3 +200,42 @@ def test_a_die_rename_carries_the_archive():
     assert sorted(doc["dies"]) == ["w1/NEW", "w1/OTHER", "w2/NEW"] and doc["history"][0]["key"] == "w1/NEW"
     with pytest.raises(ValueError):
         DA.rename_die_in({"dies": {"w1/A": {}, "w1/B": {}}}, "A", "B")
+
+
+# ── review of #726 (US · software): a published die, a grantee, two copies of one name ──────────────────────────────
+
+def _publish(env, email, name):
+    from motor_ai_sim import workspace as W
+    ns = env["srv"] / "published" / W.workspace_id(email)
+    _put_die(ns, name)
+    (ns / W.OWNER_FILE).write_text(json.dumps({"email": email}), encoding="utf-8")
+    return W.published_label(name, email)
+
+
+def test_archiving_an_own_published_die_never_hides_it_from_the_people_it_is_published_to(env):
+    pub = "PUBDIE 12_40"
+    label = _publish(env, ADMIN, pub)
+    assert pub in _tree(env["admin"]) and label in _tree(env["a"])
+    r = _archive(env, die=pub)
+    assert r.status_code == 200, r.text
+    assert pub not in _tree(env["admin"])                                       # gone from the owner's own catalog
+    assert label in _tree(env["a"])                                             # a viewer it is published to still has it
+
+
+def test_another_accounts_published_die_cannot_be_archived(env):
+    label = _publish(env, A, "ALICEDIE 12_40")
+    assert label in _tree(env["admin"])
+    r = _archive(env, die=label)
+    assert r.status_code == 409 and r.json().get("code") == "die.archive_not_own", r.text
+    assert client.get(f"/api/die-archive/{label}", headers=env["admin"]).json()["archivable"] is False
+    assert label in _tree(env["admin"]) and _audit(env) == []
+
+
+def test_a_workspace_and_an_own_published_copy_of_one_name_share_one_archive(env):
+    label = _publish(env, ADMIN, OLD)                                           # OLD is also in the admin's workspace
+    assert [n for n in _tree(env["admin"]) if n.startswith("OLDDIE")] == [OLD]  # listed once (read order)
+    assert _archive(env).status_code == 200
+    assert not [n for n in _tree(env["admin"]) if n.startswith("OLDDIE")]       # neither copy comes back from below
+    assert {OLD, label} <= _tree(env["a"])                                      # Alice: her own copy and the published one
+    assert client.post(f"/api/die-archive/{OLD}/restore", headers=env["admin"]).status_code == 200
+    assert OLD in _tree(env["admin"])

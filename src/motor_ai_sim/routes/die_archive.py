@@ -32,7 +32,11 @@ def _admin(w: dict) -> str:
 
 
 def _entry(die: str) -> dict:
-    """The listing entry of ``die`` as this caller sees it (archived or not: the listing filter is not applied here)."""
+    """The listing entry of ``die`` as this caller sees it (archived or not: the listing filter is not applied here).
+
+    The first is the right one: ``iter_dies`` lists each name ONCE in read order (another account's published die is
+    addressed as ``"<die> · by <name>"``, so it never shares a plain name), and the viewer's own workspace and own
+    published copies of one name answer to the same archive key (``die_archive.scope_of_entry``)."""
     for e in F._iter_die_entries():
         if str(e["name"]) == die:
             return e
@@ -49,6 +53,9 @@ def _scope(e: dict) -> str:
     if scope:
         return scope
     from motor_ai_sim.api_errors import ApiError
+    if str(e.get("layer") or "") == "published":
+        raise ApiError(409, "die.archive_not_own", (
+            f"'{e['name']}' is published by another account: only its owner can archive it"), params={"die": str(e["name"])})
     raise ApiError(409, "die.retire_required", (
         f"'{e['name']}' is a shared catalog die: use 'Retire for all users' (reversible) instead"), params={"die": str(e["name"])})
 

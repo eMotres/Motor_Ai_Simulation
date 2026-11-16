@@ -9,8 +9,11 @@ read).  A die that lives in a workspace had only DELETE.  This is the same idea 
 * only the LISTINGS drop an archived die: the Motors catalog tree, the pickers built from it, the admin motor picker
   and the Overview "Active" view.  Every read path (``resolve_die_dir``, stored results, projects and productions that
   name the die, the name check of a new die) is untouched, so nothing that names the die breaks;
-* the archive is per workspace owner: the key is ``<workspace id>/<die>``, so archiving the owner's old copy hides it in
-  his catalog and nowhere else.  A shared die keeps the existing Retire (a tombstone for every user);
+* the archive is per workspace owner: the key is ``<workspace id>/<die>``, and an entry is archived only for the viewer
+  whose workspace that is.  Archiving the owner's old copy hides it in his catalog and nowhere else; his own PUBLISHED
+  copy of the same name answers to the same key, while the people it is published to keep seeing it (review of #726:
+  an archive must never hide a die from a grantee).  Another account's published die cannot be archived here, and a
+  shared die keeps the existing Retire (a tombstone for every user);
 * admin only, written to the admin audit both ways, and refused while the die is in use (:func:`refusals`): a running
   or queued job, an open production, a current link of an open project, a product revision.
 
@@ -66,18 +69,24 @@ def key(scope: str, die: str) -> str:
     return f"{scope}/{die}"
 
 
+def _viewer() -> Optional[str]:
+    try:
+        from motor_ai_sim.workspace import workspace
+        return str(workspace().id or "") or None
+    except Exception:                                       # noqa: BLE001
+        return None
+
+
 def scope_of_entry(entry: Dict[str, Any]) -> Optional[str]:
-    """Whose archive an ``iter_dies`` entry answers to: this workspace for a workspace die, the publisher for a published
-    one, None for a shared die (Retire covers it)."""
+    """The archive scope an ``iter_dies`` entry answers to FOR THIS VIEWER: the viewer's workspace id for a die of the
+    viewer's own workspace or own published namespace; None for anything else (a shared die: Retire covers it; another
+    account's published die: not the viewer's to archive, and never hidden by somebody else's archive)."""
     layer = str(entry.get("layer") or "")
+    me = _viewer()
     if layer == "workspace":
-        try:
-            from motor_ai_sim.workspace import workspace
-            return str(workspace().id or "") or None
-        except Exception:                                   # noqa: BLE001
-            return None
-    if layer == "published":
-        return str(entry.get("owner_id") or "") or None
+        return me
+    if layer == "published" and me and str(entry.get("owner_id") or "") == me:
+        return me
     return None
 
 
@@ -156,7 +165,12 @@ def restore(scope: str, die: str, *, by: str) -> bool:
 
 def _live_jobs() -> List[Dict[str, str]]:
     """``[{"die", "where"}]`` of every queued or running job: the application's own queue (``jobs.JobRecord.target``) and,
-    when this process can read it, the agent job launcher's status file (its ``job.json`` names the die)."""
+    when this process can read it, the agent job launcher's status file (its ``job.json`` names the die).
+
+    FAILS OPEN: a source that cannot be read (no queue, no status file in this container, a job that names no die)
+    contributes nothing, so the running-job refusal is a best-effort guard, not a lock.  That is acceptable because the
+    archive moves nothing: a job that runs on an archived die finishes and files its results as before, and Restore
+    brings the die back into the listing."""
     out: List[Dict[str, str]] = []
     try:
         from motor_ai_sim import jobs as _J

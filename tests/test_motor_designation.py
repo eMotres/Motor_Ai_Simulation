@@ -9,6 +9,7 @@ import copy
 import pytest
 
 from motor_ai_sim import motor_designation as MD
+from motor_ai_sim.motor_designation import geometry_of
 
 LIB = {
     "steel": {"NO20": {"description": "non-oriented (NGO) electrical steel, 0.20 mm", "form": "lamination"},
@@ -165,3 +166,53 @@ def test_an_incomplete_designation_is_not_shown_to_customers_or_the_factory(rout
     assert staff["complete"] is False and "?" in staff["designation"]
     for who in ("member", "oem"):
         assert _get(client, who) == {"die": "D", "config": "C", "designation": None, "complete": False}
+
+
+# ── the stamp a stored result records (owner 2026-11-17; ~/jobs/TASK_designation_in_results.md) ───────────────────────
+
+@pytest.fixture
+def stored(monkeypatch):
+    state = {"die": None, "cfg": None}
+    die, cfg = motor(length=65, rows=17)
+    state.update(die=die, cfg=cfg)
+    monkeypatch.setattr(MD, "_stored", lambda d, c: (state["die"], state["cfg"], None))
+    return state
+
+
+def test_a_result_keeps_its_name_after_the_motor_changes(stored):
+    earlier = MD.stamp("CILN28", "G2", library=LIB)
+    assert earlier == {"designation": "CILN28 200_65 17F4SY", "complete": True}
+    edited = copy.deepcopy(stored["cfg"])
+    edited["geometry_overrides"]["num_wires_per_slot"] = 16
+    stored["cfg"] = edited
+    now = MD.stamp("CILN28", "G2", library=LIB)["designation"]
+    assert now == "CILN28 200_65 16F4SY"
+    assert MD.compare(earlier["designation"], now) == {"computed_for": "CILN28 200_65 17F4SY", "now": "CILN28 200_65 16F4SY"}
+    assert MD.compare(now, now) is None
+    assert MD.compare(None, now) is None                                  # no stamp: unknown, not different
+    assert MD.compare(now + " Rev A", now + " Rev B") is None             # a revision letter alone is no change
+
+
+@pytest.mark.parametrize("override, expected", [
+    (dict(winding={"connection": "2S-2P"}), "CILN28 200_65 17F2S2PY"),
+    (dict(winding={"star_delta": "delta"}), "CILN28 200_65 17F4SD"),
+    (dict(geometry={"num_wires_per_slot": 14}), "CILN28 200_65 14F4SY"),
+])
+def test_the_stamp_names_the_parameters_actually_solved(stored, override, expected):
+    assert MD.stamp("CILN28", "G2", library=LIB, **override)["designation"] == expected
+    assert MD.stamp("CILN28", "G2", library=LIB)["designation"] == "CILN28 200_65 17F4SY"      # the files are untouched
+
+
+def test_optimisation_candidates_each_get_their_own_name(stored):
+    names = [MD.stamp("CILN28", "G2", library=LIB, geometry={"num_wires_per_slot": n})["designation"] for n in (15, 16, 17)]
+    assert names == ["CILN28 200_65 15F4SY", "CILN28 200_65 16F4SY", "CILN28 200_65 17F4SY"]
+
+
+def test_the_stamp_never_raises(monkeypatch):
+    def boom(_d, _c):
+        raise FileNotFoundError("no files")
+    monkeypatch.setattr(MD, "_stored", boom)
+    assert MD.stamp("X", "Y") == {}
+    out = MD.stamp("CILN28", "payload", library=LIB, geometry=geometry_of(*motor()), winding={"connection": "4S"},
+                   materials={"stator_core": "NO20", "magnet": "NDFEB52", "slot": "copper"})
+    assert out["designation"] == "CILN28 200_40 24F4SY"

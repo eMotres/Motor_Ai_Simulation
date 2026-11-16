@@ -77,8 +77,25 @@ def summarize(state: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def designations(state: Dict[str, Any], die: str, config: str) -> Dict[str, Any]:
+    """The standard motor designation of the run's base motor and of EACH evaluated candidate (owner 2026-11-17: an
+    optimisation run whose candidates differ in turns shows the right name per candidate).  A candidate's name is its
+    ``overrides`` applied to the motor's stored files at import time; the run state itself is not touched.  ``{}`` when
+    nothing can be made - a stamp never fails an import."""
+    try:
+        from motor_ai_sim import motor_designation as MD
+        base = MD.stamp(die, config).get("designation")
+        points = []
+        for p in state.get("points") or []:
+            ov = p.get("overrides") if isinstance(p, dict) else None
+            points.append(MD.stamp(die, config, geometry=ov).get("designation") if isinstance(ov, dict) and ov else base)
+        return {"base": base, "points": points}
+    except Exception:                                       # noqa: BLE001
+        return {}
+
+
 def build_record(state: Dict[str, Any], run_id: Optional[str] = None, request: Any = None,
-                 source: Optional[str] = None) -> Dict[str, Any]:
+                 source: Optional[str] = None, *, die: Optional[str] = None, config: Optional[str] = None) -> Dict[str, Any]:
     validate_state(state)
     rid = check_run_id(run_id or state.get("run_id"))
     rec = {"schema": SCHEMA, "run_id": rid, **summarize(state),
@@ -86,6 +103,8 @@ def build_record(state: Dict[str, Any], run_id: Optional[str] = None, request: A
            "source": (str(source)[:200] if source else None), "state": state}
     if request is not None:
         rec["request"] = request
+    if die and config:
+        rec["designations"] = designations(state, die, config)
     if len(json.dumps(rec, default=str).encode("utf-8")) > MAX_BYTES:
         raise RunRejected("the run is larger than %d MB" % (MAX_BYTES // 1_000_000))
     return rec

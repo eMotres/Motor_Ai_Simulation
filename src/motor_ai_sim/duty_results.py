@@ -553,6 +553,21 @@ def is_limit_search(entry: Any) -> bool:
             or str(entry.get("solve_to") or "").lower() in ("limits", "continuous"))
 
 
+def designation_stamp(die: str) -> Optional[str]:
+    """The standard motor designation of the machine this result was computed on (owner 2026-11-17: a result keeps the name
+    it was computed for, it never takes the motor's later name).  From the live configuration of the solve - the source of
+    the same-machine print above - not from the motor as stored later.  ``None`` (logged) when it cannot be made: a
+    stamp never fails a save.  Only NEW records get it; stored ones are never rewritten."""
+    try:
+        from motor_ai_sim.config import get_config
+        from motor_ai_sim import motor_designation as _md
+        st = _md.stamp_from_config(str(die), get_config() or {})
+        return st.get("designation") or None
+    except Exception as exc:                                 # noqa: BLE001
+        log.info("duty_results: no designation stamp for %s (%s)", die, exc)
+        return None
+
+
 def record(die: str, cfg: str, duty: str, kind: str,
            entry: Dict[str, Any]) -> bool:
     """Park one compact result under (die, configuration, duty).
@@ -583,6 +598,8 @@ def record(die: str, cfg: str, duty: str, kind: str,
             _stamp = solver_stamp()
             if _stamp:
                 e.setdefault("solver", _stamp)
+            if "designation" not in e:
+                e["designation"] = designation_stamp(die)
             e = _carry_excitation_blocks(kind, e, node.get(kind))
             _keep_previous(doc, str(die), str(cfg), str(duty), kind, node.get(kind), e)
             node[kind] = e
@@ -626,6 +643,8 @@ def record_alt_carrier(die: str, cfg: str, duty: str, kind: str,
             e = _flat(dict(entry or {}))
             e["kind"] = kind
             e.setdefault("recorded_at", _now())
+            if "designation" not in e:
+                e["designation"] = designation_stamp(die)
             alts = [a for a in (main.get("alt_carriers") or [])
                     if isinstance(a, dict) and _entry_carrier(a) != f]
             alts.append(e)

@@ -23,7 +23,8 @@
     "production": "生产",
     "admin": "管理",
     "development": "项目",
-    "designer": "设计器"
+    "designer": "设计器",
+    "overview": "总览"
   },
   "status": {
     "connected": "已连接",
@@ -775,5 +776,34 @@
     "defaultTip": "根据状态显示。暂停和已归档的对象只是在列表中隐藏，不会被修改；在重新设为进行中之前一直隐藏。",
     "wokeTip": "{count} 个隐藏对象在隐藏后有新动态",
     "wokeRowTip": "隐藏后有新动态。在重新设为进行中之前仍留在这里。"
+  },
+  "overview": {
+    "title": "总览",
+    "titleTip": "项目使用或生产制造的每台电机和电路板，按冲片归类。项目与生产为两列，互不合并；短横线表示无。筛选依据项目和生产的进行中 / 暂停 / 已归档状态。",
+    "byMotor": "按电机",
+    "projects": "项目",
+    "motor": "电机",
+    "board": "电路板",
+    "project": "项目",
+    "production": "生产",
+    "worksWith": "配套",
+    "customer": "客户",
+    "stage": "阶段",
+    "updated": "更新",
+    "shown": "显示",
+    "refresh": "刷新",
+    "trial": "试用关联",
+    "rev": "版本 {rev}",
+    "qty": "{n} 件",
+    "removed": "已删除",
+    "notInCatalog": "不在目录中",
+    "notInCatalogTip": "有项目或生产引用此冲片，但本服务器的目录中没有。",
+    "analysisControllerTip": "该电机配置中用于分析的控制器；并非已确认的配套。",
+    "noRegistry": "无编号",
+    "noRegistryTip": "本服务器没有编号登记（保存在项目所在的主服务器上）。没有它各行数据也是完整的。",
+    "review": "{n} 项待审核",
+    "noMotorYet": "尚无电机",
+    "catalogOnly": "仅目录 ({n})",
+    "empty": "本服务器没有项目或生产。"
   }
 }

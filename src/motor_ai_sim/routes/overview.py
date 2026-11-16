@@ -1,0 +1,121 @@
+"""``GET /api/overview``: the owner's Overview (admins only; owner 2026-11-16).
+
+One answer that says, for every product item (a motor configuration or a board revision), which projects use it and which
+productions make it, with the Active / Parked / Archived state of each.  The page puts the catalog tree (``/api/family/tree``:
+die names, slots / poles, pictures) around it.
+
+Sources, all READ here, nothing written:
+* the live project records (``linked_motors``: current / trial) and the live production records: what is true now;
+* the id registry (``object_registry``): the stable ids, the layer(s) an item lives in, removed items, the
+  ``analysis_controller`` links and the review list.  Before the first backfill the answer is complete without the ids;
+* the display states (``display_state``).
+
+"Works with" pairs the motors and the boards that the same project links (a project for a motor and its controller); the
+controller a motor is analysed with (``analysis_controller``) is listed apart and is not a pairing.
+"""
+from __future__ import annotations
+
+from typing import Any, Dict, List
+
+from fastapi import APIRouter, HTTPException, Request
+
+from motor_ai_sim import display_state as DS
+from motor_ai_sim import object_registry as OR
+from motor_ai_sim.production import access as prod_access
+
+router = APIRouter(prefix="/api/overview", tags=["overview"])
+
+
+def _require_admin(request: Request) -> dict:
+    user = prod_access.require_signed_in(request)
+    if str(user.get("role") or "").lower() != "admin":
+        raise HTTPException(status_code=403, detail="Admin access required.")
+    return user
+
+
+def _title(value: Any) -> str:
+    if isinstance(value, dict):
+        return str(value.get("en") or value.get("zh") or "")
+    return str(value or "")
+
+
+def build(projects: List[dict], productions: List[dict], registry: Dict[str, Any], states: Dict[str, Any]) -> Dict[str, Any]:
+    """The Overview answer from already loaded records (pure: the route and the tests call it)."""
+    idx = OR.Index(registry)
+    items: Dict[str, Dict[str, Any]] = {}
+
+    def item(die: str, cfg: str, kind: str = "") -> Dict[str, Any]:
+        key = f"{die}/{cfg}"
+        cur = items.get(key)
+        if cur is None:
+            iid = idx.resolve("item", "catalog", key) or idx.resolve("item", "production", key)
+            obj = idx.obj(iid) if iid else None
+            cur = items[key] = {
+                "die": die, "config": cfg, "item_id": iid, "kind": (obj or {}).get("item_kind") or kind or "motor",
+                "state": (obj or {}).get("state", ""), "layers": (obj or {}).get("layers", []),
+                "projects": [], "productions": [], "works_with": [],
+                "analysis_controllers": sorted(l["to"].split(":", 1)[1] for l in idx.links_from.get(iid or "", [])
+                                               if l.get("kind") == "analysis_controller"),
+            }
+        if kind == "board":
+            cur["kind"] = "board"
+        return cur
+
+    prod_rows: Dict[str, Dict[str, Any]] = {}
+    for rec in productions:
+        die, cfg = str(rec.get("die") or ""), str(rec.get("config") or "")
+        if not die or not cfg:
+            continue
+        key = f"{die}/{cfg}"
+        prod_rows[key] = {
+            "die": die, "config": cfg, "title": _title(rec.get("title")), "status": rec.get("status") or "active",
+            "current_revision": str(rec.get("current_revision") or ""), "order_quantity": rec.get("order_quantity") or 0,
+            "product_type": rec.get("product_type") or "motor", "updated_at": rec.get("updated_at") or "",
+            "production_id": idx.resolve("production", "production", key),
+            "display": DS.effective("production", DS.object_key("production", die=die, config=cfg), rec.get("status"), states),
+        }
+        item(die, cfg, "board" if rec.get("product_type") == "electronics" else "")["productions"].append(key)
+
+    proj_rows: Dict[str, Dict[str, Any]] = {}
+    for p in projects:
+        pid = str(p.get("id") or "")
+        if not pid:
+            continue
+        linked = [m for m in p.get("linked_motors") or [] if isinstance(m, dict) and m.get("die") and m.get("config")]
+        sub = p.get("spec_submitted") if isinstance(p.get("spec_submitted"), dict) else None
+        proj_rows[pid] = {
+            "id": pid, "title": str(p.get("title") or ""), "customer_org": str(p.get("customer_org") or ""),
+            "status": str(p.get("status") or ""), "updated_at": str(p.get("updated_at") or ""),
+            "spec_submitted": sub, "project_id": idx.resolve("project", "projects", pid),
+            "motors": [f"{m['die']}/{m['config']}" for m in linked],
+            "display": DS.effective("project", DS.object_key("project", project_id=pid), p.get("status"), states),
+        }
+        for m in linked:
+            item(str(m["die"]), str(m["config"]))["projects"].append(
+                {"id": pid, "link_status": str(m.get("status") or "current")})
+
+    for pid, row in proj_rows.items():                    # works with: motors and boards of the same project
+        kinds = {k: items[k]["kind"] for k in row["motors"] if k in items}
+        boards = [k for k, v in kinds.items() if v == "board"]
+        for k, v in kinds.items():
+            others = boards if v != "board" else [x for x, y in kinds.items() if y != "board"]
+            for o in others:
+                if o != k and o not in items[k]["works_with"]:
+                    items[k]["works_with"].append(o)
+
+    return {
+        "items": items, "projects": proj_rows, "productions": prod_rows,
+        "no_motor_yet": sorted(pid for pid, r in proj_rows.items() if not r["motors"]),
+        "review": registry.get("review") or [],
+        "registry": ({"objects": len(registry.get("objects") or {}),
+                      "backfilled_at": (registry.get("backfills") or [{}])[-1].get("at", "")}
+                     if registry.get("objects") else None),
+    }
+
+
+@router.get("")
+def overview(request: Request):
+    _require_admin(request)
+    from motor_ai_sim.development import store as project_store
+    from motor_ai_sim.production import routes as PR
+    return build(project_store.list_projects(), PR._production_list_for("", True), OR.load(), DS.load()["states"])

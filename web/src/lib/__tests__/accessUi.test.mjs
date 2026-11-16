@@ -108,7 +108,7 @@ t('card summary: none / partial / all', () => {
 // -- role "engineer" (owner 2026-10-14): Configure only, or the whole simulation ------------------------------------------
 
 const ALL_TABS = ['motors', 'geometry', 'materials', 'mesh', 'simulation', 'static3d', 'mechanical',
-  'thermal', 'controller', 'schemas', 'propellers', 'sweep', 'comparePoints', 'cost', 'compare', 'model3d', 'production', 'development', 'designer', 'admin'];
+  'thermal', 'controller', 'schemas', 'propellers', 'sweep', 'comparePoints', 'cost', 'compare', 'model3d', 'production', 'development', 'designer', 'overview', 'admin'];
 
 // what App.tsx computes for a session: signedIn, fullUI (hasSimulationUI) and isAdmin
 const visible = (enforced, isAdmin, role) => {

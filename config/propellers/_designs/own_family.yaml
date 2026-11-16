@@ -74,6 +74,11 @@ operating_points:
     pack: {cells: 12, v_min: 36.0, v_nom: 44.4, v_max: 50.4}
     reference_propeller: tmotor_p13x4_4    # the configuration's cooling propeller (2-blade 13 in)
     source: "catalog stored duty 'rated' (continuous point, 13 in P13x4.4 cooling reference), read 2026-11-15; pack, rotor radius and reference propeller from the configuration, read 2026-11-16 (owner: «все параметры бери из проекта 40_12 40_20»)"
+hub_interface:                     # owner 2026-11-16 «для пропеллеров у нас дырка M5 для крепления»
+  mount: M5 hole                   # the propeller mounts on the M5 x 0.8 thread at the free end of the 4.9 mm output shaft (prop_fix)
+  bore_mm: 5.0                     # nominal M5; the clearance fit and the clamping (nut / prop_fix) are not set yet
+  source: owner 2026-11-16; shaft thread M5x0.8-6g, 8 mm, free end of the output shaft (ciano40 production decisions 2026-10-19)
+  confirmed_by: owner 2026-11-16
 air:
   temp_c: 15.0
   rho_kg_m3: 1.225

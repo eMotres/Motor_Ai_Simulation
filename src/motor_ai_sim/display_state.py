@@ -1,7 +1,7 @@
 """Active / Parked / Archived: how OUR side shows a project or a production in its lists (owner 2026-11-16).
 
-Owner: «интерфейс для архивации проекта или неактуальности на данный момент проекта; лучше убирать его видимость, чтобы в
-любой момент можно было возобновить», corrected the same day: a parked object never wakes by itself - it stays parked until
+Owner: "an interface to archive a project or mark it not current for now; better to hide it, so that it can be resumed
+at any moment", corrected the same day: a parked object never wakes by itself - it stays parked until
 an admin or engineer sets it back to Active.
 
 A PRESENTATION state for staff (admins and engineers) only.  It is not a security boundary and it changes nothing else:

@@ -606,6 +606,17 @@ def step_display_state(ctx: Ctx) -> None:
         raise RenameBlocked(str(e)) from e
 
 
+def step_object_registry(ctx: Ctx) -> None:
+    """The id registry (``<shared>/object_registry/registry.json``): locators follow, ids stay, the old name is an alias."""
+    from motor_ai_sim import object_registry as OR
+    try:
+        path = OR.store_path()
+    except Exception:                                       # noqa: BLE001
+        return
+    _json_file_rename(ctx, "object_registry", path, lambda doc: OR.rename_die_in(doc, ctx.old, ctx.new),
+                      "registry locators follow the die name")
+
+
 def step_motor_tests(ctx: Ctx) -> None:
     """The Tests store (``<shared>/motor_tests/<die>/<config>/tests.json``): same folder naming as production."""
     from motor_ai_sim.motor_tests import store as MT
@@ -742,7 +753,7 @@ def step_manual(ctx: Ctx) -> None:
 #: workspace-level steps, then the shared-catalog ones (``glob_scope``)
 LOCAL_STEPS = (step_folder, step_derived_from, step_fields, step_duty_results,
                step_context, step_workspace_memory, step_catalog_cards)
-GLOBAL_STEPS = (step_grants, step_die_access, step_projects, step_production, step_motor_revisions, step_display_state, step_motor_tests, step_cad,
+GLOBAL_STEPS = (step_grants, step_die_access, step_projects, step_production, step_motor_revisions, step_display_state, step_object_registry, step_motor_tests, step_cad,
                 step_manual)
 
 

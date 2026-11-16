@@ -1015,10 +1015,25 @@ def step_display_state(ctx: Ctx) -> None:
         raise MoveBlocked(str(e)) from e
 
 
+def step_object_registry(ctx: Ctx) -> None:
+    """The id registry (``<shared>/object_registry/registry.json``): a move or rename keeps the item's id, its locator
+    follows and the old name stays as an alias; a copy is a new configuration and gets its id at the next backfill."""
+    if ctx.copy:
+        return
+    from motor_ai_sim import object_registry as OR
+    try:
+        path = OR.store_path()
+    except Exception:                                       # noqa: BLE001
+        return
+    _json_rewrite(ctx, "object_registry", path,
+                  lambda doc: OR.move_config_in(doc, ctx.die, ctx.cfg, ctx.dst, ctx.new_cfg),
+                  "registry locators follow the configuration")
+
+
 LOCAL_STEPS = (step_files, step_fields, step_duty_results, step_context, step_workspace_memory,
                step_catalog_cards)
 GLOBAL_STEPS = (step_grants, step_projects, step_cost_estimates, step_production, step_motor_tests,
-                step_motor_revisions, step_display_state, step_cad, step_manual)
+                step_motor_revisions, step_display_state, step_object_registry, step_cad, step_manual)
 
 
 def preflight(fam: Any, die: str, cfg: str, dst: str, *, copy: bool, new_cfg: str = "",

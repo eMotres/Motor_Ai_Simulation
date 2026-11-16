@@ -1,0 +1,96 @@
+"""The owner's Overview (owner 2026-11-16): items with their projects and productions, display states, registry ids and
+review; admins only; reads, never writes.  Temporary stores, neutral names, no solver."""
+from __future__ import annotations
+
+import json
+
+import pytest
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+
+from motor_ai_sim import auth
+from motor_ai_sim import display_state as DS
+from motor_ai_sim import object_registry as OR
+from motor_ai_sim.development import store
+from motor_ai_sim.production import store as pstore
+from motor_ai_sim.routes.overview import build, router
+
+USERS = {"admin": {"email": "admin@example.test", "role": "admin"},
+         "eng": {"email": "eng@example.test", "role": "engineer"},
+         "customer": {"email": "customer@example.test", "role": "user"}}
+
+
+def _h(who):
+    return {"Authorization": "Bearer " + who}
+
+
+def _production(die, config, **kw):
+    path = pstore.path_for(die, config) / "production.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"die": die, "config": config, "status": "active", "title": {"en": f"{die} {config}"},
+                                "current_revision": "1.2", "order_quantity": 40, **kw}), encoding="utf-8")
+    return path
+
+
+@pytest.fixture
+def env(tmp_path, monkeypatch):
+    monkeypatch.setenv("MOTRES_PROJECTS_ROOT", str(tmp_path / "projects"))
+    monkeypatch.setenv("MOTRES_PRODUCTION_ROOT", str(tmp_path / "production"))
+    monkeypatch.setenv("MOTRES_OBJECT_REGISTRY_ROOT", str(tmp_path / "registry"))
+    monkeypatch.setattr(auth, "resolve_user", lambda a, **_k: USERS.get(str(a or "").split(" ", 1)[-1]))
+    base = {"customer_org": "Org", "created_at": "t", "updated_at": "t", "notes": "", "members": [], "pending_invites": []}
+    store.create_project({**base, "id": "hydro", "title": "Hydro", "status": "design",
+                          "linked_motors": [{"die": "DIE A", "config": "L12", "status": "current"},
+                                            {"die": "CTRL", "config": "R07", "status": "current"}]})
+    store.create_project({**base, "id": "joint", "title": "Joint", "status": "closed",
+                          "linked_motors": [{"die": "DIE A", "config": "L20", "status": "trial"}]})
+    store.create_project({**base, "id": "fresh", "title": "Fresh", "status": "spec", "linked_motors": []})
+    files = [store.path_for(p) / "project.json" for p in ("hydro", "joint", "fresh")]
+    files += [_production("DIE A", "L12"), _production("CTRL", "R07", product_type="electronics", status="paused")]
+    app = FastAPI()
+    app.include_router(router)
+    return TestClient(app), files, tmp_path
+
+
+def test_items_carry_their_projects_productions_and_states(env):
+    client, files, _tmp = env
+    before = {p: p.read_bytes() for p in files}
+    body = client.get("/api/overview", headers=_h("admin")).json()
+    a12, a20, board = body["items"]["DIE A/L12"], body["items"]["DIE A/L20"], body["items"]["CTRL/R07"]
+    assert [p["id"] for p in a12["projects"]] == ["hydro"] and a12["productions"] == ["DIE A/L12"]
+    assert a20["projects"] == [{"id": "joint", "link_status": "trial"}] and a20["productions"] == []
+    assert board["kind"] == "board" and board["productions"] == ["CTRL/R07"]
+    assert a12["works_with"] == ["CTRL/R07"] and board["works_with"] == ["DIE A/L12"]
+    assert body["projects"]["joint"]["display"]["state"] == "archived"           # closed -> archived (default)
+    assert body["productions"]["CTRL/R07"]["display"]["state"] == "parked"      # paused -> parked
+    assert body["no_motor_yet"] == ["fresh"]
+    assert body["registry"] is None and a12["item_id"] is None                  # complete before the first backfill
+    assert {p: p.read_bytes() for p in files} == before
+
+
+def test_registry_ids_and_explicit_states_are_used(env, tmp_path):
+    client, _files, tmp = env
+    cat = tmp / "dies"
+    for die, cfg in (("DIE A", "L12"), ("DIE A", "L20")):
+        (cat / die).mkdir(parents=True, exist_ok=True)
+        (cat / die / "die.yaml").write_text("name: x\n")
+        (cat / die / f"{cfg}.yaml").write_text("controller:\n  catalog_id: ctl-1\n")
+    OR.backfill(catalog_root=cat, projects_root=tmp / "projects", production_root=tmp / "production")
+    DS.set_state(DS.object_key("project", project_id="hydro"), "parked", by="admin@example.test", reason="waiting")
+    body = client.get("/api/overview", headers=_h("admin")).json()
+    a12 = body["items"]["DIE A/L12"]
+    assert a12["item_id"].startswith("itm_") and a12["analysis_controllers"] == ["ctl-1"]
+    assert body["projects"]["hydro"]["project_id"].startswith("prj_")
+    assert body["projects"]["hydro"]["display"]["state"] == "parked"
+    assert body["registry"]["objects"] > 0
+
+
+@pytest.mark.parametrize("who, code", [("eng", 403), ("customer", 403), (None, 401)])
+def test_admins_only(env, who, code):
+    client, _files, _tmp = env
+    assert client.get("/api/overview", headers=_h(who) if who else {}).status_code == code
+
+
+def test_build_is_pure():
+    out = build([{"id": "p", "title": "P", "linked_motors": [{"die": "D", "config": "C"}]}], [], {}, {})
+    assert out["items"]["D/C"]["projects"] == [{"id": "p", "link_status": "current"}]

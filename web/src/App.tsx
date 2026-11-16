@@ -102,6 +102,7 @@ const ComparePanel = lazy(watchChunkImport(() => import('./components/compare/Co
 const CostPanel = lazy(watchChunkImport(() => import('./components/cost/CostPanel')));
 const Model3DPanel = lazy(watchChunkImport(() => import('./components/model3d/Model3DPanel')));
 // Production is its own chunk (owner 2026-10-18): its updates never touch the Configure / Motors bundle
+const OverviewPage = lazy(watchChunkImport(() => import('./modules/overview/OverviewPage')));
 const ProductionTab = lazy(watchChunkImport(() => import('./modules/production/components/ProductionPage').then((m) => ({ default: m.ProductionTab }))));
 // Development is a customer-facing project area; keep the wizard out of the initial engineering bundle.
 const DevelopmentTab = lazy(watchChunkImport(() => import('./modules/development/components/DevelopmentPage')));
@@ -684,6 +685,9 @@ function App() {
     // Designer (pilot 2026-10-18): the design assistant chat; shown when the server says this account may use it.
     { id: 'designer', label: 'Designer', order: 95, gate: TAB_GATES.designer, showViewer: false,
       render: () => <DesignerTab /> },
+    // Overview (owner 2026-11-16): every motor and board with its projects and productions, admins only
+    { id: 'overview', label: 'Overview', order: 79, gate: TAB_GATES.overview, showViewer: false,
+      render: () => <OverviewPage /> },
     { id: 'admin', label: 'Admin', order: 90, panelId: 'admin', gate: TAB_GATES.admin, showViewer: false,
       render: () => <AdminPanel /> },
   ];

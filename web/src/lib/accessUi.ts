@@ -52,6 +52,8 @@ export const TAB_GATES: Readonly<Record<string, TabGate>> = {
   // Development (menu name "Projects"): every signed-in account (owner 2026-10-30) - a customer opens its own project there; the
   // server lists only the projects the account is a member of (staff see all).
   development: 'development',
+  // Overview (owner 2026-11-16): projects and productions by motor, for the owner and admins only
+  overview: 'admin',
 };
 /** Does this session get the Projects tab?  Any signed-in account, and an unenforced (local) backend. */
 export const developmentVisible = (enforced: boolean, signedIn: boolean): boolean => !enforced || signedIn;

@@ -23,7 +23,8 @@
     "production": "Production",
     "admin": "Admin",
     "development": "Projects",
-    "designer": "Designer"
+    "designer": "Designer",
+    "overview": "Overview"
   },
   "status": {
     "connected": "Connected",
@@ -775,5 +776,34 @@
     "defaultTip": "Shown from the status. Parked and archived objects are hidden from the lists, never changed; they stay hidden until set back to Active.",
     "wokeTip": "{count} hidden objects with activity since they were hidden",
     "wokeRowTip": "Activity since it was hidden. It stays here until set back to Active."
+  },
+  "overview": {
+    "title": "Overview",
+    "titleTip": "Every motor and board that a project uses or a production makes, under its die. Project and Production are separate columns; a dash means none. The filter follows the Active / Parked / Archived state of the projects and productions.",
+    "byMotor": "By motor",
+    "projects": "Projects",
+    "motor": "Motor",
+    "board": "Board",
+    "project": "Project",
+    "production": "Production",
+    "worksWith": "Works with",
+    "customer": "Customer",
+    "stage": "Stage",
+    "updated": "Updated",
+    "shown": "Shown",
+    "refresh": "Refresh",
+    "trial": "trial link",
+    "rev": "rev {rev}",
+    "qty": "{n} pcs",
+    "removed": "removed",
+    "notInCatalog": "not in catalog",
+    "notInCatalogTip": "A project or production names this die, but the catalog of this server does not have it.",
+    "analysisControllerTip": "The controller this motor is analysed with in its configuration; not a confirmed pairing.",
+    "noRegistry": "no ids",
+    "noRegistryTip": "The id registry is not on this server (it is kept on the home server of the projects). The rows are complete without it.",
+    "review": "{n} to review",
+    "noMotorYet": "No motor yet",
+    "catalogOnly": "Catalog only ({n})",
+    "empty": "No projects or productions on this server."
   }
 }

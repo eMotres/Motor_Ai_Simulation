@@ -287,6 +287,7 @@ DATA_MODULES = frozenset({
     "verification", "worker_state", "modules",
     "regions",                          # two regions: region info, the signed peer channel, admin region views - computes nothing
     "display_state",                    # Active / Parked / Archived of projects and productions (staff lists) - computes nothing
+    "overview",                         # the owner's Overview: projects, productions, registry links (admins) - computes nothing
 })
 #: Router modules that can compute: every route in them is admin-only or reviewed above.
 COMPUTE_MODULES = frozenset({

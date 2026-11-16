@@ -20,6 +20,13 @@ Links (``kind``): ``project_item`` (from ``linked_motors``: status current / tri
 ``production_item`` (a production makes the item of its die/config), ``analysis_controller`` (the controller catalogue entry a
 motor configuration is analysed with: an analysis setup, NOT proof of a board pairing, so ``confirmed`` is false).
 
+An item the catalog no longer has but a project's ``motor_history`` ledger still names (a configuration deleted or retired
+long ago) is registered as ``state: removed`` under its old name, linked as ``unlinked`` history: that is history, not a
+review item.  Only a CURRENT link (``linked_motors``) to a missing motor goes to the review list.
+
+The catalog can be scanned in several layers (the shared catalog and each workspace): ``--catalog shared=DIR --catalog
+ws-owner=DIR``; every family and item records the layer(s) it was found in.
+
 Backfill is idempotent: a second run over the same sources mints nothing and changes nothing; an object is never deleted (a
 source that disappeared is marked ``missing_since``).  What cannot be decided from the data is NOT guessed: it goes into
 ``review`` (codes in :data:`REVIEW_CODES`) for the owner.  Locators are exact, case-sensitive names; two names that differ
@@ -27,7 +34,7 @@ only by case are a review item, never merged.
 
 CLI (a dry run writes only the report)::
 
-    python -m motor_ai_sim.object_registry backfill --catalog DIR --projects DIR --production DIR \
+    python -m motor_ai_sim.object_registry backfill --catalog [LAYER=]DIR [--catalog LAYER=DIR ...] --projects DIR --production DIR \
         [--registry DIR] [--dry-run] [--report FILE]
 """
 from __future__ import annotations
@@ -46,7 +53,7 @@ from motor_ai_sim import json_store
 VERSION = 1
 PREFIX = {"family": "fam", "item": "itm", "project": "prj", "production": "prd"}
 REVIEW_CODES = {
-    "link_to_missing_motor": "a project links a die / configuration that is in no store",
+    "link_to_missing_motor": "a project's CURRENT link names a die / configuration that is in no store",
     "production_without_item": "a production names a die / configuration that is not in the catalog",
     "case_collision": "two names differ only by upper / lower case",
     "duplicate_link": "a project lists the same motor twice with different statuses",
@@ -164,6 +171,33 @@ def _controller_of(cfg_file: Path) -> str:
     return ""
 
 
+def scan_catalog_layers(roots: Iterable[Tuple[str, Path]]) -> Dict[str, Dict[str, Any]]:
+    """Several catalog layers merged: a die / configuration found in more than one layer lists all of them."""
+    out: Dict[str, Dict[str, Any]] = {}
+    for layer, root in roots:
+        for die, d in scan_catalog(Path(root)).items():
+            cur = out.setdefault(die, {"configs": {}, "layers": []})
+            cur["layers"].append(layer)
+            for cfg, info in d["configs"].items():
+                c = cur["configs"].setdefault(cfg, {**info, "layers": []})
+                c["layers"].append(layer)
+    return out
+
+
+def _layers_arg(catalog_root: Any) -> List[Tuple[str, Path]]:
+    """``Path`` / ``"DIR"`` / ``"LAYER=DIR"`` / a list of them -> [(layer, path)]; a bare path is the layer ``catalog``."""
+    items = catalog_root if isinstance(catalog_root, (list, tuple)) else [catalog_root]
+    out = []
+    for it in items:
+        if isinstance(it, tuple):
+            out.append((str(it[0]), Path(it[1])))
+            continue
+        text = str(it)
+        layer, sep, path = text.partition("=")
+        out.append((layer, Path(path)) if sep and layer and "/" not in layer else ("catalog", Path(text)))
+    return out
+
+
 def scan_projects(projects_root: Path) -> List[Dict[str, Any]]:
     out = []
     for d in _visible_dirs(projects_root):
@@ -238,9 +272,10 @@ def plan(doc: Dict[str, Any], catalog: Dict[str, Dict[str, Any]], projects: List
     # families and items of the catalog
     item_of: Dict[Tuple[str, str], str] = {}
     for die, d in catalog.items():
-        fam = ensure("family", "catalog", die, family_kind="die", name=die)
+        fam = ensure("family", "catalog", die, family_kind="die", name=die, layers=list(d.get("layers") or ["catalog"]))
         for cfg, info in d["configs"].items():
-            iid = ensure("item", "catalog", f"{die}/{cfg}", item_kind="motor", family=fam, die=die, config=cfg)
+            iid = ensure("item", "catalog", f"{die}/{cfg}", item_kind="motor", family=fam, die=die, config=cfg,
+                         state="present", layers=list(info.get("layers") or ["catalog"]))
             item_of[(die, cfg)] = iid
             if info.get("controller"):
                 link("analysis_controller", iid, f"controller_catalog:{info['controller']}", confirmed=False)
@@ -283,6 +318,12 @@ def plan(doc: Dict[str, Any], catalog: Dict[str, Dict[str, Any]], projects: List
                     statuses.setdefault(key, set()).add("unlinked")
         for (die, cfg), sts in statuses.items():
             iid = item_of.get((die, cfg))
+            if iid is None and sts == {"unlinked"}:
+                # history only: a configuration deleted / retired long ago; registered as removed, never reviewed
+                fam = idx.resolve("family", "catalog", die) if die in catalog else None
+                iid = ensure("item", "catalog", f"{die}/{cfg}", item_kind="motor", family=fam, die=die, config=cfg,
+                             state="removed", layers=[])
+                item_of[(die, cfg)] = iid
             if iid is None:
                 review.append({"code": "link_to_missing_motor", "where": f"{pid} -> {die}/{cfg}", "project": prj})
                 continue
@@ -302,10 +343,12 @@ def plan(doc: Dict[str, Any], catalog: Dict[str, Dict[str, Any]], projects: List
     return report
 
 
-def backfill(*, catalog_root: Path, projects_root: Path, production_root: Path, registry: Optional[Path] = None,
+def backfill(*, catalog_root: Any, projects_root: Path, production_root: Path, registry: Optional[Path] = None,
              dry_run: bool = False) -> Dict[str, Any]:
-    """Read the three stores (never written) and merge them into the registry; ``dry_run`` computes on a copy."""
-    catalog = scan_catalog(Path(catalog_root))
+    """Read the stores (never written) and merge them into the registry; ``dry_run`` computes on a copy.
+
+    ``catalog_root``: one dies folder, or a list of ``(layer, folder)`` / ``"LAYER=DIR"`` for several layers."""
+    catalog = scan_catalog_layers(_layers_arg(catalog_root))
     projects = scan_projects(Path(projects_root))
     productions = scan_productions(Path(production_root))
     if dry_run:
@@ -381,7 +424,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap = argparse.ArgumentParser(prog="python -m motor_ai_sim.object_registry")
     sub = ap.add_subparsers(dest="cmd", required=True)
     b = sub.add_parser("backfill", help="ids and links from the catalog, project and production stores")
-    b.add_argument("--catalog", required=True, type=Path, help="the dies folder (<die>/die.yaml)")
+    b.add_argument("--catalog", required=True, action="append",
+                   help="a dies folder (<die>/die.yaml), as LAYER=DIR; repeat for every layer (shared, each workspace)")
     b.add_argument("--projects", required=True, type=Path)
     b.add_argument("--production", required=True, type=Path)
     b.add_argument("--registry", type=Path, default=None, help="registry folder (default: the app's)")

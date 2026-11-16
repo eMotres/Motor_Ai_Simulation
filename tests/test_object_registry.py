@@ -142,3 +142,42 @@ def test_cli_dry_run_report(stores, tmp_path, capsys):
     assert json.loads(report.read_text())["review_items"]
     assert '"dry_run": true' in capsys.readouterr().out
     assert not R.store_path(stores["registry"]).exists()
+
+
+def test_history_of_a_removed_configuration_is_history_not_review(stores):
+    """Coordinator dry run 2026-11-17: 54 of 55 review items were motor_history rows of configurations deleted long ago."""
+    p = stores["projects_root"] / "beta" / "project.json"
+    doc = json.loads(p.read_text())
+    doc["motor_history"].append({"die": "DIE A", "config": "OLD-17t", "linked_at": "t0", "unlinked_at": "t1"})
+    doc["motor_history"].append({"die": "GONE DIE", "config": "X", "linked_at": "t0", "unlinked_at": "t1"})
+    p.write_text(json.dumps(doc))
+    rep = R.backfill(**stores)
+    wheres = {r["where"] for r in rep["review_items"]}
+    assert "beta -> DIE A/OLD-17t" not in wheres and "beta -> GONE DIE/X" not in wheres
+    assert "beta -> GONE/L1" in wheres                                       # a CURRENT link to a missing motor stays
+    idx = R.index(stores["registry"])
+    old = idx.resolve("item", "catalog", "DIE A/OLD-17t")
+    assert idx.obj(old)["state"] == "removed" and idx.obj(old)["family"] == idx.resolve("family", "catalog", "DIE A")
+    gone = idx.resolve("item", "catalog", "GONE DIE/X")
+    assert idx.obj(gone)["state"] == "removed" and idx.obj(gone)["family"] is None
+    assert [l["status"] for l in idx.links_to[old]] == ["unlinked"]
+    assert R.backfill(**stores)["minted"]["item"] == 0                         # idempotent for removed items too
+
+
+def test_workspace_layers_give_workspace_only_dies_an_id(stores, tmp_path):
+    """Coordinator dry run 2026-11-17: a production whose die lives only in the owner's workspace layer."""
+    ws = tmp_path / "ws-owner"
+    _write(ws / "DIE C" / "die.yaml", "name: DIE C\n")
+    _write(ws / "DIE C" / "L9.yaml", "name: L9\n")
+    _write(ws / "DIE A" / "L12.yaml", "name: L12\n")
+    _write(ws / "DIE A" / "die.yaml", "name: DIE A\n")
+    args = dict(stores, catalog_root=[("shared", stores["catalog_root"]), f"ws-owner={ws}"])
+    rep = R.backfill(**args)
+    assert "production_without_item" not in {r["code"] for r in rep["review_items"]}
+    idx = R.index(stores["registry"])
+    c9 = idx.resolve("item", "catalog", "DIE C/L9")
+    assert idx.obj(c9)["layers"] == ["ws-owner"]
+    assert idx.obj(idx.resolve("item", "catalog", "DIE A/L12"))["layers"] == ["shared", "ws-owner"]
+    assert idx.obj(idx.resolve("family", "catalog", "DIE A"))["layers"] == ["shared", "ws-owner"]
+    prd = idx.resolve("production", "production", "DIE C/L9")
+    assert [l["to"] for l in idx.links_from[prd]] == [c9]

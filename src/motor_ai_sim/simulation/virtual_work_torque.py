@@ -384,9 +384,21 @@ def layer_self_check(t_rotor_side: Iterable[float],
                           the waveform is flat);
     ``rel_to_ripple_scale``  max |T_r − T_s| / max(p-p, 0.5 % of |mean|) —
                           the gated number;
-    ``ripple_mesh_limited``  rel_to_ripple_scale > ``SELF_CHECK_GATE``: the gap
-                          mesh, not the machine, sets the ripple — refine the
-                          gap (gap layers per side).
+    ``ripple_mesh_limited``  rel_to_ripple_scale > ``SELF_CHECK_GATE`` (legacy
+                          flag, kept for comparability): the two ring estimators
+                          disagree.  It mixes a DC offset and a waveform
+                          disagreement, so it does NOT say the ripple is wrong:
+                          read the split below.
+
+    Split of the same disagreement (additive; Astra audit 2026-11-16: at 1 / 2
+    rows on the 80 mm die ~94 % of the 11.3 / 7.1 % was the DC offset, the
+    centred part 0.82 / 0.40 % of the ripple pp):
+
+    ``dc_diff_Nm``            mean_k (T_r − T_s)  (= ``mean_diff_Nm``);
+    ``rel_dc_to_mean``        |dc| / |mean of the average|;
+    ``ac_max_abs_diff_Nm``    max_k |d_k − mean d|, d = T_r − T_s;
+    ``ac_rms_diff_Nm``        rms of d − mean d;
+    ``rel_ac_to_ripple_scale``  ac max / ripple scale (the ripple-relevant number).
     """
     a = np.asarray(list(t_rotor_side), float)
     b = np.asarray(list(t_stator_side), float)
@@ -395,14 +407,24 @@ def layer_self_check(t_rotor_side: Iterable[float],
     if a.size == 0 or a.shape != b.shape:
         return {"max_abs_diff_Nm": None, "mean_diff_Nm": None,
                 "rel_to_mean": None, "rel_to_pp": None,
-                "rel_to_ripple_scale": None, "ripple_mesh_limited": None, **base}
+                "rel_to_ripple_scale": None, "ripple_mesh_limited": None,
+                "dc_diff_Nm": None, "rel_dc_to_mean": None,
+                "ac_max_abs_diff_Nm": None, "ac_rms_diff_Nm": None,
+                "rel_ac_to_ripple_scale": None, **base}
     d = a - b
     avg = 0.5 * (a + b)
     m = float(np.mean(avg)); pp = float(np.ptp(avg))
     mx = float(np.max(np.abs(d)))
     scale = max(pp, RIPPLE_SCALE_FLOOR_REL_MEAN * abs(m))
     rel_scale = (mx / scale if scale > 0.0 else None)
-    return {"max_abs_diff_Nm": mx, "mean_diff_Nm": float(np.mean(d)),
+    dc = float(np.mean(d)); dac = d - dc
+    ac_mx = float(np.max(np.abs(dac)))
+    return {"max_abs_diff_Nm": mx, "mean_diff_Nm": dc,
+            "dc_diff_Nm": dc,
+            "rel_dc_to_mean": (abs(dc) / abs(m) if m != 0.0 else None),
+            "ac_max_abs_diff_Nm": ac_mx,
+            "ac_rms_diff_Nm": float(np.sqrt(np.mean(dac * dac))),
+            "rel_ac_to_ripple_scale": (ac_mx / scale if scale > 0.0 else None),
             "rel_to_mean": (mx / abs(m) if m != 0.0 else None),
             "rel_to_pp": (mx / pp if pp > 0.0 else None),
             "rel_to_ripple_scale": rel_scale,

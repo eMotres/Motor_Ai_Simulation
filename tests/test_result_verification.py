@@ -42,3 +42,25 @@ def test_summary_alone_is_enough():
 def test_mean_torque_disagreement_alone_rejects():
     v = assess({"ripple_self_check_rel": 0.2}, _payload(0.2, 0.05, t_avg=-0.2, pp=0.1))
     assert v["status"] == "reject"
+
+
+def _split(rel_legacy, dc, ac_rel, t_avg=-0.1013, pp=0.0479):
+    p = _payload(rel_legacy, dc, t_avg=t_avg, pp=pp)
+    p["coulomb_torque"]["layer_self_check"]["rel_ac_to_ripple_scale"] = ac_rel
+    return p
+
+
+def test_dc_offset_alone_at_1_and_2_rows_is_not_flagged():
+    # 80 mm die, Astra audit: 1 row ring check 11.3 % (DC 0.00527, centred 0.82 %), 2 rows 7.1 % (DC 0.00334, 0.40 %)
+    assert assess({"ripple_self_check_rel": 0.1135}, _split(0.1135, 0.00527, 0.0082))["status"] == "ok"
+    assert assess({"ripple_self_check_rel": 0.0713}, _split(0.0713, 0.00334, 0.0040))["status"] == "ok"
+
+
+def test_waveform_disagreement_still_flags_and_rejects():
+    assert assess({"ripple_self_check_rel": 0.2}, _split(0.2, 0.001, 0.2))["status"] == "warn"
+    assert assess({"ripple_self_check_rel": 0.9}, _split(0.9, 0.001, 0.9))["status"] == "reject"
+
+
+def test_large_dc_offset_does_not_warn_but_a_gross_one_rejects():
+    assert assess({"ripple_self_check_rel": 0.3}, _split(0.3, 0.015, 0.01))["status"] == "ok"
+    assert assess({"ripple_self_check_rel": 0.3}, _split(0.3, 0.03, 0.01))["status"] == "reject"

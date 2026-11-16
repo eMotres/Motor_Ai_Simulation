@@ -195,6 +195,28 @@ def cancel_run(O, kind: str, kill: bool = True) -> None:
             O._kill_live_evals("descent")
 
 
+#: gap_layers counts element rows PER SIDE of the middle of the air gap.  Owner
+#: 2026-11-16: every optimisation evaluation uses one row each side (1); final
+#: points (reported / saved / stored) are solved at 2 outside the optimisation.
+OPT_GAP_LAYERS = 1.0
+MAX_GAP_LAYERS = 2.0
+
+
+def refuse_gap_layers(gl, reason: Optional[str] = None) -> None:
+    """``gl`` = ``_resolve_gap_layers(...)`` (value, source).  Below 1 and above
+    2 are never valid; 2 only with an explicit request ``gap_layers_reason``."""
+    v = float(gl[0])
+    if v < OPT_GAP_LAYERS:
+        raise Refused(f"gap_layers {v} ({gl[1]}) < 1: no gap row on a side")
+    if v > MAX_GAP_LAYERS:
+        raise Refused(f"gap_layers {v} ({gl[1]}) > 2: never more than 2 rows per side "
+                      f"(owner 2026-11-16, hard rule)")
+    if v > OPT_GAP_LAYERS and not (reason or "").strip():
+        raise Refused(f"gap_layers {v} ({gl[1]}): optimisation evaluations use gap_layers 1 "
+                      f"(one row each side of the gap middle, owner 2026-11-16); give "
+                      f"'gap_layers_reason' in the request to run another value")
+
+
 def refuse_clamped(pairs) -> None:
     """``pairs`` = (name, requested, what the app will use): a request the app
     would silently change is refused, naming the value."""
@@ -346,7 +368,8 @@ def _progress_line(st: Dict[str, Any], memo: EvalMemo) -> str:
 
 def run_descent(O, body: Dict[str, Any], *, frozen: List[str] = (),
                 log=print, poll_s: float = 15.0,
-                memo: Optional[EvalMemo] = None) -> Dict[str, Any]:
+                memo: Optional[EvalMemo] = None,
+                gap_reason: Optional[str] = None) -> Dict[str, Any]:
     """Prepare and run one descent in THIS process with the route's own
     functions; returns the final ``_descent_state``.  Raises ``Refused``."""
     req = O.DescentRequest(**body)
@@ -364,9 +387,7 @@ def run_descent(O, body: Dict[str, Any], *, frozen: List[str] = (),
     if clash:
         raise Refused("frozen keys listed as variables: " + ", ".join(clash))
     gl = O._resolve_gap_layers(req.gap_layers)
-    if float(gl[0]) < 2.0:
-        raise Refused(f"gap_layers {gl[0]} ({gl[1]}) < 2: optimisation evals use at least "
-                      f"2 gap layers (owner 2026-11-16)")
+    refuse_gap_layers(gl, gap_reason)
     if req.algorithm.strip().lower() == "cmaes":
         try:
             import cma  # noqa: F401
@@ -406,7 +427,8 @@ def _sweep_line(st: Dict[str, Any], memo: Optional[EvalMemo]) -> str:
 
 def run_sweep(O, body: Dict[str, Any], *, frozen: List[str] = (),
               log=print, poll_s: float = 15.0,
-              memo: Optional[EvalMemo] = None) -> Dict[str, Any]:
+              memo: Optional[EvalMemo] = None,
+              gap_reason: Optional[str] = None) -> Dict[str, Any]:
     """Prepare and run one Sweep in THIS process with the route's own
     functions; returns the final ``_scan_state``.  Raises ``Refused``.  A
     re-run in the same folder serves the finished points from the app's own
@@ -426,9 +448,7 @@ def run_sweep(O, body: Dict[str, Any], *, frozen: List[str] = (),
     if clash:
         raise Refused("frozen keys listed as variables: " + ", ".join(clash))
     gl = O._resolve_gap_layers(req.gap_layers)
-    if float(gl[0]) < 2.0:
-        raise Refused(f"gap_layers {gl[0]} ({gl[1]}) < 2: optimisation evals use at least "
-                      f"2 gap layers (owner 2026-11-16)")
+    refuse_gap_layers(gl, gap_reason)
     a = plan["args"]
     refuse_clamped([("steps_per_period", req.steps_per_period, a[2]),
                     ("max_geometries", req.max_geometries, a[5]),
@@ -556,7 +576,8 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     try:
         final = (run_sweep if mode == "sweep" else run_descent)(
-            O, dict(req[mode]), frozen=list(req.get("frozen") or []), log=say, memo=memo)
+            O, dict(req[mode]), frozen=list(req.get("frozen") or []), log=say, memo=memo,
+            gap_reason=req.get("gap_layers_reason"))
     except Refused as e:
         say(f"REFUSED: {e}")
         return 2

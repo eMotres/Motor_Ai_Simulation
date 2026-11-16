@@ -92,7 +92,7 @@ export function runLabel(prev: Vector | null, next: Vector, max = 3): string {
   const ch = changedNames(prev, next);
   if (!prev) return 'start';
   if (ch.length === 0) return 'same';
-  const head = ch.slice(0, max).map((n) => `${n}=${typeof next[n] === 'number' ? Number((next[n] as number).toPrecision(4)) : next[n]}`);
+  const head = ch.slice(0, max).map((n) => `${n}=${typeof next[n] === 'number' ? round2(next[n] as number) : next[n]}`);
   return head.join(', ') + (ch.length > max ? ` +${ch.length - max}` : '');
 }
 
@@ -153,4 +153,22 @@ export function keyFlags(flags: readonly string[]): string[] {
 
 export function fmt(v: number | null | undefined, digits = 2): string {
   return v == null || !Number.isFinite(v) ? '—' : v.toFixed(digits);
+}
+
+/** Display rounding of the Designer (owner 2026-11-16): at most two decimals; a value below 0.1 keeps two significant digits
+ *  so it never shows as 0.00.  Display only - stored and sent values keep full precision. */
+export function round2(v: number): number {
+  if (!Number.isFinite(v)) return v;
+  const a = Math.abs(v);
+  return a > 0 && a < 0.1 ? Number(v.toPrecision(2)) : Number(v.toFixed(2));
+}
+
+/** Thrust per shaft watt for display: N/W -> g/W (x 1000 / 9.80665).  The data and the API stay in N/W. */
+export const G_PER_N = 1000 / 9.80665;
+export function gPerW(nPerW: number | null | undefined): number | null {
+  return nPerW == null || !Number.isFinite(nPerW) ? null : nPerW * G_PER_N;
+}
+
+export function fmt2(v: number | null | undefined): string {
+  return v == null || !Number.isFinite(v) ? '—' : String(round2(v));
 }

@@ -1,9 +1,10 @@
 /** Propellers > Designer: the pieces of the page (variables, planform, tiles, profile, curves, zones, Pareto view). */
+import { useState } from 'react';
 import { Box, Button, Chip, MenuItem, Paper, Select, Table, TableBody, TableCell, TableHead, TableRow, TextField, Tooltip, Typography } from '@mui/material';
 import { CartesianGrid, Legend, Line, LineChart, ReferenceArea, ReferenceLine, ResponsiveContainer, Scatter, ScatterChart, Tooltip as RcTooltip, XAxis, YAxis } from 'recharts';
 import { useTranslation } from 'react-i18next';
 
-import { fmt, groupRows, keyFlags, outOfBounds, paretoFront, parseNumber, planformPolygon, profileRows, GROUP_KEYS } from '../../lib/propellerDesign';
+import { fmt, fmt2, gPerW, round2, groupRows, keyFlags, outOfBounds, paretoFront, parseNumber, planformPolygon, profileRows, GROUP_KEYS } from '../../lib/propellerDesign';
 import type { EvalRecord, RunRecord, VarRow, Vector } from '../../lib/propellerDesign';
 import type { Curve, Geometry } from '../../lib/propellerDesignApi';
 
@@ -17,6 +18,20 @@ export function Panel({ title, tip, children }: { title: string; tip?: string; c
       <Tooltip title={tip ?? ''} disableHoverListener={!tip}><Typography sx={{ ...TITLE, mb: 0.75, display: 'inline-block' }}>{title}</Typography></Tooltip>
       {children}
     </Paper>
+  );
+}
+
+/** A number field that shows the value rounded to two decimals; while it has focus it shows exactly what the user types,
+ *  and every parsable text is passed on at full precision. */
+function NumField({ label, name, value, error, onChange }: { label: string; name: string; value: unknown; error: boolean; onChange: (n: number) => void }) {
+  const [text, setText] = useState<string | null>(null);
+  const shown = text ?? (typeof value === 'number' ? String(round2(value)) : String(value));
+  return (
+    <TextField size="small" label={label} value={shown} error={error}
+      onFocus={() => setText(typeof value === 'number' ? String(round2(value)) : String(value))}
+      onBlur={() => setText(null)}
+      onChange={(e) => { setText(e.target.value); const n = parseNumber(e.target.value); if (n !== null) onChange(n); }}
+      inputProps={{ inputMode: 'decimal', 'aria-label': name }} InputLabelProps={{ sx: { fontSize: 12 } }} sx={{ '& input': { fontSize: 12 } }} />
   );
 }
 
@@ -45,9 +60,7 @@ export function VariablesPanel({ rows, vector, onChange, onReset }: { rows: VarR
               const tip = r.lo != null && r.hi != null ? t('propDesignBounds', { lo: r.lo, hi: r.hi }) : '';
               return (
                 <Tooltip key={r.name} title={tip}>
-                  <TextField size="small" label={`${r.name} ${r.unit}`} value={String(v)} error={bad}
-                    onChange={(e) => { const n = parseNumber(e.target.value); if (n !== null) onChange(r.name, n); }}
-                    inputProps={{ inputMode: 'decimal', 'aria-label': r.name }} InputLabelProps={{ sx: { fontSize: 12 } }} sx={{ '& input': { fontSize: 12 } }} />
+                  <NumField label={`${r.name} ${r.unit}`} name={r.name} value={v} error={bad} onChange={(n) => onChange(r.name, n)} />
                 </Tooltip>
               );
             })}
@@ -81,7 +94,7 @@ export function PlanformChart({ geo, motorRadiusMm }: { geo: Geometry | null; mo
           <CartesianGrid stroke="var(--line-soft)" strokeDasharray="3 3" />
           <XAxis dataKey="r_mm" type="number" domain={[0, 'dataMax']} tick={TXT} unit=" mm" />
           <YAxis tick={TXT} width={38} />
-          <RcTooltip formatter={(v) => [`${fmt(Number(v), 1)}°`, t('propChartTwist')]} labelFormatter={(r) => `${fmt(Number(r), 1)} mm`} contentStyle={{ background: 'var(--panel)', fontSize: 12 }} />
+          <RcTooltip formatter={(v) => [`${fmt2(Number(v))}°`, t('propChartTwist')]} labelFormatter={(r) => `${fmt2(Number(r))} mm`} contentStyle={{ background: 'var(--panel)', fontSize: 12 }} />
           <ReferenceLine x={motorRadiusMm} stroke="var(--brand)" strokeDasharray="3 3" />
           <Line type="monotone" dataKey="twist" stroke="var(--text-1)" dot={false} isAnimationActive={false} />
         </LineChart>
@@ -104,9 +117,9 @@ export function ZoneTable({ geo }: { geo: Geometry | null }) {
             <TableRow key={z.zone}>
               <TableCell sx={{ fontSize: 12 }}>{t(`propZone_${z.zone}`)}</TableCell>
               <TableCell sx={{ fontSize: 12 }}>{z.airfoil}</TableCell>
-              <TableCell sx={{ fontSize: 12 }}>{fmt(z.t_c_ideal * 100, 1)} %</TableCell>
-              <TableCell sx={{ fontSize: 12 }}>{fmt(z.t_c_manufactured * 100, 1)} %</TableCell>
-              <TableCell sx={{ fontSize: 12 }}>{fmt(z.te_thickness_mm, 2)}</TableCell>
+              <TableCell sx={{ fontSize: 12 }}>{fmt2(z.t_c_ideal * 100)} %</TableCell>
+              <TableCell sx={{ fontSize: 12 }}>{fmt2(z.t_c_manufactured * 100)} %</TableCell>
+              <TableCell sx={{ fontSize: 12 }}>{fmt2(z.te_thickness_mm)}</TableCell>
               <TableCell sx={{ fontSize: 12 }}>{z.active_limits.length ? z.active_limits.map((l) => t(`propLimit_${l}`)).join(', ') : t('propZoneNone')}</TableCell>
             </TableRow>
           ))}
@@ -120,13 +133,13 @@ export function ResultTiles({ r }: { r: EvalRecord | null }) {
   const { t } = useTranslation('simulation');
   if (!r) return null;
   const tiles: Array<{ k: string; tip?: string; v: string; hot?: boolean }> = [
-    { k: 'propTileEff', tip: 'propTileEffTip', v: fmt(r.objectives.thrust_per_shaft_W, 4), hot: true },
-    { k: 'propTileAir', tip: 'propTileAirTip', v: fmt(r.objectives.cooling_air_axial_ms, 1), hot: true },
-    { k: 'propTileThrust', v: fmt(r.thrust_N, 1) },
-    { k: 'propTileTorque', tip: 'propTileTorqueTip', v: fmt(r.torque_Nm, 3) },
+    { k: 'propTileEff', tip: 'propTileEffTip', v: fmt2(gPerW(r.objectives.thrust_per_shaft_W)), hot: true },
+    { k: 'propTileAir', tip: 'propTileAirTip', v: fmt2(r.objectives.cooling_air_axial_ms), hot: true },
+    { k: 'propTileThrust', v: fmt2(r.thrust_N) },
+    { k: 'propTileTorque', tip: 'propTileTorqueTip', v: fmt2(r.torque_Nm) },
     { k: 'propTilePower', v: fmt(r.shaft_power_W, 0) },
     { k: 'propTileRpm', v: fmt(r.operating.rpm, 0) },
-    { k: 'propTileMach', tip: 'propTileMachTip', v: fmt(r.tip_mach, 2) },
+    { k: 'propTileMach', tip: 'propTileMachTip', v: fmt2(r.tip_mach) },
   ];
   return (
     <Box data-testid="prop-tiles">
@@ -164,7 +177,7 @@ export function ProfileChart({ r, motorRadiusMm }: { r: EvalRecord | null; motor
           <XAxis dataKey="r_mm" type="number" domain={[0, 'dataMax']} tick={TXT} unit=" mm" />
           <YAxis tick={TXT} width={38} />
           <ReferenceArea x1={0} x2={motorRadiusMm} fill="var(--brand)" fillOpacity={0.12} label={{ value: t('propMotorBand'), fontSize: 10, fill: 'var(--text-3)' }} />
-          <RcTooltip formatter={(v) => `${fmt(Number(v), 1)} m/s`} labelFormatter={(x) => `${fmt(Number(x), 1)} mm`} contentStyle={{ background: 'var(--panel)', fontSize: 12 }} />
+          <RcTooltip formatter={(v) => `${fmt2(Number(v))} m/s`} labelFormatter={(x) => `${fmt2(Number(x))} mm`} contentStyle={{ background: 'var(--panel)', fontSize: 12 }} />
           <Legend wrapperStyle={{ fontSize: 11 }} />
           <Line name={t('propChartAxial')} type="monotone" dataKey="axial" stroke="var(--brand)" dot={false} connectNulls={false} isAnimationActive={false} />
           <Line name={t('propChartSwirl')} type="monotone" dataKey="swirl" stroke="#f59e0b" dot={false} connectNulls={false} isAnimationActive={false} />
@@ -200,8 +213,8 @@ export function ParetoView({ runs, selectedId, onPick, onClear, cost }: { runs: 
   const { t } = useTranslation('simulation');
   const front = paretoFront(runs);
   const frontIds = new Set(front.map((i) => runs[i].id));
-  const pts = runs.filter((r) => r.thrust_per_shaft_W != null && r.air_ms != null).map((r) => ({ air: r.air_ms as number, eff: r.thrust_per_shaft_W as number, id: r.id }));
-  const line = front.map((i) => ({ air: runs[i].air_ms as number, eff: runs[i].thrust_per_shaft_W as number })).sort((a, b) => a.air - b.air);
+  const pts = runs.filter((r) => r.thrust_per_shaft_W != null && r.air_ms != null).map((r) => ({ air: r.air_ms as number, eff: gPerW(r.thrust_per_shaft_W) as number, id: r.id }));
+  const line = front.map((i) => ({ air: runs[i].air_ms as number, eff: gPerW(runs[i].thrust_per_shaft_W) as number })).sort((a, b) => a.air - b.air);
   return (
     <Panel title={t('propPareto')} tip={t('propParetoTip')}>
       {runs.length === 0 ? <Typography sx={{ fontSize: 12, color: 'var(--text-3)' }}>{t('propParetoNone')}</Typography> : (
@@ -210,13 +223,13 @@ export function ParetoView({ runs, selectedId, onPick, onClear, cost }: { runs: 
             <ScatterChart margin={{ top: 8, right: 16, bottom: 18, left: 4 }}>
               <CartesianGrid stroke="var(--line-soft)" strokeDasharray="3 3" />
               <XAxis dataKey="air" type="number" name={t('propTileAir')} tick={TXT} domain={['auto', 'auto']} label={{ value: t('propTileAir'), position: 'insideBottom', offset: -8, fontSize: 10, fill: 'var(--text-3)' }} />
-              <YAxis dataKey="eff" type="number" name={t('propTileEff')} tick={TXT} width={48} domain={['auto', 'auto']} tickFormatter={(v) => Number(v).toFixed(3)} />
+              <YAxis dataKey="eff" type="number" name={t('propTileEff')} tick={TXT} width={48} domain={['auto', 'auto']} tickFormatter={(v) => fmt2(Number(v))} />
               <RcTooltip cursor={{ strokeDasharray: '3 3' }} contentStyle={{ background: 'var(--panel)', fontSize: 12 }} />
               <Scatter name={t('propRuns')} data={pts} fill="var(--text-3)" isAnimationActive={false} />
               <Scatter name={t('propRunFront')} data={line} fill="var(--brand)" line={{ stroke: 'var(--brand)' }} isAnimationActive={false} />
             </ScatterChart>
           </ResponsiveContainer>
-          {cost !== null && <Typography sx={{ fontSize: 12 }} data-testid="prop-front-cost">{t('propParetoCost', { value: fmt(cost, 4) })}</Typography>}
+          {cost !== null && <Typography sx={{ fontSize: 12 }} data-testid="prop-front-cost">{t('propParetoCost', { value: fmt2(gPerW(cost)) })}</Typography>}
           <Box sx={{ maxHeight: 220, overflow: 'auto', mt: 0.5 }}>
             <Table size="small" data-testid="prop-runs">
               <TableHead><TableRow>
@@ -227,8 +240,8 @@ export function ParetoView({ runs, selectedId, onPick, onClear, cost }: { runs: 
                   <TableRow key={r.id} selected={r.id === selectedId} hover>
                     <TableCell sx={{ fontSize: 11, py: 0.25 }}>{r.id}</TableCell>
                     <TableCell sx={{ fontSize: 11, py: 0.25, maxWidth: 220, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.label}</TableCell>
-                    <TableCell sx={{ fontSize: 11, py: 0.25 }}>{fmt(r.thrust_per_shaft_W, 4)}</TableCell>
-                    <TableCell sx={{ fontSize: 11, py: 0.25 }}>{fmt(r.air_ms, 1)}</TableCell>
+                    <TableCell sx={{ fontSize: 11, py: 0.25 }}>{fmt2(gPerW(r.thrust_per_shaft_W))}</TableCell>
+                    <TableCell sx={{ fontSize: 11, py: 0.25 }}>{fmt2(r.air_ms)}</TableCell>
                     <TableCell sx={{ fontSize: 11, py: 0.25 }}>{r.constraintsMet ? '✓' : '✗'}</TableCell>
                     <TableCell sx={{ fontSize: 11, py: 0.25 }}>{frontIds.has(r.id) ? '●' : ''}</TableCell>
                     <TableCell sx={{ py: 0.25 }}><Button size="small" onClick={() => onPick(r)}>{t('propParetoPick')}</Button></TableCell>

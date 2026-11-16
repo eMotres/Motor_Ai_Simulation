@@ -31,7 +31,7 @@ configuration NAMES with the parameters (read-only report; nothing is renamed).
 from __future__ import annotations
 
 import re
-from typing import Any, Dict, List, Mapping, Optional
+from typing import Any, Dict, List, Mapping, Optional, Tuple
 
 UNKNOWN = "?"
 
@@ -59,9 +59,22 @@ def _mm(v: Optional[float]) -> str:
 
 
 def geometry_of(die_doc: Mapping[str, Any], cfg_doc: Mapping[str, Any]) -> Dict[str, Any]:
-    """The effective geometry: the die's geometry with the configuration's overrides on top."""
+    """The effective geometry: the die's geometry with the configuration's overrides on top; slots / poles from the
+    segments when only those are given (a headless run's machine), and the radii from the primaries through the app's
+    one derived-geometry function (stored derived values go stale, and a payload geometry carries primaries only)."""
     g = dict((die_doc or {}).get("geometry") or {})
     g.update((cfg_doc or {}).get("geometry_overrides") or {})
+    for total, per in (("num_slots", "num_slots_per_segment"), ("num_poles", "num_poles_per_segment")):
+        if _num(g.get(total)) is None and _num(g.get(per)) is not None and _num(g.get("num_seg")) is not None:
+            g[total] = int(_num(g[per]) * _num(g["num_seg"]))
+    try:
+        from motor_ai_sim.geometry.motor_geometry import derived_geometry
+        fresh = derived_geometry(g)
+        for k in ("stator_outer_radius", "stator_inner_radius", "rotor_outer_radius"):
+            if fresh.get(k) is not None:
+                g[k] = fresh[k]
+    except Exception:                                       # noqa: BLE001 - no derivation: the stored values stand
+        pass
     return g
 
 
@@ -237,8 +250,7 @@ def check(die_name: str, cfg_name: str, described: Mapping[str, Any]) -> List[Di
     return out
 
 
-def for_motor(die: str, cfg: str) -> Dict[str, Any]:
-    """The designation of a stored motor, read now from its files (never cached, never stored)."""
+def _stored(die: str, cfg: str) -> Tuple[Dict[str, Any], Dict[str, Any], Optional[str]]:
     import yaml
     from motor_ai_sim.routes import family
     die_doc = yaml.safe_load(family._die_file(die).read_text(encoding="utf-8")) or {}
@@ -250,6 +262,66 @@ def for_motor(die: str, cfg: str) -> Dict[str, Any]:
         rev = hit[1].get("rev") if hit else None
     except Exception:                                       # noqa: BLE001 - no revision store: no Rev suffix
         rev = None
+    return die_doc, cfg_doc, rev
+
+
+def stamp(die: str, cfg: str, *, geometry: Optional[Mapping[str, Any]] = None, winding: Optional[Mapping[str, Any]] = None,
+          materials: Optional[Mapping[str, Any]] = None, library: Optional[Mapping[str, Any]] = None,
+          stored: Optional[Tuple[Dict[str, Any], Dict[str, Any], Optional[str]]] = None) -> Dict[str, Any]:
+    """What a stored RESULT records at compute time (owner 2026-11-17): the designation of the parameters actually
+    solved, so it never takes the name of the motor as it is later.  ``geometry`` (the effective geometry of the solve,
+    e.g. a payload or trial geometry), ``winding`` and ``materials`` replace the stored ones where given; the rest is read
+    from the stored die / configuration NOW, or taken from ``stored`` (a ``_stored(die, cfg)`` read made once by a caller
+    that stamps many candidates).  ``{"designation", "complete"}``; ``{}`` when nothing can be read.  Never
+    raises: the caller is the tail of a solve."""
+    try:
+        try:
+            die_doc, cfg_doc, rev = stored if stored is not None else _stored(die, cfg)
+        except Exception:                                   # noqa: BLE001 - a payload-only machine has no files
+            die_doc, cfg_doc, rev = {}, {}, None
+            if geometry is None:
+                return {}
+        cfg_doc = dict(cfg_doc)
+        if geometry is not None:
+            cfg_doc["geometry_overrides"] = {**(cfg_doc.get("geometry_overrides") or {}), **dict(geometry)}
+        if winding is not None:
+            cfg_doc["winding"] = {**(cfg_doc.get("winding") or {}), **dict(winding)}
+        if materials is not None:
+            cfg_doc["materials"] = {**(cfg_doc.get("materials") or {}), **dict(materials)}
+        out = describe(die, die_doc, cfg_doc, rev=rev, library=library)
+        return {"designation": out["designation"], "complete": out["complete"]}
+    except Exception:                                       # noqa: BLE001
+        return {}
+
+
+def stamp_from_config(die: str, config: Mapping[str, Any]) -> Dict[str, Any]:
+    """The stamp for the LIVE motor config a solve ran on (``motor_ai_sim.config.get_config()``: full geometry,
+    materials, winding - the same source the record's same-machine print is taken from).  ``{}`` on any failure."""
+    try:
+        cfg_doc = {"geometry_overrides": dict(config.get("geometry") or {}), "winding": dict(config.get("winding") or {}),
+                   "materials": dict(config.get("materials") or {})}
+        if not cfg_doc["geometry_overrides"]:
+            return {}
+        out = describe(die, {}, cfg_doc)
+        return {"designation": out["designation"], "complete": out["complete"]}
+    except Exception:                                       # noqa: BLE001
+        return {}
+
+
+def compare(result_designation: Optional[str], current_designation: Optional[str]) -> Optional[Dict[str, str]]:
+    """The mark of a result computed for another motor: ``{"computed_for", "now"}``, or None when they agree or the
+    result carries no stamp (unknown is not "different").  The ``Rev`` suffix alone does not make a difference."""
+    if not result_designation or not current_designation:
+        return None
+    strip = lambda s: re.sub(r" Rev [A-Z]+$", "", str(s).strip())     # noqa: E731
+    if strip(result_designation) == strip(current_designation):
+        return None
+    return {"computed_for": str(result_designation), "now": str(current_designation)}
+
+
+def for_motor(die: str, cfg: str) -> Dict[str, Any]:
+    """The designation of a stored motor, read now from its files (never cached, never stored)."""
+    die_doc, cfg_doc, rev = _stored(die, cfg)
     out = describe(die, die_doc, cfg_doc, rev=rev)
     out["checks"] = check(die, cfg, out)
     return out

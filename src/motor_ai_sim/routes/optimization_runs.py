@@ -83,7 +83,7 @@ def import_run(req: RunImport, dry_run: bool = False, _w: dict = Depends(require
     die, config = F._check_name(req.die, "die"), F._check_name(req.config, "configuration")
     F._require_die_write(die, _w, config)
     try:
-        rec = RS.build_record(req.state, req.run_id, req.request, req.source)
+        rec = RS.build_record(req.state, req.run_id, req.request, req.source, die=die, config=config)
     except RS.RunRejected as e:
         raise HTTPException(422, detail=str(e))
     exists = RS.read_run(*_read_dirs(F, die), config=config, run_id=rec["run_id"]) is not None

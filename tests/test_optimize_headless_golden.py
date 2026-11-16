@@ -37,7 +37,7 @@ BODY = {
     "operating_point": {"current_a": 10.0, "gamma_deg": 0.0, "rpm": 3000.0},
     "max_iters": 2, "auto_expand": False, "optimize_gamma": False,
     "objective": "baseline_line", "steps_per_period": 24, "run_id": "golden",
-    "gap_layers": 2,
+    "gap_layers": 1,
 }
 KEYS = ("n_evals", "best", "history", "baseline", "baseline_line", "result",
         "final_validation_status", "error")
@@ -154,14 +154,20 @@ def test_a_frozen_variable_is_refused():
             raise AssertionError("not refused")
 
 
-def test_fewer_than_two_gap_layers_are_refused():
+def test_gap_layers_rule_for_optimisation():
+    # gap_layers counts rows PER SIDE: optimisation = 1 (owner 2026-11-16)
     with _patched(_stub):
-        try:
-            H.run_descent(O, dict(BODY, gap_layers=1), log=lambda m: None)
-        except H.Refused as e:
-            assert "gap_layers 1.0" in str(e)
-        else:
-            raise AssertionError("not refused")
+        for gl, reason, word in ((0.5, None, "< 1"), (2, None, "use gap_layers 1")):
+            try:
+                H.run_descent(O, dict(BODY, gap_layers=gl), log=lambda m: None, gap_reason=reason)
+            except H.Refused as e:
+                assert word in str(e), (word, str(e))
+            else:
+                raise AssertionError("not refused: %s" % gl)
+    with _patched(_stub):
+        st = H.run_descent(O, dict(BODY, gap_layers=2), log=lambda m: None, poll_s=0.05,
+                           gap_reason="final-point comparison")
+    assert not st.get("error")
 
 
 def test_suspect_results_are_used_but_not_replayed():
@@ -206,7 +212,7 @@ def test_mtpa_run_settings_are_opt_in():
             # the eval defaults, exactly as before: no run switches passed
             assert all("structured_gap" not in kw and "rotor_eddy" not in kw for kw in sweep)
         else:
-            assert all(kw["structured_gap"] is True and kw["gap_layers"] == 2.0
+            assert all(kw["structured_gap"] is True and kw["gap_layers"] == 1.0
                        and kw["rotor_eddy"] is True and kw["rpm"] == 3000.0 for kw in sweep)
 
 
@@ -228,7 +234,7 @@ def _sweep_body(**kw):
                       {"name": "slot_height", "min": round(sh - 0.2, 1), "max": round(sh, 1),
                        "mode": "sweep", "step": 0.2}],
         "operating_points": [{"gamma_deg": 0.0, "current_a": 0.0, "rpm": 630.9}],
-        "steps_per_period": 24, "gap_layers": 2, "max_geometries": 20, "mesh_size_mm": 1.0,
+        "steps_per_period": 24, "gap_layers": 1, "max_geometries": 20, "mesh_size_mm": 1.0,
         "min_size_mm": 0.3, "run_id": "golden-sweep",
     }
     body.update(kw)
@@ -277,7 +283,7 @@ def test_sweep_refusals():
     with _patched_sweep(_stub):
         sw = _sweep_body()
         for body, word in ((dict(sw, mesh_size_mm=0.6), "mesh_size_mm 0.6 -> 1.0"),
-                           (dict(sw, gap_layers=1), "gap_layers 1.0"),
+                           (dict(sw, gap_layers=2), "use gap_layers 1"),
                            (dict(sw, variables=sw["variables"] + [
                                {"name": "air_gap", "min": 0.3, "max": 0.6, "mode": "sweep", "step": 0.1}]),
                             "air_gap (not in sweep_whitelist)")):

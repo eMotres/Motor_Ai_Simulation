@@ -32,8 +32,17 @@ class ApiProblem(Exception):
         self.status, self.detail = status, detail
 
 
-def _design() -> pd.Design:
-    return pd.load_design()
+def _design(polar_source: Any = None) -> pd.Design:
+    """The family design; ``polar_source`` (None = the file's, default flat plate) selects the section polar for this request only."""
+    d = pd.load_design()
+    if polar_source is None:
+        return d
+    if not isinstance(polar_source, str):
+        raise ApiProblem(422, "polar_source must be one of %s" % list(pd.POLAR_CHOICES))
+    try:
+        return pd.with_polar_source(d, polar_source)
+    except pd.DesignError as exc:
+        raise ApiProblem(422, str(exc))
 
 
 def _clean_vector(vec: Any) -> Dict[str, Any]:
@@ -70,6 +79,7 @@ def family(diameter_in: int = 10, blades: int = 2) -> Dict[str, Any]:
                           "limits": {n: {"value": l.value, "unit": l.unit, "source": l.source, "confirmed": l.confirmed}
                                      for n, l in d.manufacturing.limits.items()}},
         "inputs_unconfirmed": d.inputs_unconfirmed(),
+        "polar_source": pd.polar_source(d), "polar_sources": list(pd.POLAR_CHOICES),
         "control_r_over_R": list(d.control), "seed": seed, "variables": pd.variables_table(d, seed),
     }
 
@@ -107,8 +117,8 @@ def geometry(vec: Any) -> Dict[str, Any]:
             "outline": [{"r_mm": s["r_mm"], "chord_mm": s["chord_mm"], "twist_deg": s["twist_deg"]} for s in raw["blade"]["stations"]]}
 
 
-def evaluate(vec: Any, op: str, v_inf: float = 0.0) -> Dict[str, Any]:
-    d = _design()
+def evaluate(vec: Any, op: str, v_inf: float = 0.0, polar_source: Any = None) -> Dict[str, Any]:
+    d = _design(polar_source)
     v = _clean_vector(vec)
     if op not in d.operating_points:
         raise ApiProblem(422, "unknown operating point %r; known: %s" % (op, sorted(d.operating_points)))
@@ -124,9 +134,9 @@ def evaluate(vec: Any, op: str, v_inf: float = 0.0) -> Dict[str, Any]:
 
 
 def sweep(vec: Any, op: str, variable: str, values: Optional[List[Any]] = None, lo: Optional[float] = None,
-          hi: Optional[float] = None, n: int = 7) -> Dict[str, Any]:
+          hi: Optional[float] = None, n: int = 7, polar_source: Any = None) -> Dict[str, Any]:
     """Evaluate the candidate with ONE variable changed: explicit ``values`` or ``n`` points from ``lo`` to ``hi`` (numeric variables)."""
-    d = _design()
+    d = _design(polar_source)
     v = _clean_vector(vec)
     if variable not in pd.variable_names(d):
         raise ApiProblem(422, "unknown variable %r" % variable)
@@ -160,10 +170,10 @@ def sweep(vec: Any, op: str, variable: str, values: Optional[List[Any]] = None, 
     return {"variable": variable, "operating_point": op, "rows": rows, "banner": pd.BANNER}
 
 
-def curve(vec: Any, op: str, n: int = 11, v_inf: float = 0.0) -> Dict[str, Any]:
+def curve(vec: Any, op: str, n: int = 11, v_inf: float = 0.0, polar_source: Any = None) -> Dict[str, Any]:
     """Thrust, torque and power against rpm for the candidate (0.4 to 1.3 x the motor's stored rated rpm), with the motor torque limit."""
     from motor_ai_sim import propeller_inflow as pi
-    d = _design()
+    d = _design(polar_source)
     v = _clean_vector(vec)
     if op not in d.operating_points:
         raise ApiProblem(422, "unknown operating point %r; known: %s" % (op, sorted(d.operating_points)))
@@ -190,11 +200,11 @@ def curve(vec: Any, op: str, n: int = 11, v_inf: float = 0.0) -> Dict[str, Any]:
 
 def optimize(vec: Any, op: str, pop: Any = 12, generations: Any = 6, seed: Any = 1, objectives: Any = None, free: Any = None,
              enforce_tip_mach: Any = True, tip_mach_limit: Any = None,
-             structure_material: Any = None, min_safety_factor: Any = None) -> Dict[str, Any]:
+             structure_material: Any = None, min_safety_factor: Any = None, polar_source: Any = None) -> Dict[str, Any]:
     """Two-objective optimisation from the given design (diameter and blade count stay).  Synchronous and capped (pop x (generations + 1) <= 200);
     every evaluation is appended to ``<workspace>/propeller_designs/_runs/<run_id>.jsonl``."""
     from motor_ai_sim import propeller_optimize as po
-    d = _design()
+    d = _design(polar_source)
     v = _clean_vector(vec)
     if not isinstance(pop, int) or isinstance(pop, bool) or not isinstance(generations, int) or isinstance(generations, bool) \
             or not isinstance(seed, int) or isinstance(seed, bool):

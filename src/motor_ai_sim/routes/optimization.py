@@ -3869,6 +3869,10 @@ class DescentRequest(BaseModel):
     current_bump_pct: float = 10.0    # 2nd baseline current = I·(1 + pct/100)
     # See OptRequest.allow_new_lamination.
     allow_new_lamination: bool = False
+    # Opt-in: the MTPA pre-sweep solves its angles with THIS run's eval
+    # switches (rotor eddy, gap mesh, k_end, speed) instead of the eval
+    # defaults.  Off = the angle choice exactly as before.
+    mtpa_run_settings: bool = False
 
 
 class BaselineRequest(BaseModel):
@@ -4455,8 +4459,24 @@ def _recenter_specs(specs, best_x):
     return out
 
 
+def _mtpa_settings(on, *, pole_copy, torque_filter, end_winding, rotor_eddy,
+                   gap_layers, structured_gap, airgap_macro, iron_template,
+                   geo_mesh, op) -> Optional[Dict[str, Any]]:
+    """The run's eval switches for the MTPA pre-sweep, or None (= the eval
+    defaults, the behaviour before ``mtpa_run_settings`` existed)."""
+    if not on:
+        return None
+    return {"pole_copy": pole_copy, "torque_filter": torque_filter,
+            "end_winding_factor": end_winding, "rotor_eddy": rotor_eddy,
+            "gap_layers": gap_layers, "structured_gap": structured_gap,
+            "airgap_macro": airgap_macro, "iron_template": iron_template,
+            "geo_mesh": geo_mesh,
+            "rpm": (float(op.get("rpm")) if op.get("rpm") else None)}
+
+
 def _mtpa_gamma_sweep(geom, ref_I, steps, coil_temp, mesh_size, min_size, n_sectors,
-                      lo=-50.0, hi=50.0, step=10.0, element_order=2):
+                      lo=-50.0, hi=50.0, step=10.0, element_order=2,
+                      run_settings: Optional[Dict[str, Any]] = None):
     """Find the load angle γ that MAXIMISES torque (MTPA) for ONE geometry at a
     reference current — a coarse PARALLEL sweep + parabolic refine.  Run once
     before the geometry search so the whole optimization uses the best phase.
@@ -4466,7 +4486,12 @@ def _mtpa_gamma_sweep(geom, ref_I, steps, coil_temp, mesh_size, min_size, n_sect
     12s/10p (user's hand-found γ ≈ +16°) the peak landed ON the edge and the
     whole run was pinned to γ = 0.0 (perp_free_200_20260904, 2026-09-04).
     Same 11 evals, one parallel wave: [-50, 50] at 10° plus the parabolic
-    refine resolves the peak to ~1° on a cosine-shaped T(γ)."""
+    refine resolves the peak to ~1° on a cosine-shaped T(γ).
+
+    ``run_settings`` (opt-in, ``DescentRequest.mtpa_run_settings``): the run's
+    own eval switches (rotor eddy, structured / harmonic gap, gap layers, k_end,
+    speed ...) passed to every angle, so γ is chosen on the same solve the
+    search then uses.  ``None`` = the eval defaults, exactly as before."""
     from motor_ai_sim.workspace import (WorkspaceThreadPoolExecutor
                                         as ThreadPoolExecutor)
     cand = [round(lo + i * step, 1) for i in range(int(round((hi - lo) / step)) + 1)]
@@ -4476,7 +4501,7 @@ def _mtpa_gamma_sweep(geom, ref_I, steps, coil_temp, mesh_size, min_size, n_sect
                              gamma_deg=float(gc), mesh_size_mm=mesh_size,
                              min_size_mm=min_size, n_sectors=n_sectors,
                              element_order=element_order, owner="descent",
-                             sampling_purpose="optimization")
+                             sampling_purpose="optimization", **(run_settings or {}))
         return (float(gc), float(o["res"].get("T_em_Nm", 0.0) or 0.0)) if o.get("ok") else None
 
     with ThreadPoolExecutor(max_workers=_job_workers()) as ex:
@@ -4510,7 +4535,8 @@ def _descent_worker(var_specs, op, ripple_max, w_eff, w_td, lam,
                   torque_filter=False, end_winding=0.0, rotor_eddy=True,
                   gap_layers=None, objective="baseline_line",
                   current_bump_pct=10.0, structured_gap=False, airgap_macro=False,
-                  iron_template=True, geo_mesh=True, element_order=2) -> None:
+                  iron_template=True, geo_mesh=True, element_order=2,
+                  mtpa_run_settings=False) -> None:
     # NOTE: server-side box-walking (auto_expand) is implemented for CMA-ES only;
     # the gradient path runs a single round, then the UI flags boundary variables
     # for a manual one-click continue.
@@ -4603,7 +4629,13 @@ def _descent_worker(var_specs, op, ripple_max, w_eff, w_td, lam,
                 _descent_state["phase"] = "mtpa"
             _save_descent_state()
             _gm = _mtpa_gamma_sweep(x, I, steps, coil_temp, mesh_size, min_size, n_sectors,
-                                    element_order=element_order)
+                                    element_order=element_order,
+                                    run_settings=_mtpa_settings(
+                                        mtpa_run_settings, pole_copy=pole_copy,
+                                        torque_filter=torque_filter, end_winding=end_winding,
+                                        rotor_eddy=rotor_eddy, gap_layers=gap_layers,
+                                        structured_gap=structured_gap, airgap_macro=airgap_macro,
+                                        iron_template=iron_template, geo_mesh=geo_mesh, op=op))
             if _gm is not None:
                 g = _gm
                 with _descent_lock:
@@ -4923,7 +4955,8 @@ def _cmaes_worker(var_specs, op, ripple_max, w_eff, w_td, lam,
                   torque_filter=False, end_winding=0.0, rotor_eddy=True,
                   gap_layers=None, objective="baseline_line",
                   current_bump_pct=10.0, structured_gap=False, airgap_macro=False,
-                  iron_template=True, geo_mesh=True, element_order=2) -> None:
+                  iron_template=True, geo_mesh=True, element_order=2,
+                  mtpa_run_settings=False) -> None:
     """Covariance-Matrix-Adaptation Evolution Strategy — derivative-free,
     noise-robust geometry search.  Same penalised cost as the gradient descent
     (−(eff/eff0)^w_eff·(td/td0)^w_td + λ·max(0, ripple−ripple_max)), evaluated on
@@ -5059,7 +5092,13 @@ def _cmaes_worker(var_specs, op, ripple_max, w_eff, w_td, lam,
                         _descent_state["phase"] = "mtpa"
                     _save_descent_state()
                     _gm = _mtpa_gamma_sweep(to_geom(x0n), I, steps, coil_temp, mesh_size, min_size, n_sectors,
-                                            element_order=element_order)
+                                            element_order=element_order,
+                                            run_settings=_mtpa_settings(
+                                                mtpa_run_settings, pole_copy=pole_copy,
+                                                torque_filter=torque_filter, end_winding=end_winding,
+                                                rotor_eddy=rotor_eddy, gap_layers=gap_layers,
+                                                structured_gap=structured_gap, airgap_macro=airgap_macro,
+                                                iron_template=iron_template, geo_mesh=geo_mesh, op=op))
                     if _gm is not None:
                         g = _gm
                         with _descent_lock:
@@ -5441,6 +5480,8 @@ def prepare_descent(req: DescentRequest) -> Dict[str, Any]:
     kwargs = {"iron_template": bool(getattr(req, "iron_template", True)),
                 "geo_mesh": bool(getattr(req, "geo_mesh", True)),
                 "element_order": int(getattr(req, "element_order", 2) or 2)}
+    if req.mtpa_run_settings:          # absent unless asked: the default call is unchanged
+        kwargs["mtpa_run_settings"] = True
     response = {"started": True, "algorithm": algo, "n_sectors": n_sectors,
             "target_torque_nm": target_torque, "v_peak_limit": v_peak_limit,
             "n_variables": len(var_specs), "max_iters": max_iters, "auto_expand": auto_expand,

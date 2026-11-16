@@ -606,6 +606,20 @@ def step_display_state(ctx: Ctx) -> None:
         raise RenameBlocked(str(e)) from e
 
 
+def step_die_archive(ctx: Ctx) -> None:
+    """The die archive (``<shared>/object_registry/die_archive.json``, every workspace) names the die."""
+    from motor_ai_sim import die_archive as DA
+    try:
+        path = DA.store_path()
+    except Exception:                                       # noqa: BLE001
+        return
+    try:
+        _json_file_rename(ctx, "die_archive", path, lambda doc: DA.rename_die_in(doc, ctx.old, ctx.new),
+                          "an archived die stays archived under its new name")
+    except ValueError as e:
+        raise RenameBlocked(str(e)) from e
+
+
 def step_object_registry(ctx: Ctx) -> None:
     """The id registry (``<shared>/object_registry/registry.json``): locators follow, ids stay, the old name is an alias."""
     from motor_ai_sim import object_registry as OR
@@ -753,7 +767,7 @@ def step_manual(ctx: Ctx) -> None:
 #: workspace-level steps, then the shared-catalog ones (``glob_scope``)
 LOCAL_STEPS = (step_folder, step_derived_from, step_fields, step_duty_results,
                step_context, step_workspace_memory, step_catalog_cards)
-GLOBAL_STEPS = (step_grants, step_die_access, step_projects, step_production, step_motor_revisions, step_display_state, step_object_registry, step_motor_tests, step_cad,
+GLOBAL_STEPS = (step_grants, step_die_access, step_projects, step_production, step_motor_revisions, step_display_state, step_die_archive, step_object_registry, step_motor_tests, step_cad,
                 step_manual)
 
 

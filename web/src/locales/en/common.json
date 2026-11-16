@@ -837,6 +837,24 @@
     "stageName": {
       "in_production": "In production",
       "computed": "Computed"
+    },
+    "archive": {
+      "tip": "Archive this die: it leaves the Motors catalog and the pickers; nothing is deleted",
+      "title": "Archive ‘{die}’?",
+      "body": "‘{die}’ leaves your Motors catalog, the pickers and the Active view. Nothing on disk is moved or deleted; stored results, projects and productions that name it keep working. Restore brings it back. The action is logged in the admin audit.",
+      "confirm": "Archive",
+      "shared": "‘{die}’ is a shared catalog die: use “Retire for all users” in the Motors catalog.",
+      "refused": "‘{die}’ cannot be archived: {why}",
+      "refusal": {
+        "running_job": "a job is running or queued for it ({names})",
+        "open_production": "it has an open production ({names})",
+        "project_link": "an open project links it ({names})",
+        "product_revision": "it holds a product revision ({names})"
+      },
+      "list": "{n, plural, one {# archived die} other {# archived dies}}",
+      "archivedTip": "Archived in your workspace",
+      "retiredTip": "Shared die retired for all users",
+      "restore": "Restore"
     }
   },
   "designation": {

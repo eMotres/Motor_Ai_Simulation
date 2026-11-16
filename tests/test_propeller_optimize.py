@@ -58,7 +58,7 @@ def test_every_evaluated_design_is_valid_and_within_the_budget():
             continue
         assert pd.check_candidate(D, e["vector"]) == [], e["vector"]
     assert r["evaluations"][0]["vector"] == seed()                                           # the start design is individual 0
-    assert r["settings"]["tip_mach_limit_confirmed"] is False and r["estimated"] is True and r["validated_against"] is None
+    assert r["settings"]["tip_mach_limit_confirmed"] is True and r["estimated"] is True and r["validated_against"] is None
     assert r["banner"] == pd.BANNER
 
 
@@ -83,9 +83,9 @@ def test_the_front_is_non_dominated_feasible_and_improves_on_the_start():
 
 def test_the_constraint_is_respected_and_can_be_relaxed():
     tight = run(pop=12, generations=6, seed=2)
-    assert all(e["tip_mach"] <= 0.6 + 1e-12 for e in (tight["evaluations"][i] for i in tight["front"]))
+    assert all(e["tip_mach"] <= D.tip_mach_limit + 1e-12 for e in (tight["evaluations"][i] for i in tight["front"]))
     loose = run(pop=12, generations=6, seed=2, enforce_tip_mach=False)
-    assert max(e["tip_mach"] for e in loose["evaluations"] if e["tip_mach"] is not None) > 0.6                             # the limit no longer binds
+    assert max(e["tip_mach"] for e in loose["evaluations"] if e["tip_mach"] is not None) > D.tip_mach_limit                             # the limit no longer binds
     over = run(pop=12, generations=6, seed=2, tip_mach_limit=0.5)
     assert over["settings"]["tip_mach_limit"] == 0.5 and over["settings"]["tip_mach_limit_confirmed"] is False
     assert all(over["evaluations"][i]["tip_mach"] <= 0.5 + 1e-12 for i in over["front"])

@@ -43,10 +43,10 @@ seed:                              # starting design, NOT a recommendation
   root_cutout_mm: 14.0
   airfoil: {root: naca4-4412, mid: naca4-4410, tip: naca4-4408}
 
-tip_mach_limit:
-  value: 0.6
-  source: "bemt-1 validity limit (HIGH_TIP_MACH); the owner's value is pending"
-  confirmed_by: null
+tip_mach_limit:                    # owner 2026-11-16: no fixed tip-speed limit, the optimiser chooses the tip speed that is most efficient
+  value: 0.9                       # a model-validity guard only: bemt-1 has no compressibility correction (results above 0.6 carry high_tip_mach)
+  source: "owner 2026-11-16 «предела на концах нужно самим подбирать, что было наиболее эффективно»: tip speed free, chosen by the optimiser; 0.9 = guard of the incompressible blade-element model, not a design limit"
+  confirmed_by: owner 2026-11-16
 
 # Operating points: the motors the first propellers are designed for (owner 2026-11-15). Values are the stored RATED duty of the catalog,
 # read read-only on 2026-11-15 (not re-computed). The propeller sets its own rpm: the optimiser works at the speed where the propeller
@@ -59,7 +59,10 @@ operating_points:
     rated_rpm_ref: 13628.1
     rpm_search_max: 17716.5
     motor_radius_mm: 20.0
-    source: "catalog stored duty 'rated' (propeller S1 point on the HQ1050-3 load line), read 2026-11-15"
+    rotor_radius_mm: 11.75           # die rotor_outer_radius (inner rotor; open frame: the wash reaches the gap)
+    pack: {cells: 6, v_min: 18.0, v_nom: 22.2, v_max: 25.2}
+    reference_propeller: tmotor_fpv_10x5   # the configuration's default propeller (3-blade 10 in); bench load line motres_bench_hq1050_3
+    source: "catalog stored duty 'rated' (propeller S1 point on the HQ1050-3 load line), read 2026-11-15; pack, rotor radius and reference propeller from the configuration, read 2026-11-16 (owner: «все параметры бери из проекта 40_12 40_20»)"
   L20:
     die: CIANO14 40 new
     config: L20
@@ -67,7 +70,10 @@ operating_points:
     rated_rpm_ref: 13000.0
     rpm_search_max: 16900.0
     motor_radius_mm: 20.0
-    source: "catalog stored duty 'rated' (continuous point, 13 in P13x4.4 cooling reference), read 2026-11-15"
+    rotor_radius_mm: 11.75
+    pack: {cells: 12, v_min: 36.0, v_nom: 44.4, v_max: 50.4}
+    reference_propeller: tmotor_p13x4_4    # the configuration's cooling propeller (2-blade 13 in)
+    source: "catalog stored duty 'rated' (continuous point, 13 in P13x4.4 cooling reference), read 2026-11-15; pack, rotor radius and reference propeller from the configuration, read 2026-11-16 (owner: «все параметры бери из проекта 40_12 40_20»)"
 air:
   temp_c: 15.0
   rho_kg_m3: 1.225

@@ -199,14 +199,18 @@ def cancel_run(O, kind: str, kill: bool = True) -> None:
 #: 2026-11-16: every optimisation evaluation uses one row each side (1); final
 #: points (reported / saved / stored) are solved at 2 outside the optimisation.
 OPT_GAP_LAYERS = 1.0
+MAX_GAP_LAYERS = 2.0
 
 
 def refuse_gap_layers(gl, reason: Optional[str] = None) -> None:
-    """``gl`` = ``_resolve_gap_layers(...)`` (value, source).  Below 1 is never
-    valid; above 1 only with an explicit request ``gap_layers_reason``."""
+    """``gl`` = ``_resolve_gap_layers(...)`` (value, source).  Below 1 and above
+    2 are never valid; 2 only with an explicit request ``gap_layers_reason``."""
     v = float(gl[0])
     if v < OPT_GAP_LAYERS:
         raise Refused(f"gap_layers {v} ({gl[1]}) < 1: no gap row on a side")
+    if v > MAX_GAP_LAYERS:
+        raise Refused(f"gap_layers {v} ({gl[1]}) > 2: never more than 2 rows per side "
+                      f"(owner 2026-11-16, hard rule)")
     if v > OPT_GAP_LAYERS and not (reason or "").strip():
         raise Refused(f"gap_layers {v} ({gl[1]}): optimisation evaluations use gap_layers 1 "
                       f"(one row each side of the gap middle, owner 2026-11-16); give "

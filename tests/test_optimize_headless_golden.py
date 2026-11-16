@@ -157,7 +157,8 @@ def test_a_frozen_variable_is_refused():
 def test_gap_layers_rule_for_optimisation():
     # gap_layers counts rows PER SIDE: optimisation = 1 (owner 2026-11-16)
     with _patched(_stub):
-        for gl, reason, word in ((0.5, None, "< 1"), (2, None, "use gap_layers 1")):
+        for gl, reason, word in ((0.5, None, "< 1"), (2, None, "use gap_layers 1"),
+                                 (3, "any reason", "> 2"), (5, "ring check", "> 2")):
             try:
                 H.run_descent(O, dict(BODY, gap_layers=gl), log=lambda m: None, gap_reason=reason)
             except H.Refused as e:

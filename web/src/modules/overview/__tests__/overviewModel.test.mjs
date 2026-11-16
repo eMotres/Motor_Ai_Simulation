@@ -1,7 +1,7 @@
 // node --test: the Overview tree (modules/overview/overviewModel.ts).
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { buildView, flatProjects, rowState } from '../overviewModel.ts';
+import { buildView, flatProjects, headerChips, rowState } from '../overviewModel.ts';
 
 const ds = (state, at = '') => ({ state, explicit: false, default: state, reason: '', by: '', at });
 const answer = {
@@ -21,7 +21,7 @@ const answer = {
     'DIE A/L12': { die: 'DIE A', config: 'L12', title: 'x', status: 'active', current_revision: '1.2', order_quantity: 40, product_type: 'motor', updated_at: '', display: ds('active') },
     'CTRL/R07': { die: 'CTRL', config: 'R07', title: 'y', status: 'paused', current_revision: '1.0', order_quantity: 5, product_type: 'electronics', updated_at: '', display: ds('parked') },
   },
-  no_motor_yet: ['fresh'], review: [], registry: null,
+  no_item_yet: ['fresh'], review: [], registry: null,
 };
 const tree = [{ name: 'DIE A', slots: 24, poles: 28, stator_diameter: 80, configs: [{ name: 'L12' }, { name: 'L20' }] },
   { name: 'DIE Z', slots: 12, poles: 14, stator_diameter: 40, configs: [{ name: 'L10' }] }];
@@ -37,7 +37,7 @@ test('the tree: dies with their motors, boards apart, catalog-only and no-motor 
   assert.deepEqual(v.motors.map((f) => [f.die, f.rows.map((r) => r.item.config), f.inCatalog]), [['DIE A', ['L12', 'L20'], true], ['GONE', ['X'], false]]);
   assert.deepEqual(v.controllers.map((f) => f.die), ['CTRL']);
   assert.deepEqual(v.catalogOnly.map((d) => d.name), ['DIE Z']);
-  assert.deepEqual(v.noMotorYet.map((p) => p.id), ['fresh']);
+  assert.deepEqual(v.noItemYet.map((p) => p.id), ['fresh']);
   assert.deepEqual(v.counts, { active: 2, parked: 1, archived: 1, all: 4 });
   const a12 = v.motors[0].rows[0];
   assert.equal(a12.projects[0].title, 'Hydro');
@@ -56,4 +56,16 @@ test('the filter hides rows and empty families; counts stay over all rows', () =
 test('the flat projects tab: newest first, filtered by its own state', () => {
   assert.deepEqual(flatProjects(answer, 'active').map((p) => p.id), ['fresh', 'hydro']);
   assert.deepEqual(flatProjects(answer, 'all').map((p) => p.id), ['fresh', 'joint', 'hydro', 'old']);
+});
+
+test('current variants first, trial-only rows muted after them', () => {
+  const v = buildView(answer, tree, 'all');
+  const rows = v.motors[0].rows;
+  assert.deepEqual(rows.map((r) => [r.item.config, r.muted]), [['L12', false], ['L20', true]]);
+});
+
+test('the family header does not repeat what the die name says', () => {
+  assert.deepEqual(headerChips({ die: 'CIANO10 12_40 Ø12 12s10p', od: 12, slots: 12, poles: 10 }), { od: false, sp: false });
+  assert.deepEqual(headerChips({ die: 'CIANO28 80_12', od: 80, slots: 24, poles: 28 }), { od: true, sp: true });
+  assert.deepEqual(headerChips({ die: 'X', od: null, slots: null, poles: 10 }), { od: false, sp: false });
 });

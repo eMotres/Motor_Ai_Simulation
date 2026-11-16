@@ -788,7 +788,10 @@
     "production": "Production",
     "worksWith": "Works with",
     "customer": "Customer",
-    "stage": "Stage",
+    "stage": {
+      "in_production": "In production",
+      "computed": "Computed"
+    },
     "updated": "Updated",
     "shown": "Shown",
     "refresh": "Refresh",
@@ -802,9 +805,38 @@
     "noRegistry": "no ids",
     "noRegistryTip": "The id registry is not on this server (it is kept on the home server of the projects). The rows are complete without it.",
     "review": "{n} to review",
-    "noMotorYet": "No motor yet",
     "catalogOnly": "Catalog only ({n})",
-    "empty": "No projects or productions on this server."
+    "empty": "No projects or productions on this server.",
+    "qtyNotSet": "qty not set",
+    "countsRowsTip": "Counted: motor and board rows. A row is as current as its most current project or production.",
+    "countsProjectsTip": "Counted: projects, by their own state.",
+    "noItemYet": "No item yet",
+    "reviewCode": {
+      "link_to_missing_motor": {
+        "what": "{where}: the project links a motor that is in no catalog.",
+        "do": "Open the project and link the motor that exists, or unlink this one."
+      },
+      "production_without_item": {
+        "what": "{where}: the production names a configuration that is in no catalog layer.",
+        "do": "Save the configuration in the catalog under this name, or tell us which motor the production makes."
+      },
+      "case_collision": {
+        "what": "{where}: two names differ only by upper / lower case.",
+        "do": "Rename one of them (Motors, rename die) so they cannot be confused."
+      },
+      "duplicate_link": {
+        "what": "{where}: the project lists the same motor twice with different statuses.",
+        "do": "Keep one link in the project's motor list."
+      },
+      "electronics_and_catalog": {
+        "what": "{where}: the same name is a catalog motor and an electronics production.",
+        "do": "Rename one of them."
+      },
+      "project_without_item": {
+        "what": "{where}: a controller project has no item, while boards have no project: {candidates}.",
+        "do": "Tell us which board belongs to this project; nothing is linked by guess."
+      }
+    }
   },
   "designation": {
     "segment": {

@@ -46,7 +46,10 @@ def _number(value) -> str:
         number = float(value)
     except (TypeError, ValueError):
         return ""
-    return f"{number:g}" if number > 0 else ""
+    if number <= 0:
+        return ""
+    shown = round(number, 1)                    # owner rule: dimensional values to 0.1 (21.0085 N·m -> 21 N·m)
+    return f"{shown:g}" if shown > 0 else f"{number:.2g}"
 
 
 def _title_point(draft: dict) -> dict:

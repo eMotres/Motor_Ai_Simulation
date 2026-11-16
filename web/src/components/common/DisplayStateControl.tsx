@@ -7,9 +7,9 @@ import EditNoteOutlinedIcon from '@mui/icons-material/EditNoteOutlined';
 import { useTranslation } from 'react-i18next';
 import { DISPLAY_FILTERS, DISPLAY_STATES, type DisplayFilter, type DisplayState, type DisplayStateRec, type FilterCounts } from '../../lib/displayState';
 
-export const DisplayStateFilter: React.FC<{ value: DisplayFilter; onChange: (f: DisplayFilter) => void; counts: FilterCounts }> = ({ value, onChange, counts }) => {
+export const DisplayStateFilter: React.FC<{ value: DisplayFilter; onChange: (f: DisplayFilter) => void; counts: FilterCounts; tip?: string }> = ({ value, onChange, counts, tip }) => {
   const { t } = useTranslation('common');
-  return (
+  const box = (
     <Box sx={{ display: 'flex', gap: 0.5, alignItems: 'center', flexWrap: 'wrap' }} data-testid="display-state-filter">
       {DISPLAY_FILTERS.map((f) => {
         const woke = counts.woke[f];
@@ -23,6 +23,7 @@ export const DisplayStateFilter: React.FC<{ value: DisplayFilter; onChange: (f: 
       })}
     </Box>
   );
+  return tip ? <Tooltip title={tip} placement="bottom-start"><span>{box}</span></Tooltip> : box;
 };
 
 /** One click each way; the optional one-line reason is edited behind the note icon.  Who / when / why sit in the tooltip. */

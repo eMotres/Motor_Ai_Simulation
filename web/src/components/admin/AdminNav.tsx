@@ -15,7 +15,7 @@ export type AdminSectionId =
 export interface AdminSectionDef { id: AdminSectionId; label: string; badge?: number }
 
 export const ADMIN_SECTIONS: { id: AdminSectionId; label: string }[] = [
-  { id: 'overview', label: 'Overview' },
+  { id: 'overview', label: 'Load' },
   { id: 'users', label: 'Users' },
   { id: 'directory', label: 'Companies & people' },
   { id: 'signups', label: 'Sign-ups' },

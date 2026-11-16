@@ -63,7 +63,7 @@ def test_items_carry_their_projects_productions_and_states(env):
     assert a12["works_with"] == ["CTRL/R07"] and board["works_with"] == ["DIE A/L12"]
     assert body["projects"]["joint"]["display"]["state"] == "archived"           # closed -> archived (default)
     assert body["productions"]["CTRL/R07"]["display"]["state"] == "parked"      # paused -> parked
-    assert body["no_motor_yet"] == ["fresh"]
+    assert body["no_item_yet"] == ["fresh"]
     assert body["registry"] is None and a12["item_id"] is None                  # complete before the first backfill
     assert {p: p.read_bytes() for p in files} == before
 
@@ -92,5 +92,23 @@ def test_admins_only(env, who, code):
 
 
 def test_build_is_pure():
-    out = build([{"id": "p", "title": "P", "linked_motors": [{"die": "D", "config": "C"}]}], [], {}, {})
+    out = build([{"id": "p", "title": "P", "linked_motors": [{"die": "D", "config": "C"}]}], [], {}, {},
+                has_results=lambda die, cfg: False)
     assert out["items"]["D/C"]["projects"] == [{"id": "p", "link_status": "current"}]
+
+
+def test_stage_is_derived_and_board_projects_go_to_review():
+    projects = [{"id": "hydro", "title": "Hydro", "status": "spec", "linked_motors": [{"die": "D", "config": "A"}]},
+                {"id": "calc", "title": "Calc", "status": "spec", "linked_motors": [{"die": "D", "config": "B"}]},
+                {"id": "sub", "title": "Sub", "status": "spec", "spec_submitted": {"version": 2, "at": "t"}, "linked_motors": []},
+                {"id": "ctl", "title": "Controller 800V board", "status": "design", "linked_motors": []},
+                {"id": "gone", "title": "Gone", "status": "closed", "linked_motors": [{"die": "D", "config": "A"}]}]
+    productions = [{"die": "D", "config": "A", "status": "active"},
+                   {"die": "SIC", "config": "Rev A", "status": "active", "product_type": "electronics"}]
+    out = build(projects, productions, {}, {}, has_results=lambda die, cfg: cfg == "B")
+    stages = {pid: r["stage"] for pid, r in out["projects"].items()}
+    assert stages == {"hydro": "in_production", "calc": "computed", "sub": "spec_submitted", "ctl": "design", "gone": "closed"}
+    assert out["items"]["D/B"]["computed"] is True and out["items"]["D/A"]["computed"] is False
+    assert sorted(out["no_item_yet"]) == ["ctl", "sub"]
+    rev = [r for r in out["review"] if r["code"] == "project_without_item"]
+    assert rev == [{"code": "project_without_item", "where": "Controller 800V board", "project": "ctl", "candidates": ["SIC/Rev A"]}]

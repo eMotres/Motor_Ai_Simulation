@@ -1,7 +1,7 @@
 {
   "admin": "管理",
   "nav": {
-    "overview": "概览",
+    "overview": "负载",
     "users": "用户",
     "signups": "注册申请",
     "servers": "服务器",

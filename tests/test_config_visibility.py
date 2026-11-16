@@ -380,6 +380,9 @@ SELF_GATED = {           # routes whose natural "missing" answer is not a 404: g
     ("GET", "/api/model3d/{die}/{config}/simplified.json"), ("GET", "/api/model3d/{die}/{config}/simplified_view.glb"),
     ("POST", "/api/family/config/{die}/{cfg}/cad_params/import"),       # multipart; tested in tests/test_construction_params.py
     ("GET", "/api/propellers/cooling-options"), ("GET", "/api/propellers/{prop_id}/s1"), ("GET", "/api/system/graph"),
+    # saved optimisation runs (die + config as query / body): _require_die_access(die, auth, config) answers 404 for a hidden
+    # configuration, the import is catalog-write plus die-write; tested below
+    ("GET", "/api/optimization/runs"), ("GET", "/api/optimization/runs/{run_id}"), ("POST", "/api/optimization/runs/import"),
     # bearing fit / holder strength: a hidden configuration answers 404 in-route (_gate_config), tested below
     ("GET", "/api/mechanical/bearing_fit"), ("GET", "/api/mechanical/holder_strength"), ("POST", "/api/mechanical/holder_fem_job"),
     # product revisions (Rev A, B ...): a hidden configuration answers 404 like a missing one, writes are staff only (tests/test_motor_revisions.py)
@@ -1732,3 +1735,17 @@ def test_bearing_fit_and_holder_strength_hide_a_hidden_configuration(env):
             assert r.status_code in (401, 404), (path, who, r.status_code)
         assert client.get(path, params={"die": DIE, "config": PUB}, headers=env["plain"]).status_code == 200, path
     assert client.post("/api/mechanical/holder_fem_job", params={"die": DIE, "config": PUB}, headers=env["eng"]).status_code == 501
+
+
+def test_saved_optimisation_runs_hide_a_hidden_configuration(env):
+    for who in ("plain", "anon"):
+        r = client.get("/api/optimization/runs", params={"die": DIE, "config": PRIV}, headers=env[who])
+        assert r.status_code in (401, 404), (who, r.status_code)
+        r = client.get("/api/optimization/runs/x", params={"die": DIE, "config": PRIV}, headers=env[who])
+        assert r.status_code in (401, 404), (who, r.status_code)
+    body = {"die": DIE, "config": PRIV, "state": {}}
+    for who in ("plain", "eng", "anon"):
+        r = client.post("/api/optimization/runs/import", params={"dry_run": 1}, json=body, headers=env[who])
+        assert r.status_code in (401, 403, 404), (who, r.status_code)
+    r = client.get("/api/optimization/runs", params={"die": DIE, "config": PUB}, headers=env["plain"])
+    assert r.status_code == 200 and r.json()["runs"] == []

@@ -743,23 +743,23 @@
   },
   "releasedStrip": {
     "line": {
-      "same": "No die attached: {{die}} was detached{{by}}{{when}}. Nothing to save.",
-      "edited": "No die attached: the screen differs from {{die}} / {{config}}.",
-      "differs": "No die attached: the screen is a new lamination ({{changed}}).",
+      "same": "No die attached: {die} was detached{by, select, none {} other { by {by}}}{when, select, none {} other { at {when}}}. Nothing to save.",
+      "edited": "No die attached: the screen differs from {die} / {config}.",
+      "differs": "No die attached: the screen is a new lamination ({changed}).",
       "foreign": "No die attached: the loaded machine is not a catalog duty."
     },
     "tip": {
-      "same": "Released from {{die}}: {{reason}}.",
-      "edited": "Released from {{die}}: {{reason}}.",
-      "differs": "Released from {{die}}: {{reason}}.",
-      "foreign": "Released from {{die}}: {{reason}}."
+      "same": "Released from {die}: {reason}.",
+      "edited": "Released from {die}: {reason}.",
+      "differs": "Released from {die}: {reason}.",
+      "foreign": "Released from {die}: {reason}."
     },
     "btn": {
-      "reload": "Reload {{config}}",
-      "discardReload": "Discard changes and reload {{config}}",
+      "reload": "Reload {config}",
+      "discardReload": "Discard changes and reload {config}",
       "saveDie": "Save as new die",
-      "saveConfig": "Save as new configuration of {{die}}",
-      "reattach": "Re-attach to {{die}} / {{config}}"
+      "saveConfig": "Save as new configuration of {die}",
+      "reattach": "Re-attach to {die} / {config}"
     }
   }
 }

@@ -137,7 +137,8 @@ export function releasedOffers(ctx: ReleasedCtxLike | null | undefined): Release
     : liveIsDie ? (ctx.live_matches_config === true ? 'same' : 'edited')
     : 'foreign';
   const tail = `${by ? ` by ${by}` : ''}${when ? ` at ${when}` : ''}`;
-  const vars = { die: rel, config: cfg, changed, by: by ? ` by ${by}` : '', when: when ? ` at ${when}` : '' };
+  // 'none' selects the empty branch of the locale strings' ICU select (the wording around by / when is the locale's)
+  const vars = { die: rel, config: cfg, changed, by: by || 'none', when: when || 'none' };
 
   const line = kind === 'same'
     ? `No die attached: ${rel} was detached${tail}. Nothing to save.`

@@ -2,6 +2,7 @@
  *  productions that make it, two columns that are never merged; boards grouped by platform the same way.  Pure functions over
  *  `/api/overview` and `/api/family/tree`, so they run under `node --test`. */
 import type { DisplayFilter, DisplayState, DisplayStateRec } from '../../lib/displayState.ts';
+import type { ArchivedDie } from '../../lib/dieArchiveApi.ts';
 
 export interface OverviewProject { id: string; title: string; customer_org: string; status: string; updated_at: string;
   spec_submitted?: { version: number; at: string | null } | null; motors: string[]; display: DisplayStateRec; project_id?: string | null;
@@ -14,7 +15,9 @@ export interface OverviewItem { die: string; config: string; item_id: string | n
   analysis_controllers: string[]; computed?: boolean }
 export interface OverviewAnswer { items: Record<string, OverviewItem>; projects: Record<string, OverviewProject>;
   productions: Record<string, OverviewProduction>; no_item_yet: string[]; review: Array<Record<string, unknown>>;
-  registry: { objects: number; backfilled_at: string } | null }
+  registry: { objects: number; backfilled_at: string } | null;
+  /** dies that left the catalog listing: this workspace's archive and the shared dies retired for all users */
+  archived_dies?: ArchivedDie[] }
 export interface TreeDie { name: string; slots?: number | null; poles?: number | null; stator_diameter?: number | null;
   configs?: Array<{ name: string }> }
 
@@ -41,11 +44,13 @@ export function buildView(answer: OverviewAnswer, tree: TreeDie[], filter: Displ
   const dies = new Map(tree.filter((d) => d && typeof d.name === 'string').map((d) => [d.name, d]));
   const counts: Record<DisplayFilter, number> = { active: 0, parked: 0, archived: 0, all: 0 };
   const motors = new Map<string, Family>(), controllers = new Map<string, Family>();
+  // a row of an archived or retired die is archived, whatever its links say: the die left the catalog (owner 2026-11-17)
+  const gone = new Set((answer.archived_dies ?? []).map((d) => d.die));
   for (const [key, item] of Object.entries(answer.items).sort(([a], [b]) => a.localeCompare(b))) {
     const projects = item.projects.map((p) => answer.projects[p.id] && { ...answer.projects[p.id], link_status: p.link_status })
       .filter((p): p is OverviewProject & { link_status: string } => !!p);
     const productions = item.productions.map((k) => answer.productions[k]).filter((p): p is OverviewProduction => !!p);
-    const state = rowState(projects, productions);
+    const state = gone.has(item.die) ? 'archived' : rowState(projects, productions);
     counts[state] += 1; counts.all += 1;
     if (filter !== 'all' && state !== filter) continue;
     const groups = item.kind === 'board' ? controllers : motors;

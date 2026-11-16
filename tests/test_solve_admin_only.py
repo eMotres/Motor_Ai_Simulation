@@ -290,6 +290,7 @@ DATA_MODULES = frozenset({
     "regions",                          # two regions: region info, the signed peer channel, admin region views - computes nothing
     "display_state",                    # Active / Parked / Archived of projects and productions (staff lists) - computes nothing
     "overview",                         # the owner's Overview: projects, productions, registry links (admins) - computes nothing
+    "die_archive",                      # archive a workspace / published die: a sidecar list, nothing on disk moves - computes nothing
     "regions_sync",                     # the signed peer channel of the catalog mirror (extracts, foreign submit / result)
     "optimization_runs",                # stored optimisation runs of a motor: list / open / import a file, solves nothing
     "designation",                      # the standard motor name read off the stored parameters - computes nothing

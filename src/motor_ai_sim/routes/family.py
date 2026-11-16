@@ -829,7 +829,11 @@ def catalog_dies() -> list[dict]:
     """Every die on disk with its configuration and duty counts — the admin
     motor picker's source (unfiltered; the route behind it is admin-only)."""
     out: list[dict] = []
+    from motor_ai_sim import die_archive as _da
+    _archived = _da.archived_keys()           # an archived die leaves the picker too (motor_ai_sim.die_archive)
     for _e in _iter_die_entries():
+        if _archived and _da.is_archived(_e, _archived):
+            continue
         dd = Path(str(_e["dir"]))
         try:
             die = _load_yaml(dd / "die.yaml", "die")
@@ -2617,7 +2621,11 @@ def _tree_dies(_acc: dict, *, heads_only: bool = False) -> tuple:
 
     _caller_key = _row_caller_key(_acc)
     from motor_ai_sim import duty_results as _dr
+    from motor_ai_sim import die_archive as _da
+    _archived = _da.archived_keys()           # an archived workspace / published die leaves the listing, nothing else
     for _e in _entries:
+        if _archived and _da.is_archived(_e, _archived):
+            continue
         dd = Path(str(_e["dir"]))
         _die_name, _layer = str(_e["name"]), str(_e["layer"])
         # A signed-in non-admin sees its granted dies and nothing else — with

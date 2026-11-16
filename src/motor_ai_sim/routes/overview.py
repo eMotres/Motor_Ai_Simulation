@@ -8,7 +8,9 @@ Sources, all READ here, nothing written:
 * the live project records (``linked_motors``: current / trial) and the live production records: what is true now;
 * the id registry (``object_registry``): the stable ids, the layer(s) an item lives in, removed items, the
   ``analysis_controller`` links and the review list.  Before the first backfill the answer is complete without the ids;
-* the display states (``display_state``).
+* the display states (``display_state``);
+* the archived dies (``archived_dies``): this workspace's die archive (``die_archive``) and the shared dies retired for all
+  users, which the catalog tree no longer lists; the page shows them under "Archived" with Restore.
 
 The shown STAGE of a project is derived, never written back (owner's finding 2026-11-17: "Specification" everywhere told him
 nothing): a linked item has a production -> ``in_production``; a linked motor has stored results -> ``computed``; else the
@@ -24,7 +26,7 @@ controller a motor is analysed with (``analysis_controller``) is listed apart an
 from __future__ import annotations
 
 import time
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from fastapi import APIRouter, HTTPException, Request
 
@@ -174,4 +176,27 @@ def overview(request: Request):
     _require_admin(request)
     from motor_ai_sim.development import store as project_store
     from motor_ai_sim.production import routes as PR
-    return build(project_store.list_projects(), PR._production_list_for("", True), OR.load(), DS.load()["states"])
+    out = build(project_store.list_projects(), PR._production_list_for("", True), OR.load(), DS.load()["states"])
+    out["archived_dies"] = archived_dies()
+    return out
+
+
+def archived_dies(scope: Optional[str] = None) -> List[Dict[str, Any]]:
+    """The dies that left the catalog listing, for the "Archived" view: this workspace's archive
+    (``motor_ai_sim.die_archive``) and the shared dies retired for all users (tombstones).  ``[]`` on any failure."""
+    out: List[Dict[str, Any]] = []
+    try:
+        from motor_ai_sim import die_archive as DA
+        if scope is None:
+            from motor_ai_sim.workspace import workspace
+            scope = str(workspace().id or "")
+        out += [{**r, "retired": False} for r in DA.for_scope(scope)]
+    except Exception:                                       # noqa: BLE001
+        pass
+    try:
+        from motor_ai_sim import workspace as _WS
+        out += [{"die": k, "layer": "shared", "by": (v or {}).get("by", ""), "at": (v or {}).get("at", ""), "reason": "",
+                 "configs": None, "retired": True} for k, v in sorted(_WS._load_tombstones().items())]
+    except Exception:                                       # noqa: BLE001
+        pass
+    return sorted(out, key=lambda r: str(r["die"]))

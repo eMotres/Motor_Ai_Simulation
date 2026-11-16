@@ -334,7 +334,7 @@ const FamilyCatalog: React.FC<{
   const [askConfirm, setAskConfirm] = useState<ConfirmState | null>(null);
   const [batteryFor, setBatteryFor] = useState<{ die: string; cfg: Cfg } | null>(null);
   // the admin overflow menu of a die row (owner 2026-10-27): holds "Retire for all users"
-  const [dieMenu, setDieMenu] = useState<{ el: HTMLElement; die: string } | null>(null);
+  const [dieMenu, setDieMenu] = useState<{ el: HTMLElement; die: string; shared: boolean } | null>(null);
 
   // null = not loaded yet / load FAILED — a different state from "loaded and
   // empty".  A backend mid-restart used to render as "no dies yet" (live
@@ -643,13 +643,27 @@ const FamilyCatalog: React.FC<{
       });
     })();
   };
+  // "Archive" — admin only, a die of a workspace or a published layer (owner 2026-11-17: archive what is not needed; we
+  // never delete).  Nothing on disk moves; the server refuses a die in use and says why.
+  const archiveDie = (name: string) => setAskConfirm({
+    title: tx('archiveDieTitle', { die: name }),
+    body: tx('archiveDieBody', { die: name }),
+    confirmLabel: tx('archiveDieConfirm'),
+    onConfirm: () => mutate(tx('archiveDieDone', { die: name }),
+      () => post(`/api/die-archive/${encodeURIComponent(name)}/archive`, { confirm: name })),
+  });
   const restoreRetired = () => {
     void (async () => {
       let names: string[] = [];
+      const archived = new Set<string>();             // archived in this workspace: restored through /api/die-archive
       try {
         const r = await fetch(`${API}/api/family/retired`);
         if (r.ok) names = ((await r.json())?.dies ?? []).map((d: { die: string }) => d.die);
       } catch { /* empty list below */ }
+      try {
+        const r = await fetch(`${API}/api/die-archive`);
+        if (r.ok) for (const d of ((await r.json())?.dies ?? []) as Array<{ die: string }>) { archived.add(d.die); names.push(d.die); }
+      } catch { /* the retired ones still show */ }
       if (!names.length) { setMsg(tx('retiredNone')); return; }
       setAskText({
         title: tx('restoreRetiredTitle'),
@@ -657,8 +671,9 @@ const FamilyCatalog: React.FC<{
         initial: names[0],
         hint: tx('restoreRetiredHint', { names: names.join(', ') }),
         okLabel: tx('restoreRetiredOk'),
-        onSubmit: (name) => mutate(tx('restoreRetiredDone', { die: name }),
-          () => post(`/api/family/die/${encodeURIComponent(name)}/restore`, {})),
+        onSubmit: (name) => (archived.has(name)
+          ? mutate(tx('archiveDieRestored', { die: name }), () => post(`/api/die-archive/${encodeURIComponent(name)}/restore`, {}))
+          : mutate(tx('restoreRetiredDone', { die: name }), () => post(`/api/family/die/${encodeURIComponent(name)}/restore`, {}))),
       });
     })();
   };
@@ -1031,12 +1046,12 @@ const FamilyCatalog: React.FC<{
                 </span>
               </Tooltip>
             )}
-            {canWrite && isAdmin && die.layer === 'shared' && (
+            {canWrite && isAdmin && (
               <Tooltip title={tx('dieMenuTip')}>
                 <span>
                   <IconButton size="small" disabled={!!busy} data-testid="die-menu-button"
                     aria-label={tx('dieMenuTip')}
-                    onClick={(e) => setDieMenu({ el: e.currentTarget, die: die.name })}
+                    onClick={(e) => setDieMenu({ el: e.currentTarget, die: die.name, shared: die.layer === 'shared' })}
                     sx={{ color: 'var(--text-4)', p: 0.3 }}>
                     <MoreVertIcon sx={{ fontSize: 16 }} />
                   </IconButton>
@@ -1274,12 +1289,21 @@ const FamilyCatalog: React.FC<{
       <TextPromptDialog state={askText} onClose={() => setAskText(null)} />
       <ConfirmDialog state={askConfirm} onClose={() => setAskConfirm(null)} />
       <Menu open={!!dieMenu} anchorEl={dieMenu?.el ?? null} onClose={() => setDieMenu(null)}>
-        <Tooltip title={tx('retireDieTip')} placement="left">
-          <MenuItem dense data-testid="retire-die-item" sx={{ fontSize: 12, color: '#f87171' }}
-            onClick={() => { const d = dieMenu?.die; setDieMenu(null); if (d) retireDie(d); }}>
-            {tx('retireDieConfirm')}
-          </MenuItem>
-        </Tooltip>
+        {dieMenu?.shared ? (
+          <Tooltip title={tx('retireDieTip')} placement="left">
+            <MenuItem dense data-testid="retire-die-item" sx={{ fontSize: 12, color: '#f87171' }}
+              onClick={() => { const d = dieMenu?.die; setDieMenu(null); if (d) retireDie(d); }}>
+              {tx('retireDieConfirm')}
+            </MenuItem>
+          </Tooltip>
+        ) : (
+          <Tooltip title={tx('archiveDieTip')} placement="left">
+            <MenuItem dense data-testid="archive-die-item" sx={{ fontSize: 12 }}
+              onClick={() => { const d = dieMenu?.die; setDieMenu(null); if (d) archiveDie(d); }}>
+              {tx('archiveDieConfirm')}
+            </MenuItem>
+          </Tooltip>
+        )}
       </Menu>
       <BatteryDialog open={!!batteryFor}
         configName={batteryFor?.cfg.name ?? ''}

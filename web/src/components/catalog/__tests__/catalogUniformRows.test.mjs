@@ -50,8 +50,12 @@ test('no coloured card chip, no older-build chip and no red retire link in the r
 });
 
 test('"Retire for all users" is reachable for admins from the die row menu with the same confirm flow', () => {
-  assert.match(family, /canWrite && isAdmin && die\.layer === 'shared'[\s\S]{0,400}data-testid="die-menu-button"/);
-  assert.match(family, /data-testid="retire-die-item"[\s\S]{0,300}retireDie\(d\)/);
+  // the menu is on every die for an admin (2026-11-17: "Archive" for a workspace / published die); Retire stays shared-only
+  assert.match(family, /canWrite && isAdmin && \([\s\S]{0,400}data-testid="die-menu-button"/);
+  assert.match(family, /shared: die\.layer === 'shared'/);
+  assert.match(family, /dieMenu\?\.shared \?[\s\S]{0,200}data-testid="retire-die-item"[\s\S]{0,300}retireDie\(d\)/);
+  assert.match(family, /data-testid="archive-die-item"[\s\S]{0,300}archiveDie\(d\)/);
+  assert.match(family, /\/api\/die-archive\/\$\{encodeURIComponent\(name\)\}\/archive`, \{ confirm: name \}/);
   assert.match(family, /const retireDie = \(name: string\) =>/);
   assert.match(family, /\/retire`, \{ confirm: name \}/);
 });

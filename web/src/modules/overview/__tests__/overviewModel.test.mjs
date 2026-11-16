@@ -69,3 +69,10 @@ test('the family header does not repeat what the die name says', () => {
   assert.deepEqual(headerChips({ die: 'CIANO28 80_12', od: 80, slots: 24, poles: 28 }), { od: true, sp: true });
   assert.deepEqual(headerChips({ die: 'X', od: null, slots: null, poles: 10 }), { od: false, sp: false });
 });
+
+test('the rows of an archived die are archived, whatever their links say (die archive 2026-11-17)', () => {
+  const withArchive = { ...answer, archived_dies: [{ die: 'GONE', layer: 'workspace', by: 'a', at: 't', configs: ['X'] }] };
+  assert.deepEqual(buildView(withArchive, tree, 'archived').motors.map((f) => f.die), ['DIE A', 'GONE']);
+  assert.deepEqual(buildView(withArchive, tree, 'parked').motors, []);          // GONE's parked project no longer makes it parked
+  assert.deepEqual(buildView(withArchive, tree, 'all').counts, { active: 2, parked: 0, archived: 2, all: 4 });
+});

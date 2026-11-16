@@ -2,8 +2,9 @@
  *  its die / platform, with the Project and the Production columns kept apart; a flat Projects tab beside it.  Reads
  *  `/api/overview` (projects, productions, registry ids, display states) and the catalog tree; writes only the display state. */
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { Accordion, AccordionDetails, AccordionSummary, Box, Button, Chip, CircularProgress, Link, Paper, Popover, Table, TableBody, TableCell,
+import { Accordion, AccordionDetails, AccordionSummary, Box, Button, Chip, CircularProgress, IconButton, Link, Paper, Popover, Table, TableBody, TableCell,
   TableHead, TableRow, ToggleButton, ToggleButtonGroup, Tooltip, Typography } from '@mui/material';
+import ArchiveOutlinedIcon from '@mui/icons-material/ArchiveOutlined';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import { useTranslation } from 'react-i18next';
@@ -11,12 +12,15 @@ import HelpTip from '../../components/common/HelpTip';
 import { DisplayStateControl, DisplayStateFilter } from '../../components/common/DisplayStateControl';
 import { DISPLAY_FILTERS, filterCounts, type DisplayFilter, type DisplayState } from '../../lib/displayState';
 import { displayStateApi } from '../../lib/displayStateApi';
+import { dieArchiveApi, type ArchivedDie } from '../../lib/dieArchiveApi';
+import { ConfirmDialog, type ConfirmState } from '../../components/common/PromptDialogs';
 import { useRememberedView } from '../../lib/useRememberedView';
 import { oneOf } from '../../lib/viewMemory';
 import { appLinkPath } from '../../lib/appLink';
-import { fetchFamilyTree } from '../../lib/familyTree';
+import { fetchFamilyTree, invalidateFamilyTree } from '../../lib/familyTree';
 import { NARROW } from '../../lib/narrowLayout';
 import { shownStatus } from '../development/projectStage';
+import ArchivedDies from './ArchivedDies';
 import { buildView, flatProjects, headerChips, type Family, type OverviewAnswer, type OverviewProduction, type OverviewProject, type TreeDie } from './overviewModel';
 
 const API = (import.meta.env.VITE_API_URL ?? 'http://localhost:8001') as string;
@@ -42,6 +46,7 @@ const OverviewPage: React.FC = () => {
   const [view, setView] = useRememberedView<View>('overview.view', 'tree', oneOf(VIEWS));
   const [filter, setFilter] = useRememberedView<DisplayFilter>('overview.displayFilter', 'active', oneOf(DISPLAY_FILTERS));
   const [reviewAnchor, setReviewAnchor] = useState<HTMLElement | null>(null);
+  const [askConfirm, setAskConfirm] = useState<ConfirmState | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true); setErr('');
@@ -49,7 +54,7 @@ const OverviewPage: React.FC = () => {
       const r = await fetch(`${API}/api/overview`, { cache: 'no-store' });
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
       setAnswer(await r.json() as OverviewAnswer);
-      fetchFamilyTree().then((tr) => setTree((tr.dies ?? []) as TreeDie[])).catch(() => setTree([]));
+      fetchFamilyTree({ fresh: true }).then((tr) => setTree((tr.dies ?? []) as TreeDie[])).catch(() => setTree([]));
     } catch (e) { setErr(e instanceof Error ? e.message : String(e)); }
     finally { setLoading(false); }
   }, []);
@@ -67,6 +72,30 @@ const OverviewPage: React.FC = () => {
     void load();
   };
   // the stage is derived by the server (production -> in production, stored results -> computed), never written back
+  // Archive a die that is not needed any more (owner 2026-11-17): the server says first whether it may go, then asks for the name.
+  const changed = () => { invalidateFamilyTree(); try { window.dispatchEvent(new CustomEvent('family-changed')); } catch { /* SSR */ } void load(); };
+  const startArchive = async (die: string) => {
+    setErr('');
+    try {
+      const c = await dieArchiveApi.check(die);
+      if (!c.archivable) { setErr(t('overview.archive.shared', { die })); return; }
+      if (c.refusals.length) {
+        setErr(t('overview.archive.refused', { die, why: c.refusals.map((r) => t(`overview.archive.refusal.${r.code}`, { names: r.names.join(', ') })).join('; ') }));
+        return;
+      }
+      setAskConfirm({ title: t('overview.archive.title', { die }), body: t('overview.archive.body', { die }), confirmLabel: t('overview.archive.confirm'),
+        onConfirm: () => { dieArchiveApi.archive(die).then(changed).catch((e: unknown) => setErr(e instanceof Error ? e.message : String(e))); } });
+    } catch (e) { setErr(e instanceof Error ? e.message : String(e)); }
+  };
+  const restore = (d: ArchivedDie) => { setErr(''); dieArchiveApi.restore(d).then(changed).catch((e: unknown) => setErr(e instanceof Error ? e.message : String(e))); };
+  const archiveButton = (die: string) => (
+    <Tooltip title={t('overview.archive.tip')}>
+      <IconButton size="small" aria-label={t('overview.archive.tip')} data-testid="overview-archive-die" onClick={() => void startArchive(die)}
+        sx={{ ml: 0.5, p: 0.25, color: 'var(--text-4)' }}><ArchiveOutlinedIcon sx={{ fontSize: 15 }} /></IconButton>
+    </Tooltip>
+  );
+  const archived = answer?.archived_dies ?? [];
+
   const projectLabel = (p: OverviewProject) => (p.stage === 'in_production' || p.stage === 'computed'
     ? t(`overview.stageName.${p.stage}`) : t(`development:status.${p.stage || shownStatus(p.status, p.spec_submitted ?? undefined)}`));
 
@@ -105,6 +134,7 @@ const OverviewPage: React.FC = () => {
                   {headerChips(f).od && <Box component="span" sx={{ ml: 1, color: 'var(--text-3)', fontWeight: 600 }}>Ø{f.od}</Box>}
                   {headerChips(f).sp && <Box component="span" sx={{ ml: 1, color: 'var(--text-3)', fontWeight: 600 }}>{f.slots}s{f.poles}p</Box>}
                   {!f.inCatalog && kind === 'motors' && <Tooltip title={t('overview.notInCatalogTip')}><Chip size="small" label={t('overview.notInCatalog')} sx={{ ml: 1, height: 18, fontSize: 10 }} /></Tooltip>}
+                  {f.inCatalog && kind === 'motors' && archiveButton(f.die)}
                 </TableCell>
               </TableRow>
               {f.rows.map((r) => (
@@ -179,13 +209,16 @@ const OverviewPage: React.FC = () => {
               {model.noItemYet.map((p) => projectChip(p))}
             </Box>
           )}
+          {(filter === 'archived' || filter === 'all') && <ArchivedDies dies={archived} onRestore={restore} />}
           {model.catalogOnly.length > 0 && filter !== 'parked' && filter !== 'archived' && (
             <Accordion disableGutters sx={{ bgcolor: 'var(--panel-2)' }}>
               <AccordionSummary expandIcon={<ExpandMoreIcon />}>
                 <Typography sx={{ fontSize: 12, fontWeight: 700, color: 'var(--text-2)' }}>{t('overview.catalogOnly', { n: model.catalogOnly.length })}</Typography>
               </AccordionSummary>
               <AccordionDetails>
-                {model.catalogOnly.map((d) => <Chip key={d.name} size="small" variant="outlined" label={`${d.name} · ${d.configs?.length ?? 0}`} sx={{ m: 0.25, height: 20, fontSize: 11 }} />)}
+                {model.catalogOnly.map((d) => <Chip key={d.name} size="small" variant="outlined" label={`${d.name} · ${d.configs?.length ?? 0}`}
+                  onDelete={() => void startArchive(d.name)} deleteIcon={<Tooltip title={t('overview.archive.tip')}><ArchiveOutlinedIcon aria-label={t('overview.archive.tip')} /></Tooltip>}
+                  sx={{ m: 0.25, height: 20, fontSize: 11 }} />)}
               </AccordionDetails>
             </Accordion>
           )}
@@ -219,6 +252,7 @@ const OverviewPage: React.FC = () => {
           </Table>
         </Paper>
       )}
+      <ConfirmDialog state={askConfirm} onClose={() => setAskConfirm(null)} />
     </Box>
   );
 };

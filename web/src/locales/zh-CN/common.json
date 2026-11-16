@@ -837,6 +837,24 @@
     "stageName": {
       "in_production": "生产中",
       "computed": "已计算"
+    },
+    "archive": {
+      "tip": "归档此冲片：它将从电机目录和选择列表中移除；不会删除任何内容",
+      "title": "归档“{die}”？",
+      "body": "“{die}”将从您的电机目录、选择列表和“活动”视图中移除。磁盘上的文件不会被移动或删除；引用它的已存结果、项目和生产仍可正常使用。“恢复”可将其找回。此操作记录在管理员审计中。",
+      "confirm": "归档",
+      "shared": "“{die}”是共享目录冲片：请在电机目录中使用“对所有用户停用”。",
+      "refused": "“{die}”无法归档：{why}",
+      "refusal": {
+        "running_job": "有针对它的计算正在运行或排队（{names}）",
+        "open_production": "它有未结束的生产（{names}）",
+        "project_link": "有未关闭的项目链接了它（{names}）",
+        "product_revision": "它包含产品版本（{names}）"
+      },
+      "list": "{n} 个已归档冲片",
+      "archivedTip": "已在您的工作区归档",
+      "retiredTip": "已对所有用户停用的共享冲片",
+      "restore": "恢复"
     }
   },
   "designation": {

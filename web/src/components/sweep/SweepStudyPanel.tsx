@@ -7,6 +7,8 @@
 // its Simulation value.  Runs the backend grid-scan (POST /api/optimization/scan)
 // and streams the points live.  Resumes a running scan on mount (reload-safe).
 // ─────────────────────────────────────────────────────────────────────────────
+import { nsT } from '../../i18n/nsT';
+import { invertedRangeNames } from '../../lib/optVarRanges';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Box, Typography, Button, LinearProgress, Divider, TextField,
@@ -39,6 +41,7 @@ import {
 import type { RestoreVerdict } from '../../lib/sweepRestore';
 import SavedSweeps from './SavedSweeps';
 
+const tx = nsT('simulation');
 const API = import.meta.env.VITE_API_URL ?? 'http://localhost:8001';
 
 function useLS<T>(key: string, def: T): [T, (v: T) => void] {
@@ -589,6 +592,8 @@ const SweepStudyPanel: React.FC = () => {
   }, []);
 
   const run = async () => {
+    const inv = invertedRangeNames(sweepConfig.variations as never);
+    if (inv.length) { setErr(tx('optRunBlockedInverted', { names: inv.join(', ') })); return; }
     setErr(null); setResult(null); setResultView(null); setRunning(true); setProgress(null); stopRef.current = false;
     // A user-started run is never a resume — the backend clears its own
     // `resumed_from_restart` on a fresh /scan POST, and the panel must not go

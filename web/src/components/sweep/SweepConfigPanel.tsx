@@ -45,6 +45,7 @@ import {
 import type { History } from '../../lib/optVarsHistory';
 import {
   bracketRange, identityScope, outOfRangeNames, reuseRemembered, isUsableRange,
+  rangeState, trimNumber,
 } from '../../lib/optVarRanges';
 import type { ParameterVariation } from '../../types/motor';
 
@@ -89,15 +90,15 @@ interface SweepVarCardProps {
 
 // string-backed number field — a leading "-" (or "0." mid-typing) isn't clobbered
 // to NaN, so negative ranges like γ ∈ [-30, 0] type fine.
-const RangeField: React.FC<{ label: string; value: number; onChange: (v: number) => void }> =
-  ({ label, value, onChange }) => {
+const RangeField: React.FC<{ label: string; value: number; onChange: (v: number) => void; error?: boolean }> =
+  ({ label, value, onChange, error }) => {
     const [s, setS] = useState(String(value));
     // Re-sync the box when `value` changes from OUTSIDE (e.g. switching the
     // per-algorithm variable set) — but NOT while typing: skip if the text already
     // parses to the same number, so an in-progress "-", "0." or "1." isn't clobbered.
     useEffect(() => { if (parseFloat(s) !== value) setS(String(value)); }, [value]);   // eslint-disable-line react-hooks/exhaustive-deps
     return (
-      <TextField label={label} size="small" type="text" value={s}
+      <TextField label={label} size="small" type="text" value={s} error={!!error}
         onChange={e => { const t = e.target.value; setS(t); const n = parseFloat(t); if (Number.isFinite(n)) onChange(n); }}
         inputProps={{ inputMode: 'decimal', style: { fontSize: 12, padding: '4px 8px' } }} sx={{ flex: 1 }} />
     );
@@ -205,21 +206,33 @@ const SweepVarCard: React.FC<SweepVarCardProps> = ({ paramName, label, unit, opt
           </IconButton>
         </Box>
 
-        {!optimize && Number.isFinite(cur) && (() => {
-          // cur is in DISPLAY units; the stored range is Arms — compare like
-          // with like, or a peak value reads "above max" against an RMS bound.
-          const outLo = cur < Number(v.min) * kU, outHi = cur > Number(v.max) * kU;
-          const out = outLo || outHi;
-          // Show the FAITHFUL value (not snapped to 0.1) — a small fractional
-          // param like magnet_fill = 0.467 must not display as "0.5" and look like
-          // it contradicts "below min 0.48".  Trim trailing zeros for tidiness.
-          const shown = isInt ? String(Math.round(cur))
-            : cur.toFixed(3).replace(/(\.\d*?)0+$/, '$1').replace(/\.$/, '');
+        {!optimize && (() => {
+          // States, said plainly (owner 2026-11-16): min above max first (the real mistake), then a current value
+          // outside the range, else just the current value.  cur is in DISPLAY units; the stored range is Arms.
+          const state = rangeState({ min: Number(v.min) * kU, max: Number(v.max) * kU }, cur);
+          if (state === 'unknown') return null;
+          if (state === 'inverted') {
+            return (
+              <Tooltip title={tx('optRangeInvertedTip')}>
+                <Typography variant="caption" sx={{ color: '#f87171', mb: 0.75, display: 'block', cursor: 'help' }}>
+                  {tx('optRangeInverted')}
+                </Typography>
+              </Tooltip>
+            );
+          }
+          if (!Number.isFinite(cur)) return null;
+          const shown = trimNumber(cur, isInt);
+          const unitSfx = unitShown ? ` ${unitShown}` : '';
+          const out = state !== 'ok';
           return (
-            <Typography variant="caption" sx={{ color: out ? '#fbbf24' : 'text.disabled', mb: 0.75, display: 'block' }}>
-              now: {shown}{unitShown ? ` ${unitShown}` : ''} (from {src})
-              {out && ` — ${outLo ? 'below min' : 'above max'}, widen the range to include it`}
-            </Typography>
+            <Tooltip title={tx(out ? 'optRangeNowOutsideTip' : 'optRangeNowTip', { src })}>
+              <Typography variant="caption" sx={{ color: out ? '#fbbf24' : 'text.disabled', mb: 0.75, display: 'block', cursor: 'help' }}>
+                {out
+                  ? tx('optRangeNowOutside', { value: shown, unit: unitSfx,
+                      lo: trimNumber(Number(v.min) * kU, isInt), hi: trimNumber(Number(v.max) * kU, isInt) })
+                  : tx('optRangeNow', { value: shown, unit: unitSfx })}
+              </Typography>
+            </Tooltip>
           );
         })()}
 
@@ -255,8 +268,10 @@ const SweepVarCard: React.FC<SweepVarCardProps> = ({ paramName, label, unit, opt
           </Box>
         ) : (
           <Box sx={{ display: 'flex', gap: 1, alignItems: 'center', flexWrap: 'wrap', rowGap: 0.5 }}>
-            <RangeField label="min"  value={snap(Number(v.min) * kU)}  onChange={n => onEdit({ min: n / kU }, 'edit')} />
-            <RangeField label="max"  value={snap(Number(v.max) * kU)}  onChange={n => onEdit({ max: n / kU }, 'edit')} />
+            <RangeField label="min"  value={snap(Number(v.min) * kU)}  onChange={n => onEdit({ min: n / kU }, 'edit')}
+              error={Number(v.min) > Number(v.max)} />
+            <RangeField label="max"  value={snap(Number(v.max) * kU)}  onChange={n => onEdit({ max: n / kU }, 'edit')}
+              error={Number(v.min) > Number(v.max)} />
             <RangeField label="step" value={snap(Number(v.step) * kU)} onChange={n => onEdit({ step: n / kU }, 'edit')} />
           </Box>
         )}
@@ -675,7 +690,13 @@ const SweepConfigPanel: React.FC = () => {
               <Tooltip title={tx('optVarsResetTip')}>
                 <Button size="small" variant="outlined" color="warning" onClick={resetRanges}
                   sx={{ textTransform: 'none', fontSize: 11 }}>
-                  {tx('optVarsResetButton', { count: staleNames.length })}
+                  {staleNames.length === 1
+                    ? (() => {
+                        const w = defaultWindow(staleNames[0]);
+                        const isI = schemaMap[staleNames[0]]?.type === 'int';
+                        return tx('optVarsResetOne', { lo: trimNumber(w.min, isI), hi: trimNumber(w.max, isI) });
+                      })()
+                    : tx('optVarsResetMany', { count: staleNames.length })}
                 </Button>
               </Tooltip>
             </Box>

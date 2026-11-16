@@ -136,3 +136,38 @@ export function outOfRangeNames(
   }
   return out;
 }
+
+/** The state of one variable's range against the loaded motor's current value (owner 2026-11-16: say the real mistake first):
+ *  `inverted` - min is above max (the run cannot start); `below` / `above` - the current value is outside the range (the search
+ *  starts from the current design, so it should be inside); `ok`; `unknown` - no usable numbers or no current value. */
+export type RangeState = 'ok' | 'below' | 'above' | 'inverted' | 'unknown';
+
+export function rangeState(
+  v: { min?: unknown; max?: unknown } | null | undefined,
+  cur: number,
+): RangeState {
+  const lo = num(v?.min), hi = num(v?.max);
+  if (lo === null || hi === null) return 'unknown';
+  if (lo > hi) return 'inverted';
+  if (!Number.isFinite(cur)) return 'unknown';
+  if (rangeContains(v, cur)) return 'ok';
+  return cur < lo ? 'below' : 'above';
+}
+
+/** Selected variables whose min is above their max: a run with one of them cannot start. */
+export function invertedRangeNames(
+  vars: Record<string, { mode?: string; min?: unknown; max?: unknown } | undefined>,
+): string[] {
+  const out: string[] = [];
+  for (const [name, v] of Object.entries(vars ?? {})) {
+    if (!v || v.mode === 'fixed') continue;
+    const lo = num(v.min), hi = num(v.max);
+    if (lo !== null && hi !== null && lo > hi) out.push(name);
+  }
+  return out;
+}
+
+/** The "now" figure as the card prints it: the faithful value, trailing zeros trimmed (a fraction like 0.467 must not read 0.5). */
+export function trimNumber(x: number, isInt: boolean): string {
+  return isInt ? String(Math.round(x)) : x.toFixed(3).replace(/(\.\d*?)0+$/, '$1').replace(/\.$/, '');
+}

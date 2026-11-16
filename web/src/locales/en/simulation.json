@@ -85,7 +85,6 @@
   "optVarsActDoe": "Apply DOE importance",
   "optVarsSnackAdded": "{count, plural, one {Added # variable} other {Added # variables}}",
   "optVarsSnackRemoved": "{count, plural, one {Removed # variable} other {Removed # variables}}",
-  "optVarsResetButton": "Reset {count, plural, one {# out-of-range variable} other {# out-of-range variables}} to current ±10 %",
   "optVarsResetTip": "These ranges do not contain the current value of the loaded motor (they may have been set for another motor). One click re-centres them on the current value ±10 %. Undo brings them back.",
   "optVarsManage": "Manage",
   "optVarsManageTip": "Choose which parameters can be varied: the Optimizable switch on each row of the Geometry tab.",
@@ -235,5 +234,14 @@
   "propOptTipMach": "Enforce tip Mach",
   "propOptTipMachLimit": "Tip Mach limit",
   "propOptTipMachLimitTip": "The limit is an unconfirmed owner input; the value here overrides it for this run only.",
-  "propOptDone": "{n} designs, {front} on the front, {s} s"
+  "propOptDone": "{n} designs, {front} on the front, {s} s",
+  "optRangeInverted": "Min is above max",
+  "optRangeInvertedTip": "The minimum must be below the maximum. The run cannot start until the range is fixed.",
+  "optRangeNow": "Now {value}{unit}",
+  "optRangeNowOutside": "Now {value}{unit} - outside the range {lo}-{hi}",
+  "optRangeNowTip": "Current value of the loaded motor (from {src}). The search starts from the current design, so it should be inside the range.",
+  "optRangeNowOutsideTip": "The search starts from the current design (from {src}), so its value should be inside the range. Widen the range, or use the reset button to set it around the current value.",
+  "optVarsResetOne": "Set range to {lo}-{hi} (now ±10 %)",
+  "optVarsResetMany": "Set {count} ranges to now ±10 %",
+  "optRunBlockedInverted": "Cannot start: min is above max for {names}. Fix the range first."
 }

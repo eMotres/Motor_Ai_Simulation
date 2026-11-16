@@ -788,10 +788,7 @@
     "production": "Production",
     "worksWith": "Works with",
     "customer": "Customer",
-    "stage": {
-      "in_production": "In production",
-      "computed": "Computed"
-    },
+    "stage": "Stage",
     "updated": "Updated",
     "shown": "Shown",
     "refresh": "Refresh",
@@ -836,6 +833,10 @@
         "what": "{where}: a controller project has no item, while boards have no project: {candidates}.",
         "do": "Tell us which board belongs to this project; nothing is linked by guess."
       }
+    },
+    "stageName": {
+      "in_production": "In production",
+      "computed": "Computed"
     }
   },
   "designation": {

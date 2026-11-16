@@ -788,10 +788,7 @@
     "production": "生产",
     "worksWith": "配套",
     "customer": "客户",
-    "stage": {
-      "in_production": "生产中",
-      "computed": "已计算"
-    },
+    "stage": "阶段",
     "updated": "更新",
     "shown": "显示",
     "refresh": "刷新",
@@ -836,6 +833,10 @@
         "what": "{where}：控制器项目没有关联产品，而以下电路板没有项目：{candidates}。",
         "do": "请告诉我们哪块电路板属于此项目；不会凭猜测关联。"
       }
+    },
+    "stageName": {
+      "in_production": "生产中",
+      "computed": "已计算"
     }
   },
   "designation": {

@@ -7581,6 +7581,11 @@ def _fem_transient_sliding_band_once(
              N2, "full ring" if _full_ring else "sector",
              Nring, _proj.n_redge, _proj.n_re_pairs, _proj.n_cut_v,
              _proj.n_cut_e)
+    if _proj.n_cut_e_rescued or _proj.n_cut_e_unmatched:
+        log.warning("P2 belt: %d sector-cut edge(s) welded that the radius walk skipped, %d cut edge(s) with NO partner",
+                    _proj.n_cut_e_rescued, _proj.n_cut_e_unmatched)
+        if _proj.n_cut_e_unmatched and _os_sb.environ.get("SB_BOUNDARY_STRICT", "0") == "1":
+            raise ValueError("sector cut edges do not match across the cut: %d unmatched" % _proj.n_cut_e_unmatched)
 
     # ═══════════════════════════════════════════════════════════════════
     #  COUPLED EDDY-CURRENT DATA (σ·∂A/∂t) — SOLID CONDUCTORS, P2
@@ -15216,6 +15221,9 @@ def _fem_transient_sliding_band_once(
         "P2_transient_sample_history": _p2_transient_history,
         "T_em_Nm": _T2, "T_avg_Nm": Tavg, "T_ripple_pct": Trip_raw,
         "gap_layers_requested": _gap_layers_req,
+        **({"p2_cut_edge_weld": {"rescued": int(_proj.n_cut_e_rescued), "unmatched": int(_proj.n_cut_e_unmatched)}}
+           if (locals().get("_proj") is not None
+               and (_proj.n_cut_e_rescued or _proj.n_cut_e_unmatched)) else {}),
         "gap_layers_effective": float(gap_layers),
         "gap_layers_note": _gap_layers_note,
         "T_coulomb_series": _coul2["T_coulomb_series"],

@@ -50,7 +50,7 @@ def test_family_lists_variables_bounds_and_operating_points():
     assert j["id"] == "own_family" and j["banner"] == pd.BANNER and j["diameters_in"] == [10, 11, 12, 13] and j["blades_options"] == [2, 3]
     assert j["seed"]["diameter_in"] == 12 and j["seed"]["blades"] == 3
     assert sorted(j["operating_points"]) == ["L12", "L20"] and j["operating_points"]["L20"]["torque_limit_Nm"] == 0.82
-    assert j["tip_mach_limit"] == {"value": 0.6, "confirmed": False, "source": j["tip_mach_limit"]["source"]}
+    assert j["tip_mach_limit"] == {"value": 0.9, "confirmed": True, "source": j["tip_mach_limit"]["source"]}       # owner 2026-11-16: free, guard only
     assert j["inputs_unconfirmed"] is True and j["manufacturing"]["limits"] == {} and "wall_min_mm" in j["manufacturing"]["unset"]
     assert len(j["variables"]) == len(pd.variable_names(D))
     assert client().get(B + "/family", params={"diameter_in": 14}).status_code == 422
@@ -111,7 +111,7 @@ def test_optimize_route_runs_stores_and_validates():
         assert r.status_code == 200
         j = r.json()
         assert j["banner"] == pd.BANNER and j["operating_point"] == "L12" and j["front"] and j["estimated"] is True
-        assert j["settings"]["pop"] == 4 and j["settings"]["tip_mach_limit_confirmed"] is False
+        assert j["settings"]["pop"] == 4 and j["settings"]["tip_mach_limit_confirmed"] is True
         stored = tmp / pda.DRAFT_DIR / "_runs" / (j["run_id"] + ".jsonl")
         assert stored.is_file() and len(stored.read_text().splitlines()) == len(j["evaluations"])
         assert c.get(B + "/drafts").json() == {"drafts": []}                              # run files are not drafts

@@ -217,7 +217,9 @@ class EvalMemo:
             with self.lock:
                 self.memo[k] = res
                 with open(self.path, "a", encoding="utf-8") as fh:
-                    fh.write(json.dumps({"k": k, "v": res}, default=str) + "\n")
+                    fh.write(json.dumps({"k": k, "v": res, "call": {
+                        "overrides": overrides, "current_a": current_a, "steps": steps,
+                        "coil_temp_c": coil_temp_c, **kw}}, default=str) + "\n")
         return res
 
 

@@ -133,3 +133,43 @@ test('outOfRangeNames: only selected geometry variables that miss the current va
   assert.deepEqual(outOfRangeNames({}, geometry), []);
   assert.deepEqual(outOfRangeNames(vars, undefined), []);
 });
+
+// ── the three states of the variable card (owner 2026-11-16: "Core Thickness min 2.3 max 2.2, now 2.3") ──
+import { rangeState, invertedRangeNames, trimNumber } from '../optVarRanges.ts';
+
+test('rangeState: ok, current outside (below / above), min above max, unknown', () => {
+  assert.equal(rangeState({ min: 2.0, max: 2.5 }, 2.3), 'ok');
+  assert.equal(rangeState({ min: 2.0, max: 2.2 }, 2.3), 'above');
+  assert.equal(rangeState({ min: 2.4, max: 2.8 }, 2.3), 'below');
+  assert.equal(rangeState({ min: 2.3, max: 2.2 }, 2.3), 'inverted');   // the owner's card: said first, not "above max"
+  assert.equal(rangeState({ min: 2.3, max: 2.2 }, NaN), 'inverted');   // even with no current value
+  assert.equal(rangeState({ min: 2.0, max: 2.5 }, NaN), 'unknown');
+  assert.equal(rangeState({ min: 'x', max: 2.5 }, 2.3), 'unknown');
+  assert.equal(rangeState(null, 2.3), 'unknown');
+  assert.equal(rangeState({ min: 2.0, max: 2.0 }, 2.0), 'ok');         // equal bounds are a point, not inverted
+});
+
+test('invertedRangeNames lists the selected variables whose min is above their max', () => {
+  const vars = {
+    core_thickness: { mode: 'optimize', min: 2.3, max: 2.2 },
+    tooth_width: { mode: 'optimize', min: 4, max: 6 },
+    old: { mode: 'fixed', min: 9, max: 1 },
+  };
+  assert.deepEqual(invertedRangeNames(vars), ['core_thickness']);
+  assert.deepEqual(invertedRangeNames({}), []);
+  assert.deepEqual(invertedRangeNames(undefined), []);
+});
+
+test('the reset button names the window it will set: now +-10 %, rounded outward to the step', () => {
+  const w = bracketRange(2.3, { type: 'float', min: 0.5, max: 40, step: 0.1 });
+  assert.equal(`${trimNumber(w.min, false)}-${trimNumber(w.max, false)}`, '2-2.6');
+  assert.ok(w.min <= 2.3 && 2.3 <= w.max);
+  assert.equal(rangeState(w, 2.3), 'ok');                              // after the reset the card is in the ok state
+});
+
+test('trimNumber keeps a small fraction faithful and drops trailing zeros', () => {
+  assert.equal(trimNumber(0.467, false), '0.467');
+  assert.equal(trimNumber(2.3, false), '2.3');
+  assert.equal(trimNumber(14.0, false), '14');
+  assert.equal(trimNumber(14.4, true), '14');
+});

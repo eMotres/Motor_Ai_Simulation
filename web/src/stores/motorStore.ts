@@ -31,6 +31,8 @@ import {
 } from '../types/motor';
 import { storedGapLayers } from '../lib/meshSettings';
 import { endWindingPin } from '../lib/endWindingPin';
+import { invertedRangeNames } from '../lib/optVarRanges';
+import { nsT } from '../i18n/nsT';
 
 const API_BASE_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:8001';
 const storedIdentity = () => (getStoredUser()?.email ?? '').trim().toLowerCase();
@@ -994,6 +996,11 @@ export const useMotorStore = create<MotorState>()(
       setLastOptSnapshot: (s) => set({ lastOptSnapshot: s }),
       runDescent: async ({ rippleMax, maxIters, wEff, wTd, steps, algorithm, nSectors, targetTorque, vPeakLimit, optimizeGamma, autoExpand, maxRounds, surrogateSeed, objective, currentBumpPct, ripplePenaltyLambda, thdPenaltyLambda, thdMaxPct }) => {
         const { sweepConfig } = get();
+        const _inv = invertedRangeNames(sweepConfig.variations as never);
+        if (_inv.length) {
+          set({ descentError: nsT('simulation')('optRunBlockedInverted', { names: _inv.join(', ') }) });
+          return;
+        }
         // Fixed operating point = Sweep "Point 1" (γ/current from Simulation).
         const op0 = sweepConfig.operatingPoints[0] || ({} as any);
         // Variables = every active (non-fixed) entry; each card sets its explicit

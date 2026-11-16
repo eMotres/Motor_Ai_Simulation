@@ -85,7 +85,6 @@
   "optVarsActDoe": "应用 DOE 重要性",
   "optVarsSnackAdded": "已添加 {count} 个变量",
   "optVarsSnackRemoved": "已移除 {count} 个变量",
-  "optVarsResetButton": "将 {count} 个超出范围的变量重置为当前值 ±10 %",
   "optVarsResetTip": "这些范围不包含当前电机的当前值（可能是为另一台电机设置的）。一键即可重新以当前值 ±10 % 为中心。可撤销。",
   "optVarsManage": "管理",
   "optVarsManageTip": "选择哪些参数可以变化：几何页每一行的“可优化”开关。",
@@ -235,5 +234,14 @@
   "propOptTipMach": "限制叶尖马赫数",
   "propOptTipMachLimit": "叶尖马赫数上限",
   "propOptTipMachLimitTip": "上限是尚未确认的业主输入；此处的值仅对本次运行覆盖它。",
-  "propOptDone": "{n} 个设计，前沿 {front} 个，{s} 秒"
+  "propOptDone": "{n} 个设计，前沿 {front} 个，{s} 秒",
+  "optRangeInverted": "最小值高于最大值",
+  "optRangeInvertedTip": "最小值必须低于最大值。在修正范围之前无法开始运行。",
+  "optRangeNow": "当前 {value}{unit}",
+  "optRangeNowOutside": "当前 {value}{unit} - 超出范围 {lo}-{hi}",
+  "optRangeNowTip": "已加载电机的当前值（来自 {src}）。搜索从当前设计出发，因此该值应在范围内。",
+  "optRangeNowOutsideTip": "搜索从当前设计出发（来自 {src}），因此其值应在范围内。请放宽范围，或使用重置按钮将范围设置在当前值附近。",
+  "optVarsResetOne": "将范围设为 {lo}-{hi}（当前值 ±10 %）",
+  "optVarsResetMany": "将 {count} 个范围设为当前值 ±10 %",
+  "optRunBlockedInverted": "无法开始：{names} 的最小值高于最大值。请先修正范围。"
 }

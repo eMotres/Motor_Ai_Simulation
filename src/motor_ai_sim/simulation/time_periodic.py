@@ -348,6 +348,46 @@ def _mkl_local_threads(lib, n: Optional[int]) -> None:
         pass
 
 
+class TdmMemoryExceeded(RuntimeError):
+    """The per-frame Jacobian factors of the orbit do not fit the memory.
+
+    Raised inside the TDM attempt; the caller abandons TDM and marches
+    (transactional), so the container is not killed by the memory limit."""
+
+
+def memory_budget_bytes() -> Optional[int]:
+    """Bytes this process may still grow by: the smaller of the cgroup limit and
+    the free system memory, 85 %, minus what it already holds. ``None`` when
+    neither is readable (the guard then stays off)."""
+    try:
+        lim = []
+        for f in ("/sys/fs/cgroup/memory.max",
+                  "/sys/fs/cgroup/memory/memory.limit_in_bytes"):
+            try:
+                v = open(f).read().strip()
+                if v.isdigit() and int(v) < (1 << 50):
+                    lim.append(int(v))
+            except OSError:
+                pass
+        try:
+            for ln in open("/proc/meminfo"):
+                if ln.startswith("MemAvailable:"):
+                    lim.append(int(ln.split()[1]) * 1024)
+                    break
+        except OSError:
+            pass
+        if not lim:
+            return None
+        rss = 0
+        for ln in open("/proc/self/status"):
+            if ln.startswith("VmRSS:"):
+                rss = int(ln.split()[1]) * 1024
+                break
+        return int(0.85 * min(lim)) - rss
+    except Exception:            # noqa: BLE001 — a guard must never break a solve
+        return None
+
+
 class FrameFactor:
     """Cholesky (PARDISO mtype 2) of one frame's bordered Jacobian, kept for
     back-solves; LU (mtype 11) when the run-time checks decline Cholesky or it
@@ -481,6 +521,15 @@ class FrameFactor:
         h.set_phase(33)
         self.solves += 1
         return h._call_pardiso(self._M, bb)
+
+    def kept_bytes(self) -> int:
+        """Memory the factor holds after the numerical factorisation (MKL
+        PARDISO iparm(16) permanent + iparm(17) factors, in KB); 0 if unknown."""
+        h = self._h
+        try:
+            return int((int(h.iparm[15]) + int(h.iparm[16])) * 1024) if h is not None else 0
+        except Exception:        # noqa: BLE001
+            return 0
 
     def close(self) -> None:
         h, self._h = self._h, None
@@ -683,6 +732,7 @@ class TimePeriodicEddy:
         self._pool = (ThreadPoolExecutor(max_workers=self.workers)
                       if self.workers > 1 else None)
         self._coarse = None
+        self._mem_abort: Optional[str] = None
         self.stats: Dict[str, Any] = {
             "frames": self.N, "newton": [], "gmres_iterations": 0,
             "sweeps": 0, "back_solves": 0, "residual_evals": 0,
@@ -691,6 +741,23 @@ class TimePeriodicEddy:
     # ── utilities ────────────────────────────────────────────────────────
     def _tick(self, key: str, t0: float) -> None:
         self.stats["t"][key] = self.stats["t"].get(key, 0.0) + (time.perf_counter() - t0)
+
+    def _mem_guard(self, fac) -> None:
+        """All N frame factors stay alive together: stop as soon as one factor
+        shows that N of them exceed the memory (SB_TDM_MEM_GUARD=0 switches off)."""
+        if os.environ.get("SB_TDM_MEM_GUARD", "1") == "0" or self._mem_abort:
+            return
+        per = fac.kept_bytes()
+        if per <= 0:
+            return
+        need = per * self.N
+        left = memory_budget_bytes()
+        if left is not None and need > left:
+            self._mem_abort = (
+                "tdm_memory: %d frame factors of %.2f GB need %.1f GB, %.1f GB left; "
+                "the orbit is marched instead" % (self.N, per / 2**30, need / 2**30,
+                                                  max(left, 0) / 2**30))
+            raise TdmMemoryExceeded(self._mem_abort)
 
     def _map(self, fn, items):
         if self._pool is None:
@@ -761,7 +828,10 @@ class TimePeriodicEddy:
             J = fr.K if T is None else (fr.K + T)
             Jff = ((fr.PfT @ (J @ fr.Pf)) + fr.Msd_ff).tocsr()
             Mb = _bmat([[Jff, -fr.Bf], [-fr.Bf.T, _diags(self.Sdt)]]).tocsr()
+            if self._mem_abort is not None:
+                raise TdmMemoryExceeded(self._mem_abort)
             fr.fac.factor(Mb, self.mkl_threads)
+            self._mem_guard(fr.fac)
             return J if keep_J else None
         Js = self._map(one, range(self.N))
         self.stats["jacobian_factorizations"] += self.N

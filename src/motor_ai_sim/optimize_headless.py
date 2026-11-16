@@ -28,7 +28,8 @@ itself writes next to its config (``.last_descent.json``, ``.descent_runs/``,
 therefore the app's own run format, nothing new; ``result.json`` is a copy of
 the final state.
 
-Resume and growth: every computed eval is kept in ``state/.headless_memo.jsonl``
+Resume and growth (same machine AND same application code: the state folder
+records both and refuses another): every computed eval is kept in ``state/.headless_memo.jsonl``
 under the exact arguments it was solved with.  Running the same request again
 in the same folder replays the run (CMA-ES has a fixed seed): every eval found
 in the memo returns at once, the first missing one is computed.  ``max_evals``
@@ -140,6 +141,22 @@ def _write_yaml(p: Path, cfg: Dict[str, Any]) -> None:
     tmp.write_text(yaml.safe_dump(cfg, sort_keys=False, allow_unicode=True),
                    encoding="utf-8")
     os.replace(tmp, p)
+
+
+def code_fingerprint() -> str:
+    """Hash of the application's Python sources this process runs.  A memo
+    filled by other code (a solver fix deployed in between) would replay
+    answers the new code does not give, so a state folder is bound to it."""
+    import motor_ai_sim
+    root = Path(motor_ai_sim.__file__).resolve().parent
+    h = hashlib.sha256()
+    for f in sorted(root.rglob("*.py")):
+        if "__pycache__" in f.parts:
+            continue
+        h.update(str(f.relative_to(root)).encode())
+        # line endings do not change the code (the image is built from CRLF files)
+        h.update(f.read_bytes().replace(b"\r\n", b"\n"))
+    return h.hexdigest()[:16]
 
 
 def _cpus() -> int:
@@ -322,15 +339,21 @@ def main(argv: Optional[List[str]] = None) -> int:
     cfg = _refresh_derived(cfg)
     machine_fp = hashlib.sha256(json.dumps(cfg, sort_keys=True, default=str)
                                 .encode()).hexdigest()[:16]
+    code_fp = code_fingerprint()
     stamp = state / ".headless_machine.json"
     if stamp.is_file():
-        old = json.loads(stamp.read_text(encoding="utf-8")).get("machine_fp")
-        if old != machine_fp:
+        old = json.loads(stamp.read_text(encoding="utf-8"))
+        if old.get("machine_fp") != machine_fp:
             say(f"REFUSED: state folder {state} belongs to another machine "
-                f"({old} != {machine_fp}); use a new folder")
+                f"({old.get('machine_fp')} != {machine_fp}); use a new folder")
+            return 2
+        if old.get("code_fp") != code_fp:
+            say(f"REFUSED: state folder {state} was filled by other application code "
+                f"({old.get('code_fp')} != {code_fp}); its evals would be replayed "
+                f"as answers of this code - use a new folder")
             return 2
     _write_yaml(cfg_p, cfg)
-    stamp.write_text(json.dumps({"machine_fp": machine_fp,
+    stamp.write_text(json.dumps({"machine_fp": machine_fp, "code_fp": code_fp,
                                  "request": str(req_p)}, indent=1), encoding="utf-8")
     C.get_config(reload=True)
     from motor_ai_sim.routes import optimization as O

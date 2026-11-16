@@ -818,3 +818,29 @@ def test_deleting_a_die_takes_its_run_folder_with_it(dies):
     r = client.delete(f"/api/family/die/{DIE}?force=true")
     assert r.status_code == 200, r.text
     assert not (dies / DIE / "runs").exists()
+
+
+# ── the not-verified guard (audit 2026-11-16) ────────────────────────────────
+
+def _bad_run(drive="current", allow=False):
+    pl = _payload(drive)
+    pl["coulomb_torque"] = {"layer_self_check": {"rel_to_ripple_scale": 1.016, "rel_to_mean": 0.898}}
+    s = dict(_summary(drive), ripple_self_check_rel=1.016)
+    return client.post("/api/family/duty_run", json={
+        "die": DIE, "config": CFG, "duty": DUTY, "drive": drive, "settings": _settings(drive),
+        "summary": s, "payload": pl, "allow_unverified": allow})
+
+
+def test_grossly_unverified_run_is_refused_and_nothing_is_stored(dies):
+    assert _save_duty("current", DUTY, CFG).status_code == 200
+    r = _bad_run()
+    assert r.status_code == 409 and r.json()["detail"]["error"] == "result_not_verified"
+    assert "verification" not in ((_duty_doc(dies).get("runs") or {}).get("current") or {})
+
+
+def test_unverified_run_saved_on_purpose_carries_the_flag(dies):
+    assert _save_duty("current", DUTY, CFG).status_code == 200
+    assert _bad_run(allow=True).status_code == 200
+    assert _duty_doc(dies)["runs"]["current"]["verification"]["status"] == "reject"
+    rows = client.get(f"/api/family/duty_runs/{DIE}/{CFG}/{DUTY}").json()
+    assert rows["runs"][0]["verification"]["status"] == "reject"

@@ -1717,6 +1717,7 @@ def _run_rows(build_sig: Any, entry: dict) -> list[dict]:
             "f_switch_hz": st.get("sim.fSwitch"),
             "steps": st.get("sim.stepsPP"),
             "has_payload": bool(r.get("payload_file")),
+            **({"verification": r["verification"]} if isinstance(r.get("verification"), dict) else {}),
         })
     return rows
 
@@ -2211,6 +2212,8 @@ class DutyRunSave(BaseModel):
     result: Optional[dict] = None
     assignment_sig: Optional[str] = None
     payload: Optional[dict] = None       # the transient, heavy arrays stripped
+    # A run whose own ring checks fail grossly is refused (409) unless the caller asks for it explicitly.
+    allow_unverified: bool = False
 
 
 class ConfigCreate(BaseModel):
@@ -4076,10 +4079,21 @@ def record_duty_run(req: DutyRunSave, _w: dict = Depends(require_catalog_write))
                 f"{_RUN_MAX_BYTES / 1e6:.0f} MB.  Drop the per-element field "
                 f"arrays ({', '.join(_RUN_HEAVY_KEYS)}) before sending: no "
                 "chart reads them and they are what makes a run enormous."))
+    from motor_ai_sim.result_verification import assess as _assess_run
+    verdict = _assess_run(req.summary, req.payload)
+    if verdict["status"] == "reject" and not req.allow_unverified:
+        raise HTTPException(409, detail={
+            "error": "result_not_verified",
+            "message": ("this run is not verified and is not saved into the duty: "
+                        + "; ".join(verdict["reasons"])
+                        + ".  Re-run with more gap layers, or save it deliberately with allow_unverified."),
+            "verification": verdict})
     rec = _store_run(die, cfg, c, entry, drive,
                      settings=req.settings, summary=req.summary,
                      result=req.result, assignment_sig=req.assignment_sig,
                      payload=req.payload)
+    if verdict["status"] != "ok" and verdict["verified"] is False:
+        rec["verification"] = verdict          # additive: shown as "not verified", never rewrites a number
     _save_yaml(p, c)
     log.info("family: %s run stored on '%s/%s/%s' -> %s",
              drive, die, cfg, req.duty, rec.get("payload_file") or "(no payload)")
@@ -4146,6 +4160,7 @@ def get_duty_runs(die: str, cfg: str, duty: str,
             "settings": r.get("settings") or {},
             "summary": _summary_with_full_mass(r.get("summary"), die, cfg), "result": r.get("result"),
             "payload": payload,
+            **({"verification": r["verification"]} if isinstance(r.get("verification"), dict) else {}),
         })
     return {"die": die, "config": cfg, "duty": duty,
             "primary_drive": prim, "build_sig": bsig, "runs": out}

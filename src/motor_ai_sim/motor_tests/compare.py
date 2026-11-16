@@ -398,7 +398,10 @@ def noload_em_loss_at(rpm: float, ref: Dict[str, Any], ratio: float = 1.0) -> Op
 
     core  = hysteresis * r + eddy * r^2 + excess * r^1.5     (r = n / n0; P_core * r^1.5 when the split is not stored)
     solid = P_solid * r^2                                     (resistance-limited eddy in magnets, shaft, sleeve)
-    both  x ratio^2                                           (loss ~ B^2, B ~ Br)
+    copper = P_cu_ac * r^2                                    (eddy in the strands from the slot field; stored no-load
+                                                               ``P_stranded_W`` less its DC part, G2 audit 2026-11-16)
+    all   x ratio^2                                           (loss ~ B^2, B ~ Br)
+    A reference without ``p_cu_ac`` (older stored runs) contributes no copper term, as before.
     """
     r0 = num(ref.get("rpm"))
     if not r0:
@@ -413,8 +416,9 @@ def noload_em_loss_at(rpm: float, ref: Dict[str, Any], ratio: float = 1.0) -> Op
             return None
         core = pc * r ** 1.5
     solid = (num(ref.get("p_solid")) or 0.0) * r * r
+    copper = (num(ref.get("p_cu_ac")) or 0.0) * r * r
     b2 = float(ratio) ** 2
-    return {"core": core * b2, "solid": solid * b2, "em": (core + solid) * b2}
+    return {"core": core * b2, "solid": solid * b2, "copper": copper * b2, "em": (core + solid + copper) * b2}
 
 
 def fit_an_bn2(points: Sequence[Tuple[float, float]]) -> Optional[Dict[str, float]]:

@@ -705,6 +705,7 @@ def _free_run(rec: Dict[str, Any], model: Dict[str, Any], die: str, config: str)
         meas_w = num(r.get("shaft_power_w"))
         lx = {"em_w": None if em is None else em["em"], "core_w": None if em is None else em["core"],
               "solid_w": None if em is None else em["solid"],
+              "copper_ac_w": None if em is None else em.get("copper"),
               "bearings_w": (mech or {}).get("bearings_w"), "windage_w": (mech or {}).get("windage_w"),
               "unexplained_w": None if (meas_w is None or total is None) else meas_w - total,
               "has_bearings": bool(model.get("has_bearings")), **extra}

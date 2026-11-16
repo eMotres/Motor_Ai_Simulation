@@ -260,11 +260,18 @@ def from_docs(die_doc: Dict[str, Any], cfg_doc: Dict[str, Any], stored_by_duty: 
             p_solid = num(s.get("P_solid_W"))
             if p_solid is None:
                 p_solid = (num(s.get("P_mag_W")) or 0.0) + (num(s.get("P_shaft_W")) or 0.0) + (num(s.get("P_sleeve_W")) or 0.0)
+            # the AC copper of the no-load run (eddy in the strands from the slot field; the DC part at the run's small
+            # current is subtracted, it is not a no-load loss).  G2 audit 2026-11-16: the compare left it out.
+            p_cu = num(s.get("P_stranded_W"))
+            p_cu_ac = None
+            if p_cu is not None:
+                i_ph, r_ph = num(s.get("I_phase_rms_A")), num(s.get("R_phase_ohm"))
+                p_cu_ac = max(0.0, p_cu - (3.0 * i_ph * i_ph * r_ph if i_ph is not None and r_ph is not None else 0.0))
             noload.append({"duty": name, "rpm": rpm, "v_ll_peak": vpk, "v_ll_rms": num(s.get("V_line_rms_V")),
                            # the fundamental of the line-line voltage (older stored runs have none or 0: no fundamental)
                            "v_ll_fund_peak": (num(s.get("V1_LL_V")) or None),
                            "hyst": hy, "eddy": ed, "excess": ex, "p_core": num(s.get("P_core_W")),
-                           "p_solid": p_solid, "magnet_temp_c": mag_t})
+                           "p_solid": p_solid, "p_cu_ac": p_cu_ac, "magnet_temp_c": mag_t})
     cog = cfg_doc.get("cogging") if isinstance(cfg_doc.get("cogging"), dict) else None
     cogging = None
     if cog and num(cog.get("pkpk_Nm")) is not None:

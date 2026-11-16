@@ -112,3 +112,22 @@ def test_stage_is_derived_and_board_projects_go_to_review():
     assert sorted(out["no_item_yet"]) == ["ctl", "sub"]
     rev = [r for r in out["review"] if r["code"] == "project_without_item"]
     assert rev == [{"code": "project_without_item", "where": "Controller 800V board", "project": "ctl", "candidates": ["SIC/Rev A"]}]
+
+
+def test_computed_reads_each_die_once_and_caches_it(monkeypatch):
+    """Coordinator 2026-11-17: the page took 6-10 s with one full results read per motor."""
+    from motor_ai_sim import duty_results
+    from motor_ai_sim.routes import overview as OV
+    calls = []
+
+    def fake_index(die, shared=False):
+        calls.append((die, shared))
+        return {"A": {"rated": {"em": {}}}, "B": {}}
+    monkeypatch.setattr(duty_results, "index", fake_index)
+    monkeypatch.setattr(OV, "_RESULTS_CACHE", {})
+    projects = [{"id": f"p{i}", "title": "P", "linked_motors": [{"die": "D", "config": c} for c in ("A", "B", "C")]} for i in range(5)]
+    out = build(projects, [], {}, {})
+    assert calls == [("D", True)]                                             # one read for the die, not one per motor
+    assert {k: v["computed"] for k, v in out["items"].items()} == {"D/A": True, "D/B": False, "D/C": False}
+    build(projects, [], {}, {})
+    assert calls == [("D", True)]                                             # cached for a minute

@@ -23,7 +23,8 @@ controller a motor is analysed with (``analysis_controller``) is listed apart an
 """
 from __future__ import annotations
 
-from typing import Any, Dict, List
+import time
+from typing import Any, Dict, List, Tuple
 
 from fastapi import APIRouter, HTTPException, Request
 
@@ -47,12 +48,29 @@ def _title(value: Any) -> str:
     return str(value or "")
 
 
-def _has_results(die: str, cfg: str) -> bool:
+#: die -> (monotonic time, configurations with stored results); one minute is fresh enough for "computed"
+_RESULTS_CACHE: Dict[str, Tuple[float, frozenset]] = {}
+_RESULTS_TTL_S = 60.0
+
+
+def _computed_configs(die: str) -> frozenset:
+    """The configurations of ``die`` with any stored result: ONE layered read per die (``duty_results.index`` with the
+    shared parsed-store memo), cached for a minute.  Before (#721) it was a full ``get`` per motor: 6-10 s per page."""
+    now = time.monotonic()
+    hit = _RESULTS_CACHE.get(die)
+    if hit and now - hit[0] < _RESULTS_TTL_S:
+        return hit[1]
     try:
         from motor_ai_sim import duty_results
-        return bool(duty_results.get(die, cfg))
+        cfgs = frozenset(cfg for cfg, duties in duty_results.index(die, shared=True).items() if duties)
     except Exception:                                       # noqa: BLE001 - no store: not computed
-        return False
+        cfgs = frozenset()
+    _RESULTS_CACHE[die] = (now, cfgs)
+    return cfgs
+
+
+def _has_results(die: str, cfg: str) -> bool:
+    return cfg in _computed_configs(die)
 
 
 def build(projects: List[dict], productions: List[dict], registry: Dict[str, Any], states: Dict[str, Any],

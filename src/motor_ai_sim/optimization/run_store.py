@@ -77,7 +77,7 @@ def summarize(state: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def designations(state: Dict[str, Any], die: str, config: str) -> Dict[str, Any]:
+def designations(state: Dict[str, Any], die: str, config: str, request: Any = None) -> Dict[str, Any]:
     """The standard motor designation of the run's base motor and of EACH evaluated candidate (owner 2026-11-17: an
     optimisation run whose candidates differ in turns shows the right name per candidate).
 
@@ -87,13 +87,30 @@ def designations(state: Dict[str, Any], die: str, config: str) -> Dict[str, Any]
     the record says ``"stamped_at": "import"`` and a reader never presents it as a compute-time stamp; the existing
     ``machine_fp`` re-check is what tells whether the machine still matches.  The files are read ONCE per import (a run
     holds up to ~1000 points).  The run state itself is not touched.  ``{}`` when nothing can be made - a stamp never
-    fails an import."""
+    fails an import.
+
+    A headless run carries its whole machine in ``request["machine"]`` (geometry, winding, materials; with
+    ``replace_geometry`` the geometry is complete): then THAT is the base (``"base": "run_machine"``), which is what the run
+    computed, and the stored files only fill what the machine does not say.  Otherwise ``"base": "stored_files"``."""
     try:
         from motor_ai_sim import motor_designation as MD
+        machine = request.get("machine") if isinstance(request, dict) and isinstance(request.get("machine"), dict) else None
         try:
             stored = MD._stored(die, config)
-        except Exception:                                   # noqa: BLE001 - no files: nothing to stamp from
-            return {}
+        except Exception:                                   # noqa: BLE001 - no files: the run's machine alone, if any
+            if machine is None:
+                return {}
+            stored = ({}, {}, None)
+        source = "stored_files"
+        if machine is not None and isinstance(machine.get("geometry"), dict) and machine["geometry"]:
+            die_doc, cfg_doc, rev = stored
+            geo = dict(machine["geometry"]) if machine.get("replace_geometry") else {**(die_doc.get("geometry") or {}),
+                                                                                     **(cfg_doc.get("geometry_overrides") or {}),
+                                                                                     **machine["geometry"]}
+            cfg_doc = {**cfg_doc, "geometry_overrides": geo,
+                       "winding": {**(cfg_doc.get("winding") or {}), **(machine.get("winding") or {})},
+                       "materials": {**(cfg_doc.get("materials") or {}), **(machine.get("materials") or {})}}
+            stored, source = ({}, cfg_doc, rev), "run_machine"
         def name(geometry=None):                             # an incomplete name ("?") is never stored
             st = MD.stamp(die, config, geometry=geometry, stored=stored)
             return st.get("designation") if st.get("complete") else None
@@ -102,7 +119,7 @@ def designations(state: Dict[str, Any], die: str, config: str) -> Dict[str, Any]
         for p in state.get("points") or []:
             ov = p.get("overrides") if isinstance(p, dict) else None
             points.append(name(ov) if isinstance(ov, dict) and ov else base)
-        return {"base": base, "points": points, "stamped_at": "import"}
+        return {"base": base, "points": points, "stamped_at": "import", "base_source": source}
     except Exception:                                       # noqa: BLE001
         return {}
 
@@ -117,7 +134,7 @@ def build_record(state: Dict[str, Any], run_id: Optional[str] = None, request: A
     if request is not None:
         rec["request"] = request
     if die and config:
-        rec["designations"] = designations(state, die, config)
+        rec["designations"] = designations(state, die, config, request)
     if len(json.dumps(rec, default=str).encode("utf-8")) > MAX_BYTES:
         raise RunRejected("the run is larger than %d MB" % (MAX_BYTES // 1_000_000))
     return rec

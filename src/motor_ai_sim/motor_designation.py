@@ -59,9 +59,22 @@ def _mm(v: Optional[float]) -> str:
 
 
 def geometry_of(die_doc: Mapping[str, Any], cfg_doc: Mapping[str, Any]) -> Dict[str, Any]:
-    """The effective geometry: the die's geometry with the configuration's overrides on top."""
+    """The effective geometry: the die's geometry with the configuration's overrides on top; slots / poles from the
+    segments when only those are given (a headless run's machine), and the radii from the primaries through the app's
+    one derived-geometry function (stored derived values go stale, and a payload geometry carries primaries only)."""
     g = dict((die_doc or {}).get("geometry") or {})
     g.update((cfg_doc or {}).get("geometry_overrides") or {})
+    for total, per in (("num_slots", "num_slots_per_segment"), ("num_poles", "num_poles_per_segment")):
+        if _num(g.get(total)) is None and _num(g.get(per)) is not None and _num(g.get("num_seg")) is not None:
+            g[total] = int(_num(g[per]) * _num(g["num_seg"]))
+    try:
+        from motor_ai_sim.geometry.motor_geometry import derived_geometry
+        fresh = derived_geometry(g)
+        for k in ("stator_outer_radius", "stator_inner_radius", "rotor_outer_radius"):
+            if fresh.get(k) is not None:
+                g[k] = fresh[k]
+    except Exception:                                       # noqa: BLE001 - no derivation: the stored values stand
+        pass
     return g
 
 

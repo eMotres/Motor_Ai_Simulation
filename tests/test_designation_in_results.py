@@ -107,7 +107,7 @@ def test_optimisation_candidates_each_get_their_own_name(monkeypatch):
     state = {"variables": [{"name": "num_wires_per_slot"}], "history": [{"cost": 1}],
              "points": [{"overrides": {"num_wires_per_slot": n}} for n in (15, 16)] + [{"td": 1}]}
     rec = RS.build_record(state, "run-1", die="CILN28", config="G2")
-    assert rec["designations"] == {"base": "CILN28 200_65 17F4SY", "stamped_at": "import",
+    assert rec["designations"] == {"base": "CILN28 200_65 17F4SY", "stamped_at": "import", "base_source": "stored_files",
                                    "points": ["CILN28 200_65 15F4SY", "CILN28 200_65 16F4SY", "CILN28 200_65 17F4SY"]}
     assert reads == [("CILN28", "G2")]                                        # the files are read once per import
     assert rec["state"] is state and "designation" not in state["points"][0]   # the run state is not touched
@@ -131,3 +131,18 @@ def test_an_incomplete_candidate_name_is_never_stored(monkeypatch):
     monkeypatch.setattr(MD, "_library", lambda: LIB)
     state = {"variables": [{"name": "n"}], "history": [{"cost": 1}], "points": [{"overrides": {"num_wires_per_slot": 15}}]}
     assert RS.build_record(state, "run-3", die="CILN28", config="G2")["designations"]["points"] == [None]
+
+
+def test_a_headless_run_is_named_from_its_own_machine(monkeypatch):
+    """Coordinator review of #724, point 3: a headless run carries its whole machine in request.machine."""
+    die_doc = {"geometry": dict(live()["geometry"])}                       # the stored motor: 17 turns
+    cfg_doc = {"geometry_overrides": {}, "winding": live()["winding"], "materials": live()["materials"]}
+    monkeypatch.setattr(MD, "_stored", lambda d, c: (die_doc, cfg_doc, None))
+    monkeypatch.setattr(MD, "_library", lambda: LIB)
+    machine = {"geometry": {**live(rows=14)["geometry"]}, "replace_geometry": True,
+               "winding": {"connection": "2S-2P", "star_delta": "star"}, "materials": {}}
+    state = {"variables": [{"name": "w"}], "history": [{"cost": 1}],
+             "points": [{"overrides": {"wire_width": 6.0}}, {"overrides": {"num_wires_per_slot": 13}}]}
+    d = RS.build_record(state, "run-4", {"machine": machine}, die="CILN28", config="G2")["designations"]
+    assert d["base_source"] == "run_machine" and d["base"] == "CILN28 200_65 14F2S2PY"
+    assert d["points"] == ["CILN28 200_65 14F2S2PY", "CILN28 200_65 13F2S2PY"]

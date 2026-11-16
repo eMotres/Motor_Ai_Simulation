@@ -411,7 +411,8 @@ def design_curve(body: Dict[str, Any] = Body(...)) -> Dict[str, Any]:
 def design_optimize(body: Dict[str, Any] = Body(...)) -> Dict[str, Any]:
     try:
         return pda.optimize(body.get("vector"), str(body.get("op") or ""), body.get("pop", 12), body.get("generations", 6), body.get("seed", 1),
-                            body.get("objectives"), body.get("free"), body.get("enforce_tip_mach", True), body.get("tip_mach_limit"))
+                            body.get("objectives"), body.get("free"), body.get("enforce_tip_mach", True), body.get("tip_mach_limit"),
+                            body.get("structure_material"), body.get("min_safety_factor"))
     except pda.ApiProblem as exc:
         raise _problem(exc)
 

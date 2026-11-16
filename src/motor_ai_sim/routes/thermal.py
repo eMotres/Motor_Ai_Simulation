@@ -396,8 +396,20 @@ def _force_bore_for_propeller(air_speed_source: str, bore_mode: str):
 
 def _thermal_air_source_kw(source: str, propeller_id: str,
                            propeller_position: str, propeller_context_key: str,
-                           cooling_mode: str, authorization: Optional[str]) -> Dict[str, Any]:
-    """Validate and retain source provenance before history/coupled caching."""
+                           cooling_mode: str, authorization: Optional[str],
+                           air_zones: Optional[str] = None, frame: str = "housed") -> Dict[str, Any]:
+    """Validate and retain source provenance before history/coupled caching.  ``air_zones`` (opt-in) is validated here and, when
+    present, carried as its canonical JSON beside the propeller fields so it reaches the history key and the solve."""
+    zones = _parse_air_zones(air_zones, cooling_mode=cooling_mode, frame=frame)
+    out = _thermal_air_source_kw_base(source, propeller_id, propeller_position, propeller_context_key, cooling_mode, authorization)
+    if zones is not None:
+        out = {**out, "air_zones": json.dumps(zones, sort_keys=True)}
+    return out
+
+
+def _thermal_air_source_kw_base(source: str, propeller_id: str,
+                                propeller_position: str, propeller_context_key: str,
+                                cooling_mode: str, authorization: Optional[str]) -> Dict[str, Any]:
     src = str(source or "manual").strip().lower()
     if src not in ("manual", "propeller"):
         raise _bad("air_speed_source", source, "bad_value",
@@ -423,6 +435,73 @@ def _thermal_air_source_kw(source: str, propeller_id: str,
     if pos:
         out["propeller_position"] = pos
     return out
+
+
+AIR_ZONE_MODEL = "zone-1"
+#: zone name -> what it drives (docs in ~/jobs/TASK_propeller_zone_air.md, plan stage A5)
+AIR_ZONES = {
+    "housing_outer": "air_speed_mps (the housing outer film, cm.outer_air)",
+    "stator_ends": "open_air_speed_mps (end windings, tooth backs, gap recess)",
+    "rotor_ends": "the rotor end-face speed (replaces the open-frame speed in the end-face film, still x phi_face)",
+}
+
+
+def _parse_air_zones(air_zones, *, cooling_mode: str, frame: str) -> Optional[Dict[str, Any]]:
+    """Validate the OPT-IN zone-wise air speed of a propeller-cooled open frame (owner 2026-11-16: the thermal solver may take it,
+    the one-scalar path stays as it is).  ``None`` / blank / ``"null"`` = the scalar path, nothing else read.  Returns the canonical
+    ``{model_id, source, zones, axial_only, calibration}`` or raises a named 422.  Axial speed only in v1; every zone given must be a
+    finite speed above 0 (0 would silently fall back to the housing speed in the solver); a zone left out keeps today's value."""
+    if air_zones is None:
+        return None
+    raw = air_zones
+    if isinstance(raw, str):
+        if not raw.strip() or raw.strip().lower() == "null":
+            return None
+        try:
+            raw = json.loads(raw)
+        except ValueError:
+            raise _bad("air_zones", air_zones, "bad_value", "air_zones must be a JSON object")
+    if raw is None:
+        return None
+    if not isinstance(raw, dict):
+        raise _bad("air_zones", air_zones, "bad_value", "air_zones must be a JSON object")
+    if raw.get("model_id") != AIR_ZONE_MODEL:
+        raise _bad("air_zones.model_id", raw.get("model_id"), "bad_value",
+                   "air_zones.model_id must be %r" % AIR_ZONE_MODEL)
+    src = raw.get("source")
+    if not isinstance(src, str) or not src.strip():
+        raise _bad("air_zones.source", src, "missing", "air_zones.source is required: where the zone speeds come from")
+    if "swirl" in raw:
+        raise _bad("air_zones.swirl", raw.get("swirl"), "bad_value", "air_zones carries the AXIAL speed only (swirl is not read in zone-1)")
+    if raw.get("calibration") not in (None,):
+        raise _bad("air_zones.calibration", raw.get("calibration"), "bad_value", "air_zones.calibration is reserved and must be null in zone-1")
+    extra = sorted(set(raw) - {"model_id", "source", "zones", "calibration"})
+    if extra:
+        raise _bad("air_zones", extra, "bad_value", "unknown air_zones key(s): %s" % ", ".join(extra))
+    if str(cooling_mode or "").strip().lower() != "air":
+        raise _bad("air_zones", air_zones, "bad_value", "air_zones is only valid with cooling_mode='air'")
+    if _norm_frame(frame) != "open":
+        raise _bad("air_zones", air_zones, "bad_value", "air_zones is only valid with frame='open' (the zones are the open frame's)")
+    zones = raw.get("zones")
+    if not isinstance(zones, dict):
+        raise _bad("air_zones.zones", zones, "missing", "air_zones.zones must be an object, e.g. {\"housing_outer\": 3.1}")
+    bad = sorted(set(zones) - set(AIR_ZONES))
+    if bad:
+        raise _bad("air_zones.zones", bad, "bad_value", "unknown zone(s) %s; known: %s" % (", ".join(bad), ", ".join(AIR_ZONES)))
+    out_z: Dict[str, float] = {}
+    for k, v in zones.items():
+        if isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(float(v)) or float(v) <= 0.0:
+            raise _bad("air_zones.zones." + k, v, "bad_value",
+                       "zone speed %s must be a finite number above 0 m/s (leave the zone out to keep today's value)" % k)
+        out_z[k] = float(v)
+    return {"model_id": AIR_ZONE_MODEL, "source": src.strip(), "zones": {k: out_z[k] for k in sorted(out_z)},
+            "axial_only": True, "calibration": None}
+
+
+def _air_zones_stamp(zones: Dict[str, Any]) -> Dict[str, Any]:
+    """The part of a validated ``air_zones`` that goes into a result: which zones were given and what they were."""
+    return {"model_id": zones["model_id"], "source": zones["source"], "zones": dict(zones["zones"]), "axial_only": True,
+            "calibration": zones.get("calibration")}
 
 
 def _cooling_bc(*, mode: str, t_ambient_c: float, air_speed_mps: float,
@@ -4046,6 +4125,9 @@ def solve_thermal_field(
     air_speed_source:   str = "manual",
     propeller_id:       str = "",
     propeller_position: str = "",
+    # ZONE-WISE AIR SPEED (2026-11-16, opt-in): a JSON object, see `_parse_air_zones`.  None = the scalar
+    # path above, bit for bit.
+    air_zones:          Optional[str] = None,
     # THE SPEED THE LOSS MAP WAS SOLVED AT (2026-10-11).  None (every route
     # call) = the shared configuration's speed, bit-identical.  The coupled loop
     # passes its own request rpm, so the map it looks up is the run it just made
@@ -4365,6 +4447,16 @@ def solve_thermal_field(
     _sleeve_on = stator_od_cooling == "sleeve_contact"
     frame = _norm_frame(frame)
     end_faces = _norm_end_faces(end_faces)
+    # ZONE-WISE AIR (opt-in): untie the three speeds the open frame otherwise takes from one scalar.  Absent = untouched.
+    _zones = _parse_air_zones(air_zones, cooling_mode=cooling_mode, frame=frame)
+    _rotor_v_override: Optional[float] = None
+    if _zones is not None:
+        _zz = _zones["zones"]
+        if "housing_outer" in _zz:
+            air_speed_mps = _zz["housing_outer"]
+        if "stator_ends" in _zz:
+            open_air_speed_mps = _zz["stator_ends"]
+        _rotor_v_override = _zz.get("rotor_ends")
     # The mount's temperature is the AMBIENT when the field is blank: a machine
     # bolted to an arm in the same room is the answer nobody has to type.
     mount_g_w_per_k = float(mount_g_w_per_k or 0.0)
@@ -4427,6 +4519,10 @@ def solve_thermal_field(
     # other's temperature field.
     if magnet_temp_c is not None:
         key = key + ("magnet_temp_c", round(float(magnet_temp_c), 2))
+    # ZONE-WISE AIR: appended only when present (an absent request keys on exactly the tuple it always did).
+    if _zones is not None:
+        key = key + ("air_zones", _zones["model_id"],
+                     tuple((k, round(v, 3)) for k, v in _zones["zones"].items()))
     # The loss map's OWN speed, when the caller names one (the coupled loop): the
     # same rule — absent, the key is byte-identical; present, a map solved at
     # another speed than the saved one is a different answer.
@@ -4503,6 +4599,10 @@ def solve_thermal_field(
         if _prop_cooling is not None:
             out["cooling_air_source"] = _prop_cooling
         out.pop("bore_ignored", None)
+        out.pop("air_model", None)
+        out.pop("air_zones", None)
+        if _zones is not None:
+            out["air_model"], out["air_zones"] = _zones["model_id"], _air_zones_stamp(_zones)
         if _bore_ignored:
             out["bore_ignored"] = _bore_ignored
         return out
@@ -5308,7 +5408,7 @@ def solve_thermal_field(
                                     else "no CAD holder: the face is taken "
                                          "fully open")
     _phi_face = min(max(_phi_face, 0.0), 1.0)
-    _face_v = float(_open_v) * _phi_face
+    _face_v = float(_open_v if _rotor_v_override is None else _rotor_v_override) * _phi_face
 
     # ── THE HOUSED FRAME's END CAPS in the propeller slipstream (2026-10-11) ──
     # A housed drone motor cooled by its own propeller has its two end caps in
@@ -7319,6 +7419,8 @@ def solve_thermal_field(
     if _prop_cooling is not None:
         # a copy: the cached entry must not carry this request's propeller
         result = {**result, "cooling_air_source": _prop_cooling}
+    if _zones is not None:
+        result = {**result, "air_model": _zones["model_id"], "air_zones": _air_zones_stamp(_zones)}
     if _bore_ignored:
         result = {**result, "bore_ignored": _bore_ignored}
     return result
@@ -7628,6 +7730,9 @@ def field(
     propeller_id:       str = Query(default="", description="assigned propeller ID for propeller airflow"),
     propeller_context_key: str = Query(default="", description="account and loaded motor identity for assigned propeller"),
     propeller_position: str = Query(default="", description="optional catalogue slipstream position"),
+    air_zones:          Optional[str] = Query(default=None,
+                                              description="OPT-IN zone-wise air speed (JSON, model_id 'zone-1'); "
+                                                          "absent = the scalar air path"),
     fluid:              str = Query(default="water",
                                     description="cooling_mode=liquid: coolant name "
                                                 "from the materials library"),
@@ -7878,7 +7983,8 @@ def field(
     # inventing a second one.
     _source_kw = _thermal_air_source_kw(
         air_speed_source, propeller_id, propeller_position,
-        propeller_context_key, cooling_mode, authorization)
+        propeller_context_key, cooling_mode, authorization,
+        air_zones=air_zones, frame=frame)
     bore_mode, _bore_ignored = _force_bore_for_propeller(
         air_speed_source, bore_mode)
     _hist_params = _field_params(

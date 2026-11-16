@@ -215,3 +215,107 @@ def test_default_descent_kwargs_are_unchanged():
     assert "mtpa_run_settings" not in plan["kwargs"]
     plan = O.prepare_descent(O.DescentRequest(**dict(BODY, mtpa_run_settings=True)))
     assert plan["kwargs"]["mtpa_run_settings"] is True
+
+
+def _sweep_body(**kw):
+    """Six points next to the config's own design (the pre-solve geometry
+    fence must pass all of them, or nothing is evaluated)."""
+    g = O.get_config()["geometry"]
+    tw, sh = float(g["tooth_width"]), float(g["slot_height"])
+    body = {
+        "variables": [{"name": "tooth_width", "min": round(tw - 0.2, 1), "max": round(tw + 0.2, 1),
+                       "mode": "sweep", "step": 0.2},
+                      {"name": "slot_height", "min": round(sh - 0.2, 1), "max": round(sh, 1),
+                       "mode": "sweep", "step": 0.2}],
+        "operating_points": [{"gamma_deg": 0.0, "current_a": 0.0, "rpm": 630.9}],
+        "steps_per_period": 24, "gap_layers": 2, "max_geometries": 20, "mesh_size_mm": 1.0,
+        "min_size_mm": 0.3, "run_id": "golden-sweep",
+    }
+    body.update(kw)
+    return body
+
+
+@contextlib.contextmanager
+def _patched_sweep(fn):
+    real, real_store, real_cache = O._subprocess_eval, O._store_eval, O._EVAL_CACHE
+    saved = dict(O._scan_state)
+    O._subprocess_eval = fn
+    O._store_eval = lambda k, v: None          # no cross-run cache hits between the two runs
+    O._EVAL_CACHE = {}
+    O._scan_state["running"] = False
+    O._scan_state["cancel"] = False
+    try:
+        yield
+    finally:
+        O._subprocess_eval, O._store_eval, O._EVAL_CACHE = real, real_store, real_cache
+        O._scan_state.clear()
+        O._scan_state.update(saved)
+
+
+def _sweep_points(st):
+    return sorted(repr(sorted((k, v) for k, v in p.items() if k not in ("t", "ts", "elapsed_s")))
+                  for p in st.get("points") or [])
+
+
+def test_sweep_runner_gives_the_route_s_points():
+    with _patched_sweep(_stub):
+        O.scan_designs(O.ScanRequest(**_sweep_body()))
+        t0 = time.time()
+        time.sleep(0.2)
+        while O._scan_state.get("running") and time.time() - t0 < 120:
+            time.sleep(0.1)
+        route = dict(O._scan_state)
+    assert not route.get("error"), route.get("error")
+    assert len(route["points"]) == 6
+    assert all(p.get("fem") is not False and not p.get("geometry_rejected") for p in route["points"])
+    with _patched_sweep(_stub):
+        st = H.run_sweep(O, _sweep_body(), log=lambda m: None, poll_s=0.05)
+    assert _sweep_points(route) == _sweep_points(st)
+
+
+def test_sweep_refusals():
+    with _patched_sweep(_stub):
+        sw = _sweep_body()
+        for body, word in ((dict(sw, mesh_size_mm=0.6), "mesh_size_mm 0.6 -> 1.0"),
+                           (dict(sw, gap_layers=1), "gap_layers 1.0"),
+                           (dict(sw, variables=sw["variables"] + [
+                               {"name": "air_gap", "min": 0.3, "max": 0.6, "mode": "sweep", "step": 0.1}]),
+                            "air_gap (not in sweep_whitelist)")):
+            try:
+                H.run_sweep(O, body, log=lambda m: None)
+            except H.Refused as e:
+                assert word in str(e), (word, str(e))
+            else:
+                raise AssertionError("not refused: " + word)
+
+
+def test_sweep_magnet_temperature_is_opt_in():
+    assert O._scan_pins(630.9, None) == {"rpm": 630.9}
+    assert O._scan_pins(None, None) is None
+    assert O._scan_pins(630.9, 20.0) == {"rpm": 630.9, "magnet_temp_c": 20.0}
+    assert O.prepare_scan(O.ScanRequest(**_sweep_body()))["kwargs"] == {}
+    assert O.prepare_scan(O.ScanRequest(**_sweep_body(magnet_temp_c=20)))["kwargs"] == {"magnet_temp_c": 20.0}
+    seen = []
+
+    def fn(ov, cur, *a, **kw):
+        seen.append(kw.get("magnet_temp_c", "absent"))
+        return _stub(ov, cur, *a, **kw)
+    with _patched_sweep(fn):
+        H.run_sweep(O, _sweep_body(magnet_temp_c=20.0), log=lambda m: None, poll_s=0.05)
+    assert seen and set(seen) == {20.0}
+    seen.clear()
+    with _patched_sweep(fn):
+        H.run_sweep(O, _sweep_body(), log=lambda m: None, poll_s=0.05)
+    assert seen and set(seen) == {None}
+
+
+def test_a_timeout_is_solved_once_more():
+    calls = []
+
+    def fn(ov, cur, *a, **kw):
+        calls.append(1)
+        return {"ok": False, "error": "timeout"} if len(calls) == 1 else _stub(ov, cur, *a, **kw)
+    with tempfile.TemporaryDirectory() as d, _patched(fn):
+        m = H.EvalMemo(O, Path(d) / H.MEMO_FILE, None)
+        r = m({"tooth_width": 1.0}, 10.0, 24, 120.0)
+        assert r["ok"] and len(calls) == 2 and m.retried == 1 and len(m.memo) == 1

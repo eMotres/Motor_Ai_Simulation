@@ -142,3 +142,44 @@ def set_state(key: str, state: Optional[str], *, by: str, reason: str = "") -> O
     path.parent.mkdir(parents=True, exist_ok=True)
     json_store.mutate_json(path, mutate, default=_empty())
     return out.get("rec")
+
+
+# ── a die / configuration rename or move: the production keys follow (die_rename.py, config_move.py) ─────────────────────
+
+def _retarget(doc: Any, fn) -> int:
+    """Rewrite every production key of ``doc`` (states and history) through ``fn(die, config) -> (die, config) | None``."""
+    if not isinstance(doc, dict):
+        return 0
+    n = 0
+
+    def new_key(key: str) -> Optional[str]:
+        kind, _s, rest = str(key).partition(":")
+        die, sep, config = rest.partition("/")
+        if kind != "production" or not sep:
+            return None
+        hit = fn(die, config)
+        return f"production:{hit[0]}/{hit[1]}" if hit else None
+
+    states = doc.get("states") if isinstance(doc.get("states"), dict) else {}
+    for key in list(states):
+        nk = new_key(key)
+        if nk and nk != key:
+            if nk in states:
+                raise ValueError(f"display state already has {nk!r}")
+            states[nk] = states.pop(key)
+            n += 1
+    for row in doc.get("history") or []:
+        if isinstance(row, dict):
+            nk = new_key(row.get("key", ""))
+            if nk and nk != row.get("key"):
+                row["key"] = nk
+                n += 1
+    return n
+
+
+def rename_die_in(doc: Any, old: str, new: str) -> int:
+    return _retarget(doc, lambda die, config: (new, config) if die == old else None)
+
+
+def move_config_in(doc: Any, die: str, config: str, new_die: str, new_config: str) -> int:
+    return _retarget(doc, lambda d, c: (new_die, new_config) if (d, c) == (die, config) else None)

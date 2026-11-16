@@ -592,6 +592,20 @@ def step_motor_revisions(ctx: Ctx) -> None:
                       "product revision records follow the die name")
 
 
+def step_display_state(ctx: Ctx) -> None:
+    """Active / Parked / Archived of the productions (``<shared>/object_registry/display_state.json``) names the die."""
+    from motor_ai_sim import display_state as DS
+    try:
+        path = DS.store_path()
+    except Exception:                                       # noqa: BLE001
+        return
+    try:
+        _json_file_rename(ctx, "display_state", path, lambda doc: DS.rename_die_in(doc, ctx.old, ctx.new),
+                          "the shown state of the productions follows the die name")
+    except ValueError as e:
+        raise RenameBlocked(str(e)) from e
+
+
 def step_motor_tests(ctx: Ctx) -> None:
     """The Tests store (``<shared>/motor_tests/<die>/<config>/tests.json``): same folder naming as production."""
     from motor_ai_sim.motor_tests import store as MT
@@ -728,7 +742,7 @@ def step_manual(ctx: Ctx) -> None:
 #: workspace-level steps, then the shared-catalog ones (``glob_scope``)
 LOCAL_STEPS = (step_folder, step_derived_from, step_fields, step_duty_results,
                step_context, step_workspace_memory, step_catalog_cards)
-GLOBAL_STEPS = (step_grants, step_die_access, step_projects, step_production, step_motor_revisions, step_motor_tests, step_cad,
+GLOBAL_STEPS = (step_grants, step_die_access, step_projects, step_production, step_motor_revisions, step_display_state, step_motor_tests, step_cad,
                 step_manual)
 
 

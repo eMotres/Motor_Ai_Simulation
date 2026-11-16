@@ -997,10 +997,28 @@ def step_motor_revisions(ctx: Ctx) -> None:
         ctx.undo.append(lambda: _restore_bytes(path, raw))
 
 
+def step_display_state(ctx: Ctx) -> None:
+    """Active / Parked / Archived of the production (``<shared>/object_registry/display_state.json``) follows a move or
+    a rename; a copy has no production, so its state stays with the source."""
+    if ctx.copy:
+        return
+    from motor_ai_sim import display_state as DS
+    try:
+        path = DS.store_path()
+    except Exception:                                       # noqa: BLE001
+        return
+    try:
+        _json_rewrite(ctx, "display_state", path,
+                      lambda doc: DS.move_config_in(doc, ctx.die, ctx.cfg, ctx.dst, ctx.new_cfg),
+                      "the shown state of the production follows the configuration")
+    except ValueError as e:
+        raise MoveBlocked(str(e)) from e
+
+
 LOCAL_STEPS = (step_files, step_fields, step_duty_results, step_context, step_workspace_memory,
                step_catalog_cards)
 GLOBAL_STEPS = (step_grants, step_projects, step_cost_estimates, step_production, step_motor_tests,
-                step_motor_revisions, step_cad, step_manual)
+                step_motor_revisions, step_display_state, step_cad, step_manual)
 
 
 def preflight(fam: Any, die: str, cfg: str, dst: str, *, copy: bool, new_cfg: str = "",

@@ -150,3 +150,21 @@ def test_parallel_changes_are_not_lost(env):
     for t in threads:
         t.join()
     assert set(DS.load()["states"]) == set(keys)
+
+
+def test_a_die_rename_and_a_configuration_move_carry_the_production_state(env):
+    """Owner rule 2026-10-26: every store keyed by a die name follows ``die_rename`` (and ``config_move``)."""
+    from motor_ai_sim import config_move as CM
+    from motor_ai_sim import die_rename as DRN
+    assert DRN.step_display_state in DRN.GLOBAL_STEPS and CM.step_display_state in CM.GLOBAL_STEPS
+    DS.set_state(DS.object_key("production", die="DIE A", config="L20"), "archived", by="t")
+    DS.set_state(DS.object_key("project", project_id="alpha"), "parked", by="t")
+    doc = DS.load()
+    assert DS.rename_die_in(doc, "DIE A", "DIE A2") == 2                        # the state and its history row
+    assert set(doc["states"]) == {"production:DIE A2/L20", "project:alpha"}
+    assert DS.move_config_in(doc, "DIE A2", "L20", "DIE C", "L22") == 2
+    assert set(doc["states"]) == {"production:DIE C/L22", "project:alpha"}
+    assert DS.rename_die_in(doc, "nothing", "else") == 0
+    doc["states"]["production:DIE D/L22"] = {"state": "parked"}
+    with pytest.raises(ValueError):
+        DS.rename_die_in(doc, "DIE C", "DIE D")

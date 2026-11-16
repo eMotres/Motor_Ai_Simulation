@@ -189,7 +189,8 @@ def curve(vec: Any, op: str, n: int = 11, v_inf: float = 0.0) -> Dict[str, Any]:
 
 
 def optimize(vec: Any, op: str, pop: Any = 12, generations: Any = 6, seed: Any = 1, objectives: Any = None, free: Any = None,
-             enforce_tip_mach: Any = True, tip_mach_limit: Any = None) -> Dict[str, Any]:
+             enforce_tip_mach: Any = True, tip_mach_limit: Any = None,
+             structure_material: Any = None, min_safety_factor: Any = None) -> Dict[str, Any]:
     """Two-objective optimisation from the given design (diameter and blade count stay).  Synchronous and capped (pop x (generations + 1) <= 200);
     every evaluation is appended to ``<workspace>/propeller_designs/_runs/<run_id>.jsonl``."""
     from motor_ai_sim import propeller_optimize as po
@@ -206,12 +207,18 @@ def optimize(vec: Any, op: str, pop: Any = 12, generations: Any = 6, seed: Any =
         raise ApiProblem(422, "enforce_tip_mach must be true or false")
     if tip_mach_limit is not None and (isinstance(tip_mach_limit, bool) or not isinstance(tip_mach_limit, (int, float))):
         raise ApiProblem(422, "tip_mach_limit must be a number")
+    if structure_material is not None and not isinstance(structure_material, str):
+        raise ApiProblem(422, "structure_material must be a material name")
+    if min_safety_factor is not None and (isinstance(min_safety_factor, bool) or not isinstance(min_safety_factor, (int, float))):
+        raise ApiProblem(422, "min_safety_factor must be a number")
     kw: Dict[str, Any] = {"pop": pop, "generations": generations, "seed": seed, "enforce_tip_mach": enforce_tip_mach,
                           "tip_mach_limit": tip_mach_limit, "store_dir": _draft_dir() / "_runs"}
     if objectives is not None:
         kw["objectives"] = objectives
     if free is not None:
         kw["free"] = free
+    if structure_material is not None or min_safety_factor is not None:
+        kw.update(structure_material=structure_material, min_safety_factor=min_safety_factor)
     try:
         return po.optimize(d, v, op, **kw)
     except po.OptimizeError as exc:

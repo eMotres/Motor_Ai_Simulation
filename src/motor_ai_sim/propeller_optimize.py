@@ -8,7 +8,8 @@ variables of ``propeller_design``.  The result is a PARETO FRONT of the objectiv
 
 Either one alone is allowed (``objectives=[...]``).  Constraints: the candidate's own validity rules (bounds, manufacturing limits; a
 candidate that cannot be repaired is infeasible and is not evaluated), the motor torque limit (met by construction of the operating speed), the tip
-Mach limit (selectable, ``enforce_tip_mach``; the limit may be overridden and stays unconfirmed) and solver convergence.
+Mach limit (selectable, ``enforce_tip_mach``; the limit may be overridden and stays unconfirmed) and solver convergence, and — opt-in, ``structure_material`` — the root safety factor of ``propeller_structure`` (plan section 9.5: a failed check is a
+hard constraint).  Without ``structure_material`` nothing changes: same candidates, same records, same numbers.
 
 Every evaluation is appended to ``<store_dir>/<run_id>.jsonl`` in one record format (``propeller-eval-1``) shared with later tools (CFD, the thrust
 stand) so the fidelities can be compared.  The run is reproducible: a seed fixes every random draw.  All values are blade-element model values
@@ -203,10 +204,27 @@ def _violation(rec: Dict[str, Any], enforce_tip_mach: bool, limit: float) -> flo
     return v
 
 
+def _structure_violation(design: pd.Design, vec: Dict[str, Any], rec: Dict[str, Any], material: str, sf_min: float) -> float:
+    """Root safety factor of the candidate (``propeller_structure.root_stress`` at 1.2 x the operating rpm, the module's labelled
+    assumption) written into the record as ``structure``; returns the violation: 0 at or above ``sf_min``, the relative shortfall below it,
+    1 when the check itself cannot run (an unchecked candidate is not accepted)."""
+    from motor_ai_sim import propeller_structure as ps
+    try:
+        s = ps.root_stress(pd.candidate_to_propeller2(design, vec), float(rec["operating"]["rpm"]), material)
+        sf = float(s["safety_factor"])
+    except Exception as exc:                                 # noqa: BLE001 - the reason goes into the record
+        rec["structure"] = {"material": material, "error": "%s: %s" % (type(exc).__name__, exc), "validated": False}
+        return 1.0
+    rec["structure"] = {"material": material, "safety_factor": sf, "required": sf_min, "passes": bool(sf >= sf_min),
+                        "validated": False, "overspeed_assumption": s.get("overspeed_assumption")}
+    return 0.0 if sf >= sf_min else (sf_min - sf) / sf_min
+
+
 def optimize(design: pd.Design, base: Dict[str, Any], op: str, *, objectives: Sequence[str] = OBJECTIVES, pop: int = 12, generations: int = 6,
              seed: int = 1, free: Sequence[str] = FREE_GROUPS, enforce_tip_mach: bool = True, tip_mach_limit: Optional[float] = None,
              evaluate: Optional[Callable[[pd.Design, Dict[str, Any], str], Dict[str, Any]]] = None,
-             store_dir: Optional[Path] = None) -> Dict[str, Any]:
+             store_dir: Optional[Path] = None, structure_material: Optional[str] = None,
+             min_safety_factor: Optional[float] = None) -> Dict[str, Any]:
     """Run NSGA-II from ``base`` (diameter and blade count stay as given).  Returns the evaluations, the front (indices) and the settings."""
     t0 = time.time()
     objectives = list(objectives)
@@ -231,6 +249,18 @@ def optimize(design: pd.Design, base: Dict[str, Any], op: str, *, objectives: Se
         raw["tip_mach_limit"] = dict(raw["tip_mach_limit"], value=float(tip_mach_limit), confirmed_by=None)
         design = dataclasses.replace(design, raw=raw)
     limit = design.tip_mach_limit
+    sf_min: Optional[float] = None
+    if structure_material is not None:
+        from motor_ai_sim import propeller_structure as ps
+        try:
+            ps.get_material(structure_material)
+        except Exception as exc:                             # noqa: BLE001 - an unknown material is a named refusal
+            raise OptimizeError("structure_material: %s" % exc)
+        sf_min = ps.SAFETY_FACTOR if min_safety_factor is None else float(min_safety_factor)
+        if not (isinstance(min_safety_factor, (int, float, type(None))) and not isinstance(min_safety_factor, bool) and 1.0 <= sf_min <= 10.0):
+            raise OptimizeError("min_safety_factor must be a number between 1 and 10")
+    elif min_safety_factor is not None:
+        raise OptimizeError("min_safety_factor needs structure_material")
     evalf = evaluate or (lambda dz, v, o: pd.evaluate_candidate(dz, v, o))
     rows = _free_names(design, base, free)
     zones = [z for z in ("root", "mid", "tip")] if "airfoil" in free else []
@@ -266,6 +296,8 @@ def optimize(design: pd.Design, base: Dict[str, Any], op: str, *, objectives: Se
                 ind.record = rec
                 ind.objs = [rec["objectives"].get(o) for o in objectives]
                 ind.viol = _violation(rec, enforce_tip_mach, limit)
+                if sf_min is not None:
+                    ind.viol += _structure_violation(design, ind.vector, rec, structure_material, sf_min)
         ind.index = len(evaluations)
         evaluations.append(ind)
         cache[key] = ind
@@ -317,12 +349,15 @@ def optimize(design: pd.Design, base: Dict[str, Any], op: str, *, objectives: Se
     return {
         "run_id": run_id, "banner": pd.BANNER, "operating_point": op, "objectives": objectives, "front": front,
         "settings": {"pop": pop, "generations": generations, "seed": int(seed), "free": free, "enforce_tip_mach": enforce_tip_mach,
-                     "tip_mach_limit": limit, "tip_mach_limit_confirmed": bool(design.raw["tip_mach_limit"].get("confirmed_by")),
+                     "tip_mach_limit": limit, **({"structure_material": structure_material, "min_safety_factor": sf_min} if sf_min is not None else {}),
+                     "tip_mach_limit_confirmed": bool(design.raw["tip_mach_limit"].get("confirmed_by")),
                      "diameter_in": base["diameter_in"], "blades": base["blades"]},
         "evaluations": [{"index": i.index, "generation": i.generation, "vector": i.vector,
                          "objectives": dict(zip(objectives, i.objs or [])), "violation": i.viol, "note": i.note,
                          "design_id": (i.record or {}).get("design_id"), "rpm": (i.record or {}).get("operating", {}).get("rpm"),
                          "tip_mach": (i.record or {}).get("tip_mach"), "constraints_met": bool(i.record and i.record.get("constraints_met") and i.viol == 0),
-                         "flags": (i.record or {}).get("flags", [])} for i in evaluations],
+                         "flags": (i.record or {}).get("flags", []),
+                         **({"safety_factor": ((i.record or {}).get("structure") or {}).get("safety_factor")} if sf_min is not None else {})}
+                        for i in evaluations],
         "elapsed_s": round(time.time() - t0, 2), "stored": str(out_file) if out_file else None, "estimated": True, "validated_against": None,
     }

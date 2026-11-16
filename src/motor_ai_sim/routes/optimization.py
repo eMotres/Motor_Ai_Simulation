@@ -1359,7 +1359,7 @@ def serial_first_decision(n_tasks: int, n_workers: int, demag: bool,
                   "state" % (int(n_tasks), int(n_workers)))
 
 
-def _nonphysical_result(res: Any) -> Optional[str]:
+def _nonphysical_result(res: Any, skip: Tuple[str, ...] = ()) -> Optional[str]:
     """Reason the metrics of an 'ok' eval are physically impossible, else None.
 
     Bounds are deliberately loose — orders of magnitude, not engineering
@@ -1384,6 +1384,8 @@ def _nonphysical_result(res: Any) -> Optional[str]:
         ("P_loss_total_W",        lambda v: 0.0 <= v < 1e7),
     )
     for key, ok_fn in checks:
+        if key in skip:
+            continue
         v = res.get(key)
         if v is None:
             continue                    # absent metric is the consumer's problem
@@ -1507,6 +1509,7 @@ def _subprocess_eval(overrides: Dict[str, float], current_a: float, steps: int,
                      magnet_temp_c: Optional[float] = None,
                      owner: str = "",
                      threads: Optional[int] = None,
+                     ripple_pct_gate: bool = True,
                      sampling_purpose: Literal["standard", "optimization", "cogging_quality"] =
                      "optimization",
                      optimizer_candidate: bool = True) -> Dict[str, Any]:
@@ -1749,7 +1752,13 @@ def _subprocess_eval(overrides: Dict[str, float], current_a: float, steps: int,
                 # exactly 0.0 — the point then stretched every chart axis).
                 # A non-physical RESULT is a rejected eval, said out loud —
                 # never data.
-                _bad = _nonphysical_result(_res.get("res"))
+                # A cogging screen (opt-in) solves points at ZERO current:
+                # their mean torque is ~0, so a ripple PERCENT is undefined
+                # and can be any size - not a broken postprocess.
+                _bad = _nonphysical_result(
+                    _res.get("res"),
+                    skip=(("T_ripple_pct",) if not ripple_pct_gate
+                          and abs(float(current_a)) == 0.0 else ()))
                 if _bad:
                     log.warning("eval REJECTED (non-physical result): %s | "
                                 "I=%.3g A gamma=%.3g deg overrides=%s",
@@ -2042,6 +2051,14 @@ class ScanRequest(BaseModel):
     geo_mesh: bool = True                   # geometry-driven CDT mesh — SINGLE SOURCE: Mesh tab (same build as Simulation)
     element_order: int = 2                  # 2 = P2 — the only basis: energy-consistent mean torque + mesh-convergent ripple.  P1 is deleted; any other value raises.
     demag: bool = False                     # per-element irreversible demagnetisation — SINGLE SOURCE: Simulation (de-rates Br → torque/EMF; doubles the frames per point)
+    # Opt-in magnet temperature of every point (°C).  None = the assigned
+    # magnet card's own temperature, exactly as before (a cogging screen at
+    # 20 °C on a 120 °C card needs it).
+    magnet_temp_c: Optional[float] = None
+    # Opt-in cogging screen: points at ZERO current are not rejected for an
+    # out-of-range ripple PERCENT (undefined at ~0 mean torque); their result
+    # is the cogging peak-to-peak in N·m.  Off = the sanity gate as before.
+    cogging_screen: bool = False
     # The BASELINE point (the current motor, un-varied, at operating point 0)
     # is an extra full FEM eval that used to run unconditionally and LAST —
     # the user stopped every sweep at "22/23" to skip it (2026-09-04).  Opt-in.
@@ -2172,6 +2189,20 @@ def _scan_owns(run_id) -> bool:
     return str(_scan_state.get("run_id") or "") == str(run_id or "")
 
 
+def _scan_pins(rpm=None, magnet_temp_c=None, cogging_screen=False) -> Optional[Dict[str, Any]]:
+    """The eval-cache pins of a Sweep point: its speed, and the magnet
+    temperature only when the request set one (so every key of a Sweep
+    without it is what it always was)."""
+    pins: Dict[str, Any] = {}
+    if rpm:
+        pins["rpm"] = float(rpm)
+    if magnet_temp_c is not None:
+        pins["magnet_temp_c"] = round(float(magnet_temp_c), 2)
+    if cogging_screen:
+        pins["cogging_screen"] = True
+    return pins or None
+
+
 @_optimizer_job("scan")
 def _scan_worker(variables, operating_points, steps, coil_temp_c, ripple_max,
                  max_geom, seed, run_id, mesh_size_mm=4.0, min_size_mm=0.3,
@@ -2179,7 +2210,7 @@ def _scan_worker(variables, operating_points, steps, coil_temp_c, ripple_max,
                  end_winding=0.0, rotor_eddy=False, hi_fidelity=False,
                  structured_gap=False, airgap_macro=False, iron_template=True,
                  geo_mesh=True, element_order=2, demag=False,
-                 with_baseline=False) -> None:
+                 with_baseline=False, magnet_temp_c=None, cogging_screen=False) -> None:
     import numpy as np  # noqa: F401
     from concurrent.futures import wait, FIRST_COMPLETED
     # Workspace-carrying pool — see workspace.WorkspaceThreadPoolExecutor.
@@ -2332,7 +2363,7 @@ def _scan_worker(variables, operating_points, steps, coil_temp_c, ripple_max,
                                  gap_layers, end_winding, rotor_eddy, hi_fidelity, structured_gap, airgap_macro,
                                  iron_template=iron_template, geo_mesh=geo_mesh,
                                  element_order=element_order, demag=demag,
-                                 pins=({"rpm": float(rpm)} if rpm else None),
+                                 pins=_scan_pins(rpm, magnet_temp_c, cogging_screen),
                                  sampling_purpose="optimization",
                                  fp_excludes=_excl)
 
@@ -2380,6 +2411,8 @@ def _scan_worker(variables, operating_points, steps, coil_temp_c, ripple_max,
                                    element_order=element_order, demag=demag,
                                    rpm=oprpm, owner="scan",
                                     threads=_solo_ctx["threads"],
+                                    magnet_temp_c=magnet_temp_c,
+                                    **({"ripple_pct_gate": False} if cogging_screen else {}),
                                     sampling_purpose="optimization")
             if _config_fingerprint(tuple(geo_ov)) != fp_before:
                 out = {"ok": False, "error": "source config changed during FEM scan",
@@ -2622,6 +2655,8 @@ def _scan_worker(variables, operating_points, steps, coil_temp_c, ripple_max,
                                        airgap_macro=airgap_macro,
                                        iron_template=iron_template, geo_mesh=geo_mesh,
                                        element_order=element_order, demag=demag,
+                                       magnet_temp_c=magnet_temp_c,
+                                       **({"ripple_pct_gate": False} if cogging_screen else {}),
                                        sampling_purpose="optimization")
                 if base_out and base_out.get("ok"):
                     _store_eval(_bck, base_out)
@@ -2729,6 +2764,125 @@ def _scan_worker(variables, operating_points, steps, coil_temp_c, ripple_max,
                 _scan_state["running"] = False
 
 
+def prepare_scan(req: ScanRequest) -> Dict[str, Any]:
+    """Turn a ScanRequest into everything a Sweep needs, with no web process
+    and no side effect: the whitelisted variables, the operating points, the
+    clamped eval settings, the initial scan state and the worker arguments.
+
+    Shared by ``scan_designs`` and the headless runner.  ``dropped`` lists the
+    requested variables the whitelist left out (the route ignores it, as it
+    always did, and answers 400 only when none is left; the runner refuses)."""
+    wl = get_config().get("sweep_whitelist", None)
+    allowed = set(wl or [])
+    variables = [{"name": v.name, "min": float(v.min), "max": float(v.max),
+                  "mode": v.mode, "step": float(v.step)} for v in req.variables
+                 if (not allowed) or v.name == "gamma_deg" or v.name in allowed]
+    dropped = [{"name": v.name, "reason": "not in sweep_whitelist"} for v in req.variables
+               if allowed and v.name != "gamma_deg" and v.name not in allowed]
+    ops = [{"gamma_deg": float(o.gamma_deg), "current_a": float(o.current_a),
+            "rpm": float(o.rpm)} for o in (req.operating_points or [])] or \
+          [{"gamma_deg": 0.0, "current_a": 85.0, "rpm": 3950.0}]
+    steps = max(4, min(int(req.steps_per_period), 180))
+    # The explicit optimization purpose selects its topology-dependent
+    # raw cogging minimum in FEM after whole-node slip snapping. A fixed
+    # 48-frame floor here would mask that policy. Independent PWM/carrier
+    # resolution guards remain in place.
+    max_geom = max(1, min(int(req.max_geometries), 400))
+    mesh_size = max(1.0, min(float(req.mesh_size_mm), 12.0))
+    min_size  = max(0.1, min(float(req.min_size_mm), 3.0))
+    # FEM symmetry — single source: the Mesh tab (same build the Simulation uses),
+    # so the sweep's ripple matches the Simulation for an identical geometry.
+    # "Full"(1) MUST mean the full ring (-1), exactly like the Simulation transient
+    # route (simulation.py: n_sectors ≤1 → -1).  Passing raw 1 made the solver build
+    # an invalid NS=4 wedge (90°) — broken for any motor whose pole count is not a
+    # multiple of 4 (e.g. 14 poles → 3.5/sector) → spurious tooth-width torque slope
+    # + scattered ripple.  This was the sweep-vs-Simulation mismatch vs commercial FEM.
+    n_sectors = -1 if int(req.n_sectors) <= 1 else int(req.n_sectors)
+    # Air-gap mesh layers — single source: the Mesh tab.  gap_layers drives the
+    # air-gap field resolution → torque ripple + magnet eddy; the Simulation uses
+    # mesh.gapLayers, so the sweep must too or its numbers won't reproduce in Sim.
+    gap_layers = max(1.0, min(_resolve_gap_layers(req.gap_layers)[0], 8.0))
+    # End-winding k_end — single source: the Simulation tab.  Drives copper loss
+    # → efficiency; the Simulation sends its value, so the sweep must too.
+    end_winding = max(0.0, float(req.end_winding_factor))
+    # Field-based rotor eddy — single source: the Simulation (fieldLosses toggle).
+    # Slab vs field magnet-eddy differs ~3×, so the sweep must use the same model.
+    rotor_eddy = bool(req.rotor_eddy)
+    # Hi-fidelity torque — single source: the Mesh tab toggle.  2× slip-ring nodes +
+    # finer angular mesh + ≥4 gap layers → less per-mesh mean-torque scatter (smoother
+    # tooth-width trend), at ~3-5× the runtime.  Same bundle the Simulation tab uses.
+    hi_fidelity = bool(req.hi_fidelity)
+    # Belt (mapped concentric-ring) gap mesh — single source: the Mesh tab
+    # "Structured" toggle.  Honest ripple (¼-sector == full disk), same build
+    # the Simulation tab uses.
+    structured_gap = bool(req.structured_gap)
+    airgap_macro = bool(req.airgap_macro)
+    iron_template = bool(getattr(req, 'iron_template', True))
+    # Geometry-driven CDT mesh — single source: the Mesh tab toggle.  The
+    # Simulation sends it explicitly; without it the sweep fell back to the
+    # gmsh moving mesh under airgap_macro (template+macro raises) and its
+    # assembly noise read as 58-75% ripple vs the Simulation's honest value.
+    geo_mesh = bool(getattr(req, 'geo_mesh', True))
+    # P2 elements.  refine_proc.run_one applies the same coercions the
+    # Simulation route does (force belt, auto natural-symmetry sector, keep
+    # rotor_eddy), so a sweep point matches a Simulation run at the SAME
+    # geometry/operating point.  P2 is the only basis, so this is a constant
+    # in all but name; kept as a field because the request carries it.
+    element_order = int(getattr(req, 'element_order', 2) or 2)
+    # Per-element irreversible demagnetisation — single source: the
+    # Simulation tab's toggle.  It de-rates Br, i.e. it changes the machine,
+    # so a sweep that ignores it ranks full-strength designs against a
+    # Simulation the user is reading de-rated.  Costs a whole extra period
+    # of frames per point.
+    demag = bool(getattr(req, 'demag', False))
+    # THE RUN SHOWS A PULSE FROM SECOND ONE.  A sweep point with the
+    # panel's physics is minutes of silent subprocess work, and "0/7" for
+    # ten minutes reads as a hang ("nothing is showing signs of life") — so the
+    # progress carries when the scan started, how many workers solve, and
+    # the measured per-point rate, and the panel can render a live
+    # elapsed/ETA line while the first point is still cooking.
+    import time as _t_scan
+    _rate0 = {}
+    try:
+        # A coupled-eddy sweep pays the cold price ONCE — its first point
+        # publishes the state every later point continues (user
+        # 2026-09-06) — so the per-point rate this panel renders is the
+        # SEEDED one.  `measured_eval_seconds` falls back to the combined
+        # window until this machine has timed a seeded eval, and its
+        # `source` says which window answered.
+        _rate0 = measured_eval_seconds(int(steps), seeded=bool(rotor_eddy))
+    except Exception:
+        pass
+    init_state = {"running": True, "done": 0, "total": 0, "result": None,
+                        "points": [], "run_id": req.run_id, "error": None, "cancel": False,
+                        "cached": 0, "source_changed": None, "machine": None,
+                        "ts_start": _t_scan.time(),
+                        # the share this job gets beside the optimizer
+                        # jobs already running (item 4)
+                        "workers": int(_optimizer_share(_optimizer_active_jobs() + 1)),
+                        "s_per_eval": float(_rate0.get("s_per_eval", 0.0) or 0.0),
+                        # A fresh, user-started run is NOT a resume — clear
+                        # whatever a previous resumed run left here, or the
+                        # panel would keep showing "sweep resumed after a
+                        # restart" on a run nobody restarted anything for.
+                        "resumed_from_restart": None}
+    args = (variables, ops, steps, _sim_coil_temp_c(req.coil_temp_c),
+           float(req.ripple_max_pct), max_geom, int(req.seed), req.run_id,
+           mesh_size, min_size, req.pole_copy, bool(req.torque_filter),
+           n_sectors, gap_layers, end_winding, rotor_eddy, hi_fidelity,
+           structured_gap, airgap_macro, iron_template, geo_mesh,
+           element_order, demag, bool(req.with_baseline))
+    # absent unless asked: the default worker call is unchanged
+    kwargs = ({} if req.magnet_temp_c is None
+              else {"magnet_temp_c": float(req.magnet_temp_c)})
+    if req.cogging_screen:
+        kwargs["cogging_screen"] = True
+    response = {"started": True, "steps_per_period": steps, "max_geometries": max_geom,
+                "mesh_size_mm": mesh_size, "min_size_mm": min_size}
+    return {"variables": variables, "dropped": dropped, "ops": ops, "args": args,
+            "kwargs": kwargs, "init_state": init_state, "response": response}
+
+
 @router.post("/scan")
 def scan_designs(req: ScanRequest):
     """Start a background FEM scan — every point is a real transient."""
@@ -2765,127 +2919,28 @@ def scan_designs(req: ScanRequest):
     # file whatever the tab still holds first, so an earlier sweep is never lost
     # to a later one (owner 2026-10-30).
     _archive_previous_scan()
+    plan = prepare_scan(req)
+    if req.variables and not plan["variables"]:
+        raise HTTPException(status_code=400,
+                            detail="no scan variables are in the sweep whitelist")
     with _scan_lock:
-        # Whitelist gate: only sweep_whitelist params (plus the load-angle
-        # gamma_deg, which is not a geometry knob) may be scanned.  Empty/missing
-        # whitelist → allow all (back-compat).
-        wl = get_config().get("sweep_whitelist", None)
-        allowed = set(wl or [])
-        variables = [{"name": v.name, "min": float(v.min), "max": float(v.max),
-                      "mode": v.mode, "step": float(v.step)} for v in req.variables
-                     if (not allowed) or v.name == "gamma_deg" or v.name in allowed]
-        if req.variables and not variables:
-            raise HTTPException(status_code=400,
-                                detail="no scan variables are in the sweep whitelist")
-        ops = [{"gamma_deg": float(o.gamma_deg), "current_a": float(o.current_a),
-                "rpm": float(o.rpm)} for o in (req.operating_points or [])] or \
-              [{"gamma_deg": 0.0, "current_a": 85.0, "rpm": 3950.0}]
-        steps = max(4, min(int(req.steps_per_period), 180))
-        # The explicit optimization purpose selects its topology-dependent
-        # raw cogging minimum in FEM after whole-node slip snapping. A fixed
-        # 48-frame floor here would mask that policy. Independent PWM/carrier
-        # resolution guards remain in place.
-        max_geom = max(1, min(int(req.max_geometries), 400))
-        mesh_size = max(1.0, min(float(req.mesh_size_mm), 12.0))
-        min_size  = max(0.1, min(float(req.min_size_mm), 3.0))
-        # FEM symmetry — single source: the Mesh tab (same build the Simulation uses),
-        # so the sweep's ripple matches the Simulation for an identical geometry.
-        # "Full"(1) MUST mean the full ring (-1), exactly like the Simulation transient
-        # route (simulation.py: n_sectors ≤1 → -1).  Passing raw 1 made the solver build
-        # an invalid NS=4 wedge (90°) — broken for any motor whose pole count is not a
-        # multiple of 4 (e.g. 14 poles → 3.5/sector) → spurious tooth-width torque slope
-        # + scattered ripple.  This was the sweep-vs-Simulation mismatch vs commercial FEM.
-        n_sectors = -1 if int(req.n_sectors) <= 1 else int(req.n_sectors)
-        # Air-gap mesh layers — single source: the Mesh tab.  gap_layers drives the
-        # air-gap field resolution → torque ripple + magnet eddy; the Simulation uses
-        # mesh.gapLayers, so the sweep must too or its numbers won't reproduce in Sim.
-        gap_layers = max(1.0, min(_resolve_gap_layers(req.gap_layers)[0], 8.0))
-        # End-winding k_end — single source: the Simulation tab.  Drives copper loss
-        # → efficiency; the Simulation sends its value, so the sweep must too.
-        end_winding = max(0.0, float(req.end_winding_factor))
-        # Field-based rotor eddy — single source: the Simulation (fieldLosses toggle).
-        # Slab vs field magnet-eddy differs ~3×, so the sweep must use the same model.
-        rotor_eddy = bool(req.rotor_eddy)
-        # Hi-fidelity torque — single source: the Mesh tab toggle.  2× slip-ring nodes +
-        # finer angular mesh + ≥4 gap layers → less per-mesh mean-torque scatter (smoother
-        # tooth-width trend), at ~3-5× the runtime.  Same bundle the Simulation tab uses.
-        hi_fidelity = bool(req.hi_fidelity)
-        # Belt (mapped concentric-ring) gap mesh — single source: the Mesh tab
-        # "Structured" toggle.  Honest ripple (¼-sector == full disk), same build
-        # the Simulation tab uses.
-        structured_gap = bool(req.structured_gap)
-        airgap_macro = bool(req.airgap_macro)
-        iron_template = bool(getattr(req, 'iron_template', True))
-        # Geometry-driven CDT mesh — single source: the Mesh tab toggle.  The
-        # Simulation sends it explicitly; without it the sweep fell back to the
-        # gmsh moving mesh under airgap_macro (template+macro raises) and its
-        # assembly noise read as 58-75% ripple vs the Simulation's honest value.
-        geo_mesh = bool(getattr(req, 'geo_mesh', True))
-        # P2 elements.  refine_proc.run_one applies the same coercions the
-        # Simulation route does (force belt, auto natural-symmetry sector, keep
-        # rotor_eddy), so a sweep point matches a Simulation run at the SAME
-        # geometry/operating point.  P2 is the only basis, so this is a constant
-        # in all but name; kept as a field because the request carries it.
-        element_order = int(getattr(req, 'element_order', 2) or 2)
-        # Per-element irreversible demagnetisation — single source: the
-        # Simulation tab's toggle.  It de-rates Br, i.e. it changes the machine,
-        # so a sweep that ignores it ranks full-strength designs against a
-        # Simulation the user is reading de-rated.  Costs a whole extra period
-        # of frames per point.
-        demag = bool(getattr(req, 'demag', False))
-        # THE RUN SHOWS A PULSE FROM SECOND ONE.  A sweep point with the
-        # panel's physics is minutes of silent subprocess work, and "0/7" for
-        # ten minutes reads as a hang ("nothing is showing signs of life") — so the
-        # progress carries when the scan started, how many workers solve, and
-        # the measured per-point rate, and the panel can render a live
-        # elapsed/ETA line while the first point is still cooking.
-        import time as _t_scan
-        _rate0 = {}
-        try:
-            # A coupled-eddy sweep pays the cold price ONCE — its first point
-            # publishes the state every later point continues (user
-            # 2026-09-06) — so the per-point rate this panel renders is the
-            # SEEDED one.  `measured_eval_seconds` falls back to the combined
-            # window until this machine has timed a seeded eval, and its
-            # `source` says which window answered.
-            _rate0 = measured_eval_seconds(int(steps), seeded=bool(rotor_eddy))
-        except Exception:
-            pass
-        _scan_state.update({"running": True, "done": 0, "total": 0, "result": None,
-                            "points": [], "run_id": req.run_id, "error": None, "cancel": False,
-                            "cached": 0, "source_changed": None, "machine": None,
-                            "ts_start": _t_scan.time(),
-                            # the share this job gets beside the optimizer
-                            # jobs already running (item 4)
-                            "workers": int(_optimizer_share(_optimizer_active_jobs() + 1)),
-                            "s_per_eval": float(_rate0.get("s_per_eval", 0.0) or 0.0),
-                            # A fresh, user-started run is NOT a resume — clear
-                            # whatever a previous resumed run left here, or the
-                            # panel would keep showing "sweep resumed after a
-                            # restart" on a run nobody restarted anything for.
-                            "resumed_from_restart": None})
+        _scan_state.update(plan["init_state"])
     # Stage 3: the worker runs in a fresh thread, whose context is empty — bind
     # it to THIS caller's workspace so the campaign it drives, the evals it
     # spawns and the stores it writes are all that caller's.
     _new_scan_thread = threading.Thread(target=_WSP.bind(_JOBS.as_job(
                          "optimizer.scan", priority=_JOBS.Priority.CAMPAIGN,
                          run_id=req.run_id)(_scan_worker)),
-                     args=(variables, ops, steps, _sim_coil_temp_c(req.coil_temp_c),
-                           float(req.ripple_max_pct), max_geom, int(req.seed), req.run_id,
-                           mesh_size, min_size, req.pole_copy, bool(req.torque_filter),
-                           n_sectors, gap_layers, end_winding, rotor_eddy, hi_fidelity,
-                           structured_gap, airgap_macro, iron_template, geo_mesh,
-                           element_order, demag, bool(req.with_baseline)),
+                     args=plan["args"],
                      # The machine the sweep is requested ON: the worker may
                      # wait in the job queue and must not adopt whatever is
                      # loaded when it finally starts (machine_binding).
-                     kwargs={"binding": _MB.MachineBinding(
+                     kwargs={**plan["kwargs"], "binding": _MB.MachineBinding(
                          lambda keys: _config_fingerprint(keys), what="FEM scan")},
                      daemon=True)
     _scan_thread_set(_new_scan_thread)
     _new_scan_thread.start()
-    return {"started": True, "steps_per_period": steps, "max_geometries": max_geom,
-            "mesh_size_mm": mesh_size, "min_size_mm": min_size}
+    return plan["response"]
 
 
 def _json_sane(obj):

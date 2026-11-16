@@ -13,8 +13,8 @@ Request::
     {"machine": {"geometry": {...complete...}, "materials": {...},
                  "winding": {...}, "simulation": {...}, "mesh": {...},
                  "replace_geometry": true},
-     "mode": "descent",
-     "descent": <the tab's DescentRequest body>,
+     "mode": "descent" | "sweep",
+     "descent": <the tab's DescentRequest body>,   # or "sweep": <its ScanRequest body>
      "frozen": ["air_gap", ...],          # optional: refused if also a variable
      "workers": 12,                       # optional: default = cpus of the job
      "max_evals": 20}                     # optional: computed evals in this run
@@ -181,6 +181,47 @@ def _cpus() -> int:
         return max(1, os.cpu_count() or 1)
 
 
+def cancel_run(O, kind: str, kill: bool = True) -> None:
+    """The tab's Stop for a ``descent`` or a ``sweep`` (``scan``) run."""
+    if kind == "sweep":
+        with O._scan_lock:
+            O._scan_state["cancel"] = True
+        if kill:
+            O._kill_live_evals("scan")
+    else:
+        with O._descent_lock:
+            O._descent_state["cancel"] = True
+        if kill:
+            O._kill_live_evals("descent")
+
+
+def refuse_clamped(pairs) -> None:
+    """``pairs`` = (name, requested, what the app will use): a request the app
+    would silently change is refused, naming the value."""
+    bad = [f"{n} {a!r} -> {b!r}" for n, a, b in pairs
+           if a is not None and b is not None and float(a) != float(b)]
+    if bad:
+        raise Refused("the app would clamp: " + "; ".join(bad))
+
+
+def refuse_magnet_temperature(O, mode_body: Dict[str, Any], machine_sim: Dict[str, Any],
+                              mode: str) -> None:
+    """Optimiser evals solve the magnet at its CARD temperature unless the
+    request sets ``magnet_temp_c``; the machine's simulation.magnet_temp_c is
+    never read.  A machine temperature that differs from the card, with no
+    request field to carry it, would be silently replaced: refuse."""
+    want = machine_sim.get("magnet_temp_c")
+    if want is None or mode_body.get("magnet_temp_c") is not None:
+        return
+    from motor_ai_sim.simulation.fem_solver_2d import _run_magnet_temp_c
+    card = _run_magnet_temp_c(None)
+    if card is None or abs(float(card) - float(want)) > 1e-6:
+        hint = (" (set 'magnet_temp_c' in the sweep body)" if mode == "sweep"
+                else " (Descent has no magnet_temp_c field yet)")
+        raise Refused(f"machine.simulation.magnet_temp_c {want} but the evals would solve "
+                      f"the magnet card at {card}" + hint)
+
+
 # ── eval memo: resume by replay ──────────────────────────────────────────────
 class EvalMemo:
     """Wraps ``routes.optimization._subprocess_eval``: an eval already solved
@@ -191,8 +232,8 @@ class EvalMemo:
     #: failures that say nothing about the design and must be re-solved
     _TRANSIENT = ("cancelled", "timeout", "worker exited", "source_changed")
 
-    def __init__(self, O, path: Path, max_evals: Optional[int]):
-        self.O, self.path, self.max_evals = O, path, max_evals
+    def __init__(self, O, path: Path, max_evals: Optional[int], kind: str = "descent"):
+        self.O, self.path, self.max_evals, self.kind = O, path, max_evals, kind
         self.orig = O._subprocess_eval
         self.lock = threading.Lock()
         self.memo: Dict[str, Any] = {}
@@ -200,6 +241,7 @@ class EvalMemo:
         self.capped = False
         self.oom = 0
         self.stopped_for_oom = False
+        self.retried = 0
         if path.is_file():
             for ln in path.read_text(encoding="utf-8").splitlines():
                 try:
@@ -207,6 +249,12 @@ class EvalMemo:
                     self.memo[row["k"]] = row["v"]
                 except (ValueError, KeyError):
                     continue
+
+    def stopping(self) -> bool:
+        st, lk = ((self.O._scan_state, self.O._scan_lock) if self.kind == "sweep"
+                  else (self.O._descent_state, self.O._descent_lock))
+        with lk:
+            return bool(st.get("cancel"))
 
     def key(self, overrides, current_a, steps, coil_temp_c, kw) -> str:
         kw = {k: v for k, v in kw.items() if k not in ("owner", "_log")}
@@ -250,11 +298,20 @@ class EvalMemo:
                 return json.loads(json.dumps(self.memo[k]))
             if self.max_evals is not None and self.computed >= self.max_evals:
                 self.capped = True
-                with self.O._descent_lock:
-                    self.O._descent_state["cancel"] = True
+                cancel_run(self.O, self.kind, kill=False)
                 return {"ok": False, "cancelled": True, "error": "cancelled: eval cap"}
             self.computed += 1
         res = self.orig(overrides, current_a, steps, coil_temp_c, **kw)
+        if isinstance(res, dict) and res.get("error") == "timeout" and not self.stopping():
+            # The hang cap is priced from the folder's measured median, which a
+            # fresh state folder does not have yet (cap = 3x the frame estimate,
+            # ~10 min); on a loaded host a healthy first-wave eval can pass it.
+            # A timeout says nothing about the design: solve it once more, by
+            # then the median exists and the cap is 4x it.
+            print("RETRY: eval timed out (hang cap %s); solving it once more"
+                  % ("before any median" if not self.retried else "again"), flush=True)
+            self.retried += 1
+            res = self.orig(overrides, current_a, steps, coil_temp_c, **kw)
         if isinstance(res, dict) and "exited with code -9" in str(res.get("error") or ""):
             # SIGKILL from outside = the job's memory limit, as a rule.  The app
             # files it as a failed design and goes on (an MTPA sweep then picks
@@ -265,9 +322,7 @@ class EvalMemo:
                 print("STOP: an eval was killed (exit -9, the memory limit of the job?): "
                       "fewer workers or more memory; the evals already done stay in "
                       "the memo", flush=True)
-                with self.O._descent_lock:
-                    self.O._descent_state["cancel"] = True
-                self.O._kill_live_evals("descent")
+                cancel_run(self.O, self.kind)
         if isinstance(res, dict) and not self._transient(res):
             with self.lock:
                 self.memo[k] = res
@@ -317,6 +372,13 @@ def run_descent(O, body: Dict[str, Any], *, frozen: List[str] = (),
             import cma  # noqa: F401
         except ImportError as e:
             raise Refused(f"cma package not installed: {e}")
+    ep = plan["init_state"]["eval_params"]
+    refuse_clamped([("steps_per_period", req.steps_per_period, plan["response"]["steps_per_period"]),
+                    ("max_iters", req.max_iters, plan["response"]["max_iters"]),
+                    ("mesh_size_mm", req.mesh_size_mm, ep["mesh_size_mm"]),
+                    ("min_size_mm", req.min_size_mm, ep["min_size_mm"])]
+                   + ([("max_rounds", req.max_rounds, plan["response"]["max_rounds"])]
+                      if req.auto_expand else []))
     log("plan: " + json.dumps(plan["response"], default=str))
     O.begin_descent_state(plan)
     t = threading.Thread(target=plan["worker"], args=plan["args"],
@@ -333,6 +395,68 @@ def run_descent(O, body: Dict[str, Any], *, frozen: List[str] = (),
             log(_progress_line(st, memo) if memo is not None else str(sig))
     with O._descent_lock:
         return dict(O._descent_state)
+
+
+def _sweep_line(st: Dict[str, Any], memo: Optional[EvalMemo]) -> str:
+    return ("[%s] sweep done=%s/%s cached=%s computed=%s memo=%s error=%s" % (
+        time.strftime("%H:%M:%S", time.gmtime()), st.get("done"), st.get("total"),
+        st.get("cached"), memo.computed if memo else "-", memo.hits if memo else "-",
+        st.get("error")))
+
+
+def run_sweep(O, body: Dict[str, Any], *, frozen: List[str] = (),
+              log=print, poll_s: float = 15.0,
+              memo: Optional[EvalMemo] = None) -> Dict[str, Any]:
+    """Prepare and run one Sweep in THIS process with the route's own
+    functions; returns the final ``_scan_state``.  Raises ``Refused``.  A
+    re-run in the same folder serves the finished points from the app's own
+    eval cache (``.scan_cache.jsonl``)."""
+    req = O.ScanRequest(**body)
+    try:
+        O._refuse_die_defining(req)
+    except Exception as e:  # noqa: BLE001 - the route's 422
+        raise Refused(str(getattr(e, "detail", e)))
+    plan = O.prepare_scan(req)
+    if plan["dropped"]:
+        raise Refused("variables the app would drop: " + "; ".join(
+            f"{d['name']} ({d['reason']})" for d in plan["dropped"]))
+    if not plan["variables"]:
+        raise Refused("no scan variables")
+    clash = sorted(set(frozen) & {v["name"] for v in plan["variables"]})
+    if clash:
+        raise Refused("frozen keys listed as variables: " + ", ".join(clash))
+    gl = O._resolve_gap_layers(req.gap_layers)
+    if float(gl[0]) < 2.0:
+        raise Refused(f"gap_layers {gl[0]} ({gl[1]}) < 2: optimisation evals use at least "
+                      f"2 gap layers (owner 2026-11-16)")
+    a = plan["args"]
+    refuse_clamped([("steps_per_period", req.steps_per_period, a[2]),
+                    ("max_geometries", req.max_geometries, a[5]),
+                    ("mesh_size_mm", req.mesh_size_mm, a[8]),
+                    ("min_size_mm", req.min_size_mm, a[9]),
+                    ("gap_layers", gl[0], a[13]),
+                    ("end_winding_factor", req.end_winding_factor, a[14])])
+    log("plan: " + json.dumps({**plan["response"], "variables": plan["variables"],
+                               "operating_points": plan["ops"], **plan["kwargs"]}, default=str))
+    with O._scan_lock:
+        O._scan_state.update(plan["init_state"])
+    from motor_ai_sim import machine_binding as MB
+    kw = {**plan["kwargs"], "binding": MB.MachineBinding(
+        lambda keys: O._config_fingerprint(keys), what="FEM scan")}
+    t = threading.Thread(target=O._scan_worker, args=plan["args"], kwargs=kw,
+                         name="headless-sweep")
+    t.start()
+    last = None
+    while t.is_alive():
+        t.join(poll_s)
+        with O._scan_lock:
+            st = dict(O._scan_state)
+        sig = (st.get("done"), st.get("total"), st.get("error"))
+        if sig != last:
+            last = sig
+            log(_sweep_line(st, memo))
+    with O._scan_lock:
+        return dict(O._scan_state)
 
 
 def main(argv: Optional[List[str]] = None) -> int:
@@ -352,8 +476,11 @@ def main(argv: Optional[List[str]] = None) -> int:
     state.mkdir(parents=True, exist_ok=True)
     cfg_p = state / "motor_config.yaml"
     try:
-        if (req.get("mode") or "descent") != "descent":
-            raise Refused(f"mode {req.get('mode')!r}: only 'descent' is supported yet")
+        mode = str(req.get("mode") or "descent")
+        if mode not in ("descent", "sweep"):
+            raise Refused(f"mode {mode!r}: 'descent' or 'sweep'")
+        if not isinstance(req.get(mode), dict):
+            raise Refused(f"request.{mode} (the tab's request body) missing")
         cfg = build_machine_config(req, req_p.parent, state)
         workers = int(ns.workers or req.get("workers") or _cpus())
         if workers > _cpus():
@@ -407,8 +534,14 @@ def main(argv: Optional[List[str]] = None) -> int:
     say(f"machine {machine_fp}: {cfg_p} (workers {workers}, "
         f"pool {O._scan_worker_count()})")
 
+    try:
+        refuse_magnet_temperature(O, req[mode], (req.get("machine") or {}).get("simulation") or {},
+                                  mode)
+    except Refused as e:
+        say(f"REFUSED: {e}")
+        return 2
     memo = EvalMemo(O, state / MEMO_FILE, req.get("max_evals") if ns.max_evals is None
-                    else ns.max_evals)
+                    else ns.max_evals, kind=mode)
     O._subprocess_eval = memo
     say(f"memo: {len(memo.memo)} stored evals, cap {memo.max_evals}")
 
@@ -417,24 +550,31 @@ def main(argv: Optional[List[str]] = None) -> int:
     def _stop(signum, _frame):
         stopped[0] = True
         say(f"signal {signum}: stopping (checkpoint is written by the worker)")
-        with O._descent_lock:
-            O._descent_state["cancel"] = True
-        O._kill_live_evals("descent")
+        cancel_run(O, mode)
     signal.signal(signal.SIGTERM, _stop)
     signal.signal(signal.SIGINT, _stop)
 
     try:
-        final = run_descent(O, dict(req.get("descent") or {}),
-                            frozen=list(req.get("frozen") or []), log=say, memo=memo)
+        final = (run_sweep if mode == "sweep" else run_descent)(
+            O, dict(req[mode]), frozen=list(req.get("frozen") or []), log=say, memo=memo)
     except Refused as e:
         say(f"REFUSED: {e}")
         return 2
     final.pop("cancel", None)
     (req_p.parent / "result.json").write_text(
         json.dumps(O._json_sane(final), indent=1, default=str), encoding="utf-8")
-    say(_progress_line(final, memo))
-    say(f"final_validation_status={final.get('final_validation_status')} "
-        f"apply_eligible={final.get('apply_eligible')} error={final.get('error')}")
+    try:
+        import resource
+        say("PEAK_RSS_GB of one eval subprocess: %.2f" % (
+            resource.getrusage(resource.RUSAGE_CHILDREN).ru_maxrss / 1024.0 / 1024.0))
+    except (ImportError, OSError):
+        pass
+    if mode == "sweep":
+        say(_sweep_line(final, memo))
+    else:
+        say(_progress_line(final, memo))
+        say(f"final_validation_status={final.get('final_validation_status')} "
+            f"apply_eligible={final.get('apply_eligible')} error={final.get('error')}")
     if memo.stopped_for_oom:
         say(f"STOPPED: {memo.oom} eval(s) killed by the memory limit")
         return 4

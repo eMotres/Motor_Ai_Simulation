@@ -243,5 +243,9 @@
   "optRangeNowOutsideTip": "搜索从当前设计出发（来自 {src}），因此其值应在范围内。请放宽范围，或使用重置按钮将范围设置在当前值附近。",
   "optVarsResetOne": "将范围设为 {lo}-{hi}（当前值 ±10 %）",
   "optVarsResetMany": "将 {count} 个范围设为当前值 ±10 %",
-  "optRunBlockedInverted": "无法开始：{names} 的最小值高于最大值。请先修正范围。"
+  "optRunBlockedInverted": "无法开始：{names} 的最小值高于最大值。请先修正范围。",
+  "propDesignPolar": "翼型极曲线",
+  "propDesignPolarTip": "叶素模型的截面极曲线。平板：通用升力和阻力。含弯度：按薄翼理论计算各翼型的零升力角；阻力和失速仍为通用值。两者均为估算。",
+  "propPolar_flatplate_model": "平板",
+  "propPolar_camber_model": "含弯度"
 }

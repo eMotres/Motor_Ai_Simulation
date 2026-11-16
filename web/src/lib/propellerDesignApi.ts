@@ -11,6 +11,7 @@ export interface Family {
   tip_mach_limit: { value: number; confirmed: boolean; source: string };
   manufacturing: { process: string | null; unset: string[]; unconfirmed: string[] };
   inputs_unconfirmed: boolean; seed: Vector; variables: VarRow[];
+  polar_source?: string; polar_sources?: string[];
 }
 export interface Violation { rule: string; name: string | null; value: unknown; limit: unknown }
 export interface ZoneReport {
@@ -46,19 +47,24 @@ async function call<T>(method: string, path: string, body?: unknown, signal?: Ab
   return j as T;
 }
 
+/** Section polar for the evaluating calls (null = the server default, the flat plate). */
+let polarSource: string | null = null;
+export const setPolarSource = (p: string | null) => { polarSource = p; };
+const withPolar = <T extends object>(body: T) => (polarSource ? { ...body, polar_source: polarSource } : body);
+
 export const getFamily = (diameter: number, blades: number, signal?: AbortSignal) =>
   call<Family>('GET', `/family?diameter_in=${diameter}&blades=${blades}`, undefined, signal);
 export const checkVector = (vector: Vector) => call<{ valid: boolean; violations: Violation[] }>('POST', '/check', { vector });
 export const getGeometry = (vector: Vector) => call<Geometry>('POST', '/geometry', { vector });
-export const evaluate = (vector: Vector, op: string, signal?: AbortSignal) => call<EvalRecord>('POST', '/evaluate', { vector, op }, signal);
-export const getCurve = (vector: Vector, op: string, n = 11) => call<Curve>('POST', '/curve', { vector, op, n });
+export const evaluate = (vector: Vector, op: string, signal?: AbortSignal) => call<EvalRecord>('POST', '/evaluate', withPolar({ vector, op }), signal);
+export const getCurve = (vector: Vector, op: string, n = 11) => call<Curve>('POST', '/curve', withPolar({ vector, op, n }));
 export const sweep = (vector: Vector, op: string, variable: string, lo: number, hi: number, n: number) =>
-  call<{ rows: SweepRow[] }>('POST', '/sweep', { vector, op, variable, lo, hi, n });
+  call<{ rows: SweepRow[] }>('POST', '/sweep', withPolar({ vector, op, variable, lo, hi, n }));
 export interface OptEval { index: number; generation: number; vector: Vector; objectives: Record<string, number | null>; violation: number; note: string;
   design_id: string | null; rpm: number | null; tip_mach: number | null; constraints_met: boolean; flags: string[] }
 export interface OptResult { run_id: string; front: number[]; evaluations: OptEval[]; elapsed_s: number; objectives: string[]; settings: Record<string, unknown> }
 export const optimize = (vector: Vector, op: string, o: { pop: number; generations: number; seed: number; free: string[]; objectives: string[];
-  enforce_tip_mach: boolean; tip_mach_limit: number | null }) => call<OptResult>('POST', '/optimize', { vector, op, ...o });
+  enforce_tip_mach: boolean; tip_mach_limit: number | null }) => call<OptResult>('POST', '/optimize', withPolar({ vector, op, ...o }));
 export const listDrafts = () => call<{ drafts: DraftInfo[] }>('GET', '/drafts');
 export const getDraft = (name: string) => call<{ vector: Vector; operating_point: string }>('GET', `/drafts/${encodeURIComponent(name)}`);
 export const putDraft = (name: string, vector: Vector, op: string) => call<{ saved: boolean; valid: boolean }>('PUT', `/drafts/${encodeURIComponent(name)}`, { vector, op });

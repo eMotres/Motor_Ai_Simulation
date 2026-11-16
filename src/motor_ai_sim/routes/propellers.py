@@ -385,7 +385,7 @@ def design_geometry(body: Dict[str, Any] = Body(...)) -> Dict[str, Any]:
 @router.post("/design/evaluate")
 def design_evaluate(body: Dict[str, Any] = Body(...)) -> Dict[str, Any]:
     try:
-        return pda.evaluate(body.get("vector"), str(body.get("op") or ""), body.get("v_inf_ms", 0.0))
+        return pda.evaluate(body.get("vector"), str(body.get("op") or ""), body.get("v_inf_ms", 0.0), body.get("polar_source"))
     except pda.ApiProblem as exc:
         raise _problem(exc)
 
@@ -394,7 +394,7 @@ def design_evaluate(body: Dict[str, Any] = Body(...)) -> Dict[str, Any]:
 def design_sweep(body: Dict[str, Any] = Body(...)) -> Dict[str, Any]:
     try:
         return pda.sweep(body.get("vector"), str(body.get("op") or ""), str(body.get("variable") or ""), body.get("values"),
-                         body.get("lo"), body.get("hi"), body.get("n", 7))
+                         body.get("lo"), body.get("hi"), body.get("n", 7), body.get("polar_source"))
     except pda.ApiProblem as exc:
         raise _problem(exc)
 
@@ -402,7 +402,7 @@ def design_sweep(body: Dict[str, Any] = Body(...)) -> Dict[str, Any]:
 @router.post("/design/curve")
 def design_curve(body: Dict[str, Any] = Body(...)) -> Dict[str, Any]:
     try:
-        return pda.curve(body.get("vector"), str(body.get("op") or ""), body.get("n", 11), body.get("v_inf_ms", 0.0))
+        return pda.curve(body.get("vector"), str(body.get("op") or ""), body.get("n", 11), body.get("v_inf_ms", 0.0), body.get("polar_source"))
     except pda.ApiProblem as exc:
         raise _problem(exc)
 
@@ -412,7 +412,7 @@ def design_optimize(body: Dict[str, Any] = Body(...)) -> Dict[str, Any]:
     try:
         return pda.optimize(body.get("vector"), str(body.get("op") or ""), body.get("pop", 12), body.get("generations", 6), body.get("seed", 1),
                             body.get("objectives"), body.get("free"), body.get("enforce_tip_mach", True), body.get("tip_mach_limit"),
-                            body.get("structure_material"), body.get("min_safety_factor"))
+                            body.get("structure_material"), body.get("min_safety_factor"), body.get("polar_source"))
     except pda.ApiProblem as exc:
         raise _problem(exc)
 

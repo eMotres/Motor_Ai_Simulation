@@ -192,3 +192,19 @@ def test_access_tiers_the_designer_is_a_solve_the_catalogue_stays_open():
             os.environ["MOTRES_SOLVE_ADMIN_ONLY"] = old
     for m, p in (("GET", "/api/propellers"), ("GET", "/api/propellers/x"), ("GET", "/api/propellers/x/point"), ("GET", "/api/propellers/cooling-options")):
         assert auth.required_role(m, p) is None, (m, p)
+
+
+def test_polar_source_is_selectable_per_request_and_defaults_to_the_flat_plate():
+    c = client()
+    fam = c.get(B + "/family", params={"diameter_in": 10, "blades": 3}).json()
+    assert fam["polar_source"] == "flatplate_model" and fam["polar_sources"] == ["flatplate_model", "camber_model"]
+    body = {"vector": seed(10, 3), "op": "L12"}
+    flat = c.post(B + "/evaluate", json=body).json()
+    same = c.post(B + "/evaluate", json=dict(body, polar_source=None)).json()
+    assert same["thrust_N"] == flat["thrust_N"] and pd.F_AIRFOIL in flat["flags"]           # default unchanged
+    cam = c.post(B + "/evaluate", json=dict(body, polar_source="camber_model")).json()
+    assert pd.F_AIRFOIL_DRAG in cam["flags"] and cam["operating"]["rpm"] < flat["operating"]["rpm"]
+    cur = c.post(B + "/curve", json=dict(body, n=3, polar_source="camber_model")).json()
+    assert len(cur["rows"]) == 3
+    for bad in ("neuralfoil", 5):
+        assert c.post(B + "/evaluate", json=dict(body, polar_source=bad)).status_code == 422

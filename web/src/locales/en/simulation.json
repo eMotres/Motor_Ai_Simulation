@@ -243,5 +243,9 @@
   "optRangeNowOutsideTip": "The search starts from the current design (from {src}), so its value should be inside the range. Widen the range, or use the reset button to set it around the current value.",
   "optVarsResetOne": "Set range to {lo}-{hi} (now ±10 %)",
   "optVarsResetMany": "Set {count} ranges to now ±10 %",
-  "optRunBlockedInverted": "Cannot start: min is above max for {names}. Fix the range first."
+  "optRunBlockedInverted": "Cannot start: min is above max for {names}. Fix the range first.",
+  "propDesignPolar": "Polar",
+  "propDesignPolarTip": "Section polar of the blade-element model. Flat plate: generic lift and drag. With camber: the zero-lift angle of each airfoil from thin-airfoil theory; drag and stall stay generic. Both estimated.",
+  "propPolar_flatplate_model": "flat plate",
+  "propPolar_camber_model": "with camber"
 }

@@ -19,6 +19,8 @@ export default function DesignerPage() {
   const [diameter, setDiameter] = useRememberedView<string>('propellers.designer.diameter', '10', oneOf(['10', '11', '12', '13']));
   const [blades, setBlades] = useRememberedView<string>('propellers.designer.blades', '2', oneOf(['2', '3']));
   const [op, setOp] = useRememberedView<string>('propellers.designer.op', 'L12', oneOf(['L12', 'L20']));
+  const [polar, setPolar] = useRememberedView<string>('propellers.designer.polar', 'flatplate_model', oneOf(['flatplate_model', 'camber_model']));
+  useEffect(() => { api.setPolarSource(polar === 'flatplate_model' ? null : polar); }, [polar]);
   const [family, setFamily] = useState<api.Family | null>(null);
   const [vector, setVector] = useState<Vector | null>(null);
   const [geo, setGeo] = useState<api.Geometry | null>(null);
@@ -179,6 +181,11 @@ export default function DesignerPage() {
         <Tooltip title={t('propDesignMotorTip')}>
           <Select size="small" value={op} onChange={(e) => setOp(String(e.target.value))} sx={{ fontSize: 13 }} renderValue={(v) => `${t('propDesignMotor')}: ${v}`} inputProps={{ 'aria-label': t('propDesignMotor') }}>
             {Object.entries(family.operating_points).map(([k, o]) => <MenuItem key={k} value={k}>{`${o.config} · ${o.torque_limit_Nm} N·m`}</MenuItem>)}
+          </Select>
+        </Tooltip>
+        <Tooltip title={t('propDesignPolarTip')}>
+          <Select size="small" value={polar} onChange={(e) => setPolar(String(e.target.value))} sx={{ fontSize: 13 }} renderValue={(v) => `${t('propDesignPolar')}: ${t(`propPolar_${v}`)}`} inputProps={{ 'aria-label': t('propDesignPolar') }} data-testid="prop-polar">
+            {(family.polar_sources ?? ['flatplate_model']).map((p) => <MenuItem key={p} value={p}>{t(`propPolar_${p}`)}</MenuItem>)}
           </Select>
         </Tooltip>
         <Button variant="contained" size="small" onClick={onEvaluate} disabled={busy}>{busy ? t('propDesignEvaluating') : t('propDesignEvaluate')}</Button>

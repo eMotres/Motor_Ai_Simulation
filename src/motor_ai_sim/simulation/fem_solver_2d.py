@@ -4466,6 +4466,18 @@ def fem_transient_sliding_band(*args, **kwargs) -> dict:
 
 
 @_pardiso_scope          # each attempt owns (and releases) its PARDISO handles
+def _ring_on_24_grid(req_steps: int, nodes_per_period: int, pole_pairs: int,
+                     n_sectors: int) -> int:
+    """Smallest slip ring (nodes per period) that is a multiple of the requested
+    steps AND of 24, at least ``nodes_per_period``, with a whole number of nodes
+    per sector."""
+    st = int(req_steps) * 24 // math.gcd(int(req_steps), 24)
+    spp = st * max(1, int(math.ceil(nodes_per_period / float(st))))
+    while (pole_pairs * spp) % max(1, int(n_sectors)):
+        spp += st
+    return spp
+
+
 def _fem_transient_sliding_band_once(
     n_steps_per_period: int = 12,
     sampling_purpose: SamplingPurpose = "standard",
@@ -5542,6 +5554,18 @@ def _fem_transient_sliding_band_once(
             1, int(math.ceil(_nodes_per_period / float(_req_steps))))
         while (pole_pairs * _spp2) % _ns_abs2:
             _spp2 += int(_req_steps)
+        # The rotor mesh is pole-pair periodic only on the 24k ring grid (the
+        # adaptive ring above is one).  A raised ring off that grid (128, 160)
+        # makes the rotor non-periodic: TDM is refused (TdmMeshNotPeriodic) and
+        # the eddy warm-up / demag pre-pass lose their pole images.  Only the
+        # runs that need those images move onto the grid; a pure magnetostatic
+        # run keeps its ring.
+        if (eddy or rotor_eddy or demag) and _spp2 % 24:
+            _spp24 = _ring_on_24_grid(_req_steps, _nodes_per_period, pole_pairs, _ns_abs2)
+            log.warning("SB: the raised ring of %d nodes/period is off the 24-node "
+                        "grid the pole-periodic rotor mesh needs; using %d",
+                        _spp2, _spp24)
+            _spp2 = _spp24
         log.warning("SB: %d steps/period requested, not a divisor of the %d-node slip ring "
                     "— RAISING the ring to %d nodes/period (%d on the full "
                     "circle) so the requested time resolution is honoured "

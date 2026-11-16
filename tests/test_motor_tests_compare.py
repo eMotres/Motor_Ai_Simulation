@@ -593,3 +593,15 @@ def test_the_per_mass_columns_prefer_the_weighed_motor_then_cad_then_active():
     assert comparison.motor_mass({"tests": []}, cad) == {"kg": 9.72, "basis": "cad"}
     assert comparison.motor_mass({"tests": []}, {"mass": {"full_kg": 2.23, "active_kg": 2.23, "partial": True}}) == {"kg": 2.23, "basis": "active"}
     assert comparison.motor_mass({"tests": []}, {}) is None
+
+
+def test_noload_loss_includes_the_stored_ac_copper():
+    # G2 audit 2026-11-16: the no-load AC copper (strand eddy) is part of the no-load loss; it scales like the solid eddy
+    ref = {"rpm": 1000.0, "hyst": 10.0, "eddy": 5.0, "excess": 2.0, "p_solid": 1.0, "p_cu_ac": 3.0}
+    out = C.noload_em_loss_at(2000.0, ref, ratio=1.1)
+    assert out["copper"] == pytest.approx(3.0 * 4 * 1.21)
+    assert out["em"] == pytest.approx(out["core"] + out["solid"] + out["copper"])
+    # an older reference without the field gives the same numbers as before
+    old = dict(ref); old.pop("p_cu_ac")
+    o = C.noload_em_loss_at(2000.0, old, ratio=1.1)
+    assert o["copper"] == 0.0 and o["em"] == pytest.approx(o["core"] + o["solid"])

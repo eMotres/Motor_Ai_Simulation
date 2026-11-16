@@ -276,6 +276,8 @@ REVIEWED_NOT_A_SOLVE = {
     "GET /api/winding/config": "reads / edits the caller's own workspace machine; the 3-D viewer and Configure draw it (CAD tessellation, no physics)",
     "PATCH /api/winding/config": "reads / edits the caller's own workspace machine; the 3-D viewer and Configure draw it (CAD tessellation, no physics)",
     "GET /api/wires/stock": "catalog / library / settings / stored-state read; resolves a stored value, solves nothing",
+    "GET /api/optimization/runs": "lists the stored optimisation runs of one motor (a file read behind the die / configuration gate); solves nothing",
+    "GET /api/optimization/runs/{run_id}": "opens one stored optimisation run (a file read behind the die / configuration gate); solves nothing",
 }
 
 #: Router modules whose routes are data, accounts or admin screens - they compute nothing on request.  A route in a module that is in
@@ -288,6 +290,8 @@ DATA_MODULES = frozenset({
     "regions",                          # two regions: region info, the signed peer channel, admin region views - computes nothing
     "display_state",                    # Active / Parked / Archived of projects and productions (staff lists) - computes nothing
     "overview",                         # the owner's Overview: projects, productions, registry links (admins) - computes nothing
+    "regions_sync",                     # the signed peer channel of the catalog mirror (extracts, foreign submit / result)
+    "optimization_runs",                # stored optimisation runs of a motor: list / open / import a file, solves nothing
 })
 #: Router modules that can compute: every route in them is admin-only or reviewed above.
 COMPUTE_MODULES = frozenset({

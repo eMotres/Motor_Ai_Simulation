@@ -49,17 +49,31 @@ def _cloud(st):
                   for p in st.get("points") or [])
 
 
+def _final_stub(*, best_x, best_metrics, coarse_base, score, **_kw):
+    """The 6x standard re-solve is its own suite's business (as in
+    test_screening_descent): certify the coarse winner as it is."""
+    cost, F = score(best_metrics, coarse_base)
+    return {"status": "certified", "sampling_purpose": "standard",
+            "shortlist_only": True, "shortlist_limit": 3, "shortlist_count": 1,
+            "validated": [], "failed": [],
+            "winner": {"x": dict(best_x), "res": dict(best_metrics),
+                       "cost": cost, "F": F}, "baseline": coarse_base}
+
+
 @contextlib.contextmanager
 def _patched(fn):
     real = O._subprocess_eval
+    real_final = O._finalize_standard_shortlist
     saved = dict(O._descent_state)
     O._subprocess_eval = fn
+    O._finalize_standard_shortlist = _final_stub
     O._descent_state["running"] = False
     O._descent_state["cancel"] = False
     try:
         yield
     finally:
         O._subprocess_eval = real
+        O._finalize_standard_shortlist = real_final
         O._descent_state.clear()
         O._descent_state.update(saved)
 

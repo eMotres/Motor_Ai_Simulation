@@ -4465,7 +4465,6 @@ def fem_transient_sliding_band(*args, **kwargs) -> dict:
         _tdm_ctl={"fallback": {"note": note, "attempts": attempts}})
 
 
-@_pardiso_scope          # each attempt owns (and releases) its PARDISO handles
 def _ring_on_24_grid(req_steps: int, nodes_per_period: int, pole_pairs: int,
                      n_sectors: int) -> int:
     """Smallest slip ring (nodes per period) that is a multiple of the requested
@@ -4478,6 +4477,14 @@ def _ring_on_24_grid(req_steps: int, nodes_per_period: int, pole_pairs: int,
     return spp
 
 
+def _boundary_strict() -> bool:
+    """Boundary pairing defects (unequal slip rings, sector-cut edges without a
+    partner) refuse the solve; ``SB_BOUNDARY_STRICT=0`` restores the old
+    warn-and-go."""
+    return _os_sb.environ.get("SB_BOUNDARY_STRICT", "1") != "0"
+
+
+@_pardiso_scope          # each attempt owns (and releases) its PARDISO handles
 def _fem_transient_sliding_band_once(
     n_steps_per_period: int = 12,
     sampling_purpose: SamplingPurpose = "standard",
@@ -5912,6 +5919,11 @@ def _fem_transient_sliding_band_once(
     sring = _ring(Ps, mid)
     Nring = min(sring.size, rring.size)
     if sring.size != rring.size:
+        if _boundary_strict():
+            raise ValueError(
+                "band ring node counts differ: stator=%d rotor=%d - the two "
+                "slip rings cannot be paired (SB_BOUNDARY_STRICT=0 truncates, "
+                "as before)" % (sring.size, rring.size))
         log.warning("band ring node counts differ: stator=%d rotor=%d — "
                     "truncating to %d", sring.size, rring.size, Nring)
     sring = sring[:Nring]; rring = rring[:Nring]
@@ -7608,8 +7620,9 @@ def _fem_transient_sliding_band_once(
     if _proj.n_cut_e_rescued or _proj.n_cut_e_unmatched:
         log.warning("P2 belt: %d sector-cut edge(s) welded that the radius walk skipped, %d cut edge(s) with NO partner",
                     _proj.n_cut_e_rescued, _proj.n_cut_e_unmatched)
-        if _proj.n_cut_e_unmatched and _os_sb.environ.get("SB_BOUNDARY_STRICT", "0") == "1":
-            raise ValueError("sector cut edges do not match across the cut: %d unmatched" % _proj.n_cut_e_unmatched)
+        if _proj.n_cut_e_unmatched and _boundary_strict():
+            raise ValueError("sector cut edges do not match across the cut: %d unmatched "
+                             "(SB_BOUNDARY_STRICT=0 solves anyway)" % _proj.n_cut_e_unmatched)
 
     # ═══════════════════════════════════════════════════════════════════
     #  COUPLED EDDY-CURRENT DATA (σ·∂A/∂t) — SOLID CONDUCTORS, P2

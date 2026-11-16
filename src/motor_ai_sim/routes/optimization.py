@@ -5299,15 +5299,17 @@ def _cmaes_worker(var_specs, op, ripple_max, w_eff, w_td, lam,
         _archive_descent_run(_final)     # …and survives the NEXT run (see the archive)
 
 
-@router.post("/descent/start")
-def descent_start(req: DescentRequest):
-    """Start a background geometry optimization (fixed current+rpm+γ).
-    algorithm='cmaes' (default) → CMA-ES; 'gradient' → finite-diff descent."""
-    _refuse_die_defining(req)          # before any state is touched (422)
-    with _descent_lock:
-        if _descent_state["running"]:
-            raise HTTPException(status_code=409, detail="a descent is already running")
+def prepare_descent(req: DescentRequest) -> Dict[str, Any]:
+    """Turn a DescentRequest into everything a descent run needs, with no web
+    process and no side effect: the variable windows (schema bounds, whitelist,
+    manufacturing floor, 0.1 mm grid, int steps), the clamped eval settings, the
+    initial run state, the worker and its arguments, and the route's answer.
 
+    Shared by ``descent_start`` and the headless runner
+    (``motor_ai_sim.optimize_headless``), so both run the SAME assembly.
+    ``dropped`` lists the requested variables that did not make it into
+    ``var_specs`` and why (the route ignores it, as it always did; the runner
+    refuses).  An empty ``var_specs`` is the caller's to refuse."""
     cfg = get_config()
     schema = cfg.get("geometry_schema", {})
     wl = cfg.get("sweep_whitelist", None)
@@ -5317,8 +5319,10 @@ def descent_start(req: DescentRequest):
     # a real range is given, else fall back to the schema min/max; step from the
     # request, else schema step, else 5 % of the range.
     var_specs: List[Dict[str, Any]] = []
+    dropped: List[Dict[str, Any]] = []
     for v in req.variables:
         if allowed and v.name not in allowed:
+            dropped.append({"name": v.name, "reason": "not in sweep_whitelist"})
             continue
         meta = schema.get(v.name, {})
         s_lo = float(meta.get("min", v.min))
@@ -5339,8 +5343,10 @@ def descent_start(req: DescentRequest):
             and not isinstance(_x_cur, bool) else None)
         if _excl:
             log.warning("descent: %s", _excl)
+            dropped.append({"name": v.name, "reason": str(_excl)})
             continue
         if hi <= lo:
+            dropped.append({"name": v.name, "reason": f"empty range [{lo}, {hi}]"})
             continue
         step = float(v.step) if float(v.step) > 0 else float(meta.get("step", 0) or 0)
         if step <= 0:
@@ -5355,10 +5361,6 @@ def descent_start(req: DescentRequest):
                           "step": step, "is_int": is_int,
                           "hard_lo": s_lo, "hard_hi": s_hi, "quant": quant})
 
-    if not var_specs:
-        raise HTTPException(status_code=400,
-                            detail="no whitelisted variables with a usable range to descend")
-
     op = {"gamma_deg": float(req.operating_point.gamma_deg),
           "current_a": float(req.operating_point.current_a),
           "rpm": float(req.operating_point.rpm)}
@@ -5372,22 +5374,17 @@ def descent_start(req: DescentRequest):
     # Rated-duty constraints (off when 0 / huge): target torque + peak-voltage cap.
     v_peak_limit  = float(req.v_peak_limit) if float(req.v_peak_limit) > 0 else 1e9
     target_torque = max(0.0, float(req.target_torque_nm))
-    # Ripple penalty (per-run; one descent at a time → module global is safe).
-    # v0 is the INITIAL weight; the box-walk ramp escalates "v" from it.
+    # Ripple / THD penalty weights: installed by begin_descent_state.
     _rp0 = max(0.0, float(req.ripple_penalty_lambda or 0.0))
-    _RIPPLE_PEN_LAM["v"] = _rp0
-    _RIPPLE_PEN_LAM["v0"] = _rp0
     # THD penalty (CIANO FOC spec: clean line-to-line back-EMF; same pattern).
-    _THD_PEN["lam"] = max(0.0, float(req.thd_penalty_lambda or 0.0))
-    _THD_PEN["max"] = max(0.0, float(req.thd_max_pct or 5.0))
+    _thd_lam = max(0.0, float(req.thd_penalty_lambda or 0.0))
+    _thd_max = max(0.0, float(req.thd_max_pct or 5.0))
     # Box-walking (server-side auto-expand): re-centre the window + re-run until settled.
     auto_expand     = bool(req.auto_expand)
     max_rounds      = max(1, min(int(req.max_rounds), 20))
     boundary_margin = min(0.3, max(0.01, float(req.boundary_margin)))
 
-    with _descent_lock:
-        _descent_external[0] = False   # this process owns the flag now
-        _descent_state.update({"running": True, "iter": 0, "max_iters": max_iters,
+    init_state = {"running": True, "iter": 0, "max_iters": max_iters,
                                "n_evals": 0, "best": None, "current": None,
                                "history": [], "baseline": None, "baseline_line": None,
                                 "result": None, "phase": "starting",
@@ -5429,12 +5426,8 @@ def descent_start(req: DescentRequest):
                                    # record what that resolved to at launch
                                    "demag": _effective_demag(None),
                                    "mesh_size_mm": mesh_size, "min_size_mm": min_size},
-                               "run_id": req.run_id, "error": None, "cancel": False})
-    threading.Thread(
-        target=_WSP.bind(_JOBS.as_job(           # Stage 3 + Stage 4: workspace + slot
-            "optimizer.descent", priority=_JOBS.Priority.CAMPAIGN,
-            run_id=req.run_id)(worker)),
-        args=(var_specs, op, float(req.ripple_max_pct), float(req.w_eff),
+                               "run_id": req.run_id, "error": None, "cancel": False}
+    args = (var_specs, op, float(req.ripple_max_pct), float(req.w_eff),
               float(req.w_td), float(req.penalty_lambda), steps,
               _sim_coil_temp_c(req.coil_temp_c), mesh_size, min_size, max_iters, req.run_id,
               n_sectors, v_peak_limit, target_torque, bool(req.optimize_gamma),
@@ -5444,16 +5437,56 @@ def descent_start(req: DescentRequest):
               max(1.0, min(_resolve_gap_layers(req.gap_layers)[0], 8.0)),
               str(req.objective or "baseline_line"),
               max(0.0, min(float(req.current_bump_pct), 100.0)),
-              bool(req.structured_gap), bool(req.airgap_macro)),
-        kwargs={"iron_template": bool(getattr(req, "iron_template", True)),
+              bool(req.structured_gap), bool(req.airgap_macro))
+    kwargs = {"iron_template": bool(getattr(req, "iron_template", True)),
                 "geo_mesh": bool(getattr(req, "geo_mesh", True)),
-                "element_order": int(getattr(req, "element_order", 2) or 2)},
-        daemon=True).start()
-    return {"started": True, "algorithm": algo, "n_sectors": n_sectors,
+                "element_order": int(getattr(req, "element_order", 2) or 2)}
+    response = {"started": True, "algorithm": algo, "n_sectors": n_sectors,
             "target_torque_nm": target_torque, "v_peak_limit": v_peak_limit,
             "n_variables": len(var_specs), "max_iters": max_iters, "auto_expand": auto_expand,
             "max_rounds": (max_rounds if auto_expand else 1),
             "variables": [s["name"] for s in var_specs], "steps_per_period": steps}
+    return {"var_specs": var_specs, "dropped": dropped, "worker": worker,
+            "args": args, "kwargs": kwargs, "init_state": init_state,
+            "ripple_pen0": _rp0, "thd_pen": (_thd_lam, _thd_max),
+            "response": response}
+
+
+def begin_descent_state(plan: Dict[str, Any]) -> None:
+    """Install a prepared run (``prepare_descent``): the per-run penalty
+    globals and the fresh ``_descent_state`` - exactly what ``descent_start``
+    did inline before its worker thread starts."""
+    # Ripple penalty (per-run; one descent at a time → module global is safe).
+    # v0 is the INITIAL weight; the box-walk ramp escalates "v" from it.
+    _RIPPLE_PEN_LAM["v"] = plan["ripple_pen0"]
+    _RIPPLE_PEN_LAM["v0"] = plan["ripple_pen0"]
+    _THD_PEN["lam"], _THD_PEN["max"] = plan["thd_pen"]
+    with _descent_lock:
+        _descent_external[0] = False   # this process owns the flag now
+        _descent_state.update(plan["init_state"])
+
+
+@router.post("/descent/start")
+def descent_start(req: DescentRequest):
+    """Start a background geometry optimization (fixed current+rpm+γ).
+    algorithm='cmaes' (default) → CMA-ES; 'gradient' → finite-diff descent."""
+    _refuse_die_defining(req)          # before any state is touched (422)
+    with _descent_lock:
+        if _descent_state["running"]:
+            raise HTTPException(status_code=409, detail="a descent is already running")
+
+    plan = prepare_descent(req)
+    if not plan["var_specs"]:
+        raise HTTPException(status_code=400,
+                            detail="no whitelisted variables with a usable range to descend")
+    begin_descent_state(plan)
+    threading.Thread(
+        target=_WSP.bind(_JOBS.as_job(           # Stage 3 + Stage 4: workspace + slot
+            "optimizer.descent", priority=_JOBS.Priority.CAMPAIGN,
+            run_id=req.run_id)(plan["worker"])),
+        args=plan["args"], kwargs=plan["kwargs"],
+        daemon=True).start()
+    return plan["response"]
 
 
 @router.post("/descent/baseline")

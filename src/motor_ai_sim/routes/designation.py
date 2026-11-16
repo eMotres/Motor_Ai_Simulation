@@ -5,6 +5,9 @@
   configuration itself (a hidden configuration answers like a missing one).  The name check (``checks``) is our
   housekeeping: only staff (admin / engineer) get it.  A customer or the factory never gets an INCOMPLETE designation
   (one with "?"): ``designation`` is null for them and no segment is sent; staff see it, marked incomplete.
+  ``other_names``: the stored results of this motor that were computed for another designation (each result keeps the
+  name it was computed for, #724), for staff and members alike, since they are the caller's own results.  Only beside a
+  complete designation: against a "?" every stamp would read as different.
 
 The public help page "How to read a MOTRES motor name" decodes a typed name in the browser (``web/src/lib/motorDesignation.ts``,
 the same grammar as :func:`motor_designation.parse`), so it needs no route and works without sign-in.
@@ -34,5 +37,15 @@ def motor_designation(die: str, cfg: str, response: Response, authorization: Opt
         out.pop("checks", None)
         if not out["complete"]:
             return {"die": die, "config": cfg, "designation": None, "complete": False}
+    out["other_names"] = _other_names(die, cfg, out) if out["complete"] else []
     return {"die": die, "config": cfg, **out}
+
+
+def _other_names(die: str, cfg: str, out: dict) -> list:
+    """Results computed for another name; ``[]`` when the store cannot be read (the name itself still answers)."""
+    try:
+        from motor_ai_sim import duty_results
+        return MD.result_marks(out.get("designation"), duty_results.index(die, shared=True).get(cfg) or {})
+    except Exception:                                       # noqa: BLE001
+        return []
 

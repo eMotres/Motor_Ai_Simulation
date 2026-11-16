@@ -925,6 +925,7 @@
     "decode": "如何解读此名称",
     "fromDieNameTip": "取自冲片名称；目前没有存储的参数包含此项。",
     "checksTip": "{n} 个已存名称与参数不一致（见解读中的名称检查）",
+    "otherName": "{count} 个结果是按 {old} 计算的；电机现在是 {now}",
     "fact": {
       "slots": "{n} 槽",
       "phases": "{n} 相"

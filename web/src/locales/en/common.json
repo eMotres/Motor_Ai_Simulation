@@ -925,6 +925,7 @@
     "decode": "How to read this name",
     "fromDieNameTip": "Read from the die name; no stored parameter holds it yet.",
     "checksTip": "{n} stored names contradict the parameters (the name check in the decoder)",
+    "otherName": "{count, plural, one {# result was} other {# results were}} computed for {old}; the motor is now {now}",
     "fact": {
       "slots": "{n} slots",
       "phases": "{n} phases"

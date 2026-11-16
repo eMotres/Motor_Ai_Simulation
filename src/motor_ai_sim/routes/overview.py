@@ -10,6 +10,14 @@ Sources, all READ here, nothing written:
   ``analysis_controller`` links and the review list.  Before the first backfill the answer is complete without the ids;
 * the display states (``display_state``).
 
+The shown STAGE of a project is derived, never written back (owner's finding 2026-11-17: "Specification" everywhere told him
+nothing): a linked item has a production -> ``in_production``; a linked motor has stored results -> ``computed``; else the
+project's own status (``spec`` / ``spec_submitted`` / ``design`` ... ``closed``).  The three state lines of the object model
+replace this later.
+
+A project about a controller (its title says so) with no linked item, while a board (electronics production) has no
+project, is not guessed into a link: both sides go to the review list (``project_without_item``) with what the owner can do.
+
 "Works with" pairs the motors and the boards that the same project links (a project for a motor and its controller); the
 controller a motor is analysed with (``analysis_controller``) is listed apart and is not a pairing.
 """
@@ -39,8 +47,17 @@ def _title(value: Any) -> str:
     return str(value or "")
 
 
-def build(projects: List[dict], productions: List[dict], registry: Dict[str, Any], states: Dict[str, Any]) -> Dict[str, Any]:
-    """The Overview answer from already loaded records (pure: the route and the tests call it)."""
+def _has_results(die: str, cfg: str) -> bool:
+    try:
+        from motor_ai_sim import duty_results
+        return bool(duty_results.get(die, cfg))
+    except Exception:                                       # noqa: BLE001 - no store: not computed
+        return False
+
+
+def build(projects: List[dict], productions: List[dict], registry: Dict[str, Any], states: Dict[str, Any],
+          has_results=_has_results) -> Dict[str, Any]:
+    """The Overview answer from already loaded records (pure apart from ``has_results``: the route and the tests call it)."""
     idx = OR.Index(registry)
     items: Dict[str, Dict[str, Any]] = {}
 
@@ -94,6 +111,27 @@ def build(projects: List[dict], productions: List[dict], registry: Dict[str, Any
             item(str(m["die"]), str(m["config"]))["projects"].append(
                 {"id": pid, "link_status": str(m.get("status") or "current")})
 
+    computed = {k: bool(has_results(v["die"], v["config"])) for k, v in items.items() if v["kind"] == "motor"}
+    for k, v in items.items():
+        v["computed"] = computed.get(k, False)
+    for row in proj_rows.values():
+        if row["status"] == "closed":
+            row["stage"] = "closed"
+        elif any(items[k]["productions"] for k in row["motors"] if k in items):
+            row["stage"] = "in_production"
+        elif any(computed.get(k) for k in row["motors"]):
+            row["stage"] = "computed"
+        else:
+            row["stage"] = "spec_submitted" if row["status"] == "spec" and row["spec_submitted"] else row["status"]
+
+    review = list(registry.get("review") or [])
+    orphan_boards = sorted(k for k, v in items.items() if v["kind"] == "board" and not v["projects"])
+    for pid in sorted(pid for pid, r in proj_rows.items() if not r["motors"]):
+        # only a project that says it is about a controller: a new customer specification without a motor is not a review item
+        if orphan_boards and "controller" in proj_rows[pid]["title"].lower():
+            review.append({"code": "project_without_item", "where": proj_rows[pid]["title"], "project": pid,
+                           "candidates": orphan_boards})
+
     for pid, row in proj_rows.items():                    # works with: motors and boards of the same project
         kinds = {k: items[k]["kind"] for k in row["motors"] if k in items}
         boards = [k for k, v in kinds.items() if v == "board"]
@@ -105,8 +143,8 @@ def build(projects: List[dict], productions: List[dict], registry: Dict[str, Any
 
     return {
         "items": items, "projects": proj_rows, "productions": prod_rows,
-        "no_motor_yet": sorted(pid for pid, r in proj_rows.items() if not r["motors"]),
-        "review": registry.get("review") or [],
+        "no_item_yet": sorted(pid for pid, r in proj_rows.items() if not r["motors"]),
+        "review": review,
         "registry": ({"objects": len(registry.get("objects") or {}),
                       "backfilled_at": (registry.get("backfills") or [{}])[-1].get("at", "")}
                      if registry.get("objects") else None),

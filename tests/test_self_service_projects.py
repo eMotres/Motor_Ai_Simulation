@@ -248,6 +248,10 @@ def test_the_name_says_generator_and_uses_the_first_point_and_waits_for_data():
     assert self_service.spec_title(points) == "Hydrofoil generator, 159 N·m, 3000 rpm"
     assert self_service.spec_title({"fields": {"1_1": {"value": "Pump motor"}, "1_2": {"value": "Motor, one direction"}}}) == "Pump motor"
     assert self_service.spec_title({"fields": {}}) == ""
+    # owner rule: dimensional values to 0.1 in the title (a typed 21.0085 N·m read "21.0085 N·m")
+    odd = {"fields": {"1_1": {"value": "Marine propulsion"}, "1_2": {"value": "Motor"},
+                      "1_4": {"value": {"torque_Nm": 21.0085, "speed_rpm": 1499.96}, "status": "filled"}}}
+    assert self_service.spec_title(odd) == "Marine propulsion motor, 21 N·m, 1500 rpm"
 
 
 def test_only_staff_rename_and_their_name_stays(api):

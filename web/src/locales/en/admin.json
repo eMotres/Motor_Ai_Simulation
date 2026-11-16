@@ -1,7 +1,7 @@
 {
   "admin": "Admin",
   "nav": {
-    "overview": "Overview",
+    "overview": "Load",
     "users": "Users",
     "signups": "Sign-ups",
     "servers": "Servers",

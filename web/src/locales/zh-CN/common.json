@@ -788,7 +788,10 @@
     "production": "生产",
     "worksWith": "配套",
     "customer": "客户",
-    "stage": "阶段",
+    "stage": {
+      "in_production": "生产中",
+      "computed": "已计算"
+    },
     "updated": "更新",
     "shown": "显示",
     "refresh": "刷新",
@@ -802,9 +805,38 @@
     "noRegistry": "无编号",
     "noRegistryTip": "本服务器没有编号登记（保存在项目所在的主服务器上）。没有它各行数据也是完整的。",
     "review": "{n} 项待审核",
-    "noMotorYet": "尚无电机",
     "catalogOnly": "仅目录 ({n})",
-    "empty": "本服务器没有项目或生产。"
+    "empty": "本服务器没有项目或生产。",
+    "qtyNotSet": "数量未设定",
+    "countsRowsTip": "计数：电机和电路板行。一行的状态取其关联项目或生产中最新的状态。",
+    "countsProjectsTip": "计数：项目，按项目自身状态。",
+    "noItemYet": "尚无产品",
+    "reviewCode": {
+      "link_to_missing_motor": {
+        "what": "{where}：项目关联的电机不在任何目录中。",
+        "do": "打开项目，关联存在的电机，或取消此关联。"
+      },
+      "production_without_item": {
+        "what": "{where}：生产引用的配置不在任何目录层中。",
+        "do": "以此名称在目录中保存该配置，或告诉我们该生产制造的是哪台电机。"
+      },
+      "case_collision": {
+        "what": "{where}：两个名称仅大小写不同。",
+        "do": "重命名其中一个（电机目录，重命名冲片），避免混淆。"
+      },
+      "duplicate_link": {
+        "what": "{where}：项目以不同状态两次列出同一电机。",
+        "do": "在项目的电机列表中只保留一个关联。"
+      },
+      "electronics_and_catalog": {
+        "what": "{where}：同一名称既是目录电机又是电子生产。",
+        "do": "重命名其中一个。"
+      },
+      "project_without_item": {
+        "what": "{where}：控制器项目没有关联产品，而以下电路板没有项目：{candidates}。",
+        "do": "请告诉我们哪块电路板属于此项目；不会凭猜测关联。"
+      }
+    }
   },
   "designation": {
     "segment": {

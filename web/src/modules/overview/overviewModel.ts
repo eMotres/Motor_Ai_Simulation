@@ -4,22 +4,26 @@
 import type { DisplayFilter, DisplayState, DisplayStateRec } from '../../lib/displayState.ts';
 
 export interface OverviewProject { id: string; title: string; customer_org: string; status: string; updated_at: string;
-  spec_submitted?: { version: number; at: string | null } | null; motors: string[]; display: DisplayStateRec; project_id?: string | null }
+  spec_submitted?: { version: number; at: string | null } | null; motors: string[]; display: DisplayStateRec; project_id?: string | null;
+  /** derived by the server, never stored: in_production / computed / the project's own status */
+  stage?: string }
 export interface OverviewProduction { die: string; config: string; title: string; status: string; current_revision: string;
   order_quantity: number; product_type: string; updated_at: string; display: DisplayStateRec; production_id?: string | null }
 export interface OverviewItem { die: string; config: string; item_id: string | null; kind: 'motor' | 'board'; state: string;
   layers: string[]; projects: Array<{ id: string; link_status: string }>; productions: string[]; works_with: string[];
-  analysis_controllers: string[] }
+  analysis_controllers: string[]; computed?: boolean }
 export interface OverviewAnswer { items: Record<string, OverviewItem>; projects: Record<string, OverviewProject>;
-  productions: Record<string, OverviewProduction>; no_motor_yet: string[]; review: Array<Record<string, unknown>>;
+  productions: Record<string, OverviewProduction>; no_item_yet: string[]; review: Array<Record<string, unknown>>;
   registry: { objects: number; backfilled_at: string } | null }
 export interface TreeDie { name: string; slots?: number | null; poles?: number | null; stator_diameter?: number | null;
   configs?: Array<{ name: string }> }
 
 export interface Row { key: string; item: OverviewItem; projects: Array<OverviewProject & { link_status: string }>;
-  productions: OverviewProduction[]; state: DisplayState }
+  productions: OverviewProduction[]; state: DisplayState;
+  /** no current project link and no production: a superseded or trial variant, shown muted after the current one */
+  muted: boolean }
 export interface Family { die: string; slots: number | null; poles: number | null; od: number | null; inCatalog: boolean; rows: Row[] }
-export interface OverviewView { motors: Family[]; controllers: Family[]; catalogOnly: TreeDie[]; noMotorYet: OverviewProject[];
+export interface OverviewView { motors: Family[]; controllers: Family[]; catalogOnly: TreeDie[]; noItemYet: OverviewProject[];
   counts: Record<DisplayFilter, number> }
 
 const RANK: Record<DisplayState, number> = { active: 0, parked: 1, archived: 2 };
@@ -51,15 +55,19 @@ export function buildView(answer: OverviewAnswer, tree: TreeDie[], filter: Displ
       fam = { die: item.die, slots: num(d?.slots), poles: num(d?.poles), od: num(d?.stator_diameter), inCatalog: !!d, rows: [] };
       groups.set(item.die, fam);
     }
-    fam.rows.push({ key, item, projects, productions, state });
+    const muted = !productions.length && !projects.some((p) => p.link_status !== 'trial');
+    fam.rows.push({ key, item, projects, productions, state, muted });
   }
   const linkedDies = new Set(Object.values(answer.items).map((i) => i.die));
   const byName = (a: Family, b: Family) => a.die.localeCompare(b.die);
+  for (const fam of [...motors.values(), ...controllers.values()]) {
+    fam.rows.sort((a, b) => Number(a.muted) - Number(b.muted) || a.item.config.localeCompare(b.item.config));
+  }
   return {
     motors: [...motors.values()].sort(byName),
     controllers: [...controllers.values()].sort(byName),
     catalogOnly: tree.filter((d) => d && typeof d.name === 'string' && !linkedDies.has(d.name)).sort((a, b) => a.name.localeCompare(b.name)),
-    noMotorYet: answer.no_motor_yet.map((id) => answer.projects[id]).filter((p): p is OverviewProject => !!p
+    noItemYet: answer.no_item_yet.map((id) => answer.projects[id]).filter((p): p is OverviewProject => !!p
       && (filter === 'all' || (p.display?.state ?? 'active') === filter)),
     counts,
   };
@@ -70,4 +78,13 @@ export function flatProjects(answer: OverviewAnswer, filter: DisplayFilter): Ove
   return Object.values(answer.projects)
     .filter((p) => filter === 'all' || (p.display?.state ?? 'active') === filter)
     .sort((a, b) => (b.updated_at || '').localeCompare(a.updated_at || '') || a.title.localeCompare(b.title));
+}
+
+/** The family header shows Ø and slots/poles only when the die name does not already say them ("CIANO10 12_40 Ø12 12s10p"). */
+export function headerChips(f: { die: string; od: number | null; slots: number | null; poles: number | null }): { od: boolean; sp: boolean } {
+  const name = f.die.toLowerCase();
+  return {
+    od: f.od !== null && !name.includes(`ø${f.od}`),
+    sp: f.slots !== null && f.poles !== null && !name.includes(`${f.slots}s${f.poles}p`),
+  };
 }

@@ -5,7 +5,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Alert, Box, Button, Checkbox, Chip, CircularProgress, FormControlLabel, MenuItem, Select, TextField, Tooltip, Typography } from '@mui/material';
 import { useTranslation } from 'react-i18next';
 
-import { frontCost, paretoFront, runLabel, toRun } from '../../lib/propellerDesign';
+import { frontCost, paretoFront, round2, runLabel, toRun } from '../../lib/propellerDesign';
 import type { EvalRecord, RunRecord, Vector } from '../../lib/propellerDesign';
 import { oneOf } from '../../lib/viewMemory';
 import { useRememberedView } from '../../lib/useRememberedView';
@@ -107,7 +107,7 @@ export default function DesignerPage() {
         if (!row.valid || !row.objectives) continue;
         const v = { ...vector, [sweepVar]: row.value };
         const id = nextId.current++;
-        setRuns((rs) => [...rs, { id, label: `${sweepVar}=${typeof row.value === 'number' ? Number(row.value.toPrecision(4)) : row.value}`, vector: v, designId: row.design_id ?? '',
+        setRuns((rs) => [...rs, { id, label: `${sweepVar}=${typeof row.value === 'number' ? round2(row.value) : row.value}`, vector: v, designId: row.design_id ?? '',
           op, rpm: row.rpm ?? 0, thrust_per_shaft_W: row.objectives!.thrust_per_shaft_W, air_ms: row.objectives!.cooling_air_axial_ms,
           constraintsMet: row.constraints_met === true, tipMach: row.tip_mach ?? 0 }].slice(-MAX_RUNS));
       }

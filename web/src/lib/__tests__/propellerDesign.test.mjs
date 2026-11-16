@@ -43,7 +43,7 @@ t('run labels name what changed', () => {
   const a = { x: 1, y: 2, z: 'a' };
   assert.equal(P.runLabel(null, a), 'start');
   assert.equal(P.runLabel(a, { ...a }), 'same');
-  assert.equal(P.runLabel(a, { ...a, x: 1.23456789 }), 'x=1.235');
+  assert.equal(P.runLabel(a, { ...a, x: 1.23456789 }), 'x=1.23');                // display rounding: two decimals (owner 2026-11-16)
   assert.equal(P.runLabel(a, { x: 5, y: 6, z: 'b', w: 1 }, 2), 'x=5, y=6 +2');
   assert.deepEqual(P.changedNames(null, a), ['x', 'y', 'z']);
 });
@@ -83,6 +83,21 @@ t('key flags keep a fixed order and drop the rest; formatting never prints NaN',
   assert.equal(P.fmt(null), '—');
   assert.equal(P.fmt(NaN), '—');
   assert.equal(P.fmt(1.2345, 1), '1.2');
+});
+
+t('display rounding: at most two decimals, small values keep two significant digits, the value itself is not changed', () => {
+  assert.equal(P.round2(38.511887253966584), 38.51);
+  assert.equal(P.fmt2(38.511887253966584), '38.51');
+  assert.equal(P.fmt2(0.0412345), '0.041');
+  assert.equal(P.fmt2(-0.5), '-0.5');
+  assert.equal(P.fmt2(0), '0');
+  assert.equal(P.fmt2(null), '—');
+  assert.equal(P.fmt2(NaN), '—');
+  assert.equal(P.fmt2(P.gPerW(0.0401)), '4.09');                                              // N/W shown as g/W
+  assert.equal(P.gPerW(null), null);
+  const v = { x: 38.511887253966584 };
+  P.runLabel(null, v);
+  assert.equal(v.x, 38.511887253966584);
 });
 
 t('toRun copies the vector so a later edit cannot change the stored run', () => {

@@ -805,5 +805,114 @@
     "noMotorYet": "No motor yet",
     "catalogOnly": "Catalog only ({n})",
     "empty": "No projects or productions on this server."
+  },
+  "designation": {
+    "segment": {
+      "winding": "Winding",
+      "rotor": "Rotor",
+      "cooling": "Cooling",
+      "steel": "Core steel",
+      "double": "Double winding",
+      "open": "Construction",
+      "ferrite": "Magnets",
+      "aluminium": "Coils",
+      "poles": "Poles",
+      "od": "Stator OD",
+      "length": "Stack length",
+      "turns": "Turns per coil",
+      "wire": "Wire",
+      "connection": "Coil connection",
+      "star_delta": "Phase connection",
+      "rev": "Revision"
+    },
+    "meaning": {
+      "winding": {
+        "C": "concentrated",
+        "D": "distributed"
+      },
+      "rotor": {
+        "I": "inrunner",
+        "O": "outrunner"
+      },
+      "cooling": {
+        "A": "air",
+        "L": "liquid",
+        "O": "oil"
+      },
+      "steel": {
+        "G": "grain-oriented",
+        "N": "non-oriented",
+        "C": "cobalt-iron (FeCo)"
+      },
+      "double": {
+        "D": "two three-phase sets",
+        "none": "one three-phase set"
+      },
+      "open": {
+        "O": "open",
+        "none": "closed"
+      },
+      "ferrite": {
+        "F": "ferrite",
+        "none": "NdFeB"
+      },
+      "aluminium": {
+        "A": "aluminium",
+        "none": "copper"
+      },
+      "wire": {
+        "F": "flat (rectangular)",
+        "R": "round"
+      },
+      "star_delta": {
+        "Y": "star",
+        "D": "delta"
+      },
+      "poles": {
+        "n": "{n} poles"
+      },
+      "od": {
+        "n": "{n} mm"
+      },
+      "length": {
+        "n": "{n} mm"
+      },
+      "turns": {
+        "n": "{n} turns"
+      },
+      "rev": {
+        "n": "Rev {n}"
+      },
+      "connection": {
+        "n": "{n}",
+        "words": "{series} in series × {parallel} parallel"
+      },
+      "unknown": "not decided by the stored parameters"
+    },
+    "decode": "How to read this name",
+    "fromDieNameTip": "Read from the die name; no stored parameter holds it yet.",
+    "checksTip": "{n} stored names contradict the parameters (the name check in the decoder)",
+    "fact": {
+      "slots": "{n} slots",
+      "phases": "{n} phases"
+    },
+    "check": {
+      "die_name_not_standard": "The die name \"{name}\" does not follow the standard.",
+      "die_name_winding": "The die name \"{name}\" says another winding type; the parameters give {value}.",
+      "die_name_rotor": "The die name \"{name}\" says another rotor type; the parameters give {value}.",
+      "die_name_steel": "The die name \"{name}\" says another core steel; the parameters give {value}.",
+      "die_name_poles": "The die name \"{name}\" says another pole count; the parameters give {value}.",
+      "die_name_od": "The die name \"{name}\" says another OD; the parameters give {value} mm.",
+      "config_name_turns": "The configuration name \"{name}\" says another turn count; the parameters give {value}.",
+      "config_name_length": "The configuration name \"{name}\" says another stack length; the parameters give {value} mm."
+    },
+    "help": {
+      "title": "How to read a MOTRES motor name",
+      "format": "<letters><poles> <stator OD>_<stack length> <turns><F|R><connection><Y|D> [Rev X]",
+      "try": "Motor name",
+      "notAName": "Not a motor name in this format.",
+      "position": "Position",
+      "values": "Values"
+    }
   }
 }

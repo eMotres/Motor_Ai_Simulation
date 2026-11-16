@@ -26,6 +26,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
   import { useRememberedView } from '../../../lib/useRememberedView';
   import { oneOf } from '../../../lib/viewMemory';
   import MotorRevisionText from '../../../components/common/MotorRevisionText';
+  import MotorDesignation from '../../../components/common/MotorDesignation';
   import { useAuth } from '../../../contexts/AuthContext';
   import { useTranslation } from 'react-i18next';
   import { developmentApi, DevelopmentApiError } from '../api';
@@ -799,7 +800,7 @@ export default function DevelopmentPage() {
           return headerRow(colSpan, motorColor(r.motor), false, <Stack direction="row" alignItems="center" spacing={1} flexWrap="wrap" useFlexGap>
             <Box component="span" aria-hidden sx={{ width: 9, height: 9, borderRadius: '50%', flex: '0 0 9px', bgcolor: motorColor(r.motor) }} />
             <Stack spacing={0.1} sx={{ minWidth: 0, flex: '1 1 260px' }}>
-              <Typography sx={{ fontSize: 12.5, fontWeight: 700, color: 'var(--text-0)', overflowWrap: 'anywhere' }} data-testid="variant-name">{r.variant}<MotorRevisionText die={r.motor.die} config={r.motor.config} canonicalDie={r.motor.canonical_die} /></Typography>
+              <Typography sx={{ fontSize: 12.5, fontWeight: 700, color: 'var(--text-0)', overflowWrap: 'anywhere' }} data-testid="variant-name">{r.variant}<MotorRevisionText die={r.motor.die} config={r.motor.config} canonicalDie={r.motor.canonical_die} /><MotorDesignation die={r.motor.die} config={r.motor.config} size={11} /></Typography>
               {stepNote(note)}
               {live && <VariantStageBar data={activity} motor={live} t={tr} />}
             </Stack>

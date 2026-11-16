@@ -28,6 +28,7 @@ import { appLinkPath, isAppLinkPath, parseAppLink } from '../../../lib/appLink';
 import { useHistoryLevel } from '../../../lib/historyLevels';
 import { useUIStore } from '../../../stores/uiStore';
 import DigestSettings from '../../../components/digest/DigestSettings';
+import MotorDesignation from '../../../components/common/MotorDesignation';
 import { DisplayStateControl } from '../../../components/common/DisplayStateControl';
 import { productionStateKey } from '../../../lib/displayState';
 import { displayStateApi, useDisplayStates } from '../../../lib/displayStateApi';
@@ -173,7 +174,7 @@ const ProductionPage: React.FC<{ die: string; config: string; onBack: () => void
     <Box>
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, mb: 1.5, flexWrap: 'wrap' }}>
         <Button size="small" onClick={onBack} sx={{ textTransform: 'none', fontSize: 12, color: 'var(--text-2)' }}>← {backLabel ?? t('back')}</Button>
-        <Typography sx={{ fontSize: 16, fontWeight: 800, color: 'var(--text-0)' }}>{die} / {config}<RevisionLabel rev={prod?.product_revision?.rev} /></Typography>
+        <Typography sx={{ fontSize: 16, fontWeight: 800, color: 'var(--text-0)' }}>{die} / {config}<RevisionLabel rev={prod?.product_revision?.rev} />{prod && prod.product_type !== 'electronics' && <MotorDesignation die={die} config={config} />}</Typography>
         {prod && (
           <>
             <Chip size="small" label={t('parts.revision', { rev: prod.current_revision })} sx={{ height: 18, fontSize: 10.5, fontWeight: 700, bgcolor: 'var(--panel)', color: 'var(--text-2)' }} />

@@ -30,6 +30,8 @@ const App = lazy(watchChunkImport(() => import('./App')));
 const OAuthConsent = lazy(watchChunkImport(() => import('./components/auth/OAuthConsent')));
 const CommPrefsPage = lazy(watchChunkImport(() => import('./components/auth/CommPrefsPage')));
 // the Terms of Use, Privacy Policy and Platform Agreement, read-only, readable signed out (/terms, /privacy, /platform-agreement, also under /zh-cn/)
+// How to read a MOTRES motor name (owner 2026-11-16): public, signed out too (/motor-names, /zh-cn/motor-names)
+const MotorNamesPage = lazy(watchChunkImport(() => import('./components/help/MotorNamesPage')));
 const LegalPage = lazy(watchChunkImport(() => import('./components/auth/LegalPage')));
 // the door behind a shared production-documents link: asks the server whether the caller is a member before the workspace opens
 const ShareLinkEntry = lazy(watchChunkImport(() => import('./modules/production/components/ShareLinkEntry')));
@@ -61,6 +63,7 @@ const Root: React.FC = () => {
   if (isPreferencesPath(path)) return <Suspense fallback={<Loading />}><CommPrefsPage /></Suspense>;
   const legalKind = matchLegalPage(path);
   if (legalKind) return <Suspense fallback={<Loading />}><LegalPage kind={legalKind} /></Suspense>;
+  if (/^(?:\/zh-cn)?\/motor-names\/?$/i.test(path)) return <Suspense fallback={<Loading />}><MotorNamesPage /></Suspense>;
   if (showsLandingShell(!!user, resolved, enforced)) return <LandingShell />;
   // A link to a production page or one of its tabs (owner 2026-10-19, 2026-10-26): the link grants nothing, the server decides (a stranger gets a
   // one-line "request access" page with no names).  A signed-out visitor got the landing above, with the sign-in dialog open.

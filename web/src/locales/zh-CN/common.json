@@ -805,5 +805,114 @@
     "noMotorYet": "尚无电机",
     "catalogOnly": "仅目录 ({n})",
     "empty": "本服务器没有项目或生产。"
+  },
+  "designation": {
+    "segment": {
+      "winding": "绕组",
+      "rotor": "转子",
+      "cooling": "冷却",
+      "steel": "铁芯材料",
+      "double": "双绕组",
+      "open": "结构",
+      "ferrite": "磁钢",
+      "aluminium": "线圈",
+      "poles": "极数",
+      "od": "定子外径",
+      "length": "叠厚",
+      "turns": "每线圈匝数",
+      "wire": "导线",
+      "connection": "线圈连接",
+      "star_delta": "相连接",
+      "rev": "版本"
+    },
+    "meaning": {
+      "winding": {
+        "C": "集中绕组",
+        "D": "分布绕组"
+      },
+      "rotor": {
+        "I": "内转子",
+        "O": "外转子"
+      },
+      "cooling": {
+        "A": "风冷",
+        "L": "液冷",
+        "O": "油冷"
+      },
+      "steel": {
+        "G": "取向硅钢",
+        "N": "无取向硅钢",
+        "C": "铁钴合金 (FeCo)"
+      },
+      "double": {
+        "D": "两套三相绕组",
+        "none": "一套三相绕组"
+      },
+      "open": {
+        "O": "开放式",
+        "none": "封闭式"
+      },
+      "ferrite": {
+        "F": "铁氧体",
+        "none": "钕铁硼"
+      },
+      "aluminium": {
+        "A": "铝",
+        "none": "铜"
+      },
+      "wire": {
+        "F": "扁线（矩形）",
+        "R": "圆线"
+      },
+      "star_delta": {
+        "Y": "星形",
+        "D": "三角形"
+      },
+      "poles": {
+        "n": "{n} 极"
+      },
+      "od": {
+        "n": "{n} mm"
+      },
+      "length": {
+        "n": "{n} mm"
+      },
+      "turns": {
+        "n": "{n} 匝"
+      },
+      "rev": {
+        "n": "版本 {n}"
+      },
+      "connection": {
+        "n": "{n}",
+        "words": "{series} 串 × {parallel} 并"
+      },
+      "unknown": "无法由已存参数确定"
+    },
+    "decode": "如何解读此名称",
+    "fromDieNameTip": "取自冲片名称；目前没有存储的参数包含此项。",
+    "checksTip": "{n} 个已存名称与参数不一致（见解读中的名称检查）",
+    "fact": {
+      "slots": "{n} 槽",
+      "phases": "{n} 相"
+    },
+    "check": {
+      "die_name_not_standard": "冲片名称“{name}”不符合标准。",
+      "die_name_winding": "冲片名称“{name}”的绕组类型与参数不符；参数为 {value}。",
+      "die_name_rotor": "冲片名称“{name}”的转子类型与参数不符；参数为 {value}。",
+      "die_name_steel": "冲片名称“{name}”的铁芯材料与参数不符；参数为 {value}。",
+      "die_name_poles": "冲片名称“{name}”的极数与参数不符；参数为 {value}。",
+      "die_name_od": "冲片名称“{name}”的外径与参数不符；参数为 {value} mm。",
+      "config_name_turns": "配置名称“{name}”的匝数与参数不符；参数为 {value}。",
+      "config_name_length": "配置名称“{name}”的叠厚与参数不符；参数为 {value} mm。"
+    },
+    "help": {
+      "title": "如何解读 MOTRES 电机名称",
+      "format": "<字母><极数> <定子外径>_<叠厚> <匝数><F|R><连接><Y|D> [版本 X]",
+      "try": "电机名称",
+      "notAName": "不是此格式的电机名称。",
+      "position": "位置",
+      "values": "取值"
+    }
   }
 }

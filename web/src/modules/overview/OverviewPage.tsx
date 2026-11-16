@@ -68,7 +68,7 @@ const OverviewPage: React.FC = () => {
   };
   // the stage is derived by the server (production -> in production, stored results -> computed), never written back
   const projectLabel = (p: OverviewProject) => (p.stage === 'in_production' || p.stage === 'computed'
-    ? t(`overview.stage.${p.stage}`) : t(`development:status.${p.stage || shownStatus(p.status, p.spec_submitted ?? undefined)}`));
+    ? t(`overview.stageName.${p.stage}`) : t(`development:status.${p.stage || shownStatus(p.status, p.spec_submitted ?? undefined)}`));
 
   const projectChip = (p: OverviewProject & { link_status?: string }) => (
     <Tooltip key={p.id} title={[p.customer_org, projectLabel(p), p.link_status === 'trial' ? t('overview.trial') : '', t(`displayState.${p.display.state}`)].filter(Boolean).join(' · ')}>

@@ -216,8 +216,22 @@ class EvalMemo:
         return hashlib.sha256(json.dumps(payload, sort_keys=True, default=str)
                               .encode()).hexdigest()
 
+    #: a result above this ring self-check is not reused on a replay (re-solved)
+    SELF_CHECK_MAX = 0.5
+
     def _transient(self, res: Dict[str, Any]) -> bool:
         if res.get("ok"):
+            r = res.get("res") or {}
+            # Kept for this run, never replayed into another: a solve that
+            # needed the P2 cut-edge repair (#702) or whose two-ring
+            # self-check is wild says more about its mesh than its design.
+            if r.get("p2_cut_edge_weld"):
+                return True
+            try:
+                if float(r.get("ripple_self_check_rel") or 0.0) > self.SELF_CHECK_MAX:
+                    return True
+            except (TypeError, ValueError):
+                pass
             return False
         if res.get("cancelled") or res.get("source_changed"):
             return True
@@ -294,6 +308,10 @@ def run_descent(O, body: Dict[str, Any], *, frozen: List[str] = (),
     clash = sorted(set(frozen) & {s["name"] for s in plan["var_specs"]})
     if clash:
         raise Refused("frozen keys listed as variables: " + ", ".join(clash))
+    gl = O._resolve_gap_layers(req.gap_layers)
+    if float(gl[0]) < 2.0:
+        raise Refused(f"gap_layers {gl[0]} ({gl[1]}) < 2: optimisation evals use at least "
+                      f"2 gap layers (owner 2026-11-16)")
     if req.algorithm.strip().lower() == "cmaes":
         try:
             import cma  # noqa: F401

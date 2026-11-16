@@ -37,6 +37,7 @@ BODY = {
     "operating_point": {"current_a": 10.0, "gamma_deg": 0.0, "rpm": 3000.0},
     "max_iters": 2, "auto_expand": False, "optimize_gamma": False,
     "objective": "baseline_line", "steps_per_period": 24, "run_id": "golden",
+    "gap_layers": 2,
 }
 KEYS = ("n_evals", "best", "history", "baseline", "baseline_line", "result",
         "final_validation_status", "error")
@@ -151,3 +152,66 @@ def test_a_frozen_variable_is_refused():
             assert "tooth_width" in str(e)
         else:
             raise AssertionError("not refused")
+
+
+def test_fewer_than_two_gap_layers_are_refused():
+    with _patched(_stub):
+        try:
+            H.run_descent(O, dict(BODY, gap_layers=1), log=lambda m: None)
+        except H.Refused as e:
+            assert "gap_layers 1.0" in str(e)
+        else:
+            raise AssertionError("not refused")
+
+
+def test_suspect_results_are_used_but_not_replayed():
+    with tempfile.TemporaryDirectory() as d:
+        calls = []
+
+        def fn(ov, cur, *a, **kw):
+            calls.append(1)
+            out = _stub(ov, cur, *a, **kw)
+            if len(calls) == 1:
+                out["res"]["p2_cut_edge_weld"] = {"rescued": 2, "unmatched": 0}
+            if len(calls) == 2:
+                out["res"]["ripple_self_check_rel"] = 0.7
+            return out
+        p = Path(d) / H.MEMO_FILE
+        with _patched(fn):
+            m = H.EvalMemo(O, p, None)
+            a = m({"tooth_width": 1.0}, 10.0, 24, 120.0)
+            b = m({"tooth_width": 2.0}, 10.0, 24, 120.0)
+            c = m({"tooth_width": 3.0}, 10.0, 24, 120.0)
+            assert a["ok"] and b["ok"] and c["ok"]
+            assert len(m.memo) == 1                 # only the clean one is kept
+            m({"tooth_width": 1.0}, 10.0, 24, 120.0)
+            assert len(calls) == 4                  # the repaired one is solved again
+
+
+def test_mtpa_run_settings_are_opt_in():
+    seen = []
+
+    def fn(ov, cur, *a, **kw):
+        seen.append(kw)
+        return _stub(ov, cur, *a, **kw)
+    body = dict(BODY, optimize_gamma=True, max_iters=1, rotor_eddy=True,
+                structured_gap=True, end_winding_factor=0.0)
+    for on in (False, True):
+        seen.clear()
+        with _patched(fn):
+            H.run_descent(O, dict(body, mtpa_run_settings=on), log=lambda m: None, poll_s=0.05)
+        sweep = seen[:11]                     # the pre-sweep runs first: 11 angles
+        assert sorted(kw["gamma_deg"] for kw in sweep) == [-50.0 + 10 * i for i in range(11)]
+        if not on:
+            # the eval defaults, exactly as before: no run switches passed
+            assert all("structured_gap" not in kw and "rotor_eddy" not in kw for kw in sweep)
+        else:
+            assert all(kw["structured_gap"] is True and kw["gap_layers"] == 2.0
+                       and kw["rotor_eddy"] is True and kw["rpm"] == 3000.0 for kw in sweep)
+
+
+def test_default_descent_kwargs_are_unchanged():
+    plan = O.prepare_descent(O.DescentRequest(**BODY))
+    assert "mtpa_run_settings" not in plan["kwargs"]
+    plan = O.prepare_descent(O.DescentRequest(**dict(BODY, mtpa_run_settings=True)))
+    assert plan["kwargs"]["mtpa_run_settings"] is True

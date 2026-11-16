@@ -10,9 +10,11 @@ import { connectionParts, meaningKey, SEGMENTS, UNKNOWN, type Segment } from '..
 const API = (import.meta.env.VITE_API_URL ?? 'http://localhost:8001') as string;
 
 interface SegmentInfo { value: string; source: string; [k: string]: unknown }
+/** Stored results of this motor computed for ANOTHER designation (each result keeps the name it was computed for). */
+export interface OtherName { computed_for: string; now: string; results: Array<{ duty: string; kind: string; computed_at?: string | null }> }
 /** For a customer or the factory the server sends no `checks` and no incomplete designation (`designation: null`). */
-interface DesignationAnswer { designation: string | null; complete: boolean; unknown?: string[]; segments?: Record<string, SegmentInfo>;
-  checks?: Array<{ code: string; name: string; parameters?: string }> }
+export interface DesignationAnswer { designation: string | null; complete: boolean; unknown?: string[]; segments?: Record<string, SegmentInfo>;
+  checks?: Array<{ code: string; name: string; parameters?: string }>; other_names?: OtherName[] }
 
 export const fetchDesignation = async (die: string, config: string): Promise<DesignationAnswer | null> => {
   try {
@@ -21,7 +23,13 @@ export const fetchDesignation = async (die: string, config: string): Promise<Des
   } catch { return null; }
 };
 
-export const DesignationDecoder: React.FC<{ segments: Record<string, SegmentInfo>; checks?: DesignationAnswer['checks'] }> = ({ segments, checks }) => {
+const MARK = '#f59e0b';
+
+/** "N results computed for <old>; the motor is now <new>": one line per earlier name. */
+export const otherNameText = (t: (k: string, o?: Record<string, unknown>) => string, o: OtherName) =>
+  t('designation.otherName', { count: o.results.length, old: o.computed_for, now: o.now });
+
+export const DesignationDecoder: React.FC<{ segments: Record<string, SegmentInfo>; checks?: DesignationAnswer['checks']; otherNames?: OtherName[] }> = ({ segments, checks, otherNames }) => {
   const { t } = useTranslation('common');
   const words = (seg: Segment, v: string) => {
     if (seg === 'connection') {
@@ -57,6 +65,11 @@ export const DesignationDecoder: React.FC<{ segments: Record<string, SegmentInfo
           })}
         </TableBody>
       </Table>
+      {otherNames?.map((o) => (
+        <Typography key={o.computed_for} data-testid="designation-other-name" sx={{ mt: 0.75, fontSize: 12, color: MARK }}>
+          {otherNameText(t, o)}: {o.results.map((r) => r.duty).filter((d, i, a) => a.indexOf(d) === i).join(', ')}
+        </Typography>
+      ))}
       {checks?.map((c, i) => (
         <Typography key={i} sx={{ mt: 0.75, fontSize: 12, color: '#f59e0b' }}>{t(`designation.check.${c.code}`, { name: c.name, value: c.parameters ?? '' })}</Typography>
       ))}
@@ -64,21 +77,15 @@ export const DesignationDecoder: React.FC<{ segments: Record<string, SegmentInfo
   );
 };
 
-/** `<MotorDesignation die config />`: the name in monospace, "?" opens the decoder.  Nothing while it loads or for a motor the
- *  caller may not see. */
-const MotorDesignation: React.FC<{ die: string; config: string; size?: number }> = ({ die, config, size = 12 }) => {
+/** The name in monospace, "?" opens the decoder, "≠" marks results computed for another name (never a silent relabel).
+ *  Pure on its answer, so it renders server-side in the tests with the real locale files. */
+export const DesignationName: React.FC<{ answer: DesignationAnswer; size?: number }> = ({ answer, size = 12 }) => {
   const { t } = useTranslation('common');
-  const [answer, setAnswer] = useState<DesignationAnswer | null>(null);
   const [anchor, setAnchor] = useState<HTMLElement | null>(null);
-  useEffect(() => {
-    let alive = true;
-    setAnswer(null);
-    void fetchDesignation(die, config).then((a) => { if (alive) setAnswer(a); });
-    return () => { alive = false; };
-  }, [die, config]);
-  if (!answer?.designation || !answer.segments) return null;
-  const segments = answer.segments, checks = answer.checks ?? [];
+  if (!answer.designation || !answer.segments) return null;
+  const segments = answer.segments, checks = answer.checks ?? [], others = answer.other_names ?? [];
   const stop = (e: React.SyntheticEvent) => e.stopPropagation();
+  const othersText = others.map((o) => otherNameText(t, o)).join('\n');
   return (
     <Box component="span" sx={{ display: 'inline-flex', alignItems: 'center', ml: 1, verticalAlign: 'middle' }} onClick={stop} data-testid="motor-designation">
       <Typography component="span" sx={{ fontFamily: 'monospace', fontSize: size, fontWeight: 700, color: answer.complete ? 'var(--text-1)' : 'var(--text-3)' }}>
@@ -89,12 +96,30 @@ const MotorDesignation: React.FC<{ die: string; config: string; size?: number }>
           <HelpOutlineIcon sx={{ fontSize: size + 2 }} />
         </IconButton>
       </Tooltip>
-      {checks.length > 0 && <Tooltip title={t('designation.checksTip', { n: checks.length })}><Box component="span" sx={{ color: '#f59e0b', fontWeight: 800, fontSize: size }}>!</Box></Tooltip>}
+      {others.length > 0 && (
+        <Tooltip title={<Box component="span" sx={{ whiteSpace: 'pre-line' }}>{othersText}</Box>}>
+          <Box component="span" role="img" aria-label={othersText} data-testid="designation-other-mark"
+            sx={{ color: MARK, fontWeight: 800, fontSize: size, ml: 0.25 }}>≠</Box>
+        </Tooltip>
+      )}
+      {checks.length > 0 && <Tooltip title={t('designation.checksTip', { n: checks.length })}><Box component="span" sx={{ color: MARK, fontWeight: 800, fontSize: size }}>!</Box></Tooltip>}
       <Popover open={!!anchor} anchorEl={anchor} onClose={() => setAnchor(null)} anchorOrigin={{ vertical: 'bottom', horizontal: 'left' }} onClick={stop}>
-        <DesignationDecoder segments={segments} checks={checks} />
+        <DesignationDecoder segments={segments} checks={checks} otherNames={others} />
       </Popover>
     </Box>
   );
+};
+
+/** `<MotorDesignation die config />`: fetches the answer; nothing while it loads or for a motor the caller may not see. */
+const MotorDesignation: React.FC<{ die: string; config: string; size?: number }> = ({ die, config, size = 12 }) => {
+  const [answer, setAnswer] = useState<DesignationAnswer | null>(null);
+  useEffect(() => {
+    let alive = true;
+    setAnswer(null);
+    void fetchDesignation(die, config).then((a) => { if (alive) setAnswer(a); });
+    return () => { alive = false; };
+  }, [die, config]);
+  return answer ? <DesignationName answer={answer} size={size} /> : null;
 };
 
 export default MotorDesignation;

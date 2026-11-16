@@ -319,6 +319,21 @@ def compare(result_designation: Optional[str], current_designation: Optional[str
     return {"computed_for": str(result_designation), "now": str(current_designation)}
 
 
+def result_marks(current_designation: Optional[str], results: Mapping[str, Any]) -> List[Dict[str, Any]]:
+    """The stored results of one motor that were computed for ANOTHER designation (owner 2026-11-17: a result keeps its
+    own name, never a silent relabel).  ``results`` is ``{duty: {kind: entry}}`` (``duty_results.index`` of one
+    configuration).  One row per earlier name, ``{"computed_for", "now", "results": [{"duty", "kind", "computed_at"}]}``,
+    sorted by name; a result without a stamp gives no row (unknown is not "different")."""
+    marks: Dict[str, Dict[str, Any]] = {}
+    for duty, kinds in sorted((results or {}).items()):
+        for kind, entry in sorted((kinds or {}).items()) if isinstance(kinds, Mapping) else ():
+            mark = compare(entry.get("designation") if isinstance(entry, Mapping) else None, current_designation)
+            if mark:
+                row = marks.setdefault(mark["computed_for"], {**mark, "results": []})
+                row["results"].append({"duty": str(duty), "kind": str(kind), "computed_at": entry.get("computed_at")})
+    return [marks[k] for k in sorted(marks)]
+
+
 def for_motor(die: str, cfg: str) -> Dict[str, Any]:
     """The designation of a stored motor, read now from its files (never cached, never stored)."""
     die_doc, cfg_doc, rev = _stored(die, cfg)

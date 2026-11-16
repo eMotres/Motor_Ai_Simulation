@@ -216,3 +216,41 @@ def test_the_stamp_never_raises(monkeypatch):
     out = MD.stamp("CILN28", "payload", library=LIB, geometry=geometry_of(*motor()), winding={"connection": "4S"},
                    materials={"stator_core": "NO20", "magnet": "NDFEB52", "slot": "copper"})
     assert out["designation"] == "CILN28 200_40 24F4SY"
+
+
+# ── the mark beside the name: results computed for another designation (reader side of #724) ─────────────────────────
+
+def test_result_marks_group_the_results_computed_for_another_name():
+    now = "CILN28 200_65 16F4SY"
+    results = {"rated": {"em": {"designation": "CILN28 200_65 17F4SY", "computed_at": "t1"},
+                         "thermal": {"designation": now, "computed_at": "t2"}},
+               "peak": {"em": {"designation": "CILN28 200_65 17F4SY Rev A", "computed_at": "t3"},
+                        "coupled": {"computed_at": "t0"}},                 # no stamp: unknown, not "different"
+               "cont": {"em": {"designation": "CILN28 200_65 17F2S2PY", "computed_at": "t4"}}}
+    assert MD.result_marks(now, results) == [
+        {"computed_for": "CILN28 200_65 17F2S2PY", "now": now, "results": [{"duty": "cont", "kind": "em", "computed_at": "t4"}]},
+        {"computed_for": "CILN28 200_65 17F4SY", "now": now, "results": [{"duty": "rated", "kind": "em", "computed_at": "t1"}]},
+        {"computed_for": "CILN28 200_65 17F4SY Rev A", "now": now, "results": [{"duty": "peak", "kind": "em", "computed_at": "t3"}]}]
+    assert MD.result_marks(now + " Rev B", {"rated": {"em": {"designation": now}}}) == []     # a revision alone is no mark
+    assert MD.result_marks(None, results) == [] and MD.result_marks(now, {}) == []
+
+
+def test_staff_see_results_computed_for_another_name_customers_and_the_factory_do_not(route, monkeypatch):
+    """Coordinator review of #725: whether a customer is told his results were computed for another name is the owner's
+    decision; staff only, like ``checks``."""
+    from motor_ai_sim import duty_results as DR
+    client, state = route
+    stored = {"C": {"rated": {"em": {"designation": "CILN28 200_65 17F4SY", "computed_at": "t1"}}}}
+    monkeypatch.setattr(DR, "index", lambda die, shared=False: stored)
+    for who in ("admin", "eng"):
+        assert _get(client, who)["other_names"] == [{"computed_for": "CILN28 200_65 17F4SY", "now": "CILN28 200_65 15F4SY",
+                                                     "results": [{"duty": "rated", "kind": "em", "computed_at": "t1"}]}]
+    for who in ("member", "oem"):
+        body = _get(client, who)
+        assert body["designation"] == "CILN28 200_65 15F4SY" and not body.get("other_names")
+    state.update(die_name="100 mm mid-torque", cfg_name="L15", kw=dict(steel="SMC1"))
+    assert _get(client, "admin")["other_names"] == []                      # against a "?" every stamp would differ
+    monkeypatch.setattr(DR, "index", lambda *a, **k: (_ for _ in ()).throw(OSError("store unreadable")))
+    state.update(die_name="CILN28 vadim", cfg_name="G2-L65-17t", kw=dict(length=65, rows=15))
+    body = _get(client, "admin")
+    assert body["designation"] == "CILN28 200_65 15F4SY" and body["other_names"] == []

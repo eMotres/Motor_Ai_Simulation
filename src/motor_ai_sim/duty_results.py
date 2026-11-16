@@ -562,6 +562,10 @@ def designation_stamp(die: str) -> Optional[str]:
         from motor_ai_sim.config import get_config
         from motor_ai_sim import motor_designation as _md
         st = _md.stamp_from_config(str(die), get_config() or {})
+        if st.get("designation") and not st.get("complete"):
+            # a "?" in a stored name would later read as "computed for another motor": store nothing instead
+            log.info("duty_results: incomplete designation %r for %s not stored", st.get("designation"), die)
+            return None
         return st.get("designation") or None
     except Exception as exc:                                 # noqa: BLE001
         log.info("duty_results: no designation stamp for %s (%s)", die, exc)

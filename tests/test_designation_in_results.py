@@ -101,12 +101,33 @@ def test_alt_carrier_rows_are_stamped(store):
 def test_optimisation_candidates_each_get_their_own_name(monkeypatch):
     die_doc = {"geometry": {k: v for k, v in live()["geometry"].items()}}
     cfg_doc = {"geometry_overrides": {}, "winding": live()["winding"], "materials": live()["materials"]}
-    monkeypatch.setattr(MD, "_stored", lambda d, c: (die_doc, cfg_doc, None))
+    reads = []
+    monkeypatch.setattr(MD, "_stored", lambda d, c: reads.append((d, c)) or (die_doc, cfg_doc, None))
     monkeypatch.setattr(MD, "_library", lambda: LIB)
     state = {"variables": [{"name": "num_wires_per_slot"}], "history": [{"cost": 1}],
              "points": [{"overrides": {"num_wires_per_slot": n}} for n in (15, 16)] + [{"td": 1}]}
     rec = RS.build_record(state, "run-1", die="CILN28", config="G2")
-    assert rec["designations"] == {"base": "CILN28 200_65 17F4SY",
+    assert rec["designations"] == {"base": "CILN28 200_65 17F4SY", "stamped_at": "import",
                                    "points": ["CILN28 200_65 15F4SY", "CILN28 200_65 16F4SY", "CILN28 200_65 17F4SY"]}
+    assert reads == [("CILN28", "G2")]                                        # the files are read once per import
     assert rec["state"] is state and "designation" not in state["points"][0]   # the run state is not touched
     assert "designations" not in RS.build_record(state, "run-2")             # an old caller: the record is as before
+
+
+def test_an_incomplete_name_is_never_stored(store):
+    """Coordinator review of #724: a stored "CI?N28 ..." would later read as "computed for another motor"."""
+    state, path = store
+    cfg = live()
+    cfg["materials"]["stator_core"] = "UNKNOWN_STEEL"
+    state["cfg"] = cfg
+    assert DR.record("CILN28", "G2", "rated", "em", {"computed_at": "t"}) is True
+    assert _rows(path)["CILN28"]["G2"]["rated"]["em"]["designation"] is None
+
+
+def test_an_incomplete_candidate_name_is_never_stored(monkeypatch):
+    die_doc = {"geometry": dict(live()["geometry"])}
+    cfg_doc = {"geometry_overrides": {}, "winding": live()["winding"], "materials": {**live()["materials"], "stator_core": "X"}}
+    monkeypatch.setattr(MD, "_stored", lambda d, c: (die_doc, cfg_doc, None))
+    monkeypatch.setattr(MD, "_library", lambda: LIB)
+    state = {"variables": [{"name": "n"}], "history": [{"cost": 1}], "points": [{"overrides": {"num_wires_per_slot": 15}}]}
+    assert RS.build_record(state, "run-3", die="CILN28", config="G2")["designations"]["points"] == [None]

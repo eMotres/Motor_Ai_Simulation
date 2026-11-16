@@ -253,15 +253,17 @@ def _stored(die: str, cfg: str) -> Tuple[Dict[str, Any], Dict[str, Any], Optiona
 
 
 def stamp(die: str, cfg: str, *, geometry: Optional[Mapping[str, Any]] = None, winding: Optional[Mapping[str, Any]] = None,
-          materials: Optional[Mapping[str, Any]] = None, library: Optional[Mapping[str, Any]] = None) -> Dict[str, Any]:
+          materials: Optional[Mapping[str, Any]] = None, library: Optional[Mapping[str, Any]] = None,
+          stored: Optional[Tuple[Dict[str, Any], Dict[str, Any], Optional[str]]] = None) -> Dict[str, Any]:
     """What a stored RESULT records at compute time (owner 2026-11-17): the designation of the parameters actually
     solved, so it never takes the name of the motor as it is later.  ``geometry`` (the effective geometry of the solve,
     e.g. a payload or trial geometry), ``winding`` and ``materials`` replace the stored ones where given; the rest is read
-    from the stored die / configuration NOW.  ``{"designation", "complete"}``; ``{}`` when nothing can be read.  Never
+    from the stored die / configuration NOW, or taken from ``stored`` (a ``_stored(die, cfg)`` read made once by a caller
+    that stamps many candidates).  ``{"designation", "complete"}``; ``{}`` when nothing can be read.  Never
     raises: the caller is the tail of a solve."""
     try:
         try:
-            die_doc, cfg_doc, rev = _stored(die, cfg)
+            die_doc, cfg_doc, rev = stored if stored is not None else _stored(die, cfg)
         except Exception:                                   # noqa: BLE001 - a payload-only machine has no files
             die_doc, cfg_doc, rev = {}, {}, None
             if geometry is None:

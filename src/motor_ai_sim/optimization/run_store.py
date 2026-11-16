@@ -79,17 +79,30 @@ def summarize(state: Dict[str, Any]) -> Dict[str, Any]:
 
 def designations(state: Dict[str, Any], die: str, config: str) -> Dict[str, Any]:
     """The standard motor designation of the run's base motor and of EACH evaluated candidate (owner 2026-11-17: an
-    optimisation run whose candidates differ in turns shows the right name per candidate).  A candidate's name is its
-    ``overrides`` applied to the motor's stored files at import time; the run state itself is not touched.  ``{}`` when
-    nothing can be made - a stamp never fails an import."""
+    optimisation run whose candidates differ in turns shows the right name per candidate).
+
+    Stamped AT IMPORT, not at compute time: the base is the motor's stored files when the run is imported, a candidate is
+    its ``overrides`` applied to them.  If the motor was edited between the run and its import, the base part is the
+    edited motor (the run state carries only a fingerprint, ``machine_fp``, not the parameters to rebuild it from), so
+    the record says ``"stamped_at": "import"`` and a reader never presents it as a compute-time stamp; the existing
+    ``machine_fp`` re-check is what tells whether the machine still matches.  The files are read ONCE per import (a run
+    holds up to ~1000 points).  The run state itself is not touched.  ``{}`` when nothing can be made - a stamp never
+    fails an import."""
     try:
         from motor_ai_sim import motor_designation as MD
-        base = MD.stamp(die, config).get("designation")
+        try:
+            stored = MD._stored(die, config)
+        except Exception:                                   # noqa: BLE001 - no files: nothing to stamp from
+            return {}
+        def name(geometry=None):                             # an incomplete name ("?") is never stored
+            st = MD.stamp(die, config, geometry=geometry, stored=stored)
+            return st.get("designation") if st.get("complete") else None
+        base = name()
         points = []
         for p in state.get("points") or []:
             ov = p.get("overrides") if isinstance(p, dict) else None
-            points.append(MD.stamp(die, config, geometry=ov).get("designation") if isinstance(ov, dict) and ov else base)
-        return {"base": base, "points": points}
+            points.append(name(ov) if isinstance(ov, dict) and ov else base)
+        return {"base": base, "points": points, "stamped_at": "import"}
     except Exception:                                       # noqa: BLE001
         return {}
 

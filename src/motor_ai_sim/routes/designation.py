@@ -2,7 +2,9 @@
 
 * ``GET /motor/{die}/{cfg}``   the designation of a stored motor, computed NOW from its parameters, with every segment's
   value and source, the facts the decoder shows beside it, and the read-only name check.  Same visibility gate as the
-  configuration itself (a hidden configuration answers like a missing one).
+  configuration itself (a hidden configuration answers like a missing one).  The name check (``checks``) is our
+  housekeeping: only staff (admin / engineer) get it.  A customer or the factory never gets an INCOMPLETE designation
+  (one with "?"): ``designation`` is null for them and no segment is sent; staff see it, marked incomplete.
 
 The public help page "How to read a MOTRES motor name" decodes a typed name in the browser (``web/src/lib/motorDesignation.ts``,
 the same grammar as :func:`motor_designation.parse`), so it needs no route and works without sign-in.
@@ -26,5 +28,11 @@ def motor_designation(die: str, cfg: str, response: Response, authorization: Opt
     F._load_yaml(F._cfg_file(die, cfg), "configuration")          # 404 for a configuration that does not exist
     response.headers["Cache-Control"] = "no-store"                 # recomputed at every read: never a stale name
     out = MD.for_motor(die, cfg)
+    ident = F._auth.caller_identity(authorization)
+    staff = bool(ident.get("is_admin")) or str(ident.get("role") or "").lower() in {"admin", "engineer"}
+    if not staff:
+        out.pop("checks", None)
+        if not out["complete"]:
+            return {"die": die, "config": cfg, "designation": None, "complete": False}
     return {"die": die, "config": cfg, **out}
 

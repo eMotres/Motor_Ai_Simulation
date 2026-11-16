@@ -10,8 +10,9 @@ import { connectionParts, meaningKey, SEGMENTS, UNKNOWN, type Segment } from '..
 const API = (import.meta.env.VITE_API_URL ?? 'http://localhost:8001') as string;
 
 interface SegmentInfo { value: string; source: string; [k: string]: unknown }
-interface DesignationAnswer { designation: string; complete: boolean; unknown: string[]; segments: Record<string, SegmentInfo>;
-  checks: Array<{ code: string; name: string; parameters?: string }> }
+/** For a customer or the factory the server sends no `checks` and no incomplete designation (`designation: null`). */
+interface DesignationAnswer { designation: string | null; complete: boolean; unknown?: string[]; segments?: Record<string, SegmentInfo>;
+  checks?: Array<{ code: string; name: string; parameters?: string }> }
 
 export const fetchDesignation = async (die: string, config: string): Promise<DesignationAnswer | null> => {
   try {
@@ -75,7 +76,8 @@ const MotorDesignation: React.FC<{ die: string; config: string; size?: number }>
     void fetchDesignation(die, config).then((a) => { if (alive) setAnswer(a); });
     return () => { alive = false; };
   }, [die, config]);
-  if (!answer) return null;
+  if (!answer?.designation || !answer.segments) return null;
+  const segments = answer.segments, checks = answer.checks ?? [];
   const stop = (e: React.SyntheticEvent) => e.stopPropagation();
   return (
     <Box component="span" sx={{ display: 'inline-flex', alignItems: 'center', ml: 1, verticalAlign: 'middle' }} onClick={stop} data-testid="motor-designation">
@@ -87,9 +89,9 @@ const MotorDesignation: React.FC<{ die: string; config: string; size?: number }>
           <HelpOutlineIcon sx={{ fontSize: size + 2 }} />
         </IconButton>
       </Tooltip>
-      {answer.checks.length > 0 && <Tooltip title={t('designation.checksTip', { n: answer.checks.length })}><Box component="span" sx={{ color: '#f59e0b', fontWeight: 800, fontSize: size }}>!</Box></Tooltip>}
+      {checks.length > 0 && <Tooltip title={t('designation.checksTip', { n: checks.length })}><Box component="span" sx={{ color: '#f59e0b', fontWeight: 800, fontSize: size }}>!</Box></Tooltip>}
       <Popover open={!!anchor} anchorEl={anchor} onClose={() => setAnchor(null)} anchorOrigin={{ vertical: 'bottom', horizontal: 'left' }} onClick={stop}>
-        <DesignationDecoder segments={answer.segments} checks={answer.checks} />
+        <DesignationDecoder segments={segments} checks={checks} />
       </Popover>
     </Box>
   );

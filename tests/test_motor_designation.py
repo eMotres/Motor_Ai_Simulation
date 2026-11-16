@@ -116,3 +116,52 @@ def test_the_check_report_lists_names_that_contradict_the_parameters():
 def test_parse_refuses_what_is_not_a_designation():
     for bad in ("", "CILN28", "CILN28 200_40", "L12-F475", "CILN28 200_40 24X4SY", "ciln28 200_40 24F4SY"):
         assert MD.parse(bad) is None
+
+
+# ── what a customer / the factory gets (coordinator review of #720) ───────────────────────────────────────────────────
+
+@pytest.fixture
+def route(monkeypatch):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from motor_ai_sim.routes import designation as RD
+    from motor_ai_sim.routes import family as F
+    roles = {"admin": {"is_admin": True, "role": "admin"}, "eng": {"is_admin": False, "role": "engineer"},
+             "member": {"is_admin": False, "role": "user"}, "oem": {"is_admin": False, "role": "oem"}}
+    monkeypatch.setattr(F, "_check_name", lambda v, _what: v)
+    monkeypatch.setattr(F, "_require_die_access", lambda *_a, **_k: {})
+    monkeypatch.setattr(F, "_load_yaml", lambda *_a, **_k: {})
+    monkeypatch.setattr(F, "_cfg_file", lambda die, cfg: f"{die}/{cfg}.yaml")
+    monkeypatch.setattr(F._auth, "caller_identity", lambda a=None: roles.get(str(a or "").split(" ", 1)[-1], {"role": "anon"}))
+    state = {"die_name": "CILN28 vadim", "cfg_name": "G2-L65-17t", "kw": dict(length=65, rows=15)}
+
+    def fake_for_motor(die, cfg):
+        out = name(state["die_name"], *motor(**state["kw"]))
+        out["checks"] = MD.check(state["die_name"], state["cfg_name"], out)
+        return out
+    monkeypatch.setattr(RD.MD, "for_motor", fake_for_motor)
+    app = FastAPI()
+    app.include_router(RD.router)
+    return TestClient(app), state
+
+
+def _get(client, who):
+    return client.get("/api/designation/motor/D/C", headers={"Authorization": f"Bearer {who}"}).json()
+
+
+def test_the_name_check_is_for_staff_only(route):
+    client, _state = route
+    assert [c["code"] for c in _get(client, "admin")["checks"]] == ["config_name_turns"]
+    assert _get(client, "eng")["checks"]
+    for who in ("member", "oem"):
+        body = _get(client, who)
+        assert "checks" not in body and body["designation"] == "CILN28 200_65 15F4SY"
+
+
+def test_an_incomplete_designation_is_not_shown_to_customers_or_the_factory(route):
+    client, state = route
+    state.update(die_name="100 mm mid-torque", cfg_name="L15", kw=dict(steel="SMC1"))
+    staff = _get(client, "admin")
+    assert staff["complete"] is False and "?" in staff["designation"]
+    for who in ("member", "oem"):
+        assert _get(client, who) == {"die": "D", "config": "C", "designation": None, "complete": False}

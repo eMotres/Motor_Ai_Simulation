@@ -1,7 +1,7 @@
 // node --test: the Motors catalog by die (owner 2026-11-17) - grouping and the current / old rule (lib/catalogByDie.ts).
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { buildByDie, familyOf, segmentationText } from '../catalogByDie.ts';
+import { buildByDie, familyOf, ratedPoint, segmentationText } from '../catalogByDie.ts';
 
 const cfg = (name, designation, extra = {}) => ({ name, designation, designation_complete: !String(designation ?? '?').includes('?'),
   family: designation ? designation.split('_')[0] : undefined, beside: { steel: 'NO20', magnet: 'N52' }, ...extra });
@@ -23,7 +23,7 @@ test('two laminations of one family sit under ONE family header; families by OD;
   const g = buildByDie(dies, overview);
   assert.deepEqual(g.map((x) => [x.family, x.blocks.map((b) => b.die.name)]),
     [['CIANO14 40', ['NOLINK A', 'NOLINK B']], ['CILN28 200', ['CILN28', 'CILN28 vadim']], ['CIANO56 400', ['BIG']],
-     ['100 mm mid', ['100 mm mid']]]);
+     ['', ['100 mm mid']]]);
   assert.equal(familyOf(dies[2]).named, false);
 });
 
@@ -43,7 +43,7 @@ test('without any link among the same names nothing is old; without the Overview
 });
 
 test('an incomplete or missing name shows the stored name, marked', () => {
-  const m = buildByDie(dies, null).find((x) => x.family === '100 mm mid').blocks[0].motors[0];
+  const m = buildByDie(dies, null).find((x) => x.family === '').blocks[0].motors[0];
   assert.equal(m.complete, false);
   const none = buildByDie([{ name: 'D', configs: [{ name: 'L9', designation: null }] }], null)[0].blocks[0].motors[0];
   assert.deepEqual([none.label, none.named], ['L9', false]);
@@ -54,4 +54,30 @@ test('segmentation in one value', () => {
   assert.equal(segmentationText(null, w), 'solid');
   assert.equal(segmentationText(0, w), 'solid');
   assert.equal(segmentationText(5, w), '5 mm');
+});
+
+// ── coordinator's browser findings on #731 ─────────────────────────────────────────────────────────────────────────
+test('no link on any motor of one designation: the newest LOCKED one is current, the rest old; none locked: none', () => {
+  const twin = (name, created, locked) => ({ name, created, stator_diameter: 30, configs: [cfg('L10', 'CIANO14 30_10 6F2SY', { locked })] });
+  const rows = (ds) => buildByDie(ds, overview)[0].blocks.flatMap((b) => b.motors.map((m) => [m.die, m.old, m.newestLocked]));
+  assert.deepEqual(rows([twin('A', '2026-08-19', true), twin('B', '2026-09-01', false), twin('C', '2026-08-20', true)]),
+    [['C', false, true], ['B', true, false], ['A', true, false]]);            // C: newest locked, its block first; the old ones newest first
+  assert.deepEqual(rows([twin('A', '2026-08-19', false), twin('B', '2026-09-01', false)]).map((r) => r[1]), [false, false]);
+  // without the Overview (non-admin) the links are unknown: no fallback, nothing old
+  assert.ok(buildByDie([twin('A', '2026-08-19', true), twin('C', '2026-08-20', true)], null)[0].blocks.every((b) => b.motors.every((m) => !m.old && !m.newestLocked)));
+});
+
+test('every die the generator cannot name sits in ONE group at the end; a server family names a die without motors', () => {
+  const g = buildByDie([{ name: 'X1', configs: [] }, { name: 'X2', configs: [cfg('L', 'CI????28 1_1 1F?Y')] },
+    { name: 'CIANO10 12_40 Ø12 12s10p', family: 'CIANO10 12', stator_diameter: 12, configs: [] }], null);
+  assert.deepEqual(g.map((x) => [x.family, x.named, x.blocks.length]), [['CIANO10 12', true, 1], ['', false, 2]]);
+  assert.deepEqual(familyOf({ name: 'D', family: null, configs: [] }), { family: '', named: false });
+});
+
+test('the row quotes the rated point, else the largest continuous point - never the first water point', () => {
+  const d = (name, power_kw, extra = {}) => ({ name, power_kw, torque_nm: power_kw * 2, ...extra });
+  assert.equal(ratedPoint({ name: 'c', duties: [d('water 1', 0.01), d('rated', 1.2), d('peak', 3)] }).name, 'rated');
+  assert.equal(ratedPoint({ name: 'c', duties: [d('water 1', 0.01), d('rated 120C', 1.1)] }).name, 'rated 120C');
+  assert.equal(ratedPoint({ name: 'c', duties: [d('water 1', 0.01), d('water 2', 0.9), d('boost', 5, { duty_class: 'short_time' })] }).name, 'water 2');
+  assert.equal(ratedPoint({ name: 'c', duties: [] }), null);
 });

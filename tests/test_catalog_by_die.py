@@ -99,3 +99,16 @@ def test_the_tree_names_each_motor_and_a_customer_never_gets_an_incomplete_name(
     member = _row(env["a"])                                                   # a granted account, the same cached row
     assert member["designation"] is None and member["designation_unknown"] == []
     assert member["beside"]["magnet"] == "N42SH"
+
+
+def test_a_die_without_a_named_motor_takes_its_family_from_its_own_name_and_parameters():
+    """Coordinator's browser finding on #731: "CIANO10 12_40 Ø12 12s10p" (0 motors) showed its old name."""
+    assert MD.die_family({"name": "CIANO10 12_40 Ø12 12s10p", "poles": 10, "stator_diameter": 12.0, "configs": []}) == "CIANO10 12"
+    assert MD.die_family({"name": "CIANDO56 400_90", "poles": 56, "stator_diameter": 400, "configs": []}) == "CIANO56 400"
+    assert MD.die_family({"name": "100 mm · 24s-28p mid-torque", "poles": 28, "stator_diameter": 100, "configs": []}) is None
+    assert MD.die_family({"name": "CIANO14 40", "poles": 10, "stator_diameter": 40, "configs": []}) is None   # poles disagree
+    named = {"name": "X", "configs": [{"designation_complete": False, "family": "CI?N28 200"},
+                                      {"designation_complete": True, "family": "CILN28 200"}]}
+    assert MD.die_family(named) == "CILN28 200"
+    assert MD.catalog_view([{"name": "CIANO10 12_40", "poles": 10, "stator_diameter": 12, "configs": []}],
+                           staff=False, revisions={})[0]["family"] == "CIANO10 12"

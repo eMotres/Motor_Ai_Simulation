@@ -293,6 +293,10 @@
     "report": "报告 (Word)",
     "reportPdf": "报告 (PDF)",
     "toMyMotors": "复制到我的电机",
-    "deleteMotor": "删除"
+    "deleteMotor": "删除",
+    "newestLocked": "无引用：最新锁定",
+    "newestLockedTip": "没有项目或生产引用此名称的任何电机；以最新锁定的一台为当前版本",
+    "noName": "尚无标准名称",
+    "ratedTip": "额定工作点（{duty}）；▶ 加载默认工况"
   }
 }

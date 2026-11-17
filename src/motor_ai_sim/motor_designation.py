@@ -415,8 +415,23 @@ def catalog_view(dies: List[Dict[str, Any]], *, staff: bool, revisions: Optional
             if not c.get("designation_complete") and not staff:
                 c["designation"], c["designation_unknown"] = None, []
             cfgs.append(c)
-        out.append({**d, "configs": cfgs})
+        out.append({**d, "configs": cfgs, "family": die_family(d)})
     return out
+
+
+def die_family(die_row: Mapping[str, Any]) -> Optional[str]:
+    """The family header of a die in the by-die view: the first COMPLETE motor's family; for a die without one, the die
+    name's letters with the die's own poles and stator OD (``CIANO10 12_40 Ø12 12s10p`` -> ``CIANO10 12``), when the name
+    reads as one and the poles agree; else None (the view groups it under "no standard name yet")."""
+    for c in die_row.get("configs") or []:
+        if isinstance(c, Mapping) and c.get("designation_complete") and c.get("family"):
+            return str(c["family"])
+    m = die_name_letters(str(die_row.get("name") or ""))
+    poles, od = _num(die_row.get("poles")), _num(die_row.get("stator_diameter"))
+    if not m or poles is None or od is None or m["poles"] != _mm(poles):
+        return None
+    letters = "".join(m[k] for k in ("w", "r", "c", "s", "o", "f", "a"))      # no letter D (owner 2026-11-17)
+    return f"{letters}{m['poles']} {_mm(od)}"
 
 
 def compare(result_designation: Optional[str], current_designation: Optional[str]) -> Optional[Dict[str, str]]:

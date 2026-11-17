@@ -23,6 +23,7 @@ The factory (the production's members) sees the state; it cannot set it.
 """
 from __future__ import annotations
 
+import re as _re
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable, Optional
@@ -30,6 +31,9 @@ from typing import Any, Dict, Iterable, Optional
 from motor_ai_sim import json_store
 
 STATES = ("prepared", "in_production", "finished")
+#: a payment line is "received on <date>" or a short note, never an amount (owner: no price talk is stored here)
+_AMOUNT = _re.compile(r"[$€£¥₽]|\b(?:usd|eur|rmb|cny|rub|gbp|jpy)\b|\d[\d\s.,]*\s*(?:k|m)?\s*(?:usd|eur|rmb|cny|rub|\$|€|¥|₽)",
+                     _re.IGNORECASE)
 NOTE_MAX = 200
 HISTORY_MAX = 2000
 
@@ -79,8 +83,13 @@ def set_state(die: str, config: str, state: str, *, by: str, payment: str = "", 
     if state not in STATES:
         raise ValueError(f"state must be one of {STATES}")
     payment = " ".join(str(payment or "").split())[:NOTE_MAX]
+    cur = (load()["states"].get(key(die, config)) or {})
+    if cur.get("state") == state and (not payment or cur.get("payment") == payment):
+        return cur                                          # nothing changes: no second write, no history row
     if state == "in_production" and not payment:
         raise ValueError("starting a production needs the payment line (a date or a note)")
+    if payment and _AMOUNT.search(payment):
+        raise ValueError("the payment line is a date or a note, never an amount or a currency")
     k = key(die, config)
     at = _now()
     rec: Dict[str, Any] = {"state": state, "by": str(by or ""), "at": at, "source": " ".join(str(source or "").split())[:NOTE_MAX]}
@@ -106,15 +115,20 @@ def set_state(die: str, config: str, state: str, *, by: str, payment: str = "", 
     return rec
 
 
-def seed(rows: Iterable[Dict[str, Any]], *, by: str, source: str, dry_run: bool = True) -> list:
+def seed(rows: Iterable[Dict[str, Any]], *, by: str, source: str, dry_run: bool = True, exists=None) -> list:
     """The initial states on the owner's words (``[{"die", "config", "state", "payment"?}]``): what would change; with
-    ``dry_run`` False it is written (each row through :func:`set_state`)."""
+    ``dry_run`` False it is written (each row through :func:`set_state`).  A row naming no existing production is
+    reported (``"missing": True``) and never written (``exists(die, config)``; default: the production store)."""
+    if exists is None:
+        from motor_ai_sim.production import access as _pa
+        exists = lambda d, c: _pa.load_production(d, c) is not None          # noqa: E731
     states = load()["states"]
     plan = []
     for r in rows:
         cur = state_of(str(r["die"]), str(r["config"]), states)
-        plan.append({"die": r["die"], "config": r["config"], "from": cur["state"], "to": r["state"]})
-        if not dry_run and cur["state"] != r["state"]:
+        missing = not exists(str(r["die"]), str(r["config"]))
+        plan.append({"die": r["die"], "config": r["config"], "from": cur["state"], "to": r["state"], **({"missing": True} if missing else {})})
+        if not dry_run and not missing and cur["state"] != r["state"]:
             set_state(str(r["die"]), str(r["config"]), str(r["state"]), by=by, payment=str(r.get("payment") or ""), source=source)
     return plan
 

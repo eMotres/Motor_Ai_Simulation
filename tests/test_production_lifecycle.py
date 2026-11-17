@@ -75,6 +75,9 @@ def test_the_seed_on_the_owners_words_has_a_dry_run(env):
     rows = [{"die": "CIANO14 40", "config": "L12", "state": "in_production", "payment": "owner 2026-11-17: in production"}]
     assert PL.seed(rows, by="coordinator", source="owner 2026-11-17", dry_run=True) == [
         {"die": "CIANO14 40", "config": "L12", "from": "prepared", "to": "in_production"}]
+    ghost = [{"die": "NO SUCH", "config": "X", "state": "finished"}]
+    assert PL.seed(ghost, by="c", source="s", dry_run=False)[0]["missing"] is True       # review of #743: never written
+    assert "production:NO SUCH/X" not in PL.load()["states"]
     assert PL.state_of("CIANO14 40", "L12")["state"] == "prepared"                 # a dry run writes nothing
     PL.seed(rows, by="coordinator", source="owner 2026-11-17", dry_run=False)
     assert PL.state_of("CIANO14 40", "L12")["source"] == "owner 2026-11-17"
@@ -111,3 +114,14 @@ def test_the_overview_reads_the_one_stage_per_motor_and_per_project():
     assert out["productions"]["D/F"]["lifecycle"] == "prepared"
     assert {p: r["stage"] for p, r in out["projects"].items()} == {"pump": "in_production", "fan": "confirmation", "old": "closed",
                                                                     "new": "specification"}
+
+
+def test_review_of_743_no_op_is_not_written_and_no_amount_in_the_payment_line(env):
+    PL.set_state("CIANO14 40", "L12", "in_production", by="a", payment="received 2026-11-10")
+    PL.set_state("CIANO14 40", "L12", "in_production", by="a", payment="received 2026-11-10")    # the same again
+    PL.set_state("CIANO14 40", "L12", "in_production", by="a")                                   # no new line: unchanged
+    assert len(PL.load()["history"]) == 1
+    for amount in ("$12 000 received", "paid 5000 USD", "1.2 m ₽", "EUR advance", "30 000 ¥"):
+        with pytest.raises(ValueError):
+            PL.set_state("CIANO14 40", "L12", "in_production", by="a", payment=amount)
+    PL.set_state("CIANO14 40", "L12", "in_production", by="a", payment="advance received 2026-11-12, invoice 17")  # a date and a number of a document are fine

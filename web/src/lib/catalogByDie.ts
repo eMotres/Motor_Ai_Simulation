@@ -3,10 +3,11 @@
  *  motors, each by the standard designation, the per-motor parameters BESIDE the name.  Pure over `GET /api/family/tree`
  *  (+ `GET /api/overview` for admins), so it runs under `node --test`.
  *
- *  Current or old (owner decision 2026-11-17, confirmed): among motors with the SAME designation, the one a project (current
- *  link) or a production names is current; the rest are old (muted, sorted last).  No link on any of them: the newest
+ *  Current or old (owner decision 2026-11-17, confirmed): among motors with the SAME designation AND the same primary
+ *  application, the one a project (current link) or a production names is current; the rest are old (muted, sorted last).  No link on any of them: the newest
  *  LOCKED one is current (marked "no link: newest locked"); none locked: none is marked.  The one rule is `markOld`. */
 import { shownDuties } from './catalogRows.ts';
+import { cleanApplications } from './applications.ts';
 
 export interface ByDieBeside { steel?: string | null; magnet?: string | null; magnet_lamination_mm?: number | null; slot_insulation?: string | null }
 export interface ByDieDuty { name: string; power_kw?: number | null; torque_nm?: number | null; duty_class?: string | null;
@@ -16,7 +17,7 @@ export interface ByDieDuty { name: string; power_kw?: number | null; torque_nm?:
 export interface ByDieBattery { cells?: number | null; v_cell_nom?: number | null; v_min?: number | null; v_max?: number | null; v_nom?: number | null }
 export interface ByDieCfg {
   name: string; designation?: string | null; designation_complete?: boolean; designation_unknown?: string[];
-  family?: string; beside?: ByDieBeside; locked?: boolean; duties?: ByDieDuty[]; battery?: ByDieBattery | null;
+  family?: string; beside?: ByDieBeside; locked?: boolean; applications?: unknown; duties?: ByDieDuty[]; battery?: ByDieBattery | null;
   /** for a customer / the factory, when the designation is not complete: family and length as far as known (server) */
   display_name?: string | null;
 }
@@ -50,7 +51,10 @@ export interface MotorRow {
   linked: boolean;
   /** the server's derived stage (undefined: an older server, `motorStage` falls back) */
   stage?: string | null;
-  /** another motor with the same designation is the current one */
+  /** the primary application: the FIRST entry of the configuration's `applications` (its default, the server's
+   *  `application`); '' = not set, which is a group of its own */
+  application: string;
+  /** another motor with the same designation and the same primary application is the current one */
   old: boolean;
   /** this one is current only by the fallback (no link on any of the same name): the newest locked one */
   newestLocked: boolean;
@@ -120,11 +124,12 @@ export function isLinked(m: Pick<MotorRow, 'projects' | 'productions'>): boolean
   return m.productions.length > 0 || m.projects.some((p) => !p.trial);
 }
 
-/** Owner rule 2026-11-17: same designation -> the linked one is current, the rest old.  In place. */
+/** Owner rule 2026-11-17: same designation -> the linked one is current, the rest old; ONE current motor per designation
+ *  in EACH application (owner 2026-11-17: a propeller variant is compared only with propeller variants).  In place. */
 export function markOld(rows: MotorRow[]): void {
   const byName = new Map<string, MotorRow[]>();
   for (const r of rows) if (r.named && r.complete) {
-    const k = stripRev(r.label);
+    const k = `${stripRev(r.label)}\u0000${r.application}`;
     byName.set(k, [...(byName.get(k) ?? []), r]);
   }
   for (const same of byName.values()) {
@@ -156,7 +161,7 @@ export function buildByDie(dies: ByDieDie[], overview: ByDieOverview | null, opt
       const row: MotorRow = {
         die: d.name, config: c.name, label: named ? c.designation as string : staff ? c.name : (c.display_name || ''), named,
         complete: named && c.designation_complete !== false, unknown: c.designation_unknown ?? [],
-        beside: c.beside ?? {}, projects, productions, computed: !!it?.computed, linked: false, old: false,
+        beside: c.beside ?? {}, application: cleanApplications(c.applications)[0] ?? '', projects, productions, computed: !!it?.computed, linked: false, old: false,
         ...(it && 'stage' in it ? { stage: it.stage ?? null } : {}),
         newestLocked: false, locked: !!(c.locked || d.locked), created: String(d.created ?? ''), rated: null, values: null,
       };

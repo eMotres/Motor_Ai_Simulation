@@ -150,3 +150,42 @@ test('a job chip names kind, server, queued and progress', async () => {
   assert.equal(jobChip({ kind: 'optimisation', server: 'us', state: 'running', progress: { done: 12, total: 40 } }), 'optimisation · US · 12/40');
   assert.equal(jobChip({ kind: 'single', server: 'eu', state: 'queued' }), 'single · EU · queued');
 });
+
+// ── filters and saved sets (owner 2026-11-17) ──────────────────────────────────────────────────────────────────────
+test('filters combine with AND: stage (in simulation = computed + simulation), projects, running, the highlighted project', async () => {
+  const { applyFilters, motorCount, NO_FILTER, stageOptions, projectOptions } = await import('../catalogByDie.ts');
+  const ov = {
+    items: { 'D/A': { projects: [{ id: 'p1', link_status: 'current' }], productions: ['D/A'] },
+             'D/B': { projects: [{ id: 'p1', link_status: 'current' }], productions: [], computed: true },
+             'D/C': { projects: [{ id: 'p2', link_status: 'current' }], productions: [] } },
+    projects: { p1: { id: 'p1', title: 'Pump', status: 'design', stage: 'design' }, p2: { id: 'p2', title: 'Fan', status: 'simulation', stage: 'simulation' } },
+    productions: { 'D/A': { die: 'D', config: 'A', status: 'active', current_revision: '1' } } };
+  const ds = [{ name: 'D', stator_diameter: 40, configs: ['A', 'B', 'C', 'E'].map((n, i) => cfg(n, `CIANO14 40_${10 + i} 7F2SY`)) }];
+  const g = buildByDie(ds, ov);
+  const names = (f) => applyFilters(g, { ...NO_FILTER, ...f }, (d, c) => c === 'C', (d, c) => c === 'A' || c === 'E')
+    .flatMap((x) => x.blocks.flatMap((b) => b.motors.map((m) => m.config)));
+  assert.deepEqual(names({}), ['A', 'B', 'C', 'E']);
+  assert.deepEqual(names({ stages: ['in_production'] }), ['A']);
+  assert.deepEqual(names({ stages: ['simulation'] }).sort(), ['B', 'C']);              // computed + the project stage "simulation"
+  assert.deepEqual(names({ projects: ['p1'] }).sort(), ['A', 'B']);
+  assert.deepEqual(names({ running: true }), ['C']);
+  assert.deepEqual(names({ onlyHighlighted: true }).sort(), ['A', 'E']);
+  assert.deepEqual(names({ projects: ['p1'], onlyHighlighted: true }), ['A']);         // AND
+  assert.deepEqual(names({ stages: ['quote'] }), []);
+  assert.equal(motorCount(applyFilters(g, { ...NO_FILTER, stages: ['quote'] })), 0);
+  assert.deepEqual(stageOptions(g), ['simulation', 'in_production']);
+  assert.deepEqual(projectOptions(g), [{ id: 'p2', title: 'Fan' }, { id: 'p1', title: 'Pump' }]);
+});
+
+test('saved sets: named, replaced by name, sorted; stored values parsed back safely', async () => {
+  const { upsertSet, parseFilter, parseSets, NO_FILTER } = await import('../catalogByDie.ts');
+  let sets = upsertSet([], 'My current', { ...NO_FILTER, stages: ['simulation'] });
+  sets = upsertSet(sets, 'All production', { ...NO_FILTER, stages: ['in_production'] });
+  sets = upsertSet(sets, 'My current', { ...NO_FILTER, stages: ['in_production', 'simulation'] });
+  assert.deepEqual(sets.map((s) => [s.name, s.filter.stages]), [['All production', ['in_production']], ['My current', ['in_production', 'simulation']]]);
+  assert.equal(upsertSet(sets, '   ', NO_FILTER), sets);
+  assert.deepEqual(parseFilter({ state: 'bogus', stages: ['a', 3], running: 'yes' }), { state: 'active', stages: ['a'], projects: [], running: false, onlyHighlighted: false });
+  assert.equal(parseFilter(null), null);
+  assert.deepEqual(parseSets([{ name: 'x', filter: { state: 'parked' } }, 7]).map((s) => [s.name, s.filter.state]), [['x', 'parked']]);
+  assert.equal(parseSets('nope'), null);
+});

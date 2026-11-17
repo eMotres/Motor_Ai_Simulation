@@ -9,14 +9,12 @@ import MoreVertIcon from '@mui/icons-material/MoreVert';
 import PlayArrowIcon from '@mui/icons-material/PlayArrow';
 import { useTranslation } from 'react-i18next';
 import MotorThumbnail from './MotorThumbnail';
-import { buildByDie, COL_DIGITS, colValue, COLS, filterByState, jobChip, motorStage, NAME_COL_W, nextSort, segmentationText, sortMotors,
-  stateCounts, type ByDieDie, type ByDieOverview, type ColKey, type JobsAnswer, type MotorRow, type RunningJob, type ServerView, type Sort,
+import { applyFilters, buildByDie, COL_DIGITS, colValue, COLS, filterByState, jobChip, motorCount, motorStage, NAME_COL_W, nextSort,
+  projectOptions, segmentationText, sortMotors, stageOptions, stateCounts, type ByDieDie, type ByDieOverview, type ColKey, type JobsAnswer, type MotorRow, type RunningJob, type ServerView, type Sort,
   type StateFilter } from '../../lib/catalogByDie';
-import { DisplayStateFilter } from '../common/DisplayStateControl';
+import { useCatalogFilterStore } from '../../stores/catalogFilterStore';
 import { displayStateApi } from '../../lib/displayStateApi';
 import { appLinkPath } from '../../lib/appLink';
-import { useRememberedView } from '../../lib/useRememberedView';
-import { oneOf } from '../../lib/viewMemory';
 import { parseDesignation, SEGMENTS } from '../../lib/motorDesignation';
 import { DesignationDecoder } from '../common/MotorDesignation';
 import { NARROW } from '../../lib/narrowLayout';
@@ -51,6 +49,8 @@ interface Props {
   dieExtras?: (die: string) => React.ReactNode;
   /** a line added to the name's tooltip (writers: the passport card / older-build line) */
   nameTip?: (die: string, config: string) => string;
+  /** the project the tab highlights links this motor (ProjectHighlightSelect): the "only its motors" filter of every role */
+  highlighted?: (die: string, config: string) => boolean;
 }
 
 /** One motor's cells beyond the quoted point: the application column, the marks column, the saved cogging. */
@@ -62,7 +62,6 @@ const COL_TIP: Record<ColKey, string> = { power: 'power', torque: 'torque', spee
 const charsGrid = { display: 'grid', gridTemplateColumns: `${NAME_COL_W}px ${COLS.map((c) => `${c.w}px`).join(' ')}`, columnGap: '8px',
   alignItems: 'center', flexShrink: 0 } as const;
 const REST_W = { application: 84, marks: 130, stage: 96, jobs: 170, production: 96 } as const;
-const STATE_FILTERS = ['active', 'parked', 'archived', 'all'] as const;
 const markChip = { height: 18, fontSize: 10.5, maxWidth: 120, color: 'var(--text-3)', '& .MuiChip-label': { px: 0.75 } } as const;
 /** The tab's scroller (App.tsx, the Motors tab) has `p: 3` = 24 px: the sticky header sits at -24 px so that it is flush with the
  *  scroller's top edge, right under the Motors title line; at 0 it stopped 24 px lower and rows showed through above it. */
@@ -112,7 +111,7 @@ const fmt = (v: number | null | undefined, d = 1) => (v === null || v === undefi
 const small = { fontSize: 11.5, color: 'var(--text-3)' };
 
 const CatalogByDie: React.FC<Props> = ({ dies, thumbs, rated, active, isAdmin, canWrite, standardUser, busy, actions, overview: given,
-  cells: cellsOf, dieExtras, nameTip, jobs: givenJobs }) => {
+  cells: cellsOf, dieExtras, nameTip, jobs: givenJobs, highlighted }) => {
   const { t } = useTranslation(['motors', 'common', 'development']);
   const [overview, setOverview] = useState<ByDieOverview | null>(given ?? null);
   const [dieMenu, setDieMenu] = useState<{ el: HTMLElement; die: ByDieDie } | null>(null);
@@ -120,7 +119,10 @@ const CatalogByDie: React.FC<Props> = ({ dies, thumbs, rated, active, isAdmin, c
   const [decode, setDecode] = useState<{ el: HTMLElement; m: MotorRow } | null>(null);
   const [sort, setSort] = useState<Sort>(null);
   // Active / Parked / Archived of the linked projects (owner 2026-11-17: "how do I remove old projects from the catalog")
-  const [stateFilter, setStateFilter] = useRememberedView<StateFilter>('motors.projectState', 'active', oneOf(STATE_FILTERS));
+  // the filters live in the Motors title line (components/catalog/CatalogFilters); this table applies them
+  const filter = useCatalogFilterStore((s) => s.filter);
+  const setFilterOptions = useCatalogFilterStore((s) => s.setOptions);
+  const stateFilter: StateFilter = filter.state;
   const [projMenu, setProjMenu] = useState<{ el: HTMLElement; id: string; title: string } | null>(null);
   const [overviewGen, setOverviewGen] = useState(0);
   // the running work per motor and server (admins only; the route is admin-gated), refreshed while the page is open
@@ -145,8 +147,18 @@ const CatalogByDie: React.FC<Props> = ({ dies, thumbs, rated, active, isAdmin, c
   const allGroups = useMemo(() => buildByDie(dies, isAdmin ? overview : null, { staff: isAdmin }), [dies, overview, isAdmin]);
   // the state filter needs the Overview's links: admins only (a customer's view is the whole catalog, as before)
   const showState = isAdmin && !!overview;
-  const groups = useMemo(() => (showState ? filterByState(allGroups, stateFilter) : allGroups), [allGroups, showState, stateFilter]);
+  const stateGroups = useMemo(() => (showState ? filterByState(allGroups, stateFilter) : allGroups), [allGroups, showState, stateFilter]);
   const counts = useMemo(() => stateCounts(allGroups), [allGroups]);
+  // the stage / project / running filters are the admin's (they read the Overview and the jobs); "only the highlighted
+  // project's motors" is everybody's (their own project, through the project selector of the tab)
+  const effFilter = isAdmin ? filter : { ...filter, stages: [], projects: [], running: false };
+  const groups = useMemo(() => applyFilters(stateGroups, effFilter,
+    (d, c) => !!jobs?.motors?.[`${d}/${c}`]?.length, highlighted),
+    [stateGroups, effFilter.stages.join('|'), effFilter.projects.join('|'), effFilter.running, effFilter.onlyHighlighted, jobs, highlighted]);   // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    setFilterOptions({ stages: isAdmin ? stageOptions(allGroups) : [], projects: isAdmin ? projectOptions(allGroups) : [],
+      counts, shown: motorCount(groups), total: motorCount(allGroups) });
+  }, [allGroups, groups, counts, isAdmin, setFilterOptions]);
   const setProjectState = async (id: string, state: 'active' | 'parked' | 'archived') => {
     try { await displayStateApi.set({ kind: 'project', project_id: id }, state); } catch { /* the chip stays as it was */ }
     setOverviewGen((n) => n + 1);                               // re-read the Overview: the chip moves to its state
@@ -204,12 +216,8 @@ const CatalogByDie: React.FC<Props> = ({ dies, thumbs, rated, active, isAdmin, c
       mem: tt.mem_reserved_gb ?? '—', memUsed: tt.mem_used_gb ?? '—', memBudget: b.mem_gb ?? '—', queued: tt.queued ?? 0 });
     return s.state === 'stale' ? `${load} · ${t('byDie.server.stale', { min: Math.round((s.age_s ?? 0) / 60) })}` : load;
   };
-  const topLine = isAdmin && (showState || jobs) ? (
+  const topLine = isAdmin && jobs ? (
     <Box data-testid="by-die-topline" sx={{ display: 'flex', alignItems: 'center', gap: 1.5, flexWrap: 'wrap', ...small }}>
-      {showState && (
-        <DisplayStateFilter value={stateFilter} onChange={(f) => setStateFilter(f as StateFilter)}
-          counts={{ counts, woke: { active: 0, parked: 0, archived: 0, all: 0 } }} tip={t('byDie.stateTip')} />
-      )}
       {jobs?.servers?.map((s) => (
         <Typography key={s.server} component="span" data-testid="by-die-server"
           sx={{ ...small, color: s.state === 'live' ? 'var(--text-2)' : '#f59e0b' }}>{serverText(s)}</Typography>

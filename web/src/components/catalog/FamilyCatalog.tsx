@@ -929,6 +929,7 @@ const FamilyCatalog: React.FC<{
             {isDieHighlighted(projectIndex, d.name) && <Box component="span" data-project-motor="true" sx={{ width: 3, height: 14, bgcolor: '#f59e0b' }} />}
           </>) : null; }}
         cells={rowCells}
+        highlighted={(d, c) => isConfigHighlighted(projectIndex, d, c)}
         nameTip={(n, cn) => { const d = dieOf(n); return d ? configCardTip(d, cn).trim() : ''; }} />
     </>
   );

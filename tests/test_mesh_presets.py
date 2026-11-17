@@ -220,3 +220,87 @@ def test_a_missing_data_file_is_a_plain_error_and_the_route_answers_503(tmp_path
     with pytest.raises(HTTPException) as h:
         api.get_mesh_presets()
     assert h.value.status_code == 503 and str(gone) in str(h.value.detail)
+
+
+# ── step (c): the optimiser, the headless runner and the final points use the presets ───────────────────────────────
+def test_fill_body_completes_what_the_body_leaves_out_and_lists_what_it_states_otherwise():
+    g = _machine(80.0, 12, 10)
+    out = MP.fill_body("optimization", {"mesh_size_mm": 9.0, "x_other": 1}, g, steps_key="steps_per_period")
+    body, rec = out["body"], out["record"]
+    assert body["steps_per_period"] == 48 and body["gap_layers"] == 1.0 and body["x_other"] == 1
+    assert body["mesh_size_mm"] == 9.0                                   # stated: stays
+    assert rec["custom"] and set(rec["overridden"]) == {"mesh_size_mm"}
+    assert json.loads(body["component_mesh"])["coil_rel"] == 1.0
+    clean = MP.fill_body("optimization", {}, g)["record"]
+    assert not clean["custom"] and clean["version"] == MP.version()
+
+
+def test_the_simulation_preset_reads_96_or_more():
+    g = _machine(80.0, 12, 10)
+    base = MP.fill_body("simulation", {}, g)["body"]["n_steps_per_period"]
+    assert base >= 96
+    assert not MP.fill_body("simulation", {"n_steps_per_period": base + 24}, g)["record"]["custom"]
+    assert MP.fill_body("simulation", {"n_steps_per_period": base - 24}, g)["record"]["custom"]
+    assert MP.fill_body("optimization", {"steps_per_period": 72}, g, steps_key="steps_per_period")["record"]["custom"]
+
+
+def _headless_req(**body):
+    return {"mode": "descent", "descent": dict(body)}
+
+
+def test_the_headless_runner_always_runs_the_optimization_preset():
+    from motor_ai_sim import optimize_headless as H
+    g = _machine(80.0, 12, 10)
+    cfg = {"geometry": g, "mesh": {"gap_layers": 2, "mesh_size_mm": 4.0, "component_mesh": {"stator": 9}}}
+    req = _headless_req(variables=[])
+    rec = H.apply_optimization_preset(req, cfg, "descent")
+    res = rec["resolved"]
+    assert not rec["custom"] and rec["name"] == "optimization"
+    assert req["descent"]["steps_per_period"] == 48 and req["descent"]["gap_layers"] == 1.0
+    # the machine's own Mesh block is replaced by the preset (the evals read the sizes from there)
+    assert cfg["mesh"]["gap_layers"] == 1.0 and cfg["mesh"]["mesh_size_mm"] == res["mesh_size_mm"]
+    assert cfg["mesh"]["component_mesh"] == res["component_mesh"] and cfg["mesh"]["n_sectors"] == res["n_sectors"]
+
+
+def test_the_headless_runner_refuses_other_settings_unless_a_reason_is_given():
+    from motor_ai_sim import optimize_headless as H
+    g = _machine(80.0, 12, 10)
+    with pytest.raises(H.Refused) as e:
+        H.apply_optimization_preset(_headless_req(steps_per_period=96, mesh_size_mm=0.5),
+                                    {"geometry": g}, "descent")
+    assert "steps_per_period 96" in str(e.value) and "mesh_size_mm" in str(e.value) and "preset" in str(e.value)
+    req = dict(_headless_req(steps_per_period=96), preset_override_reason="owner asked for a 96-step check")
+    rec = H.apply_optimization_preset(req, {"geometry": g}, "descent")
+    assert rec["custom"] and rec["override_reason"].startswith("owner") and req["descent"]["steps_per_period"] == 96
+
+
+def test_a_request_without_a_preset_is_unchanged_and_a_preset_fills_only_what_it_leaves_out():
+    from motor_ai_sim.routes import optimization as O
+    plain = O.DescentRequest()
+    same, rec = O._with_preset(plain)
+    assert same is plain and rec is None
+    import motor_ai_sim.routes.optimization as mod
+    g = _machine(80.0, 12, 10)
+    orig = mod.get_config
+    mod.get_config = lambda *a, **k: {"geometry": g}
+    try:
+        new, rec = O._with_preset(O.DescentRequest(preset="optimization", mesh_size_mm=3.0))
+    finally:
+        mod.get_config = orig
+    assert new.steps_per_period == 48 and new.gap_layers == 1.0 and new.mesh_size_mm == 3.0
+    assert rec["custom"] and "mesh_size_mm" in rec["overridden"] and "component_mesh" in rec["not_applied"]
+
+
+def test_the_coupled_run_takes_the_simulation_preset_only_when_asked(monkeypatch):
+    from motor_ai_sim.routes import coupled as C
+    import motor_ai_sim.config as cfgmod
+    g = _machine(80.0, 12, 10)
+    monkeypatch.setattr(cfgmod, "get_config", lambda *a, **k: {"geometry": g})
+    body = {"I_phase_rms": 10}
+    same, rec = C._with_mesh_preset(body)
+    assert same is body and rec is None
+    out, rec = C._with_mesh_preset({"I_phase_rms": 10, "preset": "simulation"})
+    assert out["n_steps_per_period"] >= 96 and out["gap_layers"] == 2.0 and "preset" not in out and not rec["custom"]
+    with pytest.raises(Exception) as e:
+        C._with_mesh_preset({"preset": "fast"})
+    assert "unknown mesh preset" in str(e.value.detail)

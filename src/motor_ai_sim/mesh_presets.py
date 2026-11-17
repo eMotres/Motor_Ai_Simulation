@@ -285,7 +285,10 @@ def fill(resolved: Mapping[str, Any], requested: Mapping[str, Any]) -> Dict[str,
             out[key] = vals[key]
         else:
             out[key] = req
-            if not _same(req, vals[key]):
+            # the Simulation preset reads "96 or more" (owner): a larger count is still the preset
+            more_ok = key == "n_steps_per_period" and resolved.get("name") == "simulation" and _num(req) is not None \
+                and _num(req) >= _num(vals[key])
+            if not (more_ok or _same(req, vals[key])):
                 over[key] = {"preset": vals[key], "requested": req}
     for key in COMPARED:
         if key in requested and requested[key] is not None and not _same(requested[key], vals[key]):
@@ -344,3 +347,32 @@ def effective_from_result(settings: Mapping[str, Any], geometry: Mapping[str, An
             out[k] = settings[k]
     out["pairs"] = pairs
     return out
+
+
+def fill_body(preset: str, body: Mapping[str, Any], geometry: Mapping[str, Any], *, steps_key: str = "n_steps_per_period",
+              cogging: bool = False) -> Dict[str, Any]:
+    """A request body (a plain dict, or a model's explicitly set fields) completed from ``preset`` for THIS machine.
+
+    The keys the body does not state (absent, ``None`` or empty) take the preset's value; a key it states with another
+    value stays as stated and is listed as overridden (the result is then "custom").  ``steps_key`` is the name this
+    route gives the step count (``n_steps_per_period`` or ``steps_per_period``).
+    Returns ``{"body": completed copy, "record": {name, version, custom, overridden, resolved, sources}}``.
+    """
+    import json
+    resolved = resolve(preset, geometry, cogging=cogging)
+    given: Dict[str, Any] = {}
+    for key in list(FILLABLE) + list(COMPARED):
+        src = steps_key if key == "n_steps_per_period" else key
+        if src in body and body[src] is not None:
+            given[key] = body[src]
+    filled = fill(resolved, given)
+    out = dict(body)
+    for key, val in filled["settings"].items():
+        out[steps_key if key == "n_steps_per_period" else key] = val
+    cm = out.get("component_mesh")
+    if isinstance(cm, dict):
+        out["component_mesh"] = json.dumps(cm, sort_keys=True)
+    rec = {"name": resolved["name"], "label": resolved["label"], "version": resolved["version"],
+           "custom": bool(filled["custom"]), "overridden": dict(filled["overridden"]),
+           "resolved": dict(resolved["values"]), "sources": dict(resolved["sources"])}
+    return {"body": out, "record": rec}

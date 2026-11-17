@@ -959,7 +959,8 @@
       "die_name_poles": "The die name \"{name}\" says another pole count; the parameters give {value}.",
       "die_name_od": "The die name \"{name}\" says another OD; the parameters give {value} mm.",
       "config_name_turns": "The configuration name \"{name}\" says another turn count; the parameters give {value}.",
-      "config_name_length": "The configuration name \"{name}\" says another stack length; the parameters give {value} mm."
+      "config_name_length": "The configuration name \"{name}\" says another stack length; the parameters give {value} mm.",
+      "die_key_family": "The die key \"{name}\" names another family; the parameters give {value}."
     },
     "help": {
       "title": "How to read a MOTRES motor name",

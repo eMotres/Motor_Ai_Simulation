@@ -278,3 +278,26 @@ def test_an_older_name_with_D_is_the_same_motor_and_still_decodes():
     assert MD.compare(old, "CIANO56 400_90 28F4SY") == {"computed_for": old, "now": "CIANO56 400_90 28F4SY"}
     assert MD.canonical("CIANDO56 400_90 15F4SY") == "CIANDO56 400_90 15F4SY"   # no second set to divide out: as written
     assert MD.result_marks(new, {"rated": {"em": {"designation": old}}}) == []
+
+
+# ── the die storage key (standard die names, owner 2026-11-17): <family> <fp4> ─────────────────────────────────────
+
+def test_a_storage_key_passes_the_name_check_and_keeps_the_die_name_letters():
+    die, cfg = motor(length=40, rows=24)
+    out = name("CILN28 200 956f", die, cfg)
+    assert out["designation"] == "CILN28 200_40 24F4SY" and out["family"] == "CILN28 200"
+    assert out["segments"]["cooling"] == {"value": "L", "source": "die_name"}     # the letters are read from the key
+    assert MD.is_storage_key("CILN28 200 956f") and MD.is_storage_key("CIANO56 400 24c9")
+    for not_key in ("CILN28 200", "CILN28 200_40", "CILN28 200 956F", "CILN28 200 vadim", "CILN28 200 956f old"):
+        assert not MD.is_storage_key(not_key), not_key
+    assert MD.check("CILN28 200 956f", "L40", out) == []
+
+
+def test_a_storage_key_with_another_family_is_reported():
+    die, cfg = motor(length=40, rows=24)
+    codes = lambda n: [c["code"] for c in MD.check(n, "L40", name(n, die, cfg))]   # noqa: E731
+    assert codes("CILN28 150 956f") == ["die_key_family", "die_name_od"]
+    assert codes("CIAN28 200 956f") == []                            # cooling is read FROM the key: nothing to contradict
+    assert codes("CILG28 200 956f") == ["die_key_family", "die_name_steel"]
+    assert codes("CILN14 200 956f") == ["die_key_family", "die_name_poles"]
+    assert MD.check("CILN28 150 956f", "L40", name("CILN28 150 956f", die, cfg))[0]["parameters"] == "CILN28 200"

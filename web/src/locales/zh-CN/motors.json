@@ -350,10 +350,30 @@
     },
     "projectMenu": {
       "open": "打开项目",
-      "active": "设为活动",
+      "active": "设为进行中",
       "parked": "暂停",
       "archived": "归档"
     },
-    "newestShort": "最新"
+    "newestShort": "最新",
+    "filter": {
+      "inSimulation": "仿真中",
+      "stage": "阶段",
+      "stageTip": "仅显示处于这些阶段的电机（总览的推导阶段）；不选 = 所有阶段",
+      "project": "项目",
+      "projectTip": "仅显示这些项目引用的电机",
+      "running": "运行中",
+      "runningTip": "仅显示当前有计算或优化在运行的电机",
+      "onlyHighlighted": "仅 {project}",
+      "onlyHighlightedTip": "仅显示在项目选择器中所选项目的电机",
+      "sets": "我的筛选",
+      "setsTip": "已保存的筛选组：选择一组，或以名称保存当前筛选（在此浏览器中为您的账户保存）",
+      "deleteSet": "删除筛选组 {name}",
+      "saveTitle": "保存当前筛选",
+      "saveLabel": "名称（例如：我的当前）",
+      "saveOk": "保存",
+      "saveCurrent": "＋ 保存当前筛选…",
+      "count": "{total} 台电机中的 {shown} 台",
+      "clear": "清除"
+    }
   }
 }

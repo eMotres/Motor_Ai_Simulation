@@ -18,6 +18,9 @@ import FamilyCatalog from './FamilyCatalog';
 import StartProject from './StartProject';
 import MyMotorsPanel from './MyMotorsPanel';
 import ProjectHighlightSelect from './ProjectHighlightSelect';
+import CatalogFilters from './CatalogFilters';
+import { useCatalogFilterStore } from '../../stores/catalogFilterStore';
+import { useProjectFocusStore } from '../../stores/projectFocusStore';
 import { isListableForClient } from '../../lib/catalogRows';
 import { isConfigHighlighted } from '../../modules/development/projectFocus';
 import { useProjectHighlightStore } from '../../stores/projectHighlightStore';
@@ -109,6 +112,11 @@ const MotorsCatalog: React.FC = () => {
   // The page can mount BEFORE /api/me has answered, or outlive a sign-in / sign-out: the tree is per account, so a change of
   // identity re-reads it (and tells the Ø sections, which hold their own copy, through the same event as every mutation).
   const { user, role, isAdmin, enforced, resolved } = useAuth();
+  // the filters (owner 2026-11-17) are remembered per account: bind the store to the signed-in account
+  const bindFilterAccount = useCatalogFilterStore((s) => s.bindAccount);
+  useEffect(() => { bindFilterAccount(user?.email ?? ''); }, [user?.email, bindFilterAccount]);
+  const focusTitle = useProjectFocusStore((s) => s.focus?.title ?? null);
+  const highlightOn = useProjectHighlightStore((s) => s.index.configs.size > 0);
   const identity = `${user?.email ?? ''}|${role}|${isAdmin}|${enforced}|${resolved}`;
   const lastIdentity = useRef(identity);
   useEffect(() => {
@@ -164,6 +172,8 @@ const MotorsCatalog: React.FC = () => {
               {APPLICATIONS.map((a) => <option key={a} value={a}>{tx(`applications.${a}`)}</option>)}
             </select>
           </Tooltip>
+          {/* the filters sit beside the application filter (owner 2026-11-17) */}
+          <CatalogFilters isAdmin={isAdmin} highlightTitle={highlightOn ? focusTitle : null} />
           {canWrite && (
             <Button size="small" variant="outlined" onClick={createDie} sx={{ textTransform: 'none', fontSize: 11, py: 0, minHeight: 24 }}>
               ＋ die from current geometry

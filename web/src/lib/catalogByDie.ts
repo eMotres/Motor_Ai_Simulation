@@ -304,3 +304,78 @@ export function jobChip(j: RunningJob): string {
   const state = j.state === 'queued' ? ' · queued' : '';
   return `${j.kind} · ${(j.server || '?').toUpperCase()}${state}${prog}`;
 }
+
+// ── filters (owner 2026-11-17: "filters of what is relevant for me now ... filter by stage"; saved sets "my current") ──
+
+/** One filter set: the state of the linked projects, the stages, the projects, "has a running job", "only the highlighted
+ *  project's motors".  Empty lists = no restriction; everything combines with AND (and with the application filter). */
+export interface CatalogFilter { state: StateFilter; stages: string[]; projects: string[]; running: boolean; onlyHighlighted: boolean }
+export const NO_FILTER: CatalogFilter = { state: 'active', stages: [], projects: [], running: false, onlyHighlighted: false };
+/** "in simulation" groups the computed stage with the project stage `simulation` (the owner's words: "in simulation"). */
+export const STAGE_GROUPS: Record<string, string[]> = { simulation: ['computed', 'simulation'] };
+
+export function isFiltered(f: CatalogFilter): boolean {
+  return f.stages.length > 0 || f.projects.length > 0 || f.running || f.onlyHighlighted;
+}
+
+/** Keep the motors that match every chosen part; drop the dies and families left empty.  `running(die, cfg)` = a job names it,
+ *  `highlighted(die, cfg)` = the project the tab highlights links it (both supplied by the caller). */
+export function applyFilters(groups: FamilyGroup[], f: CatalogFilter,
+  running?: (die: string, cfg: string) => boolean, highlighted?: (die: string, cfg: string) => boolean): FamilyGroup[] {
+  if (!isFiltered(f)) return groups;
+  const stages = new Set(f.stages.flatMap((s) => STAGE_GROUPS[s] ?? [s]));
+  const keep = (m: MotorRow) => (!stages.size || stages.has(motorStage(m) ?? ''))
+    && (!f.projects.length || m.projects.some((p) => f.projects.includes(p.id)))
+    && (!f.running || !!running?.(m.die, m.config))
+    && (!f.onlyHighlighted || !!highlighted?.(m.die, m.config));
+  const out: FamilyGroup[] = [];
+  for (const g of groups) {
+    const blocks = g.blocks.map((b) => ({ ...b, motors: b.motors.filter(keep) })).filter((b) => b.motors.length);
+    if (blocks.length) out.push({ ...g, blocks });
+  }
+  return out;
+}
+
+export const motorCount = (groups: FamilyGroup[]) => groups.reduce((a, g) => a + g.blocks.reduce((x, b) => x + b.motors.length, 0), 0);
+
+/** The stage choices present in the catalog (the derived stages, with "simulation" standing for computed + simulation). */
+export function stageOptions(groups: FamilyGroup[]): string[] {
+  const seen = new Set<string>();
+  for (const g of groups) for (const b of g.blocks) for (const m of b.motors) {
+    const s = motorStage(m);
+    if (s) seen.add(s === 'computed' ? 'simulation' : s);
+  }
+  const order = ['spec', 'spec_submitted', 'design', 'simulation', 'quote', 'prototype', 'in_production', 'production', 'closed'];
+  return [...seen].sort((a, b) => (order.indexOf(a) + 100) % 100 - (order.indexOf(b) + 100) % 100 || a.localeCompare(b));
+}
+
+/** The projects linked from the catalog's motors, by title (admins: every project the Overview names). */
+export function projectOptions(groups: FamilyGroup[]): Array<{ id: string; title: string }> {
+  const seen = new Map<string, string>();
+  for (const g of groups) for (const b of g.blocks) for (const m of b.motors) for (const p of m.projects) seen.set(p.id, p.title);
+  return [...seen].map(([id, title]) => ({ id, title })).sort((a, b) => a.title.localeCompare(b.title));
+}
+
+/** A saved filter set ("my current"): named, several per account, the last used one remembered. */
+export interface SavedFilterSet { name: string; filter: CatalogFilter }
+export function upsertSet(sets: SavedFilterSet[], name: string, filter: CatalogFilter): SavedFilterSet[] {
+  const n = name.trim();
+  if (!n) return sets;
+  const rest = sets.filter((s) => s.name !== n);
+  return [...rest, { name: n, filter: { ...filter, stages: [...filter.stages], projects: [...filter.projects] } }]
+    .sort((a, b) => a.name.localeCompare(b.name));
+}
+/** A stored value back into a filter (old / damaged storage gives the default, never a throw). */
+export function parseFilter(raw: unknown): CatalogFilter | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const r = raw as Record<string, unknown>;
+  const list = (v: unknown) => (Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string').slice(0, 50) : []);
+  const state = ['active', 'parked', 'archived', 'all'].includes(String(r.state)) ? r.state as StateFilter : 'active';
+  return { state, stages: list(r.stages), projects: list(r.projects), running: r.running === true, onlyHighlighted: r.onlyHighlighted === true };
+}
+export function parseSets(raw: unknown): SavedFilterSet[] | null {
+  if (!Array.isArray(raw)) return null;
+  return raw.slice(0, 30).map((s) => (s && typeof s === 'object' && typeof (s as SavedFilterSet).name === 'string'
+    ? { name: (s as SavedFilterSet).name.slice(0, 60), filter: parseFilter((s as SavedFilterSet).filter) ?? NO_FILTER } : null))
+    .filter((s): s is SavedFilterSet => !!s);
+}

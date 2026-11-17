@@ -354,6 +354,26 @@
       "parked": "Park",
       "archived": "Archive"
     },
-    "newestShort": "newest"
+    "newestShort": "newest",
+    "filter": {
+      "inSimulation": "In simulation",
+      "stage": "Stage",
+      "stageTip": "Show only the motors in these stages (the Overview's derived stage); empty = every stage",
+      "project": "Projects",
+      "projectTip": "Show only the motors these projects link",
+      "running": "Running",
+      "runningTip": "Show only the motors a computation or optimisation runs for now",
+      "onlyHighlighted": "Only {project}",
+      "onlyHighlightedTip": "Show only the motors of the project chosen in the project selector",
+      "sets": "My filters",
+      "setsTip": "Saved filter sets: pick one, or save the current filters under a name (kept for your account in this browser)",
+      "deleteSet": "Delete the set {name}",
+      "saveTitle": "Save the current filters",
+      "saveLabel": "Name (e.g. My current)",
+      "saveOk": "Save",
+      "saveCurrent": "＋ Save the current filters…",
+      "count": "{shown} of {total} motors",
+      "clear": "Clear"
+    }
   }
 }

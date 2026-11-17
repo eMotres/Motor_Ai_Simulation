@@ -191,3 +191,32 @@ def test_the_presets_route_names_the_missing_feature_instead_of_inventing_a_defa
     monkeypatch.setattr(api, "get_config", lambda: {"geometry": g})
     out = api.get_mesh_presets()
     assert all("values" not in p and p["error"] for p in out["presets"])
+
+
+# ── production layout: the image has NO config/, the data file is at config-seed/ (PR #750 incident) ──────────────
+def test_the_data_file_is_found_in_the_deployed_layout_with_only_config_seed(tmp_path):
+    app = tmp_path / "app"
+    (app / "config-seed").mkdir(parents=True)
+    (app / "config-seed" / "mesh_presets.yaml").write_text((CONFIG.parent / "mesh_presets.yaml").read_text(encoding="utf-8"), encoding="utf-8")
+    assert not (app / "config").exists()
+    p = MP.data_path(base=app)
+    assert p == app / "config-seed" / "mesh_presets.yaml"
+    assert MP.load(p)["version"] == MP.version()
+    # a checkout (config/ present) still wins
+    (app / "config").mkdir()
+    (app / "config" / "mesh_presets.yaml").write_text("x: 1", encoding="utf-8")
+    assert MP.data_path(base=app) == app / "config" / "mesh_presets.yaml"
+
+
+def test_a_missing_data_file_is_a_plain_error_and_the_route_answers_503(tmp_path, monkeypatch):
+    from fastapi import HTTPException
+    from motor_ai_sim import api
+    gone = tmp_path / "app" / "config" / "mesh_presets.yaml"
+    with pytest.raises(MP.PresetError) as e:
+        MP.load(gone)
+    assert str(gone) in str(e.value) and "not available" in str(e.value)
+    monkeypatch.setattr(MP, "data_path", lambda base=None: gone)
+    monkeypatch.setattr(api, "get_config", lambda: {"geometry": _machine(80.0, 12, 10)})
+    with pytest.raises(HTTPException) as h:
+        api.get_mesh_presets()
+    assert h.value.status_code == 503 and str(gone) in str(h.value.detail)

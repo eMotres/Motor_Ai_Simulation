@@ -34,10 +34,10 @@ export const MeshPresetSelect: React.FC<{ dense?: boolean; readOnly?: boolean }>
   useTranslation('simulation');
   const goToTab = useUIStore((st: any) => st.setActiveTab);                       // re-render on language change; lazy-loads the namespace
   const [set, setSet] = useState<PresetSet | null>(null);
-  const [failed, setFailed] = useState(false);
+  const [failed, setFailed] = useState<string | null>(null);
   const [tick, setTick] = useState(0);
   const load = useCallback(() => {
-    fetchMeshPresets().then(s => { setSet(s); setFailed(false); }).catch(() => setFailed(true));
+    fetchMeshPresets().then(s => { setSet(s); setFailed(null); }).catch((e: unknown) => setFailed(e instanceof Error ? e.message : String(e)));
   }, []);
   useEffect(() => {
     load();
@@ -52,7 +52,7 @@ export const MeshPresetSelect: React.FC<{ dense?: boolean; readOnly?: boolean }>
   const choice: PresetChoice = useMemo(() => matchPreset(readCurrentSettings(), set), [set, tick]);   // eslint-disable-line react-hooks/exhaustive-deps
   const tip = set
     ? set.presets.map(p => `${p.label}: ${numbersOf(p)}`).join('\n') + `\n${tx('meshPresetVersion')} ${set.version}`
-    : (failed ? tx('meshPresetUnavailable') : '');
+    : (failed ? `${tx('meshPresetUnavailable')}: ${failed}` : '');
   if (readOnly) {
     // The preset is switched in ONE place, the Mesh tab (owner 2026-11-17); here it only shows which one is active.
     const label = set?.presets.find(p => p.name === choice)?.label ?? tx('meshPresetCustom');
@@ -82,6 +82,7 @@ export const MeshPresetSelect: React.FC<{ dense?: boolean; readOnly?: boolean }>
           <MenuItem value="custom" disabled>{tx('meshPresetCustom')}</MenuItem>
         </Select>
       </Tooltip>
+      {failed && <Typography sx={{ fontSize: 11, color: 'error.main' }}>{failed}</Typography>}
     </Box>
   );
 };

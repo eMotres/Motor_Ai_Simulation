@@ -100,7 +100,11 @@ export function readCurrentSettings(): CurrentSettings {
 
 export async function fetchMeshPresets(): Promise<PresetSet> {
   const r = await fetch(`${API}/api/mesh/presets`, { cache: 'no-store' });
-  if (!r.ok) throw new Error(`HTTP ${r.status}`);
+  if (!r.ok) {
+    let detail = `HTTP ${r.status}`;
+    try { const j = await r.json(); if (typeof j?.detail === 'string') detail = j.detail; } catch { /* no body */ }
+    throw new Error(detail);
+  }
   return (await r.json()) as PresetSet;
 }
 

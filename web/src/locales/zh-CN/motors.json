@@ -305,7 +305,9 @@
       "rippleLow": "转矩脉动，求解精度低于仿真预设（每周期 {steps} 步，气隙每侧 {rows} 层；预设为 96 和 2）：48 步的脉动偏低 3-19 %",
       "battery": "电池电压，标称（{cells} 节；范围 {min}-{max} V）",
       "vllPeak": "未设电池：该工作点的线电压峰值",
-      "current": "相电流（A rms）"
+      "current": "相电流（A rms）",
+      "cogging": "齿槽转矩，峰峰值（已存的空载值）",
+      "mass": "电机质量"
     },
     "m": {
       "steel": "硅钢",
@@ -314,8 +316,24 @@
       "insulation": "槽绝缘"
     },
     "decodeTip": "如何解读此名称，以及材料",
-    "massTip": "电机质量（{duty}）",
     "namePending": "标准名称待定",
-    "otherMotors": "其他电机"
+    "otherMotors": "其他电机",
+    "col": {
+      "motor": "电机",
+      "power": "功率",
+      "torque": "转矩",
+      "speed": "转速",
+      "eff": "效率",
+      "ripple": "脉动",
+      "volt": "电池",
+      "current": "相电流",
+      "cogging": "齿槽",
+      "mass": "质量",
+      "application": "应用",
+      "marks": "标记",
+      "projects": "项目",
+      "production": "生产",
+      "sortTip": "按此列对每个冲片的电机排序（再点一次反向，第三次恢复目录顺序）"
+    }
   }
 }

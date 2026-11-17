@@ -96,3 +96,21 @@ test('row values: the rated point, battery nominal (or cells x nominal cell volt
   assert.deepEqual(rowValues({ name: 'L' }, { ...d, result: { v_ll_peak_v: 48.7 } }).voltage, { kind: 'vll_peak', v: 48.7 });
   assert.equal(rowValues({ name: 'L' }, null), null);
 });
+
+test('table columns: values per column, header-click sorting inside a die block, missing values last', async () => {
+  const { COLS, colValue, nextSort, sortMotors } = await import('../catalogByDie.ts');
+  assert.deepEqual(COLS.map((c) => c.key), ['power', 'torque', 'speed', 'eff', 'ripple', 'volt', 'current', 'cogging', 'mass']);
+  const row = (p, cog) => ({ id: p, cog, values: { power_kw: p, torque_nm: 1, rpm: 2, efficiency_pct: 3, ripple_pct: 4, voltage: { kind: 'battery', v: 5 },
+    current_arms: 6, mass_kg: 7 } });
+  const r = row(1.5);
+  assert.deepEqual(['power', 'torque', 'speed', 'eff', 'ripple', 'volt', 'current', 'mass'].map((k) => colValue(k, r)), [1.5, 1, 2, 3, 4, 5, 6, 7]);
+  assert.equal(colValue('cogging', r, 0.07), 0.07); assert.equal(colValue('power', { values: null }), null);
+  const ms = [row(1), row(3), { id: 'none', values: null }, row(2)];
+  assert.deepEqual(sortMotors(ms, 'power', 'desc').map((x) => x.id), [3, 2, 1, 'none']);
+  assert.deepEqual(sortMotors(ms, 'power', 'asc').map((x) => x.id), [1, 2, 3, 'none']);
+  assert.deepEqual(sortMotors([row(1, 0.2), row(2, null), row(3, 0.1)], 'cogging', 'asc', (x) => x.cog).map((x) => x.id), [3, 1, 2]);
+  assert.deepEqual(nextSort(null, 'power'), { key: 'power', dir: 'desc' });
+  assert.deepEqual(nextSort({ key: 'power', dir: 'desc' }, 'power'), { key: 'power', dir: 'asc' });
+  assert.equal(nextSort({ key: 'power', dir: 'asc' }, 'power'), null);
+  assert.deepEqual(nextSort({ key: 'power', dir: 'asc' }, 'mass'), { key: 'mass', dir: 'desc' });
+});

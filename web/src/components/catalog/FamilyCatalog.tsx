@@ -23,7 +23,7 @@ import PublicOutlinedIcon from '@mui/icons-material/PublicOutlined';
 import LockOutlinedIcon from '@mui/icons-material/LockOutlined';
 import { useUIStore } from '../../stores/motorStore';
 import { thumbOf, type DieThumbs } from '../../lib/dieThumbs';
-import CatalogByDie, { type ByDieActions } from './CatalogByDie';
+import CatalogByDie, { type ByDieActions, type RowCells } from './CatalogByDie';
 import StartProject from './StartProject';
 import {
   TextPromptDialog, ConfirmDialog,
@@ -853,39 +853,38 @@ const FamilyCatalog: React.FC<{
     const line = cardStatusTip(txCommon, { date: c.card_date, staleDuties: staleCatalogDutyNames(c.build_sig_aliases ?? c.build_sig, c.duties) });
     return line ? ` ${line}` : '';
   };
-  const rowExtras = (dieName: string, cfgName: string) => {
+  // the table's cells beyond the quoted point (owner 2026-11-17, columns): what the motor is for (editable for a writer), the
+  // marks (project focus, points only, the report being built or why it failed) and the saved cogging torque
+  const rowCells = (dieName: string, cfgName: string): RowCells | null => {
     const c = cfgOf(dieName, cfgName);
     if (!c) return null;
     const key = `${dieName}/${cfgName}`;
     // the project the tab highlights (ProjectHighlightSelect): ◆ its motor, ★ the one it recommends
     const mark = isConfigRecommended(projectIndex, dieName, cfgName) ? '\u2605' : isConfigHighlighted(projectIndex, dieName, cfgName) ? '\u25c6' : '';
-    return (
-      <>
-        {mark && <Tooltip title={tx('projectFocus.configTip')}><Box component="span" data-testid="project-focus-mark" sx={{ color: '#f59e0b', fontSize: 12 }}>{mark}</Box></Tooltip>}
-        {isPointsOnly(c) && (
-          <Tooltip title={tx('pointsOnlyTip')}><Chip size="small" data-testid="points-only-badge" label={tx('pointsOnly')} sx={{ height: 18, fontSize: 10, color: 'var(--text-3)' }} /></Tooltip>
-        )}
-        <ApplicationBadge cfg={c} die={dieName} canEdit={canWrite} />
-        {coggingValue(c.cogging) !== null && (
-          <Tooltip title={coggingTipText(c.cogging, txc)}>
-            <Typography component="span" data-testid="cogging-chip"
-              sx={{ fontSize: 11, color: c.cogging?.stale ? '#fbbf24' : 'var(--text-3)', cursor: 'help' }}>
-              {txc('configure.cogging')} {coggingValue(c.cogging)!.toFixed(coggingDigits(coggingValue(c.cogging)!))} N·m
-            </Typography>
-          </Tooltip>
-        )}
-        {(ringBusy(ring, `report:${key}`) || ringBusy(ring, `report:pdf:${key}`)) && (
-          <Tooltip title={ringTip(ring)}><span><ReportRing ring={ring} size={13} /></span></Tooltip>
-        )}
-        {ring.notice && ring.key.endsWith(`:${key}`) && (
-          <Tooltip title={ring.notice.full}>
-            <Typography component="span" onClick={() => setRing(RING_IDLE)}
-              sx={{ fontSize: 11, cursor: 'pointer', maxWidth: 260, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-                    color: ring.notice.kind === 'error' ? '#f87171' : 'var(--text-3)' }}>✗ {ring.notice.text}</Typography>
-          </Tooltip>
-        )}
-      </>
-    );
+    const cog = coggingValue(c.cogging);
+    return {
+      application: <ApplicationBadge cfg={c} die={dieName} canEdit={canWrite} />,
+      cogging: cog, coggingStale: !!c.cogging?.stale,
+      coggingTip: cog !== null ? `${coggingTipText(c.cogging, txc)} (${cog.toFixed(coggingDigits(cog))} N·m)` : txc('configure.cogging'),
+      marks: (
+        <>
+          {mark && <Tooltip title={tx('projectFocus.configTip')}><Box component="span" data-testid="project-focus-mark" sx={{ color: '#f59e0b', fontSize: 12 }}>{mark}</Box></Tooltip>}
+          {isPointsOnly(c) && (
+            <Tooltip title={tx('pointsOnlyTip')}><Chip size="small" data-testid="points-only-badge" label={tx('pointsOnly')} sx={{ height: 18, fontSize: 10, color: 'var(--text-3)' }} /></Tooltip>
+          )}
+          {(ringBusy(ring, `report:${key}`) || ringBusy(ring, `report:pdf:${key}`)) && (
+            <Tooltip title={ringTip(ring)}><span><ReportRing ring={ring} size={13} /></span></Tooltip>
+          )}
+          {ring.notice && ring.key.endsWith(`:${key}`) && (
+            <Tooltip title={ring.notice.full}>
+              <Typography component="span" onClick={() => setRing(RING_IDLE)}
+                sx={{ fontSize: 11, cursor: 'pointer', maxWidth: 120, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                      color: ring.notice.kind === 'error' ? '#f87171' : 'var(--text-3)' }}>✗ {ring.notice.text}</Typography>
+            </Tooltip>
+          )}
+        </>
+      ),
+    };
   };
   const byDieActions: ByDieActions = {
     load: (die, cfg) => { const r = ratedOf(die, cfg); if (r?.duty) void applyDuty(die, cfg, r.duty); },
@@ -929,7 +928,7 @@ const FamilyCatalog: React.FC<{
             <OpennessMarker die={d} />
             {isDieHighlighted(projectIndex, d.name) && <Box component="span" data-project-motor="true" sx={{ width: 3, height: 14, bgcolor: '#f59e0b' }} />}
           </>) : null; }}
-        rowExtras={(n, cn) => rowExtras(n, cn)}
+        cells={rowCells}
         nameTip={(n, cn) => { const d = dieOf(n); return d ? configCardTip(d, cn).trim() : ''; }} />
     </>
   );

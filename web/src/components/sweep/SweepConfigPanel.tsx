@@ -174,6 +174,11 @@ const SweepVarCard: React.FC<SweepVarCardProps> = ({ paramName, label, unit, opt
   // were typed (live 2026-08-21: "Magnet Fill Up, I can't set it to 0.45").
   const snap = (x: number) => (isInt ? Math.round(x) : Math.round(x * 1000) / 1000);
   const fmt  = (x: number) => (isInt ? String(Math.round(x)) : String(snap(x)));
+  // Owner 2026-11-17: an edit of min or max sets the step to max - min (the sweep
+  // takes the two ends); the step box can still be typed after it, and an empty or
+  // reversed range leaves the step as it is.  Arguments are display values.
+  const autoStep = (lo: number, hi: number): Partial<ParameterVariation> =>
+    (Number.isFinite(lo) && Number.isFinite(hi) && hi > lo ? { step: snap(hi - lo) / kU } : {});
   // Optimize view anchors the ± window on the CURRENT value.
   const anchor = Number.isFinite(cur) ? cur : (Number(v.min) + Number(v.max)) / 2;
   const half   = snap(Math.max(0, (Number(v.max) - Number(v.min)) / 2));
@@ -268,9 +273,11 @@ const SweepVarCard: React.FC<SweepVarCardProps> = ({ paramName, label, unit, opt
           </Box>
         ) : (
           <Box sx={{ display: 'flex', gap: 1, alignItems: 'center', flexWrap: 'wrap', rowGap: 0.5 }}>
-            <RangeField label="min"  value={snap(Number(v.min) * kU)}  onChange={n => onEdit({ min: n / kU }, 'edit')}
+            <RangeField label="min"  value={snap(Number(v.min) * kU)}
+              onChange={n => onEdit({ min: n / kU, ...autoStep(n, Number(v.max) * kU) }, 'edit')}
               error={Number(v.min) > Number(v.max)} />
-            <RangeField label="max"  value={snap(Number(v.max) * kU)}  onChange={n => onEdit({ max: n / kU }, 'edit')}
+            <RangeField label="max"  value={snap(Number(v.max) * kU)}
+              onChange={n => onEdit({ max: n / kU, ...autoStep(Number(v.min) * kU, n) }, 'edit')}
               error={Number(v.min) > Number(v.max)} />
             <RangeField label="step" value={snap(Number(v.step) * kU)} onChange={n => onEdit({ step: n / kU }, 'edit')} />
           </Box>

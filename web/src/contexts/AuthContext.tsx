@@ -91,6 +91,8 @@ const AuthCtx = createContext<AuthState>({
 });
 
 export const useAuth = () => useContext(AuthCtx);
+/** The context itself, for a test that renders a page as a given role. */
+export { AuthCtx };
 
 /** May we call an `/api/*` route that a closed server gates?
  *

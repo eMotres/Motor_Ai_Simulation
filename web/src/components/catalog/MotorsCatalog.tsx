@@ -23,7 +23,8 @@ import { isConfigHighlighted } from '../../modules/development/projectFocus';
 import { useProjectHighlightStore } from '../../stores/projectHighlightStore';
 import HelpTip from '../common/HelpTip';
 import { TextPromptDialog, type TextPromptState } from '../common/PromptDialogs';
-import { fetchFamilyTree, SIGN_IN_NOTE } from '../../lib/familyTree';
+import { fetchFamilyTree, peekFamilyTree, SIGN_IN_NOTE } from '../../lib/familyTree';
+import { useRememberedView } from '../../lib/useRememberedView';
 import { APPLICATIONS, catalogDiameters, parseApplicationFilter, type ApplicationFilter } from '../../lib/applications';
 import { useScrollMemory } from '../../lib/scrollMemory';
 import { useTranslation } from 'react-i18next';
@@ -62,16 +63,17 @@ const MotorsCatalog: React.FC = () => {
   const [appFilter, setAppFilter] = useState<ApplicationFilter>(() => {
     try { return parseApplicationFilter(localStorage.getItem('motors.application')); } catch { return 'all'; }
   });
-  const [allDies, setAllDies] = useState<{ name: string; stator_diameter: number; configs: { name: string; applications?: unknown; card_date?: unknown; duties?: unknown[] }[] }[]>([]);
+  const [allDies, setAllDies] = useState<{ name: string; stator_diameter: number; configs: { name: string; applications?: unknown; card_date?: unknown; duties?: unknown[] }[] }[]>(
+    () => (peekFamilyTree()?.dies ?? []) as never);
   const pickFilter = (v: string) => {
     const f = parseApplicationFilter(v);
     setAppFilter(f);
     try { localStorage.setItem('motors.application', f); } catch { /* storage blocked */ }
   };
-  const [canWrite, setCanWrite] = useState(false);
+  const [canWrite, setCanWrite] = useState(() => { const t = peekFamilyTree(); return t ? uiCanWrite(t.can_write, canWriteServer()) : false; });
   const projectIndex = useProjectHighlightStore((s) => s.index);
   // `loaded` = the tree has ANSWERED once; `failed` = the last attempt did not.  Until then the page must not claim "no motors".
-  const [loaded, setLoaded] = useState(false);
+  const [loaded, setLoaded] = useState(() => peekFamilyTree() !== null);
   const [failed, setFailed] = useState(false);
   // The backend's one-line reason for an empty catalog (a signed-in account
   // with no motors granted yet) — shown instead of the vendor's "no dies yet".
@@ -114,6 +116,10 @@ const MotorsCatalog: React.FC = () => {
   // The page can mount BEFORE /api/me has answered, or outlive a sign-in / sign-out: the tree is per account, so a change of
   // identity re-reads it (and tells the Ø sections, which hold their own copy, through the same event as every mutation).
   const { user, role, isAdmin, enforced, resolved } = useAuth();
+  // the catalog by die (owner 2026-11-17, "in the style of the Overview"): ONE switch for the whole tab, admins only for now;
+  // with it on, one view holds every die (family headers across all diameters) instead of the Ø sections
+  const [byDie, setByDie] = useRememberedView<boolean>('motors.byDie', false, (r) => (typeof r === 'boolean' ? r : null));
+  const showByDie = isAdmin && byDie;
   const identity = `${user?.email ?? ''}|${role}|${isAdmin}|${enforced}|${resolved}`;
   const lastIdentity = useRef(identity);
   useEffect(() => {
@@ -165,6 +171,14 @@ const MotorsCatalog: React.FC = () => {
             {APPLICATIONS.map((a) => <option key={a} value={a}>{tx(`applications.${a}`)}</option>)}
           </select>
         </Tooltip>
+        {isAdmin && (
+          <Tooltip title={tx('byDie.switchTip')}>
+            <Button size="small" variant={byDie ? 'contained' : 'outlined'} data-testid="by-die-switch" aria-pressed={byDie}
+              onClick={() => setByDie(!byDie)} sx={{ textTransform: 'none', fontSize: 11, py: 0, minHeight: 24 }}>
+              {tx('byDie.switch')}
+            </Button>
+          </Tooltip>
+        )}
         {dieMsg && (
           <Typography sx={{ fontSize: 11,
             color: dieMsg.startsWith('✗') ? '#fca5a5' : '#34d399' }}>{dieMsg}</Typography>
@@ -206,7 +220,8 @@ const MotorsCatalog: React.FC = () => {
         );
       })()}
 
-      {diams.map(d => (
+      {showByDie && allDies.length > 0 && <FamilyCatalog embedded byDie application={appFilter} />}
+      {!showByDie && diams.map(d => (
         <Box key={d} sx={{ p: 2, mb: 2, borderRadius: 2,
                            border: '1px solid var(--line-soft)',
                            bgcolor: 'var(--panel-2)' }}>

@@ -3,12 +3,15 @@
  *  and the production that use it.  Every action of the list view stays reachable: the motor row's ▶ loads it at its
  *  default mode, the two ⋮ menus carry everything else.  The grouping and the current / old rule: lib/catalogByDie.ts. */
 import React, { useEffect, useMemo, useState } from 'react';
-import { Box, Chip, IconButton, Menu, MenuItem, Tooltip, Typography } from '@mui/material';
+import { Box, Chip, IconButton, Menu, MenuItem, Popover, Tooltip, Typography } from '@mui/material';
+import HelpOutlineIcon from '@mui/icons-material/HelpOutline';
 import MoreVertIcon from '@mui/icons-material/MoreVert';
 import PlayArrowIcon from '@mui/icons-material/PlayArrow';
 import { useTranslation } from 'react-i18next';
 import MotorThumbnail from './MotorThumbnail';
 import { buildByDie, segmentationText, type ByDieDie, type ByDieOverview, type MotorRow } from '../../lib/catalogByDie';
+import { parseDesignation, SEGMENTS } from '../../lib/motorDesignation';
+import { DesignationDecoder } from '../common/MotorDesignation';
 import { NARROW } from '../../lib/narrowLayout';
 
 const API = (import.meta.env.VITE_API_URL ?? 'http://localhost:8001') as string;
@@ -83,6 +86,7 @@ const CatalogByDie: React.FC<Props> = ({ dies, thumbs, rated, active, isAdmin, c
   const [overview, setOverview] = useState<ByDieOverview | null>(given ?? null);
   const [dieMenu, setDieMenu] = useState<{ el: HTMLElement; die: ByDieDie } | null>(null);
   const [cfgMenu, setCfgMenu] = useState<{ el: HTMLElement; m: MotorRow } | null>(null);
+  const [decode, setDecode] = useState<{ el: HTMLElement; m: MotorRow } | null>(null);
   useEffect(() => {
     if (given !== undefined || !isAdmin) return;           // the Overview is admin-only (route-gated): nobody else asks
     let alive = true;
@@ -92,9 +96,39 @@ const CatalogByDie: React.FC<Props> = ({ dies, thumbs, rated, active, isAdmin, c
   }, [isAdmin, given]);
   const groups = useMemo(() => buildByDie(dies, isAdmin ? overview : null), [dies, overview, isAdmin]);
 
-  const beside = (m: MotorRow) => [m.beside.steel, m.beside.magnet,
-    segmentationText(m.beside.magnet_lamination_mm, { solid: t('byDie.solid'), slice: (mm) => t('byDie.slice', { mm }) }),
-    m.beside.slot_insulation].filter(Boolean).join(' · ');
+  // the four per-motor parameters left the row (owner 2026-11-17); they are in the "?" popover, under the name's segments
+  const materials = (m: MotorRow) => [
+    { label: t('byDie.m.steel'), value: m.beside.steel || '—' }, { label: t('byDie.m.magnet'), value: m.beside.magnet || '—' },
+    { label: t('byDie.m.segmentation'), value: segmentationText(m.beside.magnet_lamination_mm, { solid: t('byDie.solid'), slice: (mm) => t('byDie.slice', { mm }) }) || '—' },
+    { label: t('byDie.m.insulation'), value: m.beside.slot_insulation || '—' }];
+  const segmentsOf = (m: MotorRow) => {
+    const f = m.named ? parseDesignation(m.label) : null;
+    return f ? Object.fromEntries(SEGMENTS.filter((s) => s !== 'rev' || f.rev).map((s) => [s, { value: f[s], source: 'name' }])) : {};
+  };
+  // the continuous point beside the name: power · torque · speed · efficiency · ripple · voltage · phase current (owner)
+  const val = (key: string, text: string, tip: string, muted = false) => (
+    <Tooltip key={key} title={tip}>
+      <Box component="span" data-testid={`by-die-v-${key}`} sx={{ color: muted ? 'var(--text-4)' : 'var(--text-2)', cursor: 'help' }}>{text}</Box>
+    </Tooltip>
+  );
+  const valuesLine = (m: MotorRow) => {
+    const v = m.values;
+    if (!v) return null;
+    const d = (x: number | null, n: number, unit: string) => (x === null ? '—' : `${x.toFixed(n)} ${unit}`);
+    const low = v.ripple_low;
+    const parts = [
+      val('power', d(v.power_kw, 2, 'kW'), t('byDie.v.power', { duty: m.rated?.name ?? '' })),
+      val('torque', d(v.torque_nm, 2, 'N·m'), t('byDie.v.torque')),
+      val('speed', d(v.rpm, 0, 'rpm'), t('byDie.v.speed')),
+      val('eff', d(v.efficiency_pct, 1, '%'), t('byDie.v.efficiency')),
+      val('ripple', d(v.ripple_pct, 1, '%'), low ? t('byDie.v.rippleLow', { steps: low.steps ?? '—', rows: low.gap_layers ?? '—' }) : t('byDie.v.ripple'), !!low),
+      v.voltage?.kind === 'battery'
+        ? val('volt', d(v.voltage.v, 1, 'V'), t('byDie.v.battery', { min: v.voltage.min ?? '—', max: v.voltage.max ?? '—', cells: v.voltage.cells ?? '—' }))
+        : val('volt', d(v.voltage?.v ?? null, 1, 'V'), t('byDie.v.vllPeak')),
+      val('current', d(v.current_arms, 1, 'A'), t('byDie.v.current')),
+    ];
+    return parts.flatMap((p, i) => (i ? [<Box component="span" key={`s${i}`} sx={{ color: 'var(--text-4)' }}> · </Box>, p] : [p]));
+  };
   const run = (fn: () => void) => () => { setDieMenu(null); setCfgMenu(null); fn(); };
 
   const motorRow = (m: MotorRow) => {
@@ -115,11 +149,15 @@ const CatalogByDie: React.FC<Props> = ({ dies, thumbs, rated, active, isAdmin, c
         </Tooltip>
         {m.old && <Tooltip title={t('byDie.oldTip')}><Typography component="span" sx={{ ...small, fontStyle: 'italic' }}>{t('byDie.old')}</Typography></Tooltip>}
         {m.newestLocked && <Tooltip title={t('byDie.newestLockedTip')}><Typography component="span" data-testid="by-die-newest-locked" sx={{ ...small, fontStyle: 'italic' }}>{t('byDie.newestLocked')}</Typography></Tooltip>}
-        <Typography component="span" sx={{ ...small, flex: '1 1 220px' }}>{beside(m)}</Typography>
+        {m.named && (
+          <IconButton size="small" aria-label={t('byDie.decodeTip')} data-testid="by-die-decode" onClick={(e) => setDecode({ el: e.currentTarget, m })}
+            sx={{ p: 0.15, color: 'var(--text-4)' }}><HelpOutlineIcon sx={{ fontSize: 13 }} /></IconButton>
+        )}
+        <Typography component="span" data-testid="by-die-values" sx={{ ...small, flex: '1 1 260px', fontVariantNumeric: 'tabular-nums' }}>{valuesLine(m)}</Typography>
         {q && (
-          <Tooltip title={t('byDie.ratedTip', { duty: q.name })}>
-            <Typography component="span" data-testid="by-die-rated" sx={{ ...small, color: 'var(--text-2)', fontVariantNumeric: 'tabular-nums' }}>
-              {fmt(q.power_kw, 2)} kW · {fmt(q.torque_nm, 2)} Nm · {fmt(q.result?.mass_kg, 2)} kg
+          <Tooltip title={t('byDie.massTip', { duty: q.name })}>
+            <Typography component="span" data-testid="by-die-mass" sx={{ ...small, color: 'var(--text-2)', fontVariantNumeric: 'tabular-nums' }}>
+              {fmt(q.result?.mass_kg, 2)} kg
             </Typography>
           </Tooltip>
         )}
@@ -183,6 +221,9 @@ const CatalogByDie: React.FC<Props> = ({ dies, thumbs, rated, active, isAdmin, c
           ))}
         </Box>
       ))}
+      <Popover open={!!decode} anchorEl={decode?.el ?? null} onClose={() => setDecode(null)} anchorOrigin={{ vertical: 'bottom', horizontal: 'left' }}>
+        {decode && <DesignationDecoder segments={segmentsOf(decode.m) as never} materials={materials(decode.m)} />}
+      </Popover>
       <Menu open={!!dieMenu} anchorEl={dieMenu?.el ?? null} onClose={() => setDieMenu(null)}>
         {dieMenu && dieMenuItems(dieMenu.die, { canWrite, isAdmin, standardUser }, actions, t).map((it) => (
           <MenuItem key={it.key} dense sx={it.danger ? { color: '#f87171' } : undefined} onClick={run(it.run)}>{it.label}</MenuItem>

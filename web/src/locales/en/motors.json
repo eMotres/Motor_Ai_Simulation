@@ -297,6 +297,24 @@
     "newestLocked": "no link: newest locked",
     "newestLockedTip": "No project or production links any motor of this designation; the newest locked one is taken as current",
     "noName": "No standard name yet",
-    "ratedTip": "The rated point ({duty}); ▶ loads the default mode"
+    "v": {
+      "power": "Continuous power at the rated point ({duty})",
+      "torque": "Torque",
+      "speed": "Speed",
+      "efficiency": "Efficiency (shaft)",
+      "ripple": "Torque ripple of the stored point",
+      "rippleLow": "Torque ripple, solved below the Simulation preset ({steps} steps per period, {rows} air-gap rows per side; the preset is 96 and 2): a 48-step ripple reads 3-19 % low",
+      "battery": "Battery voltage, nominal ({cells} cells; range {min}-{max} V)",
+      "vllPeak": "No battery set: line-line peak voltage of the point",
+      "current": "Phase current (A rms)"
+    },
+    "m": {
+      "steel": "Steel",
+      "magnet": "Magnet",
+      "segmentation": "Magnet segmentation",
+      "insulation": "Slot insulation"
+    },
+    "decodeTip": "How to read this name, and the materials",
+    "massTip": "Motor mass ({duty})"
   }
 }

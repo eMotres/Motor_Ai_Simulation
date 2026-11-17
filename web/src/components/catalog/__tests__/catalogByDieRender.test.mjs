@@ -22,12 +22,15 @@ import { I18nextProvider } from 'react-i18next';
 import { createI18n } from '${rel('i18n/core.ts')}';
 import CatalogByDie from '${rel('components/catalog/CatalogByDie.tsx')}';
 export { dieMenuItems, motorMenuItems } from '${rel('components/catalog/CatalogByDie.tsx')}';
+import { DesignationDecoder } from '${rel('components/common/MotorDesignation.tsx')}';
 import enCommon from '${rel('locales/en/common.json')}';
 import zhCommon from '${rel('locales/zh-CN/common.json')}';
 import enMotors from '${rel('locales/en/motors.json')}';
 import zhMotors from '${rel('locales/zh-CN/motors.json')}';
 export const makeI18n = (lng) => createI18n({ lng, resources: { en: { common: enCommon, motors: enMotors },
   'zh-CN': { common: zhCommon, motors: zhMotors } } });
+export const decoder = (i18n, materials) => renderToStaticMarkup(React.createElement(I18nextProvider, { i18n },
+  React.createElement(DesignationDecoder, { segments: { turns: { value: '7', source: 'name' } }, materials })));
 const noop = () => {};
 const actions = new Proxy({}, { get: () => noop });
 export const render = (i18n, props) => renderToStaticMarkup(React.createElement(I18nextProvider, { i18n },
@@ -45,7 +48,9 @@ process.on('exit', () => { try { rmSync(tmp, { recursive: true, force: true }); 
 const ready = (i) => new Promise((r) => (i.isInitialized ? r() : i.on('initialized', () => r())));
 const decode = (s) => s.replace(/&#x27;|&#39;/g, "'").replace(/&quot;/g, '"').replace(/&amp;/g, '&');
 
-const DUTIES = [{ name: 'water 1', power_kw: 0.01, torque_nm: 0.1 }, { name: 'rated', power_kw: 1.5, torque_nm: 4.25, result: { mass_kg: 2 } }];
+const DUTIES = [{ name: 'water 1', power_kw: 0.01, torque_nm: 0.1 },
+  { name: 'rated', power_kw: 1.5, torque_nm: 4.25, rpm: 3370, current_arms: 12, result: { mass_kg: 2, efficiency_pct: 91.25, ripple_pct: 4.04 },
+    runs: [{ drive: 'sine', primary: true, steps: 96, gap_layers: 2 }] }];
 const cfg = (name, designation, beside) => ({ name, designation, designation_complete: true, family: designation.split('_')[0], beside,
   duties: DUTIES });
 const dies = [
@@ -68,11 +73,12 @@ for (const [lng, solidWord, sliceWord, oldWord, prod, motors] of [
     assert.equal((html.match(/data-testid="by-die-block"/g) || []).length, 2);
     assert.equal((html.match(/>CILN28 200_40 24F4SY</g) || []).length, 2);
     assert.ok(!html.includes('G2-L40 copy') && !html.includes('>CILN28 vadim 2<'), html);  // no old names shown
-    assert.ok(html.includes(`B15AHV950M · N52UH_150C · ${sliceWord} · Al2O3`), html);
-    assert.ok(html.includes(`NO20 · N52UH_150C · ${solidWord}`), html);
+    assert.ok(!html.includes('B15AHV950M') && !html.includes('Al2O3'), html);           // the materials left the row
+    assert.ok(html.includes('1.50 kW') && html.includes('4.25 N·m') && html.includes('3370 rpm') && html.includes('91.3 %')
+      && html.includes('4.0 %') && html.includes('12.0 A'), html);
     assert.ok(html.includes('Pump project') && html.includes(prod) && html.includes(oldWord), html);
     assert.equal((html.match(/data-old="true"/g) || []).length, 1);
-    assert.ok(html.includes('1.50 kW · 4.25 Nm · 2.00 kg'), html);
+    assert.ok(html.includes('>2.00 kg<') && !html.includes('4.25 Nm ·'), html);             // the right side keeps only the mass
     assert.ok(!/byDie\.|motors:/.test(html), html);                                       // no raw key
   });
   test(`${lng}: a member or the factory gets the same layout without any project, production or old mark`, async () => {
@@ -88,7 +94,7 @@ for (const [lng, solidWord, sliceWord, oldWord, prod, motors] of [
 test('the rated line quotes the point marked rated, not the first water point', async () => {
   const i18n = m.makeI18n('en'); await ready(i18n);
   const html = decode(m.render(i18n, { dies, isAdmin: true, overview }));
-  assert.ok(html.includes('1.50 kW · 4.25 Nm · 2.00 kg') && !html.includes('0.01 kW'), html);
+  assert.ok(html.includes('1.50 kW') && !html.includes('0.01 kW'), html);
 });
 
 test('390 px (phone): every row wraps and nothing in the view is wider than 358 px (390 minus the 16 px gutters)', async () => {
@@ -127,4 +133,41 @@ test('the row menus carry every action of the list view, each calling the right 
   const reader = { canWrite: false, isAdmin: false, standardUser: false };
   assert.deepEqual(m.motorMenuItems({ die: 'D', config: 'C' }, reader, actions, t).map((x) => x.key), ['ds', 'rep', 'pdf', 'mine']);
   assert.deepEqual(m.dieMenuItems({ name: 'D', configs: [] }, reader, actions, t), []);
+});
+
+// ── owner 2026-11-17: the continuous point beside the name (~/jobs/TASK_catalog_row_values.md) ──────────────────────
+const owner = { name: 'CIANO14 40 new', slots: 12, poles: 14, stator_diameter: 40, layer: 'shared', configs: [{
+  name: 'L20', designation: 'CIANO14 40_20 7F2SY', designation_complete: true, family: 'CIANO14 40',
+  beside: { steel: '20SW1200', magnet: 'F52SH_150C', slot_insulation: 'Nomex' },
+  battery: { cells: 12, v_cell_nom: 3.7, v_min: 36, v_max: 50.4, v_nom: 44.4 },
+  duties: [{ name: 'rated', power_kw: 1.11, torque_nm: 0.82, rpm: 13000, current_arms: 37.0,
+    result: { efficiency_pct: 92.8, ripple_pct: 5.0, mass_kg: 0.61 }, runs: [{ drive: 'sine', primary: true, steps: 48, gap_layers: 1 }] }] }] };
+const text = (html) => decode(html).replace(/<style[^>]*>[\s\S]*?<\/style>/g, '').replace(/<[^>]+>/g, '');
+
+for (const [lng, mat] of [['en', 'Materials (not in the name)'], ['zh-CN', '材料（不在名称中）']]) {
+  test(`${lng}: the owner's example row reads power · torque · speed · efficiency · ripple · battery · phase current`, async () => {
+    const i18n = m.makeI18n(lng); await ready(i18n);
+    const html = m.render(i18n, { dies: [owner], isAdmin: false, canWrite: false, overview: null });
+    const line = text(html.slice(html.indexOf('data-testid="by-die-values"'))).split('0.61 kg')[0];
+    assert.ok(line.includes('1.11 kW · 0.82 N·m · 13000 rpm · 92.8 % · 5.0 % · 44.4 V · 37.0 A'), line);
+    assert.ok(!html.includes('20SW1200') && !html.includes('Nomex'), html);
+    // the ripple was solved at 48 steps / 1 row: muted, the reason in its tooltip (aria-label in the markup)
+    const rip = html.slice(html.indexOf('data-testid="by-die-v-ripple"') - 400, html.indexOf('data-testid="by-die-v-ripple"') + 200);
+    assert.ok(/aria-label="[^"]*48[^"]*1[^"]*96[^"]*2/.test(decode(rip)), rip);
+    assert.ok(decode(html).includes(lng === 'en' ? '12 cells; range 36-50.4 V' : '12 节；范围 36-50.4 V'), html);
+  });
+  test(`${lng}: the materials are in the decoder popover, in a block of their own`, async () => {
+    const i18n = m.makeI18n(lng); await ready(i18n);
+    const html = decode(m.decoder(i18n, [{ label: 'Steel', value: '20SW1200' }, { label: 'Slot insulation', value: 'Nomex' }]));
+    assert.ok(html.includes(`>${mat}<`) && html.includes('>20SW1200<') && html.includes('>Nomex<'), html);
+  });
+}
+
+test('no battery: the line-line peak voltage of the point, labelled so; a missing value is a dash', async () => {
+  const i18n = m.makeI18n('en'); await ready(i18n);
+  const nob = { ...owner, configs: [{ ...owner.configs[0], battery: null,
+    duties: [{ ...owner.configs[0].duties[0], current_arms: null, result: { ...owner.configs[0].duties[0].result, v_ll_peak_v: 48.7 } }] }] };
+  const html = decode(m.render(i18n, { dies: [nob], isAdmin: false, canWrite: false, overview: null }));
+  assert.ok(text(html).includes('48.7 V · —'), text(html));
+  assert.ok(html.includes('aria-label="No battery set: line-line peak voltage of the point"'), html);
 });

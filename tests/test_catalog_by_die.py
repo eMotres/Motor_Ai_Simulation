@@ -112,3 +112,12 @@ def test_a_die_without_a_named_motor_takes_its_family_from_its_own_name_and_para
     assert MD.die_family(named) == "CILN28 200"
     assert MD.catalog_view([{"name": "CIANO10 12_40", "poles": 10, "stator_diameter": 12, "configs": []}],
                            staff=False, revisions={})[0]["family"] == "CIANO10 12"
+
+
+def test_a_run_row_names_its_air_gap_rows():
+    """The catalog row mutes a ripple solved below the Simulation preset (96 steps, 2 rows per side): the tree's run rows
+    carry the run's own gap rows beside its steps."""
+    from motor_ai_sim.routes import family as fam
+    entry = {"runs": {"current": {"settings": {"sim.stepsPP": 48, "mesh.gapLayers": 1}, "result": {"ripple_pct": 5.0}}}}
+    rows = fam._run_rows("sig", entry)
+    assert rows and rows[0]["steps"] == 48 and rows[0]["gap_layers"] == 1

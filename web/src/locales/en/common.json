@@ -970,6 +970,7 @@
       "position": "Position",
       "values": "Values",
       "double": "Two three-phase sets have no letter of their own: the turns of both sets are counted together and the connection is the one inside one set."
-    }
+    },
+    "materials": "Materials (not in the name)"
   }
 }

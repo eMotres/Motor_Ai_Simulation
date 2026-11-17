@@ -81,3 +81,18 @@ test('the row quotes the rated point, else the largest continuous point - never 
   assert.equal(ratedPoint({ name: 'c', duties: [d('water 1', 0.01), d('water 2', 0.9), d('boost', 5, { duty_class: 'short_time' })] }).name, 'water 2');
   assert.equal(ratedPoint({ name: 'c', duties: [] }), null);
 });
+
+test('row values: the rated point, battery nominal (or cells x nominal cell voltage), ripple below the preset flagged', async () => {
+  const { rowValues, RIPPLE_PRESET } = await import('../catalogByDie.ts');
+  assert.deepEqual(RIPPLE_PRESET, { steps: 96, gapLayers: 2 });
+  const d = { name: 'rated', power_kw: 1.11, torque_nm: 0.82, rpm: 13000, current_arms: 37,
+    result: { efficiency_pct: 92.8, ripple_pct: 5, mass_kg: 0.6 }, runs: [{ primary: true, steps: 96, gap_layers: 2 }] };
+  const v = rowValues({ name: 'L20', battery: { cells: 12, v_cell_nom: 3.7, v_min: 36, v_max: 50.4 } }, d);
+  assert.equal(v.voltage.kind, 'battery'); assert.ok(Math.abs(v.voltage.v - 44.4) < 1e-9);
+  assert.equal(v.ripple_low, null);
+  assert.deepEqual(rowValues({ name: 'L' }, { ...d, runs: [{ primary: true, steps: 48, gap_layers: 2 }] }).ripple_low, { steps: 48, gap_layers: 2 });
+  assert.deepEqual(rowValues({ name: 'L' }, { ...d, runs: [{ primary: true, steps: 96, gap_layers: 1 }] }).ripple_low, { steps: 96, gap_layers: 1 });
+  assert.equal(rowValues({ name: 'L' }, { ...d, runs: [] }).ripple_low, null);            // unknown fidelity: no mark, no guess
+  assert.deepEqual(rowValues({ name: 'L' }, { ...d, result: { v_ll_peak_v: 48.7 } }).voltage, { kind: 'vll_peak', v: 48.7 });
+  assert.equal(rowValues({ name: 'L' }, null), null);
+});

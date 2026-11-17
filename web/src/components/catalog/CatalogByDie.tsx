@@ -9,7 +9,7 @@ import MoreVertIcon from '@mui/icons-material/MoreVert';
 import PlayArrowIcon from '@mui/icons-material/PlayArrow';
 import { useTranslation } from 'react-i18next';
 import MotorThumbnail from './MotorThumbnail';
-import { applyFilters, buildByDie, stageKey, COL_DIGITS, colValue, COLS, filterByState, jobChip, motorCount, motorStage, NAME_COL_W, nextSort,
+import { applyFilters, buildByDie, restrictTo, stageKey, COL_DIGITS, colValue, COLS, filterByState, jobChip, motorCount, motorStage, NAME_COL_W, nextSort,
   projectOptions, segmentationText, sortMotors, stageOptions, stateCounts, type ByDieDie, type ByDieOverview, type ColKey, type JobsAnswer, type MotorRow, type RunningJob, type ServerView, type Sort,
   type StateFilter } from '../../lib/catalogByDie';
 import { useCatalogFilterStore } from '../../stores/catalogFilterStore';
@@ -47,6 +47,8 @@ interface Props {
   /** the non-numeric cells and the cogging of a motor (what the list view showed and this table keeps), from FamilyCatalog */
   cells?: (die: string, config: string) => RowCells | null;
   dieExtras?: (die: string) => React.ReactNode;
+  /** every die of the catalog (before the application filter): the old / current marks are computed over these */
+  allDies?: Array<ByDieDie & { slots: number; poles: number }>;
   /** a line added to the name's tooltip (writers: the passport card / older-build line) */
   nameTip?: (die: string, config: string) => string;
   /** the project the tab highlights links this motor (ProjectHighlightSelect): the "only its motors" filter of every role */
@@ -111,7 +113,7 @@ const fmt = (v: number | null | undefined, d = 1) => (v === null || v === undefi
 const small = { fontSize: 11.5, color: 'var(--text-3)' };
 
 const CatalogByDie: React.FC<Props> = ({ dies, thumbs, rated, active, isAdmin, canWrite, standardUser, busy, actions, overview: given,
-  cells: cellsOf, dieExtras, nameTip, jobs: givenJobs, highlighted }) => {
+  cells: cellsOf, dieExtras, nameTip, jobs: givenJobs, highlighted, allDies }) => {
   const { t } = useTranslation(['motors', 'common', 'development']);
   const [overview, setOverview] = useState<ByDieOverview | null>(given ?? null);
   const [dieMenu, setDieMenu] = useState<{ el: HTMLElement; die: ByDieDie } | null>(null);
@@ -144,7 +146,9 @@ const CatalogByDie: React.FC<Props> = ({ dies, thumbs, rated, active, isAdmin, c
       .then((a) => { if (alive) setOverview(a as ByDieOverview | null); }).catch(() => { /* rows without links */ });
     return () => { alive = false; };
   }, [isAdmin, given, overviewGen]);
-  const allGroups = useMemo(() => buildByDie(dies, isAdmin ? overview : null, { staff: isAdmin }), [dies, overview, isAdmin]);
+  // marks over the WHOLE catalog, then only the shown dies (a mark never depends on the application filter)
+  const allGroups = useMemo(() => restrictTo(buildByDie(allDies ?? dies, isAdmin ? overview : null, { staff: isAdmin }), dies),
+    [allDies, dies, overview, isAdmin]);
   // the state filter needs the Overview's links: admins only (a customer's view is the whole catalog, as before)
   const showState = isAdmin && !!overview;
   const stateGroups = useMemo(() => (showState ? filterByState(allGroups, stateFilter) : allGroups), [allGroups, showState, stateFilter]);

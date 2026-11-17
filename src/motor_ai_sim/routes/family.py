@@ -19,6 +19,7 @@ config exists here, so nothing already working can be broken by this layer.
 """
 from __future__ import annotations
 
+import contextvars
 import hashlib
 import logging
 import re
@@ -505,6 +506,11 @@ def _copy_on_write(src_dir: Path, addressed: str) -> Path:
     return dst
 
 
+#: the ``dies`` folder a workspace-scope die RENAME is rewriting in place (set by ``die_rename.run``, nothing else): the
+#: rename re-saves the moved die and its derived siblings where they are, never redirected to the shared catalog
+_IN_PLACE_PARENT: "contextvars.ContextVar[str]" = contextvars.ContextVar("die_rename_in_place_parent", default="")
+
+
 def _write_target(p: Path) -> Path:
     """The path a catalog document is ACTUALLY written to.
 
@@ -515,6 +521,8 @@ def _write_target(p: Path) -> Path:
     if not _ws_layering():
         return p
     src_dir = Path(str(p)).parent
+    if _IN_PLACE_PARENT.get() and str(src_dir.parent) == _IN_PLACE_PARENT.get():
+        return p
     layer, addressed = _classify_die_dir(src_dir)
     want = _WS.write_layer()
     if _WS.is_verified_admin_request() and want == _WS.LAYER_PUBLISHED:
@@ -2814,17 +2822,29 @@ def rename_die(die: str, req: DieRename, dry_run: bool = False,
     die = _check_name(die, "die")
     new = _check_name(req.name, "die")
     _require_die_write(die, _w)
-    src = _die_dir(die)
+    # A RETIRED shared die is hidden from every read, so only a verified admin finds it, in the shared folder.
+    retired = None
+    if _ws_layering() and _WS.is_verified_admin_request() and _WS.is_tombstoned(die):
+        cand = _shared_die_dir(die)
+        if (cand / "die.yaml").is_file():
+            retired = cand
+    src = retired or _die_dir(die)
     if not (src / "die.yaml").is_file():
         raise HTTPException(404, detail=f"die '{die}' not found")
     new = _caller_die_name(new, _w.get("authorization"))
     if new == die:
         return {"ok": True, "die": die, "dry_run": dry_run, "changes": [], "manual": []}
-    _require_writable_die(die)
+    # A die that exists only in the caller's own workspace is theirs to rename, an admin included: the admin check below
+    # aims at the shared catalog and refuses it ("still a workspace-only motor") although nothing shared is touched.
+    own_only = (_ws_layering() and retired is None and _classify_die_dir(src)[0] == _WS.LAYER_WORKSPACE
+                and not (_shared_die_dir(die) / "die.yaml").is_file())
+    if not own_only:
+        _require_writable_die(die)
     # The rename stays in the layer that holds the die: a workspace die moves
     # inside the workspace, an admin's ``?layer=shared`` rename inside shared.
     dst = src.parent / new
-    if dst.exists() or (_ws_layering() and _ws_resolve_die_dir(new) is not None):
+    if dst.exists() or (_ws_layering() and (_ws_resolve_die_dir(new) is not None
+                                            or (_shared_die_dir(new) / "die.yaml").is_file())):   # a retired die keeps its name
         raise HTTPException(409, detail=f"die '{new}' already exists")
     # The shared catalog's NAME changes only when the shared die is renamed; a
     # private copy in a workspace does not retarget what everybody else's grants,

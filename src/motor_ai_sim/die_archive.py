@@ -236,15 +236,16 @@ def _revisions(die: str) -> List[str]:
 
 # ── a die rename: the keys follow (die_rename.py) ─────────────────────────────────────────────────────────────────────
 
-def rename_die_in(doc: Any, old: str, new: str) -> int:
-    """Rewrite every key of ``doc`` (archived dies and history) naming ``old`` to ``new``, in every scope."""
+def rename_die_in(doc: Any, old: str, new: str, scope: Optional[str] = None) -> int:
+    """Rewrite every key of ``doc`` (archived dies and history) naming ``old`` to ``new``: in every scope, or only in
+    ``scope`` (a workspace die renamed in its own workspace must not move another workspace's key of the same name)."""
     if not isinstance(doc, dict):
         return 0
     n = 0
 
     def nk(k: str) -> Optional[str]:
-        scope, sep, die = str(k).partition("/")
-        return f"{scope}/{new}" if sep and die == old else None
+        sc, sep, die = str(k).partition("/")
+        return f"{sc}/{new}" if sep and die == old and (scope is None or sc == scope) else None
 
     dies = doc.get("dies") if isinstance(doc.get("dies"), dict) else {}
     for k in list(dies):

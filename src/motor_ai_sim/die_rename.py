@@ -607,17 +607,32 @@ def step_display_state(ctx: Ctx) -> None:
 
 
 def step_die_archive(ctx: Ctx) -> None:
-    """The die archive (``<shared>/object_registry/die_archive.json``, every workspace) names the die."""
+    """The die archive (``<shared>/object_registry/die_archive.json``) names the die.  A shared die is renamed for every
+    scope; a die of one workspace (or published namespace) only moves the key of THAT workspace."""
     from motor_ai_sim import die_archive as DA
     try:
         path = DA.store_path()
+        scope = None if ctx.glob_scope else DA._viewer()
     except Exception:                                       # noqa: BLE001
         return
+    if not ctx.glob_scope and not scope:
+        return
     try:
-        _json_file_rename(ctx, "die_archive", path, lambda doc: DA.rename_die_in(doc, ctx.old, ctx.new),
+        _json_file_rename(ctx, "die_archive", path, lambda doc: DA.rename_die_in(doc, ctx.old, ctx.new, scope),
                           "an archived die stays archived under its new name")
     except ValueError as e:
         raise RenameBlocked(str(e)) from e
+
+
+def step_tombstone(ctx: Ctx) -> None:
+    """A RETIRED shared die (``shared_die_tombstones.json``) stays retired under its new name."""
+    from motor_ai_sim import workspace as W
+    try:
+        path = W._tombstones_file()
+    except Exception:                                       # noqa: BLE001
+        return
+    _json_file_rename(ctx, "tombstones", path, lambda doc: int(_rename_key(doc, ctx.old, ctx.new)),
+                      "the retired state follows the die name")
 
 
 def step_object_registry(ctx: Ctx) -> None:
@@ -766,8 +781,8 @@ def step_manual(ctx: Ctx) -> None:
 
 #: workspace-level steps, then the shared-catalog ones (``glob_scope``)
 LOCAL_STEPS = (step_folder, step_derived_from, step_fields, step_duty_results,
-               step_context, step_workspace_memory, step_catalog_cards)
-GLOBAL_STEPS = (step_grants, step_die_access, step_projects, step_production, step_motor_revisions, step_display_state, step_die_archive, step_object_registry, step_motor_tests, step_cad,
+               step_context, step_workspace_memory, step_catalog_cards, step_die_archive)
+GLOBAL_STEPS = (step_grants, step_die_access, step_projects, step_production, step_motor_revisions, step_display_state, step_tombstone, step_object_registry, step_motor_tests, step_cad,
                 step_manual)
 
 
@@ -792,6 +807,9 @@ def run(fam: Any, old: str, new: str, *, src_dir: Path, dst_dir: Path, dry_run: 
               glob_scope=glob_scope, actor=actor)
     steps = LOCAL_STEPS + (GLOBAL_STEPS if glob_scope else ())
     done = 0
+    tok = None
+    if not glob_scope and hasattr(fam, "_IN_PLACE_PARENT"):
+        tok = fam._IN_PLACE_PARENT.set(str(src_dir.parent))   # a workspace die is re-saved where it is, admin or not
     try:
         for step in steps:
             step(ctx)
@@ -813,6 +831,9 @@ def run(fam: Any, old: str, new: str, *, src_dir: Path, dst_dir: Path, dry_run: 
             except Exception:                           # noqa: BLE001
                 pass
         raise
+    finally:
+        if tok is not None:
+            fam._IN_PLACE_PARENT.reset(tok)
     if not dry_run:
         for line in ctx.after:
             try:

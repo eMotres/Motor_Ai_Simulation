@@ -193,13 +193,16 @@ def test_the_overview_lists_archived_and_retired_dies(env):
 
 def test_a_die_rename_carries_the_archive():
     from motor_ai_sim import die_rename as DRN
-    assert DRN.step_die_archive in DRN.GLOBAL_STEPS
+    assert DRN.step_die_archive in DRN.LOCAL_STEPS          # runs for a workspace die too, scoped to its workspace
     doc = {"dies": {"w1/OLD": {"layer": "workspace"}, "w2/OLD": {"layer": "workspace"}, "w1/OTHER": {}},
            "history": [{"key": "w1/OLD"}, {"key": "w1/OTHER"}]}
     assert DA.rename_die_in(doc, "OLD", "NEW") == 3
     assert sorted(doc["dies"]) == ["w1/NEW", "w1/OTHER", "w2/NEW"] and doc["history"][0]["key"] == "w1/NEW"
     with pytest.raises(ValueError):
         DA.rename_die_in({"dies": {"w1/A": {}, "w1/B": {}}}, "A", "B")
+    doc = {"dies": {"w1/OLD": {}, "w2/OLD": {}}, "history": [{"key": "w1/OLD"}, {"key": "w2/OLD"}]}
+    assert DA.rename_die_in(doc, "OLD", "NEW", scope="w1") == 2                                 # one workspace only
+    assert sorted(doc["dies"]) == ["w1/NEW", "w2/OLD"] and doc["history"][1]["key"] == "w2/OLD"
 
 
 # ── review of #726 (US · software): a published die, a grantee, two copies of one name ──────────────────────────────

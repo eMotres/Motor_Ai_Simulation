@@ -305,7 +305,9 @@
       "rippleLow": "Torque ripple, solved below the Simulation preset ({steps} steps per period, {rows} air-gap rows per side; the preset is 96 and 2): a 48-step ripple reads 3-19 % low",
       "battery": "Battery voltage, nominal ({cells} cells; range {min}-{max} V)",
       "vllPeak": "No battery set: line-line peak voltage of the point",
-      "current": "Phase current (A rms)"
+      "current": "Phase current (A rms)",
+      "cogging": "Cogging torque, peak to peak (the saved no-load value)",
+      "mass": "Motor mass"
     },
     "m": {
       "steel": "Steel",
@@ -314,8 +316,24 @@
       "insulation": "Slot insulation"
     },
     "decodeTip": "How to read this name, and the materials",
-    "massTip": "Motor mass ({duty})",
     "namePending": "standard name pending",
-    "otherMotors": "Other motors"
+    "otherMotors": "Other motors",
+    "col": {
+      "motor": "Motor",
+      "power": "Power",
+      "torque": "Torque",
+      "speed": "Speed",
+      "eff": "Effic.",
+      "ripple": "Ripple",
+      "volt": "Battery",
+      "current": "Phase I",
+      "cogging": "Cogging",
+      "mass": "Mass",
+      "application": "Application",
+      "marks": "Marks",
+      "projects": "Projects",
+      "production": "Production",
+      "sortTip": "Sort the motors of each die by this column (click again to reverse, a third time for the catalog order)"
+    }
   }
 }

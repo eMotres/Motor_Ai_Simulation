@@ -74,11 +74,10 @@ for (const [lng, solidWord, sliceWord, oldWord, prod, motors] of [
     assert.equal((html.match(/>CILN28 200_40 24F4SY</g) || []).length, 2);
     assert.ok(!html.includes('G2-L40 copy') && !html.includes('>CILN28 vadim 2<'), html);  // no old names shown
     assert.ok(!html.includes('B15AHV950M') && !html.includes('Al2O3'), html);           // the materials left the row
-    assert.ok(html.includes('1.50 kW') && html.includes('4.25 N·m') && html.includes('3370 rpm') && html.includes('91.3 %')
-      && html.includes('4.0 %') && html.includes('12.0 A'), html);
+    assert.deepEqual(rowCells(html, 0), ['1.50', '4.25', '3370', '91.3', '4.0', '—', '12.0', '—', '2.00']);
     assert.ok(html.includes('Pump project') && html.includes(prod) && html.includes(oldWord), html);
     assert.equal((html.match(/data-old="true"/g) || []).length, 1);
-    assert.ok(html.includes('>2.00 kg<') && !html.includes('4.25 Nm ·'), html);             // the right side keeps only the mass
+    for (const h of ['kW', 'N·m', 'rpm', '%', 'V', 'A', 'kg']) assert.ok(html.includes(h), h);                    // units in the header
     assert.ok(!/byDie\.|motors:/.test(html), html);                                       // no raw key
   });
   test(`${lng}: a member or the factory gets the same layout without any project, production or old mark`, async () => {
@@ -94,21 +93,29 @@ for (const [lng, solidWord, sliceWord, oldWord, prod, motors] of [
 test('the rated line quotes the point marked rated, not the first water point', async () => {
   const i18n = m.makeI18n('en'); await ready(i18n);
   const html = decode(m.render(i18n, { dies, isAdmin: true, overview }));
-  assert.ok(html.includes('1.50 kW') && !html.includes('0.01 kW'), html);
+  assert.equal(rowCells(html, 0)[0], '1.50');
+  assert.ok(!html.includes('>0.01<'), html);
 });
 
-test('390 px (phone): every row wraps and nothing in the view is wider than 358 px (390 minus the 16 px gutters)', async () => {
-  // A static check of the emitted styles: no DOM measures here (no DOM library in the repository).
+test('the widths: the characteristics line up (fixed grid) and fit beside the rest at 1456 and 2000 px; at 390 px the table scrolls', async () => {
+  // A static check of the emitted styles and the column constants: no DOM measures here (no DOM library in the repository).
   const i18n = m.makeI18n('en'); await ready(i18n);
   const html = m.render(i18n, { dies, isAdmin: true, overview });
-  const widths = [...html.matchAll(/(?:^|[;{])\s*(?:min-width|width|flex-basis):\s*(\d+(?:\.\d+)?)px/g)].map((x) => Number(x[1]));
-  assert.ok(widths.length > 0 && Math.max(...widths) <= 358, `widths ${widths}`);
-  const rows = (html.match(/data-testid="by-die-motor"/g) || []).length;
-  assert.equal(rows, 2);
-  // each motor row and each die header is a wrapping flex row
+  const grids = [...html.matchAll(/grid-template-columns:([^;}]+)/g)].map((x) => x[1].trim());
+  assert.ok(grids.length >= 1 && grids.every((g) => g === grids[0]), `one grid for the header and every row: ${[...new Set(grids)]}`);
+  const px = grids[0].split(/\s+/).map((x) => Number(x.replace('px', '')));
+  assert.equal(px.length, 10);                                           // the designation + 9 characteristics
+  const chars = px.reduce((a, b) => a + b, 0) + 8 * (px.length - 1);    // + the column gaps
+  const REST_MIN = 320, PAGE_PAD = 2 * 24;                              // the "everything else" part, the page padding
+  for (const w of [1456, 2000]) assert.ok(chars + 8 + REST_MIN + PAGE_PAD <= w, `${w}px: ${chars} + ${REST_MIN}`);
+  assert.ok(chars + 8 + REST_MIN + PAGE_PAD > 390);                         // ... and at a phone width it cannot fit:
+  assert.match(html, /overflow-x:auto/);                                  // the table scrolls inside the catalog, the page does not
+  // the "everything else" part wraps under the characteristics first (a wrapping row; the chars block never shrinks)
   const wrapClasses = new Set([...html.matchAll(/\.(css-[a-z0-9]+)\{[^}]*flex-wrap:wrap/g)].map((x) => x[1]));
   const rowClasses = [...html.matchAll(/class="MuiBox-root (css-[a-z0-9]+)" data-testid="by-die-motor"/g)].map((x) => x[1]);
-  assert.ok(rowClasses.length === 2 && rowClasses.every((c) => wrapClasses.has(c)), `${rowClasses} / ${[...wrapClasses]}`);
+  assert.ok(rowClasses.length === 2 && rowClasses.every((c) => wrapClasses.has(c)), `${rowClasses}`);
+  assert.equal((html.match(/data-testid="by-die-header"/g) || []).length, 1);          // ONE header for the page, not per family
+  assert.match(html, /position:sticky/);
 });
 
 test('the row menus carry every action of the list view, each calling the right handler with the right motor', async () => {
@@ -143,13 +150,19 @@ const owner = { name: 'CIANO14 40 new', slots: 12, poles: 14, stator_diameter: 4
   duties: [{ name: 'rated', power_kw: 1.11, torque_nm: 0.82, rpm: 13000, current_arms: 37.0,
     result: { efficiency_pct: 92.8, ripple_pct: 5.0, mass_kg: 0.61 }, runs: [{ drive: 'sine', primary: true, steps: 48, gap_layers: 1 }] }] }] };
 const text = (html) => decode(html).replace(/<style[^>]*>[\s\S]*?<\/style>/g, '').replace(/<[^>]+>/g, '');
+/** The characteristics of the n-th motor row, in column order (the table of 2026-11-17). */
+const CHARS = ['power', 'torque', 'speed', 'eff', 'ripple', 'volt', 'current', 'cogging', 'mass'];
+const rowCells = (html, n = 0) => {
+  const rows = decode(html).split('data-testid="by-die-motor"').slice(1);
+  const r = rows[n];
+  return CHARS.map((k) => { const i = r.indexOf(`data-testid="by-die-v-${k}"`); return text(r.slice(r.indexOf('>', i) + 1, r.indexOf('</span>', i))); });
+};
 
 for (const [lng, mat] of [['en', 'Materials (not in the name)'], ['zh-CN', '材料（不在名称中）']]) {
-  test(`${lng}: the owner's example row reads power · torque · speed · efficiency · ripple · battery · phase current`, async () => {
+  test(`${lng}: the owner's example row, one column each: power · torque · speed · efficiency · ripple · battery · phase current · cogging · mass`, async () => {
     const i18n = m.makeI18n(lng); await ready(i18n);
     const html = m.render(i18n, { dies: [owner], isAdmin: false, canWrite: false, overview: null });
-    const line = text(html.slice(html.indexOf('data-testid="by-die-values"'))).split('0.61 kg')[0];
-    assert.ok(line.includes('1.11 kW · 0.82 N·m · 13000 rpm · 92.8 % · 5.0 % · 44.4 V · 37.0 A'), line);
+    assert.deepEqual(rowCells(html, 0), ['1.11', '0.82', '13000', '92.8', '5.0', '44.4', '37.0', '—', '0.61']);
     assert.ok(!html.includes('20SW1200') && !html.includes('Nomex'), html);
     // the ripple was solved at 48 steps / 1 row: muted, the reason in its tooltip (aria-label in the markup)
     const rip = html.slice(html.indexOf('data-testid="by-die-v-ripple"') - 400, html.indexOf('data-testid="by-die-v-ripple"') + 200);
@@ -168,6 +181,21 @@ test('no battery: the line-line peak voltage of the point, labelled so; a missin
   const nob = { ...owner, configs: [{ ...owner.configs[0], battery: null,
     duties: [{ ...owner.configs[0].duties[0], current_arms: null, result: { ...owner.configs[0].duties[0].result, v_ll_peak_v: 48.7 } }] }] };
   const html = decode(m.render(i18n, { dies: [nob], isAdmin: false, canWrite: false, overview: null }));
-  assert.ok(text(html).includes('48.7 V · —'), text(html));
+  const c = rowCells(html, 0);
+  assert.equal(c[5], '48.7'); assert.equal(c[6], '—');
   assert.ok(html.includes('aria-label="No battery set: line-line peak voltage of the point"'), html);
+});
+
+test('cogging, application and marks sit in their own columns; a customer has no project / production columns at all', async () => {
+  const i18n = m.makeI18n('en'); await ready(i18n);
+  const cells = () => ({ cogging: 0.0727, coggingTip: 'pk-pk', application: '<APP>', marks: 'Points only' });
+  const admin = decode(m.render(i18n, { dies: [owner], isAdmin: true, overview: { items: {}, projects: {}, productions: {} }, cells }));
+  assert.equal(rowCells(admin, 0)[7], '0.073');
+  const rest = admin.slice(admin.indexOf('data-testid="by-die-rest"'));
+  assert.ok(rest.indexOf('&lt;APP&gt;') >= 0 || rest.indexOf('<APP>') >= 0, rest.slice(0, 400));
+  assert.ok(rest.includes('Points only'), rest.slice(0, 600));
+  assert.ok(admin.includes('data-testid="by-die-projects"') && admin.includes('>Projects<'));
+  const member = decode(m.render(i18n, { dies: [owner], isAdmin: false, canWrite: false, overview: null, cells }));
+  assert.ok(!member.includes('by-die-projects') && !member.includes('by-die-production') && !member.includes('>Projects<'), member);
+  assert.equal(rowCells(member, 0)[7], '0.073');                                      // the same characteristics
 });

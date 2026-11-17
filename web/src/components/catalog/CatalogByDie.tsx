@@ -3,13 +3,14 @@
  *  and the production that use it.  Every action of the list view stays reachable: the motor row's ▶ loads it at its
  *  default mode, the two ⋮ menus carry everything else.  The grouping and the current / old rule: lib/catalogByDie.ts. */
 import React, { useEffect, useMemo, useState } from 'react';
-import { Box, Chip, IconButton, Menu, MenuItem, Popover, Tooltip, Typography } from '@mui/material';
+import { Box, IconButton, Menu, MenuItem, Popover, Tooltip, Typography } from '@mui/material';
 import HelpOutlineIcon from '@mui/icons-material/HelpOutline';
 import MoreVertIcon from '@mui/icons-material/MoreVert';
 import PlayArrowIcon from '@mui/icons-material/PlayArrow';
 import { useTranslation } from 'react-i18next';
 import MotorThumbnail from './MotorThumbnail';
-import { buildByDie, segmentationText, type ByDieDie, type ByDieOverview, type MotorRow } from '../../lib/catalogByDie';
+import { buildByDie, COL_DIGITS, colValue, COLS, NAME_COL_W, nextSort, segmentationText, sortMotors, type ByDieDie, type ByDieOverview,
+  type ColKey, type MotorRow, type Sort } from '../../lib/catalogByDie';
 import { parseDesignation, SEGMENTS } from '../../lib/motorDesignation';
 import { DesignationDecoder } from '../common/MotorDesignation';
 import { NARROW } from '../../lib/narrowLayout';
@@ -37,12 +38,22 @@ interface Props {
   isAdmin: boolean; canWrite: boolean; standardUser: boolean; busy: boolean; actions: ByDieActions;
   /** for the tests: the Overview answer given instead of fetched */
   overview?: ByDieOverview | null;
-  /** what the list view showed beside a motor / a die that this view keeps (application, cogging, report state; openness) */
-  rowExtras?: (die: string, config: string) => React.ReactNode;
+  /** the non-numeric cells and the cogging of a motor (what the list view showed and this table keeps), from FamilyCatalog */
+  cells?: (die: string, config: string) => RowCells | null;
   dieExtras?: (die: string) => React.ReactNode;
   /** a line added to the name's tooltip (writers: the passport card / older-build line) */
   nameTip?: (die: string, config: string) => string;
 }
+
+/** One motor's cells beyond the quoted point: the application column, the marks column, the saved cogging. */
+export interface RowCells { application?: React.ReactNode; marks?: React.ReactNode; cogging?: number | null; coggingTip?: string; coggingStale?: boolean }
+
+const COL_TIP: Record<ColKey, string> = { power: 'power', torque: 'torque', speed: 'speed', eff: 'efficiency', ripple: 'ripple', volt: 'battery',
+  current: 'current', cogging: 'cogging', mass: 'mass' };
+/** the fixed widths: the designation, then one column per characteristic */
+const charsGrid = { display: 'grid', gridTemplateColumns: `${NAME_COL_W}px ${COLS.map((c) => `${c.w}px`).join(' ')}`, columnGap: '8px',
+  alignItems: 'center', flexShrink: 0 } as const;
+const REST_W = { application: 84, marks: 130, production: 96 } as const;
 
 export interface MenuEntry { key: string; label: string; run: () => void; danger?: boolean }
 type Who = { canWrite: boolean; isAdmin: boolean; standardUser: boolean };
@@ -87,12 +98,14 @@ const fmt = (v: number | null | undefined, d = 1) => (v === null || v === undefi
 const small = { fontSize: 11.5, color: 'var(--text-3)' };
 
 const CatalogByDie: React.FC<Props> = ({ dies, thumbs, rated, active, isAdmin, canWrite, standardUser, busy, actions, overview: given,
-  rowExtras, dieExtras, nameTip }) => {
+  cells: cellsOf, dieExtras, nameTip }) => {
   const { t } = useTranslation('motors');
   const [overview, setOverview] = useState<ByDieOverview | null>(given ?? null);
   const [dieMenu, setDieMenu] = useState<{ el: HTMLElement; die: ByDieDie } | null>(null);
   const [cfgMenu, setCfgMenu] = useState<{ el: HTMLElement; m: MotorRow } | null>(null);
   const [decode, setDecode] = useState<{ el: HTMLElement; m: MotorRow } | null>(null);
+  const [sort, setSort] = useState<Sort>(null);
+  const cells = cellsOf;
   useEffect(() => {
     if (given !== undefined || !isAdmin) return;           // the Overview is admin-only (route-gated): nobody else asks
     let alive = true;
@@ -111,90 +124,125 @@ const CatalogByDie: React.FC<Props> = ({ dies, thumbs, rated, active, isAdmin, c
     const f = m.named ? parseDesignation(m.label) : null;
     return f ? Object.fromEntries(SEGMENTS.filter((s) => s !== 'rev' || f.rev).map((s) => [s, { value: f[s], source: 'name' }])) : {};
   };
-  // the continuous point beside the name: power · torque · speed · efficiency · ripple · voltage · phase current (owner)
-  const val = (key: string, text: string, tip: string, muted = false) => (
-    <Tooltip key={key} title={tip}>
-      <Box component="span" data-testid={`by-die-v-${key}`} sx={{ color: muted ? 'var(--text-4)' : 'var(--text-2)', cursor: 'help' }}>{text}</Box>
-    </Tooltip>
-  );
-  const valuesLine = (m: MotorRow) => {
+  // ── the motor rows as a TABLE (owner 2026-11-17): the characteristics first, one fixed column each, then the rest ──
+  const cellTip = (key: ColKey, m: MotorRow): string => {
     const v = m.values;
-    if (!v) return null;
-    const d = (x: number | null, n: number, unit: string) => (x === null ? '—' : `${x.toFixed(n)} ${unit}`);
-    const low = v.ripple_low;
-    const parts = [
-      val('power', d(v.power_kw, 2, 'kW'), t('byDie.v.power', { duty: m.rated?.name ?? '' })),
-      val('torque', d(v.torque_nm, 2, 'N·m'), t('byDie.v.torque')),
-      val('speed', d(v.rpm, 0, 'rpm'), t('byDie.v.speed')),
-      val('eff', d(v.efficiency_pct, 1, '%'), t('byDie.v.efficiency')),
-      val('ripple', d(v.ripple_pct, 1, '%'), low ? t('byDie.v.rippleLow', { steps: low.steps ?? '—', rows: low.gap_layers ?? '—' }) : t('byDie.v.ripple'), !!low),
-      v.voltage?.kind === 'battery'
-        ? val('volt', d(v.voltage.v, 1, 'V'), t('byDie.v.battery', { min: v.voltage.min ?? '—', max: v.voltage.max ?? '—', cells: v.voltage.cells ?? '—' }))
-        : val('volt', d(v.voltage?.v ?? null, 1, 'V'), t('byDie.v.vllPeak')),
-      val('current', d(v.current_arms, 1, 'A'), t('byDie.v.current')),
-    ];
-    return parts.flatMap((p, i) => (i ? [<Box component="span" key={`s${i}`} sx={{ color: 'var(--text-4)' }}> · </Box>, p] : [p]));
+    if (key === 'ripple' && v?.ripple_low) return t('byDie.v.rippleLow', { steps: v.ripple_low.steps ?? '—', rows: v.ripple_low.gap_layers ?? '—' });
+    if (key === 'volt') {
+      return v?.voltage?.kind === 'battery'
+        ? t('byDie.v.battery', { min: v.voltage.min ?? '—', max: v.voltage.max ?? '—', cells: v.voltage.cells ?? '—' }) : t('byDie.v.vllPeak');
+    }
+    if (key === 'cogging') return cells?.(m.die, m.config)?.coggingTip ?? t('byDie.v.cogging');
+    if (key === 'power') return t('byDie.v.power', { duty: m.rated?.name ?? '' });
+    return t(`byDie.v.${COL_TIP[key]}`);
+  };
+  const cell = (key: ColKey, m: MotorRow) => {
+    const x = colValue(key, m, cells?.(m.die, m.config)?.cogging ?? null);
+    const muted = (key === 'ripple' && !!m.values?.ripple_low) || (key === 'cogging' && !!cells?.(m.die, m.config)?.coggingStale);
+    return (
+      <Tooltip key={key} title={cellTip(key, m)}>
+        <Box component="span" data-testid={`by-die-v-${key}`}
+          sx={{ textAlign: 'right', color: muted ? 'var(--text-4)' : 'var(--text-2)', cursor: 'help', whiteSpace: 'nowrap' }}>
+          {x === null ? '—' : x.toFixed(COL_DIGITS[key])}
+        </Box>
+      </Tooltip>
+    );
   };
   const run = (fn: () => void) => () => { setDieMenu(null); setCfgMenu(null); fn(); };
 
   const motorRow = (m: MotorRow) => {
     const r = rated(m.die, m.config);                       // the default mode: what ▶ loads
-    const q = m.rated;                                        // the point the row quotes: rated, else largest continuous
     const loaded = active?.die === m.die && active?.config === m.config;
     const nameTipBase = !m.named ? (isAdmin ? t('byDie.noNameTip') : '')
       : !m.complete ? t('byDie.incompleteTip', { missing: m.unknown.join(', ') }) : '';   // a named motor: no old name anywhere
     const tipText = [nameTipBase, nameTip?.(m.die, m.config) ?? ''].filter(Boolean).join(' · ');
+    const extra = cells?.(m.die, m.config);
+    const projects = m.projects.map((p) => p.title).join(', ');
     return (
       <Box key={`${m.die}/${m.config}`} data-testid="by-die-motor" data-old={m.old ? 'true' : undefined}
-        sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap', pl: 1, py: 0.2, minHeight: 26,
+        sx={{ display: 'flex', alignItems: 'center', columnGap: 1, flexWrap: 'wrap', py: 0.2, minHeight: 26,
               borderTop: '1px solid var(--panel)', opacity: m.old ? 0.5 : 1 }}>
-        <Tooltip title={tipText}>
-          <Typography component="span" sx={{ fontFamily: 'monospace', fontSize: 12.5, fontWeight: 700, minWidth: 190,
-            color: loaded ? '#60a5fa' : m.named && m.complete ? 'var(--text-1)' : 'var(--text-4)' }}>
-            {m.label || t('byDie.namePending')}{loaded ? ' ●' : ''}
-          </Typography>
-        </Tooltip>
-        {m.old && <Tooltip title={t('byDie.oldTip')}><Typography component="span" sx={{ ...small, fontStyle: 'italic' }}>{t('byDie.old')}</Typography></Tooltip>}
-        {m.newestLocked && <Tooltip title={t('byDie.newestLockedTip')}><Typography component="span" data-testid="by-die-newest-locked" sx={{ ...small, fontStyle: 'italic' }}>{t('byDie.newestLocked')}</Typography></Tooltip>}
-        {m.named && (
-          <IconButton size="small" aria-label={t('byDie.decodeTip')} data-testid="by-die-decode" onClick={(e) => setDecode({ el: e.currentTarget, m })}
-            sx={{ p: 0.15, color: 'var(--text-4)' }}><HelpOutlineIcon sx={{ fontSize: 13 }} /></IconButton>
-        )}
-        {rowExtras?.(m.die, m.config)}
-        <Typography component="span" data-testid="by-die-values" sx={{ ...small, flex: '1 1 260px', fontVariantNumeric: 'tabular-nums' }}>{valuesLine(m)}</Typography>
-        {q && (
-          <Tooltip title={t('byDie.massTip', { duty: q.name })}>
-            <Typography component="span" data-testid="by-die-mass" sx={{ ...small, color: 'var(--text-2)', fontVariantNumeric: 'tabular-nums' }}>
-              {fmt(q.result?.mass_kg, 2)} kg
+        {/* 1-2: designation and the characteristics, fixed columns: they line up across every family and never reorder */}
+        <Box data-testid="by-die-chars" sx={{ ...charsGrid, ...small, fontVariantNumeric: 'tabular-nums' }}>
+          <Box sx={{ display: 'flex', alignItems: 'center', minWidth: 0 }}>
+            <Tooltip title={tipText}>
+              <Typography component="span" noWrap sx={{ fontFamily: 'monospace', fontSize: 12.5, fontWeight: 700,
+                color: loaded ? '#60a5fa' : m.named && m.complete ? 'var(--text-1)' : 'var(--text-4)' }}>
+                {m.label || t('byDie.namePending')}{loaded ? ' ●' : ''}
+              </Typography>
+            </Tooltip>
+            {m.named && (
+              <IconButton size="small" aria-label={t('byDie.decodeTip')} data-testid="by-die-decode" onClick={(e) => setDecode({ el: e.currentTarget, m })}
+                sx={{ p: 0.15, color: 'var(--text-4)' }}><HelpOutlineIcon sx={{ fontSize: 13 }} /></IconButton>
+            )}
+          </Box>
+          {COLS.map((c) => cell(c.key, m))}
+        </Box>
+        {/* 3: everything else, fixed columns too; at a narrow width this part wraps under the row first */}
+        <Box data-testid="by-die-rest" sx={{ display: 'flex', alignItems: 'center', columnGap: 1, flex: '1 1 320px', minWidth: 0, ...small }}>
+          <Box sx={{ width: REST_W.application, flexShrink: 0, overflow: 'hidden' }}>{extra?.application}</Box>
+          <Box data-testid="by-die-marks" sx={{ width: REST_W.marks, flexShrink: 0, display: 'flex', alignItems: 'center', gap: 0.5, overflow: 'hidden' }}>
+            {extra?.marks}
+            {m.old && <Tooltip title={t('byDie.oldTip')}><Typography component="span" sx={{ ...small, fontStyle: 'italic' }}>{t('byDie.old')}</Typography></Tooltip>}
+            {m.newestLocked && <Tooltip title={t('byDie.newestLockedTip')}><Typography component="span" data-testid="by-die-newest-locked" sx={{ ...small, fontStyle: 'italic' }}>{t('byDie.newestLocked')}</Typography></Tooltip>}
+          </Box>
+          {isAdmin && (
+            <Tooltip title={projects}>
+              <Typography component="span" noWrap data-testid="by-die-projects" sx={{ ...small, color: 'var(--text-2)', flex: '1 1 120px', minWidth: 0 }}>
+                {projects || (m.computed && !m.productions.length ? t('byDie.computed') : '')}
+              </Typography>
+            </Tooltip>
+          )}
+          {isAdmin && (
+            <Typography component="span" noWrap data-testid="by-die-production" sx={{ ...small, width: REST_W.production, flexShrink: 0 }}>
+              {m.productions.map((p) => t('byDie.production', { rev: p.rev || '—' })).join(', ')}
             </Typography>
-          </Tooltip>
-        )}
-        {isAdmin && m.projects.map((p) => (
-          <Chip key={p.id} size="small" variant="outlined" label={p.title}
-            sx={{ height: 18, fontSize: 10.5, ...(p.trial ? { borderStyle: 'dashed' } : {}) }} />
-        ))}
-        {isAdmin && m.productions.map((p, i) => (
-          <Chip key={i} size="small" variant="outlined" label={t('byDie.production', { rev: p.rev || '—' })} sx={{ height: 18, fontSize: 10.5 }} />
-        ))}
-        {isAdmin && !m.projects.length && !m.productions.length && m.computed && (
-          <Typography component="span" sx={small}>{t('byDie.computed')}</Typography>
-        )}
-        <Tooltip title={t('byDie.loadTip')}>
-          <span>
-            <IconButton size="small" disabled={busy || !r?.duty} aria-label={t('byDie.loadTip')} data-testid="by-die-load"
-              onClick={() => actions.load(m.die, m.config)} sx={{ p: 0.25, color: '#60a5fa' }}>
-              <PlayArrowIcon sx={{ fontSize: 16 }} />
-            </IconButton>
-          </span>
-        </Tooltip>
-        <IconButton size="small" aria-label={t('byDie.motorMenu')} data-testid="by-die-motor-menu" onClick={(e) => setCfgMenu({ el: e.currentTarget, m })}
-          sx={{ p: 0.25, color: 'var(--text-4)' }}><MoreVertIcon sx={{ fontSize: 15 }} /></IconButton>
+          )}
+          {!isAdmin && <Box sx={{ flex: 1 }} />}
+          {/* 4: the row actions, last */}
+          <Box sx={{ display: 'flex', alignItems: 'center', flexShrink: 0, ml: 'auto' }}>
+            <Tooltip title={t('byDie.loadTip')}>
+              <span>
+                <IconButton size="small" disabled={busy || !r?.duty} aria-label={t('byDie.loadTip')} data-testid="by-die-load"
+                  onClick={() => actions.load(m.die, m.config)} sx={{ p: 0.25, color: '#60a5fa' }}>
+                  <PlayArrowIcon sx={{ fontSize: 16 }} />
+                </IconButton>
+              </span>
+            </Tooltip>
+            <IconButton size="small" aria-label={t('byDie.motorMenu')} data-testid="by-die-motor-menu" onClick={(e) => setCfgMenu({ el: e.currentTarget, m })}
+              sx={{ p: 0.25, color: 'var(--text-4)' }}><MoreVertIcon sx={{ fontSize: 15 }} /></IconButton>
+          </Box>
+        </Box>
       </Box>
     );
   };
+  const sortBlock = (motors: MotorRow[]) => (sort ? sortMotors(motors, sort.key, sort.dir, (m) => cells?.(m.die, m.config)?.cogging ?? null) : motors);
+  const header = (
+    <Box data-testid="by-die-header" sx={{ position: 'sticky', top: 0, zIndex: 2, bgcolor: 'var(--panel-2)', display: 'flex', alignItems: 'flex-end',
+      columnGap: 1, flexWrap: 'wrap', px: 1, py: 0.3, borderBottom: '1px solid var(--line-soft)', fontSize: 10, color: 'var(--text-3)' }}>
+      <Box sx={{ ...charsGrid }}>
+        <Box component="span">{t('byDie.col.motor')}</Box>
+        {COLS.map((c) => (
+          <Tooltip key={c.key} title={t('byDie.col.sortTip')}>
+            <Box component="span" role="button" data-testid={`by-die-sort-${c.key}`} onClick={() => setSort(nextSort(sort, c.key))}
+              sx={{ textAlign: 'right', cursor: 'pointer', userSelect: 'none', lineHeight: 1.15, color: sort?.key === c.key ? 'var(--text-1)' : undefined }}>
+              {t(`byDie.col.${c.key}`)}<br />{c.unit}{sort?.key === c.key ? (sort.dir === 'desc' ? ' ▾' : ' ▴') : ''}
+            </Box>
+          </Tooltip>
+        ))}
+      </Box>
+      <Box sx={{ display: 'flex', columnGap: 1, flex: '1 1 320px', minWidth: 0 }}>
+        <Box component="span" sx={{ width: REST_W.application, flexShrink: 0 }}>{t('byDie.col.application')}</Box>
+        <Box component="span" sx={{ width: REST_W.marks, flexShrink: 0 }}>{t('byDie.col.marks')}</Box>
+        {isAdmin && <Box component="span" sx={{ flex: '1 1 120px' }}>{t('byDie.col.projects')}</Box>}
+        {isAdmin && <Box component="span" sx={{ width: REST_W.production, flexShrink: 0 }}>{t('byDie.col.production')}</Box>}
+      </Box>
+    </Box>
+  );
 
   return (
-    <Box data-testid="catalog-by-die" sx={{ display: 'flex', flexDirection: 'column', gap: 0.75 }}>
+    <Box data-testid="catalog-by-die" sx={{ display: 'flex', flexDirection: 'column', gap: 0.75, overflowX: 'auto' }}>
+      {header}
       {groups.map((g) => (
         <Box key={g.family || '-'} data-testid="by-die-family" sx={{ border: '1px solid var(--line-soft)', borderRadius: 1, overflow: 'hidden', ...(g.named ? {} : { opacity: 0.6 }) }}>
           <Box sx={{ px: 1, py: 0.4, bgcolor: 'var(--panel)', display: 'flex', alignItems: 'center', gap: 1 }}>
@@ -225,7 +273,7 @@ const CatalogByDie: React.FC<Props> = ({ dies, thumbs, rated, active, isAdmin, c
                     sx={{ p: 0.25, color: 'var(--text-4)' }}><MoreVertIcon sx={{ fontSize: 15 }} /></IconButton>
                 )}
               </Box>
-              {b.motors.map(motorRow)}
+              {sortBlock(b.motors).map(motorRow)}
             </Box>
           ))}
         </Box>

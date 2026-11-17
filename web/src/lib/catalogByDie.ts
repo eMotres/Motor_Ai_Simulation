@@ -187,3 +187,49 @@ export function segmentationText(mm: number | null | undefined, words: { solid: 
   if (mm === null || mm === undefined) return words.solid;
   return Number.isFinite(mm) && mm > 0 ? words.slice(mm) : words.solid;
 }
+
+// ── the table columns (owner 2026-11-17: "first the characteristics, then everything else", one column each) ──────────
+export type ColKey = 'power' | 'torque' | 'speed' | 'eff' | 'ripple' | 'volt' | 'current' | 'cogging' | 'mass';
+/** In the owner's order; `w` px fixed (tabular numerals) so the numbers line up across every family on the page. */
+export const COLS: ReadonlyArray<{ key: ColKey; unit: string; w: number }> = [
+  { key: 'power', unit: 'kW', w: 52 }, { key: 'torque', unit: 'N·m', w: 52 }, { key: 'speed', unit: 'rpm', w: 56 },
+  { key: 'eff', unit: '%', w: 46 }, { key: 'ripple', unit: '%', w: 46 }, { key: 'volt', unit: 'V', w: 48 },
+  { key: 'current', unit: 'A', w: 50 }, { key: 'cogging', unit: 'N·m', w: 58 }, { key: 'mass', unit: 'kg', w: 48 }];
+export const COL_DIGITS: Record<ColKey, number> = { power: 2, torque: 2, speed: 0, eff: 1, ripple: 1, volt: 1, current: 1, cogging: 3, mass: 2 };
+export const NAME_COL_W = 230;
+
+/** The number in one column (null = a dash); the cogging comes from the configuration's saved cogging (the caller's). */
+export function colValue(key: ColKey, m: Pick<MotorRow, 'values'>, cogging?: number | null): number | null {
+  const v = m.values;
+  if (key === 'cogging') return cogging ?? null;
+  if (!v) return null;
+  switch (key) {
+    case 'power': return v.power_kw;
+    case 'torque': return v.torque_nm;
+    case 'speed': return v.rpm;
+    case 'eff': return v.efficiency_pct;
+    case 'ripple': return v.ripple_pct;
+    case 'volt': return v.voltage?.v ?? null;
+    case 'current': return v.current_arms;
+    case 'mass': return v.mass_kg;
+  }
+  return null;
+}
+
+export type Sort = { key: ColKey; dir: 'asc' | 'desc' } | null;
+/** A header click: first descending, then ascending, then back to the catalog order. */
+export function nextSort(cur: Sort, key: ColKey): Sort {
+  if (!cur || cur.key !== key) return { key, dir: 'desc' };
+  return cur.dir === 'desc' ? { key, dir: 'asc' } : null;
+}
+/** Sorting stays INSIDE each die block (families and dies keep their places); a missing value sorts last either way. */
+export function sortMotors<M extends Pick<MotorRow, 'values'>>(motors: M[], key: ColKey, dir: 'asc' | 'desc', coggingOf?: (m: M) => number | null): M[] {
+  const val = (m: M) => colValue(key, m, coggingOf?.(m) ?? null);
+  return [...motors].sort((a, b) => {
+    const x = val(a), y = val(b);
+    if (x === null && y === null) return 0;
+    if (x === null) return 1;
+    if (y === null) return -1;
+    return dir === 'desc' ? y - x : x - y;
+  });
+}

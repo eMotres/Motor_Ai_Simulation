@@ -10,17 +10,20 @@ const dies = [
   { name: 'CILN28 vadim', created: '2026-11-01', slots: 24, poles: 28, stator_diameter: 200,
     configs: [cfg('G2-L65-17t', 'CILN28 200_65 17F4SY'), cfg('G2-L40 copy', 'CILN28 200_40 24F4SY')] },
   { name: '100 mm mid', created: '2026-08-19', slots: 24, poles: 28, stator_diameter: 100, configs: [cfg('L15', 'CI????28 100_15 10F?Y', { designation_unknown: ['steel'] })] },
-  { name: 'NOLINK A', configs: [cfg('L1', 'CIANO14 40_12 7F2SY')] }, { name: 'NOLINK B', configs: [cfg('L1', 'CIANO14 40_12 7F2SY')] },
+  { name: 'NOLINK A', stator_diameter: 40, configs: [cfg('L1', 'CIANO14 40_12 7F2SY')] },
+  { name: 'NOLINK B', stator_diameter: 40, configs: [cfg('L1', 'CIANO14 40_12 7F2SY')] },
+  { name: 'BIG', stator_diameter: 400, configs: [cfg('L90', 'CIANO56 400_90 30F4SY')] },
 ];
 const overview = {
   items: { 'CILN28/G2-L40': { projects: [{ id: 'p1', link_status: 'current' }], productions: [], computed: true } },
   projects: { p1: { id: 'p1', title: 'Pump', status: 'design', stage: 'computed' } }, productions: {},
 };
 
-test('two laminations of one family sit under ONE family header; the unnamed die last', () => {
+test('two laminations of one family sit under ONE family header; families by OD; the unnamed die last', () => {
   const g = buildByDie(dies, overview);
   assert.deepEqual(g.map((x) => [x.family, x.blocks.map((b) => b.die.name)]),
-    [['CIANO14 40', ['NOLINK A', 'NOLINK B']], ['CILN28 200', ['CILN28', 'CILN28 vadim']], ['100 mm mid', ['100 mm mid']]]);
+    [['CIANO14 40', ['NOLINK A', 'NOLINK B']], ['CILN28 200', ['CILN28', 'CILN28 vadim']], ['CIANO56 400', ['BIG']],
+     ['100 mm mid', ['100 mm mid']]]);
   assert.equal(familyOf(dies[2]).named, false);
 });
 

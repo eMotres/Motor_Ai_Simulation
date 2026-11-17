@@ -26,7 +26,6 @@ import { useUIStore } from '../../stores/motorStore';
 import { thumbOf, type DieThumbs } from '../../lib/dieThumbs';
 import MotorThumbnail from './MotorThumbnail';
 import CatalogByDie, { type ByDieActions } from './CatalogByDie';
-import { useRememberedView } from '../../lib/useRememberedView';
 import StartProject from './StartProject';
 import MotorRevisionText from '../common/MotorRevisionText';
 import {
@@ -47,7 +46,7 @@ import {
   IDLE as RING_IDLE, newRunId, ringBusy, ringDone, ringFail, ringPoll,
   ringStart, ringTip, type ReportProgressInfo, type ReportRing,
 } from './reportProgress';
-import { fetchDieThumbs, fetchFamilyTree, SIGN_IN_NOTE } from '../../lib/familyTree';
+import { fetchDieThumbs, fetchFamilyTree, peekFamilyTree, SIGN_IN_NOTE } from '../../lib/familyTree';
 import { pageVisible } from '../../lib/pageVisible';
 import { useTranslation } from 'react-i18next';
 import { nsT } from '../../i18n/nsT';
@@ -290,20 +289,22 @@ const FamilyCatalog: React.FC<{
   embedded?: boolean;
   /** Motors application filter (all / propeller / robot / aviation / marine). */
   application?: ApplicationFilter;
-}> = ({ diameter, embedded, application = 'all' }) => {
+  /** the by-die view (owner 2026-11-17), switched on in the Motors tab header for admins: every die of the tab at once */
+  byDie?: boolean;
+}> = ({ diameter, embedded, application = 'all', byDie = false }) => {
   useTranslation('motors'); // re-render on language change; lazy-loads the namespace
   useTranslation('controller'); // the cogging chip borrows Configure's label and tooltip
   const setActiveTab = useUIStore((s) => s.setActiveTab);
-  const [dies, setDies] = useState<Die[]>([]);
+  const [dies, setDies] = useState<Die[]>(() => ((peekFamilyTree()?.dies ?? []) as Die[]));
   const [busy, setBusy] = useState<string | null>(null);   // what is being applied/created
   // A load started from this panel outlives it (the view switches at once): while one runs
   // anywhere, no second load starts.
-  const loadRunning = useSyncExternalStore(subscribeFamilyLoad, () => getFamilyLoad().status === 'loading');
+  const loadRunning = useSyncExternalStore(subscribeFamilyLoad, () => getFamilyLoad().status === 'loading', () => false);
   const [msg,  setMsg]  = useState<string | null>(null);   // last outcome (ok or error)
   // Clients browse and LOAD; editing the family catalog is the vendor's job.
   // The backend enforces this on every mutating endpoint — this flag only
   // decides whether the editing controls are drawn at all.
-  const [canWrite, setCanWrite] = useState(false);
+  const [canWrite, setCanWrite] = useState(() => { const t = peekFamilyTree(); return t ? uiCanWrite(t.can_write, canWriteServer()) : false; });
   const { user, enforced, isAdmin, role } = useAuth();
   const standardUser = isStandardUser(enforced, isAdmin, role);
 
@@ -346,8 +347,6 @@ const FamilyCatalog: React.FC<{
   const [treeLoaded, setTreeLoaded] = useState(false);   // the tree has answered once
   // the dies' cross-section drawings: a separate request since 2026-11-12 (they were two thirds of the tree)
   const [thumbs, setThumbs] = useState<DieThumbs | null>(null);
-  // the by-die view (owner 2026-11-17, "in the style of the Overview"): admins only for now, the list stays the default
-  const [byDie, setByDie] = useRememberedView<boolean>('motors.byDie', false, (r) => (typeof r === 'boolean' ? r : null));
   // The backend's one-line reason for an empty catalog (a signed-in account
   // with no motors granted yet) — an empty page tells that user nothing.
   const [note, setNote] = useState<string | null>(null);
@@ -922,7 +921,7 @@ const FamilyCatalog: React.FC<{
         </Typography>
       )}
 
-      {isAdmin && byDie && !embedded ? (
+      {isAdmin && byDie ? (
         <CatalogByDie dies={shown as never} thumbs={(d) => thumbOf(d as never, thumbs)} rated={ratedOf}
           active={active ? { die: active.die, config: active.config } : null} isAdmin={isAdmin} canWrite={canWrite}
           standardUser={standardUser} busy={!!busy || loadRunning} actions={byDieActions} />
@@ -1373,14 +1372,6 @@ const FamilyCatalog: React.FC<{
             sx={{ textTransform: 'none', fontSize: 11 }}>
             ＋ die from current geometry
           </Button>
-        )}
-        {isAdmin && !embedded && (
-          <Tooltip title={tx('byDie.switchTip')}>
-            <Button size="small" variant={byDie ? 'contained' : 'outlined'} data-testid="by-die-switch" onClick={() => setByDie(!byDie)}
-              sx={{ textTransform: 'none', fontSize: 11, py: 0, minHeight: 24 }}>
-              {tx('byDie.switch')}
-            </Button>
-          </Tooltip>
         )}
         {canWrite && isAdmin && (
           <Tooltip title={tx('restoreRetiredTip')}>

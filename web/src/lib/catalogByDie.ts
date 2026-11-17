@@ -101,8 +101,10 @@ export function buildByDie(dies: ByDieDie[], overview: ByDieOverview | null): Fa
   for (const g of groups.values()) {
     g.blocks.sort((a, z) => blockRank(a) - blockRank(z) || String(z.die.created ?? '').localeCompare(String(a.die.created ?? '')));
   }
-  // named families by name, the dies the generator cannot name yet last
-  return [...groups.values()].sort((a, z) => Number(a.named === false) - Number(z.named === false) || a.family.localeCompare(z.family));
+  // named families by stator OD, then by name (the tab holds every diameter at once); the dies the generator cannot name yet last
+  const od = (g: FamilyGroup) => Math.min(...g.blocks.map((b) => (typeof b.die.stator_diameter === 'number' ? b.die.stator_diameter : Infinity)));
+  return [...groups.values()].sort((a, z) => Number(a.named === false) - Number(z.named === false) || od(a) - od(z)
+    || a.family.localeCompare(z.family));
 }
 
 /** The magnet segmentation in one short value: "solid" or the slice length; null when unknown. */

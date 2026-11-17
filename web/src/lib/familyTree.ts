@@ -57,6 +57,12 @@ export function fetchDieThumbs(opts: { fresh?: boolean } = {}): Promise<DieThumb
   return promise;
 }
 
+/** The memoised tree when it is fresh, else null - a page that mounts again shows it at once (and renders server-side in
+ *  the tab test) instead of waiting for the effect's fetch. */
+export function peekFamilyTree(): FamilyTree | null {
+  return memo && memo.gen === generation && Date.now() - memo.t < MEMO_MS ? memo.value : null;
+}
+
 /** Forget the memoised tree — the next fetch goes to the server. */
 export function invalidateFamilyTree(): void {
   generation += 1;

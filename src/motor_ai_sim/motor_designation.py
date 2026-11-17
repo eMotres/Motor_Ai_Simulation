@@ -371,8 +371,11 @@ def catalog_fields(die_name: str, die_doc: Mapping[str, Any], cfg_doc: Mapping[s
         out = describe(die_name, die_doc, cfg_doc, library=library)
         g = geometry_of(die_doc, cfg_doc)
         mats = dict((cfg_doc or {}).get("materials") or {})
+        from motor_ai_sim.die_sheet import sheet_id
         return {"designation": out["designation"], "designation_complete": out["complete"],
                 "designation_unknown": out["unknown"], "family": out["family"],
+                # the stamped sheet this motor is built on (die_sheet.py): the catalog's one header per physical die
+                "sheet_id": sheet_id(g),
                 "beside": {"steel": mats.get("stator_core") or None, "magnet": mats.get("magnet") or None,
                            # the axial magnet slice length (``magnet_lamination``, mm); 0 or absent = one solid piece
                            "magnet_lamination_mm": _num(g.get("magnet_lamination")) or None,

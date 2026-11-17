@@ -382,7 +382,8 @@ const CatalogByDie: React.FC<Props> = ({ dies, thumbs, rated, active, isAdmin, c
             <Typography sx={small}>{t('byDie.motors', { n: g.blocks.reduce((n, b) => n + b.motors.length, 0) })}</Typography>
           </Box>
           {g.blocks.map((b) => (
-            <Box key={b.die.name} data-testid="by-die-block" sx={{ px: 1, py: 0.4, borderTop: '1px solid var(--line-soft)' }}>
+            <Box key={b.sheet} data-testid="by-die-block" data-members={b.members.length}
+              sx={{ px: 1, py: 0.4, borderTop: '1px solid var(--line-soft)' }}>
               <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap', [NARROW]: { gap: 0.5 } }}>
                 <Box sx={{ lineHeight: 0, flexShrink: 0 }}>
                   <MotorThumbnail slots={b.die.slots ?? 0} poles={b.die.poles ?? 0} size={28} thumbSvg={thumbs(b.die) ?? undefined} />
@@ -390,18 +391,34 @@ const CatalogByDie: React.FC<Props> = ({ dies, thumbs, rated, active, isAdmin, c
                 <Typography sx={{ ...small, color: 'var(--text-2)' }}>
                   Ø{fmt(b.die.stator_diameter, 0)} · {b.die.slots}s{b.die.poles}p
                 </Typography>
-                {dieExtras?.(b.die.name)}
-                {isAdmin && (jobs?.dies?.[b.die.name] ?? []).map(jobChipEl)}
-                {canWrite && (
-                  <Tooltip title={b.die.locked ? t('byDie.lockedTip') : t('byDie.unlockedTip')}>
-                    <span>
-                      <IconButton size="small" disabled={busy} onClick={() => actions.toggleDieLock(b.die.name)}
-                        sx={{ fontSize: 11, p: 0.2, color: b.die.locked ? '#fbbf24' : 'var(--text-4)' }}>{b.die.locked ? '🔒' : '🔓'}</IconButton>
-                    </span>
-                  </Tooltip>
-                )}
+                {/* one header per stamped sheet (owner 2026-11-17); every stored record of it keeps its own lock, extras,
+                    running work and menu as one compact mark, never as a header of its own */}
+                {b.members.map((d) => (
+                  <Box key={d.name} data-testid="by-die-record" sx={{ display: 'inline-flex', alignItems: 'center', gap: 0.25,
+                    ...(b.members.length > 1 ? { border: '1px solid var(--line-soft)', borderRadius: 1, px: 0.25 } : {}) }}>
+                    {b.members.length > 1 && (
+                      <Tooltip title={isAdmin ? t('byDie.recordTip', { name: d.name, n: b.motors.filter((m) => m.die === d.name).length }) : ''}>
+                        <Typography component="span" sx={{ ...small, color: 'var(--text-3)' }}>{b.motors.filter((m) => m.die === d.name).length}</Typography>
+                      </Tooltip>
+                    )}
+                    {dieExtras?.(d.name)}
+                    {isAdmin && (jobs?.dies?.[d.name] ?? []).map(jobChipEl)}
+                    {canWrite && (
+                      <Tooltip title={d.locked ? t('byDie.lockedTip') : t('byDie.unlockedTip')}>
+                        <span>
+                          <IconButton size="small" disabled={busy} onClick={() => actions.toggleDieLock(d.name)} data-testid="by-die-lock"
+                            sx={{ fontSize: 11, p: 0.2, color: d.locked ? '#fbbf24' : 'var(--text-4)' }}>{d.locked ? '🔒' : '🔓'}</IconButton>
+                        </span>
+                      </Tooltip>
+                    )}
+                    {canWrite && b.members.length > 1 && (
+                      <IconButton size="small" aria-label={t('byDie.dieMenu')} data-testid="by-die-die-menu" onClick={(e) => setDieMenu({ el: e.currentTarget, die: d })}
+                        sx={{ p: 0.15, color: 'var(--text-4)' }}><MoreVertIcon sx={{ fontSize: 14 }} /></IconButton>
+                    )}
+                  </Box>
+                ))}
                 <Box sx={{ flex: 1 }} />
-                {canWrite && (
+                {canWrite && b.members.length === 1 && (
                   <IconButton size="small" aria-label={t('byDie.dieMenu')} data-testid="by-die-die-menu" onClick={(e) => setDieMenu({ el: e.currentTarget, die: b.die })}
                     sx={{ p: 0.25, color: 'var(--text-4)' }}><MoreVertIcon sx={{ fontSize: 15 }} /></IconButton>
                 )}

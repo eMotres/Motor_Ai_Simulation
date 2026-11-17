@@ -225,3 +225,26 @@ test('the old / current rule keys on (designation, primary application): a robot
     N1: ['', false, false],                                               // no application: a group of its own, alone
   });
 });
+
+// ── owner 2026-11-17: one header (one icon) per physical die ─────────────────────────────────────────────────────────
+test('records of one stamped sheet share ONE block; the locked shared record represents it; an override of a sheet key moves the motor', () => {
+  const s = (name, designation, sheet) => cfg(name, designation, { sheet_id: sheet });
+  const g = buildByDie([
+    { name: 'CIANO28 80 8672', created: '2026-11-17', stator_diameter: 80, configs: [s('L12-R2', 'CIANO28 80_12 14F4SY', 'sheet:r2')] },
+    { name: 'CIANO28 80_11 vadim 5', created: '2026-11-01', stator_diameter: 80, configs: [s('L12-F475', 'CIANO28 80_12 18F4SY', 'sheet:c')] },
+    { name: 'CIANO28 80_12', created: '2026-11-11', locked: true, layer: 'shared', stator_diameter: 80,
+      configs: [s('L12-F475', 'CIANO28 80_12 17F4SY', 'sheet:c'), s('L12-tip', 'CIANO28 80_12 16F4SY', 'sheet:d')] },
+    { name: 'CIANO28 80_11 vadim 6', created: '2026-11-12', stator_diameter: 80, configs: [s('L12-x', 'CIANO28 80_12 15F4SY', 'sheet:d')] },
+    { name: 'EMPTY', stator_diameter: 80, family: 'CIANO28 80', configs: [] },
+  ], null)[0];
+  const view = g.blocks.map((b) => [b.die.name, b.members.map((d) => d.name), b.motors.map((m) => `${m.die}/${m.config}`).sort()]);
+  assert.deepEqual(view.find((v) => v[0] === 'CIANO28 80_12'),
+    ['CIANO28 80_12', ['CIANO28 80_12', 'CIANO28 80_11 vadim 5'], ['CIANO28 80_11 vadim 5/L12-F475', 'CIANO28 80_12/L12-F475']]);
+  // the configuration that overrides a sheet key sits with the record of ITS sheet, its own die listed as a member there
+  assert.deepEqual(view.find((v) => v[2].includes('CIANO28 80_12/L12-tip'))?.[1].sort(), ['CIANO28 80_11 vadim 6', 'CIANO28 80_12']);
+  assert.deepEqual(view.find((v) => v[0] === 'CIANO28 80 8672')?.[1], ['CIANO28 80 8672']);   // another sheet: its own header
+  assert.deepEqual(view.find((v) => v[0] === 'EMPTY')?.[2], []);
+  assert.equal(g.blocks.length, 4);
+  // an older server without sheet ids: one block per stored record, as before
+  assert.equal(buildByDie(dies, null).flatMap((x) => x.blocks).length, dies.length);
+});

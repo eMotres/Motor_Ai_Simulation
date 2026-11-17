@@ -17,7 +17,9 @@ export interface ByDieDuty { name: string; power_kw?: number | null; torque_nm?:
 export interface ByDieBattery { cells?: number | null; v_cell_nom?: number | null; v_min?: number | null; v_max?: number | null; v_nom?: number | null }
 export interface ByDieCfg {
   name: string; designation?: string | null; designation_complete?: boolean; designation_unknown?: string[];
-  family?: string; beside?: ByDieBeside; locked?: boolean; applications?: unknown; duties?: ByDieDuty[]; battery?: ByDieBattery | null;
+  family?: string; beside?: ByDieBeside; locked?: boolean; applications?: unknown;
+  /** the stamped sheet the motor is built on (server: die_sheet.sheet_id over the effective geometry) */
+  sheet_id?: string | null; duties?: ByDieDuty[]; battery?: ByDieBattery | null;
   /** for a customer / the factory, when the designation is not complete: family and length as far as known (server) */
   display_name?: string | null;
 }
@@ -97,7 +99,10 @@ export function rowValues(c: ByDieCfg, d: ByDieDuty | null): RowValues | null {
     current_arms: fin(d.current_arms), mass_kg: fin(d.result?.mass_kg),
   };
 }
-export interface DieBlock { die: ByDieDie; motors: MotorRow[] }
+/** One header per stamped SHEET (owner 2026-11-17: "all our 80 mm motors come from one die; draw ONE icon and under it the
+ *  different motors"): `die` is the record that represents it (icon, Ø, slots / poles), `members` every stored die record of
+ *  that sheet (one when the server sends no sheet id: the old one-header-per-record view). */
+export interface DieBlock { die: ByDieDie; members: ByDieDie[]; sheet: string; motors: MotorRow[] }
 export interface FamilyGroup { family: string; named: boolean; blocks: DieBlock[] }
 
 const stripRev = (s: string) => s.replace(/ Rev [A-Z]+$/, '');
@@ -142,12 +147,18 @@ export function markOld(rows: MotorRow[]): void {
   }
 }
 
+/** Which record of a sheet represents it: a locked shared one first, then any locked one, then the oldest, then by name. */
+export function memberOrder(a: ByDieDie, z: ByDieDie): number {
+  const r = (d: ByDieDie) => (d.locked ? (d.layer === 'shared' ? 0 : 1) : 2);
+  return r(a) - r(z) || String(a.created ?? '').localeCompare(String(z.created ?? '')) || a.name.localeCompare(z.name);
+}
+
 /** `staff` false (a customer, the factory): a motor without a complete designation is shown by its family and length
  *  (`display_name`) or not named at all ('' = "name pending"), never by its stored configuration name. */
 export function buildByDie(dies: ByDieDie[], overview: ByDieOverview | null, opts: { staff?: boolean } = {}): FamilyGroup[] {
   const staff = opts.staff !== false;
   const all: MotorRow[] = [];
-  const blocks: DieBlock[] = (dies ?? []).filter((d) => d && typeof d.name === 'string').map((d) => {
+  const perDie = (dies ?? []).filter((d) => d && typeof d.name === 'string').map((d) => {
     const motors = (d.configs ?? []).map((c): MotorRow => {
       const key = `${d.name}/${c.name}`;
       const it = overview?.items?.[key];
@@ -171,8 +182,26 @@ export function buildByDie(dies: ByDieDie[], overview: ByDieOverview | null, opt
       all.push(row);
       return row;
     });
-    return { die: d, motors };
+    const sheets = (d.configs ?? []).map((c) => (typeof c.sheet_id === 'string' && c.sheet_id ? c.sheet_id : `die:${d.name}`));
+    return { d, motors, sheets };
   });
+  // regroup by sheet: the motors of every record of one sheet under ONE header; a configuration that overrides a sheet key
+  // goes under the header of its own sheet; a die without motors keeps a header of its own
+  const bySheet = new Map<string, DieBlock>();
+  for (const { d, motors, sheets } of perDie) {
+    const keys = motors.length ? sheets : [`die:${d.name}`];
+    keys.forEach((k, i) => {
+      const b = bySheet.get(k) ?? { die: d, members: [], sheet: k, motors: [] };
+      if (!b.members.includes(d)) b.members.push(d);
+      if (motors[i]) b.motors.push(motors[i]);
+      bySheet.set(k, b);
+    });
+  }
+  const blocks = [...bySheet.values()];
+  for (const b of blocks) {
+    b.members.sort(memberOrder);
+    b.die = b.members[0];
+  }
   // without the Overview (a customer, the factory, or before it answered) the links are unknown: nothing is marked, because
   // the fallback alone could call the linked motor "old"
   if (overview) markOld(all);
@@ -406,8 +435,10 @@ export function restrictTo(groups: FamilyGroup[], shown: ByDieDie[]): FamilyGrou
   const want = new Map(shown.map((d) => [d.name, new Set((d.configs ?? []).map((c) => c.name))]));
   const out: FamilyGroup[] = [];
   for (const g of groups) {
-    const blocks = g.blocks.filter((b) => want.has(b.die.name))
-      .map((b) => ({ ...b, motors: b.motors.filter((m) => want.get(b.die.name)!.has(m.config)) }));
+    const blocks = g.blocks.filter((b) => b.members.some((d) => want.has(d.name)))
+      .map((b) => ({ ...b, members: b.members.filter((d) => want.has(d.name)),
+        motors: b.motors.filter((m) => want.get(m.die)?.has(m.config)) }))
+      .map((b) => ({ ...b, die: b.members[0] }));
     if (blocks.length) out.push({ ...g, blocks });
   }
   return out;

@@ -23,7 +23,12 @@ globalThis.localStorage = { getItem: (k) => (store.has(k) ? store.get(k) : null)
 const TREE = { can_write: true, dies: [
   { name: 'CILN28', slots: 24, poles: 28, stator_diameter: 200, locked: true, layer: 'shared', family: 'CILN28 200', configs: [
     { name: 'G2-L40', role: 'motor', card_date: '2026-11-01', duties: [{ name: 'rated', power_kw: 1, torque_nm: 2 }], stack_mm: 40,
-      designation: 'CILN28 200_40 24F4SY', designation_complete: true, family: 'CILN28 200', beside: { steel: 'B15AHV950M' } }] },
+      designation: 'CILN28 200_40 24F4SY', designation_complete: true, family: 'CILN28 200', beside: { steel: 'B15AHV950M' },
+      sheet_id: 'sheet:cil' }] },
+  // a later stored record of the SAME stamped sheet (owner 2026-11-17: one header, one icon per physical die)
+  { name: 'CILN28 R2', slots: 24, poles: 28, stator_diameter: 200, locked: false, layer: 'workspace', family: 'CILN28 200', configs: [
+    { name: 'L65', role: 'motor', card_date: '2026-11-02', duties: [{ name: 'rated', power_kw: 2, torque_nm: 3 }], stack_mm: 65,
+      designation: 'CILN28 200_65 17F4SY', designation_complete: true, family: 'CILN28 200', sheet_id: 'sheet:cil' }] },
   { name: 'CIANO28 80_11 vadim 5', slots: 24, poles: 28, stator_diameter: 80, layer: 'shared', family: 'CIANO28 80', configs: [
     { name: 'L12-F475', role: 'motor', card_date: '2026-11-01', duties: [{ name: 'rated', power_kw: 0.5, torque_nm: 1 }], stack_mm: 12,
       designation: null, designation_complete: false, display_name: 'CIANO28 80_12', family: 'CIANO28 80' }] }] };
@@ -128,5 +133,29 @@ for (const w of [1280, 1920]) {
     const actW = Number(html.match(new RegExp(`\\.${actCls}\\{[^}]*width:(\\d+)px`))[1]);
     const PAGE_PAD = 2 * 24, FAMILY_PAD = 2 * 8 + 2;                 // the tab's scroller padding, the block padding and border
     assert.ok(chars + 8 + actW + PAGE_PAD + FAMILY_PAD <= w, `${w}: ${chars} + ${actW}`);
+  });
+}
+
+// ── owner 2026-11-17: "all our 80 mm motors come from one die; draw ONE icon and under it the different motors" ──────────
+for (const [who, isAdmin] of [['admin', true], ['member', false]]) {
+  test(`${who}: two stored records of one stamped sheet are ONE header with one icon and both motors under it`, async () => {
+    const i18n = m.makeI18n(); await i18nReady(i18n);
+    const html = m.renderTab(i18n, isAdmin, who);
+    const fam = html.slice(html.indexOf('>CILN28 200<'));
+    const blocks = [...fam.matchAll(/data-testid="by-die-block" data-members="(\d+)"/g)].map((x) => Number(x[1]));
+    assert.equal(blocks[0], 2, String(blocks));                                         // one header, two member records
+    const block = fam.slice(fam.indexOf('data-testid="by-die-block"'));
+    const head = block.slice(0, block.indexOf('data-testid="by-die-motor"'));
+    assert.equal((head.match(/<svg/g) || []).length >= 1 && (head.match(/data-testid="by-die-block"/g) || []).length, 1);
+    assert.ok(block.includes('>CILN28 200_40 24F4SY<') && block.includes('>CILN28 200_65 17F4SY<'),
+      [...block.matchAll(/data-testid="by-die-(?:motor|block)"|>CILN28[^<]*</g)].map((x) => x[0]).join(' '));
+    assert.equal((head.match(/data-testid="by-die-record"/g) || []).length, 2);         // each record a compact mark
+    if (isAdmin) {
+      assert.equal((head.match(/data-testid="by-die-lock"/g) || []).length, 2);         // its own lock ...
+      assert.equal((head.match(/data-testid="by-die-die-menu"/g) || []).length, 2);     // ... and its own menu
+      assert.ok(head.includes('aria-label="Stored record CILN28 R2: 1 motor of this sheet'), head);
+    } else {
+      assert.ok(!head.includes('Stored record') && !head.includes('CILN28 R2'), 'no stored record name for a non-staff viewer');
+    }
   });
 }

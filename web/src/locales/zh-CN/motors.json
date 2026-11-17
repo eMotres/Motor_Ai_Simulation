@@ -354,6 +354,7 @@
       "parked": "暂停",
       "archived": "归档"
     },
+    "recordTip": "存储记录 {name}：此冲片的 {n} 台电机；其锁定和菜单在旁边",
     "newestShort": "最新",
     "filter": {
       "stage": "阶段",

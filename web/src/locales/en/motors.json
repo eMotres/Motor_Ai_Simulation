@@ -354,6 +354,7 @@
       "parked": "Park",
       "archived": "Archive"
     },
+    "recordTip": "Stored record {name}: {n, plural, one {# motor} other {# motors}} of this sheet; its lock and menu are beside it",
     "newestShort": "newest",
     "filter": {
       "stage": "Stage",

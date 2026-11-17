@@ -20,8 +20,8 @@ import yaml
 
 SOURCES = ("owner", "measured", "provisional")
 PRESET_NAMES = ("optimization", "simulation")
-#: the file, beside the other library files
-PATH = Path(__file__).resolve().parents[2] / "config" / "mesh_presets.yaml"
+#: the file name; it is CODE data, shipped by the image (``config/`` in a checkout, ``config-seed/`` in the deployed image)
+FILE_NAME = "mesh_presets.yaml"
 COIL_REL_CHOICES = (0.5, 1.0, 2.0)
 
 _SCALAR_KEYS = ("gap_layers", "n_periods", "outer_air_factor", "element_order", "eddy", "rotor_eddy", "demag",
@@ -110,10 +110,23 @@ def _load_cached(path: str, mtime_ns: int) -> Dict[str, Any]:
     return validate(yaml.safe_load(Path(path).read_text(encoding="utf-8")))
 
 
+def data_path(base: Optional[Path] = None) -> Path:
+    """Where the data file is: ``<app>/config/`` in a checkout, ``<app>/config-seed/`` in the deployed image (which has no
+    ``config/``; same rule as the other code-shipped data files, ``propeller.seeded_config_path``).  Never a user workspace."""
+    from motor_ai_sim.propeller import seeded_config_path
+    return seeded_config_path(FILE_NAME, base=base)
+
+
 def load(path: Optional[Path] = None) -> Dict[str, Any]:
-    """The validated data file (cached until it changes on disk)."""
-    p = Path(path or PATH)
-    return _load_cached(str(p), p.stat().st_mtime_ns)
+    """The validated data file (cached until it changes on disk).  A missing or unreadable file is a
+    :class:`PresetError` that names the path (the routes answer it plainly, never a bare 500)."""
+    p = Path(path) if path else data_path()
+    try:
+        return _load_cached(str(p), p.stat().st_mtime_ns)
+    except OSError as exc:
+        raise PresetError(f"the mesh preset file {p} cannot be read ({exc.strerror or exc}); the presets are not available")
+    except yaml.YAMLError as exc:
+        raise PresetError(f"the mesh preset file {p} is not valid YAML: {exc}")
 
 
 def names() -> List[str]:

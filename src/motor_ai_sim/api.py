@@ -1600,6 +1600,10 @@ def get_mesh_presets():
     ``error`` instead of values (never a default)."""
     from motor_ai_sim import mesh_presets as _MP
     geometry = dict(get_config().get("geometry") or {})
+    try:
+        doc = _MP.load()
+    except _MP.PresetError as exc:                       # the file is missing / broken: say so, not a bare 500
+        raise HTTPException(status_code=503, detail=str(exc))
     out = []
     for name in _MP.names():
         try:
@@ -1608,9 +1612,9 @@ def get_mesh_presets():
             if name == "simulation":
                 row["cogging_steps_per_period"] = _MP.steps_for(name, geometry, cogging=True)
         except _MP.PresetError as exc:
-            row = {"name": name, "label": _MP.load()["presets"][name]["label"], "error": str(exc)}
+            row = {"name": name, "label": doc["presets"][name]["label"], "error": str(exc)}
         out.append(row)
-    return {"version": _MP.version(), "policy": _MP.load().get("policy"), "presets": out}
+    return {"version": int(doc["version"]), "policy": doc.get("policy"), "presets": out}
 
 
 @app.patch("/api/mesh/config")

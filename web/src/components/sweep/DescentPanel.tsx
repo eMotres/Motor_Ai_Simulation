@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
+import MeshPresetSelect from '../mesh/MeshPresetSelect';
 import { whenVisible } from '../../lib/pageVisible';
 import {
   Box, Typography, Button, TextField, Tooltip, Divider, Chip,
@@ -539,6 +540,7 @@ const DescentPanel: React.FC<{ chartsOnly?: boolean }> = ({ chartsOnly = false }
           skipped; the data sections below read the same store the auto run
           writes, so they visualise auto runs too. */}
       {!chartsOnly && (<>
+      <Box sx={{ mb: 1 }}><MeshPresetSelect dense readOnly /></Box>
       {/* ── Header: title + Run ── */}
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1.5 }}>
         <TrendingDownIcon sx={{ fontSize: 18 }} />

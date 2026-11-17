@@ -45,6 +45,7 @@ import {
   type StepsSource,
 } from '../../lib/eddySteps';
 import { fetchCoupledLast, setCoupledControllerRef } from './coupledApi';
+import MeshPresetSelect from '../mesh/MeshPresetSelect';
 // The Drive selector (2026-09-22, Stage 2's open item): whether the CONTROLLER
 // has a device saved for this configuration at all — the same read the
 // Controller tab itself does on mount, reused here only to GATE the option
@@ -2755,6 +2756,7 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
               above (the panel scrolls if needed); no bottom-pin, which used to
               leave a big empty gap now that the cooling/PINN sections are gone. ── */}
         <Box sx={{ pt: 1 }}>
+          <Box sx={{ mb: 1.25 }}><MeshPresetSelect dense readOnly /></Box>
           <FormControl size="small" fullWidth sx={{ mb: 1.25 }} disabled={simBusy}>
             <InputLabel id="steps-pp-label">{tx('stepsPerElectricalPeriod')}</InputLabel>
             <Select

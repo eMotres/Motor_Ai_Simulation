@@ -1592,6 +1592,27 @@ def get_mesh_config():
     }
 
 
+@app.get("/api/mesh/presets")
+def get_mesh_presets():
+    """The two mesh / solve presets resolved for the machine that is open (owner 2026-11-17): the numbers the Mesh panel,
+    the Simulation panel and the optimisation panels fill in one click.  Read-only; the values come from
+    ``config/mesh_presets.yaml`` (``mesh_presets.py``).  A preset that cannot be resolved for this machine carries
+    ``error`` instead of values (never a default)."""
+    from motor_ai_sim import mesh_presets as _MP
+    geometry = dict(get_config().get("geometry") or {})
+    out = []
+    for name in _MP.names():
+        try:
+            res = _MP.resolve(name, geometry)
+            row = {"name": name, "label": res["label"], "values": res["values"], "sources": res["sources"], "h0": res["h0"]}
+            if name == "simulation":
+                row["cogging_steps_per_period"] = _MP.steps_for(name, geometry, cogging=True)
+        except _MP.PresetError as exc:
+            row = {"name": name, "label": _MP.load()["presets"][name]["label"], "error": str(exc)}
+        out.append(row)
+    return {"version": _MP.version(), "policy": _MP.load().get("policy"), "presets": out}
+
+
 @app.patch("/api/mesh/config")
 def update_mesh_config(patch: MeshConfigPatch):
     """Persist mesh parameters into motor_config.yaml (adds keys if missing), so

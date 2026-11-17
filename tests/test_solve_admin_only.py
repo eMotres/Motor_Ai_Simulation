@@ -188,6 +188,7 @@ REVIEWED_NOT_A_SOLVE = {
     "GET /api/mechanical/last": "reads a stored result",
     "GET /api/mechanical/materials": "catalog / library / settings / stored-state read; resolves a stored value, solves nothing",
     "GET /api/mechanical/progress": "job list / progress / cancel / history of runs that already exist",
+    "GET /api/mesh/presets": "reads config/mesh_presets.yaml and the open machine's geometry and returns numbers (mesh sizes, step counts); it runs no solve and no mesh build",
     "GET /api/mesh/config": "reads / edits the caller's own workspace machine; the 3-D viewer and Configure draw it (CAD tessellation, no physics)",
     "GET /api/model3d/downloads": "stored 3-D model files and listings (NDA rules apply)",
     "GET /api/model3d/models": "stored 3-D model files and listings (NDA rules apply)",

@@ -247,5 +247,18 @@
   "propDesignPolar": "Polar",
   "propDesignPolarTip": "Section polar of the blade-element model. Flat plate: generic lift and drag. With camber: the zero-lift angle of each airfoil from thin-airfoil theory; drag and stall stay generic. Both estimated.",
   "propPolar_flatplate_model": "flat plate",
-  "propPolar_camber_model": "with camber"
+  "propPolar_camber_model": "with camber",
+  "meshPresetLabel": "Preset",
+  "meshPresetCustom": "Custom",
+  "meshPresetHelp": "Mesh and step-count presets",
+  "meshPresetUnavailable": "Presets are not available for this machine",
+  "meshPresetVersion": "preset file version",
+  "meshPresetStepsPerPeriod": "steps/period",
+  "meshPresetGapRows": "gap rows per side",
+  "meshPresetMesh": "mesh",
+  "meshPresetOuterAir": "outer air",
+  "meshPresetSector": "sector",
+  "meshPresetFullRing": "full ring",
+  "meshPresetWireCell": "wire cell",
+  "meshPresetOpenMesh": "Switch the preset on the Mesh tab"
 }

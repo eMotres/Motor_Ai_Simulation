@@ -168,3 +168,26 @@ def test_the_route_refuses_an_unknown_preset_before_any_solve():
     with pytest.raises(HTTPException) as e:
         S.get_fem_transient(preset="fast")
     assert e.value.status_code == 422 and "unknown mesh preset" in str(e.value.detail)
+
+
+def test_the_presets_route_answers_both_presets_resolved_for_the_open_machine(monkeypatch):
+    from motor_ai_sim import api
+    g = _machine(80.0, 12, 10)
+    monkeypatch.setattr(api, "get_config", lambda: {"geometry": g})
+    out = api.get_mesh_presets()
+    assert out["version"] == MP.version()
+    assert [p["name"] for p in out["presets"]] == ["optimization", "simulation"]
+    opt, sim = out["presets"]
+    assert opt["values"]["n_steps_per_period"] == 48 and opt["values"]["gap_layers"] == 1
+    assert sim["values"]["n_steps_per_period"] >= 96 and sim["values"]["gap_layers"] == 2
+    assert sim["cogging_steps_per_period"] >= 120
+    assert all(p["values"]["mesh_size_mm"] > 0 and p["values"]["component_mesh"]["stator"] > 0 for p in out["presets"])
+
+
+def test_the_presets_route_names_the_missing_feature_instead_of_inventing_a_default(monkeypatch):
+    from motor_ai_sim import api
+    g = _machine(80.0, 12, 10)
+    g.pop("tooth_width", None)
+    monkeypatch.setattr(api, "get_config", lambda: {"geometry": g})
+    out = api.get_mesh_presets()
+    assert all("values" not in p and p["error"] for p in out["presets"])

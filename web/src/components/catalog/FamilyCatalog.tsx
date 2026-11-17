@@ -920,7 +920,7 @@ const FamilyCatalog: React.FC<{
 
       {/* THE Motors catalog for every role (owner 2026-11-17: "the catalog view must be the same for everybody"); the
           admin sees more in it, gated in the routes (designations, Overview, jobs).  The old list is gone. */}
-      <CatalogByDie dies={shown as never} thumbs={(d) => thumbOf(d as never, thumbs)} rated={ratedOf}
+      <CatalogByDie dies={shown as never} allDies={dies as never} thumbs={(d) => thumbOf(d as never, thumbs)} rated={ratedOf}
         active={active ? { die: active.die, config: active.config } : null} isAdmin={isAdmin} canWrite={canWrite}
         standardUser={standardUser} busy={!!busy || loadRunning} actions={byDieActions}
         dieExtras={(n) => { const d = dieOf(n); return d ? (

@@ -392,3 +392,18 @@ export function parseSets(raw: unknown): SavedFilterSet[] | null {
     ? { name: (s as SavedFilterSet).name.slice(0, 60), filter: parseFilter((s as SavedFilterSet).filter) ?? NO_FILTER } : null))
     .filter((s): s is SavedFilterSet => !!s);
 }
+
+
+/** Keep only the dies and motors of `shown` (the dies the application filter and the client rule let through), AFTER the
+ *  old / current marks were computed over the whole catalog: a mark must not change with a filter (US · 80mm,
+ *  2026-11-17: a row flipped between old and current when the application filter hid its linked twin). */
+export function restrictTo(groups: FamilyGroup[], shown: ByDieDie[]): FamilyGroup[] {
+  const want = new Map(shown.map((d) => [d.name, new Set((d.configs ?? []).map((c) => c.name))]));
+  const out: FamilyGroup[] = [];
+  for (const g of groups) {
+    const blocks = g.blocks.filter((b) => want.has(b.die.name))
+      .map((b) => ({ ...b, motors: b.motors.filter((m) => want.get(b.die.name)!.has(m.config)) }));
+    if (blocks.length) out.push({ ...g, blocks });
+  }
+  return out;
+}

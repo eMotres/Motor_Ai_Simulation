@@ -194,3 +194,19 @@ test('saved sets: named, replaced by name, sorted; stored values parsed back saf
   assert.deepEqual(parseSets([{ name: 'x', filter: { state: 'parked' } }, 7]).map((s) => [s.name, s.filter.state]), [['x', 'parked']]);
   assert.equal(parseSets('nope'), null);
 });
+
+test('a mark never depends on the application filter: computed over the whole catalog, then restricted (US · 80mm finding)', async () => {
+  const { buildByDie, restrictTo } = await import('../catalogByDie.ts');
+  const linked = { name: 'CIANO28 80_12', created: '2026-11-11', configs: [cfg('L12-R14F035-RJ', 'CIANO28 80_12 14F4SY')] };
+  const drone = { name: 'CIANO28 80 8672', created: '2026-11-17', configs: [cfg('L12-R14F035-DR', 'CIANO28 80_12 14F4SY')] };
+  const ov = { items: { 'CIANO28 80_12/L12-R14F035-RJ': { projects: [{ id: 'p', link_status: 'current' }], productions: [] } },
+    projects: { p: { id: 'p', title: 'Robot', status: 'design' } }, productions: {} };
+  const oldOf = (groups) => groups.flatMap((g) => g.blocks.flatMap((b) => b.motors.map((m) => [m.die, m.old])));
+  const all = restrictTo(buildByDie([linked, drone], ov), [linked, drone]);
+  const filtered = restrictTo(buildByDie([linked, drone], ov), [drone]);            // the application filter shows only the drone die
+  assert.deepEqual(oldOf(all), [['CIANO28 80_12', false], ['CIANO28 80 8672', true]]);
+  assert.deepEqual(oldOf(filtered), [['CIANO28 80 8672', true]]);                    // the same mark with or without the filter
+  assert.deepEqual(oldOf(buildByDie([drone], ov)), [['CIANO28 80 8672', false]]);     // what the old code did (marked after filtering)
+  const someConfigs = restrictTo(buildByDie([linked, drone], ov), [{ ...linked, configs: [] }]);
+  assert.deepEqual(someConfigs.flatMap((g) => g.blocks.map((b) => [b.die.name, b.motors.length])), [['CIANO28 80_12', 0]]);
+});

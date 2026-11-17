@@ -25,6 +25,8 @@ import LockOutlinedIcon from '@mui/icons-material/LockOutlined';
 import { useUIStore } from '../../stores/motorStore';
 import { thumbOf, type DieThumbs } from '../../lib/dieThumbs';
 import MotorThumbnail from './MotorThumbnail';
+import CatalogByDie, { type ByDieActions } from './CatalogByDie';
+import { useRememberedView } from '../../lib/useRememberedView';
 import StartProject from './StartProject';
 import MotorRevisionText from '../common/MotorRevisionText';
 import {
@@ -344,6 +346,8 @@ const FamilyCatalog: React.FC<{
   const [treeLoaded, setTreeLoaded] = useState(false);   // the tree has answered once
   // the dies' cross-section drawings: a separate request since 2026-11-12 (they were two thirds of the tree)
   const [thumbs, setThumbs] = useState<DieThumbs | null>(null);
+  // the by-die view (owner 2026-11-17, "in the style of the Overview"): admins only for now, the list stays the default
+  const [byDie, setByDie] = useRememberedView<boolean>('motors.byDie', false, (r) => (typeof r === 'boolean' ? r : null));
   // The backend's one-line reason for an empty catalog (a signed-in account
   // with no motors granted yet) — an empty page tells that user nothing.
   const [note, setNote] = useState<string | null>(null);
@@ -873,6 +877,26 @@ const FamilyCatalog: React.FC<{
     .filter((d) => d.configs.length > 0);
   if (embedded && shown.length === 0 && !msg) return null;
 
+  // what the by-die view's rows and menus do: the SAME handlers as the list below, so no action is lost
+  const dieOf = (name: string) => dies.find((d) => d.name === name);
+  const cfgOf = (die: string, cfg: string) => dieOf(die)?.configs.find((c) => c.name === cfg);
+  const ratedOf = (die: string, cfg: string) => {
+    const d = dieOf(die);
+    const b = d ? configButtons(d as never).find((x) => x.config === cfg) : undefined;
+    return b ? { duty: b.duty, power_kw: b.power_kw, torque_nm: b.torque_nm, mass_kg: b.mass_kg } : null;
+  };
+  const byDieActions: ByDieActions = {
+    load: (die, cfg) => { const r = ratedOf(die, cfg); if (r?.duty) void applyDuty(die, cfg, r.duty); },
+    renameDie, toggleDieLock: (n) => { const d = dieOf(n); if (d) toggleDieLock(d); },
+    dieHistory: (n) => setHistOf({ die: n, config: null }), duplicateDie: (n) => void duplicateDie(n),
+    addConfig: createCfg, deleteDie: (n) => { const d = dieOf(n); if (d) deleteDie(d); },
+    retireOrArchive: (n) => (dieOf(n)?.layer === 'shared' ? retireDie(n) : archiveDie(n)),
+    renameCfg, toggleCfgLock: (d, c) => { const x = cfgOf(d, c); if (x) toggleCfgLock(d, x); },
+    cfgHistory: (d, c) => setHistOf({ die: d, config: c }), duplicateCfg, moveCfg,
+    datasheet: (d, c) => void runExport('datasheet', d, c), report: (d, c, pdf) => void runExport('report', d, c, pdf),
+    toMyMotors: duplicateToMySpace, battery: (d, c) => { const x = cfgOf(d, c); if (x) editBattery(d, x); }, deleteCfg,
+  };
+
   const body = (
     <>
       {msg && (
@@ -898,6 +922,12 @@ const FamilyCatalog: React.FC<{
         </Typography>
       )}
 
+      {isAdmin && byDie && !embedded ? (
+        <CatalogByDie dies={shown as never} thumbs={(d) => thumbOf(d as never, thumbs)} rated={ratedOf}
+          active={active ? { die: active.die, config: active.config } : null} isAdmin={isAdmin} canWrite={canWrite}
+          standardUser={standardUser} busy={!!busy || loadRunning} actions={byDieActions} />
+      ) : (
+      <>
       {shown.map(die => (
         <Box key={die.name} data-project-motor={isDieHighlighted(projectIndex, die.name) ? 'true' : undefined} sx={{
           border: `1px solid ${active?.die === die.name ? '#60a5fa88' : 'var(--line-soft)'}`,
@@ -1281,6 +1311,8 @@ const FamilyCatalog: React.FC<{
           ))}
         </Box>
       ))}
+      </>
+      )}
     </>
   );
 
@@ -1341,6 +1373,14 @@ const FamilyCatalog: React.FC<{
             sx={{ textTransform: 'none', fontSize: 11 }}>
             ＋ die from current geometry
           </Button>
+        )}
+        {isAdmin && !embedded && (
+          <Tooltip title={tx('byDie.switchTip')}>
+            <Button size="small" variant={byDie ? 'contained' : 'outlined'} data-testid="by-die-switch" onClick={() => setByDie(!byDie)}
+              sx={{ textTransform: 'none', fontSize: 11, py: 0, minHeight: 24 }}>
+              {tx('byDie.switch')}
+            </Button>
+          </Tooltip>
         )}
         {canWrite && isAdmin && (
           <Tooltip title={tx('restoreRetiredTip')}>

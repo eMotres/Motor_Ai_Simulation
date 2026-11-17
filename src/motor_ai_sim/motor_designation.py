@@ -359,6 +359,66 @@ def canonical(designation: Any) -> str:
     return f"{letters}{f['poles']} {f['od']}_{f['length']} {int(f['turns']) * 2}{f['wire']}{conn}{f['star_delta']}"
 
 
+# ── the Motors catalog by die (owner 2026-11-17): each motor shown by its designation, the per-motor parameters BESIDE it ──
+
+def catalog_fields(die_name: str, die_doc: Mapping[str, Any], cfg_doc: Mapping[str, Any],
+                   library: Optional[Mapping[str, Any]] = None) -> Dict[str, Any]:
+    """What a catalog row adds for the by-die view: the designation (no ``Rev``: :func:`catalog_view` adds it per request),
+    whether it is complete, the family header and the parameters shown BESIDE the name, never in it (owner: steel,
+    magnet, magnet segmentation, slot insulation "change per motor and are too much for the name").  ``{}`` on any
+    failure: the row stays as it was."""
+    try:
+        out = describe(die_name, die_doc, cfg_doc, library=library)
+        g = geometry_of(die_doc, cfg_doc)
+        mats = dict((cfg_doc or {}).get("materials") or {})
+        return {"designation": out["designation"], "designation_complete": out["complete"],
+                "designation_unknown": out["unknown"], "family": out["family"],
+                "beside": {"steel": mats.get("stator_core") or None, "magnet": mats.get("magnet") or None,
+                           # the axial magnet slice length (``magnet_lamination``, mm); 0 or absent = one solid piece
+                           "magnet_lamination_mm": _num(g.get("magnet_lamination")) or None,
+                           "slot_insulation": mats.get("slot_insulation") or None}}
+    except Exception:                                       # noqa: BLE001
+        return {}
+
+
+def revision_index() -> Dict[Tuple[str, str], str]:
+    """``{(die, config): rev}`` of every product revision, read once per request; ``{}`` without the store."""
+    out: Dict[Tuple[str, str], str] = {}
+    try:
+        from motor_ai_sim import motor_revisions as MR
+        for lin in MR._load().values():
+            for rev in lin.get("revisions") or []:
+                if rev.get("die") and rev.get("config") and rev.get("rev"):
+                    out[(str(rev["die"]), str(rev["config"]))] = str(rev["rev"])
+    except Exception:                                       # noqa: BLE001
+        return {}
+    return out
+
+
+def catalog_view(dies: List[Dict[str, Any]], *, staff: bool, revisions: Optional[Mapping[Tuple[str, str], str]] = None
+                 ) -> List[Dict[str, Any]]:
+    """The tree's dies for THIS caller: the product revision appended to the designation, and an INCOMPLETE designation
+    (one with "?") never reaches a customer or the factory: ``designation`` None for them (the gate of #720, in the route).
+    Copies; the cached rows are not touched."""
+    revs = revision_index() if revisions is None else revisions
+    out = []
+    for d in dies or []:
+        cfgs = []
+        for c in d.get("configs") or []:
+            if not isinstance(c, dict) or "designation" not in c:
+                cfgs.append(c)
+                continue
+            c = dict(c)
+            rev = revs.get((str(d.get("name")), str(c.get("name"))))
+            if c.get("designation") and rev:
+                c["designation"] = f"{c['designation']} Rev {rev}"
+            if not c.get("designation_complete") and not staff:
+                c["designation"], c["designation_unknown"] = None, []
+            cfgs.append(c)
+        out.append({**d, "configs": cfgs})
+    return out
+
+
 def compare(result_designation: Optional[str], current_designation: Optional[str]) -> Optional[Dict[str, str]]:
     """The mark of a result computed for another motor: ``{"computed_for", "now"}``, or None when they agree or the
     result carries no stamp (unknown is not "different").  The ``Rev`` suffix alone does not make a difference, and

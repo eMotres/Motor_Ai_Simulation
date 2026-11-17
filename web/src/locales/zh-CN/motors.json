@@ -47,10 +47,11 @@
   "deleteYourCopy": "删除您的副本",
   "myMotors": "我的电机",
   "sharedByOthers": "他人共享",
-  "everythingGroupedByStatorDiameterA": "全部按定子外径分组。🔒 冲片表示已冲压定型的叠片：配置（叠厚、导线、绕组、材料）位于其下，每个配置有自己的工况表——点击工况上的 ▶ 即可将整台电机载入仿真。＋ 按钮在各层级保存当前状态的快照。",
+  "everythingGroupedByStatorDiameterA": "每台电机按其系列（不含长度的型号名称）和冲片排列，按定子外径排序。每台电机以标准名称及其连续工作点显示；▶ 将其载入仿真。名称旁的 ? 可解读名称并列出材料。",
   "catalog": "目录",
   "catalogLoading": "正在加载目录…",
-  "catalogUnreachable": "服务器未响应，正在重试…",
+  "catalogUnreachable": "服务器没有响应（正在重启？）。",
+  "retry": "重试",
   "materialsViewMenu": "材料与零件目录",
   "materialsViewMaterials": "材料",
   "materialsViewBearings": "轴承",
@@ -263,8 +264,6 @@
   "currentPerSetHead": "每组相电流有效值：两组同相绕组，各由一台控制器驱动。两组合计为其两倍。",
   "currentBothSets": "两组合计：{a} A",
   "byDie": {
-    "switch": "按冲片",
-    "switchTip": "按冲片显示目录：系列、每种冲片，以及其下按标准名称排列的电机",
     "solid": "整体磁钢",
     "slice": "磁钢分段 {mm} mm",
     "noNameTip": "尚无标准名称：显示已存的配置名称",
@@ -315,6 +314,8 @@
       "insulation": "槽绝缘"
     },
     "decodeTip": "如何解读此名称，以及材料",
-    "massTip": "电机质量（{duty}）"
+    "massTip": "电机质量（{duty}）",
+    "namePending": "标准名称待定",
+    "otherMotors": "其他电机"
   }
 }

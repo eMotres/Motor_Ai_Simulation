@@ -47,10 +47,11 @@
   "deleteYourCopy": "Delete your copy",
   "myMotors": "My motors",
   "sharedByOthers": "Shared by others",
-  "everythingGroupedByStatorDiameterA": "Everything grouped by stator diameter. A 🔒 die is a stamped lamination: configurations (stack, wire, winding, materials) live under it, and each configuration has its duty table — click ▶ on a duty to load the whole machine into Simulation. ＋ buttons snapshot the CURRENT state at each level.",
+  "everythingGroupedByStatorDiameterA": "Every motor under its family (the designation without the length) and its die (lamination), sorted by stator diameter. Each motor is shown by its standard name with its continuous point; ▶ loads it into Simulation. The ? next to a name decodes it and lists the materials.",
   "catalog": "Catalog",
   "catalogLoading": "Loading the catalog…",
-  "catalogUnreachable": "The server did not answer; retrying…",
+  "catalogUnreachable": "The server does not answer (a restart?).",
+  "retry": "Retry",
   "materialsViewMenu": "Materials and part catalogues",
   "materialsViewMaterials": "Materials",
   "materialsViewBearings": "Bearings",
@@ -263,8 +264,6 @@
   "currentPerSetHead": "Phase current RMS PER SET: two in-phase sets, each on its own controller. Both sets together carry twice this.",
   "currentBothSets": "both sets: {a} A",
   "byDie": {
-    "switch": "By die",
-    "switchTip": "Show the catalog by die: the family, each lamination, and under it its motors by the standard name",
     "solid": "solid magnet",
     "slice": "magnet in {mm} mm slices",
     "noNameTip": "No standard name yet: the stored configuration name is shown",
@@ -315,6 +314,8 @@
       "insulation": "Slot insulation"
     },
     "decodeTip": "How to read this name, and the materials",
-    "massTip": "Motor mass ({duty})"
+    "massTip": "Motor mass ({duty})",
+    "namePending": "standard name pending",
+    "otherMotors": "Other motors"
   }
 }

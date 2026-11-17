@@ -98,6 +98,10 @@ def test_the_tree_names_each_motor_and_a_customer_never_gets_an_incomplete_name(
     assert "rotor" in staff["designation_unknown"] and staff["beside"]["steel"] == "20SW1200"
     member = _row(env["a"])                                                   # a granted account, the same cached row
     assert member["designation"] is None and member["designation_unknown"] == []
+    # one catalog for everybody (owner 2026-11-17): the member's tree carries no project, production or stage of anybody
+    tree = client.get("/api/family/tree", headers=env["a"]).text
+    for key in ('"projects"', '"productions"', '"stage"', '"linked_motors"'):
+        assert key not in tree, key
     assert member["beside"]["magnet"] == "N42SH"
 
 
@@ -121,3 +125,16 @@ def test_a_run_row_names_its_air_gap_rows():
     entry = {"runs": {"current": {"settings": {"sim.stepsPP": 48, "mesh.gapLayers": 1}, "result": {"ripple_pct": 5.0}}}}
     rows = fam._run_rows("sig", entry)
     assert rows and rows[0]["steps"] == 48 and rows[0]["gap_layers"] == 1
+
+
+def test_a_customer_sees_the_family_and_length_of_an_incomplete_name_never_the_stored_name():
+    """Owner 2026-11-17 (one catalog for everybody): a plain user sees no stored name with a suffix, anywhere."""
+    assert MD.partial_name("CIANO28 80_12 ?R4SY") == "CIANO28 80_12"
+    assert MD.partial_name("CIA?O28 80_12 60R4SY") is None
+    assert MD.partial_name("CIANO28 80_?? 60R4SY") == "CIANO28 80"
+    assert MD.partial_name(None) is None
+    dies = [{"name": "CIANO28 80_11 vadim 5", "configs": [{"name": "L12-F475", "designation": "CIANO28 80_12 ?R4SY",
+                                                          "designation_complete": False, "designation_unknown": ["turns"]}]}]
+    member = MD.catalog_view(dies, staff=False, revisions={})[0]["configs"][0]
+    assert member["designation"] is None and member["display_name"] == "CIANO28 80_12"
+    assert "display_name" not in MD.catalog_view(dies, staff=True, revisions={})[0]["configs"][0]

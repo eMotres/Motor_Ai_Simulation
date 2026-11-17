@@ -24,7 +24,6 @@ import { useProjectHighlightStore } from '../../stores/projectHighlightStore';
 import HelpTip from '../common/HelpTip';
 import { TextPromptDialog, type TextPromptState } from '../common/PromptDialogs';
 import { fetchFamilyTree, peekFamilyTree, SIGN_IN_NOTE } from '../../lib/familyTree';
-import { useRememberedView } from '../../lib/useRememberedView';
 import { APPLICATIONS, catalogDiameters, parseApplicationFilter, type ApplicationFilter } from '../../lib/applications';
 import { useScrollMemory } from '../../lib/scrollMemory';
 import { useTranslation } from 'react-i18next';
@@ -39,6 +38,8 @@ import { HeaderRight } from '../common/PanelHeader';
 const tx = nsT('motors');
 
 const API = import.meta.env.VITE_API_URL ?? 'http://localhost:8001';
+/** Failed tree loads in a row (3 s apart) before the page says so: about the 20 s an API restart takes on a deploy. */
+export const LOAD_QUIET_FAILURES = 7;
 
 const MotorsCatalog: React.FC = () => {
   useTranslation('motors'); // re-render on language change; lazy-loads the namespace
@@ -47,18 +48,6 @@ const MotorsCatalog: React.FC = () => {
   // reloads (user 2026-09-13).
   const rootRef = useRef<HTMLDivElement>(null);
   useScrollMemory('motors', rootRef, 'parent');
-  // Each Ø section folds on a click of its header and stays folded across
-  // tab switches and reloads (user 2026-09-13: "you click 200 —
-  // the whole list dumps out, click again — it closes").
-  const [folded, setFolded] = useState<Record<string, boolean>>(() => {
-    try { return JSON.parse(localStorage.getItem('motors.folded') || '{}') || {}; }
-    catch { return {}; }
-  });
-  const toggleFold = (d: number) => setFolded(prev => {
-    const next = { ...prev, [String(d)]: !prev[String(d)] };
-    try { localStorage.setItem('motors.folded', JSON.stringify(next)); } catch { /* storage blocked */ }
-    return next;
-  });
   // Application filter (owner 2026-10-13): all / propeller / robot / aviation / marine.
   const [appFilter, setAppFilter] = useState<ApplicationFilter>(() => {
     try { return parseApplicationFilter(localStorage.getItem('motors.application')); } catch { return 'all'; }
@@ -75,6 +64,9 @@ const MotorsCatalog: React.FC = () => {
   // `loaded` = the tree has ANSWERED once; `failed` = the last attempt did not.  Until then the page must not claim "no motors".
   const [loaded, setLoaded] = useState(() => peekFamilyTree() !== null);
   const [failed, setFailed] = useState(false);
+  // a deploy restarts the API for about 20 s: the first failed answers are retried quietly, the line shows after
+  // LOAD_QUIET_FAILURES in a row (owner 2026-11-17: the green "catalog load failed" read as a success)
+  const failures = useRef(0);
   // The backend's one-line reason for an empty catalog (a signed-in account
   // with no motors granted yet) — shown instead of the vendor's "no dies yet".
   const [note, setNote] = useState<string | null>(null);
@@ -90,7 +82,7 @@ const MotorsCatalog: React.FC = () => {
         setNote(typeof t.note === 'string' ? t.note : null);
         setNoteCode(typeof t.note_code === 'string' ? t.note_code : null);
         setAllDies((t.dies || []) as never);
-        setLoaded(true); setFailed(false);
+        setLoaded(true); setFailed(false); failures.current = 0;
       })
       .catch((e: { status?: number }) => {
         // 401 = this server keeps nothing public (PUBLIC_EXHIBIT=0) and nobody
@@ -98,7 +90,8 @@ const MotorsCatalog: React.FC = () => {
         // session, it just hammers the door while the user reads the message.
         if (e?.status === 401) { setCanWrite(false); setAllDies([]); setLoaded(true); setFailed(false); setNote(SIGN_IN_NOTE); return; }
         // Any other failure keeps the dies already on screen (a failed REFRESH used to blank the page) and retries.
-        setFailed(true);
+        failures.current += 1;
+        if (failures.current >= LOAD_QUIET_FAILURES) setFailed(true);
         // Backend away (a restart window): retry instead of freezing a wrong
         // answer — a failed first load left an ADMIN's catalog stripped of
         // its lock/duplicate buttons until a manual F5 (measured live
@@ -116,10 +109,6 @@ const MotorsCatalog: React.FC = () => {
   // The page can mount BEFORE /api/me has answered, or outlive a sign-in / sign-out: the tree is per account, so a change of
   // identity re-reads it (and tells the Ø sections, which hold their own copy, through the same event as every mutation).
   const { user, role, isAdmin, enforced, resolved } = useAuth();
-  // the catalog by die (owner 2026-11-17, "in the style of the Overview"): ONE switch for the whole tab, admins only for now;
-  // with it on, one view holds every die (family headers across all diameters) instead of the Ø sections
-  const [byDie, setByDie] = useRememberedView<boolean>('motors.byDie', false, (r) => (typeof r === 'boolean' ? r : null));
-  const showByDie = isAdmin && byDie;
   const identity = `${user?.email ?? ''}|${role}|${isAdmin}|${enforced}|${resolved}`;
   const lastIdentity = useRef(identity);
   useEffect(() => {
@@ -159,37 +148,30 @@ const MotorsCatalog: React.FC = () => {
 
   return (
     <Box ref={rootRef}>
-      <HeaderRight tab="motors"><HelpTip title={tx('everythingGroupedByStatorDiameterA')} /></HeaderRight>
-      <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75, mb: 1.5 }}>
-        <Box sx={{ flex: 1 }} />
-        <ProjectHighlightSelect />
-        <Tooltip title={tx('applications.filterTip')}>
-          <select value={appFilter} onChange={(e) => pickFilter(e.target.value)} aria-label={tx('applications.label')}
-            style={{ fontSize: 11, padding: '1px 4px', background: 'transparent', color: 'var(--text-2)',
-                     border: '1px solid var(--line-soft)', borderRadius: 4 }}>
-            <option value="all">{tx('applications.all')}</option>
-            {APPLICATIONS.map((a) => <option key={a} value={a}>{tx(`applications.${a}`)}</option>)}
-          </select>
-        </Tooltip>
-        {isAdmin && (
-          <Tooltip title={tx('byDie.switchTip')}>
-            <Button size="small" variant={byDie ? 'contained' : 'outlined'} data-testid="by-die-switch" aria-pressed={byDie}
-              onClick={() => setByDie(!byDie)} sx={{ textTransform: 'none', fontSize: 11, py: 0, minHeight: 24 }}>
-              {tx('byDie.switch')}
-            </Button>
+      {/* the controls sit IN the title line (owner 2026-11-17: no tall band that holds only controls); they wrap there when
+          they do not fit */}
+      <HeaderRight tab="motors">
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75, flexWrap: 'wrap', justifyContent: 'flex-end' }} data-testid="motors-controls">
+          {dieMsg && (
+            <Typography sx={{ fontSize: 11, color: dieMsg.startsWith('✗') ? '#f87171' : '#34d399' }}>{dieMsg}</Typography>
+          )}
+          <ProjectHighlightSelect />
+          <Tooltip title={tx('applications.filterTip')}>
+            <select value={appFilter} onChange={(e) => pickFilter(e.target.value)} aria-label={tx('applications.label')}
+              style={{ fontSize: 11, padding: '1px 4px', background: 'transparent', color: 'var(--text-2)',
+                       border: '1px solid var(--line-soft)', borderRadius: 4 }}>
+              <option value="all">{tx('applications.all')}</option>
+              {APPLICATIONS.map((a) => <option key={a} value={a}>{tx(`applications.${a}`)}</option>)}
+            </select>
           </Tooltip>
-        )}
-        {dieMsg && (
-          <Typography sx={{ fontSize: 11,
-            color: dieMsg.startsWith('✗') ? '#fca5a5' : '#34d399' }}>{dieMsg}</Typography>
-        )}
-        {canWrite && (
-          <Button size="small" variant="outlined" onClick={createDie}
-            sx={{ textTransform: 'none', fontSize: 11 }}>
-            ＋ die from current geometry
-          </Button>
-        )}
-      </Box>
+          {canWrite && (
+            <Button size="small" variant="outlined" onClick={createDie} sx={{ textTransform: 'none', fontSize: 11, py: 0, minHeight: 24 }}>
+              ＋ die from current geometry
+            </Button>
+          )}
+          <HelpTip title={tx('everythingGroupedByStatorDiameterA')} />
+        </Box>
+      </HeaderRight>
       <TextPromptDialog state={askDie} onClose={() => setAskDie(null)} />
 
       {/* The signed-in user's private space — above the shared catalog.
@@ -210,9 +192,15 @@ const MotorsCatalog: React.FC = () => {
       ) : diams.length === 0 && (() => {
         const line = emptyCatalogLine({ loaded, failed, note, canWrite });
         return (
-          line === 'note' && noteCode === 'no_motors_granted' ? <StartProject /> : <Typography sx={{ fontSize: 11, color: line === 'unreachable' ? '#f59e0b' : 'var(--text-4)' }}>
+          line === 'unreachable' ? (
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }} data-testid="catalog-load-failed">
+              <Typography sx={{ fontSize: 11.5, color: '#f87171' }}>{tx('catalogUnreachable')}</Typography>
+              <Button size="small" onClick={() => { failures.current = 0; void load(true); }} sx={{ textTransform: 'none', fontSize: 11, minWidth: 0, py: 0 }}>
+                {tx('retry')}
+              </Button>
+            </Box>
+          ) : line === 'note' && noteCode === 'no_motors_granted' ? <StartProject /> : <Typography sx={{ fontSize: 11, color: 'var(--text-4)' }}>
             {line === 'loading' ? tx('catalogLoading')
-              : line === 'unreachable' ? tx('catalogUnreachable')
               : line === 'note' ? note
               : line === 'noMotors' ? tx('noMotorsAssigned')
               : 'no dies yet — freeze the current geometry with the button above'}
@@ -220,22 +208,8 @@ const MotorsCatalog: React.FC = () => {
         );
       })()}
 
-      {showByDie && allDies.length > 0 && <FamilyCatalog embedded byDie application={appFilter} />}
-      {!showByDie && diams.map(d => (
-        <Box key={d} sx={{ p: 2, mb: 2, borderRadius: 2,
-                           border: '1px solid var(--line-soft)',
-                           bgcolor: 'var(--panel-2)' }}>
-          <Box onClick={() => toggleFold(d)} role="button" aria-expanded={!folded[String(d)]}
-               sx={{ display: 'flex', alignItems: 'center', gap: 1,
-                     mb: folded[String(d)] ? 0 : 1.25, cursor: 'pointer', userSelect: 'none' }}>
-            <Typography sx={{ fontWeight: 800, color: '#60a5fa', fontSize: '1rem' }}>
-              {folded[String(d)] ? '▸' : '▾'} Ø {d} mm
-            </Typography>
-            <Box sx={{ flex: 1, height: '1px', bgcolor: 'var(--panel)' }} />
-          </Box>
-          {!folded[String(d)] && <FamilyCatalog embedded diameter={d} application={appFilter} />}
-        </Box>
-      ))}
+      {/* THE Motors catalog, the same for every role (owner 2026-11-17): family headers sorted by stator OD, no Ø folds */}
+      {allDies.length > 0 && <FamilyCatalog embedded application={appFilter} />}
     </Box>
   );
 };

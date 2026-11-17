@@ -34,11 +34,11 @@ test('card / older-build tooltip line: date, older build, nothing without a card
 });
 
 test('a die row carries the marker for open AND closed, drawn for every row', () => {
-  assert.match(family, /<OpennessMarker die=\{die\} \/>/);
+  assert.match(family, /<OpennessMarker die=\{d\} \/>/);
   assert.match(family, /kind === 'open' \? PublicOutlinedIcon : LockOutlinedIcon/);
   assert.match(family, /data-openness=\{kind\}/);
   // not behind canWrite / isAdmin: clients see it too
-  const at = family.indexOf('<OpennessMarker die={die} />');
+  const at = family.indexOf('<OpennessMarker die={d} />');
   assert.doesNotMatch(family.slice(Math.max(0, at - 60), at), /canWrite/);
 });
 
@@ -49,15 +49,14 @@ test('no coloured card chip, no older-build chip and no red retire link in the r
   assert.doesNotMatch(family, /die\.locked \? '🔒 ' : ''/);
 });
 
-test('"Retire for all users" is reachable for admins from the die row menu with the same confirm flow', () => {
-  // the menu is on every die for an admin (2026-11-17: "Archive" for a workspace / published die); Retire stays shared-only
-  assert.match(family, /canWrite && isAdmin && \([\s\S]{0,400}data-testid="die-menu-button"/);
-  assert.match(family, /shared: die\.layer === 'shared'/);
-  assert.match(family, /dieMenu\?\.shared \?[\s\S]{0,200}data-testid="retire-die-item"[\s\S]{0,300}retireDie\(d\)/);
-  assert.match(family, /data-testid="archive-die-item"[\s\S]{0,300}archiveDie\(d\)/);
-  assert.match(family, /\/api\/die-archive\/\$\{encodeURIComponent\(name\)\}\/archive`, \{ confirm: name \}/);
+test('"Retire for all users" is reachable for admins from the die menu with the same confirm flow', () => {
+  // one catalog (2026-11-17): the die menu of the by-die block (CatalogByDie.dieMenuItems) - Retire for a shared die, Archive else
+  const byDie = readFileSync(new URL('../CatalogByDie.tsx', import.meta.url), 'utf8');
+  assert.match(byDie, /who\.isAdmin \? \[\{ key: 'arc', label: die\.layer === 'shared' \? t\('retireDieConfirm'\) : t\('archiveDieConfirm'\)/);
+  assert.match(family, /retireOrArchive: \(n\) => \(dieOf\(n\)\?\.layer === 'shared' \? retireDie\(n\) : archiveDie\(n\)\)/);
   assert.match(family, /const retireDie = \(name: string\) =>/);
   assert.match(family, /\/retire`, \{ confirm: name \}/);
+  assert.match(family, /\/api\/die-archive\/\$\{encodeURIComponent\(name\)\}\/archive`, \{ confirm: name \}/);
 });
 
 test('EN and ZH carry the new strings; the dead link label is gone from both', () => {

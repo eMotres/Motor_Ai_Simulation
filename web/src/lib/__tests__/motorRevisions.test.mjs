@@ -53,7 +53,8 @@ test('wiring: the letter is plain text next to the name in the catalogue row, th
   const text = read('../../components/common/MotorRevisionText.tsx');
   assert.match(text, /t\('revisions\.label', \{ rev \}\)/);
   assert.doesNotMatch(text, /<Chip|bgcolor|color:/);                                // uniform row style: no chip, no colour
-  assert.match(read('../../components/catalog/FamilyCatalog.tsx'), /\{c\.name\}\s*<MotorRevisionText die=\{die\.name\} config=\{c\.name\} \/>/);
+  // the one catalog (2026-11-17) shows the motor by its designation, which carries "Rev X" (motor_designation.catalog_view)
+  assert.match(read('../../components/catalog/CatalogByDie.tsx'), /\{m\.label \|\| t\('byDie\.namePending'\)\}/);
   assert.match(read('../../modules/development/components/DevelopmentPage.tsx'), /\{r\.variant\}<MotorRevisionText die=\{r\.motor\.die\} config=\{r\.motor\.config\} canonicalDie=\{r\.motor\.canonical_die\} \/>/);
   const page = read('../../modules/production/components/ProductionPage.tsx');
   assert.match(page, /\{die\} \/ \{config\}<RevisionLabel rev=\{prod\?\.product_revision\?\.rev\} \/>/);          // the page title

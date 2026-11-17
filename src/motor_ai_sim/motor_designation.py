@@ -413,10 +413,27 @@ def catalog_view(dies: List[Dict[str, Any]], *, staff: bool, revisions: Optional
             if c.get("designation") and rev:
                 c["designation"] = f"{c['designation']} Rev {rev}"
             if not c.get("designation_complete") and not staff:
+                # never the incomplete name, and never the stored name with a suffix (owner 2026-11-17): the family and
+                # the length when they are known ("CIANO28 80_12"), else nothing (the row says "name pending")
+                c["display_name"] = partial_name(c.get("designation"))
                 c["designation"], c["designation_unknown"] = None, []
             cfgs.append(c)
         out.append({**d, "configs": cfgs, "family": die_family(d)})
     return out
+
+
+def partial_name(designation: Any) -> Optional[str]:
+    """``<family>_<length>`` of an incomplete designation when neither part has a "?" (``CIANO28 80_12``), else the family
+    alone when it has none, else None: what a customer is shown for a motor whose standard name is not complete yet."""
+    text = str(designation or "")
+    head = text.split(" ")
+    if len(head) < 2:
+        return None
+    family_len = f"{head[0]} {head[1]}"
+    if "?" not in family_len:
+        return family_len
+    fam = f"{head[0]} {head[1].split('_')[0]}"
+    return fam if "?" not in fam else None
 
 
 def die_family(die_row: Mapping[str, Any]) -> Optional[str]:

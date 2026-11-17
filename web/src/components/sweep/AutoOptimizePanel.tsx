@@ -323,7 +323,7 @@ const AutoOptimizePanel: React.FC = () => {
           </Typography>
         )}
 
-        <Box sx={{ mt: 1.25 }}><MeshPresetSelect dense /></Box>
+        <Box sx={{ mt: 1.25 }}><MeshPresetSelect dense readOnly /></Box>
         {plan && !running && (
           <Box sx={{ mt: 1.25, display: 'flex', gap: 0.75, flexWrap: 'wrap', alignItems: 'center' }}>
             <Chip size="small" variant="outlined" sx={{ height: 22, fontSize: 10.5 }}

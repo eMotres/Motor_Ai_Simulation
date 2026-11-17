@@ -2756,7 +2756,7 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
               above (the panel scrolls if needed); no bottom-pin, which used to
               leave a big empty gap now that the cooling/PINN sections are gone. ── */}
         <Box sx={{ pt: 1 }}>
-          <Box sx={{ mb: 1.25 }}><MeshPresetSelect dense /></Box>
+          <Box sx={{ mb: 1.25 }}><MeshPresetSelect dense readOnly /></Box>
           <FormControl size="small" fullWidth sx={{ mb: 1.25 }} disabled={simBusy}>
             <InputLabel id="steps-pp-label">{tx('stepsPerElectricalPeriod')}</InputLabel>
             <Select

@@ -259,5 +259,6 @@
   "meshPresetOuterAir": "外部空气",
   "meshPresetSector": "扇区",
   "meshPresetFullRing": "整圈",
-  "meshPresetWireCell": "线单元"
+  "meshPresetWireCell": "线单元",
+  "meshPresetOpenMesh": "请在“网格”标签页切换预设"
 }

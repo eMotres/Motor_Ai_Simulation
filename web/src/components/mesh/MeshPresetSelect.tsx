@@ -4,9 +4,10 @@
  * every manual control stays; a manual change reads "custom".
  */
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { MenuItem, Select, Tooltip, Box, Typography } from '@mui/material';
+import { MenuItem, Select, Tooltip, Box, Typography, Chip } from '@mui/material';
 import { useTranslation } from 'react-i18next';
 import { nsT } from '../../i18n/nsT';
+import { useUIStore } from '../../stores/uiStore';
 import {
   applyPreset, fetchMeshPresets, matchPreset, readCurrentSettings,
   type PresetChoice, type PresetSet, type ResolvedPreset,
@@ -29,8 +30,9 @@ function numbersOf(p: ResolvedPreset): string {
   ].join(' · ');
 }
 
-export const MeshPresetSelect: React.FC<{ dense?: boolean }> = ({ dense = false }) => {
-  useTranslation('simulation');                       // re-render on language change; lazy-loads the namespace
+export const MeshPresetSelect: React.FC<{ dense?: boolean; readOnly?: boolean }> = ({ dense = false, readOnly = false }) => {
+  useTranslation('simulation');
+  const goToTab = useUIStore((st: any) => st.setActiveTab);                       // re-render on language change; lazy-loads the namespace
   const [set, setSet] = useState<PresetSet | null>(null);
   const [failed, setFailed] = useState(false);
   const [tick, setTick] = useState(0);
@@ -51,6 +53,16 @@ export const MeshPresetSelect: React.FC<{ dense?: boolean }> = ({ dense = false 
   const tip = set
     ? set.presets.map(p => `${p.label}: ${numbersOf(p)}`).join('\n') + `\n${tx('meshPresetVersion')} ${set.version}`
     : (failed ? tx('meshPresetUnavailable') : '');
+  if (readOnly) {
+    // The preset is switched in ONE place, the Mesh tab (owner 2026-11-17); here it only shows which one is active.
+    const label = set?.presets.find(p => p.name === choice)?.label ?? tx('meshPresetCustom');
+    return (
+      <Tooltip title={<span style={{ whiteSpace: 'pre-line' }}>{(tip ? tip + '\n' : '') + tx('meshPresetOpenMesh')}</span>} placement="right">
+        <Chip size="small" variant="outlined" clickable label={`${tx('meshPresetLabel')}: ${label}`}
+          onClick={() => goToTab('mesh' as never)} sx={{ height: 22, fontSize: 11 }} />
+      </Tooltip>
+    );
+  }
   return (
     <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75 }}>
       <Typography sx={{ fontSize: dense ? 11 : 12, color: 'var(--text-2)' }}>{tx('meshPresetLabel')}</Typography>

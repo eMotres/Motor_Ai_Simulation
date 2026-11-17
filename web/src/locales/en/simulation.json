@@ -259,5 +259,6 @@
   "meshPresetOuterAir": "outer air",
   "meshPresetSector": "sector",
   "meshPresetFullRing": "full ring",
-  "meshPresetWireCell": "wire cell"
+  "meshPresetWireCell": "wire cell",
+  "meshPresetOpenMesh": "Switch the preset on the Mesh tab"
 }

@@ -39,3 +39,8 @@ complete. Only motors of the shared catalog can be flagged.
 from, problems and the "what the site will show" preview; PUT takes `show`, `availability`, `lead_time_text`, `slug`, `price_text`,
 `image_url`, `points`, `rated_point`). The record lives in `<shared>/object_registry/site_publication.json`, never in a `die.yaml`;
 a die rename or a configuration move carries it.
+
+## Closed dies
+
+A die that is not in the open data set (a customer's closed motor) cannot be shown unless an admin records why in `closed_reason`
+(stored as `closed_ok {reason, by, at}` in the site record, never in the public answer); clearing the reason takes the motor off the site.

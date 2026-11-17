@@ -121,6 +121,7 @@ class SiteChange(BaseModel):
     image_url: Optional[str] = Field(default=None, max_length=500)
     points: Optional[List[str]] = None
     rated_point: Optional[str] = Field(default=None, max_length=120)
+    closed_reason: Optional[str] = Field(default=None, max_length=400)      # why a CLOSED die may be public (empty clears it)
 
 
 @admin_router.put("/{die}/{config}")

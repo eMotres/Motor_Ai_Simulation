@@ -53,6 +53,7 @@ def env(tmp_path, monkeypatch):
     monkeypatch.setenv("MOTRES_OBJECT_REGISTRY_ROOT", str(tmp_path / "registry"))
     monkeypatch.setenv("ADMIN_AUDIT_FILE", str(tmp_path / "audit.jsonl"))
     from motor_ai_sim import motor_access as MA
+    monkeypatch.setattr(fam, "_die_source_of", lambda d: "open")              # the synthetic die is in the open data set
     monkeypatch.setattr(MA, "_DIE_ACCESS_FILE", tmp_path / "die_access.json")
     monkeypatch.delitem(fam.__dict__, "_DIES_DIR", raising=False)
     fam._TREE_CACHE.clear()
@@ -263,3 +264,17 @@ def test_the_derived_slug_is_fixed_at_the_first_publish(env):
     assert second != first                                                          # equal designations never share a slug
     assert _put(env, lead_time_text="4 weeks").status_code == 200
     assert SP.record_of(DIE, CFG)["slug"] == first
+
+
+def test_a_closed_die_is_public_only_by_an_explicit_admin_decision(env, monkeypatch):
+    from motor_ai_sim.routes import family as fam
+    monkeypatch.setattr(fam, "_die_source_of", lambda d: "private")
+    r = _put(env, show=True, availability="to_order")
+    assert r.status_code == 422 and "closed" in r.json()["detail"]
+    r = _put(env, show=True, availability="to_order", closed_reason="customer agreed to the public listing, owner 2026-11-17")
+    assert r.status_code == 200 and r.json()["record"]["closed_ok"]["reason"].startswith("customer agreed") and r.json()["record"]["closed_ok"]["by"]
+    assert client.get("/api/public/site/motors").json()["count"] == 1
+    assert "closed_ok" not in client.get("/api/public/site/motors").text and "customer agreed" not in client.get("/api/public/site/motors").text
+    assert _put(env, closed_reason="").status_code == 200                      # withdrawing the decision takes it off the site
+    SP._CACHE.clear()
+    assert client.get("/api/public/site/motors").json()["count"] == 0

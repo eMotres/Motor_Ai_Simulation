@@ -80,6 +80,7 @@ def record_of(die: str, config: str, motors: Optional[Dict[str, Any]] = None) ->
             "availability": r.get("availability") if r.get("availability") in AVAILABILITY else None,
             "lead_time_text": _text(r.get("lead_time_text")), "slug": str(r.get("slug") or ""),
             "price_text": _text(r.get("price_text")), "image_url": str(r.get("image_url") or ""),
+            "closed_ok": r.get("closed_ok") if isinstance(r.get("closed_ok"), dict) else None,
             "points": [str(x) for x in (r.get("points") or []) if str(x)],
             "rated_point": str(r.get("rated_point") or ""),
             "updated_at": str(r.get("updated_at") or ""), "updated_by": str(r.get("updated_by") or "")}
@@ -116,8 +117,11 @@ def set_record(die: str, config: str, fields: Dict[str, Any], *, by: str) -> Dic
         upd["points"] = list(dict.fromkeys(_text(p) for p in pts if _text(p)))[:50]
     if "rated_point" in fields:
         upd["rated_point"] = _text(fields["rated_point"])
+    if "closed_reason" in fields:
+        reason = _text(fields["closed_reason"])
+        upd["closed_ok"] = {"reason": reason, "by": str(by or ""), "at": _now()} if reason else None
     if upd.get("show"):
-        blocked = blockers(die, config)
+        blocked = blockers(die, config, {**record_of(die, config), **upd})
         if blocked:
             raise ValueError("cannot show on the site: " + "; ".join(blocked))
     if upd.get("availability") == "in_production" and _production_state(die, config) != "in_production":
@@ -201,9 +205,10 @@ def _shared_docs(die: str, config: str) -> Optional[Tuple[Dict[str, Any], Dict[s
         return None
 
 
-def blockers(die: str, config: str) -> List[str]:
+def blockers(die: str, config: str, rec: Optional[Dict[str, Any]] = None) -> List[str]:
     """What forbids showing this motor on the public site, whatever the flag says: a retired shared die, a private
-    configuration, a die the owner opened to selected clients only (the access rules of ``motor_access``)."""
+    configuration, a die the owner opened to selected clients only (the access rules of ``motor_access``), and a CLOSED die
+    (not in the open data set: a customer's motor) unless the record carries an explicit admin decision ``closed_ok``."""
     out: List[str] = []
     try:
         from motor_ai_sim import motor_access as MA
@@ -215,6 +220,10 @@ def blockers(die: str, config: str) -> List[str]:
             out.append("the configuration is private")
         if MA.get_die_access(die).get("visibility") == MA.VIS_SELECTED:
             out.append("the die is open to selected clients only")
+        from motor_ai_sim.routes import family as fam
+        from motor_ai_sim.workspace import shared_root
+        if fam._die_source_of(Path(str(shared_root())) / "dies" / die) != "open" and not ((rec or {}).get("closed_ok") or {}).get("reason"):
+            out.append("the die is closed (not in the open data set): an admin must record why it may be public (closed_ok)")
     except Exception:                                       # noqa: BLE001 - when the rules cannot be read, nothing is published
         out.append("the access rules could not be read")
     return out
@@ -239,7 +248,7 @@ def build_motor(die: str, config: str, rec: Dict[str, Any], *, registry: Optiona
     from motor_ai_sim import motor_designation as md
     from motor_ai_sim.duty_kind import is_test_duty
     des = md.describe(die, die_doc, cfg_doc)
-    blocked = blockers(die, config)
+    blocked = blockers(die, config, rec)
     if blocked:
         return None, blocked
     if rec.get("availability") == "in_production" and _production_state(die, config) != "in_production":

@@ -2222,6 +2222,16 @@ def run_rotor_stress_at(temps: Dict[str, float],
         # saved panel, then the route's own default of the whole rotor.
         symmetry=str(route_params.get("symmetry")
                      or ps.get("symmetry") or "full"),
+        # Every Query() default the hook does not state would arrive as the
+        # FastAPI Query object outside an HTTP request (the pull one made
+        # _resolve_pull answer 422 on every coupled run, 2026-11-17).  The pull
+        # is stated here: the caller's, else none.  ``fresh`` keeps what the
+        # hook always did (the Query object is truthy: always a new solve).
+        pull=str(route_params.get("pull") or "none"),
+        pull_duty=route_params.get("pull_duty"),
+        pull_mpa=route_params.get("pull_mpa"),
+        pull_b_gap_t=route_params.get("pull_b_gap_t"),
+        fresh=bool(route_params.get("fresh", True)),
         geo=route_params.get("geo"),
     )
     # THE LIMIT SPEED, AUTOMATIC (owner 2026-09-21: "this maximum rotation

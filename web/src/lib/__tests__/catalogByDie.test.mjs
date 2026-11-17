@@ -116,11 +116,14 @@ test('table columns: values per column, header-click sorting inside a die block,
 });
 
 // ── the admin's stage, project state and running work (owner 2026-11-17) ───────────────────────────────────────────
-test('stage: production, else computed, else the current project\'s stage; state: the most current link', async () => {
+test('stage: the server\'s one derived stage; an older server: a production RECORD is confirmation, never production', async () => {
   const { motorStage, motorState } = await import('../catalogByDie.ts');
   const p = (stage, state = 'active', trial = false) => ({ id: stage, title: stage, trial, stage, state });
-  assert.equal(motorStage({ productions: [{ status: 'active', rev: '1', state: 'active' }], computed: true, projects: [p('design')] }), 'in_production');
-  assert.equal(motorStage({ productions: [], computed: true, projects: [p('design')] }), 'computed');
+  const prod = [{ status: 'active', rev: '1', state: 'active' }];
+  assert.equal(motorStage({ productions: prod, computed: true, projects: [], stage: 'finished' }), 'finished');
+  assert.equal(motorStage({ productions: prod, computed: true, projects: [], stage: null }), null);         // the server says: nothing
+  assert.equal(motorStage({ productions: prod, computed: true, projects: [p('design')] }), 'confirmation');  // owner 2026-11-17
+  assert.equal(motorStage({ productions: [], computed: true, projects: [p('design')] }), 'simulation');
   assert.equal(motorStage({ productions: [], computed: false, projects: [p('quote', 'active', true), p('design')] }), 'design');
   assert.equal(motorStage({ productions: [], computed: false, projects: [] }), null);
   assert.equal(motorState({ projects: [p('a', 'archived'), p('b', 'parked')], productions: [] }), 'parked');
@@ -152,12 +155,12 @@ test('a job chip names kind, server, queued and progress', async () => {
 });
 
 // ── filters and saved sets (owner 2026-11-17) ──────────────────────────────────────────────────────────────────────
-test('filters combine with AND: stage (in simulation = computed + simulation), projects, running, the highlighted project', async () => {
+test('filters combine with AND: stage (simulation and confirmation apart), projects, running, the highlighted project', async () => {
   const { applyFilters, motorCount, NO_FILTER, stageOptions, projectOptions } = await import('../catalogByDie.ts');
   const ov = {
-    items: { 'D/A': { projects: [{ id: 'p1', link_status: 'current' }], productions: ['D/A'] },
-             'D/B': { projects: [{ id: 'p1', link_status: 'current' }], productions: [], computed: true },
-             'D/C': { projects: [{ id: 'p2', link_status: 'current' }], productions: [] } },
+    items: { 'D/A': { projects: [{ id: 'p1', link_status: 'current' }], productions: ['D/A'], stage: 'in_production' },
+             'D/B': { projects: [{ id: 'p1', link_status: 'current' }], productions: [], computed: true, stage: 'simulation' },
+             'D/C': { projects: [{ id: 'p2', link_status: 'current' }], productions: [], stage: 'confirmation' } },
     projects: { p1: { id: 'p1', title: 'Pump', status: 'design', stage: 'design' }, p2: { id: 'p2', title: 'Fan', status: 'simulation', stage: 'simulation' } },
     productions: { 'D/A': { die: 'D', config: 'A', status: 'active', current_revision: '1' } } };
   const ds = [{ name: 'D', stator_diameter: 40, configs: ['A', 'B', 'C', 'E'].map((n, i) => cfg(n, `CIANO14 40_${10 + i} 7F2SY`)) }];
@@ -166,14 +169,16 @@ test('filters combine with AND: stage (in simulation = computed + simulation), p
     .flatMap((x) => x.blocks.flatMap((b) => b.motors.map((m) => m.config)));
   assert.deepEqual(names({}), ['A', 'B', 'C', 'E']);
   assert.deepEqual(names({ stages: ['in_production'] }), ['A']);
-  assert.deepEqual(names({ stages: ['simulation'] }).sort(), ['B', 'C']);              // computed + the project stage "simulation"
+  assert.deepEqual(names({ stages: ['simulation'] }), ['B']);                           // simulation and confirmation are apart
+  assert.deepEqual(names({ stages: ['confirmation'] }), ['C']);
+  assert.deepEqual(names({ stages: ['simulation', 'confirmation'] }).sort(), ['B', 'C']);
   assert.deepEqual(names({ projects: ['p1'] }).sort(), ['A', 'B']);
   assert.deepEqual(names({ running: true }), ['C']);
   assert.deepEqual(names({ onlyHighlighted: true }).sort(), ['A', 'E']);
   assert.deepEqual(names({ projects: ['p1'], onlyHighlighted: true }), ['A']);         // AND
   assert.deepEqual(names({ stages: ['quote'] }), []);
   assert.equal(motorCount(applyFilters(g, { ...NO_FILTER, stages: ['quote'] })), 0);
-  assert.deepEqual(stageOptions(g), ['simulation', 'in_production']);
+  assert.deepEqual(stageOptions(g), ['simulation', 'confirmation', 'in_production']);
   assert.deepEqual(projectOptions(g), [{ id: 'p2', title: 'Fan' }, { id: 'p1', title: 'Pump' }]);
 });
 

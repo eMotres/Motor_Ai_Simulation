@@ -8,7 +8,7 @@ import { Box, Button, Checkbox, Chip, ListItemText, Menu, MenuItem, Select, Tool
 import { useTranslation } from 'react-i18next';
 import { DisplayStateFilter } from '../common/DisplayStateControl';
 import { TextPromptDialog, type TextPromptState } from '../common/PromptDialogs';
-import { isFiltered, type StateFilter } from '../../lib/catalogByDie';
+import { isFiltered, stageKey, type StateFilter } from '../../lib/catalogByDie';
 import { useCatalogFilterStore } from '../../stores/catalogFilterStore';
 
 const ctl = { fontSize: 11, height: 24, '& .MuiSelect-select': { py: 0.25, pl: 1, fontSize: 11 } } as const;
@@ -18,8 +18,7 @@ const CatalogFilters: React.FC<{ isAdmin: boolean; highlightTitle: string | null
   const { filter, options, sets, activeSet, set, clear, saveSet, applySet, deleteSet } = useCatalogFilterStore();
   const [setsAnchor, setSetsAnchor] = useState<HTMLElement | null>(null);
   const [ask, setAsk] = useState<TextPromptState | null>(null);
-  const stageLabel = (s: string) => (s === 'in_production' ? t('common:overview.stageName.in_production')
-    : s === 'simulation' ? t('motors:byDie.filter.inSimulation') : t(`development:status.${s}`, { defaultValue: s }));
+  const stageLabel = (s: string) => t(stageKey(s), { defaultValue: s });
   const projectTitle = (id: string) => options.projects.find((p) => p.id === id)?.title ?? id;
   return (
     <Box data-testid="catalog-filters" sx={{ display: 'flex', alignItems: 'center', gap: 0.75, flexWrap: 'wrap' }}>

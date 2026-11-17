@@ -232,7 +232,8 @@ test('admin: stage and running work in their columns, the server strip, archived
   assert.equal((html.match(/data-testid="by-die-motor"/g) || []).length, 1);                    // the archived-only copy left
   assert.ok(html.includes('Pump project') && !html.includes('Old trial'), html);
   const stage = html.slice(html.indexOf('data-testid="by-die-stage"'));
-  assert.equal(text(stage.slice(stage.indexOf('>') + 1, stage.indexOf('</span>'))), 'Computed');   // the Overview's derived stage
+  // no server stage in this fixture: the fallback reads stored results as "Simulation" (never "Computed in production")
+  assert.equal(text(stage.slice(stage.indexOf('>') + 1, stage.indexOf('</span>'))), 'Simulation');
   assert.ok(html.includes('data-testid="by-die-project-chip"'), html);
 });
 
@@ -265,4 +266,16 @@ test('"no link: newest locked" is the chip "newest", the sentence only in its to
   assert.ok(chip.includes('>newest<') && /aria-label="no link: newest locked: No project/.test(chip), chip);
   assert.ok(!text(html).includes('no link: newest locked'), 'not in the cell');
   assert.ok(html.includes('data-testid="by-die-old"'));
+});
+
+test('the stage column reads the server\'s stage: a prepared production is "Confirmation", a finished one "Finished"', async () => {
+  const i18n = m.makeI18n('en'); await ready(i18n);
+  const ov = { items: { 'CILN28/G2-L40': { projects: [], productions: ['CILN28/G2-L40'], stage: 'finished' },
+      'CILN28 vadim 2/G2-L40 copy': { projects: [], productions: ['x'], stage: 'confirmation' } }, projects: {}, productions: {} };
+  const html = decode(m.render(i18n, { dies, isAdmin: true, overview: ov }));
+  const stages = [...html.matchAll(/data-testid="by-die-stage"[^>]*>([^<]*)</g)].map((x) => x[1]);
+  assert.deepEqual(stages.sort(), ['Confirmation', 'Finished']);
+  const zh = m.makeI18n('zh-CN'); await ready(zh);
+  const z = decode(m.render(zh, { dies, isAdmin: true, overview: ov }));
+  assert.deepEqual([...z.matchAll(/data-testid="by-die-stage"[^>]*>([^<]*)</g)].map((x) => x[1]).sort(), ['已完成', '确认中']);
 });

@@ -107,7 +107,9 @@ def test_stage_is_derived_and_board_projects_go_to_review():
                    {"die": "SIC", "config": "Rev A", "status": "active", "product_type": "electronics"}]
     out = build(projects, productions, {}, {}, has_results=lambda die, cfg: cfg == "B")
     stages = {pid: r["stage"] for pid, r in out["projects"].items()}
-    assert stages == {"hydro": "in_production", "calc": "computed", "sub": "spec_submitted", "ctl": "design", "gone": "closed"}
+    # owner 2026-11-17: a production RECORD alone is not production (prepared = waiting for the payment: confirmation); stored
+    # results are "simulation" (production_lifecycle / overview.motor_stage)
+    assert stages == {"hydro": "confirmation", "calc": "simulation", "sub": "spec_submitted", "ctl": "design", "gone": "closed"}
     assert out["items"]["D/B"]["computed"] is True and out["items"]["D/A"]["computed"] is False
     assert sorted(out["no_item_yet"]) == ["ctl", "sub"]
     rev = [r for r in out["review"] if r["code"] == "project_without_item"]

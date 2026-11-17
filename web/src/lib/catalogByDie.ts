@@ -26,7 +26,9 @@ export interface ByDieDie { name: string; created?: string; slots?: number | nul
   family?: string | null }
 /** The Overview's answer, only the parts this view reads (admins only: the route is admin-gated). */
 export interface ByDieOverview {
-  items: Record<string, { projects: Array<{ id: string; link_status: string }>; productions: string[]; computed?: boolean }>;
+  items: Record<string, { projects: Array<{ id: string; link_status: string }>; productions: string[]; computed?: boolean;
+    /** the ONE derived stage of the motor (server: routes/overview.motor_stage, owner 2026-11-17) */
+    stage?: string | null }>;
   projects: Record<string, { id: string; title: string; status: string; stage?: string; display?: { state?: string } }>;
   productions: Record<string, { die: string; config: string; status: string; current_revision: string; display?: { state?: string } }>;
 }
@@ -46,6 +48,8 @@ export interface MotorRow {
   computed: boolean;
   /** a project (current link) or a production links it */
   linked: boolean;
+  /** the server's derived stage (undefined: an older server, `motorStage` falls back) */
+  stage?: string | null;
   /** another motor with the same designation is the current one */
   old: boolean;
   /** this one is current only by the fallback (no link on any of the same name): the newest locked one */
@@ -153,6 +157,7 @@ export function buildByDie(dies: ByDieDie[], overview: ByDieOverview | null, opt
         die: d.name, config: c.name, label: named ? c.designation as string : staff ? c.name : (c.display_name || ''), named,
         complete: named && c.designation_complete !== false, unknown: c.designation_unknown ?? [],
         beside: c.beside ?? {}, projects, productions, computed: !!it?.computed, linked: false, old: false,
+        ...(it && 'stage' in it ? { stage: it.stage ?? null } : {}),
         newestLocked: false, locked: !!(c.locked || d.locked), created: String(d.created ?? ''), rated: null, values: null,
       };
       row.rated = ratedPoint(c);
@@ -242,11 +247,19 @@ export function sortMotors<M extends Pick<MotorRow, 'values'>>(motors: M[], key:
 
 // ── the admin's stage, project state and running work in the catalog (owner 2026-11-17) ─────────────────────────────
 
-/** The derived stage of a motor, the Overview's rule: a production makes it "in production", stored results "computed",
- *  else the stage of the first project that links it currently; null = nothing known. */
-export function motorStage(m: Pick<MotorRow, 'productions' | 'computed' | 'projects'>): string | null {
-  if (m.productions.length) return 'in_production';
-  if (m.computed) return 'computed';
+/** The derived stages, in order (owner 2026-11-17: "production starts when the money from the customer arrives"). */
+export const STAGE_IDS = ['specification', 'simulation', 'confirmation', 'in_production', 'finished'] as const;
+/** The i18n key of a stage: the derived ones in `common:overview.stageName`, a project status in `development:status`. */
+export const stageKey = (s: string): string => ((STAGE_IDS as readonly string[]).includes(s) || s === 'computed'
+  ? `common:overview.stageName.${s}` : `development:status.${s}`);
+
+/** The derived stage of a motor: the SERVER's (routes/overview.motor_stage, from stored facts: the production's lifecycle,
+ *  the offered flag, results, the submitted specification).  An older server without it: the old reading, which never
+ *  says "in production" for a mere production record any more. */
+export function motorStage(m: Pick<MotorRow, 'productions' | 'computed' | 'projects'> & { stage?: string | null }): string | null {
+  if (m.stage !== undefined) return m.stage;
+  if (m.productions.length) return 'confirmation';
+  if (m.computed) return 'simulation';
   const p = m.projects.find((x) => !x.trial) ?? m.projects[0];
   return p ? p.stage : null;
 }
@@ -311,8 +324,8 @@ export function jobChip(j: RunningJob): string {
  *  project's motors".  Empty lists = no restriction; everything combines with AND (and with the application filter). */
 export interface CatalogFilter { state: StateFilter; stages: string[]; projects: string[]; running: boolean; onlyHighlighted: boolean }
 export const NO_FILTER: CatalogFilter = { state: 'active', stages: [], projects: [], running: false, onlyHighlighted: false };
-/** "in simulation" groups the computed stage with the project stage `simulation` (the owner's words: "in simulation"). */
-export const STAGE_GROUPS: Record<string, string[]> = { simulation: ['computed', 'simulation'] };
+/** Filter values that stand for more than one stage; none since 2026-11-17 (simulation and confirmation are separate). */
+export const STAGE_GROUPS: Record<string, string[]> = {};
 
 export function isFiltered(f: CatalogFilter): boolean {
   return f.stages.length > 0 || f.projects.length > 0 || f.running || f.onlyHighlighted;
@@ -345,7 +358,7 @@ export function stageOptions(groups: FamilyGroup[]): string[] {
     const s = motorStage(m);
     if (s) seen.add(s === 'computed' ? 'simulation' : s);
   }
-  const order = ['spec', 'spec_submitted', 'design', 'simulation', 'quote', 'prototype', 'in_production', 'production', 'closed'];
+  const order = [...STAGE_IDS, 'spec', 'spec_submitted', 'design', 'quote', 'prototype', 'production', 'closed'];
   return [...seen].sort((a, b) => (order.indexOf(a) + 100) % 100 - (order.indexOf(b) + 100) % 100 || a.localeCompare(b));
 }
 

@@ -20,6 +20,8 @@ for (const lang of ['en', 'zh-CN']) {
     assert.deepEqual(bad, []);
   });
   test(`${lang}: the derived stage names exist`, () => {
-    for (const s of ['in_production', 'computed']) assert.equal(typeof lookup(locale(lang), `overview.stageName.${s}`), 'string');
+    for (const s of ['in_production', 'computed', 'specification', 'simulation', 'confirmation', 'finished']) {
+      assert.equal(typeof lookup(locale(lang), `overview.stageName.${s}`), 'string', s);
+    }
   });
 }

@@ -9,7 +9,7 @@ import MoreVertIcon from '@mui/icons-material/MoreVert';
 import PlayArrowIcon from '@mui/icons-material/PlayArrow';
 import { useTranslation } from 'react-i18next';
 import MotorThumbnail from './MotorThumbnail';
-import { applyFilters, buildByDie, COL_DIGITS, colValue, COLS, filterByState, jobChip, motorCount, motorStage, NAME_COL_W, nextSort,
+import { applyFilters, buildByDie, stageKey, COL_DIGITS, colValue, COLS, filterByState, jobChip, motorCount, motorStage, NAME_COL_W, nextSort,
   projectOptions, segmentationText, sortMotors, stageOptions, stateCounts, type ByDieDie, type ByDieOverview, type ColKey, type JobsAnswer, type MotorRow, type RunningJob, type ServerView, type Sort,
   type StateFilter } from '../../lib/catalogByDie';
 import { useCatalogFilterStore } from '../../stores/catalogFilterStore';
@@ -198,8 +198,7 @@ const CatalogByDie: React.FC<Props> = ({ dies, thumbs, rated, active, isAdmin, c
     );
   };
   const run = (fn: () => void) => () => { setDieMenu(null); setCfgMenu(null); setProjMenu(null); fn(); };
-  const stageLabel = (s: string | null) => (!s ? '' : s === 'in_production' || s === 'computed'
-    ? t(`common:overview.stageName.${s}`) : t(`development:status.${s}`, { defaultValue: s }));
+  const stageLabel = (s: string | null) => (!s ? '' : t(stageKey(s), { defaultValue: s }));
   const jobTip = (j: RunningJob) => t('byDie.job.tip', { tag: j.tag || '—', session: j.session || '—', since: j.started_at || '—',
     cpus: j.cpus_reserved ?? '—', used: j.cpu_used ?? '—', mem: j.mem_reserved_gb ?? '—', now: j.mem_now_gb ?? '—' });
   const jobChipEl = (j: RunningJob) => (

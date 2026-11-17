@@ -790,5 +790,27 @@
       "compute": "Not computed: {reason}",
       "parse": "Line {line} not read: {text}"
     }
+  },
+  "lifecycle": {
+    "state": {
+      "prepared": "Prepared",
+      "in_production": "In production",
+      "finished": "Finished"
+    },
+    "set": {
+      "prepared": "Set: prepared (not started)",
+      "in_production": "Start production (payment received)…",
+      "finished": "Set: finished (built)"
+    },
+    "tip": {
+      "prepared": "The production record exists; production has not started (it starts when the customer's payment has arrived)",
+      "in_production": "In production: the customer's payment has arrived",
+      "finished": "Finished: built, delivered or on the shelf"
+    },
+    "paymentTip": "Payment: {line}",
+    "byTip": "set by {by} at {at}",
+    "startTitle": "Start production",
+    "paymentLabel": "Payment received (a date or a note, no amount)",
+    "startOk": "Start"
   }
 }

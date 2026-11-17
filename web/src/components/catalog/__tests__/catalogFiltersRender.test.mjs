@@ -54,7 +54,7 @@ m.catalogFilterApi.getInitialState = m.catalogFilterApi.getState;
 
 const cfg = (name, d) => ({ name, designation: d, designation_complete: true, family: d.split('_')[0], beside: {} });
 const dies = [{ name: 'D', slots: 12, poles: 14, stator_diameter: 40, configs: [cfg('A', 'CIANO14 40_10 7F2SY'), cfg('B', 'CIANO14 40_11 7F2SY'), cfg('C', 'CIANO14 40_12 7F2SY')] }];
-const overview = { items: { 'D/A': { projects: [{ id: 'p1', link_status: 'current' }], productions: ['D/A'] },
+const overview = { items: { 'D/A': { projects: [{ id: 'p1', link_status: 'current' }], productions: ['D/A'], stage: 'in_production' },
     'D/B': { projects: [{ id: 'p1', link_status: 'current' }], productions: [], computed: true } },
   projects: { p1: { id: 'p1', title: 'Pump', status: 'design', stage: 'design' } },
   productions: { 'D/A': { die: 'D', config: 'A', status: 'active', current_revision: '1' } } };

@@ -327,7 +327,9 @@ const CatalogByDie: React.FC<Props> = ({ dies, thumbs, rated, active, isAdmin, c
   );
 
   return (
-    <Box data-testid="catalog-by-die" sx={{ display: 'flex', flexDirection: 'column', gap: 0.75, overflowX: 'auto' }}>
+    // NO overflow on the catalog itself on a desktop: an overflow box would become the sticky header's scroll container
+    // and the header would scroll away with the list (browser finding on #738); only a phone scrolls the table sideways
+    <Box data-testid="catalog-by-die" sx={{ display: 'flex', flexDirection: 'column', gap: 0.75, [NARROW]: { overflowX: 'auto' } }}>
       {topLine}
       {header}
       {groups.map((g) => (

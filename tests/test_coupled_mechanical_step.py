@@ -203,3 +203,23 @@ def test_the_mechanical_point_rule():
     assert rpm == 13000.0 and "proof rpm" in note and "23,000" in note
     # an empty box: the operating speed, quietly
     assert coupled._mechanical_point({"cases": "single", "rpm1": ""}, 3000.0) == (3000.0, None)
+
+
+def test_the_hook_states_every_query_default_of_the_stress_route(monkeypatch):
+    """Outside an HTTP request an unstated ``Query(...)`` default arrives as the Query OBJECT (the pull one made
+    ``_resolve_pull`` answer 422 on every coupled run, 2026-11-17).  The hook must hand ``rotor_stress`` a real value
+    for every parameter it has, so none can be a Query object."""
+    import inspect
+    from fastapi.params import Param
+    from motor_ai_sim.routes import mechanical as M
+
+    names = set(inspect.signature(M.rotor_stress).parameters)
+    seen = {}
+    monkeypatch.setattr(M, "rotor_stress", lambda **kw: seen.update(kw) or {})
+    monkeypatch.setattr(M, "_mech_panel_settings", lambda authorization=None: {})
+    M.run_rotor_stress_at({"magnet": 100.0, "rotor_core": 100.0}, field=False)
+    assert names - set(seen) == set(), "the hook leaves a route parameter to its Query default"
+    assert not [k for k, v in seen.items() if isinstance(v, Param)]
+    assert seen["pull"] == "none" and seen["pull_duty"] is None
+    assert seen["pull_mpa"] is None and seen["pull_b_gap_t"] is None
+    assert seen["fresh"] is True

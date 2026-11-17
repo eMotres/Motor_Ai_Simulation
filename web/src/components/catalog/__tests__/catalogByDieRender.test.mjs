@@ -279,3 +279,17 @@ test('the stage column reads the server\'s stage: a prepared production is "Conf
   const z = decode(m.render(zh, { dies, isAdmin: true, overview: ov }));
   assert.deepEqual([...z.matchAll(/data-testid="by-die-stage"[^>]*>([^<]*)</g)].map((x) => x[1]).sort(), ['已完成', '确认中']);
 });
+
+// ── owner decision 2026-11-17: one current motor per designation PER application ──────────────────────────────────
+for (const [lng, tipPart] of [['en', 'the same application'], ['zh-CN', '同一应用']]) {
+  test(`${lng}: a robot copy of the linked propeller motor's designation is not old; the propeller copy is, its tooltip says why`, async () => {
+    const i18n = m.makeI18n(lng); await ready(i18n);
+    const one = (name, config, apps) => ({ name, slots: 24, poles: 28, stator_diameter: 200, locked: true,
+      configs: [{ ...cfg(config, 'CILN28 200_40 24F4SY', {}), applications: apps }] });
+    const html = decode(m.render(i18n, { isAdmin: true, overview,
+      dies: [one('CILN28', 'G2-L40', ['propeller']), one('CILN28 vadim 2', 'G2-L40 copy', ['propeller']), one('CILN28 robot', 'R', ['robot'])] }));
+    assert.equal((html.match(/data-old="true"/g) || []).length, 1, html);                  // only the propeller copy
+    assert.ok(html.includes(tipPart), html);
+    assert.ok(!html.includes('data-testid="by-die-newest-locked"'), html);    // the robot is alone in its group: nothing to mark
+  });
+}

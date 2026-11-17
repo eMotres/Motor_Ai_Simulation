@@ -210,3 +210,18 @@ test('a mark never depends on the application filter: computed over the whole ca
   const someConfigs = restrictTo(buildByDie([linked, drone], ov), [{ ...linked, configs: [] }]);
   assert.deepEqual(someConfigs.flatMap((g) => g.blocks.map((b) => [b.die.name, b.motors.length])), [['CIANO28 80_12', 0]]);
 });
+
+// ── owner decision 2026-11-17: one current motor per designation PER application ──────────────────────────────────
+test('the old / current rule keys on (designation, primary application): a robot motor is never old next to a propeller one', () => {
+  const m = (name, created, apps, locked = true) => ({ name, created, stator_diameter: 30,
+    configs: [cfg('L10', 'CIANO14 30_10 6F2SY', { locked, ...(apps ? { applications: apps } : {}) })] });
+  const ov = { items: { 'P1/L10': { projects: [{ id: 'p1', link_status: 'current' }], productions: [] } },
+    projects: { p1: { id: 'p1', title: 'Drone', status: 'design', stage: 'computed' } }, productions: {} };
+  const rows = (ds) => Object.fromEntries(buildByDie(ds, ov)[0].blocks.flatMap((b) => b.motors.map((m) => [m.die, [m.application, m.old, m.newestLocked]])));
+  assert.deepEqual(rows([m('P1', '2026-08-01', ['propeller']), m('P2', '2026-09-01', ['propeller']),
+    m('R1', '2026-08-01', ['robot']), m('R2', '2026-09-01', ['robot', 'propeller']), m('N1', '2026-08-01', null)]), {
+    P1: ['propeller', false, false], P2: ['propeller', true, false],      // the linked propeller motor is current
+    R1: ['robot', true, false], R2: ['robot', false, true],               // robots: no link -> newest locked; R2's primary is robot
+    N1: ['', false, false],                                               // no application: a group of its own, alone
+  });
+});

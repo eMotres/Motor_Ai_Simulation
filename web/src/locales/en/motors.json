@@ -269,7 +269,7 @@
     "noNameTip": "No standard name yet: the stored configuration name is shown",
     "incompleteTip": "Standard name incomplete; missing: {missing}",
     "old": "old",
-    "oldTip": "Another motor with the same designation is the one a project or production links; this copy is old",
+    "oldTip": "Another motor with the same designation and the same application is the one a project or production links; this copy is old",
     "production": "production {rev}",
     "computed": "computed",
     "loadTip": "Load this motor at its default mode",
@@ -294,7 +294,7 @@
     "toMyMotors": "Copy to my motors",
     "deleteMotor": "Delete",
     "newestLocked": "no link: newest locked",
-    "newestLockedTip": "No project or production links any motor of this designation; the newest locked one is taken as current",
+    "newestLockedTip": "No project or production links any motor of this designation in this application; the newest locked one is taken as current",
     "noName": "No standard name yet",
     "v": {
       "power": "Continuous power at the rated point ({duty})",

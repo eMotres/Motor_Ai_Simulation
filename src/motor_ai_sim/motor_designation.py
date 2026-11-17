@@ -235,14 +235,31 @@ def fields(described: Mapping[str, Any]) -> Dict[str, str]:
     return out
 
 
+#: the STORAGE key of a die (standard die names, owner 2026-11-17): ``<family> <fp4>``, the family exactly as
+#: :func:`describe` makes it (``CILN28 200``) and 4 lowercase hex characters of the lamination fingerprint, computed once
+#: when the die is created.  The owner never sees it: shown names are the motor designations.  The letters the generator
+#: reads from the die name (cooling, open) stay in its first word.
+STORAGE_KEY = re.compile(r"^(?P<family>[CD?][IO?][ALO?][GNC?]D?O?F?A?\d+ \d+(?:\.\d+)?) (?P<fp>[0-9a-f]{4})$")
+
+
+def is_storage_key(die_name: Any) -> bool:
+    return bool(STORAGE_KEY.match(str(die_name or "")))
+
+
 _TURNS_TAG = re.compile(r"(?:^|-)(\d+)t(?:$|-)", re.IGNORECASE)
 _LENGTH_TAG = re.compile(r"(?:^|-)L(\d+(?:\.\d+)?)(?:$|-)")
 
 
 def check(die_name: str, cfg_name: str, described: Mapping[str, Any]) -> List[Dict[str, str]]:
-    """Where the stored NAMES say something else than the parameters (read-only; nothing is renamed)."""
+    """Where the stored NAMES say something else than the parameters (read-only; nothing is renamed).
+
+    A die name in the storage-key form (``STORAGE_KEY``) must carry exactly the family the parameters give
+    (``die_key_family``: any letter, the poles or the OD); the per-letter checks below still name what differs."""
     seg = described["segments"]
     out: List[Dict[str, str]] = []
+    key = STORAGE_KEY.match(str(die_name or ""))
+    if key and described.get("family") and key.group("family") != described["family"]:
+        out.append({"code": "die_key_family", "name": die_name, "parameters": str(described["family"])})
     parsed = die_name_letters(die_name)
     if not parsed:
         out.append({"code": "die_name_not_standard", "name": die_name})

@@ -959,7 +959,8 @@
       "die_name_poles": "冲片名称“{name}”的极数与参数不符；参数为 {value}。",
       "die_name_od": "冲片名称“{name}”的外径与参数不符；参数为 {value} mm。",
       "config_name_turns": "配置名称“{name}”的匝数与参数不符；参数为 {value}。",
-      "config_name_length": "配置名称“{name}”的叠厚与参数不符；参数为 {value} mm。"
+      "config_name_length": "配置名称“{name}”的叠厚与参数不符；参数为 {value} mm。",
+      "die_key_family": "冲片键“{name}”的系列与参数不符；参数为 {value}。"
     },
     "help": {
       "title": "如何解读 MOTRES 电机名称",

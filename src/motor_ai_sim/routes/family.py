@@ -2576,6 +2576,8 @@ def _config_row(dd: Path, die_name: str, cf: Path, caller_key: Any, dr_die) -> d
     die = _load_yaml(dd / "die.yaml", "die")
     c = _load_yaml(cf, "configuration")
     row = _build_config_row(die, c, cf.stem, dr_die().get(cf.stem) or {})
+    from motor_ai_sim import motor_designation as _md
+    row.update(_md.catalog_fields(die_name, die, c))   # the designation + the parameters beside it (by-die view); {} on failure
     if cacheable:
         _TREE_CACHE[key] = (sig, row)
     return row
@@ -2752,7 +2754,9 @@ def tree_for_access(response: Response, _acc: dict, *, with_mass: bool = True,
     dies, _had = _tree_dies(_acc)
     if not _had:
         return {"dies": [], "can_write": _can_write}
-    res = {"dies": _stamp_cards(dies, with_mass, full_construction),
+    from motor_ai_sim import motor_designation as _md
+    # the product revision per request (never cached in a row); an incomplete designation only for admins (#720 rule)
+    res = {"dies": _md.catalog_view(_stamp_cards(dies, with_mass, full_construction), staff=bool(_acc.get("is_admin"))),
            "can_write": _can_write}
     if not dies and _acc["mode"] == MODE_GRANTED:
         # An empty page tells a new account nothing.  ONE line, no wall of

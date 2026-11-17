@@ -12,6 +12,7 @@ import {
   Alert, Box, Button, Chip, CircularProgress, Divider,
   Paper, Slider, Switch, TextField, Tooltip, Typography, ToggleButton, ToggleButtonGroup,
 } from '@mui/material';
+import MeshPresetSelect from './MeshPresetSelect';
 
 // Per-component mesh-size controls (study mesh-density effect on results).
 // Keys MUST match the backend _comp_of() mapping in build_mesh_from_polygons.
@@ -891,6 +892,7 @@ const MeshPanel: React.FC = () => {
 
         {view === 'fem' && (
           <>
+            <MeshPresetSelect />
             {/* One short line + tooltip (UI rule).  Shown while the server
                 config is unknown: the settings are dimmed and locked, nothing
                 is saved and no mesh is built — the state that used to silently

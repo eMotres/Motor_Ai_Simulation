@@ -247,5 +247,17 @@
   "propDesignPolar": "翼型极曲线",
   "propDesignPolarTip": "叶素模型的截面极曲线。平板：通用升力和阻力。含弯度：按薄翼理论计算各翼型的零升力角；阻力和失速仍为通用值。两者均为估算。",
   "propPolar_flatplate_model": "平板",
-  "propPolar_camber_model": "含弯度"
+  "propPolar_camber_model": "含弯度",
+  "meshPresetLabel": "预设",
+  "meshPresetCustom": "自定义",
+  "meshPresetHelp": "网格与步数预设",
+  "meshPresetUnavailable": "此电机没有可用的预设",
+  "meshPresetVersion": "预设文件版本",
+  "meshPresetStepsPerPeriod": "步/周期",
+  "meshPresetGapRows": "气隙单侧层数",
+  "meshPresetMesh": "网格",
+  "meshPresetOuterAir": "外部空气",
+  "meshPresetSector": "扇区",
+  "meshPresetFullRing": "整圈",
+  "meshPresetWireCell": "线单元"
 }

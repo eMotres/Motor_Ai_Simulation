@@ -16,6 +16,7 @@ import {
   ResponsiveContainer, ReferenceLine, ScatterChart, Scatter,
 } from 'recharts';
 import { useMotorStore } from '../../stores/motorStore';
+import MeshPresetSelect from '../mesh/MeshPresetSelect';
 import { appliedSaveLine } from '../../lib/appliedAutoSave';
 
 /**
@@ -322,6 +323,7 @@ const AutoOptimizePanel: React.FC = () => {
           </Typography>
         )}
 
+        <Box sx={{ mt: 1.25 }}><MeshPresetSelect dense /></Box>
         {plan && !running && (
           <Box sx={{ mt: 1.25, display: 'flex', gap: 0.75, flexWrap: 'wrap', alignItems: 'center' }}>
             <Chip size="small" variant="outlined" sx={{ height: 22, fontSize: 10.5 }}

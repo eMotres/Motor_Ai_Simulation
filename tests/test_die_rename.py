@@ -696,3 +696,15 @@ def test_a_workspace_die_that_a_shared_store_names_is_refused_with_the_stores_li
         assert "grants" in r.text and "cannot be renamed here" in r.text
     ws = layered["ws"].parent
     assert any((p / "dies" / "ADMW 40").is_dir() for p in ws.iterdir() if p.is_dir())          # nothing moved
+
+
+def test_a_workspace_only_rename_keeps_the_registry_id_and_moves_the_locator(layered, monkeypatch):
+    registry = layered["shared"].parent / "registry"
+    monkeypatch.setenv("MOTRES_OBJECT_REGISTRY_ROOT", str(registry))
+    _admin_workspace_die(layered, "ADMW 40")
+    _write_json(registry / "registry.json", {"version": 1, "links": {}, "review": [], "backfills": [], "objects": {
+        "fam-1": {"kind": "family", "locator": {"ns": "catalog", "key": "ADMW 40"}, "name": "ADMW 40"}}})
+    r = layered["client"].patch("/api/family/die/ADMW 40", json={"name": "ADMW 40 old"}, headers=layered["admin"])
+    assert r.status_code == 200, r.text
+    obj = json.loads((registry / "registry.json").read_text(encoding="utf-8"))["objects"]["fam-1"]
+    assert obj["locator"]["key"] == "ADMW 40 old" and "ADMW 40" in obj["aliases"]

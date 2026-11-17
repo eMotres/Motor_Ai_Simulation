@@ -840,6 +840,7 @@ def run(fam: Any, old: str, new: str, *, src_dir: Path, dst_dir: Path, dry_run: 
               glob_scope=glob_scope, actor=actor)
     steps = LOCAL_STEPS + (GLOBAL_STEPS if glob_scope else ())
     if refuse_links and not glob_scope:
+        steps = steps + (step_object_registry,)                  # the ids are kept: the locator follows (review of #728)
         _refuse_while_linked(fam, old, new, src_dir, dst_dir, actor)    # a workspace rename does not carry the shared stores
     done = 0
     tok = None

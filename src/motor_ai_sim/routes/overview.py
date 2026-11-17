@@ -32,6 +32,7 @@ from fastapi import APIRouter, HTTPException, Request
 
 from motor_ai_sim import display_state as DS
 from motor_ai_sim import object_registry as OR
+from motor_ai_sim import production_lifecycle as PL
 from motor_ai_sim.production import access as prod_access
 
 router = APIRouter(prefix="/api/overview", tags=["overview"])
@@ -75,8 +76,36 @@ def _has_results(die: str, cfg: str) -> bool:
     return cfg in _computed_configs(die)
 
 
+#: the derived stage of a motor, in order (owner 2026-11-17: "production starts when the money from the customer arrives")
+STAGES = ("specification", "simulation", "confirmation", "in_production", "finished")
+
+
+def motor_stage(*, lifecycle: Optional[str], has_production: bool, offered: bool, computed: bool, spec_submitted: bool) -> Optional[str]:
+    """The one derived stage of a motor, from stored facts only (never guessed):
+
+    * ``finished``      its production's lifecycle is ``finished`` (production_lifecycle, admin-set);
+    * ``in_production`` its production's lifecycle is ``in_production`` (started: the customer's payment arrived);
+    * ``confirmation``  offered to the customer and waiting for agreement / payment: an open project links it as current AND
+                        marks it its recommended variant (the existing staff flag ``recommended`` on the link), or a
+                        production record exists that has not started (``prepared``);
+    * ``simulation``    stored results exist (computing or computed, not offered);
+    * ``specification`` a project that links it has a submitted specification, no results yet;
+    * ``None``          none of these."""
+    if lifecycle == "finished":
+        return "finished"
+    if lifecycle == "in_production":
+        return "in_production"
+    if offered or has_production:
+        return "confirmation"
+    if computed:
+        return "simulation"
+    if spec_submitted:
+        return "specification"
+    return None
+
+
 def build(projects: List[dict], productions: List[dict], registry: Dict[str, Any], states: Dict[str, Any],
-          has_results=_has_results) -> Dict[str, Any]:
+          has_results=_has_results, lifecycle: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """The Overview answer from already loaded records (pure apart from ``has_results``: the route and the tests call it)."""
     idx = OR.Index(registry)
     items: Dict[str, Dict[str, Any]] = {}
@@ -111,9 +140,11 @@ def build(projects: List[dict], productions: List[dict], registry: Dict[str, Any
             "production_id": idx.resolve("production", "production", key),
             "display": DS.effective("production", DS.object_key("production", die=die, config=cfg), rec.get("status"), states),
         }
+        prod_rows[key]["lifecycle"] = PL.state_of(die, cfg, lifecycle if lifecycle is not None else {})["state"]
         item(die, cfg, "board" if rec.get("product_type") == "electronics" else "")["productions"].append(key)
 
     proj_rows: Dict[str, Dict[str, Any]] = {}
+    offered: set = set()
     for p in projects:
         pid = str(p.get("id") or "")
         if not pid:
@@ -130,17 +161,27 @@ def build(projects: List[dict], productions: List[dict], registry: Dict[str, Any
         for m in linked:
             item(str(m["die"]), str(m["config"]))["projects"].append(
                 {"id": pid, "link_status": str(m.get("status") or "current")})
+            if isinstance(m.get("recommended"), dict):                  # the staff flag: the variant offered to the customer
+                offered.add((f"{m['die']}/{m['config']}", pid))
 
     computed = {k: bool(has_results(v["die"], v["config"])) for k, v in items.items() if v["kind"] == "motor"}
     for k, v in items.items():
         v["computed"] = computed.get(k, False)
+        prods = [prod_rows[x] for x in v["productions"] if x in prod_rows]
+        life = next((p["lifecycle"] for p in prods if p["lifecycle"] == "in_production"), None) or \
+            next((p["lifecycle"] for p in prods if p["lifecycle"] == "finished"), None)
+        open_links = [l for l in v["projects"] if proj_rows.get(l["id"], {}).get("status") != "closed"]
+        v["stage"] = motor_stage(
+            lifecycle=life, has_production=bool(prods),
+            offered=any(l["link_status"] != "trial" and (k, l["id"]) in offered for l in open_links),
+            computed=v["computed"],
+            spec_submitted=any(proj_rows.get(l["id"], {}).get("spec_submitted") for l in open_links))
     for row in proj_rows.values():
         if row["status"] == "closed":
             row["stage"] = "closed"
-        elif any(items[k]["productions"] for k in row["motors"] if k in items):
-            row["stage"] = "in_production"
-        elif any(computed.get(k) for k in row["motors"]):
-            row["stage"] = "computed"
+        elif any(items.get(k, {}).get("stage") for k in row["motors"]):
+            # the project is as far as its most advanced motor (the one derived stage, ``motor_stage``)
+            row["stage"] = max((items[k]["stage"] for k in row["motors"] if k in items and items[k].get("stage")), key=STAGES.index)
         else:
             row["stage"] = "spec_submitted" if row["status"] == "spec" and row["spec_submitted"] else row["status"]
 
@@ -176,7 +217,8 @@ def overview(request: Request):
     _require_admin(request)
     from motor_ai_sim.development import store as project_store
     from motor_ai_sim.production import routes as PR
-    out = build(project_store.list_projects(), PR._production_list_for("", True), OR.load(), DS.load()["states"])
+    out = build(project_store.list_projects(), PR._production_list_for("", True), OR.load(), DS.load()["states"],
+                lifecycle=PL.load()["states"])
     out["archived_dies"] = archived_dies()
     return out
 

@@ -356,7 +356,6 @@
     },
     "newestShort": "最新",
     "filter": {
-      "inSimulation": "仿真中",
       "stage": "阶段",
       "stageTip": "仅显示处于这些阶段的电机（总览的推导阶段）；不选 = 所有阶段",
       "project": "项目",

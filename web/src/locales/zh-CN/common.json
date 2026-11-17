@@ -836,7 +836,11 @@
     },
     "stageName": {
       "in_production": "生产中",
-      "computed": "已计算"
+      "computed": "已计算",
+      "specification": "规格",
+      "simulation": "仿真",
+      "confirmation": "确认中",
+      "finished": "已完成"
     },
     "archive": {
       "tip": "归档此冲片：它将从电机目录和选择列表中移除；不会删除任何内容",

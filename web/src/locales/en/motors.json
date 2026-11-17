@@ -356,7 +356,6 @@
     },
     "newestShort": "newest",
     "filter": {
-      "inSimulation": "In simulation",
       "stage": "Stage",
       "stageTip": "Show only the motors in these stages (the Overview's derived stage); empty = every stage",
       "project": "Projects",

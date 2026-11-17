@@ -790,5 +790,27 @@
       "compute": "未计算：{reason}",
       "parse": "第 {line} 行无法读取：{text}"
     }
+  },
+  "lifecycle": {
+    "state": {
+      "prepared": "已准备",
+      "in_production": "生产中",
+      "finished": "已完成"
+    },
+    "set": {
+      "prepared": "设为：已准备（未开始）",
+      "in_production": "开始生产（已收款）…",
+      "finished": "设为：已完成（已制造）"
+    },
+    "tip": {
+      "prepared": "生产记录已存在；尚未开始生产（收到客户付款后开始）",
+      "in_production": "生产中：已收到客户付款",
+      "finished": "已完成：已制造、已交付或在库"
+    },
+    "paymentTip": "付款：{line}",
+    "byTip": "由 {by} 于 {at} 设置",
+    "startTitle": "开始生产",
+    "paymentLabel": "已收款（日期或备注，不写金额）",
+    "startOk": "开始"
   }
 }

@@ -836,7 +836,11 @@
     },
     "stageName": {
       "in_production": "In production",
-      "computed": "Computed"
+      "computed": "Computed",
+      "specification": "Specification",
+      "simulation": "Simulation",
+      "confirmation": "Confirmation",
+      "finished": "Finished"
     },
     "archive": {
       "tip": "Archive this die: it leaves the Motors catalog and the pickers; nothing is deleted",

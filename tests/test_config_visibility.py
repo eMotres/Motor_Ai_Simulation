@@ -415,6 +415,8 @@ NOT_CONFIG_ROUTES = {    # name a `die` or a `config` that is not a catalog conf
     ("GET", "/api/digest/settings/production/{die}/{config}"), ("PUT", "/api/digest/settings/production/{die}/{config}"),
     # Active / Parked / Archived of a PRODUCTION (die + config name a production): staff only, tests/test_display_state.py
     ("PUT", "/api/display-state"),
+    # prepared / in production / finished of a PRODUCTION: admins and the production's members, tests/test_production_lifecycle.py
+    ("GET", "/api/production-lifecycle/{die}/{config}"), ("PUT", "/api/production-lifecycle"),
 }
 
 

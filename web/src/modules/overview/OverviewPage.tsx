@@ -24,6 +24,7 @@ import ArchivedDies from './ArchivedDies';
 import { buildView, flatProjects, headerChips, type Family, type OverviewAnswer, type OverviewProduction, type OverviewProject, type TreeDie } from './overviewModel';
 
 const API = (import.meta.env.VITE_API_URL ?? 'http://localhost:8001') as string;
+const DERIVED_STAGES: readonly string[] = ['specification', 'simulation', 'confirmation', 'in_production', 'finished'];
 const VIEWS = ['tree', 'projects'] as const;
 type View = typeof VIEWS[number];
 
@@ -96,7 +97,8 @@ const OverviewPage: React.FC = () => {
   );
   const archived = answer?.archived_dies ?? [];
 
-  const projectLabel = (p: OverviewProject) => (p.stage === 'in_production' || p.stage === 'computed'
+  // the ONE derived stage (routes/overview.motor_stage: the project is as far as its most advanced motor), else its status
+  const projectLabel = (p: OverviewProject) => (p.stage && (DERIVED_STAGES.includes(p.stage) || p.stage === 'computed')
     ? t(`overview.stageName.${p.stage}`) : t(`development:status.${p.stage || shownStatus(p.status, p.spec_submitted ?? undefined)}`));
 
   const projectChip = (p: OverviewProject & { link_status?: string }) => (

@@ -353,6 +353,7 @@
       "active": "设为活动",
       "parked": "暂停",
       "archived": "归档"
-    }
+    },
+    "newestShort": "最新"
   }
 }

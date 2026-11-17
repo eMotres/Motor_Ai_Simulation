@@ -63,6 +63,10 @@ const charsGrid = { display: 'grid', gridTemplateColumns: `${NAME_COL_W}px ${COL
   alignItems: 'center', flexShrink: 0 } as const;
 const REST_W = { application: 84, marks: 130, stage: 96, jobs: 170, production: 96 } as const;
 const STATE_FILTERS = ['active', 'parked', 'archived', 'all'] as const;
+const markChip = { height: 18, fontSize: 10.5, maxWidth: 120, color: 'var(--text-3)', '& .MuiChip-label': { px: 0.75 } } as const;
+/** The tab's scroller (App.tsx, the Motors tab) has `p: 3` = 24 px: the sticky header sits at -24 px so that it is flush with the
+ *  scroller's top edge, right under the Motors title line; at 0 it stopped 24 px lower and rows showed through above it. */
+const SCROLLER_PAD_PX = 24;
 const JOBS_POLL_MS = 20000;
 
 export interface MenuEntry { key: string; label: string; run: () => void; danger?: boolean }
@@ -252,8 +256,13 @@ const CatalogByDie: React.FC<Props> = ({ dies, thumbs, rated, active, isAdmin, c
           <Box sx={{ width: REST_W.application, flexShrink: 0, overflow: 'hidden' }}>{extra?.application}</Box>
           <Box data-testid="by-die-marks" sx={{ width: REST_W.marks, flexShrink: 0, display: 'flex', alignItems: 'center', gap: 0.5, overflow: 'hidden' }}>
             {extra?.marks}
-            {m.old && <Tooltip title={t('byDie.oldTip')}><Typography component="span" sx={{ ...small, fontStyle: 'italic' }}>{t('byDie.old')}</Typography></Tooltip>}
-            {m.newestLocked && <Tooltip title={t('byDie.newestLockedTip')}><Typography component="span" data-testid="by-die-newest-locked" sx={{ ...small, fontStyle: 'italic' }}>{t('byDie.newestLocked')}</Typography></Tooltip>}
+            {/* one short chip each, the reason in the tooltip: a sentence wrapped the Marks column on three lines (browser finding) */}
+            {m.old && <Tooltip title={t('byDie.oldTip')}><Chip size="small" variant="outlined" label={t('byDie.old')} data-testid="by-die-old" sx={markChip} /></Tooltip>}
+            {m.newestLocked && (
+              <Tooltip title={`${t('byDie.newestLocked')}: ${t('byDie.newestLockedTip')}`}>
+                <Chip size="small" variant="outlined" label={t('byDie.newestShort')} data-testid="by-die-newest-locked" sx={markChip} />
+              </Tooltip>
+            )}
           </Box>
           {isAdmin && (
             <Typography component="span" noWrap data-testid="by-die-stage" sx={{ ...small, width: REST_W.stage, flexShrink: 0, color: 'var(--text-2)' }}>
@@ -302,7 +311,7 @@ const CatalogByDie: React.FC<Props> = ({ dies, thumbs, rated, active, isAdmin, c
   };
   const sortBlock = (motors: MotorRow[]) => (sort ? sortMotors(motors, sort.key, sort.dir, (m) => cells?.(m.die, m.config)?.cogging ?? null) : motors);
   const header = (
-    <Box data-testid="by-die-header" sx={{ position: 'sticky', top: 0, zIndex: 2, bgcolor: 'var(--panel-2)', display: 'flex', alignItems: 'flex-end',
+    <Box data-testid="by-die-header" sx={{ position: 'sticky', top: -SCROLLER_PAD_PX, zIndex: 2, bgcolor: 'var(--panel-2)', display: 'flex', alignItems: 'flex-end',
       columnGap: 1, flexWrap: 'wrap', px: 1, py: 0.3, borderBottom: '1px solid var(--line-soft)', fontSize: 10, color: 'var(--text-3)' }}>
       <Box sx={{ ...charsGrid }}>
         <Box component="span">{t('byDie.col.motor')}</Box>

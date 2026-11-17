@@ -114,3 +114,39 @@ test('table columns: values per column, header-click sorting inside a die block,
   assert.equal(nextSort({ key: 'power', dir: 'asc' }, 'power'), null);
   assert.deepEqual(nextSort({ key: 'power', dir: 'asc' }, 'mass'), { key: 'mass', dir: 'desc' });
 });
+
+// ── the admin's stage, project state and running work (owner 2026-11-17) ───────────────────────────────────────────
+test('stage: production, else computed, else the current project\'s stage; state: the most current link', async () => {
+  const { motorStage, motorState } = await import('../catalogByDie.ts');
+  const p = (stage, state = 'active', trial = false) => ({ id: stage, title: stage, trial, stage, state });
+  assert.equal(motorStage({ productions: [{ status: 'active', rev: '1', state: 'active' }], computed: true, projects: [p('design')] }), 'in_production');
+  assert.equal(motorStage({ productions: [], computed: true, projects: [p('design')] }), 'computed');
+  assert.equal(motorStage({ productions: [], computed: false, projects: [p('quote', 'active', true), p('design')] }), 'design');
+  assert.equal(motorStage({ productions: [], computed: false, projects: [] }), null);
+  assert.equal(motorState({ projects: [p('a', 'archived'), p('b', 'parked')], productions: [] }), 'parked');
+  assert.equal(motorState({ projects: [], productions: [] }), null);
+});
+
+test('the state filter: chips of other states hidden, a motor linked only to old projects leaves Active, an unlinked one stays', async () => {
+  const { buildByDie, filterByState, stateCounts } = await import('../catalogByDie.ts');
+  const ov = {
+    items: { 'D/A': { projects: [{ id: 'old', link_status: 'current' }], productions: [] },
+             'D/B': { projects: [{ id: 'old', link_status: 'current' }, { id: 'now', link_status: 'current' }], productions: [] } },
+    projects: { old: { id: 'old', title: 'Old', status: 'closed', display: { state: 'archived' } },
+                now: { id: 'now', title: 'Now', status: 'design', display: { state: 'active' } } },
+    productions: {} };
+  const ds = [{ name: 'D', stator_diameter: 40, configs: ['A', 'B', 'C'].map((n) => cfg(n, `CIANO14 40_1${n.charCodeAt(0) - 64} 7F2SY`)) }];
+  const g = buildByDie(ds, ov);
+  const rows = (f) => filterByState(g, f).flatMap((x) => x.blocks.flatMap((b) => b.motors.map((m) => [m.config, m.projects.map((p) => p.title)])));
+  assert.deepEqual(rows('active'), [['B', ['Now']], ['C', []]]);              // A (archived project only) left; B keeps only "Now"
+  assert.deepEqual(rows('archived'), [['A', ['Old']], ['B', ['Old']]]);
+  assert.deepEqual(rows('parked'), []);
+  assert.equal(rows('all').length, 3);
+  assert.deepEqual(stateCounts(g), { active: 2, parked: 0, archived: 2, all: 3 });
+});
+
+test('a job chip names kind, server, queued and progress', async () => {
+  const { jobChip } = await import('../catalogByDie.ts');
+  assert.equal(jobChip({ kind: 'optimisation', server: 'us', state: 'running', progress: { done: 12, total: 40 } }), 'optimisation · US · 12/40');
+  assert.equal(jobChip({ kind: 'single', server: 'eu', state: 'queued' }), 'single · EU · queued');
+});

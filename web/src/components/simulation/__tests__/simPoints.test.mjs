@@ -146,8 +146,8 @@ test('the catalog has no duty rows or duty controls any more; motors load their 
   assert.doesNotMatch(fam, /renameDuty|duplicateDuty|deleteDuty|createDuty|setDefaultDuty/);
   assert.doesNotMatch(fam, /Box component="table"/);
   assert.doesNotMatch(fam, /＋ duty/);
-  assert.match(fam, /configClickPlan\(btns, b\.config/);                      // the configuration button still loads
-  assert.match(fam, /void applyDuty\(die\.name, plan\.pick, plan\.load\)/);
+  // the motor row's ▶ loads the configuration's default mode (one catalog, 2026-11-17)
+  assert.match(fam, /load: \(die, cfg\) => \{ const r = ratedOf\(die, cfg\); if \(r\?\.duty\) void applyDuty\(die, cfg, r\.duty\); \}/);
   // the report-pictures choice is read from the key the switcher writes
   assert.match(fam, /report\.pictures:\$\{die\}\/\$\{cfg\}/);
   assert.match(read('../../../lib/dutyOps.ts'), /`report\.pictures:\$\{die\}\/\$\{cfg\}`/);

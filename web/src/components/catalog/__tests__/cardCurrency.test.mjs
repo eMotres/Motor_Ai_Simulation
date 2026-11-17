@@ -38,7 +38,7 @@ test('every spelling of the current build counts: a stamp taken before the defau
 test('the older-build information lives in the configuration button tooltip, not in a chip in the row', () => {
   const family = readFileSync(new URL('../FamilyCatalog.tsx', import.meta.url), 'utf8');
   assert.match(family, /staleDuties: staleCatalogDutyNames\(c\.build_sig_aliases \?\? c\.build_sig, c\.duties\)/);
-  assert.match(family, /configCardTip\(die, b\.config\)/);
+  assert.match(family, /configCardTip\(d, cn\)/);                                   // on the motor name's tooltip
   assert.doesNotMatch(family, /CardBadge|CardSummary/);
   // the shared badge component stays for the admin pickers and Configure
   const badge = readFileSync(new URL('../../common/CardBadge.tsx', import.meta.url), 'utf8');

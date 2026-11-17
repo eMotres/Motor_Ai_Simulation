@@ -37,6 +37,11 @@ interface Props {
   isAdmin: boolean; canWrite: boolean; standardUser: boolean; busy: boolean; actions: ByDieActions;
   /** for the tests: the Overview answer given instead of fetched */
   overview?: ByDieOverview | null;
+  /** what the list view showed beside a motor / a die that this view keeps (application, cogging, report state; openness) */
+  rowExtras?: (die: string, config: string) => React.ReactNode;
+  dieExtras?: (die: string) => React.ReactNode;
+  /** a line added to the name's tooltip (writers: the passport card / older-build line) */
+  nameTip?: (die: string, config: string) => string;
 }
 
 export interface MenuEntry { key: string; label: string; run: () => void; danger?: boolean }
@@ -81,7 +86,8 @@ export function motorMenuItems(m: Pick<MotorRow, 'die' | 'config'>, who: Who, a:
 const fmt = (v: number | null | undefined, d = 1) => (v === null || v === undefined || !Number.isFinite(v) ? '—' : v.toFixed(d));
 const small = { fontSize: 11.5, color: 'var(--text-3)' };
 
-const CatalogByDie: React.FC<Props> = ({ dies, thumbs, rated, active, isAdmin, canWrite, standardUser, busy, actions, overview: given }) => {
+const CatalogByDie: React.FC<Props> = ({ dies, thumbs, rated, active, isAdmin, canWrite, standardUser, busy, actions, overview: given,
+  rowExtras, dieExtras, nameTip }) => {
   const { t } = useTranslation('motors');
   const [overview, setOverview] = useState<ByDieOverview | null>(given ?? null);
   const [dieMenu, setDieMenu] = useState<{ el: HTMLElement; die: ByDieDie } | null>(null);
@@ -94,7 +100,7 @@ const CatalogByDie: React.FC<Props> = ({ dies, thumbs, rated, active, isAdmin, c
       .then((a) => { if (alive) setOverview(a as ByDieOverview | null); }).catch(() => { /* rows without links */ });
     return () => { alive = false; };
   }, [isAdmin, given]);
-  const groups = useMemo(() => buildByDie(dies, isAdmin ? overview : null), [dies, overview, isAdmin]);
+  const groups = useMemo(() => buildByDie(dies, isAdmin ? overview : null, { staff: isAdmin }), [dies, overview, isAdmin]);
 
   // the four per-motor parameters left the row (owner 2026-11-17); they are in the "?" popover, under the name's segments
   const materials = (m: MotorRow) => [
@@ -135,16 +141,17 @@ const CatalogByDie: React.FC<Props> = ({ dies, thumbs, rated, active, isAdmin, c
     const r = rated(m.die, m.config);                       // the default mode: what ▶ loads
     const q = m.rated;                                        // the point the row quotes: rated, else largest continuous
     const loaded = active?.die === m.die && active?.config === m.config;
-    const nameTip = !m.named ? t('byDie.noNameTip')
+    const nameTipBase = !m.named ? (isAdmin ? t('byDie.noNameTip') : '')
       : !m.complete ? t('byDie.incompleteTip', { missing: m.unknown.join(', ') }) : '';   // a named motor: no old name anywhere
+    const tipText = [nameTipBase, nameTip?.(m.die, m.config) ?? ''].filter(Boolean).join(' · ');
     return (
       <Box key={`${m.die}/${m.config}`} data-testid="by-die-motor" data-old={m.old ? 'true' : undefined}
         sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap', pl: 1, py: 0.2, minHeight: 26,
               borderTop: '1px solid var(--panel)', opacity: m.old ? 0.5 : 1 }}>
-        <Tooltip title={canWrite || isAdmin ? nameTip : ''}>
+        <Tooltip title={tipText}>
           <Typography component="span" sx={{ fontFamily: 'monospace', fontSize: 12.5, fontWeight: 700, minWidth: 190,
             color: loaded ? '#60a5fa' : m.named && m.complete ? 'var(--text-1)' : 'var(--text-4)' }}>
-            {m.label}{loaded ? ' ●' : ''}
+            {m.label || t('byDie.namePending')}{loaded ? ' ●' : ''}
           </Typography>
         </Tooltip>
         {m.old && <Tooltip title={t('byDie.oldTip')}><Typography component="span" sx={{ ...small, fontStyle: 'italic' }}>{t('byDie.old')}</Typography></Tooltip>}
@@ -153,6 +160,7 @@ const CatalogByDie: React.FC<Props> = ({ dies, thumbs, rated, active, isAdmin, c
           <IconButton size="small" aria-label={t('byDie.decodeTip')} data-testid="by-die-decode" onClick={(e) => setDecode({ el: e.currentTarget, m })}
             sx={{ p: 0.15, color: 'var(--text-4)' }}><HelpOutlineIcon sx={{ fontSize: 13 }} /></IconButton>
         )}
+        {rowExtras?.(m.die, m.config)}
         <Typography component="span" data-testid="by-die-values" sx={{ ...small, flex: '1 1 260px', fontVariantNumeric: 'tabular-nums' }}>{valuesLine(m)}</Typography>
         {q && (
           <Tooltip title={t('byDie.massTip', { duty: q.name })}>
@@ -190,7 +198,7 @@ const CatalogByDie: React.FC<Props> = ({ dies, thumbs, rated, active, isAdmin, c
       {groups.map((g) => (
         <Box key={g.family || '-'} data-testid="by-die-family" sx={{ border: '1px solid var(--line-soft)', borderRadius: 1, overflow: 'hidden', ...(g.named ? {} : { opacity: 0.6 }) }}>
           <Box sx={{ px: 1, py: 0.4, bgcolor: 'var(--panel)', display: 'flex', alignItems: 'center', gap: 1 }}>
-            <Typography sx={{ fontSize: 13, fontWeight: 800, color: g.named ? 'var(--text-0)' : 'var(--text-3)' }}>{g.named ? g.family : t('byDie.noName')}</Typography>
+            <Typography sx={{ fontSize: 13, fontWeight: 800, color: g.named ? 'var(--text-0)' : 'var(--text-3)' }}>{g.named ? g.family : isAdmin ? t('byDie.noName') : t('byDie.otherMotors')}</Typography>
             <Typography sx={small}>{t('byDie.motors', { n: g.blocks.reduce((n, b) => n + b.motors.length, 0) })}</Typography>
           </Box>
           {g.blocks.map((b) => (
@@ -202,6 +210,7 @@ const CatalogByDie: React.FC<Props> = ({ dies, thumbs, rated, active, isAdmin, c
                 <Typography sx={{ ...small, color: 'var(--text-2)' }}>
                   Ø{fmt(b.die.stator_diameter, 0)} · {b.die.slots}s{b.die.poles}p
                 </Typography>
+                {dieExtras?.(b.die.name)}
                 {canWrite && (
                   <Tooltip title={b.die.locked ? t('byDie.lockedTip') : t('byDie.unlockedTip')}>
                     <span>

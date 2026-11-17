@@ -17,17 +17,14 @@
 import React, { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import {
   Box, Paper, Typography, Button, Chip, Tooltip, IconButton, CircularProgress,
-  Dialog, DialogTitle, DialogContent, Menu, MenuItem,
+  Dialog, DialogTitle, DialogContent,
 } from '@mui/material';
-import MoreVertIcon from '@mui/icons-material/MoreVert';
 import PublicOutlinedIcon from '@mui/icons-material/PublicOutlined';
 import LockOutlinedIcon from '@mui/icons-material/LockOutlined';
 import { useUIStore } from '../../stores/motorStore';
 import { thumbOf, type DieThumbs } from '../../lib/dieThumbs';
-import MotorThumbnail from './MotorThumbnail';
 import CatalogByDie, { type ByDieActions } from './CatalogByDie';
 import StartProject from './StartProject';
-import MotorRevisionText from '../common/MotorRevisionText';
 import {
   TextPromptDialog, ConfirmDialog,
   type TextPromptState, type ConfirmState,
@@ -56,7 +53,7 @@ import { canWriteServer } from '../../lib/localAuth';
 import { emptyCatalogLine, isStandardUser, uiCanWrite } from '../../lib/accessUi';
 import { staleCatalogDutyNames } from '../../lib/catalogCardStaleness';
 import { cardStatusTip, dieOpenness, OPENNESS_COLOR, OPENNESS_TIP_KEY } from '../../lib/catalogOpenness';
-import { configButtons, configClickPlan, isListableForClient, isPointsOnly, loadedMotor, loadTargetTab, selectedConfig } from '../../lib/catalogRows';
+import { configButtons, isListableForClient, isPointsOnly, loadedMotor, loadTargetTab } from '../../lib/catalogRows';
 import ApplicationEditor from '../admin/ApplicationEditor';
 import { cleanApplications, diesOfDiameter, filterDiesByApplication, type ApplicationFilter } from '../../lib/applications';
 import { getFamilyLoad, subscribeFamilyLoad } from '../../lib/familyLoad';
@@ -195,8 +192,6 @@ interface Die {
   source?: string | null;
 }
 
-const fmt = (v: number | null | undefined, digits = 1) =>
-  v == null || !Number.isFinite(Number(v)) ? '—' : Number(v).toFixed(digits).replace(/\.0+$/, '');
 
 const readLS = (k: string, d: any) => {
   try { const v = localStorage.getItem('sim.' + k); return v == null ? d : JSON.parse(v); }
@@ -289,9 +284,7 @@ const FamilyCatalog: React.FC<{
   embedded?: boolean;
   /** Motors application filter (all / propeller / robot / aviation / marine). */
   application?: ApplicationFilter;
-  /** the by-die view (owner 2026-11-17), switched on in the Motors tab header for admins: every die of the tab at once */
-  byDie?: boolean;
-}> = ({ diameter, embedded, application = 'all', byDie = false }) => {
+}> = ({ diameter, embedded, application = 'all' }) => {
   useTranslation('motors'); // re-render on language change; lazy-loads the namespace
   useTranslation('controller'); // the cogging chip borrows Configure's label and tooltip
   const setActiveTab = useUIStore((s) => s.setActiveTab);
@@ -308,10 +301,6 @@ const FamilyCatalog: React.FC<{
   const { user, enforced, isAdmin, role } = useAuth();
   const standardUser = isStandardUser(enforced, isAdmin, role);
 
-  // ONE ROW PER MOTOR (owner 2026-10-13): which configuration button is picked on each die's
-  // row, and which dies show the full configuration/mode tables underneath.
-  const [picked, setPicked] = useState<Record<string, string>>({});
-  const [openDie, setOpenDie] = useState<Record<string, boolean>>({});
 
   // What is loaded in the editor — its die/config/duty rows get highlighted.
   // `ctxActive` = the SHARED machine the server reports (/api/family/context); `active` below = the machine
@@ -337,7 +326,6 @@ const FamilyCatalog: React.FC<{
   const [askConfirm, setAskConfirm] = useState<ConfirmState | null>(null);
   const [batteryFor, setBatteryFor] = useState<{ die: string; cfg: Cfg } | null>(null);
   // the admin overflow menu of a die row (owner 2026-10-27): holds "Retire for all users"
-  const [dieMenu, setDieMenu] = useState<{ el: HTMLElement; die: string; shared: boolean } | null>(null);
 
   // null = not loaded yet / load FAILED — a different state from "loaded and
   // empty".  A backend mid-restart used to render as "no dies yet" (live
@@ -376,7 +364,7 @@ const FamilyCatalog: React.FC<{
         setLoadFailed(false); setTreeLoaded(true); setMsg(null); setNote(SIGN_IN_NOTE);
         return;
       }
-      setLoadFailed(true); setMsg(`catalog load failed: ${e}`);
+      setLoadFailed(true);      // retried below every 3 s; the tab (MotorsCatalog) says so in red after a quiet ~20 s
     }
   };
   useEffect(() => { load(); }, []);
@@ -446,7 +434,7 @@ const FamilyCatalog: React.FC<{
   //
   // `exporting` holds "<kind>:<die>/<cfg>", so pressing one button does not
   // grey out the other on the same row.
-  const [exporting, setExporting] = useState<string | null>(null);
+  const [, setExporting] = useState<string | null>(null);   // the button of an export in flight (the ring shows it)
 
   // THE PROGRESS RING (user 2026-09-16: "we also need a minimal progress ring
   // for report generation, so you can see it's working and not stuck").
@@ -458,8 +446,6 @@ const FamilyCatalog: React.FC<{
   // plumbing.
   const [ring, setRing] = useState<ReportRing>(RING_IDLE);
   const pollRef = useRef(0);
-  const reportBusy = (die: string, cfg: string) =>
-    exporting === `report:${die}/${cfg}` || exporting === `report:pdf:${die}/${cfg}`;
 
   // WHICH DUTY'S PICTURES go into the report (user 2026-09-11: "we also need
   // a choice of which mode we publish the pictures from into the report").  The
@@ -837,33 +823,6 @@ const FamilyCatalog: React.FC<{
     setBusy(null);
   };
 
-  /** Editors only: the passport card / older-build line of a configuration, as tooltip text
-   *  (it used to be a coloured chip in the row; the rows are uniform since 2026-10-27). */
-  const configCardTip = (die: Die, config: string): string => {
-    if (!canWrite) return '';
-    const c = die.configs.find((x) => x.name === config);
-    if (!c) return '';
-    const line = cardStatusTip(txCommon, { date: c.card_date, staleDuties: staleCatalogDutyNames(c.build_sig_aliases ?? c.build_sig, c.duties) });
-    return line ? ` ${line}` : '';
-  };
-
-  const roleColor = (role: string) =>
-    role === 'generator' ? '#38bdf8' : role === 'mixed' ? '#a78bfa' : '#f59e0b';
-  /** Where the chip's word came from.  The role is READ OFF THE DUTIES since
-   *  2026-09-10 — it used to be the Simulation toggle's value on the day the
-   *  configuration was created, frozen in the yaml, so "L180 gen" wore a
-   *  `motor` chip over two generator duties (user: "why does it say motor here,
-   *  when this is a generator"). */
-  const roleTip = (c: { role: string; role_source?: string; role_stored?: string }) => (
-    c.role_source === 'duties'
-      ? (c.role === 'mixed'
-        ? 'Read off this configuration’s duties: some drive, some generate.'
-        : `Read off this configuration’s duties — every one of them is a ${c.role} duty.`)
-        + (c.role_stored && c.role_stored !== c.role
-          ? ` The yaml still says "${c.role_stored}" from the day it was created; the duties are what count.`
-          : '')
-      : 'No duties saved yet, so this is the Simulation mode that was set when the configuration was created. It follows the duties as soon as there is one.');
-
   const shownAll = diameter == null ? filterDiesByApplication(dies, application) : diesOfDiameter(dies, application, diameter);
   // Clients see what is computed (owner 2026-10-17) - a configuration with a catalogue card - AND, since 2026-10-26, every
   // configuration they may open that stores computed points (no card yet) or that belongs to the project the tab highlights;
@@ -884,6 +843,50 @@ const FamilyCatalog: React.FC<{
     const b = d ? configButtons(d as never).find((x) => x.config === cfg) : undefined;
     return b ? { duty: b.duty, power_kw: b.power_kw, torque_nm: b.torque_nm, mass_kg: b.mass_kg } : null;
   };
+  // what the old list showed beside a configuration and the by-die row keeps: what the motor is for (editable for a writer),
+  // its saved cogging torque, and the state of a report being built or the reason it failed
+  /** Editors only: the passport card / older-build line of a configuration, as tooltip text (on the motor name). */
+  const configCardTip = (die: Die, config: string): string => {
+    if (!canWrite) return '';
+    const c = die.configs.find((x) => x.name === config);
+    if (!c) return '';
+    const line = cardStatusTip(txCommon, { date: c.card_date, staleDuties: staleCatalogDutyNames(c.build_sig_aliases ?? c.build_sig, c.duties) });
+    return line ? ` ${line}` : '';
+  };
+  const rowExtras = (dieName: string, cfgName: string) => {
+    const c = cfgOf(dieName, cfgName);
+    if (!c) return null;
+    const key = `${dieName}/${cfgName}`;
+    // the project the tab highlights (ProjectHighlightSelect): ◆ its motor, ★ the one it recommends
+    const mark = isConfigRecommended(projectIndex, dieName, cfgName) ? '\u2605' : isConfigHighlighted(projectIndex, dieName, cfgName) ? '\u25c6' : '';
+    return (
+      <>
+        {mark && <Tooltip title={tx('projectFocus.configTip')}><Box component="span" data-testid="project-focus-mark" sx={{ color: '#f59e0b', fontSize: 12 }}>{mark}</Box></Tooltip>}
+        {isPointsOnly(c) && (
+          <Tooltip title={tx('pointsOnlyTip')}><Chip size="small" data-testid="points-only-badge" label={tx('pointsOnly')} sx={{ height: 18, fontSize: 10, color: 'var(--text-3)' }} /></Tooltip>
+        )}
+        <ApplicationBadge cfg={c} die={dieName} canEdit={canWrite} />
+        {coggingValue(c.cogging) !== null && (
+          <Tooltip title={coggingTipText(c.cogging, txc)}>
+            <Typography component="span" data-testid="cogging-chip"
+              sx={{ fontSize: 11, color: c.cogging?.stale ? '#fbbf24' : 'var(--text-3)', cursor: 'help' }}>
+              {txc('configure.cogging')} {coggingValue(c.cogging)!.toFixed(coggingDigits(coggingValue(c.cogging)!))} N·m
+            </Typography>
+          </Tooltip>
+        )}
+        {(ringBusy(ring, `report:${key}`) || ringBusy(ring, `report:pdf:${key}`)) && (
+          <Tooltip title={ringTip(ring)}><span><ReportRing ring={ring} size={13} /></span></Tooltip>
+        )}
+        {ring.notice && ring.key.endsWith(`:${key}`) && (
+          <Tooltip title={ring.notice.full}>
+            <Typography component="span" onClick={() => setRing(RING_IDLE)}
+              sx={{ fontSize: 11, cursor: 'pointer', maxWidth: 260, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                    color: ring.notice.kind === 'error' ? '#f87171' : 'var(--text-3)' }}>✗ {ring.notice.text}</Typography>
+          </Tooltip>
+        )}
+      </>
+    );
+  };
   const byDieActions: ByDieActions = {
     load: (die, cfg) => { const r = ratedOf(die, cfg); if (r?.duty) void applyDuty(die, cfg, r.duty); },
     renameDie, toggleDieLock: (n) => { const d = dieOf(n); if (d) toggleDieLock(d); },
@@ -903,11 +906,6 @@ const FamilyCatalog: React.FC<{
           color: msg.startsWith('✗') ? '#fca5a5' : '#34d399' }}>{msg}</Typography>
       )}
 
-      {!embedded && loadFailed && (
-        <Typography sx={{ fontSize: 11, color: '#f59e0b' }}>
-          backend unreachable — the catalog is safe on disk; retrying…
-        </Typography>
-      )}
       {!embedded && shown.length === 0 && !msg && !loadFailed && (
         <Typography sx={{ fontSize: 11, color: 'var(--text-4)' }}>
           {(() => {
@@ -921,397 +919,18 @@ const FamilyCatalog: React.FC<{
         </Typography>
       )}
 
-      {isAdmin && byDie ? (
-        <CatalogByDie dies={shown as never} thumbs={(d) => thumbOf(d as never, thumbs)} rated={ratedOf}
-          active={active ? { die: active.die, config: active.config } : null} isAdmin={isAdmin} canWrite={canWrite}
-          standardUser={standardUser} busy={!!busy || loadRunning} actions={byDieActions} />
-      ) : (
-      <>
-      {shown.map(die => (
-        <Box key={die.name} data-project-motor={isDieHighlighted(projectIndex, die.name) ? 'true' : undefined} sx={{
-          border: `1px solid ${active?.die === die.name ? '#60a5fa88' : 'var(--line-soft)'}`,
-          ...(isDieHighlighted(projectIndex, die.name) ? { borderLeft: '3px solid #f59e0b' } : {}),
-          borderRadius: 1, p: 1.2, display: 'flex', flexDirection: 'column', gap: 0.8 }}>
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.2, flexWrap: 'wrap' }}>
-            <Box sx={{ flexShrink: 0, lineHeight: 0 }}>
-              <MotorThumbnail slots={die.slots} poles={die.poles} size={56}
-                thumbSvg={thumbOf(die, thumbs)} />
-            </Box>
-            <Typography sx={{ fontSize: 13, fontWeight: 700, color: 'var(--text-1)' }}>
-              {die.name}
-            </Typography>
-            <OpennessMarker die={die} />
-            {(() => {
-              // The configurations as small buttons; the numbers beside them are those of
-              // the picked configuration's DEFAULT mode (lib/catalogRows).
-              const btns = configButtons(die as never);
-              const sel = selectedConfig(btns, active?.die === die.name ? active.config ?? null : null,
-                                         picked[die.name] ?? null);
-              const cur = btns.find((b) => b.config === sel) ?? null;
-              return (
-                <>
-                  <Box sx={{ display: 'inline-flex', gap: 0.4, flexWrap: 'wrap' }}>
-                    {btns.map((b) => {
-                      const loaded = active?.die === die.name && active?.config === b.config;
-                      return (
-                        <Tooltip key={b.config} title={tx('configButtonTip', { config: b.config, duty: b.duty ?? '\u2014', n: b.modes }) + (isConfigHighlighted(projectIndex, die.name, b.config) ? ` ${tx('projectFocus.configTip')}` : '') + configCardTip(die, b.config)}>
-                          <Button size="small" variant={b.config === sel ? 'contained' : 'outlined'}
-                            onClick={() => {
-                              // pick it AND load its default mode; a click that cannot load says why
-                              const plan = configClickPlan(btns, b.config,
-                                active?.die === die.name ? { config: active.config, duty: active.duty } : null,
-                                !!busy || loadRunning);
-                              setPicked((m) => ({ ...m, [die.name]: plan.pick }));
-                              if (plan.refuse) setMsg(`✗ ${tx(plan.refuse === 'busy' ? 'configClickBusy' : 'configClickNoMode', { config: b.config })}`);
-                              else if (plan.alreadyLoaded) {
-                                // never silent: say it, briefly
-                                const said = `✓ ${tx('configAlreadyLoaded', { config: b.config })}`;
-                                setMsg(said);
-                                window.setTimeout(() => setMsg((cur) => (cur === said ? null : cur)), 3500);
-                              }
-                              else if (plan.load) void applyDuty(die.name, plan.pick, plan.load);
-                            }}
-                            sx={{ textTransform: 'none', fontSize: 12, py: 0, px: 0.9, minWidth: 0, minHeight: 22,
-                                  ...(loaded && b.config !== sel ? { borderColor: '#60a5fa', color: '#60a5fa' } : {}),
-                                  ...(isConfigHighlighted(projectIndex, die.name, b.config) && !loaded ? { borderColor: '#f59e0b', color: b.config === sel ? undefined : '#f59e0b' } : {}) }}>
-                            {b.config}{loaded ? ' \u25cf' : ''}{isConfigRecommended(projectIndex, die.name, b.config) ? ' \u2605' : isConfigHighlighted(projectIndex, die.name, b.config) ? ' \u25c6' : ''}
-                          </Button>
-                        </Tooltip>
-                      );
-                    })}
-                  </Box>
-                  {cur && (
-                    <>
-                      {cur && isPointsOnly(die.configs.find((x) => x.name === cur.config) ?? { name: cur.config, duties: [] }) && (
-                        <Tooltip title={tx('pointsOnlyTip')}><Chip size="small" data-testid="points-only-badge" label={tx('pointsOnly')} sx={{ height: 18, fontSize: 10, color: 'var(--text-3)' }} /></Tooltip>
-                      )}
-                      <ApplicationBadge cfg={die.configs.find((x) => x.name === cur.config)} die={die.name} canEdit={canWrite} />
-                      <Tooltip title={tx('defaultModeNumbersTip', { duty: cur.duty ?? '\u2014' })}>
-                        <Typography component="span" sx={{ fontSize: 12, color: 'var(--text-2)', cursor: 'help',
-                                                          fontVariantNumeric: 'tabular-nums' }}>
-                          {/* the rated line, plainly: rated is always the continuous maximum, never a
-                              short-time mark (owner 2026-10-19) */}
-                          {cur.duty ? `${cur.duty}: ` : ''}{fmt(cur.power_kw, 2)} kW · {fmt(cur.torque_nm, 2)} Nm · {fmt(cur.mass_kg, 2)} kg{cur.mass_partial ? ` (${tx('massPartialShort')})` : ''}
-                        </Typography>
-                      </Tooltip>
-                      {/* no load arrow here (owner 2026-10-15): the configuration buttons load the motor */}
-                    </>
-                  )}
-                  <Button size="small" onClick={() => setOpenDie((m) => ({ ...m, [die.name]: !m[die.name] }))}
-                    aria-expanded={!!openDie[die.name]}
-                    sx={{ textTransform: 'none', fontSize: 12, py: 0, px: 0.6, minWidth: 0, color: 'var(--text-3)' }}>
-                    {openDie[die.name] ? tx('detailsHide') : tx('detailsShow')}
-                  </Button>
-                </>
-              );
-            })()}
-            {canWrite && (
-              <Tooltip title={tx('renameDie')}>
-                <span>
-                  <IconButton size="small" disabled={!!busy}
-                    onClick={() => renameDie(die.name)}
-                    sx={{ fontSize: 11, p: 0.2, color: 'var(--text-4)' }}>✎</IconButton>
-                </span>
-              </Tooltip>
-            )}
-            {canWrite && (
-              <Tooltip title={die.locked
-                ? 'Die is LOCKED — stamped geometry is read-only. Click to unlock.'
-                : 'Die is unlocked — the whole geometry is editable. Click to lock.'}>
-                <span>
-                  {/* The glyph shows the CURRENT STATE (🔒 = locked), never the
-                      action — an action-glyph read as state locked the user's
-                      mental model backwards. */}
-                  <IconButton size="small" disabled={!!busy}
-                    onClick={() => toggleDieLock(die)}
-                    sx={{ fontSize: 11, p: 0.2,
-                          color: die.locked ? '#fbbf24' : 'var(--text-4)' }}>
-                    {die.locked ? '🔒' : '🔓'}
-                  </IconButton>
-                </span>
-              </Tooltip>
-            )}
-            <Typography sx={{ fontSize: 11, color: 'var(--text-3)' }}>
-              {die.configs.length} configuration{die.configs.length === 1 ? '' : 's'}
-            </Typography>
-            {canWrite && (  /* history = rollback, only for those who may edit (owner 2026-10-15) */
-            <Tooltip title="History of the die geometry (die.yaml) — every saved version; pick one to roll back.">
-              <span>
-                <Button size="small" disabled={!!busy}
-                  onClick={() => setHistOf({ die: die.name, config: null })}
-                  sx={{ fontSize: 11, py: 0, px: 0.6, minWidth: 0,
-                        textTransform: 'none', color: 'var(--text-3)' }}>
-                  ⟲ history
-                </Button>
-              </span>
-            </Tooltip>
-            )}
-            {canWrite && (
-              <Tooltip title={tx('duplicateTheWholeDieStampedGeometry')}>
-                <span>
-                  <Button size="small" disabled={!!busy}
-                    onClick={() => duplicateDie(die.name)}
-                    sx={{ fontSize: 11, py: 0, px: 0.6, minWidth: 0,
-                          textTransform: 'none', color: '#60a5fa' }}>
-                    ⧉ duplicate
-                  </Button>
-                </span>
-              </Tooltip>
-            )}
-            <Box sx={{ flex: 1 }} />
-            {canWrite && (
-              <Button size="small" variant="text" disabled={!!busy}
-                onClick={() => createCfg(die.name)}
-                sx={{ textTransform: 'none', fontSize: 11, minWidth: 0 }}>
-                ＋ configuration
-              </Button>
-            )}
-            {canWrite && (
-              <Tooltip title={tx('deleteDieConfigurationsMustBeDeleted')}>
-                <span>
-                  <IconButton size="small" disabled={!!busy}
-                    onClick={() => deleteDie(die)}
-                    sx={{ color: 'var(--text-4)', fontSize: 13, p: 0.4 }}>🗑</IconButton>
-                </span>
-              </Tooltip>
-            )}
-            {canWrite && isAdmin && (
-              <Tooltip title={tx('dieMenuTip')}>
-                <span>
-                  <IconButton size="small" disabled={!!busy} data-testid="die-menu-button"
-                    aria-label={tx('dieMenuTip')}
-                    onClick={(e) => setDieMenu({ el: e.currentTarget, die: die.name, shared: die.layer === 'shared' })}
-                    sx={{ color: 'var(--text-4)', p: 0.3 }}>
-                    <MoreVertIcon sx={{ fontSize: 16 }} />
-                  </IconButton>
-                </span>
-              </Tooltip>
-            )}
-          </Box>
-
-          {openDie[die.name] && die.configs.map(c => (
-            <Box key={c.name} sx={{ pl: 1, py: 0.3, borderTop: '1px solid var(--panel)' }}>
-              <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.8, flexWrap: 'wrap' }}>
-                <Typography sx={{ fontSize: 12.5, fontWeight: 600, minWidth: 84,
-                  color: (active?.die === die.name && active?.config === c.name)
-                    ? '#60a5fa' : 'var(--text-2)' }}>
-                  {c.name}
-                  <MotorRevisionText die={die.name} config={c.name} />
-                  {(active?.die === die.name && active?.config === c.name)
-                    ? ' ●' : ''}
-                </Typography>
-                {canWrite && (
-                  <Tooltip title={tx('renameConfiguration')}>
-                    <span>
-                      <IconButton size="small" disabled={!!busy}
-                        onClick={() => renameCfg(die.name, c.name)}
-                        sx={{ fontSize: 11, p: 0.2, color: 'var(--text-4)' }}>✎</IconButton>
-                    </span>
-                  </Tooltip>
-                )}
-                {canWrite && (
-                  <Tooltip title={c.locked
-                    ? 'Configuration is LOCKED — with the locked die the geometry is fully read-only. Click to unlock.'
-                    : 'Configuration is unlocked — stack length, wire height and turns are editable. Click to lock.'}>
-                    <span>
-                      <IconButton size="small" disabled={!!busy}
-                        onClick={() => toggleCfgLock(die.name, c)}
-                        sx={{ fontSize: 11, p: 0.2,
-                              color: c.locked ? '#fbbf24' : 'var(--text-4)' }}>
-                        {c.locked ? '🔒' : '🔓'}
-                      </IconButton>
-                    </span>
-                  </Tooltip>
-                )}
-                {canWrite && (
-                <Tooltip title="History — every saved version of this configuration (geometry, winding, materials, duties). Pick one to roll back; the current version is kept as a snapshot too.">
-                  <span>
-                    <Button size="small" disabled={!!busy}
-                      onClick={() => setHistOf({ die: die.name, config: c.name })}
-                      sx={{ fontSize: 11, py: 0, px: 0.6, minWidth: 0,
-                            textTransform: 'none', color: 'var(--text-3)' }}>
-                      ⟲ history
-                    </Button>
-                  </span>
-                </Tooltip>
-                )}
-                {canWrite && (
-                  <Tooltip title={tx('duplicateCopyThisConfigurationWithAll')}>
-                    <span>
-                      <Button size="small" disabled={!!busy}
-                        onClick={() => duplicateCfg(die.name, c.name)}
-                        sx={{ fontSize: 11, py: 0, px: 0.6, minWidth: 0,
-                              textTransform: 'none', color: '#60a5fa' }}>
-                        ⧉ duplicate
-                      </Button>
-                    </span>
-                  </Tooltip>
-                )}
-                {canWrite && isAdmin && (
-                  <Tooltip title="Move this configuration to another die, with its results, project links and customer access (a dry run is shown first)">
-                    <span>
-                      <Button size="small" disabled={!!busy}
-                        onClick={() => moveCfg(die.name, c.name, 'move')}
-                        sx={{ fontSize: 11, py: 0, px: 0.6, minWidth: 0,
-                              textTransform: 'none', color: 'var(--text-3)' }}>
-                        ⇄ move
-                      </Button>
-                    </span>
-                  </Tooltip>
-                )}
-                {canWrite && isAdmin && (
-                  <Tooltip title="Copy this configuration into another die, with its runs, results and history; the source stays">
-                    <span>
-                      <Button size="small" disabled={!!busy}
-                        onClick={() => moveCfg(die.name, c.name, 'copy')}
-                        sx={{ fontSize: 11, py: 0, px: 0.6, minWidth: 0,
-                              textTransform: 'none', color: 'var(--text-3)' }}>
-                        ⇉ copy to die
-                      </Button>
-                    </span>
-                  </Tooltip>
-                )}
-                {(c.duties?.length ?? 0) > 0 && (
-                  <Tooltip title={tx('downloadTheDatasheetXlsxEveryDuty')}>
-                    <span>
-                      <Button size="small"
-                        disabled={exporting === `datasheet:${die.name}/${c.name}`}
-                        onClick={() => runExport('datasheet', die.name, c.name)}
-                        sx={{ fontSize: 11, py: 0, px: 0.6, minWidth: 0,
-                              textTransform: 'none', color: '#34d399' }}>
-                        {exporting === `datasheet:${die.name}/${c.name}`
-                          ? '… datasheet' : '⭳ datasheet'}
-                      </Button>
-                    </span>
-                  </Tooltip>
-                )}
-                <Tooltip title={ringBusy(ring, `report:${die.name}/${c.name}`)
-                  ? ringTip(ring)
-                  : 'Full report of the last results of every solver for this configuration — as a WORD document you can edit and forward: every duty compared in tables, the field maps, and the warnings with what to do about each.'}>
-                  <span>
-                    <Button size="small"
-                      disabled={reportBusy(die.name, c.name)}
-                      onClick={() => runExport('report', die.name, c.name)}
-                      sx={{ fontSize: 11, py: 0, px: 0.6, minWidth: 0,
-                            textTransform: 'none', color: '#a78bfa' }}>
-                      {ringBusy(ring, `report:${die.name}/${c.name}`)
-                        ? <ReportRing ring={ring} />
-                        : (exporting === `report:${die.name}/${c.name}`
-                          ? '… report' : '⭳ report')}
-                    </Button>
-                  </span>
-                </Tooltip>
-                {/* The failure, where it was clicked: one short sentence, the
-                    whole text in the tooltip (lib/runNotice, the Run button's
-                    own pattern).  A report that dies must not leave the user
-                    looking at a button that simply came back. */}
-                {ring.notice && ring.key.endsWith(`:${die.name}/${c.name}`) && (
-                  <Tooltip title={ring.notice.full}>
-                    <Typography onClick={() => setRing(RING_IDLE)}
-                      sx={{ fontSize: 11, cursor: 'pointer', maxWidth: 320,
-                            overflow: 'hidden', textOverflow: 'ellipsis',
-                            whiteSpace: 'nowrap',
-                            color: ring.notice.kind === 'error'
-                              ? '#f87171' : 'var(--text-3)' }}>
-                      ✗ {ring.notice.text}
-                    </Typography>
-                  </Tooltip>
-                )}
-                {/* …and the same report as a PDF, for sending it read-only.
-                    Small, because Word is the one the user asked to lead. */}
-                <Tooltip title={ringBusy(ring, `report:pdf:${die.name}/${c.name}`)
-                  ? ringTip(ring)
-                  : 'The same report as a PDF — read-only, for sending on. Word can export one itself; this is the shortcut.'}>
-                  <span>
-                    <Button size="small"
-                      disabled={reportBusy(die.name, c.name)}
-                      onClick={() => runExport('report', die.name, c.name, true)}
-                      sx={{ fontSize: 10, py: 0, px: 0.4, minWidth: 0,
-                            textTransform: 'none', color: 'var(--text-4)' }}>
-                      {ringBusy(ring, `report:pdf:${die.name}/${c.name}`)
-                        ? <ReportRing ring={ring} size={13} />
-                        : (exporting === `report:pdf:${die.name}/${c.name}`
-                          ? '…' : 'pdf')}
-                    </Button>
-                  </span>
-                </Tooltip>
-                {!canWrite && !standardUser && (
-                  <Tooltip title={tx('copyThisMachineIntoMyMotors')}>
-                    <span>
-                      <Button size="small" disabled={!!busy}
-                        onClick={() => duplicateToMySpace(die.name, c.name)}
-                        sx={{ fontSize: 11, py: 0, px: 0.6, minWidth: 0,
-                              textTransform: 'none', color: '#60a5fa' }}>
-                        ⧉ to my motors
-                      </Button>
-                    </span>
-                  </Tooltip>
-                )}
-                <ApplicationBadge cfg={c} die={die.name} canEdit={canWrite} />
-                <Tooltip title={roleTip(c)}>
-                  <Chip size="small" label={c.role}
-                    sx={{ height: 18, fontSize: 10, color: roleColor(c.role),
-                          bgcolor: 'transparent', cursor: 'help',
-                          border: `1px solid ${roleColor(c.role)}55` }} />
-                </Tooltip>
-                <Typography sx={{ fontSize: 11, color: 'var(--text-3)' }}>
-                  {c.stack_mm} mm · wire {c.wire_height_mm}×{c.wire_width_mm} mm
-                  {' '}· {c.turns} turns
-                  {c.connection ? ` · ${c.connection}` : ''}
-                  {String(c.star_delta ?? 'star').startsWith('d') ? ' · Δ' : ' · Y'}
-                  {c.steel ? ` · ${c.steel}` : ''}
-                  {c.magnet ? ` · ${c.magnet}` : ''}
-                </Typography>
-                {(c as any).name_stack_mismatch && (
-                  <Tooltip title={`The L-number in the name contradicts the stored stack (${c.stack_mm} mm). New saves can no longer create this; rename the configuration (✎) so the catalog stops repeating it.`}>
-                    <Chip size="small" label={tx('nameStack')}
-                      sx={{ height: 18, fontSize: 10, color: '#f59e0b',
-                            bgcolor: 'transparent', border: '1px solid #f59e0b88' }} />
-                  </Tooltip>
-                )}
-                {coggingValue(c.cogging) !== null && (
-                  <Tooltip title={coggingTipText(c.cogging, txc)}>
-                    <Typography component="span" data-testid="cogging-chip"
-                      sx={{ fontSize: 11, color: c.cogging?.stale ? '#fbbf24' : 'var(--text-3)', cursor: 'help' }}>
-                      {txc('configure.cogging')} {coggingValue(c.cogging)!.toFixed(coggingDigits(coggingValue(c.cogging)!))} N·m
-                    </Typography>
-                  </Tooltip>
-                )}
-                {c.battery && (
-                  <Tooltip title={`Supply: ${c.battery.cells ?? '?'} cells, `
-                    + `${c.battery.v_min}–${c.battery.v_max} V pack`
-                    + (c.battery.cells ? ` (${(c.battery.v_min / c.battery.cells).toFixed(2)}–${(c.battery.v_max / c.battery.cells).toFixed(2)} V/cell)` : '')
-                    + '. Duty V L-L cells are judged against this range.'}>
-                    <Typography component="span"
-                      sx={{ fontSize: 11, color: 'var(--text-3)', cursor: canWrite ? 'pointer' : 'help' }}
-                      onClick={canWrite ? () => editBattery(die.name, c) : undefined}>
-                      🔋 {c.battery.chemistry ? `${c.battery.chemistry} ` : ''}{c.battery.cells ?? '?'}s · {fmt(c.battery.v_min, 0)}–{fmt(c.battery.v_max, 0)} V
-                    </Typography>
-                  </Tooltip>
-                )}
-                {!c.battery && canWrite && (
-                  <Tooltip title={tx('setTheSupplyBatteryDutiesWill')}>
-                    <Typography component="span" sx={{ fontSize: 11, color: 'var(--text-4)', cursor: 'pointer' }}
-                      onClick={() => editBattery(die.name, c)}>🔋 —</Typography>
-                  </Tooltip>
-                )}
-                <Box sx={{ flex: 1 }} />
-                {canWrite && (
-                  <Tooltip title={tx('deleteThisConfigurationAndItsDuties')}>
-                    <span>
-                      <IconButton size="small" disabled={!!busy}
-                        onClick={() => deleteCfg(die.name, c.name)}
-                        sx={{ color: 'var(--text-4)', fontSize: 12, p: 0.3 }}>🗑</IconButton>
-                    </span>
-                  </Tooltip>
-                )}
-              </Box>
-            </Box>
-          ))}
-        </Box>
-      ))}
-      </>
-      )}
+      {/* THE Motors catalog for every role (owner 2026-11-17: "the catalog view must be the same for everybody"); the
+          admin sees more in it, gated in the routes (designations, Overview, jobs).  The old list is gone. */}
+      <CatalogByDie dies={shown as never} thumbs={(d) => thumbOf(d as never, thumbs)} rated={ratedOf}
+        active={active ? { die: active.die, config: active.config } : null} isAdmin={isAdmin} canWrite={canWrite}
+        standardUser={standardUser} busy={!!busy || loadRunning} actions={byDieActions}
+        dieExtras={(n) => { const d = dieOf(n); return d ? (
+          <>
+            <OpennessMarker die={d} />
+            {isDieHighlighted(projectIndex, d.name) && <Box component="span" data-project-motor="true" sx={{ width: 3, height: 14, bgcolor: '#f59e0b' }} />}
+          </>) : null; }}
+        rowExtras={(n, cn) => rowExtras(n, cn)}
+        nameTip={(n, cn) => { const d = dieOf(n); return d ? configCardTip(d, cn).trim() : ''; }} />
     </>
   );
 
@@ -1319,23 +938,6 @@ const FamilyCatalog: React.FC<{
     <>
       <TextPromptDialog state={askText} onClose={() => setAskText(null)} />
       <ConfirmDialog state={askConfirm} onClose={() => setAskConfirm(null)} />
-      <Menu open={!!dieMenu} anchorEl={dieMenu?.el ?? null} onClose={() => setDieMenu(null)}>
-        {dieMenu?.shared ? (
-          <Tooltip title={tx('retireDieTip')} placement="left">
-            <MenuItem dense data-testid="retire-die-item" sx={{ fontSize: 12, color: '#f87171' }}
-              onClick={() => { const d = dieMenu?.die; setDieMenu(null); if (d) retireDie(d); }}>
-              {tx('retireDieConfirm')}
-            </MenuItem>
-          </Tooltip>
-        ) : (
-          <Tooltip title={tx('archiveDieTip')} placement="left">
-            <MenuItem dense data-testid="archive-die-item" sx={{ fontSize: 12 }}
-              onClick={() => { const d = dieMenu?.die; setDieMenu(null); if (d) archiveDie(d); }}>
-              {tx('archiveDieConfirm')}
-            </MenuItem>
-          </Tooltip>
-        )}
-      </Menu>
       <BatteryDialog open={!!batteryFor}
         configName={batteryFor?.cfg.name ?? ''}
         initial={(batteryFor?.cfg.battery ?? null) as BatteryValue | null}

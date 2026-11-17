@@ -17,6 +17,8 @@ export interface ByDieBattery { cells?: number | null; v_cell_nom?: number | nul
 export interface ByDieCfg {
   name: string; designation?: string | null; designation_complete?: boolean; designation_unknown?: string[];
   family?: string; beside?: ByDieBeside; locked?: boolean; duties?: ByDieDuty[]; battery?: ByDieBattery | null;
+  /** for a customer / the factory, when the designation is not complete: family and length as far as known (server) */
+  display_name?: string | null;
 }
 export interface ByDieDie { name: string; created?: string; slots?: number | null; poles?: number | null; stator_diameter?: number | null;
   locked?: boolean; layer?: string; configs: ByDieCfg[];
@@ -126,7 +128,10 @@ export function markOld(rows: MotorRow[]): void {
   }
 }
 
-export function buildByDie(dies: ByDieDie[], overview: ByDieOverview | null): FamilyGroup[] {
+/** `staff` false (a customer, the factory): a motor without a complete designation is shown by its family and length
+ *  (`display_name`) or not named at all ('' = "name pending"), never by its stored configuration name. */
+export function buildByDie(dies: ByDieDie[], overview: ByDieOverview | null, opts: { staff?: boolean } = {}): FamilyGroup[] {
+  const staff = opts.staff !== false;
   const all: MotorRow[] = [];
   const blocks: DieBlock[] = (dies ?? []).filter((d) => d && typeof d.name === 'string').map((d) => {
     const motors = (d.configs ?? []).map((c): MotorRow => {
@@ -140,7 +145,7 @@ export function buildByDie(dies: ByDieDie[], overview: ByDieOverview | null): Fa
         .filter((p): p is NonNullable<typeof p> => !!p).map((p) => ({ status: p.status, rev: p.current_revision }));
       const named = typeof c.designation === 'string' && c.designation.length > 0;
       const row: MotorRow = {
-        die: d.name, config: c.name, label: named ? c.designation as string : c.name, named,
+        die: d.name, config: c.name, label: named ? c.designation as string : staff ? c.name : (c.display_name || ''), named,
         complete: named && c.designation_complete !== false, unknown: c.designation_unknown ?? [],
         beside: c.beside ?? {}, projects, productions, computed: !!it?.computed, linked: false, old: false,
         newestLocked: false, locked: !!(c.locked || d.locked), created: String(d.created ?? ''), rated: null, values: null,

@@ -130,8 +130,8 @@ test('wiring: the Motors tab has the selector and FamilyCatalog marks rows from 
   const src = (rel) => readFileSync(new URL(rel, import.meta.url), 'utf8');
   assert.match(src('../../../components/catalog/MotorsCatalog.tsx'), /<ProjectHighlightSelect \/>/);
   const fam = src('../../../components/catalog/FamilyCatalog.tsx');
-  assert.match(fam, /isConfigHighlighted\(projectIndex, die\.name, b\.config\)/);
-  assert.match(fam, /isDieHighlighted\(projectIndex, die\.name\)/);
+  assert.match(fam, /isConfigHighlighted\(projectIndex, dieName, cfgName\)/);          // the motor row's mark (one catalog)
+  assert.match(fam, /isDieHighlighted\(projectIndex, d\.name\)/);
   const sel = src('../../../components/catalog/ProjectHighlightSelect.tsx');
   assert.match(sel, /developmentApi\.motors\(chosen\.id, true\)/);                // through the project route's own gates
   assert.match(src('../../../lib/openProjectMotor.ts'), /useProjectFocusStore\.getState\(\)\.set/);   // opening a motor sets the focus

@@ -333,7 +333,26 @@
       "marks": "Marks",
       "projects": "Projects",
       "production": "Production",
-      "sortTip": "Sort the motors of each die by this column (click again to reverse, a third time for the catalog order)"
+      "sortTip": "Sort the motors of each die by this column (click again to reverse, a third time for the catalog order)",
+      "stage": "Stage",
+      "jobs": "Running"
+    },
+    "stateTip": "Which projects the rows show: a motor linked only to projects or productions in another state leaves the view (it is still here under that state)",
+    "job": {
+      "tip": "{tag} · {session} · since {since} · cpus {cpus} reserved ({used} used) · memory {mem} GB reserved ({now} GB now)"
+    },
+    "server": {
+      "noStatus": "{name}: no status",
+      "load": "{name}: {cpus}/{budget} threads reserved ({used} used) · {mem}/{memBudget} GB ({memUsed} used) · {queued} queued",
+      "stale": "stale, {min} min old",
+      "unnamed": "{n} jobs without a motor",
+      "unknownDie": "{n} jobs name a die that is not in the catalog"
+    },
+    "projectMenu": {
+      "open": "Open the project",
+      "active": "Set Active",
+      "parked": "Park",
+      "archived": "Archive"
     }
   }
 }

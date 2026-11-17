@@ -59,7 +59,7 @@ const m = await import(pathToFileURL(out).href);
 process.on('exit', () => { try { rmSync(tmp, { recursive: true, force: true }); } catch { /* */ } });
 const ready = (i) => new Promise((r) => (i.isInitialized ? r() : i.on('initialized', () => r())));
 await m.fetchFamilyTree();
-const i18nReady = async (i) => { await ready(i); await i.changeLanguage('en'); await i.loadNamespaces(['common', 'motors', 'controller']); };                                   // the tree in the memo, as after the tab's first load
+const i18nReady = async (i) => { await ready(i); await i.changeLanguage('en'); await i.loadNamespaces(['common', 'motors', 'controller', 'development']); };                                   // the tree in the memo, as after the tab's first load
 
 // owner 2026-11-17: "the catalog view must be the SAME for everybody" - one by-die catalog, no switch, no Ø folds
 for (const [who, isAdmin] of [['admin', true], ['member', false], ['oem', false]]) {

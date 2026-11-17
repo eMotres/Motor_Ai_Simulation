@@ -333,7 +333,26 @@
       "marks": "标记",
       "projects": "项目",
       "production": "生产",
-      "sortTip": "按此列对每个冲片的电机排序（再点一次反向，第三次恢复目录顺序）"
+      "sortTip": "按此列对每个冲片的电机排序（再点一次反向，第三次恢复目录顺序）",
+      "stage": "阶段",
+      "jobs": "运行中"
+    },
+    "stateTip": "行中显示哪些项目：仅关联其他状态项目或生产的电机会移出此视图（在该状态下仍可看到）",
+    "job": {
+      "tip": "{tag} · {session} · 开始于 {since} · 预留 {cpus} 线程（已用 {used}）· 预留内存 {mem} GB（当前 {now} GB）"
+    },
+    "server": {
+      "noStatus": "{name}：无状态",
+      "load": "{name}：已预留 {cpus}/{budget} 线程（已用 {used}）· {mem}/{memBudget} GB（已用 {memUsed}）· 排队 {queued}",
+      "stale": "已过期，{min} 分钟前",
+      "unnamed": "{n} 个任务未指明电机",
+      "unknownDie": "{n} 个任务指向目录中不存在的冲片"
+    },
+    "projectMenu": {
+      "open": "打开项目",
+      "active": "设为活动",
+      "parked": "暂停",
+      "archived": "归档"
     }
   }
 }

@@ -3,14 +3,20 @@
  *  and the production that use it.  Every action of the list view stays reachable: the motor row's ▶ loads it at its
  *  default mode, the two ⋮ menus carry everything else.  The grouping and the current / old rule: lib/catalogByDie.ts. */
 import React, { useEffect, useMemo, useState } from 'react';
-import { Box, IconButton, Menu, MenuItem, Popover, Tooltip, Typography } from '@mui/material';
+import { Box, Chip, IconButton, Menu, MenuItem, Popover, Tooltip, Typography } from '@mui/material';
 import HelpOutlineIcon from '@mui/icons-material/HelpOutline';
 import MoreVertIcon from '@mui/icons-material/MoreVert';
 import PlayArrowIcon from '@mui/icons-material/PlayArrow';
 import { useTranslation } from 'react-i18next';
 import MotorThumbnail from './MotorThumbnail';
-import { buildByDie, COL_DIGITS, colValue, COLS, NAME_COL_W, nextSort, segmentationText, sortMotors, type ByDieDie, type ByDieOverview,
-  type ColKey, type MotorRow, type Sort } from '../../lib/catalogByDie';
+import { buildByDie, COL_DIGITS, colValue, COLS, filterByState, jobChip, motorStage, NAME_COL_W, nextSort, segmentationText, sortMotors,
+  stateCounts, type ByDieDie, type ByDieOverview, type ColKey, type JobsAnswer, type MotorRow, type RunningJob, type ServerView, type Sort,
+  type StateFilter } from '../../lib/catalogByDie';
+import { DisplayStateFilter } from '../common/DisplayStateControl';
+import { displayStateApi } from '../../lib/displayStateApi';
+import { appLinkPath } from '../../lib/appLink';
+import { useRememberedView } from '../../lib/useRememberedView';
+import { oneOf } from '../../lib/viewMemory';
 import { parseDesignation, SEGMENTS } from '../../lib/motorDesignation';
 import { DesignationDecoder } from '../common/MotorDesignation';
 import { NARROW } from '../../lib/narrowLayout';
@@ -38,6 +44,8 @@ interface Props {
   isAdmin: boolean; canWrite: boolean; standardUser: boolean; busy: boolean; actions: ByDieActions;
   /** for the tests: the Overview answer given instead of fetched */
   overview?: ByDieOverview | null;
+  /** for the tests: the running work given instead of fetched (`/api/catalog/jobs`, admins) */
+  jobs?: JobsAnswer | null;
   /** the non-numeric cells and the cogging of a motor (what the list view showed and this table keeps), from FamilyCatalog */
   cells?: (die: string, config: string) => RowCells | null;
   dieExtras?: (die: string) => React.ReactNode;
@@ -53,7 +61,9 @@ const COL_TIP: Record<ColKey, string> = { power: 'power', torque: 'torque', spee
 /** the fixed widths: the designation, then one column per characteristic */
 const charsGrid = { display: 'grid', gridTemplateColumns: `${NAME_COL_W}px ${COLS.map((c) => `${c.w}px`).join(' ')}`, columnGap: '8px',
   alignItems: 'center', flexShrink: 0 } as const;
-const REST_W = { application: 84, marks: 130, production: 96 } as const;
+const REST_W = { application: 84, marks: 130, stage: 96, jobs: 170, production: 96 } as const;
+const STATE_FILTERS = ['active', 'parked', 'archived', 'all'] as const;
+const JOBS_POLL_MS = 20000;
 
 export interface MenuEntry { key: string; label: string; run: () => void; danger?: boolean }
 type Who = { canWrite: boolean; isAdmin: boolean; standardUser: boolean };
@@ -98,13 +108,28 @@ const fmt = (v: number | null | undefined, d = 1) => (v === null || v === undefi
 const small = { fontSize: 11.5, color: 'var(--text-3)' };
 
 const CatalogByDie: React.FC<Props> = ({ dies, thumbs, rated, active, isAdmin, canWrite, standardUser, busy, actions, overview: given,
-  cells: cellsOf, dieExtras, nameTip }) => {
-  const { t } = useTranslation('motors');
+  cells: cellsOf, dieExtras, nameTip, jobs: givenJobs }) => {
+  const { t } = useTranslation(['motors', 'common', 'development']);
   const [overview, setOverview] = useState<ByDieOverview | null>(given ?? null);
   const [dieMenu, setDieMenu] = useState<{ el: HTMLElement; die: ByDieDie } | null>(null);
   const [cfgMenu, setCfgMenu] = useState<{ el: HTMLElement; m: MotorRow } | null>(null);
   const [decode, setDecode] = useState<{ el: HTMLElement; m: MotorRow } | null>(null);
   const [sort, setSort] = useState<Sort>(null);
+  // Active / Parked / Archived of the linked projects (owner 2026-11-17: "how do I remove old projects from the catalog")
+  const [stateFilter, setStateFilter] = useRememberedView<StateFilter>('motors.projectState', 'active', oneOf(STATE_FILTERS));
+  const [projMenu, setProjMenu] = useState<{ el: HTMLElement; id: string; title: string } | null>(null);
+  const [overviewGen, setOverviewGen] = useState(0);
+  // the running work per motor and server (admins only; the route is admin-gated), refreshed while the page is open
+  const [jobs, setJobs] = useState<JobsAnswer | null>(givenJobs ?? null);
+  useEffect(() => {
+    if (givenJobs !== undefined || !isAdmin) return;
+    let alive = true;
+    const pull = () => fetch(`${API}/api/catalog/jobs`, { cache: 'no-store' }).then((r) => (r.ok ? r.json() : null))
+      .then((a) => { if (alive) setJobs(a as JobsAnswer | null); }).catch(() => { /* the strip says "no status" */ });
+    void pull();
+    const id = window.setInterval(() => { if (typeof document === 'undefined' || document.visibilityState === 'visible') void pull(); }, JOBS_POLL_MS);
+    return () => { alive = false; window.clearInterval(id); };
+  }, [isAdmin, givenJobs]);
   const cells = cellsOf;
   useEffect(() => {
     if (given !== undefined || !isAdmin) return;           // the Overview is admin-only (route-gated): nobody else asks
@@ -112,8 +137,16 @@ const CatalogByDie: React.FC<Props> = ({ dies, thumbs, rated, active, isAdmin, c
     fetch(`${API}/api/overview`, { cache: 'no-store' }).then((r) => (r.ok ? r.json() : null))
       .then((a) => { if (alive) setOverview(a as ByDieOverview | null); }).catch(() => { /* rows without links */ });
     return () => { alive = false; };
-  }, [isAdmin, given]);
-  const groups = useMemo(() => buildByDie(dies, isAdmin ? overview : null, { staff: isAdmin }), [dies, overview, isAdmin]);
+  }, [isAdmin, given, overviewGen]);
+  const allGroups = useMemo(() => buildByDie(dies, isAdmin ? overview : null, { staff: isAdmin }), [dies, overview, isAdmin]);
+  // the state filter needs the Overview's links: admins only (a customer's view is the whole catalog, as before)
+  const showState = isAdmin && !!overview;
+  const groups = useMemo(() => (showState ? filterByState(allGroups, stateFilter) : allGroups), [allGroups, showState, stateFilter]);
+  const counts = useMemo(() => stateCounts(allGroups), [allGroups]);
+  const setProjectState = async (id: string, state: 'active' | 'parked' | 'archived') => {
+    try { await displayStateApi.set({ kind: 'project', project_id: id }, state); } catch { /* the chip stays as it was */ }
+    setOverviewGen((n) => n + 1);                               // re-read the Overview: the chip moves to its state
+  };
 
   // the four per-motor parameters left the row (owner 2026-11-17); they are in the "?" popover, under the name's segments
   const materials = (m: MotorRow) => [
@@ -148,7 +181,43 @@ const CatalogByDie: React.FC<Props> = ({ dies, thumbs, rated, active, isAdmin, c
       </Tooltip>
     );
   };
-  const run = (fn: () => void) => () => { setDieMenu(null); setCfgMenu(null); fn(); };
+  const run = (fn: () => void) => () => { setDieMenu(null); setCfgMenu(null); setProjMenu(null); fn(); };
+  const stageLabel = (s: string | null) => (!s ? '' : s === 'in_production' || s === 'computed'
+    ? t(`common:overview.stageName.${s}`) : t(`development:status.${s}`, { defaultValue: s }));
+  const jobTip = (j: RunningJob) => t('byDie.job.tip', { tag: j.tag || '—', session: j.session || '—', since: j.started_at || '—',
+    cpus: j.cpus_reserved ?? '—', used: j.cpu_used ?? '—', mem: j.mem_reserved_gb ?? '—', now: j.mem_now_gb ?? '—' });
+  const jobChipEl = (j: RunningJob) => (
+    <Tooltip key={`${j.server}/${j.tag}`} title={jobTip(j)}>
+      <Chip size="small" data-testid="by-die-job" label={jobChip(j)}
+        sx={{ height: 18, fontSize: 10.5, color: j.state === 'running' ? '#34d399' : 'var(--text-3)', borderColor: 'currentColor' }} variant="outlined" />
+    </Tooltip>
+  );
+  const serverText = (s: ServerView) => {
+    const name = (s.server || '?').toUpperCase();
+    if (s.state === 'missing' || s.state === 'no_status') return t('byDie.server.noStatus', { name });
+    const tt = s.totals ?? {}, b = s.budget ?? {};
+    const load = t('byDie.server.load', { name, cpus: tt.cpus_reserved ?? '—', used: tt.cpus_used ?? '—', budget: b.cpus ?? '—',
+      mem: tt.mem_reserved_gb ?? '—', memUsed: tt.mem_used_gb ?? '—', memBudget: b.mem_gb ?? '—', queued: tt.queued ?? 0 });
+    return s.state === 'stale' ? `${load} · ${t('byDie.server.stale', { min: Math.round((s.age_s ?? 0) / 60) })}` : load;
+  };
+  const topLine = isAdmin && (showState || jobs) ? (
+    <Box data-testid="by-die-topline" sx={{ display: 'flex', alignItems: 'center', gap: 1.5, flexWrap: 'wrap', ...small }}>
+      {showState && (
+        <DisplayStateFilter value={stateFilter} onChange={(f) => setStateFilter(f as StateFilter)}
+          counts={{ counts, woke: { active: 0, parked: 0, archived: 0, all: 0 } }} tip={t('byDie.stateTip')} />
+      )}
+      {jobs?.servers?.map((s) => (
+        <Typography key={s.server} component="span" data-testid="by-die-server"
+          sx={{ ...small, color: s.state === 'live' ? 'var(--text-2)' : '#f59e0b' }}>{serverText(s)}</Typography>
+      ))}
+      {!!jobs?.unnamed?.length && <Typography component="span" sx={small}>{t('byDie.server.unnamed', { n: jobs.unnamed.length })}</Typography>}
+      {!!jobs?.unknown?.length && (
+        <Tooltip title={jobs.unknown.map((j) => `${j.tag}: ${j.die}`).join(', ')}>
+          <Typography component="span" sx={{ ...small, color: '#f59e0b' }}>{t('byDie.server.unknownDie', { n: jobs.unknown.length })}</Typography>
+        </Tooltip>
+      )}
+    </Box>
+  ) : null;
 
   const motorRow = (m: MotorRow) => {
     const r = rated(m.die, m.config);                       // the default mode: what ▶ loads
@@ -179,7 +248,7 @@ const CatalogByDie: React.FC<Props> = ({ dies, thumbs, rated, active, isAdmin, c
           {COLS.map((c) => cell(c.key, m))}
         </Box>
         {/* 3: everything else, fixed columns too; at a narrow width this part wraps under the row first */}
-        <Box data-testid="by-die-rest" sx={{ display: 'flex', alignItems: 'center', columnGap: 1, flex: '1 1 320px', minWidth: 0, ...small }}>
+        <Box data-testid="by-die-rest" sx={{ display: 'flex', alignItems: 'center', columnGap: 1, flexWrap: 'wrap', flex: '1 1 320px', minWidth: 0, ...small }}>
           <Box sx={{ width: REST_W.application, flexShrink: 0, overflow: 'hidden' }}>{extra?.application}</Box>
           <Box data-testid="by-die-marks" sx={{ width: REST_W.marks, flexShrink: 0, display: 'flex', alignItems: 'center', gap: 0.5, overflow: 'hidden' }}>
             {extra?.marks}
@@ -187,10 +256,25 @@ const CatalogByDie: React.FC<Props> = ({ dies, thumbs, rated, active, isAdmin, c
             {m.newestLocked && <Tooltip title={t('byDie.newestLockedTip')}><Typography component="span" data-testid="by-die-newest-locked" sx={{ ...small, fontStyle: 'italic' }}>{t('byDie.newestLocked')}</Typography></Tooltip>}
           </Box>
           {isAdmin && (
+            <Typography component="span" noWrap data-testid="by-die-stage" sx={{ ...small, width: REST_W.stage, flexShrink: 0, color: 'var(--text-2)' }}>
+              {stageLabel(motorStage(m))}
+            </Typography>
+          )}
+          {isAdmin && (
+            <Box data-testid="by-die-jobs" sx={{ width: REST_W.jobs, flexShrink: 0, display: 'flex', gap: 0.5, overflow: 'hidden' }}>
+              {(jobs?.motors?.[`${m.die}/${m.config}`] ?? []).map(jobChipEl)}
+            </Box>
+          )}
+          {isAdmin && (
             <Tooltip title={projects}>
-              <Typography component="span" noWrap data-testid="by-die-projects" sx={{ ...small, color: 'var(--text-2)', flex: '1 1 120px', minWidth: 0 }}>
-                {projects || (m.computed && !m.productions.length ? t('byDie.computed') : '')}
-              </Typography>
+              <Box data-testid="by-die-projects" sx={{ ...small, flex: '1 1 120px', minWidth: 0, display: 'flex', gap: 0.5, overflow: 'hidden', whiteSpace: 'nowrap' }}>
+                {m.projects.map((p) => (
+                  <Chip key={p.id} size="small" variant="outlined" label={p.title} data-testid="by-die-project-chip"
+                    onClick={(e) => setProjMenu({ el: e.currentTarget, id: p.id, title: p.title })}
+                    sx={{ height: 18, fontSize: 10.5, maxWidth: 160, ...(p.trial ? { borderStyle: 'dashed' } : {}), ...(p.state !== 'active' ? { opacity: 0.6 } : {}) }} />
+                ))}
+                {!m.projects.length && m.computed && !m.productions.length ? <span>{t('byDie.computed')}</span> : null}
+              </Box>
             </Tooltip>
           )}
           {isAdmin && (
@@ -231,9 +315,11 @@ const CatalogByDie: React.FC<Props> = ({ dies, thumbs, rated, active, isAdmin, c
           </Tooltip>
         ))}
       </Box>
-      <Box sx={{ display: 'flex', columnGap: 1, flex: '1 1 320px', minWidth: 0 }}>
+      <Box sx={{ display: 'flex', columnGap: 1, flexWrap: 'wrap', flex: '1 1 320px', minWidth: 0 }}>
         <Box component="span" sx={{ width: REST_W.application, flexShrink: 0 }}>{t('byDie.col.application')}</Box>
         <Box component="span" sx={{ width: REST_W.marks, flexShrink: 0 }}>{t('byDie.col.marks')}</Box>
+        {isAdmin && <Box component="span" sx={{ width: REST_W.stage, flexShrink: 0 }}>{t('byDie.col.stage')}</Box>}
+        {isAdmin && <Box component="span" sx={{ width: REST_W.jobs, flexShrink: 0 }}>{t('byDie.col.jobs')}</Box>}
         {isAdmin && <Box component="span" sx={{ flex: '1 1 120px' }}>{t('byDie.col.projects')}</Box>}
         {isAdmin && <Box component="span" sx={{ width: REST_W.production, flexShrink: 0 }}>{t('byDie.col.production')}</Box>}
       </Box>
@@ -242,6 +328,7 @@ const CatalogByDie: React.FC<Props> = ({ dies, thumbs, rated, active, isAdmin, c
 
   return (
     <Box data-testid="catalog-by-die" sx={{ display: 'flex', flexDirection: 'column', gap: 0.75, overflowX: 'auto' }}>
+      {topLine}
       {header}
       {groups.map((g) => (
         <Box key={g.family || '-'} data-testid="by-die-family" sx={{ border: '1px solid var(--line-soft)', borderRadius: 1, overflow: 'hidden', ...(g.named ? {} : { opacity: 0.6 }) }}>
@@ -259,6 +346,7 @@ const CatalogByDie: React.FC<Props> = ({ dies, thumbs, rated, active, isAdmin, c
                   Ø{fmt(b.die.stator_diameter, 0)} · {b.die.slots}s{b.die.poles}p
                 </Typography>
                 {dieExtras?.(b.die.name)}
+                {isAdmin && (jobs?.dies?.[b.die.name] ?? []).map(jobChipEl)}
                 {canWrite && (
                   <Tooltip title={b.die.locked ? t('byDie.lockedTip') : t('byDie.unlockedTip')}>
                     <span>
@@ -281,6 +369,14 @@ const CatalogByDie: React.FC<Props> = ({ dies, thumbs, rated, active, isAdmin, c
       <Popover open={!!decode} anchorEl={decode?.el ?? null} onClose={() => setDecode(null)} anchorOrigin={{ vertical: 'bottom', horizontal: 'left' }}>
         {decode && <DesignationDecoder segments={segmentsOf(decode.m) as never} materials={materials(decode.m)} />}
       </Popover>
+      <Menu open={!!projMenu} anchorEl={projMenu?.el ?? null} onClose={() => setProjMenu(null)}>
+        {projMenu && [
+          <MenuItem key="open" dense component="a" href={appLinkPath({ kind: 'project', id: projMenu.id }) ?? undefined}>{t('byDie.projectMenu.open')}</MenuItem>,
+          ...(['active', 'parked', 'archived'] as const).map((st) => (
+            <MenuItem key={st} dense onClick={run(() => void setProjectState(projMenu.id, st))}>{t(`byDie.projectMenu.${st}`)}</MenuItem>
+          )),
+        ]}
+      </Menu>
       <Menu open={!!dieMenu} anchorEl={dieMenu?.el ?? null} onClose={() => setDieMenu(null)}>
         {dieMenu && dieMenuItems(dieMenu.die, { canWrite, isAdmin, standardUser }, actions, t).map((it) => (
           <MenuItem key={it.key} dense sx={it.danger ? { color: '#f87171' } : undefined} onClick={run(it.run)}>{it.label}</MenuItem>

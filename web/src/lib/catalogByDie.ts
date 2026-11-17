@@ -27,17 +27,22 @@ export interface ByDieDie { name: string; created?: string; slots?: number | nul
 /** The Overview's answer, only the parts this view reads (admins only: the route is admin-gated). */
 export interface ByDieOverview {
   items: Record<string, { projects: Array<{ id: string; link_status: string }>; productions: string[]; computed?: boolean }>;
-  projects: Record<string, { id: string; title: string; status: string; stage?: string }>;
-  productions: Record<string, { die: string; config: string; status: string; current_revision: string }>;
+  projects: Record<string, { id: string; title: string; status: string; stage?: string; display?: { state?: string } }>;
+  productions: Record<string, { die: string; config: string; status: string; current_revision: string; display?: { state?: string } }>;
 }
+
+/** Active / Parked / Archived of a project or production (display_state); anything else reads as active. */
+export type LinkState = 'active' | 'parked' | 'archived';
+const linkState = (x: { display?: { state?: string } } | undefined): LinkState =>
+  (x?.display?.state === 'parked' || x?.display?.state === 'archived' ? x.display.state : 'active') as LinkState;
 
 export interface MotorRow {
   die: string; config: string;
   /** what is shown: the designation, or the stored configuration name when there is none (`named` false) */
   label: string; named: boolean; complete: boolean; unknown: string[];
   beside: ByDieBeside;
-  projects: Array<{ id: string; title: string; trial: boolean; stage: string }>;
-  productions: Array<{ status: string; rev: string }>;
+  projects: Array<{ id: string; title: string; trial: boolean; stage: string; state: LinkState }>;
+  productions: Array<{ status: string; rev: string; state: LinkState }>;
   computed: boolean;
   /** a project (current link) or a production links it */
   linked: boolean;
@@ -139,10 +144,10 @@ export function buildByDie(dies: ByDieDie[], overview: ByDieOverview | null, opt
       const it = overview?.items?.[key];
       const projects = (it?.projects ?? []).map((p) => {
         const pr = overview?.projects?.[p.id];
-        return pr ? { id: p.id, title: pr.title, trial: p.link_status === 'trial', stage: pr.stage || pr.status } : null;
+        return pr ? { id: p.id, title: pr.title, trial: p.link_status === 'trial', stage: pr.stage || pr.status, state: linkState(pr) } : null;
       }).filter((p): p is MotorRow['projects'][number] => !!p);
       const productions = (it?.productions ?? []).map((k) => overview?.productions?.[k])
-        .filter((p): p is NonNullable<typeof p> => !!p).map((p) => ({ status: p.status, rev: p.current_revision }));
+        .filter((p): p is NonNullable<typeof p> => !!p).map((p) => ({ status: p.status, rev: p.current_revision, state: linkState(p) }));
       const named = typeof c.designation === 'string' && c.designation.length > 0;
       const row: MotorRow = {
         die: d.name, config: c.name, label: named ? c.designation as string : staff ? c.name : (c.display_name || ''), named,
@@ -232,4 +237,70 @@ export function sortMotors<M extends Pick<MotorRow, 'values'>>(motors: M[], key:
     if (y === null) return -1;
     return dir === 'desc' ? y - x : x - y;
   });
+}
+
+
+// ── the admin's stage, project state and running work in the catalog (owner 2026-11-17) ─────────────────────────────
+
+/** The derived stage of a motor, the Overview's rule: a production makes it "in production", stored results "computed",
+ *  else the stage of the first project that links it currently; null = nothing known. */
+export function motorStage(m: Pick<MotorRow, 'productions' | 'computed' | 'projects'>): string | null {
+  if (m.productions.length) return 'in_production';
+  if (m.computed) return 'computed';
+  const p = m.projects.find((x) => !x.trial) ?? m.projects[0];
+  return p ? p.stage : null;
+}
+
+const STATE_RANK: Record<LinkState, number> = { active: 0, parked: 1, archived: 2 };
+/** A motor is as current as its most current project or production; null = linked to nothing (a catalog motor). */
+export function motorState(m: Pick<MotorRow, 'projects' | 'productions'>): LinkState | null {
+  const all = [...m.projects.map((p) => p.state), ...m.productions.map((p) => p.state)];
+  if (!all.length) return null;
+  return all.reduce<LinkState>((best, s) => (STATE_RANK[s] < STATE_RANK[best] ? s : best), 'archived');
+}
+
+export type StateFilter = LinkState | 'all';
+/** Owner 2026-11-17 ("how do I remove old projects from the catalog"): with a state chosen, a row shows only the project
+ *  and production chips in that state, and a motor linked ONLY to projects / productions in other states leaves the view.
+ *  A motor linked to nothing stays under Active (and All).  A die block left without motors goes too; a family as well. */
+export function filterByState(groups: FamilyGroup[], filter: StateFilter): FamilyGroup[] {
+  if (filter === 'all') return groups;
+  const out: FamilyGroup[] = [];
+  for (const g of groups) {
+    const blocks: DieBlock[] = [];
+    for (const b of g.blocks) {
+      const motors = b.motors.filter((m) => {
+        const st = motorState(m);
+        return st === null ? filter === 'active' : m.projects.some((p) => p.state === filter) || m.productions.some((p) => p.state === filter);
+      }).map((m) => ({ ...m, projects: m.projects.filter((p) => p.state === filter),
+        productions: m.productions.filter((p) => p.state === filter) }));
+      if (motors.length || (!b.motors.length && filter === 'active')) blocks.push({ ...b, motors });
+    }
+    if (blocks.length) out.push({ ...g, blocks });
+  }
+  return out;
+}
+
+/** How many motors each state choice would show (the header's counts). */
+export function stateCounts(groups: FamilyGroup[]): Record<StateFilter, number> {
+  const n = (f: StateFilter) => filterByState(groups, f).reduce((a, g) => a + g.blocks.reduce((x, b) => x + b.motors.length, 0), 0);
+  return { active: n('active'), parked: n('parked'), archived: n('archived'), all: n('all') };
+}
+
+/** One running job as `/api/catalog/jobs` answers it (motor_ai_sim.job_status). */
+export interface RunningJob { source: string; tag: string; server: string; state: string; kind: string; session: string;
+  die: string | null; configuration: string | null; started_at?: string | null;
+  progress?: { done?: number | null; total?: number | null; unit?: string | null } | null;
+  cpus_reserved?: number | null; cpu_used?: number | null; mem_reserved_gb?: number | null; mem_now_gb?: number | null }
+export interface ServerView { server: string; state: 'live' | 'stale' | 'missing' | 'no_status'; age_s: number | null;
+  budget?: { cpus?: number; mem_gb?: number } | null;
+  totals?: { cpus_reserved?: number; cpus_used?: number; mem_reserved_gb?: number; mem_used_gb?: number; queued?: number } | null; jobs: number }
+export interface JobsAnswer { servers: ServerView[]; motors: Record<string, RunningJob[]>; dies: Record<string, RunningJob[]>;
+  unknown: RunningJob[]; unnamed: RunningJob[] }
+
+/** The chip text of a job: kind, server, state, progress when it reports it (e.g. "optimisation · US · 12/40"). */
+export function jobChip(j: RunningJob): string {
+  const prog = j.progress && typeof j.progress.done === 'number' && typeof j.progress.total === 'number' ? ` · ${j.progress.done}/${j.progress.total}` : '';
+  const state = j.state === 'queued' ? ' · queued' : '';
+  return `${j.kind} · ${(j.server || '?').toUpperCase()}${state}${prog}`;
 }

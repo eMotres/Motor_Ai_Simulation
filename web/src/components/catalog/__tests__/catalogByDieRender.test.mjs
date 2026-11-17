@@ -199,3 +199,39 @@ test('cogging, application and marks sit in their own columns; a customer has no
   assert.ok(!member.includes('by-die-projects') && !member.includes('by-die-production') && !member.includes('>Projects<'), member);
   assert.equal(rowCells(member, 0)[7], '0.073');                                      // the same characteristics
 });
+
+// ── the admin's stage, project state, running work and server strip (owner 2026-11-17) ────────────────────────────
+const ovState = { items: {
+    'CILN28/G2-L40': { projects: [{ id: 'p1', link_status: 'current' }], productions: [], computed: true },
+    'CILN28 vadim 2/G2-L40 copy': { projects: [{ id: 'p2', link_status: 'current' }], productions: [] } },
+  projects: { p1: { id: 'p1', title: 'Pump project', status: 'design', stage: 'design', display: { state: 'active' } },
+              p2: { id: 'p2', title: 'Old trial', status: 'closed', stage: 'closed', display: { state: 'archived' } } },
+  productions: {} };
+const jobsAnswer = { servers: [
+    { server: 'us', state: 'live', age_s: 5, budget: { cpus: 25, mem_gb: 80 }, totals: { cpus_reserved: 11, cpus_used: 6, mem_reserved_gb: 68, mem_used_gb: 13, queued: 1 }, jobs: 2 },
+    { server: 'eu', state: 'no_status', age_s: null, jobs: 0 }],
+  motors: { 'CILN28/G2-L40': [{ source: 'agent', tag: 'opt-1', server: 'us', state: 'running', kind: 'optimisation', session: 'US · a',
+    die: 'CILN28', configuration: 'G2-L40', progress: { done: 12, total: 40 }, cpus_reserved: 2 }] },
+  dies: { CILN28: [{ source: 'agent', tag: 'st-1', server: 'us', state: 'queued', kind: 'study', session: 'US · b', die: 'CILN28', configuration: null }] },
+  unknown: [], unnamed: [{ tag: 'x' }] };
+
+test('admin: stage and running work in their columns, the server strip, archived-only motors out of the Active view', async () => {
+  const i18n = m.makeI18n('en'); await ready(i18n);
+  const html = decode(m.render(i18n, { dies, isAdmin: true, overview: ovState, jobs: jobsAnswer }));
+  const t = text(html);
+  assert.ok(t.includes('us: 11/25 threads reserved (6 used) · 68/80 GB (13 used) · 1 queued'.replace('us', 'US')), t);
+  assert.ok(t.includes('EU: no status') && t.includes('1 jobs without a motor'), t);
+  assert.ok(t.includes('optimisation · US · 12/40') && t.includes('study · US · queued'), t);   // motor and die chips
+  assert.equal((html.match(/data-testid="by-die-motor"/g) || []).length, 1);                    // the archived-only copy left
+  assert.ok(html.includes('Pump project') && !html.includes('Old trial'), html);
+  const stage = html.slice(html.indexOf('data-testid="by-die-stage"'));
+  assert.equal(text(stage.slice(stage.indexOf('>') + 1, stage.indexOf('</span>'))), 'Computed');   // the Overview's derived stage
+  assert.ok(html.includes('data-testid="by-die-project-chip"'), html);
+});
+
+test('member: no stage, no running work, no server strip, no state filter', async () => {
+  const i18n = m.makeI18n('en'); await ready(i18n);
+  const html = decode(m.render(i18n, { dies, isAdmin: false, canWrite: false, overview: ovState, jobs: jobsAnswer }));
+  for (const id of ['by-die-stage', 'by-die-jobs', 'by-die-topline', 'by-die-server', 'by-die-project-chip']) assert.ok(!html.includes(id), id);
+  assert.ok(!html.includes('optimisation') && !html.includes('threads'), html);
+});

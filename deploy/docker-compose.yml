@@ -66,6 +66,12 @@ x-app-common: &app-common
     # the API (which takes them) and the worker (which runs them); NOT in any restic include list and excluded by name.
     # Unused (empty) unless MOTRES_CROSS_REGION_COMPUTE=1.
     - /srv/motres/run/foreign_jobs:/srv/motres/run/foreign_jobs
+    # The agent job launcher's status folder (motres-agent-job writes jobs_status.json every 10 s), READ-ONLY, at the path the
+    # application reads (die_archive.JOBS_STATUS; MOTRES_JOBS_STATUS overrides the file).  A DIRECTORY, not the file: the
+    # launcher replaces the file by rename, and a single-file bind mount would keep showing the old inode.  On the US server set
+    # JOBS_STATUS_DIR=/var/lib/motres-agent-job in deploy/.env; everywhere else the default is an empty folder (mkdir it once, like
+    # foreign_jobs) and the application shows "no status".  The web process gets no Docker access and cannot write here.
+    - ${JOBS_STATUS_DIR:-/srv/motres/run/jobs_status}:/var/lib/motres-agent-job:ro
     # The private data checkout (eMotres/motor-ai-sim-private), READ-ONLY: the CAD reference profiles at
     # /srv/motres/private_assets/cad/reference (cad/store.py, candidate 5) for the CAD export / profile views.  k_end does
     # NOT read them - it is one coil rule for every machine (coil_build.py, owner 2026-10-30).

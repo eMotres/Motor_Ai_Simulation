@@ -56,7 +56,7 @@ Two files, deliberately different in kind:
 | file | when | mode | holds |
 |---|---|---|---|
 | `/etc/motres/api.env` | **runtime** — `env_file:` / `EnvironmentFile=` | `root:root 0600` | everything below |
-| `deploy/.env` | **build** — compose interpolation only | `0640` | `GOOGLE_CLIENT_ID`, `ADMIN_EMAILS`, `SEED_SRC` |
+| `deploy/.env` | **build** — compose interpolation only | `0640` | `GOOGLE_CLIENT_ID`, `ADMIN_EMAILS`, `SEED_SRC`, `JOBS_STATUS_DIR` (optional) |
 
 The frontend bakes `VITE_GOOGLE_CLIENT_ID` into its bundle, so that value has to
 exist at `docker build` time and cannot come from the runtime file. An OAuth
@@ -493,3 +493,16 @@ suite inside it, and render an L155 report through the container's own
 reportlab/python-docx. Run it once on the first server before inviting anyone:
 it is the check that the three newly-pinned deps actually work on Linux and that
 a Cyrillic duty name renders instead of becoming black boxes.
+
+## Job status mount (US server)
+
+`motres-agent-job` writes `jobs_status.json` into `/var/lib/motres-agent-job` every 10 s (queue, running jobs with measured
+cpu / memory, the manifest `job.json` of each: die, configuration, kind, session). The admin catalog reads it to show running
+work per motor. `docker-compose.yml` mounts the folder **read-only** at the same path in every application container:
+
+- US: `JOBS_STATUS_DIR=/var/lib/motres-agent-job` in `deploy/.env`. The folder also holds `attempts.jsonl` (world-readable job
+  history) and the root-only `state.json` (not readable by the container); nothing in it is writable from the container.
+- any other server: leave `JOBS_STATUS_DIR` unset and `mkdir -p /srv/motres/run/jobs_status` once; the application finds no
+  file and shows "no status" (never a zero load).
+- the mount is the DIRECTORY on purpose: the launcher replaces the file by rename, so a single-file bind would go stale.
+- rollback: remove the line (or unset the variable); nothing else depends on it.

@@ -113,6 +113,7 @@ from motor_ai_sim.routes.display_state import router as display_state_router
 from motor_ai_sim.routes.overview import router as overview_router
 from motor_ai_sim.routes.job_status import router as job_status_router
 from motor_ai_sim.routes.production_lifecycle import router as production_lifecycle_router
+from motor_ai_sim.routes.site_public import public_router as site_public_router, admin_router as site_admin_router
 from motor_ai_sim.routes.die_archive import router as die_archive_router
 from motor_ai_sim.routes.designation import router as designation_router
 from motor_ai_sim.routes.presets import router as presets_router
@@ -397,6 +398,8 @@ app.include_router(optimization_runs_router)   # /api/optimization/runs: saved o
 app.include_router(display_state_router)   # /api/display-state: Active / Parked / Archived for staff lists
 app.include_router(overview_router)   # /api/overview: the owner's Overview (admins)
 app.include_router(job_status_router)   # /api/catalog/jobs: running work per motor and server (admins, read-only)
+app.include_router(site_public_router)   # /api/public/site: the flagged motors for emotres.com (no sign-in, read-only)
+app.include_router(site_admin_router)   # /api/admin/site-publication: the flag and the site-only fields (admins)
 app.include_router(production_lifecycle_router)   # /api/production-lifecycle: prepared / in production / finished (admins set)
 app.include_router(die_archive_router)   # /api/die-archive: archive a workspace / published die (admins)
 app.include_router(designation_router)   # /api/designation: the standard motor name, from the parameters

@@ -369,6 +369,8 @@ BODY_ROUTES = {          # (method, path) -> body builder(cfg)
     ("POST", "/api/family/config"): lambda c: {"die": DIE, "name": c},     # CREATE: nothing hidden to leak, covered by its own test
 }
 SELF_GATED = {           # routes whose natural "missing" answer is not a 404: gated in-route and tested below
+    # admin only (auth.require_admin) and shared-catalog only; tested in tests/test_site_publication.py
+    ("GET", "/api/admin/site-publication/{die}/{config}"), ("PUT", "/api/admin/site-publication/{die}/{config}"),
     ("GET", "/api/bearings/losses"), ("GET", "/api/controller/cooling_from_thermal"), ("GET", "/api/controller/devices"),
     ("GET", "/api/controller/point"), ("GET", "/api/controller/settings"), ("GET", "/api/controller/thermal_cooling"),
     ("GET", "/api/model3d/{die}/{config}/model.glb"), ("GET", "/api/model3d/{die}/{config}/model.step"),

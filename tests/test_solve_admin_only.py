@@ -295,6 +295,7 @@ DATA_MODULES = frozenset({
     "die_archive",                      # archive a workspace / published die: a sidecar list, nothing on disk moves - computes nothing
     "regions_sync",                     # the signed peer channel of the catalog mirror (extracts, foreign submit / result)
     "optimization_runs",                # stored optimisation runs of a motor: list / open / import a file, solves nothing
+    "site_public",                      # the flagged motors for emotres.com (public, read-only) and the admin flag - computes nothing
     "designation",                      # the standard motor name read off the stored parameters - computes nothing
 })
 #: Router modules that can compute: every route in them is admin-only or reviewed above.

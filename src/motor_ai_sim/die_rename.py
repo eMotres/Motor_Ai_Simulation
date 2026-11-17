@@ -606,6 +606,20 @@ def step_production_lifecycle(ctx: Ctx) -> None:
         raise RenameBlocked(str(e)) from e
 
 
+def step_site_publication(ctx: Ctx) -> None:
+    """The "show on the site" flag and the site-only fields (``<shared>/object_registry/site_publication.json``) follow the die name."""
+    from motor_ai_sim import site_publication as SP
+    try:
+        path = SP.store_path()
+    except Exception:                                       # noqa: BLE001
+        return
+    try:
+        _json_file_rename(ctx, "site_publication", path, lambda doc: SP.rename_die_in(doc, ctx.old, ctx.new),
+                          "the site publication record follows the die name")
+    except ValueError as e:
+        raise RenameBlocked(str(e)) from e
+
+
 def step_display_state(ctx: Ctx) -> None:
     """Active / Parked / Archived of the productions (``<shared>/object_registry/display_state.json``) names the die."""
     from motor_ai_sim import display_state as DS
@@ -799,13 +813,13 @@ def step_manual(ctx: Ctx) -> None:
 #: workspace-level steps, then the shared-catalog ones (``glob_scope``)
 LOCAL_STEPS = (step_folder, step_derived_from, step_fields, step_duty_results,
                step_context, step_workspace_memory, step_catalog_cards, step_die_archive)
-GLOBAL_STEPS = (step_grants, step_die_access, step_projects, step_production, step_motor_revisions, step_display_state, step_production_lifecycle, step_tombstone, step_object_registry, step_motor_tests, step_cad,
+GLOBAL_STEPS = (step_grants, step_die_access, step_projects, step_production, step_motor_revisions, step_display_state, step_production_lifecycle, step_site_publication, step_tombstone, step_object_registry, step_motor_tests, step_cad,
                 step_manual)
 
 
 #: the shared-catalog stores that name a die: a WORKSPACE rename does not rewrite them, so it is refused while any names the die
 LINK_STEPS = ("step_grants", "step_die_access", "step_projects", "step_production", "step_motor_revisions",
-              "step_display_state", "step_production_lifecycle", "step_motor_tests", "step_cad")
+              "step_display_state", "step_production_lifecycle", "step_site_publication", "step_motor_tests", "step_cad")
 
 
 def _refuse_while_linked(fam: Any, old: str, new: str, src_dir: Path, dst_dir: Path, actor: str) -> None:

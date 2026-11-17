@@ -63,6 +63,18 @@ const COL_TIP: Record<ColKey, string> = { power: 'power', torque: 'torque', spee
 /** the fixed widths: the designation, then one column per characteristic */
 const charsGrid = { display: 'grid', gridTemplateColumns: `${NAME_COL_W}px ${COLS.map((c) => `${c.w}px`).join(' ')}`, columnGap: '8px',
   alignItems: 'center', flexShrink: 0 } as const;
+/** the row actions (▶ load, ⋮ menu), right after the characteristics; the header keeps the same gap */
+const ACTIONS_W = 48;
+/** what inside a motor row has its own click (not a load) */
+const ROW_CONTROLS = 'button, a, input, textarea, select, label, [role="button"], [role="combobox"], .MuiChip-root, [data-row-click="own"]';
+type ClickNode = { closest(sel: string): ClickNode | null; contains(n: unknown): boolean };
+/** Whether a click on `target` inside the motor `row` is a load: inside the row's DOM (not a portal) and not on one of the
+ *  row's own controls.  Pure over `closest` / `contains`, exported for the test (no DOM library in the repository). */
+export function rowClickLoads(target: ClickNode | null, row: ClickNode): boolean {
+  if (!target || !row.contains(target)) return false;
+  const own = target.closest(ROW_CONTROLS);
+  return !own || own === row || !row.contains(own);
+}
 const REST_W = { application: 84, marks: 130, stage: 96, jobs: 170, production: 96 } as const;
 const markChip = { height: 18, fontSize: 10.5, maxWidth: 120, color: 'var(--text-3)', '& .MuiChip-label': { px: 0.75 } } as const;
 /** The tab's scroller (App.tsx, the Motors tab) has `p: 3` = 24 px: the sticky header sits at -24 px so that it is flush with the
@@ -234,6 +246,13 @@ const CatalogByDie: React.FC<Props> = ({ dies, thumbs, rated, active, isAdmin, c
     </Box>
   ) : null;
 
+  /** A click on the row (the name included) loads the motor at its default mode, like ▶; the row's own controls (the "?"
+   *  decoder, the application editor, a chip, the menus) keep their clicks, and a click inside a dialog or menu opened from
+   *  the row (a portal: React bubbles it here, the DOM does not contain it) is not a load. */
+  const rowClick = (m: MotorRow) => (e: React.MouseEvent<HTMLElement>) => {
+    if (rowClickLoads(e.target as Element | null, e.currentTarget)) actions.load(m.die, m.config);
+  };
+
   const motorRow = (m: MotorRow) => {
     const r = rated(m.die, m.config);                       // the default mode: what ▶ loads
     const loaded = active?.die === m.die && active?.config === m.config;
@@ -242,10 +261,13 @@ const CatalogByDie: React.FC<Props> = ({ dies, thumbs, rated, active, isAdmin, c
     const tipText = [nameTipBase, nameTip?.(m.die, m.config) ?? ''].filter(Boolean).join(' · ');
     const extra = cells?.(m.die, m.config);
     const projects = m.projects.map((p) => p.title).join(', ');
+    const canLoad = !busy && !!r?.duty;
     return (
       <Box key={`${m.die}/${m.config}`} data-testid="by-die-motor" data-old={m.old ? 'true' : undefined}
+        data-loadable={canLoad ? 'true' : undefined} onClick={canLoad ? rowClick(m) : undefined}
         sx={{ display: 'flex', alignItems: 'center', columnGap: 1, flexWrap: 'wrap', py: 0.2, minHeight: 26,
-              borderTop: '1px solid var(--panel)', opacity: m.old ? 0.5 : 1 }}>
+              borderTop: '1px solid var(--panel)', opacity: m.old ? 0.5 : 1,
+              ...(canLoad ? { cursor: 'pointer', '&:hover': { bgcolor: 'var(--panel)' } } : {}) }}>
         {/* 1-2: designation and the characteristics, fixed columns: they line up across every family and never reorder */}
         <Box data-testid="by-die-chars" sx={{ ...charsGrid, ...small, fontVariantNumeric: 'tabular-nums' }}>
           <Box sx={{ display: 'flex', alignItems: 'center', minWidth: 0 }}>
@@ -262,7 +284,21 @@ const CatalogByDie: React.FC<Props> = ({ dies, thumbs, rated, active, isAdmin, c
           </Box>
           {COLS.map((c) => cell(c.key, m))}
         </Box>
-        {/* 3: everything else, fixed columns too; at a narrow width this part wraps under the row first */}
+        {/* 3: the row actions, right after the characteristics (owner 2026-11-17: "they are not clickable"; at the far right
+            end of a 1974 px row the ▶ went unnoticed or off-screen): always on the first line, at 1280 px too */}
+        <Box data-testid="by-die-actions" sx={{ width: ACTIONS_W, display: 'flex', alignItems: 'center', flexShrink: 0 }}>
+          <Tooltip title={t('byDie.loadTip')}>
+            <span>
+              <IconButton size="small" disabled={!canLoad} aria-label={t('byDie.loadTip')} data-testid="by-die-load"
+                onClick={() => actions.load(m.die, m.config)} sx={{ p: 0.25, color: '#60a5fa' }}>
+                <PlayArrowIcon sx={{ fontSize: 16 }} />
+              </IconButton>
+            </span>
+          </Tooltip>
+          <IconButton size="small" aria-label={t('byDie.motorMenu')} data-testid="by-die-motor-menu" onClick={(e) => setCfgMenu({ el: e.currentTarget, m })}
+            sx={{ p: 0.25, color: 'var(--text-4)' }}><MoreVertIcon sx={{ fontSize: 15 }} /></IconButton>
+        </Box>
+        {/* 4: everything else, fixed columns too; at a narrow width this part wraps under the row first */}
         <Box data-testid="by-die-rest" sx={{ display: 'flex', alignItems: 'center', columnGap: 1, flexWrap: 'wrap', flex: '1 1 320px', minWidth: 0, ...small }}>
           <Box sx={{ width: REST_W.application, flexShrink: 0, overflow: 'hidden' }}>{extra?.application}</Box>
           <Box data-testid="by-die-marks" sx={{ width: REST_W.marks, flexShrink: 0, display: 'flex', alignItems: 'center', gap: 0.5, overflow: 'hidden' }}>
@@ -302,20 +338,6 @@ const CatalogByDie: React.FC<Props> = ({ dies, thumbs, rated, active, isAdmin, c
               {m.productions.map((p) => t('byDie.production', { rev: p.rev || '—' })).join(', ')}
             </Typography>
           )}
-          {!isAdmin && <Box sx={{ flex: 1 }} />}
-          {/* 4: the row actions, last */}
-          <Box sx={{ display: 'flex', alignItems: 'center', flexShrink: 0, ml: 'auto' }}>
-            <Tooltip title={t('byDie.loadTip')}>
-              <span>
-                <IconButton size="small" disabled={busy || !r?.duty} aria-label={t('byDie.loadTip')} data-testid="by-die-load"
-                  onClick={() => actions.load(m.die, m.config)} sx={{ p: 0.25, color: '#60a5fa' }}>
-                  <PlayArrowIcon sx={{ fontSize: 16 }} />
-                </IconButton>
-              </span>
-            </Tooltip>
-            <IconButton size="small" aria-label={t('byDie.motorMenu')} data-testid="by-die-motor-menu" onClick={(e) => setCfgMenu({ el: e.currentTarget, m })}
-              sx={{ p: 0.25, color: 'var(--text-4)' }}><MoreVertIcon sx={{ fontSize: 15 }} /></IconButton>
-          </Box>
         </Box>
       </Box>
     );
@@ -335,6 +357,7 @@ const CatalogByDie: React.FC<Props> = ({ dies, thumbs, rated, active, isAdmin, c
           </Tooltip>
         ))}
       </Box>
+      <Box component="span" sx={{ width: ACTIONS_W, flexShrink: 0 }} />
       <Box sx={{ display: 'flex', columnGap: 1, flexWrap: 'wrap', flex: '1 1 320px', minWidth: 0 }}>
         <Box component="span" sx={{ width: REST_W.application, flexShrink: 0 }}>{t('byDie.col.application')}</Box>
         <Box component="span" sx={{ width: REST_W.marks, flexShrink: 0 }}>{t('byDie.col.marks')}</Box>

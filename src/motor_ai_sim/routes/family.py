@@ -1728,6 +1728,8 @@ def _run_rows(build_sig: Any, entry: dict) -> list[dict]:
             "ripple_pct": res.get("ripple_pct", summ.get("T_ripple_pct")),
             "f_switch_hz": st.get("sim.fSwitch"),
             "steps": st.get("sim.stepsPP"),
+            # the air-gap rows per side of the run (the catalog row mutes a ripple solved below the Simulation preset)
+            "gap_layers": st.get("mesh.gapLayers"),
             "has_payload": bool(r.get("payload_file")),
             **({"verification": r["verification"]} if isinstance(r.get("verification"), dict) else {}),
         })

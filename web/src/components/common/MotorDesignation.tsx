@@ -29,7 +29,12 @@ const MARK = '#f59e0b';
 export const otherNameText = (t: (k: string, o?: Record<string, unknown>) => string, o: OtherName) =>
   t('designation.otherName', { count: o.results.length, old: o.computed_for, now: o.now });
 
-export const DesignationDecoder: React.FC<{ segments: Record<string, SegmentInfo>; checks?: DesignationAnswer['checks']; otherNames?: OtherName[] }> = ({ segments, checks, otherNames }) => {
+/** A second block under the segments: the per-motor parameters that are NOT in the name (owner 2026-11-17: steel, magnet,
+ *  magnet segmentation, slot insulation), as label / value rows. */
+export interface MaterialRow { label: string; value: string }
+
+export const DesignationDecoder: React.FC<{ segments: Record<string, SegmentInfo>; checks?: DesignationAnswer['checks']; otherNames?: OtherName[];
+  materials?: MaterialRow[] }> = ({ segments, checks, otherNames, materials }) => {
   const { t } = useTranslation('common');
   const words = (seg: Segment, v: string) => {
     if (seg === 'connection') {
@@ -68,6 +73,18 @@ export const DesignationDecoder: React.FC<{ segments: Record<string, SegmentInfo
           })}
         </TableBody>
       </Table>
+      {materials && materials.length > 0 && (
+        <Box data-testid="designation-materials" sx={{ mt: 1 }}>
+          <Typography sx={{ fontSize: 12, fontWeight: 700, color: 'var(--text-2)' }}>{t('designation.materials')}</Typography>
+          <Table size="small" sx={{ '& td': { fontSize: 12, borderColor: 'var(--panel)', py: 0.4 } }}>
+            <TableBody>
+              {materials.map((r) => (
+                <TableRow key={r.label}><TableCell sx={{ color: 'var(--text-3)', whiteSpace: 'nowrap' }}>{r.label}</TableCell><TableCell>{r.value}</TableCell></TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </Box>
+      )}
       {otherNames?.map((o) => (
         <Typography key={o.computed_for} data-testid="designation-other-name" sx={{ mt: 0.75, fontSize: 12, color: MARK }}>
           {otherNameText(t, o)}: {o.results.map((r) => r.duty).filter((d, i, a) => a.indexOf(d) === i).join(', ')}

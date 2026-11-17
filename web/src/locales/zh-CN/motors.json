@@ -297,6 +297,24 @@
     "newestLocked": "无引用：最新锁定",
     "newestLockedTip": "没有项目或生产引用此名称的任何电机；以最新锁定的一台为当前版本",
     "noName": "尚无标准名称",
-    "ratedTip": "额定工作点（{duty}）；▶ 加载默认工况"
+    "v": {
+      "power": "额定工作点（{duty}）的连续功率",
+      "torque": "转矩",
+      "speed": "转速",
+      "efficiency": "效率（轴端）",
+      "ripple": "已存工作点的转矩脉动",
+      "rippleLow": "转矩脉动，求解精度低于仿真预设（每周期 {steps} 步，气隙每侧 {rows} 层；预设为 96 和 2）：48 步的脉动偏低 3-19 %",
+      "battery": "电池电压，标称（{cells} 节；范围 {min}-{max} V）",
+      "vllPeak": "未设电池：该工作点的线电压峰值",
+      "current": "相电流（A rms）"
+    },
+    "m": {
+      "steel": "硅钢",
+      "magnet": "磁钢",
+      "segmentation": "磁钢分段",
+      "insulation": "槽绝缘"
+    },
+    "decodeTip": "如何解读此名称，以及材料",
+    "massTip": "电机质量（{duty}）"
   }
 }

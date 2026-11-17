@@ -10,10 +10,13 @@ import { shownDuties } from './catalogRows.ts';
 
 export interface ByDieBeside { steel?: string | null; magnet?: string | null; magnet_lamination_mm?: number | null; slot_insulation?: string | null }
 export interface ByDieDuty { name: string; power_kw?: number | null; torque_nm?: number | null; duty_class?: string | null;
-  mode?: string; result?: { mass_kg?: number | null } | null }
+  mode?: string; rpm?: number | null; current_arms?: number | null;
+  result?: { mass_kg?: number | null; efficiency_pct?: number | null; ripple_pct?: number | null; v_ll_peak_v?: number | null } | null;
+  primary_drive?: string; runs?: Array<{ drive?: string; primary?: boolean; steps?: number | null; gap_layers?: number | null }> }
+export interface ByDieBattery { cells?: number | null; v_cell_nom?: number | null; v_min?: number | null; v_max?: number | null; v_nom?: number | null }
 export interface ByDieCfg {
   name: string; designation?: string | null; designation_complete?: boolean; designation_unknown?: string[];
-  family?: string; beside?: ByDieBeside; locked?: boolean; duties?: ByDieDuty[];
+  family?: string; beside?: ByDieBeside; locked?: boolean; duties?: ByDieDuty[]; battery?: ByDieBattery | null;
 }
 export interface ByDieDie { name: string; created?: string; slots?: number | null; poles?: number | null; stator_diameter?: number | null;
   locked?: boolean; layer?: string; configs: ByDieCfg[];
@@ -43,6 +46,41 @@ export interface MotorRow {
   locked: boolean; created: string;
   /** the point the row quotes (`ratedPoint`) */
   rated: ByDieDuty | null;
+  /** its values beside the name (owner 2026-11-17): power · torque · speed · efficiency · ripple · voltage · phase current */
+  values: RowValues | null;
+}
+
+/** The Simulation preset a quoted ripple must have been solved at (steps per electrical period, air-gap rows per side). */
+export const RIPPLE_PRESET = { steps: 96, gapLayers: 2 } as const;
+
+export interface RowValues {
+  power_kw: number | null; torque_nm: number | null; rpm: number | null; efficiency_pct: number | null;
+  ripple_pct: number | null;
+  /** why the ripple is below the preset (muted): 'steps' (< 96 per period) / 'gap' (1 row per side); null = at the preset or unknown */
+  ripple_low: { steps: number | null; gap_layers: number | null } | null;
+  /** the configuration's battery (nominal, the range in the tooltip), else the point's line-line peak voltage */
+  voltage: { kind: 'battery'; v: number | null; min: number | null; max: number | null; cells: number | null }
+    | { kind: 'vll_peak'; v: number | null } | null;
+  current_arms: number | null; mass_kg: number | null;
+}
+
+const fin = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) ? v : null);
+
+/** The values a row shows for its quoted point; missing ones stay null (a dash, never a guess). */
+export function rowValues(c: ByDieCfg, d: ByDieDuty | null): RowValues | null {
+  if (!d) return null;
+  const run = (d.runs ?? []).find((r) => r.primary) ?? (d.runs ?? []).find((r) => r.drive === d.primary_drive) ?? null;
+  const steps = fin(run?.steps), gap = fin(run?.gap_layers);
+  const low = (steps !== null && steps < RIPPLE_PRESET.steps) || (gap !== null && gap < RIPPLE_PRESET.gapLayers);
+  const b = c.battery;
+  const nominal = fin(b?.v_nom) ?? (fin(b?.cells) !== null && fin(b?.v_cell_nom) !== null ? (b!.cells as number) * (b!.v_cell_nom as number) : null);
+  return {
+    power_kw: fin(d.power_kw), torque_nm: fin(d.torque_nm), rpm: fin(d.rpm), efficiency_pct: fin(d.result?.efficiency_pct),
+    ripple_pct: fin(d.result?.ripple_pct), ripple_low: low ? { steps, gap_layers: gap } : null,
+    voltage: b ? { kind: 'battery', v: nominal, min: fin(b.v_min), max: fin(b.v_max), cells: fin(b.cells) }
+      : { kind: 'vll_peak', v: fin(d.result?.v_ll_peak_v) },
+    current_arms: fin(d.current_arms), mass_kg: fin(d.result?.mass_kg),
+  };
 }
 export interface DieBlock { die: ByDieDie; motors: MotorRow[] }
 export interface FamilyGroup { family: string; named: boolean; blocks: DieBlock[] }
@@ -105,8 +143,10 @@ export function buildByDie(dies: ByDieDie[], overview: ByDieOverview | null): Fa
         die: d.name, config: c.name, label: named ? c.designation as string : c.name, named,
         complete: named && c.designation_complete !== false, unknown: c.designation_unknown ?? [],
         beside: c.beside ?? {}, projects, productions, computed: !!it?.computed, linked: false, old: false,
-        newestLocked: false, locked: !!(c.locked || d.locked), created: String(d.created ?? ''), rated: ratedPoint(c),
+        newestLocked: false, locked: !!(c.locked || d.locked), created: String(d.created ?? ''), rated: null, values: null,
       };
+      row.rated = ratedPoint(c);
+      row.values = rowValues(c, row.rated);
       row.linked = isLinked(row);
       all.push(row);
       return row;

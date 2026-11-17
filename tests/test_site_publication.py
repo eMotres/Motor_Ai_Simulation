@@ -52,6 +52,8 @@ def env(tmp_path, monkeypatch):
     monkeypatch.setenv("PUBLISHED_ROOT", str(published))
     monkeypatch.setenv("MOTRES_OBJECT_REGISTRY_ROOT", str(tmp_path / "registry"))
     monkeypatch.setenv("ADMIN_AUDIT_FILE", str(tmp_path / "audit.jsonl"))
+    from motor_ai_sim import motor_access as MA
+    monkeypatch.setattr(MA, "_DIE_ACCESS_FILE", tmp_path / "die_access.json")
     monkeypatch.delitem(fam.__dict__, "_DIES_DIR", raising=False)
     fam._TREE_CACHE.clear()
     SP._CACHE.clear()
@@ -212,3 +214,52 @@ def test_a_rename_and_a_move_carry_the_record():
     assert SP.move_config_in(doc, "B", "c2", "C", "c9") == 1 and doc["motors"]["motor:C/c9"] == {"show": False}
     with pytest.raises(ValueError):
         SP.rename_die_in({"motors": {"motor:A/c": {}, "motor:B/c": {}}}, "A", "B")
+
+
+def test_a_private_configuration_a_retired_die_and_a_closed_die_cannot_be_shown(env, tmp_path):
+    from motor_ai_sim import motor_access as MA
+    from motor_ai_sim import workspace as WS
+    cfg_file = tmp_path / "shared" / "dies" / DIE / f"{BARE}.yaml"
+    cfg_file.write_text("visibility: private\n" + cfg_file.read_text())
+    r = _put(env, cfg=BARE, show=True)
+    assert r.status_code == 422 and "private" in r.json()["detail"]
+    _publish(env)
+    assert client.get("/api/public/site/motors").json()["count"] == 1
+    cfg_file2 = tmp_path / "shared" / "dies" / DIE / f"{CFG}.yaml"
+    cfg_file2.write_text("visibility: private\n" + cfg_file2.read_text())          # made private AFTER it was published
+    SP._CACHE.clear()
+    assert client.get("/api/public/site/motors").json()["count"] == 0
+    assert "the configuration is private" in client.get(f"/api/admin/site-publication/{DIE}/{CFG}", headers=env["admin"]).json()["problems"]
+    cfg_file2.write_text(cfg_file2.read_text().replace("visibility: private\n", "", 1))
+    SP._CACHE.clear()
+    assert client.get("/api/public/site/motors").json()["count"] == 1
+    WS.add_tombstone(DIE, "admin@example.com")                                      # a retired shared die leaves the site
+    SP._CACHE.clear()
+    assert client.get("/api/public/site/motors").json()["count"] == 0
+    WS.remove_tombstone(DIE)
+    MA.set_die_access(DIE, visibility="selected", clients=["x@example.com"])
+    SP._CACHE.clear()
+    assert client.get("/api/public/site/motors").json()["count"] == 0
+    assert _put(env, show=True).status_code == 422
+
+
+def test_availability_in_production_must_agree_with_the_production_state(env):
+    from motor_ai_sim import production_lifecycle as PL
+    assert _put(env, availability="in_production").status_code == 422
+    PL.set_state(DIE, CFG, "in_production", by="admin@example.com", payment="paid")
+    assert _put(env, show=True, availability="in_production", slug="x1").status_code == 200
+    assert client.get("/api/public/site/motors").json()["count"] == 1
+    PL.set_state(DIE, CFG, "finished", by="admin@example.com")
+    SP._CACHE.clear()
+    assert client.get("/api/public/site/motors").json()["count"] == 0               # the stored value now contradicts it
+
+
+def test_the_derived_slug_is_fixed_at_the_first_publish(env):
+    assert _put(env, show=True, availability="to_order").status_code == 200
+    first = SP.record_of(DIE, CFG)["slug"]
+    assert first and first.startswith("cian28-150-30")
+    assert _put(env, cfg=BARE, show=True, availability="to_order").status_code == 200
+    second = SP.record_of(DIE, BARE)["slug"]
+    assert second != first                                                          # equal designations never share a slug
+    assert _put(env, lead_time_text="4 weeks").status_code == 200
+    assert SP.record_of(DIE, CFG)["slug"] == first

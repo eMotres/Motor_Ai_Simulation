@@ -116,6 +116,19 @@ def set_record(die: str, config: str, fields: Dict[str, Any], *, by: str) -> Dic
         upd["points"] = list(dict.fromkeys(_text(p) for p in pts if _text(p)))[:50]
     if "rated_point" in fields:
         upd["rated_point"] = _text(fields["rated_point"])
+    if upd.get("show"):
+        blocked = blockers(die, config)
+        if blocked:
+            raise ValueError("cannot show on the site: " + "; ".join(blocked))
+    if upd.get("availability") == "in_production" and _production_state(die, config) != "in_production":
+        raise ValueError("availability 'in_production' needs the production to be in production (set by an admin in Production)")
+    derived = ""
+    if upd.get("show"):                                      # the slug is fixed at the first publish: it never shifts later
+        docs = _shared_docs(die, config)
+        if docs is not None:
+            from motor_ai_sim import motor_designation as md
+            d = md.describe(die, docs[0], docs[1])
+            derived = slugify(d["designation"]) if d["complete"] else ""
     at = _now()
 
     def mutate(data: Any) -> Any:
@@ -125,6 +138,13 @@ def set_record(die: str, config: str, fields: Dict[str, Any], *, by: str) -> Dic
         history = data.setdefault("history", [])
         cur = dict(motors.get(k) or {})
         new = {**cur, **upd}
+        if new.get("show") and not new.get("slug") and derived:
+            taken_slugs = {o.get("slug") for o in motors.values() if isinstance(o, dict)}
+            n, cand = 1, derived
+            while cand in taken_slugs:
+                n += 1
+                cand = f"{derived}-{n}"
+            new["slug"] = cand
         slug = new.get("slug")
         if slug:
             for other, o in motors.items():
@@ -181,6 +201,33 @@ def _shared_docs(die: str, config: str) -> Optional[Tuple[Dict[str, Any], Dict[s
         return None
 
 
+def blockers(die: str, config: str) -> List[str]:
+    """What forbids showing this motor on the public site, whatever the flag says: a retired shared die, a private
+    configuration, a die the owner opened to selected clients only (the access rules of ``motor_access``)."""
+    out: List[str] = []
+    try:
+        from motor_ai_sim import motor_access as MA
+        from motor_ai_sim import workspace as WS
+        if WS.is_tombstoned(die):
+            out.append("the die is retired")
+        docs = _shared_docs(die, config)
+        if docs is not None and MA.file_visibility(docs[3]) == MA.CFG_PRIVATE:
+            out.append("the configuration is private")
+        if MA.get_die_access(die).get("visibility") == MA.VIS_SELECTED:
+            out.append("the die is open to selected clients only")
+    except Exception:                                       # noqa: BLE001 - when the rules cannot be read, nothing is published
+        out.append("the access rules could not be read")
+    return out
+
+
+def _production_state(die: str, config: str) -> str:
+    try:
+        from motor_ai_sim import production_lifecycle as PL
+        return PL.state_of(die, config)["state"]
+    except Exception:                                       # noqa: BLE001
+        return "prepared"
+
+
 def build_motor(die: str, config: str, rec: Dict[str, Any], *, registry: Optional[Any] = None) -> Tuple[Optional[Dict[str, Any]], List[str]]:
     """``(public motor, problems)``: the motor is None while something blocks it (the problems say what, for the admin
     preview); the public routes drop such a motor silently."""
@@ -192,6 +239,11 @@ def build_motor(die: str, config: str, rec: Dict[str, Any], *, registry: Optiona
     from motor_ai_sim import motor_designation as md
     from motor_ai_sim.duty_kind import is_test_duty
     des = md.describe(die, die_doc, cfg_doc)
+    blocked = blockers(die, config)
+    if blocked:
+        return None, blocked
+    if rec.get("availability") == "in_production" and _production_state(die, config) != "in_production":
+        return None, ["availability 'in_production' contradicts the production state (it is not in production)"]
     if not des["complete"]:
         problems.append("designation incomplete: " + ", ".join(des["unknown"]))
     if not rec.get("availability"):

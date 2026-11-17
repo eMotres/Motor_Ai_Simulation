@@ -1,0 +1,52 @@
+# Mesh / solve presets (owner 2026-11-17): "Optimization" and "Simulation", for now exactly these two.
+# Content: ~/reports/astra_mesh_memory_2026-11-17/PRESETS.md (Astra stage 2a), restricted to what the application can set today.
+#
+# A preset fixes EVERY numerical setting of a solve.  The values live HERE and nowhere else: the mesh study (US · simulation)
+# changes numbers by editing this one file.  Bump `version` on every change of a value; every stored result records the preset
+# name and this version.  Mesh sizes are RULES relative to the machine, resolved to millimetres per motor when the preset is
+# applied (src/motor_ai_sim/mesh_presets.py), never one absolute number for all motors:
+#   h0 = min(c_D * D, tooth_width / 2, yoke / 2, magnet_height / 3, pole_pitch / 6)     D = stator outer diameter
+#   c_D, f_min and the reference-air factor come from the size class of D (below).
+# Each value carries its source: owner (an owner's decision), measured (a mesh-study result), provisional (proposed, not yet
+# qualified).  PROVISIONAL means: do not read these coefficients as measured production defaults.
+version: 1
+policy: 2026-11-17.stage2a-provisional
+size_classes:                                  # c_D in h0, f_min = minimum-size fraction, air = reference air size in h0
+  - {from_mm: 12, to_mm: 100, c_D: 0.0125, f_min: 0.1, air: 3.0, source: provisional}              # 1/80, 1/10: matches the measured pilot at D80
+  - {from_mm: 100, to_mm: 200, c_D: 0.0106667, f_min: 0.1875, air: 2.0, source: provisional}       # 4/375, 3/16: pilot at D150
+  - {from_mm: 200, to_mm: 300, c_D: 0.009, f_min: 0.133333, air: 2.0, source: provisional}         # 9/1000, 2/15: pilot at D250
+  - {from_mm: 300, to_mm: 400.0001, c_D: 0.008, f_min: 0.09375, air: 2.0, source: provisional}     # 1/125, 3/32: no pilot in this class
+presets:
+  optimization:
+    label: Optimization
+    steps_per_period: {value: 48, source: owner}          # owner 2026-11-17: optimisation 48 per electrical period
+    gap_layers: {value: 1, source: owner}                 # owner 2026-11-16: one row per side in an optimisation
+    n_periods: {value: 1, source: owner}
+    global_edge_factor: {value: 1.0, source: provisional} # global edge = g * h0; the study's rungs are g = 1, 4/3, 16/9
+    coil_rel: {value: 1, source: provisional}             # wire-cell size = coil_rel * wire height; 0.5 / 1 / 2 only (candidate rung: 2)
+    outer_air_factor: {value: 1.2, source: provisional}   # outer boundary radius / stator radius (measured pilot factor)
+    n_sectors: {rule: symmetry, source: provisional}      # gcd(slots, poles): the natural sector of the machine
+    element_order: {value: 2, source: owner}
+    eddy: {value: true, source: provisional}
+    rotor_eddy: {value: true, source: provisional}
+    demag: {value: true, source: provisional}
+  simulation:
+    label: Simulation
+    # owner 2026-11-17: 96 or more per electrical period; the ripple grade (9 samples per cogging cycle, owner 2026-09-27) raises
+    # it for a machine with many cogging cycles.  Cogging run at 20 C: 120 or more, and at least 6 raw samples per cogging cycle.
+    steps_per_period: {min: 96, per_cogging_cycle: 9, source: owner}
+    cogging_steps_per_period: {min: 120, samples_per_cycle: 6, multiple_of: 24, source: owner}
+    gap_layers: {value: 2, source: owner}                 # owner 2026-11-16: final points two rows per side, never above 2
+    n_periods: {value: 1, source: owner}
+    global_edge_factor: {value: 1.0, source: provisional}
+    coil_rel: {value: 1, source: provisional}
+    outer_air_factor: {value: 1.2, source: provisional}
+    n_sectors: {rule: symmetry, source: provisional}
+    element_order: {value: 2, source: owner}
+    eddy: {value: true, source: provisional}
+    rotor_eddy: {value: true, source: provisional}
+    demag: {value: true, source: provisional}
+# Rules of PRESETS.md that the solver / mesher cannot take as a request field yet (so they are NOT applied and NOT claimed):
+# bulk multiplier, tooth-tip / bridge / magnet-segment local guards, graded exterior air, h0-scaled area floor, ring-node count q
+# (step snapping), skin-layer and warm-up settings (solver rules), probe policy.  Each needs a solver change of its own.
+pending: [bulk_multiplier, local_guards, graded_air, scaled_area_floor, ring_nodes_q, skin_layers, warmup, probe_policy]

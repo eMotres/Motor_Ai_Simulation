@@ -4994,6 +4994,9 @@ def get_fem_transient(
                                           #   still raising NotImplementedError is the moving /
                                           #   harmonic-macro air-gap band.  Anything but 2 raises.
     restore:             bool  = False,   # ← on open: return the LAST saved transient (stale if params differ) instead of recomputing
+    preset:              Optional[str] = None,  # ← "optimization" | "simulation" (mesh_presets.py): FILLS the steps and the Mesh
+                                                #   settings the request left empty; a field set to another value is reported
+                                                #   (``preset.custom``).  Absent = exactly as before.
     geo:                 Optional[str] = None,  # ← per-request geometry override (multi-user); absent = global config
     drive:               str   = "current",  # ← EXCITATION SOURCE:
                                              #   "current"        imposed sinusoidal phase current
@@ -5124,6 +5127,25 @@ def get_fem_transient(
     if type(sampling_purpose) is not str or sampling_purpose not in (
             "standard", "optimization", "cogging_quality"):
         raise HTTPException(status_code=422, detail="invalid sampling_purpose")
+    _preset_ctx = None
+    if preset:
+        from motor_ai_sim import mesh_presets as _MP
+        try:
+            from motor_ai_sim.config import get_config as _gc_pr
+            _pg = dict(_parse_geo_override(geo) or (_gc_pr().get("geometry") or {}))
+            _pres = _MP.resolve(preset, _pg, cogging=(sampling_purpose == "cogging_quality"))
+        except _MP.PresetError as _pe:
+            raise HTTPException(status_code=422, detail=str(_pe))
+        _pfill = _MP.fill(_pres, {"n_steps_per_period": n_steps_per_period, "gap_layers": gap_layers,
+                                  "mesh_size_mm": mesh_size_mm, "min_size_mm": min_size_mm,
+                                  "outer_air_factor": outer_air_factor, "n_sectors": n_sectors,
+                                  "component_mesh": component_mesh, "n_periods": n_periods, "eddy": eddy,
+                                  "rotor_eddy": rotor_eddy, "demag": demag})
+        _ps = _pfill["settings"]
+        n_steps_per_period, gap_layers = _ps["n_steps_per_period"], _ps["gap_layers"]
+        mesh_size_mm, min_size_mm = _ps["mesh_size_mm"], _ps["min_size_mm"]
+        outer_air_factor, n_sectors, component_mesh = _ps["outer_air_factor"], _ps["n_sectors"], _ps["component_mesh"]
+        _preset_ctx = (_pres, _pfill, _pg)
     # THE MACHINE THIS RUN STARTED ON (machine_binding, incident 2026-10-29).  A
     # solve takes minutes to hours; if another motor is loaded meanwhile, its
     # post-processing would read THAT machine (masses, passport, bearings) and
@@ -6186,6 +6208,11 @@ def get_fem_transient(
             _warm_pub = _sbres.pop("_warm_publish", None)
             _sbres["mesh_settings_source"] = dict(_mesh_src)
             _sbres["mesh_settings_note"] = _mesh_note
+            if _preset_ctx is not None:
+                _pres, _pfill, _pg = _preset_ctx
+                _sbres["preset"] = _MP.record(_pres, _pfill, _MP.effective_from_result(
+                    dict(_pfill["settings"], n_periods=n_periods, eddy=eddy, rotor_eddy=rotor_eddy, demag=demag),
+                    _pg, _sbres))
             # ── SIX PHASES: L_xy on the full ring, at THIS operating point ──
             # The circulating (x-y) mode drives the sets against each other,
             # which a sector model cannot represent unless the set pattern

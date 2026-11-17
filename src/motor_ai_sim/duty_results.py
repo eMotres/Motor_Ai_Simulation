@@ -2215,12 +2215,15 @@ def compact_em_run(sbres: Dict[str, Any]) -> Dict[str, Any]:
             for k in _EM_RUN_TEXT_KEYS
             if (res.get(k) is not None or summary.get(k) is not None)
             and isinstance(res.get(k) if res.get(k) is not None else summary.get(k), (str, int, float))}
+    pr = res.get("preset") if isinstance(res.get("preset"), dict) else None
     return {
         "computed_at": res.get("computed_at") or summary.get("computed_at"),
         "geometry_fingerprint": res.get("geo_fingerprint"),
         **_fp2_block(),
         "numbers": nums,
         **({"text": text} if text else {}),
+        # the mesh preset the run was solved with (mesh_presets.record), only when the request named one
+        **({"preset": {k: pr.get(k) for k in ("name", "version", "custom", "overridden", "effective", "changed")}} if pr else {}),
     }
 
 

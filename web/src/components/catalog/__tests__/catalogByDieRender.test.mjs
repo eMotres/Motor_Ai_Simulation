@@ -116,6 +116,13 @@ test('the widths: the characteristics line up (fixed grid) and fit beside the re
   assert.ok(rowClasses.length === 2 && rowClasses.every((c) => wrapClasses.has(c)), `${rowClasses}`);
   assert.equal((html.match(/data-testid="by-die-header"/g) || []).length, 1);          // ONE header for the page, not per family
   assert.match(html, /position:sticky/);
+  // the header sticks to the TAB's scroller (under the Motors title line): the catalog box itself has no overflow on a
+  // desktop (it would capture the sticky header and let it scroll away, browser finding on #738); only the phone rule has it
+  const rootCls = html.match(/class="MuiBox-root (css-[a-z0-9]+)" data-testid="catalog-by-die"/)[1];
+  const rule = html.slice(html.indexOf(`.${rootCls}{`));
+  const base = rule.slice(0, rule.indexOf('}') + 1);
+  assert.ok(!/overflow/.test(base), base);
+  assert.match(rule.slice(0, 400), /@media \(max-width:767\.95px\)\{\.css-[a-z0-9]+\{overflow-x:auto;/);
 });
 
 test('the row menus carry every action of the list view, each calling the right handler with the right motor', async () => {

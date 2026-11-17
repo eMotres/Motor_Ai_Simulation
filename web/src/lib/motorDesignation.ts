@@ -37,13 +37,13 @@ export function connectionParts(code: string): { series: number; parallel: numbe
   return { series: Number(m[1]), parallel: m[2] ? Number(m[2]) : 1 };
 }
 
-/** The letter table of the help page: every position with its possible values ('' = omitted). */
+/** The letter table of the help page: every position with its possible values ('' = omitted).  The double-winding letter D
+ *  is not generated for now (owner 2026-11-17: shown as more turns); a typed name with D still decodes. */
 export const LETTER_TABLE: ReadonlyArray<{ segment: Segment; values: string[] }> = [
   { segment: 'winding', values: ['C', 'D'] },
   { segment: 'rotor', values: ['I', 'O'] },
   { segment: 'cooling', values: ['A', 'L', 'O'] },
   { segment: 'steel', values: ['G', 'N', 'C'] },
-  { segment: 'double', values: ['D', ''] },
   { segment: 'open', values: ['O', ''] },
   { segment: 'ferrite', values: ['F', ''] },
   { segment: 'aluminium', values: ['A', ''] },

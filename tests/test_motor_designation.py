@@ -42,7 +42,7 @@ def name(die_name, die, cfg, **kw):
     ("CIANO20 200_50", dict(slots=24, poles=20, length=50, rows=15, conn="2S-2P"), "CIANO20 200_50 15F2S2PY"),
     ("CIANO28 80_12", dict(od=80, length=12, rows=10, split=6, ww=0.4, wh=0.4, rot_r=30.3, sta_r=30.8), "CIANO28 80_12 60R4SY"),
     ("CIANO28 80_12", dict(od=80, length=12, rows=14, ww=3.0, wh=0.35, rot_r=30.3, sta_r=30.8), "CIANO28 80_12 14F4SY"),
-    ("CIANO56 400_90", dict(slots=48, poles=56, od=400, length=90, rows=15, conn="4S-2P", phases=6), "CIANDO56 400_90 15F4S2PY"),
+    ("CIANO56 400_90", dict(slots=48, poles=56, od=400, length=90, rows=15, conn="4S-2P", phases=6), "CIANO56 400_90 30F4SY"),
     ("CIANO14 40 new", dict(slots=12, poles=14, od=40, length=12, rows=7, conn="2S", phases=None), "CIANO14 40_12 7F2SY"),
 ])
 def test_the_owner_table(die_name, kw, expected):
@@ -254,3 +254,27 @@ def test_staff_see_results_computed_for_another_name_customers_and_the_factory_d
     state.update(die_name="CILN28 vadim", cfg_name="G2-L65-17t", kw=dict(length=65, rows=15))
     body = _get(client, "admin")
     assert body["designation"] == "CILN28 200_65 15F4SY" and body["other_names"] == []
+
+
+# ── no letter D for now (owner 2026-11-17): a double winding shows in the turns ───────────────────────────────────────
+
+def test_a_double_winding_has_no_letter_and_counts_the_turns_of_both_sets():
+    out = name("CIANO56 400_90", *motor(slots=48, poles=56, od=400, length=90, rows=15, conn="4S-2P", phases=6))
+    seg = out["segments"]
+    assert out["designation"] == "CIANO56 400_90 30F4SY" and out["family"] == "CIANO56 400"
+    assert seg["double"]["value"] == "" and seg["double"]["phases"] == 6
+    assert (seg["turns"]["per_set"], seg["turns"]["sets"], seg["connection"]["sets"]) == (15, 2, 2)
+    # a two-set winding with parallel paths inside each set: 2S-4P = 2 in series x 2 parallel per set
+    assert name("CIANO56 400_90", *motor(slots=48, poles=56, od=400, length=90, rows=15, conn="2S-4P",
+                                         phases=6))["designation"].endswith(" 30F2S2PY")
+    assert name("CILN28", *motor(length=65, rows=17))["designation"] == "CILN28 200_65 17F4SY"   # one set: unchanged
+
+
+def test_an_older_name_with_D_is_the_same_motor_and_still_decodes():
+    old, new = "CIANDO56 400_90 15F4S2PY", "CIANO56 400_90 30F4SY"
+    assert MD.parse(old)["double"] == "D"
+    assert MD.canonical(old) == new and MD.canonical(old + " Rev A") == new and MD.canonical(new) == new
+    assert MD.compare(old, new) is None and MD.compare(new, old) is None
+    assert MD.compare(old, "CIANO56 400_90 28F4SY") == {"computed_for": old, "now": "CIANO56 400_90 28F4SY"}
+    assert MD.canonical("CIANDO56 400_90 15F4SY") == "CIANDO56 400_90 15F4SY"   # no second set to divide out: as written
+    assert MD.result_marks(new, {"rated": {"em": {"designation": old}}}) == []

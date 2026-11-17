@@ -6,7 +6,8 @@ import { useTranslation } from 'react-i18next';
 import { LETTER_TABLE, parseDesignation, SEGMENTS } from '../../lib/motorDesignation';
 import { DesignationDecoder } from '../common/MotorDesignation';
 
-const EXAMPLES = ['CILN28 200_40 24F4SY', 'CIANO28 80_12 60R4SY', 'CIANDO56 400_90 15F4S2PY'];
+// the 400 mm two-set motor: no letter D (owner 2026-11-17), both sets' turns counted together, the connection inside one set
+const EXAMPLES = ['CILN28 200_40 24F4SY', 'CIANO28 80_12 60R4SY', 'CIANO56 400_90 30F4SY'];
 
 const MotorNamesPage: React.FC = () => {
   const { t } = useTranslation('common');
@@ -36,6 +37,7 @@ const MotorNamesPage: React.FC = () => {
               ))}
             </TableBody>
           </Table>
+          <Typography sx={{ mt: 1.5, fontSize: 13 }}>{t('designation.help.double')}</Typography>
           <Typography sx={{ mt: 1.5, fontSize: 13 }}>{EXAMPLES.join(' · ')}</Typography>
         </Paper>
       </Box>

@@ -1,7 +1,7 @@
 // node --test: reading a motor designation (lib/motorDesignation.ts); the same grammar as motor_ai_sim.motor_designation.parse.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { connectionParts, meaningKey, parseDesignation } from '../motorDesignation.ts';
+import { connectionParts, LETTER_TABLE, meaningKey, parseDesignation } from '../motorDesignation.ts';
 
 test('the owner table parses', () => {
   for (const s of ['CILN28 200_40 24F4SY', 'CIANO28 80_12 60R4SY', 'CIANDO56 400_90 15F4S2PY', 'CIANO14 40_12 7F2SY', 'CILN28 200_40 24F4SY Rev B']) {
@@ -27,4 +27,10 @@ test('meaning keys and the connection in words', () => {
   assert.deepEqual(connectionParts('4S'), { series: 4, parallel: 1 });
   assert.deepEqual(connectionParts('2S2P'), { series: 2, parallel: 2 });
   assert.deepEqual(connectionParts('4P'), { series: 1, parallel: 4 });
+});
+
+test('no letter D on the help page for now (owner 2026-11-17); an older name with D still decodes', () => {
+  assert.ok(!LETTER_TABLE.some((r) => r.segment === 'double'));
+  assert.equal(parseDesignation('CIANDO56 400_90 15F4S2PY').double, 'D');
+  assert.equal(parseDesignation('CIANO56 400_90 30F4SY').double, '');
 });

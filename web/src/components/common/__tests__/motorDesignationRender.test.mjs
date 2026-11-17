@@ -21,6 +21,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { I18nextProvider } from 'react-i18next';
 import { createI18n } from '${rel('i18n/core.ts')}';
 import { DesignationName, DesignationDecoder } from '${rel('components/common/MotorDesignation.tsx')}';
+import MotorNamesPage from '${rel('components/help/MotorNamesPage.tsx')}';
 import enCommon from '${rel('locales/en/common.json')}';
 import zhCommon from '${rel('locales/zh-CN/common.json')}';
 export const makeI18n = (lng) => createI18n({ lng, resources: { en: { common: enCommon }, 'zh-CN': { common: zhCommon } } });
@@ -28,6 +29,7 @@ const wrap = (i18n, el) => renderToStaticMarkup(React.createElement(I18nextProvi
 export const name = (i18n, answer) => wrap(i18n, React.createElement(DesignationName, { answer }));
 export const decoder = (i18n, answer) => wrap(i18n, React.createElement(DesignationDecoder,
   { segments: answer.segments, checks: answer.checks, otherNames: answer.other_names }));
+export const helpPage = (i18n) => wrap(i18n, React.createElement(MotorNamesPage));
 `);
 await build({
   entryPoints: [join(tmp, 'entry.jsx')], bundle: true, platform: 'node', format: 'esm',
@@ -71,3 +73,25 @@ test('no mark without results computed for another name (unknown is not "differe
   }
   assert.equal(m.name(i18n, { designation: null, complete: false }), '');   // a customer's incomplete name: nothing
 });
+
+// no letter D for now (owner 2026-11-17): the 400 mm two-set motor reads 30F4SY, the decoder says why
+const TWO_SETS = { designation: 'CIANO56 400_90 30F4SY', complete: true, segments: {
+  double: { value: '', source: 'parameters', phases: 6 }, turns: { value: '30', source: 'parameters', per_set: 15, sets: 2 },
+  connection: { value: '4S', source: 'parameters', stored: '4S-2P', sets: 2 } } };
+for (const [lng, inTurns, sets, perSet, help] of [
+  ['en', 'two three-phase sets, counted in the turns', '2 sets × 15 turns', 'inside one set', 'the turns of both sets are counted together'],
+  ['zh-CN', '两套三相绕组，计入匝数', '2 套 × 15 匝', '单套内', '两套的匝数合并计算']]) {
+  test(`${lng}: a double winding decodes as turns of both sets, the connection inside one set`, async () => {
+    const i18n = m.makeI18n(lng); await ready(i18n);
+    const html = decode(m.decoder(i18n, TWO_SETS));
+    for (const s of [inTurns, sets, perSet]) assert.ok(html.includes(s), `${s} in ${html}`);
+    assert.ok(!html.includes('designation.'), html);
+  });
+  test(`${lng}: the help page shows the new example and says where the double winding went`, async () => {
+    const i18n = m.makeI18n(lng); await ready(i18n);
+    const html = decode(m.helpPage(i18n));
+    assert.ok(html.includes('CIANO56 400_90 30F4SY') && !html.includes('CIANDO56'), html);
+    assert.ok(html.includes(help), html);
+    assert.ok(!html.includes('designation.'), html);
+  });
+}

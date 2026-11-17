@@ -897,7 +897,8 @@
       },
       "double": {
         "D": "two three-phase sets",
-        "none": "one three-phase set"
+        "none": "one three-phase set",
+        "inTurns": "two three-phase sets, counted in the turns"
       },
       "open": {
         "O": "open",
@@ -946,7 +947,9 @@
     "otherName": "{count, plural, one {# result was} other {# results were}} computed for {old}; the motor is now {now}",
     "fact": {
       "slots": "{n} slots",
-      "phases": "{n} phases"
+      "phases": "{n} phases",
+      "turnsSets": "{sets} sets × {n} turns",
+      "perSet": "inside one set"
     },
     "check": {
       "die_name_not_standard": "The die name \"{name}\" does not follow the standard.",
@@ -964,7 +967,8 @@
       "try": "Motor name",
       "notAName": "Not a motor name in this format.",
       "position": "Position",
-      "values": "Values"
+      "values": "Values",
+      "double": "Two three-phase sets have no letter of their own: the turns of both sets are counted together and the connection is the one inside one set."
     }
   }
 }

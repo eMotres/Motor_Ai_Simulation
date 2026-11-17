@@ -897,7 +897,8 @@
       },
       "double": {
         "D": "两套三相绕组",
-        "none": "一套三相绕组"
+        "none": "一套三相绕组",
+        "inTurns": "两套三相绕组，计入匝数"
       },
       "open": {
         "O": "开放式",
@@ -946,7 +947,9 @@
     "otherName": "{count} 个结果是按 {old} 计算的；电机现在是 {now}",
     "fact": {
       "slots": "{n} 槽",
-      "phases": "{n} 相"
+      "phases": "{n} 相",
+      "turnsSets": "{sets} 套 × {n} 匝",
+      "perSet": "单套内"
     },
     "check": {
       "die_name_not_standard": "冲片名称“{name}”不符合标准。",
@@ -964,7 +967,8 @@
       "try": "电机名称",
       "notAName": "不是此格式的电机名称。",
       "position": "位置",
-      "values": "取值"
+      "values": "取值",
+      "double": "两套三相绕组没有单独的字母：两套的匝数合并计算，连接方式为单套内的连接。"
     }
   }
 }

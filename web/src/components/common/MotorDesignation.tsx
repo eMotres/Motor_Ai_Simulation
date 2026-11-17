@@ -36,11 +36,14 @@ export const DesignationDecoder: React.FC<{ segments: Record<string, SegmentInfo
       const c = connectionParts(v);
       return c ? t('designation.meaning.connection.words', { series: c.series, parallel: c.parallel }) : t('designation.meaning.unknown');
     }
+    if (seg === 'double' && !v && Number(segments.double?.phases) === 6) return t('designation.meaning.double.inTurns');
     return t(meaningKey(seg, v), { n: v });
   };
   const fact = (seg: string, s: SegmentInfo) => {
     if (seg === 'winding' && s.slots) return t('designation.fact.slots', { n: s.slots });
     if (seg === 'double' && s.phases) return t('designation.fact.phases', { n: s.phases });
+    if (seg === 'turns' && Number(s.sets) > 1 && s.per_set) return t('designation.fact.turnsSets', { sets: s.sets, n: s.per_set });
+    if (seg === 'connection' && Number(s.sets) > 1) return t('designation.fact.perSet');
     if ((seg === 'steel' || seg === 'ferrite' || seg === 'aluminium') && s.material) return String(s.material);
     if (seg === 'wire' && s.width_mm && s.height_mm) return `${s.width_mm} × ${s.height_mm} mm`;
     if (seg === 'connection' && s.stored) return String(s.stored);

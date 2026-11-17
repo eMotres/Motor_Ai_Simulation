@@ -12,7 +12,8 @@ pos   meaning                                     where it comes from
 2     I inrunner / O outrunner                    parameters: rotor outer radius vs stator inner radius
 3     A air / L liquid / O oil cooling            the die name (no stored parameter holds the cooling class yet)
 4     G grain-oriented / N non-oriented / C FeCo  parameters: the stator core material card
-5     D double winding (two 3-phase sets)         parameters: winding phases = 6; omitted when single
+5     D double winding (two 3-phase sets)         NOT GENERATED (owner 2026-11-17: "let us remove D for now, we will
+                                                  simply show more turns"); a typed or stored name with D still decodes
 6     O open construction ONLY                    the die name (no stored parameter yet); a closed motor has no letter
 7     F ferrite magnets                           parameters: the magnet card; omitted for NdFeB
 8     A aluminium coils                           parameters: the slot conductor; omitted for copper
@@ -21,7 +22,13 @@ pos   meaning                                     where it comes from
 Then the pole count, the stator core OD and the stack length (mm), and the winding code: turns per coil
 (``winding.turns_per_coil``, the electrical series turns), ``F`` flat (rectangular) or ``R`` round wire (a round wire is
 modelled as a square conductor: equal width and height), the coil connection inside a phase (``4S``, ``2S2P``, ``4P``) and
-``Y`` star / ``D`` delta.  ``Rev X`` is the product revision when the motor has one (``motor_revisions``).
+``Y`` star / ``D`` delta.
+
+A double winding (two 3-phase sets, ``winding.phases = 6``) has no letter of its own: the turns of BOTH sets are counted
+together (turns per coil x 2) and the connection is the one inside ONE set (the stored six-phase label counts the two
+sets as two parallel paths: ``4S-2P`` on 48 slots is 4 coils in series in each set).  The 400 mm two-set motor with
+15 turns per coil, stored ``4S-2P``, reads ``... 30F4SY``.  :func:`canonical` turns an older name with ``D`` into this
+form, so a result stamped before the change is not "computed for another name" because of the convention alone.  ``Rev X`` is the product revision when the motor has one (``motor_revisions``).
 
 The designation is NEVER typed and never stored as the motor's key: it is computed from the parameters at every read, so
 an edit of turns, connection, wire form, star / delta or stack length changes it at once.  A letter that cannot be decided
@@ -121,12 +128,18 @@ def is_ferrite(lib: Mapping[str, Any], name: Any) -> Optional[bool]:
     return "ferrite" in text
 
 
-def connection_code(conn: Any) -> Optional[str]:
+def connection_code(conn: Any, *, sets: int = 1) -> Optional[str]:
+    """``4S`` / ``2S2P`` / ``4P`` of a stored connection label; for ``sets`` = 2 the code inside ONE set (the six-phase
+    label counts the two sets as parallel paths, so they are divided out; None when they do not divide)."""
     from motor_ai_sim.winding import parse_connection
     try:
         n_par, n_ser = parse_connection(str(conn or ""))
     except ValueError:
         return None
+    if sets > 1:
+        if n_par % sets:
+            return None
+        n_par //= sets
     if n_par == 1:
         return f"{n_ser}S"
     if n_ser == 1:
@@ -164,7 +177,7 @@ def describe(die_name: str, die_doc: Mapping[str, Any], cfg_doc: Mapping[str, An
     put("rotor", UNKNOWN if r_rot is None or r_sta is None else ("I" if r_rot < r_sta else "O"), "parameters")
     put("cooling", from_name.get("c") or UNKNOWN, "die_name")
     put("steel", steel_letter(lib, mats.get("stator_core")), "parameters", material=str(mats.get("stator_core") or ""))
-    put("double", "D" if sets == 2 else "", "parameters", phases=phases)
+    put("double", "", "parameters", phases=phases)          # no letter D for now (module doc): shown in the turns
     put("open", ("O" if from_name.get("o") else "") if from_name else UNKNOWN, "die_name")
     fer = is_ferrite(lib, mats.get("magnet"))
     put("ferrite", UNKNOWN if fer is None else ("F" if fer else ""), "parameters", material=str(mats.get("magnet") or ""))
@@ -181,11 +194,12 @@ def describe(die_name: str, die_doc: Mapping[str, Any], cfg_doc: Mapping[str, An
         turns = turns_per_coil(g)
     except Exception:                                       # noqa: BLE001 - an unreadable geometry: unknown turns
         turns = 0
-    put("turns", str(turns) if turns > 0 else UNKNOWN, "parameters")
+    put("turns", str(turns * sets) if turns > 0 else UNKNOWN, "parameters", per_set=turns or None, sets=sets)
     ww, wh = _num(g.get("wire_width")), _num(g.get("wire_height"))
     put("wire", UNKNOWN if not ww or not wh else ("R" if abs(ww - wh) < 1e-9 else "F"), "parameters",
         width_mm=ww, height_mm=wh)
-    put("connection", connection_code(w.get("connection")) or UNKNOWN, "parameters", stored=str(w.get("connection") or ""))
+    put("connection", connection_code(w.get("connection"), sets=sets) or UNKNOWN, "parameters", stored=str(w.get("connection") or ""),
+        sets=sets)
     sd = str(w.get("star_delta") or "star").lower()
     put("star_delta", {"star": "Y", "delta": "D"}.get(sd, UNKNOWN), "parameters")
     if rev:
@@ -308,13 +322,33 @@ def stamp_from_config(die: str, config: Mapping[str, Any]) -> Dict[str, Any]:
         return {}
 
 
+def canonical(designation: Any) -> str:
+    """The designation in today's convention, without ``Rev``: an older name with the double-winding letter ``D``
+    (``CIANDO56 400_90 15F4S2PY``) becomes the same motor without it (``CIANO56 400_90 30F4SY``: both sets' turns, the
+    connection inside one set).  Anything that is not a designation is returned stripped."""
+    text = re.sub(r" Rev [A-Z]+$", "", str(designation or "").strip())
+    f = parse(text)
+    if not f or f["double"] != "D":
+        return text
+    m = re.fullmatch(r"(\d+)S(?:(\d+)P)?|(\d+)P", f["connection"])
+    if not m:
+        return text
+    n_ser, n_par = (1, int(m.group(3))) if m.group(3) else (int(m.group(1)), int(m.group(2) or 1))
+    if n_par % 2:
+        return text
+    n_par //= 2
+    conn = f"{n_ser}S" if n_par == 1 else (f"{n_par}P" if n_ser == 1 else f"{n_ser}S{n_par}P")
+    letters = "".join(f[k] for k in ("winding", "rotor", "cooling", "steel", "open", "ferrite", "aluminium"))
+    return f"{letters}{f['poles']} {f['od']}_{f['length']} {int(f['turns']) * 2}{f['wire']}{conn}{f['star_delta']}"
+
+
 def compare(result_designation: Optional[str], current_designation: Optional[str]) -> Optional[Dict[str, str]]:
     """The mark of a result computed for another motor: ``{"computed_for", "now"}``, or None when they agree or the
-    result carries no stamp (unknown is not "different").  The ``Rev`` suffix alone does not make a difference."""
+    result carries no stamp (unknown is not "different").  The ``Rev`` suffix alone does not make a difference, and
+    neither does the double-winding convention (:func:`canonical`)."""
     if not result_designation or not current_designation:
         return None
-    strip = lambda s: re.sub(r" Rev [A-Z]+$", "", str(s).strip())     # noqa: E731
-    if strip(result_designation) == strip(current_designation):
+    if canonical(result_designation) == canonical(current_designation):
         return None
     return {"computed_for": str(result_designation), "now": str(current_designation)}
 

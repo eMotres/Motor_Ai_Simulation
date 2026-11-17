@@ -36,6 +36,45 @@ interface Props {
   overview?: ByDieOverview | null;
 }
 
+export interface MenuEntry { key: string; label: string; run: () => void; danger?: boolean }
+type Who = { canWrite: boolean; isAdmin: boolean; standardUser: boolean };
+type T = (k: string, o?: Record<string, unknown>) => string;
+
+/** The die menu: every die action of the list view (pure, so the test checks each one is wired). */
+export function dieMenuItems(die: ByDieDie, who: Who, a: ByDieActions, t: T): MenuEntry[] {
+  if (!who.canWrite) return [];
+  const n = die.name;
+  return [
+    { key: 'add', label: t('byDie.addConfig'), run: () => a.addConfig(n) },
+    { key: 'ren', label: t('byDie.renameDie'), run: () => a.renameDie(n) },
+    { key: 'his', label: t('byDie.history'), run: () => a.dieHistory(n) },
+    { key: 'dup', label: t('byDie.duplicate'), run: () => a.duplicateDie(n) },
+    ...(who.isAdmin ? [{ key: 'arc', label: die.layer === 'shared' ? t('retireDieConfirm') : t('archiveDieConfirm'), run: () => a.retireOrArchive(n) }] : []),
+    { key: 'del', label: t('byDie.deleteDie'), run: () => a.deleteDie(n), danger: true },
+  ];
+}
+
+/** The motor menu: every configuration action of the list view (the lock of the row, the load is ▶). */
+export function motorMenuItems(m: Pick<MotorRow, 'die' | 'config'>, who: Who, a: ByDieActions, t: T): MenuEntry[] {
+  const { die, config } = m;
+  const out: MenuEntry[] = [];
+  if (who.canWrite) {
+    out.push({ key: 'ren', label: t('byDie.renameMotor'), run: () => a.renameCfg(die, config) },
+      { key: 'lock', label: t('byDie.lockMotor'), run: () => a.toggleCfgLock(die, config) },
+      { key: 'his', label: t('byDie.history'), run: () => a.cfgHistory(die, config) },
+      { key: 'dup', label: t('byDie.duplicate'), run: () => a.duplicateCfg(die, config) },
+      { key: 'bat', label: t('byDie.battery'), run: () => a.battery(die, config) });
+    if (who.isAdmin) out.push({ key: 'mov', label: t('byDie.move'), run: () => a.moveCfg(die, config, 'move') },
+      { key: 'cpy', label: t('byDie.copy'), run: () => a.moveCfg(die, config, 'copy') });
+  }
+  out.push({ key: 'ds', label: t('byDie.datasheet'), run: () => a.datasheet(die, config) },
+    { key: 'rep', label: t('byDie.report'), run: () => a.report(die, config, false) },
+    { key: 'pdf', label: t('byDie.reportPdf'), run: () => a.report(die, config, true) });
+  if (!who.canWrite && !who.standardUser) out.push({ key: 'mine', label: t('byDie.toMyMotors'), run: () => a.toMyMotors(die, config) });
+  if (who.canWrite) out.push({ key: 'del', label: t('byDie.deleteMotor'), run: () => a.deleteCfg(die, config), danger: true });
+  return out;
+}
+
 const fmt = (v: number | null | undefined, d = 1) => (v === null || v === undefined || !Number.isFinite(v) ? '—' : v.toFixed(d));
 const small = { fontSize: 11.5, color: 'var(--text-3)' };
 
@@ -59,7 +98,8 @@ const CatalogByDie: React.FC<Props> = ({ dies, thumbs, rated, active, isAdmin, c
   const run = (fn: () => void) => () => { setDieMenu(null); setCfgMenu(null); fn(); };
 
   const motorRow = (m: MotorRow) => {
-    const r = rated(m.die, m.config);
+    const r = rated(m.die, m.config);                       // the default mode: what ▶ loads
+    const q = m.rated;                                        // the point the row quotes: rated, else largest continuous
     const loaded = active?.die === m.die && active?.config === m.config;
     const nameTip = !m.named ? t('byDie.noNameTip')
       : !m.complete ? t('byDie.incompleteTip', { missing: m.unknown.join(', ') }) : '';   // a named motor: no old name anywhere
@@ -74,11 +114,12 @@ const CatalogByDie: React.FC<Props> = ({ dies, thumbs, rated, active, isAdmin, c
           </Typography>
         </Tooltip>
         {m.old && <Tooltip title={t('byDie.oldTip')}><Typography component="span" sx={{ ...small, fontStyle: 'italic' }}>{t('byDie.old')}</Typography></Tooltip>}
+        {m.newestLocked && <Tooltip title={t('byDie.newestLockedTip')}><Typography component="span" data-testid="by-die-newest-locked" sx={{ ...small, fontStyle: 'italic' }}>{t('byDie.newestLocked')}</Typography></Tooltip>}
         <Typography component="span" sx={{ ...small, flex: '1 1 220px' }}>{beside(m)}</Typography>
-        {r && (
-          <Tooltip title={t('defaultModeNumbersTip', { duty: r.duty ?? '—' })}>
-            <Typography component="span" sx={{ ...small, color: 'var(--text-2)', fontVariantNumeric: 'tabular-nums' }}>
-              {fmt(r.power_kw, 2)} kW · {fmt(r.torque_nm, 2)} Nm · {fmt(r.mass_kg, 2)} kg
+        {q && (
+          <Tooltip title={t('byDie.ratedTip', { duty: q.name })}>
+            <Typography component="span" data-testid="by-die-rated" sx={{ ...small, color: 'var(--text-2)', fontVariantNumeric: 'tabular-nums' }}>
+              {fmt(q.power_kw, 2)} kW · {fmt(q.torque_nm, 2)} Nm · {fmt(q.result?.mass_kg, 2)} kg
             </Typography>
           </Tooltip>
         )}
@@ -109,9 +150,9 @@ const CatalogByDie: React.FC<Props> = ({ dies, thumbs, rated, active, isAdmin, c
   return (
     <Box data-testid="catalog-by-die" sx={{ display: 'flex', flexDirection: 'column', gap: 0.75 }}>
       {groups.map((g) => (
-        <Box key={g.family} data-testid="by-die-family" sx={{ border: '1px solid var(--line-soft)', borderRadius: 1, overflow: 'hidden' }}>
+        <Box key={g.family || '-'} data-testid="by-die-family" sx={{ border: '1px solid var(--line-soft)', borderRadius: 1, overflow: 'hidden', ...(g.named ? {} : { opacity: 0.6 }) }}>
           <Box sx={{ px: 1, py: 0.4, bgcolor: 'var(--panel)', display: 'flex', alignItems: 'center', gap: 1 }}>
-            <Typography sx={{ fontSize: 13, fontWeight: 800, color: g.named ? 'var(--text-0)' : 'var(--text-3)' }}>{g.family}</Typography>
+            <Typography sx={{ fontSize: 13, fontWeight: 800, color: g.named ? 'var(--text-0)' : 'var(--text-3)' }}>{g.named ? g.family : t('byDie.noName')}</Typography>
             <Typography sx={small}>{t('byDie.motors', { n: g.blocks.reduce((n, b) => n + b.motors.length, 0) })}</Typography>
           </Box>
           {g.blocks.map((b) => (
@@ -143,36 +184,14 @@ const CatalogByDie: React.FC<Props> = ({ dies, thumbs, rated, active, isAdmin, c
         </Box>
       ))}
       <Menu open={!!dieMenu} anchorEl={dieMenu?.el ?? null} onClose={() => setDieMenu(null)}>
-        {dieMenu && [
-          <MenuItem key="add" dense onClick={run(() => actions.addConfig(dieMenu.die.name))}>{t('byDie.addConfig')}</MenuItem>,
-          <MenuItem key="ren" dense onClick={run(() => actions.renameDie(dieMenu.die.name))}>{t('byDie.renameDie')}</MenuItem>,
-          <MenuItem key="his" dense onClick={run(() => actions.dieHistory(dieMenu.die.name))}>{t('byDie.history')}</MenuItem>,
-          <MenuItem key="dup" dense onClick={run(() => actions.duplicateDie(dieMenu.die.name))}>{t('byDie.duplicate')}</MenuItem>,
-          ...(isAdmin ? [<MenuItem key="arc" dense onClick={run(() => actions.retireOrArchive(dieMenu.die.name))}>
-            {dieMenu.die.layer === 'shared' ? t('retireDieConfirm') : t('archiveDieConfirm')}</MenuItem>] : []),
-          <MenuItem key="del" dense sx={{ color: '#f87171' }} onClick={run(() => actions.deleteDie(dieMenu.die.name))}>{t('byDie.deleteDie')}</MenuItem>,
-        ]}
+        {dieMenu && dieMenuItems(dieMenu.die, { canWrite, isAdmin, standardUser }, actions, t).map((it) => (
+          <MenuItem key={it.key} dense sx={it.danger ? { color: '#f87171' } : undefined} onClick={run(it.run)}>{it.label}</MenuItem>
+        ))}
       </Menu>
       <Menu open={!!cfgMenu} anchorEl={cfgMenu?.el ?? null} onClose={() => setCfgMenu(null)}>
-        {cfgMenu && (() => {
-          const { die, config } = cfgMenu.m;
-          const items: Array<[string, string, () => void]> = [];
-          if (canWrite) {
-            items.push(['ren', t('byDie.renameMotor'), () => actions.renameCfg(die, config)],
-              ['lock', t('byDie.lockMotor'), () => actions.toggleCfgLock(die, config)],
-              ['his', t('byDie.history'), () => actions.cfgHistory(die, config)],
-              ['dup', t('byDie.duplicate'), () => actions.duplicateCfg(die, config)],
-              ['bat', t('byDie.battery'), () => actions.battery(die, config)]);
-            if (isAdmin) items.push(['mov', t('byDie.move'), () => actions.moveCfg(die, config, 'move')], ['cpy', t('byDie.copy'), () => actions.moveCfg(die, config, 'copy')]);
-          }
-          items.push(['ds', t('byDie.datasheet'), () => actions.datasheet(die, config)], ['rep', t('byDie.report'), () => actions.report(die, config, false)],
-            ['pdf', t('byDie.reportPdf'), () => actions.report(die, config, true)]);
-          if (!canWrite && !standardUser) items.push(['mine', t('byDie.toMyMotors'), () => actions.toMyMotors(die, config)]);
-          if (canWrite) items.push(['del', t('byDie.deleteMotor'), () => actions.deleteCfg(die, config)]);
-          return items.map(([k, label, fn]) => (
-            <MenuItem key={k} dense sx={k === 'del' ? { color: '#f87171' } : undefined} onClick={run(fn)}>{label}</MenuItem>
-          ));
-        })()}
+        {cfgMenu && motorMenuItems(cfgMenu.m, { canWrite, isAdmin, standardUser }, actions, t).map((it) => (
+          <MenuItem key={it.key} dense sx={it.danger ? { color: '#f87171' } : undefined} onClick={run(it.run)}>{it.label}</MenuItem>
+        ))}
       </Menu>
     </Box>
   );

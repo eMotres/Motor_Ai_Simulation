@@ -3,17 +3,22 @@
  *  motors, each by the standard designation, the per-motor parameters BESIDE the name.  Pure over `GET /api/family/tree`
  *  (+ `GET /api/overview` for admins), so it runs under `node --test`.
  *
- *  Current or old (owner decision 2026-11-17): among motors with the SAME designation, the one a project or a production
- *  links is current; the rest are old (muted, sorted last).  Without any link among them, none is marked old: the catalog
- *  cannot tell.  The one rule is `isLinked` + `markOld` below. */
+ *  Current or old (owner decision 2026-11-17, confirmed): among motors with the SAME designation, the one a project (current
+ *  link) or a production names is current; the rest are old (muted, sorted last).  No link on any of them: the newest
+ *  LOCKED one is current (marked "no link: newest locked"); none locked: none is marked.  The one rule is `markOld`. */
+import { shownDuties } from './catalogRows.ts';
 
 export interface ByDieBeside { steel?: string | null; magnet?: string | null; magnet_lamination_mm?: number | null; slot_insulation?: string | null }
+export interface ByDieDuty { name: string; power_kw?: number | null; torque_nm?: number | null; duty_class?: string | null;
+  mode?: string; result?: { mass_kg?: number | null } | null }
 export interface ByDieCfg {
   name: string; designation?: string | null; designation_complete?: boolean; designation_unknown?: string[];
-  family?: string; beside?: ByDieBeside; locked?: boolean;
+  family?: string; beside?: ByDieBeside; locked?: boolean; duties?: ByDieDuty[];
 }
 export interface ByDieDie { name: string; created?: string; slots?: number | null; poles?: number | null; stator_diameter?: number | null;
-  locked?: boolean; layer?: string; configs: ByDieCfg[] }
+  locked?: boolean; layer?: string; configs: ByDieCfg[];
+  /** the family header from the server (motor_designation.die_family): null when the die cannot be named yet */
+  family?: string | null }
 /** The Overview's answer, only the parts this view reads (admins only: the route is admin-gated). */
 export interface ByDieOverview {
   items: Record<string, { projects: Array<{ id: string; link_status: string }>; productions: string[]; computed?: boolean }>;
@@ -31,18 +36,35 @@ export interface MotorRow {
   computed: boolean;
   /** a project (current link) or a production links it */
   linked: boolean;
-  /** another motor with the same designation is the linked one */
+  /** another motor with the same designation is the current one */
   old: boolean;
+  /** this one is current only by the fallback (no link on any of the same name): the newest locked one */
+  newestLocked: boolean;
+  locked: boolean; created: string;
+  /** the point the row quotes (`ratedPoint`) */
+  rated: ByDieDuty | null;
 }
 export interface DieBlock { die: ByDieDie; motors: MotorRow[] }
 export interface FamilyGroup { family: string; named: boolean; blocks: DieBlock[] }
 
 const stripRev = (s: string) => s.replace(/ Rev [A-Z]+$/, '');
 
-/** The family of a die: the first configuration's designation family; the die name when no configuration has one. */
+/** The family of a die: the server's (`family`), else the first configuration's complete family; '' = cannot be named yet
+ *  (those dies share ONE muted group at the end). */
 export function familyOf(d: ByDieDie): { family: string; named: boolean } {
-  const f = d.configs.map((c) => c.family).find((x) => typeof x === 'string' && x && !x.includes('?'));
-  return f ? { family: f, named: true } : { family: d.name, named: false };
+  const f = (typeof d.family === 'string' && d.family) ? d.family
+    : d.configs.map((c) => c.family).find((x) => typeof x === 'string' && x && !x.includes('?'));
+  return f ? { family: f, named: true } : { family: '', named: false };
+}
+
+/** The point the row quotes: the one marked rated (named `rated`, else the first whose name starts with `rated`), else the
+ *  largest continuous point by power (a short-time point is never quoted as the rating). */
+export function ratedPoint(c: ByDieCfg): ByDieDuty | null {
+  const ds = shownDuties((c.duties ?? []) as never) as unknown as ByDieDuty[];
+  const marked = ds.find((d) => d.name === 'rated') ?? ds.find((d) => String(d.name).toLowerCase().startsWith('rated'));
+  if (marked) return marked;
+  const cont = ds.filter((d) => d.duty_class !== 'short_time' && typeof d.power_kw === 'number' && Number.isFinite(d.power_kw));
+  return cont.length ? cont.reduce((a, b) => (Math.abs(b.power_kw as number) > Math.abs(a.power_kw as number) ? b : a)) : null;
 }
 
 export function isLinked(m: Pick<MotorRow, 'projects' | 'productions'>): boolean {
@@ -57,8 +79,12 @@ export function markOld(rows: MotorRow[]): void {
     byName.set(k, [...(byName.get(k) ?? []), r]);
   }
   for (const same of byName.values()) {
-    if (same.length < 2 || !same.some((r) => r.linked)) continue;
-    for (const r of same) r.old = !r.linked;
+    if (same.length < 2) continue;
+    if (same.some((r) => r.linked)) { for (const r of same) r.old = !r.linked; continue; }
+    const locked = same.filter((r) => r.locked);
+    if (!locked.length) continue;                      // nothing says which one: none is marked
+    const cur = locked.reduce((a, b) => (b.created > a.created || (b.created === a.created && b.config > a.config) ? b : a));
+    for (const r of same) { r.old = r !== cur; r.newestLocked = r === cur; }
   }
 }
 
@@ -79,6 +105,7 @@ export function buildByDie(dies: ByDieDie[], overview: ByDieOverview | null): Fa
         die: d.name, config: c.name, label: named ? c.designation as string : c.name, named,
         complete: named && c.designation_complete !== false, unknown: c.designation_unknown ?? [],
         beside: c.beside ?? {}, projects, productions, computed: !!it?.computed, linked: false, old: false,
+        newestLocked: false, locked: !!(c.locked || d.locked), created: String(d.created ?? ''), rated: ratedPoint(c),
       };
       row.linked = isLinked(row);
       all.push(row);
@@ -86,8 +113,10 @@ export function buildByDie(dies: ByDieDie[], overview: ByDieOverview | null): Fa
     });
     return { die: d, motors };
   });
-  markOld(all);
-  const rank = (m: MotorRow) => (m.old ? 2 : m.linked ? 0 : 1);
+  // without the Overview (a customer, the factory, or before it answered) the links are unknown: nothing is marked, because
+  // the fallback alone could call the linked motor "old"
+  if (overview) markOld(all);
+  const rank = (m: MotorRow) => (m.old ? 2 : m.linked || m.newestLocked ? 0 : 1);
   for (const b of blocks) b.motors.sort((a, z) => rank(a) - rank(z) || a.label.localeCompare(z.label));
   const groups = new Map<string, FamilyGroup>();
   for (const b of blocks) {
@@ -97,7 +126,8 @@ export function buildByDie(dies: ByDieDie[], overview: ByDieOverview | null): Fa
     groups.set(family, g);
   }
   // inside a family: the die with a current motor first, then the newest
-  const blockRank = (b: DieBlock) => (b.motors.some((m) => m.linked) ? 0 : b.motors.every((m) => m.old) && b.motors.length ? 2 : 1);
+  const blockRank = (b: DieBlock) => (b.motors.some((m) => m.linked || m.newestLocked) ? 0
+    : b.motors.every((m) => m.old) && b.motors.length ? 2 : 1);
   for (const g of groups.values()) {
     g.blocks.sort((a, z) => blockRank(a) - blockRank(z) || String(z.die.created ?? '').localeCompare(String(a.die.created ?? '')));
   }

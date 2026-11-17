@@ -293,6 +293,10 @@
     "report": "Report (Word)",
     "reportPdf": "Report (PDF)",
     "toMyMotors": "Copy to my motors",
-    "deleteMotor": "Delete"
+    "deleteMotor": "Delete",
+    "newestLocked": "no link: newest locked",
+    "newestLockedTip": "No project or production links any motor of this designation; the newest locked one is taken as current",
+    "noName": "No standard name yet",
+    "ratedTip": "The rated point ({duty}); ▶ loads the default mode"
   }
 }

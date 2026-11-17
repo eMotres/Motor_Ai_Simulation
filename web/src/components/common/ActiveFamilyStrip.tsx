@@ -47,6 +47,7 @@ import { dutyEfficiencyPct } from '../../lib/dutyEfficiency';
 import { dutyLabel, isShortTime, type DutyClassInfo } from '../../lib/dutyClass';
 import { suggestDieName } from '../../lib/dieNames';
 import { buildClashOf, movedLine, movedSave, type BuildClash } from '../../lib/buildClash';
+import { fetchDesignation } from './MotorDesignation';
 
 const API = import.meta.env.VITE_API_URL ?? 'http://localhost:8001';
 
@@ -121,6 +122,18 @@ const ActiveFamilyStrip: React.FC = () => {
   const identity = user?.email?.trim().toLowerCase() ?? null;
   const lastMotor = useLastMotorState();
   const [ctx, setCtx] = useState<Ctx | null>(null);
+  // the loaded motor by its standard designation (owner 2026-11-17: no old names once a motor has one); the stored
+  // die / configuration names move to the tooltip.  null while it loads, for an incomplete name, or with no motor.
+  const [desig, setDesig] = useState<string | null>(null);
+  useEffect(() => {
+    let alive = true;
+    setDesig(null);
+    if (ctx?.die && ctx?.config) {
+      void fetchDesignation(String(ctx.die), String(ctx.config))
+        .then((a) => { if (alive) setDesig(a?.complete && a.designation ? a.designation : null); });
+    }
+    return () => { alive = false; };
+  }, [ctx?.die, ctx?.config]);
   const [viewedModel, setViewedModel] = useState<string | null>(null);
   useEffect(() => {
     const onViewed = (e: Event) => setViewedModel((e as CustomEvent<{ name?: string | null }>).detail?.name || null);
@@ -1061,7 +1074,15 @@ const ActiveFamilyStrip: React.FC = () => {
         return (
           <Typography sx={{ fontSize: 12, color: 'var(--text-2)',
                             fontVariantNumeric: 'tabular-nums' }}>
-            {/* the die name is the way UP to the catalog (mobile audit 2026-11: configuration -> die -> catalog) */}
+            {/* the die name is the way UP to the catalog (mobile audit 2026-11: configuration -> die -> catalog); a motor
+                with a complete designation is shown by it, the stored names in the tooltip (owner 2026-11-17) */}
+            {desig && !drifted2 ? (
+              <Tooltip title={`${ctx.die} / ${ctx.config} · Motors catalog`}>
+                <b role="link" tabIndex={0} data-testid="strip-die-to-catalog" style={{ color: 'var(--text-1)', cursor: 'pointer', fontFamily: 'monospace', textDecoration: 'underline dotted', textUnderlineOffset: 3 }}
+                  onClick={() => useUIStore.getState().setActiveTab('motors' as never)}
+                  onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); useUIStore.getState().setActiveTab('motors' as never); } }}>{desig}</b>
+              </Tooltip>
+            ) : (<>
             <Tooltip title="Motors catalog">
               <b role="link" tabIndex={0} data-testid="strip-die-to-catalog" style={{ color: 'var(--text-1)', cursor: 'pointer', textDecoration: 'underline dotted', textUnderlineOffset: 3 }}
                 onClick={() => useUIStore.getState().setActiveTab('motors' as never)}
@@ -1070,6 +1091,7 @@ const ActiveFamilyStrip: React.FC = () => {
             {' / '}{drifted2
               ? <Tooltip title={tip}><span style={{ cursor: 'help' }}>{cfgEl}</span></Tooltip>
               : cfgEl}
+            </>)}
             {ctx.duty && !ctx.can_write ? <>{' / '}<b style={{ color: '#60a5fa' }}>{ctx.duty}</b></> : null}
             {ctx.duty && ctx.can_write ? <>{' / '}
               <Tooltip title="Mode of this configuration — pick another to load its point and last stored results (nothing is solved)">

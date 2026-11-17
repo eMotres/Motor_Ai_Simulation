@@ -607,17 +607,35 @@ def step_display_state(ctx: Ctx) -> None:
 
 
 def step_die_archive(ctx: Ctx) -> None:
-    """The die archive (``<shared>/object_registry/die_archive.json``, every workspace) names the die."""
+    """The die archive (``<shared>/object_registry/die_archive.json``): a die of one workspace (or published namespace) is
+    archived under THAT workspace's key, so renaming it moves that key only.  A SHARED die is never archived (it has
+    Retire), so a shared rename moves nothing here: the keys of the same name belong to other workspaces' own dies."""
     from motor_ai_sim import die_archive as DA
-    try:
-        path = DA.store_path()
-    except Exception:                                       # noqa: BLE001
+    if ctx.glob_scope:
         return
     try:
-        _json_file_rename(ctx, "die_archive", path, lambda doc: DA.rename_die_in(doc, ctx.old, ctx.new),
+        path = DA.store_path()
+        scope = DA._viewer()
+    except Exception:                                       # noqa: BLE001
+        return
+    if not scope:
+        return
+    try:
+        _json_file_rename(ctx, "die_archive", path, lambda doc: DA.rename_die_in(doc, ctx.old, ctx.new, scope),
                           "an archived die stays archived under its new name")
     except ValueError as e:
         raise RenameBlocked(str(e)) from e
+
+
+def step_tombstone(ctx: Ctx) -> None:
+    """A RETIRED shared die (``shared_die_tombstones.json``) stays retired under its new name."""
+    from motor_ai_sim import workspace as W
+    try:
+        path = W._tombstones_file()
+    except Exception:                                       # noqa: BLE001
+        return
+    _json_file_rename(ctx, "tombstones", path, lambda doc: int(_rename_key(doc, ctx.old, ctx.new)),
+                      "the retired state follows the die name")
 
 
 def step_object_registry(ctx: Ctx) -> None:
@@ -766,13 +784,43 @@ def step_manual(ctx: Ctx) -> None:
 
 #: workspace-level steps, then the shared-catalog ones (``glob_scope``)
 LOCAL_STEPS = (step_folder, step_derived_from, step_fields, step_duty_results,
-               step_context, step_workspace_memory, step_catalog_cards)
-GLOBAL_STEPS = (step_grants, step_die_access, step_projects, step_production, step_motor_revisions, step_display_state, step_die_archive, step_object_registry, step_motor_tests, step_cad,
+               step_context, step_workspace_memory, step_catalog_cards, step_die_archive)
+GLOBAL_STEPS = (step_grants, step_die_access, step_projects, step_production, step_motor_revisions, step_display_state, step_tombstone, step_object_registry, step_motor_tests, step_cad,
                 step_manual)
 
 
+#: the shared-catalog stores that name a die: a WORKSPACE rename does not rewrite them, so it is refused while any names the die
+LINK_STEPS = ("step_grants", "step_die_access", "step_projects", "step_production", "step_motor_revisions",
+              "step_display_state", "step_motor_tests", "step_cad")
+
+
+def _refuse_while_linked(fam: Any, old: str, new: str, src_dir: Path, dst_dir: Path, actor: str) -> None:
+    """A die of one workspace is renamed inside the workspace only (``LOCAL_STEPS``).  Projects, production, revisions, tests,
+    CAD and grants key their records by the die NAME and are not rewritten, so a rename would leave them pointing at a name
+    that no longer exists.  Plan every one of them (dry run, nothing written) and refuse, naming the stores, while any of
+    them names the die; the dry run of the route shows the same refusal.  Asked for only by the route, for a die that exists
+    in the caller's workspace ALONE: a private copy that shares its name with a SHARED die keeps the old behaviour (those
+    records belong to the shared die and stay with it)."""
+    probe = Ctx(fam=fam, old=old, new=new, src_dir=src_dir, dst_dir=dst_dir, dry_run=True, glob_scope=True, actor=actor)
+    hit = []
+    for name in LINK_STEPS:
+        step = globals()[name]
+        n0 = len(probe.changes)
+        try:
+            step(probe)
+        except RenameBlocked:
+            raise
+        except Exception:                                   # noqa: BLE001 - a store that cannot be read names nothing we can prove
+            log.debug("die rename: link probe %s failed", name, exc_info=True)
+        if len(probe.changes) > n0:
+            hit.append(name.replace("step_", ""))
+    if hit:
+        raise RenameBlocked(f"'{old}' is named by {', '.join(hit)}; a workspace die with links cannot be renamed here "
+                            "(the shared stores do not follow a workspace rename)")
+
+
 def run(fam: Any, old: str, new: str, *, src_dir: Path, dst_dir: Path, dry_run: bool,
-        glob_scope: bool, actor: str = "") -> Dict[str, Any]:
+        glob_scope: bool, actor: str = "", refuse_links: bool = False) -> Dict[str, Any]:
     """Rename ``old`` to ``new`` everywhere, or (``dry_run``) list where it would.  All or nothing."""
     from motor_ai_sim import users
     if glob_scope and old == getattr(users, "_BASELINE_DIE", None):
@@ -791,7 +839,13 @@ def run(fam: Any, old: str, new: str, *, src_dir: Path, dst_dir: Path, dry_run: 
     ctx = Ctx(fam=fam, old=old, new=new, src_dir=src_dir, dst_dir=dst_dir, dry_run=dry_run,
               glob_scope=glob_scope, actor=actor)
     steps = LOCAL_STEPS + (GLOBAL_STEPS if glob_scope else ())
+    if refuse_links and not glob_scope:
+        steps = steps + (step_object_registry,)                  # the ids are kept: the locator follows (review of #728)
+        _refuse_while_linked(fam, old, new, src_dir, dst_dir, actor)    # a workspace rename does not carry the shared stores
     done = 0
+    tok = None
+    if not glob_scope and hasattr(fam, "_IN_PLACE_PARENT"):
+        tok = fam._IN_PLACE_PARENT.set(str(src_dir.parent))   # a workspace die is re-saved where it is, admin or not
     try:
         for step in steps:
             step(ctx)
@@ -813,6 +867,9 @@ def run(fam: Any, old: str, new: str, *, src_dir: Path, dst_dir: Path, dry_run: 
             except Exception:                           # noqa: BLE001
                 pass
         raise
+    finally:
+        if tok is not None:
+            fam._IN_PLACE_PARENT.reset(tok)
     if not dry_run:
         for line in ctx.after:
             try:

@@ -604,3 +604,107 @@ def test_the_shared_ledger_is_found_without_the_admin_request_context(layered):
         undo()
     ledger = json.loads((layered["shared"] / ".duty_results.json").read_text(encoding="utf-8"))
     assert list(ledger["results"]) == [LAYER_SHARED_DIE]
+
+
+# ── a retired shared die and a workspace-only die can be renamed (standard die names, step 1) ───────────────────
+
+def _admin_workspace_die(layered, name: str):
+    from motor_ai_sim import workspace as W
+    ws = layered["ws"].parent / W.workspace_id(ADMIN)
+    d = ws / "dies" / name
+    d.mkdir(parents=True)
+    (d / "die.yaml").write_text(yaml.safe_dump({"name": name, "locked": False, "geometry": dict(GEO)}, sort_keys=False),
+                                encoding="utf-8")
+    (d / f"{CFG}.yaml").write_text(yaml.safe_dump({"name": CFG, "die": name, "role": "motor", "duties": []},
+                                                  sort_keys=False), encoding="utf-8")
+    return ws, W.workspace_id(ADMIN)
+
+
+def test_an_admin_renames_a_workspace_only_die_and_only_its_archive_key_follows(layered, monkeypatch):
+    registry = layered["shared"].parent / "registry"
+    monkeypatch.setenv("MOTRES_OBJECT_REGISTRY_ROOT", str(registry))
+    ws, admin_ws = _admin_workspace_die(layered, "ADMW 40")
+    _write_json(registry / "die_archive.json", {"version": 1, "dies": {
+        f"{admin_ws}/ADMW 40": {"layer": "workspace"}, "someone-else/ADMW 40": {"layer": "workspace"}},
+        "history": [{"key": f"{admin_ws}/ADMW 40", "to": "archived"}, {"key": "someone-else/ADMW 40", "to": "archived"}]})
+    c, h = layered["client"], layered["admin"]
+    dry = c.patch("/api/family/die/ADMW 40?dry_run=1", json={"name": "ADMW 40 old"}, headers=h)
+    assert dry.status_code == 200, dry.text
+    assert dry.json()["scope"] == "workspace" and "die_archive" in {x["store"] for x in dry.json()["changes"]}
+    assert (ws / "dies" / "ADMW 40").is_dir()
+    r = c.patch("/api/family/die/ADMW 40", json={"name": "ADMW 40 old"}, headers=h)
+    assert r.status_code == 200, r.text
+    assert (ws / "dies" / "ADMW 40 old" / "die.yaml").is_file() and not (ws / "dies" / "ADMW 40").exists()
+    doc = json.loads((registry / "die_archive.json").read_text(encoding="utf-8"))
+    assert sorted(doc["dies"]) == [f"{admin_ws}/ADMW 40 old", "someone-else/ADMW 40"]
+    assert sorted(x["key"] for x in doc["history"]) == [f"{admin_ws}/ADMW 40 old", "someone-else/ADMW 40"]
+
+
+def test_an_admin_renames_a_retired_shared_die_and_it_stays_retired(layered):
+    from motor_ai_sim import users as U
+    from motor_ai_sim import workspace as W
+    c, h = layered["client"], layered["admin"]
+    assert c.post(f"/api/family/die/{LAYER_SHARED_DIE}/retire", json={"confirm": LAYER_SHARED_DIE}, headers=h).status_code == 200
+    assert W.is_tombstoned(LAYER_SHARED_DIE)
+    new = "SHAREDA 40 old"
+    # a plain account never finds it
+    assert c.patch(f"/api/family/die/{LAYER_SHARED_DIE}", json={"name": new}, headers=layered["alice"]).status_code in (403, 404)
+    dry = c.patch(f"/api/family/die/{LAYER_SHARED_DIE}?dry_run=1", json={"name": new}, headers=h)
+    assert dry.status_code == 200, dry.text
+    assert {"catalog", "tombstones", "user_grants"} <= {x["store"] for x in dry.json()["changes"]}
+    assert W.is_tombstoned(LAYER_SHARED_DIE) and (layered["shared"] / "dies" / LAYER_SHARED_DIE).is_dir()
+    r = c.patch(f"/api/family/die/{LAYER_SHARED_DIE}", json={"name": new}, headers=h)
+    assert r.status_code == 200, r.text
+    assert r.json()["scope"] == "shared catalog"
+    assert (layered["shared"] / "dies" / new / "die.yaml").is_file() and not (layered["shared"] / "dies" / LAYER_SHARED_DIE).exists()
+    assert W.is_tombstoned(new) and not W.is_tombstoned(LAYER_SHARED_DIE)
+    assert U.get_stored_motor_grants(ALICE)["dies"] == [new]
+    # it is still hidden from the plain account and restores under the new name
+    assert c.post(f"/api/family/die/{new}/restore", headers=h).status_code == 200
+    assert not W.is_tombstoned(new)
+
+
+def test_a_retired_name_is_not_taken_by_another_die(layered):
+    c, h = layered["client"], layered["admin"]
+    assert c.post(f"/api/family/die/{LAYER_SHARED_DIE}/retire", json={"confirm": LAYER_SHARED_DIE}, headers=h).status_code == 200
+    _admin_workspace_die(layered, "ADMW 40")
+    r = c.patch("/api/family/die/ADMW 40", json={"name": LAYER_SHARED_DIE}, headers=h)
+    assert r.status_code == 409, r.text
+    assert "already exists" in r.text
+
+
+def test_a_shared_rename_leaves_the_archive_keys_of_other_workspaces_alone(layered, monkeypatch):
+    """A shared die is never archived, so a key of that name belongs to somebody's OWN die and keeps its name."""
+    registry = layered["shared"].parent / "registry"
+    monkeypatch.setenv("MOTRES_OBJECT_REGISTRY_ROOT", str(registry))
+    _write_json(registry / "die_archive.json", {"version": 1, "dies": {f"other-ws/{LAYER_SHARED_DIE}": {"layer": "workspace"}},
+                                                "history": [{"key": f"other-ws/{LAYER_SHARED_DIE}", "to": "archived"}]})
+    r = layered["client"].patch(f"/api/family/die/{LAYER_SHARED_DIE}", json={"name": "SHAREDA 40 admin"}, headers=layered["admin"])
+    assert r.status_code == 200, r.text
+    doc = json.loads((registry / "die_archive.json").read_text(encoding="utf-8"))
+    assert list(doc["dies"]) == [f"other-ws/{LAYER_SHARED_DIE}"] and doc["history"][0]["key"] == f"other-ws/{LAYER_SHARED_DIE}"
+
+
+def test_a_workspace_die_that_a_shared_store_names_is_refused_with_the_stores_listed(layered):
+    from motor_ai_sim import users as U
+    _admin_workspace_die(layered, "ADMW 40")
+    U.set_motor_grants(ALICE, all_motors=False, dies=[LAYER_SHARED_DIE, "ADMW 40"], configs=[f"{LAYER_SHARED_DIE}/{CFG}"])
+    c, h = layered["client"], layered["admin"]
+    for url in ("/api/family/die/ADMW 40?dry_run=1", "/api/family/die/ADMW 40"):
+        r = c.patch(url, json={"name": "ADMW 40 old"}, headers=h)
+        assert r.status_code == 409, r.text
+        assert "grants" in r.text and "cannot be renamed here" in r.text
+    ws = layered["ws"].parent
+    assert any((p / "dies" / "ADMW 40").is_dir() for p in ws.iterdir() if p.is_dir())          # nothing moved
+
+
+def test_a_workspace_only_rename_keeps_the_registry_id_and_moves_the_locator(layered, monkeypatch):
+    registry = layered["shared"].parent / "registry"
+    monkeypatch.setenv("MOTRES_OBJECT_REGISTRY_ROOT", str(registry))
+    _admin_workspace_die(layered, "ADMW 40")
+    _write_json(registry / "registry.json", {"version": 1, "links": {}, "review": [], "backfills": [], "objects": {
+        "fam-1": {"kind": "family", "locator": {"ns": "catalog", "key": "ADMW 40"}, "name": "ADMW 40"}}})
+    r = layered["client"].patch("/api/family/die/ADMW 40", json={"name": "ADMW 40 old"}, headers=layered["admin"])
+    assert r.status_code == 200, r.text
+    obj = json.loads((registry / "registry.json").read_text(encoding="utf-8"))["objects"]["fam-1"]
+    assert obj["locator"]["key"] == "ADMW 40 old" and "ADMW 40" in obj["aliases"]

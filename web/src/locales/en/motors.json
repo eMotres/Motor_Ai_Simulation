@@ -353,6 +353,7 @@
       "active": "Set Active",
       "parked": "Park",
       "archived": "Archive"
-    }
+    },
+    "newestShort": "newest"
   }
 }

@@ -3,7 +3,7 @@
 // the name; the old copy marked; projects and production for admins only.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join, dirname, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -241,4 +241,28 @@ test('member: no stage, no running work, no server strip, no state filter', asyn
   const html = decode(m.render(i18n, { dies, isAdmin: false, canWrite: false, overview: ovState, jobs: jobsAnswer }));
   for (const id of ['by-die-stage', 'by-die-jobs', 'by-die-topline', 'by-die-server', 'by-die-project-chip']) assert.ok(!html.includes(id), id);
   assert.ok(!html.includes('optimisation') && !html.includes('threads'), html);
+});
+
+test('browser findings on #739/#740: the header sticks flush under the title line (-24 px, the scroller padding); the marks are short chips', async () => {
+  const i18n = m.makeI18n('en'); await ready(i18n);
+  const html = m.render(i18n, { dies, isAdmin: true, overview });
+  const hdrCls = html.match(/class="MuiBox-root (css-[a-z0-9]+)" data-testid="by-die-header"/)[1];
+  const rule = html.slice(html.indexOf(`.${hdrCls}{`)); const base = rule.slice(0, rule.indexOf('}'));
+  assert.match(base, /position:sticky/); assert.match(base, /top:-24px/);
+  const app = readFileSync(resolve(src, 'App.tsx'), 'utf8');
+  assert.match(app, /<Box sx=\{\{ p: 3, overflowY: 'auto', height: '100%' \}\}>\s*<MotorsCatalog \/>/);   // p: 3 = the 24 px it offsets
+  // the "old" mark is one short chip (label "old"), the long reason only in its tooltip
+  assert.match(decode(html), /data-testid="by-die-old"[^>]*>|aria-label="[^"]*"[^>]*data-testid="by-die-old"/);
+  assert.ok(!decode(html).includes('>no link: newest locked<'), 'never the sentence in the cell');
+});
+
+test('"no link: newest locked" is the chip "newest", the sentence only in its tooltip', async () => {
+  const i18n = m.makeI18n('en'); await ready(i18n);
+  const twin = (name, created, locked) => ({ name, created, locked, slots: 12, poles: 14, stator_diameter: 30, configs: [cfg('L10', 'CIANO14 30_10 6F2SY', {})] });
+  const html = decode(m.render(i18n, { dies: [twin('A', '2026-08-19', true), twin('B', '2026-09-01', false)], isAdmin: true,
+    overview: { items: {}, projects: {}, productions: {} } }));
+  const chip = html.slice(html.indexOf('data-testid="by-die-newest-locked"') - 300, html.indexOf('data-testid="by-die-newest-locked"') + 2500);
+  assert.ok(chip.includes('>newest<') && /aria-label="no link: newest locked: No project/.test(chip), chip);
+  assert.ok(!text(html).includes('no link: newest locked'), 'not in the cell');
+  assert.ok(html.includes('data-testid="by-die-old"'));
 });

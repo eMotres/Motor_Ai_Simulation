@@ -2858,7 +2858,7 @@ def rename_die(die: str, req: DieRename, dry_run: bool = False,
     try:
         out = _dr.run(_sys.modules[__name__], die, new, src_dir=src, dst_dir=dst,
                       dry_run=bool(dry_run), glob_scope=glob_scope,
-                      actor=actor_of(_w.get("user")))
+                      actor=actor_of(_w.get("user")), refuse_links=bool(own_only))
     except _dr.RenameBlocked as exc:
         raise HTTPException(409, detail=str(exc))
     except HTTPException:

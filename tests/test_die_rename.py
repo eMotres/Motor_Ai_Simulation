@@ -671,3 +671,28 @@ def test_a_retired_name_is_not_taken_by_another_die(layered):
     r = c.patch("/api/family/die/ADMW 40", json={"name": LAYER_SHARED_DIE}, headers=h)
     assert r.status_code == 409, r.text
     assert "already exists" in r.text
+
+
+def test_a_shared_rename_leaves_the_archive_keys_of_other_workspaces_alone(layered, monkeypatch):
+    """A shared die is never archived, so a key of that name belongs to somebody's OWN die and keeps its name."""
+    registry = layered["shared"].parent / "registry"
+    monkeypatch.setenv("MOTRES_OBJECT_REGISTRY_ROOT", str(registry))
+    _write_json(registry / "die_archive.json", {"version": 1, "dies": {f"other-ws/{LAYER_SHARED_DIE}": {"layer": "workspace"}},
+                                                "history": [{"key": f"other-ws/{LAYER_SHARED_DIE}", "to": "archived"}]})
+    r = layered["client"].patch(f"/api/family/die/{LAYER_SHARED_DIE}", json={"name": "SHAREDA 40 admin"}, headers=layered["admin"])
+    assert r.status_code == 200, r.text
+    doc = json.loads((registry / "die_archive.json").read_text(encoding="utf-8"))
+    assert list(doc["dies"]) == [f"other-ws/{LAYER_SHARED_DIE}"] and doc["history"][0]["key"] == f"other-ws/{LAYER_SHARED_DIE}"
+
+
+def test_a_workspace_die_that_a_shared_store_names_is_refused_with_the_stores_listed(layered):
+    from motor_ai_sim import users as U
+    _admin_workspace_die(layered, "ADMW 40")
+    U.set_motor_grants(ALICE, all_motors=False, dies=[LAYER_SHARED_DIE, "ADMW 40"], configs=[f"{LAYER_SHARED_DIE}/{CFG}"])
+    c, h = layered["client"], layered["admin"]
+    for url in ("/api/family/die/ADMW 40?dry_run=1", "/api/family/die/ADMW 40"):
+        r = c.patch(url, json={"name": "ADMW 40 old"}, headers=h)
+        assert r.status_code == 409, r.text
+        assert "grants" in r.text and "cannot be renamed here" in r.text
+    ws = layered["ws"].parent
+    assert any((p / "dies" / "ADMW 40").is_dir() for p in ws.iterdir() if p.is_dir())          # nothing moved

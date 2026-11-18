@@ -91,6 +91,21 @@ test('Projects tab: in the open-project header the button stands before the proj
   assert.ok(!/data-testid="project-back"/.test(page), 'no second, icon-only project-back left in the page');
 });
 
+// owner 2026-11-18, after #755: "the back arrow is duplicated, leave one" - the old "All projects" text button left of the project
+// title (the body row every project tab shares) is gone; the header button is the one return for every role and every tab
+test('Projects tab: exactly ONE return to the project list, for every role and every project tab', () => {
+  const page = readFileSync(resolve(src, 'modules/development/components/DevelopmentPage.tsx'), 'utf8');
+  assert.equal((page.match(/onClick=\{\(\) => void backToList\(\)\}/g) || []).length, 1, 'one control calls backToList');
+  assert.equal((page.match(/<ProjectBackButton\b/g) || []).length, 1);
+  assert.ok(!page.includes('ArrowBackIcon'), 'no other arrow in the page');
+  assert.ok(!page.includes("{tr('back')}</Button>"), 'the body text button is gone');
+  // the title row now starts with the title itself: no empty slot left before it
+  assert.ok(page.includes("<Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1.5, flexWrap: 'wrap' }}><Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, flex: 1"));
+  // the header button is not behind a role or a tab: it sits in <HeaderTabs> outside every view / role condition
+  const block = page.slice(page.indexOf('<HeaderTabs tab="development">'), page.indexOf('<SubTabs'));
+  assert.ok(!/&&\s*<ProjectBackButton|\?\s*<ProjectBackButton/.test(block), 'not conditional');
+});
+
 // Width budget of the open-project header row (PanelHeader: px 3 each side, gap 8, the panel label, then the tabs slot with the
 // button).  The row wraps (flexWrap), so if label + button + all tabs are wider than the row, the tabs drop to a second line.
 // Worst case: an admin with every tab (production, notes, timeline, quote, cost) and an unread chip on Messages.  Text widths are

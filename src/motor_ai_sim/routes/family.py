@@ -3937,7 +3937,10 @@ def _upsert_duty(req: DutyCreate, _w: dict, *, may_move: bool = True) -> dict:
     # first given, so nothing is lost on a duty that only ever ran on PWM.
     _drive = _drive_of(d.drive, d.mesh, d.summary)
     _has_primary = bool(prev and (prev.get("summary") or prev.get("mesh")))
-    _is_primary = (_drive == "current") or not _has_primary
+    # a save of the SAME excitation as the duty's own primary (a rectifier duty whose only run is custom_current)
+    # replaces that primary, so its headline can be refreshed; a sine primary stays the sine
+    _is_primary = ((_drive == "current") or not _has_primary
+                   or (_drive != "current" and _drive == _primary_drive(prev or {})))
     # THE DUTY CYCLE, before anything is written: a block naming a duty this
     # configuration does not have (a rename away, a typo) would be accepted
     # here and refused only much later, by the thermal run, with nothing on
@@ -4076,7 +4079,7 @@ def record_duty_result(req: DutyResult, _w: dict = Depends(require_catalog_write
     # excitation without disturbing them.  A duty with no result yet takes the
     # first one it is given, whatever ran it.
     _drive = _drive_of(req.drive)
-    if _drive == "current" or not found.get("result"):
+    if _drive == "current" or not found.get("result") or _drive == _primary_drive(found):
         found["result"] = res
         _primary = True
     else:

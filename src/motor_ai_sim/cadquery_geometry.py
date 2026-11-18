@@ -2192,19 +2192,18 @@ class CadQueryMotor:
         # flag must not leak onto it (the config-leak family, see merge_geo_override).
         from motor_ai_sim.geometry.motor_geometry import merge_outer_notches
         merge_outer_notches(mapped, api_params)
-        # `wire_bore_margin` is OPTIONAL (absent = the old rule): a config-level value must not leak onto an override
-        # that is silent on it (the same config-leak family as the notch flag above)
-        if api_params.get('wire_bore_margin') is None:
-            mapped.pop('wire_bore_margin', None)
-        # `wire_omit` is OPTIONAL (absent = the full grid): a config-level value must not leak onto an override that is
-        # silent on it (the same config-leak family as the notch flag above)
-        if api_params.get('wire_omit') is None:
-            mapped.pop('wire_omit', None)
-        if api_params.get('k_end_by_turns') is None:
-            mapped.pop('k_end_by_turns', None)
-        for _k in ('magnet_flat', 'magnet_pocket_clearance'):      # opt-in rotor keys: same config-leak guard
-            if api_params.get(_k) is None:
-                mapped.pop(_k, None)
+        # The OPTIONAL keys (absent = the builder's own rule: wire_bore_margin, wire_omit, k_end_by_turns,
+        # magnet_flat, magnet_pocket_clearance): a config-level value must not leak onto an override that
+        # describes ANOTHER whole lamination and is silent on them (the same config-leak family as the notch
+        # flag above).  A PARTIAL override (a sweep / descent candidate: the swept keys only) is the loaded
+        # machine with those keys replaced, so it inherits them: dropping them solved a flat-magnet die with
+        # arc-topped magnets (BUG_sweep_magnet_flat.md).
+        from motor_ai_sim.geometry.motor_geometry import describes_whole_lamination
+        if describes_whole_lamination(api_params):
+            for _k in ('wire_bore_margin', 'wire_omit', 'k_end_by_turns',
+                       'magnet_flat', 'magnet_pocket_clearance'):
+                if api_params.get(_k) is None:
+                    mapped.pop(_k, None)
         
         # Pole/slot COUNT is defined by the geometry's magnets/slots: num_poles and
         # num_slots are AUTHORITATIVE.  The segment view (num_seg × *_per_segment) is

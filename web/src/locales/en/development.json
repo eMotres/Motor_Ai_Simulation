@@ -60,6 +60,7 @@
   "customerOrg": "Customer organisation",
   "create": "Create project",
   "back": "All projects",
+  "backTip": "Back to the project list",
   "cancel": "Cancel",
   "save": "Save",
   "statusLabel": "Project status",

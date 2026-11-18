@@ -50,7 +50,8 @@
     "changes": "Changes",
     "assembly": "Assembly process",
     "tooling": "Tooling",
-    "tests": "Tests"
+    "tests": "Tests",
+    "certification": "Certification"
   },
   "bilingual": {
     "machine": "Machine translation, not verified",
@@ -812,5 +813,21 @@
     "startTitle": "Start production",
     "paymentLabel": "Payment received (a date or a note, no amount)",
     "startOk": "Start"
+  },
+  "cert": {
+    "tip": "The certification package of this motor: analysis, technical file, declarations of conformity, safety leaflet, labelling, supplier declarations, test reports. Drafts are staff-only until released.",
+    "none": "No certification documents.",
+    "group": "Group (optional)",
+    "ungrouped": "No group",
+    "internal": "Internal (staff only)",
+    "uploadTip": "Uploads into this tab. Internal documents are hidden from the factory; clear the box to release a file.",
+    "status": "Status",
+    "statuses": {
+      "draft": "Draft",
+      "signed": "Signed",
+      "evidence_received": "Evidence received"
+    },
+    "move": "To Documents",
+    "moveTip": "Move this file back to the Documents tab"
   }
 }

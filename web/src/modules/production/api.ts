@@ -2,7 +2,7 @@
 // (docs/PRODUCTION_MODULE_DESIGN.md section 5). The session token is added by the global fetch interceptor.
 import { errorInfo, productionDocumentsZipPath, supersededPrompt, productionProcessDocumentFilename, productionProcessDocumentPath, productionZipFilename, safeFileName, unwrapList } from './helpers';
 import type {
-  AssemblyProcessView, AssemblyStep, AssemblyTree, Bilingual, BomImportPlan, BomRow, CostRow, CostsData, DocumentRec, ExtraCost, Member, MemberRole, Part, PartFiles, ProcessSection, Production, Proposal, Revision, RevisionPreview, SupersedePair,
+  AssemblyProcessView, AssemblyStep, AssemblyTree, Bilingual, BomImportPlan, BomRow, CostRow, CostsData, CertStatus, DocumentRec, ExtraCost, Member, MemberRole, Part, PartFiles, ProcessSection, Production, Proposal, Revision, RevisionPreview, SupersedePair,
   ProductionAccess, Thread, TranslationRef, Lang, ProcurementData, ProcurementLine, ScheduleData, ScheduleBaseline, TimelineData,
 } from './types';
 
@@ -240,11 +240,17 @@ export const productionApi = {
   setDocumentInternal: (die: string, config: string, docId: string, internal: boolean) =>
     call<DocumentRec>('PATCH', `${base(die, config)}/documents/${enc(docId)}`, { internal }),
   documents: async (die: string, config: string) => unwrapList<DocumentRec>(await call('GET', `${base(die, config)}/documents`), 'documents'),
-  uploadDocument: (die: string, config: string, file: File, partId: string | null, stepId: string | null = null) => {
+  /** staff: move a document between Documents and Certification, or set its group label / certification status */
+  updateDocument: (die: string, config: string, docId: string,
+    patch: { internal?: boolean; section?: 'certification' | null; group?: string; cert_status?: CertStatus }) =>
+    call<DocumentRec>('PATCH', `${base(die, config)}/documents/${enc(docId)}`, patch),
+  uploadDocument: (die: string, config: string, file: File, partId: string | null, stepId: string | null = null,
+    cert?: { group: string; internal: boolean }) => {
     const f = new FormData();
     f.append('file', file, file.name);
     if (partId) f.append('part_id', partId);
     if (stepId) f.append('step_id', stepId);
+    if (cert) { f.append('section', 'certification'); f.append('group', cert.group); f.append('internal', cert.internal ? 'true' : 'false'); }
     return call<DocumentRec>('POST', `${base(die, config)}/documents`, f);
   },
 

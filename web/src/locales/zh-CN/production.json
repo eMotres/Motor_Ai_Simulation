@@ -50,7 +50,8 @@
     "changes": "变更",
     "assembly": "装配流程",
     "tooling": "工装",
-    "tests": "测试"
+    "tests": "测试",
+    "certification": "认证"
   },
   "bilingual": {
     "machine": "机器翻译，未经核实",
@@ -812,5 +813,21 @@
     "startTitle": "开始生产",
     "paymentLabel": "已收款（日期或备注，不写金额）",
     "startOk": "开始"
+  },
+  "cert": {
+    "tip": "本电机的认证文件包：分析、技术文件、符合性声明、安全说明、标识、供应商声明、测试报告。发布前草稿仅限内部人员查看。",
+    "none": "暂无认证文件。",
+    "group": "分组（可选）",
+    "ungrouped": "未分组",
+    "internal": "内部（仅限员工）",
+    "uploadTip": "上传到此标签页。内部文件对工厂不可见；取消勾选即可发布文件。",
+    "status": "状态",
+    "statuses": {
+      "draft": "草稿",
+      "signed": "已签署",
+      "evidence_received": "已收到证明材料"
+    },
+    "move": "移至文件",
+    "moveTip": "将此文件移回文件标签页"
   }
 }

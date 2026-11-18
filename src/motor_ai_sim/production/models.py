@@ -701,6 +701,32 @@ def normalize_process_section(raw: dict, section_id: Optional[str] = None) -> di
     }
 
 
+#: The document sections besides the normal Documents list; a missing ``section`` means the Documents tab.
+DOCUMENT_SECTIONS = ("certification",)
+#: Status of a certification document (its own field: ``status`` stays reserved for ``superseded``).
+CERT_STATUSES = ("draft", "signed", "evidence_received")
+
+
+def normalize_certification_fields(raw: Optional[dict]) -> dict:
+    """``{section, group, cert_status}`` for a certification document, ``{}`` for a normal one (backward compatible: old rows have none).
+
+    ``group`` is a free-text label (<= 60 characters) the tab groups its list by; ``cert_status`` defaults to ``draft``."""
+    raw = raw if isinstance(raw, dict) else {}
+    if str(raw.get("section") or "").strip().lower() not in DOCUMENT_SECTIONS:
+        return {}
+    status = str(raw.get("cert_status") or "draft").strip().lower()
+    return {
+        "section": "certification",
+        "group": " ".join(str(raw.get("group") or "").split())[:60],
+        "cert_status": status if status in CERT_STATUSES else "draft",
+    }
+
+
+def is_certification(doc: Any) -> bool:
+    """A document filed in the Certification tab."""
+    return isinstance(doc, dict) and doc.get("section") == "certification"
+
+
 def normalize_document(raw: dict, file_id: str, uploader_email: str, name: str,
                        part_id: Optional[str] = None) -> dict:
     return {
@@ -714,6 +740,8 @@ def normalize_document(raw: dict, file_id: str, uploader_email: str, name: str,
         "internal": bool((raw or {}).get("internal", False)),
         # a picture posted to one assembly step (owner 2026-10-18: images in every production step)
         "step_id": str((raw or {}).get("step_id"))[:40] if (raw or {}).get("step_id") else None,
+        # Certification tab (owner 2026-11-19): section / group / cert_status are present only on a certification document
+        **normalize_certification_fields(raw),
     }
 
 

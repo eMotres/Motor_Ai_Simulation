@@ -591,3 +591,16 @@ test('the page banner and the file chip are wired and their strings exist in bot
   const keys = (o, p = '') => Object.entries(o).flatMap(([k, v]) => (v && typeof v === 'object' ? keys(v, p + k + '.') : [p + k]));
   assert.deepEqual(keys(rd('en')).sort(), keys(rd('zh-CN')).sort());
 });
+
+t('certification documents: the Documents list leaves them out, the tab groups them by label, newest first', () => {
+  const d = (id, extra = {}) => ({ id, uploaded_at: '2026-11-19T10:00:00Z', name: id + '.pdf', ...extra });
+  const docs = [d('a'), d('b', { section: 'certification', group: 'EU DoC', uploaded_at: '2026-11-18T10:00:00Z' }),
+    d('c', { section: 'certification', group: 'EU DoC' }), d('e', { section: 'certification' }),
+    d('f', { section: 'certification', group: 'Labelling', status: 'superseded' }), d('g', { section: 'certification', group: 'Technical file' })];
+  assert.deepEqual(H.plainDocuments(docs).map((x) => x.id), ['a']);
+  const g = H.certificationGroups(docs);
+  assert.deepEqual(g.map((x) => x.group), ['EU DoC', 'Technical file', '']);
+  assert.deepEqual(g[0].docs.map((x) => x.id), ['c', 'b']);
+  assert.deepEqual(H.visibleProductionTabs(['documents', 'certification', 'tests'], 'viewer', 0), ['documents', 'tests']);
+  assert.deepEqual(H.visibleProductionTabs(['documents', 'certification', 'tests'], 'oem', 0), ['documents', 'certification', 'tests']);
+});

@@ -113,9 +113,15 @@ def pack_from_spec(b: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
 
 
 def _k_end(pp: Dict[str, Any]) -> float:
-    """3-D end-effect factor at the passport's own stack length (1.0 when the
-    machine has no Stage-A measurement — the honest 2-D answer)."""
+    """3-D end-effect factor of the passport: the SAME `end3d.k_flux` every other reader applies (checked against
+    `end3d_factors.FACTOR_BAND`); the per-length table is used only when the passport carries no scalar (1.0 when the
+    machine has no Stage-A measurement - the honest 2-D answer).  It used to read the table first, so one machine
+    had two factors (0.938 from the table, 0.965 from the scalar)."""
+    from motor_ai_sim.end3d_factors import accepted_factor
     e3 = pp.get("end3d") or {}
+    k = accepted_factor(e3.get("k_flux"), "k_flux")
+    if k is not None:
+        return k
     m = e3.get("k_flux_vs_L") or {}
     if m:
         pts = sorted((float(a), float(b)) for a, b in m.items())
@@ -123,8 +129,10 @@ def _k_end(pp: Dict[str, Any]) -> float:
         if pts:
             xs = [q[0] for q in pts]
             ys = [q[1] for q in pts]
-            return _clamp_interp(xs, ys, L0)
-    return float(e3.get("k_flux") or 1.0)
+            k = accepted_factor(_clamp_interp(xs, ys, L0), "k_flux_vs_L")
+            if k is not None:
+                return k
+    return 1.0
 
 
 def machine_point(pp: Dict[str, Any], I: float, rpm: float, *,

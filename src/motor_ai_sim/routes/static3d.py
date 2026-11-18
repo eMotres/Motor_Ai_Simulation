@@ -1112,6 +1112,7 @@ def adopt_entry(sa: Dict[str, Any], note: str = "") -> Tuple[str, Dict[str, Any]
     entry = {
         "k_flux": k,
         "k_flux_self": sa.get("k_flux_self"),
+        **({"k_flux_basis": sa["k_flux_basis"]} if sa.get("k_flux_basis") else {}),
         "fidelity": "standalone Stage A (adopted)",
         "generated_utc": sa.get("generated_utc"),
         "adopted_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),

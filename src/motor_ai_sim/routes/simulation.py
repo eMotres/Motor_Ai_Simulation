@@ -7642,8 +7642,50 @@ _SUMMARY_SHAPE_V = 21   # v21: the FULL mass of the loaded configuration + the p
 # every result solved since carries the verdict from its own solve.
 
 
+#: A passport measured on an earlier geometry is lent to another geometry of the same machine only when the stack
+#: length agrees within this fraction (the same 5 % `end3d_factors.measured_k_T` uses): the end effect of a 40 mm
+#: stack is not that of a 200 mm one.
+_END3D_STACK_TOL = 0.05
+
+
+def _end3d_stack_at(rec: dict, stack_mm: float):
+    """``(k_flux at stack_mm, basis)`` from one stored passport, or ``(None, why)`` when it was measured at a
+    different stack length.  Its own `k_flux_vs_L` entry for this length comes first (interpolated inside the
+    measured span, 5 % slack at the ends); else the scalar `k_flux` when the passport's own stack is within the
+    tolerance."""
+    tol = _END3D_STACK_TOL
+    curve = rec.get("k_flux_vs_L")
+    pts = []
+    if isinstance(curve, dict):
+        for a_, b_ in curve.items():
+            try:
+                pts.append((float(a_), float(b_)))
+            except (TypeError, ValueError):
+                continue
+    pts.sort()
+    if pts and pts[0][0] * (1.0 - tol) <= stack_mm <= pts[-1][0] * (1.0 + tol):
+        if stack_mm <= pts[0][0]:
+            return pts[0][1], "k_flux_vs_L"
+        if stack_mm >= pts[-1][0]:
+            return pts[-1][1], "k_flux_vs_L"
+        for (x0, y0), (x1, y1) in zip(pts, pts[1:]):
+            if x0 <= stack_mm <= x1:
+                return (y0 if x1 == x0 else y0 + (y1 - y0) * (stack_mm - x0) / (x1 - x0)), "k_flux_vs_L"
+    try:
+        own = float(rec.get("stack_mm"))
+    except (TypeError, ValueError):
+        own = 0.0
+    if own > 0 and abs(own - stack_mm) <= tol * stack_mm:
+        return float(rec["k_flux"]), "stack_mm"
+    if pts:
+        return None, "its stack lengths %g-%g mm do not cover %g mm" % (pts[0][0], pts[-1][0], stack_mm)
+    if own > 0:
+        return None, "measured at a %g mm stack, this one is %g mm" % (own, stack_mm)
+    return None, "its stack length is not recorded"
+
+
 def _end3d_lookup(geo_fp: Optional[str], geo: Optional[dict] = None,
-                  exact: bool = False) -> Optional[dict]:
+                  exact: bool = False, diag: Optional[dict] = None) -> Optional[dict]:
     """The Stage A end-effect passport for THIS machine, or None.
 
     config/end_effect_passports.json is keyed by the same `_geometry_fingerprint`
@@ -7651,7 +7693,11 @@ def _end3d_lookup(geo_fp: Optional[str], geo: Optional[dict] = None,
     different motor than the one on screen.  A 2-D transient overestimates the
     flux of a short stack (the field spills axially past the laminations); the
     3-D static Stage A measures the factor once per machine — 0.952 on the
-    40 mm, 0.927 on the 85 mm (stack 13 mm on Ø85 spills hard)."""
+    40 mm, 0.927 on the 85 mm (stack 13 mm on Ø85 spills hard).
+
+    A passport of an EARLIER geometry of the same machine is lent only at the same stack length (5 %); when none
+    fits the answer is None and, if `diag` is given, `diag["note"]` says why ("no 3-D factor", never a silent
+    borrow)."""
     if not geo_fp:
         return None
     try:
@@ -7679,16 +7725,48 @@ def _end3d_lookup(geo_fp: Optional[str], geo: Optional[dict] = None,
                  and v.get("k_flux") is not None]
         if not cands:
             return None
+        stack = _geo_stack_mm(geo)
         _when = lambda v: str(v.get("adopted_utc") or v.get("generated_utc") or "")  # noqa: E731
-        k, v = max(cands, key=lambda kv: _when(kv[1]))
-        return _e3_enrich({**v, "inherited": True, "inherited_from": k,
+        fits, why = [], []
+        for k, v in sorted(cands, key=lambda kv: _when(kv[1]), reverse=True):
+            if not stack:
+                why.append((k, "this geometry has no stack length"))
+                continue
+            kf, basis = _end3d_stack_at(v, stack)
+            if kf is None:
+                why.append((k, basis))
+            else:
+                fits.append((k, v, kf, basis))
+        if not fits:
+            if diag is not None:
+                diag["note"] = (
+                    "no 3-D factor: the passports of other geometries of this machine (%s) were measured at "
+                    "another stack length (%s); run Stage A for this geometry" % (desc, why[0][1] if why else "none"))
+            return None
+        k, v, kf, basis = fits[0]
+        extra = {"k_flux": float(kf), "k_flux_passport": v.get("k_flux")} if basis == "k_flux_vs_L" else {}
+        return _e3_enrich({**v, **extra, "inherited": True, "inherited_from": k,
+                "inherited_stack_basis": basis,
                 "inherited_note": (
                     f"coefficient of an EARLIER geometry of this machine "
-                    f"({desc}, passport {_when(v)[:10] or 'undated'}) — the "
+                    f"({desc}, passport {_when(v)[:10] or 'undated'}) at the same "
+                    f"stack length ({stack:g} mm, within {int(_END3D_STACK_TOL * 100)} %) — the "
                     f"current geometry has no Stage A passport yet; recompute "
                     f"to confirm or replace it")}, geo_fp, geo)
     except Exception:   # noqa: BLE001 — no passport is a normal state
         return None
+
+
+def _geo_stack_mm(geo: Optional[dict] = None) -> float:
+    """Stack length [mm] of the live config geometry with an optional per-request override on top (0 when unknown)."""
+    try:
+        from motor_ai_sim.config import get_config as _gc
+        g = dict((_gc().get("geometry") or {}))
+        if geo:
+            g.update({kk: vv for kk, vv in dict(geo).items() if vv is not None})
+        return float(g.get("motor_length") or 0.0)
+    except Exception:   # noqa: BLE001
+        return 0.0
 
 
 def _machine_desc(geo: Optional[dict] = None) -> Optional[str]:
@@ -8191,6 +8269,7 @@ def _build_transient_summary(
     _Vpk = float(sbres.get("V_peak", 0.0))
     _Vrms = _Vpk / _math.sqrt(2)
     _Vlpk = _Vpk * (1.0 if _is_delta else _sq3)
+    _e3diag: dict = {}
     _Vlrms = _Vlpk / _math.sqrt(2)
     _vs = [sbres.get(k) for k in ("V_A", "V_B", "V_C")]
     if all(isinstance(v, (list, tuple)) and len(v) == len(_vs[0]) and len(v) >= 4
@@ -9021,7 +9100,9 @@ def _build_transient_summary(
                                                   or _r["k_flux"]), 3),
             "V_line_peak_corrected_V": (
                 round(_Vlpk * float(_r["k_flux"]), 2) if _Vlpk else None),
-        }))(_end3d_lookup(sbres.get("geo_fingerprint"), _geo_cfg)),
+        }))(_end3d_lookup(sbres.get("geo_fingerprint"), _geo_cfg, diag=_e3diag)),
+        # said out loud when another geometry's passport was NOT lent (stack length differs): the card shows 2-D
+        **({"end3d_note": _e3diag["note"]} if _e3diag.get("note") else {}),
         # Bench Ld/Lq — the LCR-meter measurement, simulated: small-signal
         # values at the I≈0 iron state, per machine + connection.  Cache READ
         # only (this builder also runs on restore rebuilds); the live-machine

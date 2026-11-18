@@ -733,6 +733,11 @@ def run_stage_a(geo_override: Optional[dict] = None,
                 "only thing a 2D model can assume")),
         k_flux=float(k_vs2d),
         k_flux_self=float(k_self),
+        # the 2-D consistency check was not run: the ratio is NOT measured as 1.0, k_flux is the self-normalised
+        # 3-D ratio (= k_flux_self) and says so, so a reader can tell it from a checked one
+        k_flux_basis=("2-D check passed" if two_d is not None and two_d.get("k_flux_usable")
+                      else "2-D check failed: use k_flux_self" if two_d is not None
+                      else "self-normalised (2-D check not run; k_flux = k_flux_self)"),
         spill_profile=dict(
             z_m=prof["z_m"], z_over_half_stack=prof["z_over_half"],
             B1_T=prof["B1_T"], B1_normalised=prof["profile"],

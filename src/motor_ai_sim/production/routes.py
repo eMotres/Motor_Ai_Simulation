@@ -1193,23 +1193,48 @@ def list_documents(request: Request, die: str, config: str):
 
 @router.patch("/{die}/{config}/documents/{doc_id}")
 async def patch_document(request: Request, die: str, config: str, doc_id: str):
-    """Editors mark a document internal (hidden from the factory) or not."""
+    """Editors mark a document internal (hidden from the factory) or not, move it between Documents and Certification
+    (``section``: ``"certification"`` | ``null``) and set its certification ``group`` label and ``cert_status``."""
     user, _production = require_editor_with_full_view(request, die, config)
     body = await request.json()
-    if not isinstance(body, dict) or "internal" not in body:
+    if not isinstance(body, dict) or not any(k in body for k in ("internal", "section", "group", "cert_status")):
+        raise HTTPException(status_code=400, detail="internal, section, group or cert_status expected")
+    if "internal" in body and not isinstance(body.get("internal"), bool):
         raise HTTPException(status_code=400, detail="internal: true | false expected")
-    flag = bool(body.get("internal"))
+    if body.get("section") not in (None, "", *models.DOCUMENT_SECTIONS):
+        raise HTTPException(status_code=422, detail="section: 'certification' or null expected")
+    if body.get("cert_status") is not None and body.get("cert_status") not in models.CERT_STATUSES:
+        raise HTTPException(status_code=422, detail="cert_status: %s expected" % " | ".join(models.CERT_STATUSES))
     found = {}
 
     def mut(d):
         for doc in d.get("documents", []):
-            if doc.get("id") == doc_id:
-                doc["internal"] = flag
-                found["doc"] = doc
+            if doc.get("id") != doc_id:
+                continue
+            if "internal" in body:
+                doc["internal"] = body["internal"]
+            if "section" in body:
+                if body.get("section"):
+                    doc.update(models.normalize_certification_fields({
+                        "section": "certification",
+                        "group": body["group"] if "group" in body else doc.get("group"),
+                        "cert_status": body["cert_status"] if body.get("cert_status") else doc.get("cert_status")}))
+                else:      # back to the normal Documents list
+                    for k in ("section", "group", "cert_status"):
+                        doc.pop(k, None)
+            elif models.is_certification(doc):
+                if "group" in body:
+                    doc["group"] = models.normalize_certification_fields({"section": "certification", "group": body["group"]})["group"]
+                if body.get("cert_status"):
+                    doc["cert_status"] = body["cert_status"]
+            elif "group" in body or body.get("cert_status"):
+                raise HTTPException(status_code=422, detail="group and cert_status belong to a certification document")
+            found["doc"] = doc
     store.mutate_file(die, config, "documents.json", mut)
     if not found:
         raise HTTPException(status_code=404, detail="Document not found")
-    _audit(_email(user), die, config, "update", "document", doc_id, {"internal": flag})
+    _audit(_email(user), die, config, "update", "document", doc_id,
+           {k: body[k] for k in ("internal", "section", "group", "cert_status") if k in body})
     return found["doc"]
 
 
@@ -1319,7 +1344,20 @@ async def upload_document(request: Request, die: str, config: str):
     step_id = str(step_id).strip()[:40] if step_id else None
     if step_id and not all(c.isalnum() or c in "-_" for c in step_id):
         raise HTTPException(status_code=422, detail="bad step id")
-    doc = models.normalize_document({"step_id": step_id}, file_id, _email(user), str(uploaded.filename or "unnamed"),
+    raw = {"step_id": step_id}
+    section = str(form.get("section") or "").strip().lower()
+    if section:
+        if section not in models.DOCUMENT_SECTIONS:
+            raise HTTPException(status_code=422, detail="section: 'certification' expected")
+        # certification drafts are staff work: owner / engineer / admin only, internal unless said otherwise
+        if not access.can_edit(user["email"], _production, access.is_admin(user)):
+            raise HTTPException(status_code=403, detail="Editor access required.")
+        cert_status = str(form.get("cert_status") or "draft").strip().lower()
+        if cert_status not in models.CERT_STATUSES:
+            raise HTTPException(status_code=422, detail="cert_status: %s expected" % " | ".join(models.CERT_STATUSES))
+        internal = str(form.get("internal") or "true").strip().lower() not in ("0", "false", "no", "off")
+        raw.update(section=section, group=str(form.get("group") or ""), cert_status=cert_status, internal=internal)
+    doc = models.normalize_document(raw, file_id, _email(user), str(uploaded.filename or "unnamed"),
                                     part_id if part_id else None)
     store.mutate_file(die, config, "documents.json", lambda d: d.setdefault("documents", []).append(doc))
     _touch(die, config)

@@ -1,7 +1,7 @@
 // Pure helpers of the Production module (no React, no I/O): revision numbers, bilingual display, caller standing.
 // Imported by __tests__/helpers.test.mjs (Node >= 22.18 strips the types).
 import type {
-  AssemblyNode, AssemblyStep, AssemblyTree, Bilingual, BomRow, CallerRole, CostRow, CostSummary, CurrencyTotals, ExtraCost, Lang, Member, Part, PartFiles, Production, Revision, Thread, TranslationStatus,
+  AssemblyNode, AssemblyStep, CertStatus, DocumentRec, AssemblyTree, Bilingual, BomRow, CallerRole, CostRow, CostSummary, CurrencyTotals, ExtraCost, Lang, Member, Part, PartFiles, Production, Revision, Thread, TranslationStatus,
 } from './types';
 
 // -- revisions --------------------------------------------------------------------------------------------------------
@@ -293,6 +293,7 @@ export function productionRole(prod: { members: readonly Member[]; access?: 'pro
 
 /** Which of ``tabs`` the caller sees: a viewer only VIEWER_TABS; the tooling list only when it has rows or the caller edits it. */
 export function visibleProductionTabs<T extends string>(tabs: readonly T[], role: CallerRole, toolingRows: number): T[] {
+  // the certification tab is for members only; a project viewer never gets it (it is not in VIEWER_TABS)
   if (role === 'viewer') return tabs.filter((id) => (VIEWER_TABS as readonly string[]).includes(id));
   return tabs.filter((id) => id !== 'tooling' || toolingRows > 0 || canEditRole(role));
 }
@@ -844,4 +845,29 @@ export function unackedFiles(revs: readonly Revision[], email: string): Record<s
     }
   }
   return out;
+}
+
+
+// -- certification documents (owner 2026-11-19) -------------------------------------------------------------------------
+
+export const CERT_STATUSES: readonly CertStatus[] = ['draft', 'signed', 'evidence_received'];
+
+/** A document filed in the Certification tab (`section: "certification"`); a row without `section` is a normal document. */
+export const isCertificationDoc = (d: Pick<DocumentRec, 'section'>): boolean => d.section === 'certification';
+
+/** The Documents tab lists everything except the certification documents (no duplicates). */
+export const plainDocuments = (docs: readonly DocumentRec[]): DocumentRec[] => docs.filter((d) => !isCertificationDoc(d));
+
+/** Certification documents grouped by their free-text label, groups in first-seen order alphabetically, the unlabelled group last;
+ *  inside a group the newest upload first. */
+export function certificationGroups(docs: readonly DocumentRec[]): { group: string; docs: DocumentRec[] }[] {
+  const map = new Map<string, DocumentRec[]>();
+  for (const d of docs) {
+    if (!isCertificationDoc(d) || d.status === 'superseded') continue;
+    const key = (d.group || '').trim();
+    map.set(key, [...(map.get(key) ?? []), d]);
+  }
+  return [...map.entries()]
+    .sort(([a], [b]) => (a === '' ? 1 : b === '' ? -1 : a.localeCompare(b)))
+    .map(([group, list]) => ({ group, docs: list.sort((x, y) => y.uploaded_at.localeCompare(x.uploaded_at)) }));
 }

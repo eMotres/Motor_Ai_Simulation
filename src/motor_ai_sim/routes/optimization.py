@@ -3950,8 +3950,14 @@ class DescentRequest(BaseModel):
     #    w on efficiency = ΔT/mass (torque-density gained from +current).  A design
     #    ABOVE the line beats the current-only trade-off; farther above = better.
     #  'product': the legacy (efficiency/eff0)^w_eff · (T/mass/td0)^w_td.
+    #  'min_ripple' (opt-in): minimise T_ripple_pct at the operating point.  Use it with the hard
+    #    limits below; no baseline line is measured.
     objective: str = "baseline_line"
     current_bump_pct: float = 10.0    # 2nd baseline current = I·(1 + pct/100)
+    # Opt-in HARD limits (0 = off): a design that breaks one never beats a feasible design.
+    efficiency_min_pct: float = Field(0.0, ge=0.0, le=100.0)   # floor on efficiency [%]
+    j_max_a_mm2: float = Field(0.0, ge=0.0)                    # cap on the coil current density [A/mm2]
+    v_ll_peak_max_v: float = Field(0.0, ge=0.0)                # cap on the line-line peak voltage [V]
     # See OptRequest.allow_new_lamination.
     allow_new_lamination: bool = False
     # Opt-in: the MTPA pre-sweep solves its angles with THIS run's eval
@@ -4162,6 +4168,33 @@ _RIPPLE_RAMP_CAP  = 16.0   # λ never exceeds v0·cap (bounded escalation)
 _RIPPLE_OVER_TOL  = 0.3    # %-points slack before a design counts as "over the gate"
 _THD_PEN = {"lam": 0.0, "max": 5.0}   # >0 → _descent_cost penalises THD_LL_pct over
                                       # thd_max_pct (same per-run-global pattern)
+# Opt-in objective + HARD limits (per-run globals, the same pattern; 0 = off).  A design that
+# breaks a limit costs _HARD_LIMIT_COST plus its relative overshoot, so it never beats a feasible
+# one and the search still sees which way to go.  "mode" None/"" = the request's own objective.
+_RUN_LIMITS = {"mode": "", "eff_min": 0.0, "j_max": 0.0, "vll_max": 0.0}
+_HARD_LIMIT_COST = 1000.0
+
+
+def _reset_run_limits() -> None:
+    _RUN_LIMITS.update(mode="", eff_min=0.0, j_max=0.0, vll_max=0.0)
+
+
+def _limit_violation(m: Dict[str, Any]) -> float:
+    """Summed relative overshoot of the hard limits the run set (0.0 = feasible).  A limit that is
+    on and whose metric is missing or not finite counts as broken (1.0): it is never assumed met."""
+    def _over(key, limit, below):
+        if limit <= 0.0:
+            return 0.0
+        try:
+            v = float(m.get(key))
+        except (TypeError, ValueError):
+            return 1.0
+        if not math.isfinite(v):
+            return 1.0
+        return max(0.0, (limit - v) / limit) if below else max(0.0, (v - limit) / limit)
+    return (_over("efficiency", _RUN_LIMITS["eff_min"], True)
+            + _over("J_coil_A_per_mm2", _RUN_LIMITS["j_max"], False)
+            + _over("V_line_peak_V", _RUN_LIMITS["vll_max"], False))
 
 
 def _defined_ripple_pct(metrics: Dict[str, Any]) -> Optional[float]:
@@ -4245,6 +4278,14 @@ def _descent_cost(m: Dict[str, Any], base: Dict[str, Any],
     if _tl > 0.0:
         _thd = float(m.get("THD_LL_pct", 0.0) or 0.0)
         pen += _tl * max(0.0, _thd - float(_THD_PEN.get("max", 5.0))) / 100.0
+    _viol = _limit_violation(m)
+    if _viol > 0.0:
+        pen += _HARD_LIMIT_COST * (1.0 + _viol)
+    if _RUN_LIMITS["mode"] == "min_ripple":
+        # Opt-in objective: the lowest torque ripple at the operating point (limits above are hard).
+        # An undefined ripple already carries its 1e6 penalty; it contributes no ripple term here.
+        r = 0.0 if _rip is None else float(_rip)
+        return (r / 100.0 + pen), -r / 100.0
     bl = base.get("_bline") if isinstance(base, dict) else None
     if bl:
         td  = float(m.get("torque_per_mass_Nm_kg", 0.0) or 0.0)
@@ -5564,6 +5605,9 @@ def prepare_descent(req: DescentRequest) -> Dict[str, Any]:
               str(req.objective or "baseline_line"),
               max(0.0, min(float(req.current_bump_pct), 100.0)),
               bool(req.structured_gap), bool(req.airgap_macro))
+    _lim = {"mode": ("min_ripple" if str(req.objective or "") == "min_ripple" else ""),
+            "eff_min": float(req.efficiency_min_pct) / 100.0,
+            "j_max": float(req.j_max_a_mm2), "vll_max": float(req.v_ll_peak_max_v)}
     kwargs = {"iron_template": bool(getattr(req, "iron_template", True)),
                 "geo_mesh": bool(getattr(req, "geo_mesh", True)),
                 "element_order": int(getattr(req, "element_order", 2) or 2)}
@@ -5574,9 +5618,13 @@ def prepare_descent(req: DescentRequest) -> Dict[str, Any]:
             "n_variables": len(var_specs), "max_iters": max_iters, "auto_expand": auto_expand,
             "max_rounds": (max_rounds if auto_expand else 1),
             "variables": [s["name"] for s in var_specs], "steps_per_period": steps}
+    if _lim["mode"] or _lim["eff_min"] or _lim["j_max"] or _lim["vll_max"]:   # absent unless asked
+        init_state["objective_limits"] = dict(_lim)
+        response["objective_limits"] = dict(_lim)
     return {"var_specs": var_specs, "dropped": dropped, "worker": worker,
             "args": args, "kwargs": kwargs, "init_state": init_state,
             "ripple_pen0": _rp0, "thd_pen": (_thd_lam, _thd_max),
+            "run_limits": _lim,
             "response": response}
 
 
@@ -5589,6 +5637,7 @@ def begin_descent_state(plan: Dict[str, Any]) -> None:
     _RIPPLE_PEN_LAM["v"] = plan["ripple_pen0"]
     _RIPPLE_PEN_LAM["v0"] = plan["ripple_pen0"]
     _THD_PEN["lam"], _THD_PEN["max"] = plan["thd_pen"]
+    _RUN_LIMITS.update(plan.get("run_limits") or {"mode": "", "eff_min": 0.0, "j_max": 0.0, "vll_max": 0.0})
     with _descent_lock:
         _descent_external[0] = False   # this process owns the flag now
         _descent_state.update(plan["init_state"])
@@ -7217,6 +7266,7 @@ def _auto_worker(plan: Dict[str, Any], run_id: str, bucket: str,
         _RIPPLE_PEN_LAM["v"] = _AUTO_RIPPLE_LAMBDA
         _RIPPLE_PEN_LAM["v0"] = _AUTO_RIPPLE_LAMBDA
         _THD_PEN["lam"] = 0.0
+        _reset_run_limits()
 
         n_evals = 0
         all_pts = []
@@ -7799,6 +7849,7 @@ def _screen_worker(plan: Dict[str, Any], run_id: str, bucket: str,
         _RIPPLE_PEN_LAM["v"] = _AUTO_RIPPLE_LAMBDA
         _RIPPLE_PEN_LAM["v0"] = _AUTO_RIPPLE_LAMBDA
         _THD_PEN["lam"] = 0.0
+        _reset_run_limits()
 
         with _descent_lock:
             _descent_state["phase"] = "baseline"

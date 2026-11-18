@@ -2671,6 +2671,13 @@ def _tree_dies(_acc: dict, *, heads_only: bool = False) -> tuple:
         # exhibit stays exactly the passport-filtered shared set it always was.
         if _layer == _WS.LAYER_PUBLISHED and _acc["mode"] == MODE_ANONYMOUS:
             continue
+        # The configuration files this caller may see (the same gate as the rows below).  A die with NONE is an empty
+        # header (coordinator / owner 2026-11-19: the dies emptied by a move showed as headers with nothing under
+        # them): it is not listed - unless it is the caller's own workspace die, which they may be filling right now.
+        _visible = [cf for cf in sorted(dd.glob("*.yaml")) if cf.name != "die.yaml"
+                    and may_see_config_file(_acc, _die_name, cf.stem, cf, layer=_layer)]
+        if not _visible and not (_ws_layering() and _layer == _WS.LAYER_WORKSPACE):
+            continue
         head = _die_head(dd, _die_name)
         if _client_filter and not _die_is_client_ready(head["geo"]):
             continue
@@ -2687,17 +2694,13 @@ def _tree_dies(_acc: dict, *, heads_only: bool = False) -> tuple:
             return _box[0]
 
         cfgs = []
-        for cf in sorted(dd.glob("*.yaml")):
-            if cf.name == "die.yaml":
-                continue
-            # A configuration the caller may not see (motor_access.config_visible:
-            # a PRIVATE one without its grant, or an "inherit" one of a die that is
-            # visible only through ANOTHER configuration) is not a row at all: not
-            # listed, not counted (config_count / cards below are computed from
-            # what is left).  The caller's own workspace copy is theirs (layering
-            # on), whatever the file says.
-            if not may_see_config_file(_acc, _die_name, cf.stem, cf, layer=_layer):
-                continue
+        # A configuration the caller may not see (motor_access.config_visible:
+        # a PRIVATE one without its grant, or an "inherit" one of a die that is
+        # visible only through ANOTHER configuration) is not a row at all: not
+        # listed, not counted (config_count / cards below are computed from
+        # what is left).  The caller's own workspace copy is theirs (layering
+        # on), whatever the file says.
+        for cf in _visible:
             cfgs.append(_config_row(dd, _die_name, cf, _caller_key, _dr_die))
         out.append({
             "name": _die_name,

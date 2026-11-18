@@ -296,7 +296,7 @@ def test_flipping_the_file_changes_the_next_answer(env):
     f = env["dies_dir"] / DIE / f"{PUB}.yaml"
     assert _cfg_names(client.get("/api/family/tree", headers=env["eng"])) == [PUB]
     f.write_text("visibility: private\n" + f.read_text(encoding="utf-8"), encoding="utf-8")
-    assert _cfg_names(client.get("/api/family/tree", headers=env["eng"])) == []
+    assert _cfg_names(client.get("/api/family/tree", headers=env["eng"])) is None   # no visible configuration: die not listed
     f.write_text(f.read_text(encoding="utf-8").replace("visibility: private\n", "", 1), encoding="utf-8")
     assert _cfg_names(client.get("/api/family/tree", headers=env["eng"])) == [PUB]
 
@@ -1606,7 +1606,7 @@ def test_admin_toggle_edits_one_line_and_is_reversible(env):
     after = f.read_bytes()
     nl = b"\r\n" if b"\r\n" in before else b"\n"                    # the file's own line ending is kept
     assert after == b"visibility: private" + nl + before            # one line added, nothing else moved
-    assert _cfg_names(client.get("/api/family/tree", headers=env["eng"])) == []
+    assert _cfg_names(client.get("/api/family/tree", headers=env["eng"])) is None   # no visible configuration: die not listed
     assert client.get(f"/api/admin/dies/{DIE}/configs", headers=env["admin"]).json()["configs"] == [
         {"name": PUB, "visibility": "private"}, {"name": PRIV, "visibility": "private"}]
     r = client.put(f"/api/admin/dies/{DIE}/configs/{PUB}/access", json={"visibility": "public"}, headers=env["admin"])

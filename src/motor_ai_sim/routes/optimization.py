@@ -2790,6 +2790,22 @@ def _with_preset(req):
     return new, rec
 
 
+def _mesh_sizes(req, preset_rec):
+    """``(mesh_size, min_size, clamped)`` for a Sweep / Descent request.  The upper caps (12 / 3 mm) are unchanged.  The lower
+    floors of 1.0 / 0.1 mm are for a request WITHOUT a preset, as always; a request that names a preset takes the sizes the
+    preset resolved for THIS machine (0.15 mm on the 12 mm die), so the floors there are only a sanity bound (0.02 / 0.002 mm).
+    ``clamped`` lists a size the bounds changed (requested / used), empty when none did."""
+    lo_ms, lo_mn = (0.02, 0.002) if preset_rec else (1.0, 0.1)
+    ms_req, mn_req = float(req.mesh_size_mm), float(req.min_size_mm)
+    ms, mn = max(lo_ms, min(ms_req, 12.0)), max(lo_mn, min(mn_req, 3.0))
+    clamped = {}
+    if ms != ms_req:
+        clamped["mesh_size_mm"] = {"requested": ms_req, "used": ms}
+    if mn != mn_req:
+        clamped["min_size_mm"] = {"requested": mn_req, "used": mn}
+    return ms, mn, clamped
+
+
 def prepare_scan(req: ScanRequest) -> Dict[str, Any]:
     """Turn a ScanRequest into everything a Sweep needs, with no web process
     and no side effect: the whitelisted variables, the operating points, the
@@ -2815,8 +2831,7 @@ def prepare_scan(req: ScanRequest) -> Dict[str, Any]:
     # 48-frame floor here would mask that policy. Independent PWM/carrier
     # resolution guards remain in place.
     max_geom = max(1, min(int(req.max_geometries), 400))
-    mesh_size = max(1.0, min(float(req.mesh_size_mm), 12.0))
-    min_size  = max(0.1, min(float(req.min_size_mm), 3.0))
+    mesh_size, min_size, _mesh_clamped = _mesh_sizes(req, _preset_rec)
     # FEM symmetry — single source: the Mesh tab (same build the Simulation uses),
     # so the sweep's ripple matches the Simulation for an identical geometry.
     # "Full"(1) MUST mean the full ring (-1), exactly like the Simulation transient
@@ -2907,7 +2922,8 @@ def prepare_scan(req: ScanRequest) -> Dict[str, Any]:
         kwargs["cogging_screen"] = True
     response = {"started": True, **({"mesh_preset": _preset_rec} if _preset_rec else {}),
                 "steps_per_period": steps, "max_geometries": max_geom,
-                "mesh_size_mm": mesh_size, "min_size_mm": min_size}
+                "mesh_size_mm": mesh_size, "min_size_mm": min_size,
+                **({"mesh_clamped": _mesh_clamped} if _mesh_clamped else {})}
     return {"variables": variables, "dropped": dropped, "ops": ops, "args": args,
             "kwargs": kwargs, "init_state": init_state, "response": response}
 
@@ -5531,8 +5547,7 @@ def prepare_descent(req: DescentRequest) -> Dict[str, Any]:
           "current_a": float(req.operating_point.current_a),
           "rpm": float(req.operating_point.rpm)}
     steps     = max(8, min(int(req.steps_per_period), 180))
-    mesh_size = max(1.0, min(float(req.mesh_size_mm), 12.0))
-    min_size  = max(0.1, min(float(req.min_size_mm), 3.0))
+    mesh_size, min_size, _mesh_clamped = _mesh_sizes(req, _preset_rec)
     max_iters = max(1, min(int(req.max_iters), 40))
     n_sectors = int(req.n_sectors)
     algo      = (req.algorithm or "cmaes").strip().lower()
@@ -5617,7 +5632,8 @@ def prepare_descent(req: DescentRequest) -> Dict[str, Any]:
             "target_torque_nm": target_torque, "v_peak_limit": v_peak_limit,
             "n_variables": len(var_specs), "max_iters": max_iters, "auto_expand": auto_expand,
             "max_rounds": (max_rounds if auto_expand else 1),
-            "variables": [s["name"] for s in var_specs], "steps_per_period": steps}
+            "variables": [s["name"] for s in var_specs], "steps_per_period": steps,
+            **({"mesh_clamped": _mesh_clamped} if _mesh_clamped else {})}
     if _lim["mode"] or _lim["eff_min"] or _lim["j_max"] or _lim["vll_max"]:   # absent unless asked
         init_state["objective_limits"] = dict(_lim)
         response["objective_limits"] = dict(_lim)

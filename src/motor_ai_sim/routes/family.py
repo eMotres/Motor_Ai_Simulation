@@ -73,6 +73,22 @@ FREE_GEO_KEYS = (
     "stator_outer_notches",
 )
 
+# MOTOR keys (owner 2026-11-18, one die per size and pole count): the magnet fill of the rotor pocket and the magnet
+# segmentation belong to the MOTOR, not to the stamped lamination, so a configuration may override them on top of its
+# die (``geometry_overrides``, written only by ``PATCH /config/{die}/{cfg}/motor_keys``).  The die check of a duty save
+# compares these keys with die + override; every other die key is still compared with the die alone.  A configuration
+# without such an override behaves exactly as before.
+MOTOR_GEO_KEYS = (
+    "magnet_fill_up", "magnet_fill_down", "magnet_fill_radius", "magnet_lamination",
+)
+
+
+def _motor_key_overrides(cfg_doc: Optional[dict]) -> Dict[str, float]:
+    """The configuration's own MOTOR_GEO_KEYS overrides (numbers only; a null or absent key = the die's value)."""
+    ov = (cfg_doc or {}).get("geometry_overrides") or {}
+    return {k: ov[k] for k in MOTOR_GEO_KEYS
+            if isinstance(ov.get(k), (int, float)) and not isinstance(ov.get(k), bool)}
+
 # What stays EDITABLE while the die is locked — the user's definition, and
 # deliberately narrower than FREE_GEO_KEYS: stack length, wire height, turn
 # count.  Everything else (wire width, spacings, split, insulation) is part
@@ -3657,6 +3673,8 @@ def _upsert_duty(req: DutyCreate, _w: dict, *, may_move: bool = True) -> dict:
         _live_mats = _live_saved_materials(live)
         _live_pstates = _live_parts()
         _stored = c.get("geometry_overrides") or None
+        # the configuration's MOTOR-key overrides survive a free-key adoption, and the die check reads them
+        _motor_ov = _motor_key_overrides(c)
         if not _stored:
             c["geometry_overrides"] = _live_build
             c["winding"] = _live_wind
@@ -3693,7 +3711,7 @@ def _upsert_duty(req: DutyCreate, _w: dict, *, may_move: bool = True) -> dict:
                 if c.get("locked") is True:
                     _diffs.extend(_free_diffs)
                 else:
-                    c["geometry_overrides"] = _live_build
+                    c["geometry_overrides"] = {**_live_build, **_motor_ov}
                     _build_adopted = True
                     # A stored end-winding factor belongs to the build it was
                     # measured on: after a stack/wire change it is a different
@@ -3808,6 +3826,7 @@ def _upsert_duty(req: DutyCreate, _w: dict, *, may_move: bool = True) -> dict:
                 for k, dv in _die_geo.items():
                     if k in FREE_GEO_KEYS or not isinstance(dv, (int, float)):
                         continue
+                    dv = _motor_ov.get(k, dv)          # a motor key: die + the configuration's override
                     lv = geo.get(k)
                     if isinstance(lv, (int, float)) and abs(float(dv) - float(lv)) > 1e-6:
                         _die_diffs.append("die %s: %s → %s" % (k, dv, lv))
@@ -3819,7 +3838,7 @@ def _upsert_duty(req: DutyCreate, _w: dict, *, may_move: bool = True) -> dict:
             # the result belongs to THIS configuration of THIS die.  It used to fork a derived die here.
             if _die_diffs:
                 try:
-                    _sh = die_shape_diffs(_die_geo, geo)
+                    _sh = die_shape_diffs({**_die_geo, **_motor_ov}, geo)
                 except Exception:                          # noqa: BLE001 - cannot tell = keep the old verdict
                     _sh = []
                 if _sh and all(x["key"] == "slot_width" for x in _sh):
@@ -6836,6 +6855,88 @@ def patch_config_coil(die: str, cfg: str, req: CoilPatch, _w: dict = Depends(req
     _require_die_write(die, _w, cfg)
     sent = set(getattr(req, "model_fields_set", None) or getattr(req, "__fields_set__", None) or ())
     return set_config_coil(die, cfg, {k: getattr(req, k) for k in sent}, source="form")
+
+
+class MotorKeysPatch(BaseModel):
+    # {key: value | null} over MOTOR_GEO_KEYS; null (or the die's own value) clears the override
+    keys: Dict[str, Optional[Any]]
+    dry_run: bool = False
+
+
+def _motor_key_value(key: str, raw: Any) -> Optional[float]:
+    """A validated MOTOR_GEO_KEYS value, or None for "clear".  Raises 422 in words."""
+    if raw is None:
+        return None
+    if isinstance(raw, bool) or not isinstance(raw, (int, float)):
+        raise HTTPException(422, detail=f"{key}: a number is needed, not {raw!r}")
+    v = float(raw)
+    if key in ("magnet_fill_up", "magnet_fill_down") and not 0.0 < v <= 1.0:
+        raise HTTPException(422, detail=f"{key}: a fill ratio in (0, 1], not {v:g}")
+    if key == "magnet_fill_radius" and not 0.0 <= v <= 50.0:
+        raise HTTPException(422, detail=f"{key}: a radius 0..50 mm, not {v:g}")
+    if key == "magnet_lamination":
+        if v != int(v) or not 0 <= v <= 100:
+            raise HTTPException(422, detail=f"{key}: a whole number of segments 0..100, not {v:g}")
+        v = int(v)
+    return v
+
+
+@router.patch("/config/{die}/{cfg}/motor_keys")
+def patch_config_motor_keys(die: str, cfg: str, req: MotorKeysPatch, dry_run: bool = False,
+                            _w: dict = Depends(require_catalog_write)):
+    """Admin: set or clear the configuration's own MOTOR keys (``MOTOR_GEO_KEYS``: the magnet fill and segmentation)
+    on top of its die (owner 2026-11-18: one die per size and pole count, the magnet fill belongs to the motor).
+
+    A key that is NOT SENT is left unchanged; ``null``, or the die's own value, clears the override.  Any other key is
+    refused (422): the lamination stays the die's.  ``dry_run`` (body or ``?dry_run=1``) writes nothing and answers the
+    same document.  The overrides are part of the build signature, so the configuration's stored results then read as
+    "computed on an older build" (``results_stale``).  A LOCKED configuration is refused (409).  The previous values
+    are kept in the admin audit entry (``config.motor_keys``)."""
+    from motor_ai_sim import admin_audit as _AA
+    if not _w.get("is_admin"):
+        raise HTTPException(403, detail="only an admin may set a configuration's motor keys")
+    die, cfg = _check_name(die, "die"), _check_name(cfg, "configuration")
+    _require_die_write(die, _w, cfg)
+    bad = sorted(k for k in (req.keys or {}) if k not in MOTOR_GEO_KEYS)
+    if bad:
+        raise HTTPException(422, detail=("not a motor key: %s (allowed: %s)"
+                                         % (", ".join(bad), ", ".join(MOTOR_GEO_KEYS))))
+    vals = {k: _motor_key_value(k, v) for k, v in (req.keys or {}).items()}
+    dry = bool(dry_run or req.dry_run)
+    d = _load_yaml(_die_file(die), "die")
+    cfile = _cfg_file(die, cfg)
+    c = _load_yaml(cfile, "configuration")
+    die_geo = d.get("geometry") or {}
+    before = _motor_key_overrides(c)
+    ov = dict(c.get("geometry_overrides") or {})
+    for k, v in vals.items():
+        dv = die_geo.get(k)
+        same_as_die = (v is not None and isinstance(dv, (int, float)) and not isinstance(dv, bool)
+                       and abs(float(dv) - float(v)) <= 1e-9)
+        if v is None or same_as_die:
+            ov.pop(k, None)
+        else:
+            ov[k] = v
+    c2 = dict(c, geometry_overrides=ov)
+    after = _motor_key_overrides(c2)
+    changed = sorted(k for k in MOTOR_GEO_KEYS if before.get(k) != after.get(k))
+    if changed and c.get("locked") is True:
+        raise HTTPException(409, detail=f"configuration '{die}/{cfg}' is locked: unlock it to change its motor keys")
+    has_results = any(isinstance(x, dict) and (x.get("result") or x.get("summary") or x.get("runs"))
+                      for x in (c.get("duties") or []))
+    out = {"ok": True, "dry_run": dry, "die": die, "config": cfg, "changed": changed,
+           "before": {k: before.get(k) for k in changed}, "after": {k: after.get(k) for k in changed},
+           "die_values": {k: die_geo.get(k) for k in MOTOR_GEO_KEYS},
+           "build_sig_before": _build_sig(d, c), "build_sig_after": _build_sig(d, c2),
+           "results_stale": bool(changed) and has_results}
+    if dry or not changed:
+        return out
+    _save_yaml(cfile, c2)
+    actor = str((_w.get("user") or {}).get("email") or "local-dev").strip().lower()
+    _AA.record(actor, "config.motor_keys", f"{die}/{cfg}", details={"from": before, "to": after})
+    log.info("family: motor keys of '%s/%s': %s", die, cfg,
+             ", ".join("%s %s -> %s" % (k, before.get(k), after.get(k)) for k in changed))
+    return out
 
 
 class CadMassPut(BaseModel):

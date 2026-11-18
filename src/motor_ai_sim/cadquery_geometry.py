@@ -812,7 +812,7 @@ def _magnet_flat(p: Dict) -> bool:
 def _pocket_clearance(p: Dict) -> float:
     """``geometry.magnet_pocket_clearance`` [mm per side]: the rotor pocket is the magnet outline offset outward by this
     much, and the ring between the two is AIR (the e-coat and the magnet epoxy inside it are non-magnetic).  Owner
-    2026-11-18: «у нас у всех магнитов есть зазор от 0.035-0.04».  Every magnet shape the builder draws:
+    2026-11-18: "every magnet has a clearance of 0.035-0.04 mm".  Every magnet shape the builder draws:
 
     * the arc-topped spoke magnet and the flat (``magnet_flat``) one, rotor_hole < 1: pocket = magnet.buffer(clearance),
       mitre joins, plus the rotor_hole opening as before;

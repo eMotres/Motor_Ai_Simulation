@@ -4276,6 +4276,11 @@ def _pair_sector_cut_nodes(mesh, n_sectors: int, tol_m: float = 1e-5
     p = mesh.p
     x, y = p[0], p[1]
     r = np.sqrt(x ** 2 + y ** 2)
+    # A node ON a cut line sits within rounding of it.  The 10 um absolute tolerance is an arc of 10 um at
+    # r = 3.4 mm: on the 12 mm die the neighbouring belt node (0.17 deg off, 9.9 um from the line) was taken for a cut node,
+    # so the cut-line edges had no partner ("sector cut edges do not match").  Bound it by the machine size; for
+    # r_max >= 50 mm (D >= 100 mm) this is the 10 um it always was.
+    tol_m = min(tol_m, 2e-4 * float(r.max())) if r.size else tol_m
 
     # Cut 1 = +X axis (θ=0):  y ≈ 0, x ≥ 0
     cut1 = np.where((np.abs(y) < tol_m) & (x > tol_m) & (r > tol_m))[0]

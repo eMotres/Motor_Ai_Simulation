@@ -38,8 +38,6 @@ export interface SpecWizardProps {
   assistant: (docked: boolean) => React.ReactNode;
   /** view-memory scope of this viewer and project (the open optional groups are remembered under it); null = not remembered */
   memoryScope?: string | null;
-  /** drawn at the end of the header (the Table | Wizard switch) */
-  headerExtra?: React.ReactNode;
 }
 
 /** The specification wizard (owner 2026-10-27): header with the project and the completeness bar, a vertical stepper on the
@@ -123,7 +121,6 @@ export default function SpecWizard(p: SpecWizardProps) {
     <Typography role="status" sx={{ fontSize: 12.5, display: 'flex', alignItems: 'center', gap: 0.6, color: saveError ? 'error.main' : saving ? 'var(--text-3)' : 'success.main', whiteSpace: 'nowrap' }}>
       {!saveError && !saving && <CheckIcon sx={{ fontSize: 15 }} />}{saveError ? tr('saveFailedShort') : saving ? tr('saving') : tr('wizard.saved')}
     </Typography>
-    {p.headerExtra}
   </Stack>;
 
   return <Box ref={root} data-testid="spec-wizard" sx={{

@@ -13,10 +13,9 @@ const STATE_COLOR: Record<RowState, 'default' | 'warning' | 'error'> = { answere
  *  value - label, value, unit, and its state when it is open; the key operating points as their own small table.  A row click
  *  (or Edit) opens the Wizard at that field / step; a viewer who cannot edit the specification gets no edit control and the rows
  *  do not react to a click. */
-export default function SpecTable({ env, project, completeness, messages, headerExtra, onOpenField, onOpenStep }: {
+export default function SpecTable({ env, project, completeness, messages, onOpenField, onOpenStep }: {
   env: Pick<StepEnv, 'tr' | 'lang' | 'draft' | 'steps' | 'profile' | 'canEditSpec'>;
   project: ProjectSummary; completeness?: Completeness; messages: ProjectThreadMessage[];
-  headerExtra?: React.ReactNode;
   onOpenField: (fieldId: string) => void; onOpenStep: (index: number) => void;
 }) {
   const { tr, lang, draft, steps, profile, canEditSpec } = env;
@@ -42,7 +41,6 @@ export default function SpecTable({ env, project, completeness, messages, header
         <Typography component="h1" sx={{ fontSize: 18, fontWeight: 600, color: 'var(--text-0)' }}>{tr('wizard.title')}{!canEditSpec && <Tooltip title={tr('specReadOnlyTip')}><Typography component="span" sx={{ ml: 1.5, fontSize: 12, fontWeight: 400, color: 'var(--text-3)' }}>{tr('specReadOnly')}</Typography></Tooltip>}</Typography>
       </Box>
       <Typography role="status" sx={{ fontSize: 12.5, color: 'var(--text-2)', whiteSpace: 'nowrap' }}>{tr('wizard.progress', { answered: progress.answered, total: progress.total })}</Typography>
-      {headerExtra}
     </Stack>
     <Paper elevation={0} sx={{ bgcolor: 'var(--panel)', border: '1px solid var(--line)', borderRadius: '14px', overflowX: 'auto' }}>
       <Table size="small" aria-label={tr('wizard.title')} sx={{ minWidth: 520 }}>

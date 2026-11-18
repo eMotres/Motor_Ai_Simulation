@@ -1,6 +1,8 @@
 // node --test: the project Specification opens on a TABLE of every value (owner 2026-11-18: "when you enter the specification, by
 // default it must show a table with all the specification values, to understand it quickly"), with a Table | Wizard switch.
-// esbuild bundles the real Specification view of the Projects tab (SpecView: what DevelopmentPage mounts for the Specification
+// esbuild bundles the real Specification view of the Projects tab, composed as DevelopmentPage composes it: the page's view hook
+// (useSpecViewMode), the Table | Wizard switch in the project title row (SpecViewSwitch, owner after #757: "the specification
+// modes are better put in this row") and the view itself (SpecView: what DevelopmentPage mounts for the Specification
 // sub-tab) with the APP's i18n and the real EN / zh-CN locale files; the steps come from the real schema
 // (src/motor_ai_sim/development/schema.json).  The project fixture is a realistic specification with made-up values.  No DOM
 // library is in the repository: the views are rendered server-side, and a row click is the real handler of the table's row
@@ -33,7 +35,7 @@ import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { I18nextProvider } from 'react-i18next';
 import appI18n from '${rel('i18n/index.ts')}';
-import SpecView from '${rel('modules/development/components/specWizard/SpecView.tsx')}';
+import SpecView, { SpecViewSwitch, useSpecViewMode } from '${rel('modules/development/components/specWizard/SpecView.tsx')}';
 import SpecTable from '${rel('modules/development/components/specWizard/SpecTable.tsx')}';
 import { buildWizardSteps } from '${rel('modules/development/components/specWizard/steps.ts')}';
 import { wizardProfile } from '${rel('modules/development/components/specWizard/profile.ts')}';
@@ -55,11 +57,19 @@ export const envFor = (schema, draft, lang, canEditSpec) => {
 export const renderView = ({ schema, draft, lang = 'en', canEditSpec = true, viewScope = 'development.utest', messages = [], reveal = null }) => {
   const env = envFor(schema, draft, lang, canEditSpec);
   const { completeness, ...rest } = env;
-  return renderToStaticMarkup(React.createElement(I18nextProvider, { i18n: appI18n }, React.createElement(SpecView, {
-    project: { id: 'p1', title: 'Example drone motor', customer_org: '', status: 'spec' }, env: rest, step: 0, onStep: () => undefined, completeness,
-    saving: false, saveError: '', onRetrySave: () => undefined, onReloadDraft: () => undefined, submitError: [], submitConflict: false, submitBusy: false,
-    onSubmit: () => undefined, reveal, messages, onOpenFieldReview: () => undefined, history: null, assistant: () => null, memoryScope: null,
-    viewScope, onRevealField: () => undefined })));
+  // the page: the title row (title, then the switch on the Specification tab), then the Specification body
+  function Page() {
+    const v = useSpecViewMode(viewScope, 'p1', draft, reveal);
+    return React.createElement(React.Fragment, null,
+      React.createElement('div', { 'data-testid': 'project-title-row' }, React.createElement('span', null, 'Example drone motor'),
+        v.mode && React.createElement(SpecViewSwitch, { mode: v.mode, onChange: v.byHand, tr: rest.tr })),
+      React.createElement(SpecView, {
+        project: { id: 'p1', title: 'Example drone motor', customer_org: '', status: 'spec' }, env: rest, step: 0, onStep: () => undefined, completeness,
+        saving: false, saveError: '', onRetrySave: () => undefined, onReloadDraft: () => undefined, submitError: [], submitConflict: false, submitBusy: false,
+        onSubmit: () => undefined, reveal: v.wizardReveal, messages, onOpenFieldReview: () => undefined, history: null, assistant: () => null, memoryScope: null,
+        mode: v.mode ?? 'wizard', onOpenWizard: v.openWizard, onRevealField: () => undefined }));
+  }
+  return renderToStaticMarkup(React.createElement(I18nextProvider, { i18n: appI18n }, React.createElement(Page)));
 };
 `);
 await build({
@@ -115,11 +125,13 @@ test('default view: a specification with answers opens on the TABLE, a brand-new
   assert.equal(m.initialSpecView(null, PARTLY), 'table');
 });
 
-test('the switch Table | Wizard sits in the specification header of BOTH views; the choice is remembered per viewer', () => {
+test('the switch Table | Wizard sits in the project TITLE row for both views, not in the specification card; remembered per viewer', () => {
   store.clear();
   for (const draft of [PARTLY, EMPTY]) {
     const html = m.renderView({ schema, draft });
-    assert.ok(html.includes('data-testid="spec-view-switch"'));
+    const row = html.slice(html.indexOf('data-testid="project-title-row"'), html.indexOf('data-testid="spec-table"') > 0 ? html.indexOf('data-testid="spec-table"') : html.indexOf('data-testid="spec-wizard"'));
+    assert.ok(row.includes('data-testid="spec-view-switch"'), 'in the title row');
+    assert.equal((html.match(/data-testid="spec-view-switch"/g) || []).length, 1, 'once: no second switch in the card header');
     assert.ok(html.includes('>Table<') && html.includes('>Wizard<'), 'both labels');
   }
   // the viewer chose the Wizard earlier: a specification with answers opens there, for that viewer only
@@ -130,8 +142,15 @@ test('the switch Table | Wizard sits in the specification header of BOTH views; 
   assert.ok(isWizard(chose), 'remembered Wizard');
   assert.ok(isTable(other), 'another viewer keeps the default Table');
   const view = readFileSync(resolve(src, 'modules/development/components/specWizard/SpecView.tsx'), 'utf8');
-  assert.match(view, /const byHand = \(next: SpecViewMode\) => \{[^}]*choose\(next\); \}/, 'the switch writes the choice');
-  assert.match(view, /onOpenField=\{\(fieldId\) => \{ setMode\('wizard'\); onRevealField\(fieldId\); \}\}/, 'a row opens the wizard at the field, without changing the remembered view');
+  assert.match(view, /const byHand = \(next: SpecViewMode\) => \{[^}]*show\(next\); if \(scope\) writeView\(scope, next\); \};/, 'the switch writes the choice');
+  assert.match(view, /onOpenField=\{\(fieldId\) => \{ onOpenWizard\(\); onRevealField\(fieldId\); \}\}/, 'a row opens the wizard at the field, without changing the remembered view');
+  assert.match(view, /openWizard: \(\) => show\('wizard'\)/, 'openWizard does not write the memory');
+  // the card headers carry no switch any more ("N of N required answered" stays there)
+  for (const f of ['SpecTable.tsx', 'SpecWizard.tsx']) assert.ok(!readFileSync(resolve(src, 'modules/development/components/specWizard', f), 'utf8').includes('headerExtra'), f);
+  // the page: the switch right after the title and its pencil, only on the Specification tab
+  const page = readFileSync(resolve(src, 'modules/development/components/DevelopmentPage.tsx'), 'utf8');
+  assert.ok(page.includes("<EditOutlinedIcon sx={{ fontSize: 16 }} /></IconButton></Tooltip>}</Box>{view === 'specification' && specView.mode && <SpecViewSwitch mode={specView.mode} onChange={specView.byHand} tr={tr} />}"));
+  assert.equal((page.match(/<SpecViewSwitch\b/g) || []).length, 1);
 });
 
 test('the table: one section per step, one line per value with its unit, open required values marked, points as their own table', () => {
@@ -201,10 +220,12 @@ test('a field the page asks to open while the table shows switches to the Wizard
   store.clear();
   // the page's reveal arrives with the first render when the view mounts on it: shown in the wizard
   const view = readFileSync(resolve(src, 'modules/development/components/specWizard/SpecView.tsx'), 'utf8');
-  assert.match(view, /useEffect\(\(\) => \{ if \(n !== seen\.current\) \{ seen\.current = n; setStale\(null\); setMode\('wizard'\); \} \}, \[n\]\);/);
-  assert.match(view, /reveal=\{wizard\.reveal && wizard\.reveal\.n !== stale \? wizard\.reveal : null\}/, 'a served reveal is not replayed');
+  assert.match(view, /useEffect\(\(\) => \{ if \(n !== seen\.current\) \{ seen\.current = n; setStale\(null\); show\('wizard'\); \} \}, \[n\]\);/);
+  assert.match(view, /wizardReveal: reveal && reveal\.n !== stale \? reveal : null/, 'a served reveal is not replayed');
   const page = readFileSync(resolve(src, 'modules/development/components/DevelopmentPage.tsx'), 'utf8');
-  assert.match(page, /<SpecView key=\{selected\.id\} viewScope=\{user\?\.email \? developmentViewScope\(user\.email\) : null\} onRevealField=\{revealField\}/, 'the Projects tab mounts the view');
+  assert.match(page, /<SpecView key=\{selected\.id\} mode=\{specView\.mode \?\? 'wizard'\} onOpenWizard=\{specView\.openWizard\} onRevealField=\{revealField\}/, 'the Projects tab mounts the view');
+  assert.match(page, /reveal=\{specView\.wizardReveal\} messages=\{messages\}/);
+  assert.match(page, /const specView = useSpecViewMode\(user\?\.email \? developmentViewScope\(user\.email\) : null, selected\?\.id \?\? null, spec \? spec\.draft as SpecDraft : null, reveal\);/);
   assert.ok(!/<SpecWizard\b/.test(page), 'the page no longer mounts the wizard directly');
 });
 

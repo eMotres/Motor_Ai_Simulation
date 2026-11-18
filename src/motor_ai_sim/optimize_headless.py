@@ -144,6 +144,47 @@ def _refresh_derived(cfg: Dict[str, Any]) -> Dict[str, Any]:
     return cfg
 
 
+#: the mesh block keys the Optimization preset sets in the machine's config (the optimiser's evals read them from there)
+_MESH_BLOCK_KEYS = ("mesh_size_mm", "min_size_mm", "outer_air_factor", "gap_layers", "n_sectors")
+
+
+def apply_optimization_preset(req: Dict[str, Any], cfg: Dict[str, Any], mode: str) -> Dict[str, Any]:
+    """THE OPTIMIZER ALWAYS RUNS THE OPTIMIZATION PRESET (owner 2026-11-17, mesh_presets.py).
+
+    The preset is resolved for THIS machine and (1) written into the machine config's ``mesh`` block, where the evals read
+    the sizes, the outer air, the sector, the gap rows and the per-part sizes (``coil_rel``), and (2) filled into the
+    request body of ``mode`` for every key it leaves out.  A request body that STATES another value is refused, naming the
+    key, the request's value and the preset's, unless the request carries ``preset_override_reason`` (then it runs, and the
+    record says ``custom`` with the reason).  Returns the record stored with the run (name, version, custom, overridden,
+    resolved values); ``req[mode]`` is replaced by the completed body."""
+    from motor_ai_sim import mesh_presets as MP
+    try:
+        done = MP.fill_body("optimization", req[mode], cfg["geometry"], steps_key="steps_per_period")
+    except MP.PresetError as exc:
+        raise Refused(f"the Optimization preset cannot be resolved for this machine: {exc}")
+    rec = done["record"]
+    reason = str(req.get("preset_override_reason") or "").strip()
+    if rec["overridden"] and not reason:
+        raise Refused("the optimiser runs the Optimization preset (v%s) and the request states other settings: %s; "
+                      "remove them from the request, or give 'preset_override_reason' to run them as custom" % (
+                          rec["version"], "; ".join(f"{k} {v['requested']!r} (preset {v['preset']!r})"
+                                                    for k, v in sorted(rec["overridden"].items()))))
+    if reason:
+        rec["override_reason"] = reason
+    vals = rec["resolved"]
+    mesh = dict(cfg.get("mesh") or {})
+    stated = rec["overridden"]
+    for k in _MESH_BLOCK_KEYS:
+        if k not in stated:
+            mesh[k] = vals[k]
+    comp = dict(vals["component_mesh"])
+    if "component_mesh" not in stated:
+        mesh["component_mesh"] = comp
+    cfg["mesh"] = mesh
+    req[mode] = done["body"]
+    return rec
+
+
 def _write_yaml(p: Path, cfg: Dict[str, Any]) -> None:
     import yaml
     tmp = p.with_suffix(".yaml.tmp")
@@ -526,6 +567,12 @@ def main(argv: Optional[List[str]] = None) -> int:
                                    *(argv if argv is not None else sys.argv[1:])], env)
     os.environ["FEM_SCAN_WORKERS"] = str(workers)
     cfg = _refresh_derived(cfg)
+    try:
+        preset_rec = apply_optimization_preset(req, cfg, mode)
+    except Refused as e:
+        say(f"REFUSED: {e}")
+        return 2
+    say("preset: %s v%s%s" % (preset_rec['name'], preset_rec['version'], ' (custom)' if preset_rec['custom'] else ''))
     machine_fp = hashlib.sha256(json.dumps(cfg, sort_keys=True, default=str)
                                 .encode()).hexdigest()[:16]
     code_fp = code_fingerprint()
@@ -582,6 +629,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         say(f"REFUSED: {e}")
         return 2
     final.pop("cancel", None)
+    final["mesh_preset"] = preset_rec
     (req_p.parent / "result.json").write_text(
         json.dumps(O._json_sane(final), indent=1, default=str), encoding="utf-8")
     try:

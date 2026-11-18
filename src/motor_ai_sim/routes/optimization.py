@@ -2033,6 +2033,7 @@ class ScanRequest(BaseModel):
     variables: List[OptVariable] = Field(default_factory=list)
     operating_points: List[OptOperating] = Field(default_factory=lambda: [OptOperating()])
     steps_per_period: int = 6              # FEM frames per electrical period
+    preset: Optional[str] = None           # "optimization" | "simulation" (mesh_presets.py): fills the settings the request does not state; opt-in
     ripple_max_pct: float = 100.0
     max_geometries: int = 24               # cap on enumerated geometries
     coil_temp_c: Optional[float] = None   # None = the Simulation tab's (`_sim_coil_temp_c`)
@@ -2764,6 +2765,31 @@ def _scan_worker(variables, operating_points, steps, coil_temp_c, ripple_max,
                 _scan_state["running"] = False
 
 
+_PRESET_REQUEST_KEYS = ("steps_per_period", "gap_layers", "mesh_size_mm", "min_size_mm", "n_sectors")
+
+
+def _with_preset(req):
+    """``(request, record)``: a request that names a ``preset`` is completed from it for the machine that is loaded.
+
+    Only the settings the request does NOT state are filled (a stated one stays and is listed as overridden = "custom").
+    The outer-air factor and the per-part sizes are not request fields of the optimiser: they come from the machine's
+    stored Mesh block, and the record says so (``not_applied``).  No preset = the request unchanged, record ``None``."""
+    name = getattr(req, "preset", None)
+    if not name:
+        return req, None
+    from motor_ai_sim import mesh_presets as _MP
+    stated = {k: getattr(req, k) for k in req.model_fields_set if k in _PRESET_REQUEST_KEYS and getattr(req, k) is not None}
+    try:
+        done = _MP.fill_body(name, stated, dict(get_config().get("geometry") or {}), steps_key="steps_per_period")
+    except _MP.PresetError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    body = done["body"]
+    new = req.model_copy(update={k: body[k] for k in _PRESET_REQUEST_KEYS if k in body})
+    rec = dict(done["record"])
+    rec["not_applied"] = ["outer_air_factor", "component_mesh"]
+    return new, rec
+
+
 def prepare_scan(req: ScanRequest) -> Dict[str, Any]:
     """Turn a ScanRequest into everything a Sweep needs, with no web process
     and no side effect: the whitelisted variables, the operating points, the
@@ -2772,6 +2798,7 @@ def prepare_scan(req: ScanRequest) -> Dict[str, Any]:
     Shared by ``scan_designs`` and the headless runner.  ``dropped`` lists the
     requested variables the whitelist left out (the route ignores it, as it
     always did, and answers 400 only when none is left; the runner refuses)."""
+    req, _preset_rec = _with_preset(req)
     wl = get_config().get("sweep_whitelist", None)
     allowed = set(wl or [])
     variables = [{"name": v.name, "min": float(v.min), "max": float(v.max),
@@ -2854,6 +2881,7 @@ def prepare_scan(req: ScanRequest) -> Dict[str, Any]:
     except Exception:
         pass
     init_state = {"running": True, "done": 0, "total": 0, "result": None,
+                        **({"mesh_preset": _preset_rec} if _preset_rec else {}),
                         "points": [], "run_id": req.run_id, "error": None, "cancel": False,
                         "cached": 0, "source_changed": None, "machine": None,
                         "ts_start": _t_scan.time(),
@@ -2877,7 +2905,8 @@ def prepare_scan(req: ScanRequest) -> Dict[str, Any]:
               else {"magnet_temp_c": float(req.magnet_temp_c)})
     if req.cogging_screen:
         kwargs["cogging_screen"] = True
-    response = {"started": True, "steps_per_period": steps, "max_geometries": max_geom,
+    response = {"started": True, **({"mesh_preset": _preset_rec} if _preset_rec else {}),
+                "steps_per_period": steps, "max_geometries": max_geom,
                 "mesh_size_mm": mesh_size, "min_size_mm": min_size}
     return {"variables": variables, "dropped": dropped, "ops": ops, "args": args,
             "kwargs": kwargs, "init_state": init_state, "response": response}
@@ -3840,6 +3869,7 @@ class DescentRequest(BaseModel):
     penalty_lambda: float = 1.0       # ripple-violation penalty
     max_iters: int = 8
     steps_per_period: int = 24        # FEM frames/period (higher → cleaner ripple gradient)
+    preset: Optional[str] = None      # "optimization" | "simulation" (mesh_presets.py): fills the settings the request does not state; opt-in
     coil_temp_c: Optional[float] = None   # None = the Simulation tab's (`_sim_coil_temp_c`)
     mesh_size_mm: float = 4.0
     min_size_mm: float = 0.3
@@ -5404,6 +5434,7 @@ def prepare_descent(req: DescentRequest) -> Dict[str, Any]:
     ``dropped`` lists the requested variables that did not make it into
     ``var_specs`` and why (the route ignores it, as it always did; the runner
     refuses).  An empty ``var_specs`` is the caller's to refuse."""
+    req, _preset_rec = _with_preset(req)
     cfg = get_config()
     schema = cfg.get("geometry_schema", {})
     wl = cfg.get("sweep_whitelist", None)
@@ -5479,6 +5510,7 @@ def prepare_descent(req: DescentRequest) -> Dict[str, Any]:
     boundary_margin = min(0.3, max(0.01, float(req.boundary_margin)))
 
     init_state = {"running": True, "iter": 0, "max_iters": max_iters,
+                  **({"mesh_preset": _preset_rec} if _preset_rec else {}),
                                "n_evals": 0, "best": None, "current": None,
                                "history": [], "baseline": None, "baseline_line": None,
                                 "result": None, "phase": "starting",
@@ -5537,7 +5569,7 @@ def prepare_descent(req: DescentRequest) -> Dict[str, Any]:
                 "element_order": int(getattr(req, "element_order", 2) or 2)}
     if req.mtpa_run_settings:          # absent unless asked: the default call is unchanged
         kwargs["mtpa_run_settings"] = True
-    response = {"started": True, "algorithm": algo, "n_sectors": n_sectors,
+    response = {"started": True, **({"mesh_preset": _preset_rec} if _preset_rec else {}), "algorithm": algo, "n_sectors": n_sectors,
             "target_torque_nm": target_torque, "v_peak_limit": v_peak_limit,
             "n_variables": len(var_specs), "max_iters": max_iters, "auto_expand": auto_expand,
             "max_rounds": (max_rounds if auto_expand else 1),

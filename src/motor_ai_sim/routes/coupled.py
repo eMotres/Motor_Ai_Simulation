@@ -403,6 +403,28 @@ def _refuse(message: str, fields: List[str], *, code: str = "coupled_refused"):
         "invalid_parameters": [{"field": f} for f in fields]})
 
 
+def _with_mesh_preset(body: Dict[str, Any]):
+    """``(body, record)``: a body that names a ``preset`` ("simulation" for a final point, owner 2026-11-17) is completed
+    from it for the loaded machine; the settings the body states stay as stated and are listed as overridden (= "custom").
+    No ``preset`` key: the body is returned as it came, record ``None`` (every existing caller)."""
+    name = (body or {}).get("preset")
+    if not name:
+        return body, None
+    from motor_ai_sim import mesh_presets as _MP
+    from motor_ai_sim.config import get_config
+    from motor_ai_sim.routes._validation import parse_geo_override
+    g = dict(get_config().get("geometry") or {})
+    try:
+        g.update(parse_geo_override(body.get("geo")) or {})
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        done = _MP.fill_body(str(name), {k: v for k, v in body.items() if k != "preset"}, g)
+    except _MP.PresetError as exc:
+        raise _refuse(str(exc), ["preset"])
+    return done["body"], done["record"]
+
+
 def _with_eddy_steps(body: Dict[str, Any]) -> Dict[str, Any]:
     """The body with its step count named: the caller's, else the eddy default.
 
@@ -5683,10 +5705,14 @@ def run(body: Dict[str, Any] = Body(default_factory=dict),
 
     Everything below is the contract the loop always had.
     """
+    body, preset_rec = _with_mesh_preset(body)
     body = _with_eddy_steps(body)
     tok = None if _record_wanted(body) else _rr.suppress()
     try:
-        return _run(body, authorization)
+        out = _run(body, authorization)
+        if preset_rec is not None and isinstance(out, dict):
+            out["mesh_preset"] = preset_rec
+        return out
     finally:
         _rr.restore(tok)
 

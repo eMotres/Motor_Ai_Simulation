@@ -60,6 +60,7 @@
   "customerOrg": "客户组织",
   "create": "创建项目",
   "back": "全部项目",
+  "backTip": "返回项目列表",
   "cancel": "取消",
   "save": "保存",
   "statusLabel": "项目状态",

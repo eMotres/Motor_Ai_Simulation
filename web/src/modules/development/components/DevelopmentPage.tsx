@@ -20,6 +20,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
   import ViewModeToggle, { useViewMode } from '../../../components/common/ViewModeToggle';
   import { VIEW_MODE_KEYS } from '../../../lib/viewMode';
   import ProjectOverview from './ProjectOverview';
+  import ProjectBackButton from './ProjectBackButton';
   import { DisplayStateControl, DisplayStateFilter, WokeBadge } from '../../../components/common/DisplayStateControl';
   import { activityAfter, DISPLAY_FILTERS, filterCounts, filterRows, stateOf, type DisplayFilter, type DisplayState } from '../../../lib/displayState';
   import { displayStateApi, useDisplayStates } from '../../../lib/displayStateApi';
@@ -748,9 +749,7 @@ export default function DevelopmentPage() {
     <HeaderTabs tab="development">
       {/* the way up stays in the fixed header row (mobile audit 2026-11): on a phone the "All projects" button above scrolls away */}
       <Box sx={{ display: 'flex', alignItems: 'center', minWidth: 0 }}>
-      <Tooltip title={tr('back')}>
-        <IconButton size="small" aria-label={tr('back')} data-testid="project-back" onClick={() => void backToList()} sx={{ flexShrink: 0 }}><ArrowBackIcon sx={{ fontSize: 18 }} /></IconButton>
-      </Tooltip>
+      <ProjectBackButton label={tr('back')} tip={tr('backTip')} onClick={() => void backToList()} />
       <Box sx={{ minWidth: 0, flex: 1 }}>
       <SubTabs value={view} onChange={(v) => void openTab(v)} ariaLabel={selected.title} items={[
         { id: 'specification', label: tr('tabs.specification') },

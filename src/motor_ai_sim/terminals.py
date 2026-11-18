@@ -222,3 +222,73 @@ def terminal_loss_W(
         "P_board_W": p_board,
         "delta_R_phase_ohm": r_lead + board_ohm,
     }
+
+
+def duty_terminal_budget(
+    summary: Optional[Mapping[str, Any]],
+    terminals_block: Optional[Mapping[str, Any]] = None,
+) -> Optional[Dict[str, Any]]:
+    """The lead / phase-board loss of a stored duty as its OWN loss term, and the efficiency AT THE TERMINALS.
+
+    Owner 2026-11-18 (model-vs-bench investigation): the duty's ``P_loss_total_W`` and ``efficiency`` stop at the winding
+    (the leads and the board are outside the motor and never entered the duty), so a bench that measures at the lead ends
+    reads a lower efficiency (CIANO14 40 L12 rated: 23.8 W on 93.7 W, 90.7 % against 88.6 %).  This adds the third
+    number WITHOUT replacing the first two: nothing stored changes, the caller shows both.
+
+    ``summary`` is the duty's stored run summary; ``terminals_block`` the configuration's ``terminals:`` block.  ``None``
+    when the block states nothing, there is no phase current, or the block is invalid.  The leads are taken at the block's
+    ``lead_temp_c`` when it states one, else at the run's coil temperature (the passport card's rule), else 20 C.
+    ``efficiency_at_terminals`` (fraction) is formed on the same basis as the duty's efficiency the summary carries: the
+    shaft efficiency when it has one (``efficiency_shaft`` over ``P_shaft_net_W``), else the electromagnetic one over
+    ``P_mech_W``; motor: P / (P / eta + P_term); generator: eta - P_term / P_in.  Absent when the summary lacks those.
+    """
+    s = summary if isinstance(summary, Mapping) else {}
+    try:
+        info = validate_terminals(terminals_block)
+    except (TypeError, ValueError):
+        return None
+    if not info["stated"]:
+        return None
+    try:
+        cur = float(s.get("I_phase_rms_A"))
+    except (TypeError, ValueError):
+        return None
+    if not cur > 0.0:
+        return None
+    blk = terminals_block or {}
+    t_src = "terminals.lead_temp_c"
+    try:
+        t_lead = float(blk["lead_temp_c"])
+    except (KeyError, TypeError, ValueError):
+        t_src = "coil temperature of the run"
+        try:
+            t_lead = float(s.get("coil_temp_C"))
+        except (TypeError, ValueError):
+            t_lead, t_src = 20.0, "20 C (not stated)"
+    loss = terminal_loss_W(cur, terminals_block, temp_c=t_lead)
+    p_term = float(loss["P_leads_board_total_W"])
+    out: Dict[str, Any] = {
+        "P_leads_W": round(float(loss["P_leads_W"]), 2),
+        "P_board_W": round(float(loss["P_board_W"]), 2),
+        "P_leads_board_W": round(p_term, 2),
+        "lead_temp_c": round(t_lead, 1),
+        "lead_temp_source": t_src,
+        "note": info["note"],
+    }
+    gen = str(s.get("op_mode") or "").lower().startswith("gen")
+    pairs = ((s.get("efficiency_shaft"), s.get("P_shaft_net_W"), "shaft"),
+             (s.get("efficiency"), s.get("P_mech_W"), "electromagnetic"))
+    for eta_raw, p_raw, basis in pairs:
+        try:
+            eta, p = float(eta_raw), abs(float(p_raw))
+        except (TypeError, ValueError):
+            continue
+        if not (eta > 0.0 and p > 0.0):
+            continue
+        eta_t = (eta - p_term / p) if gen else (p / (p / eta + p_term))
+        out["efficiency"] = round(eta, 6)
+        out["efficiency_at_terminals"] = round(max(eta_t, 0.0), 6)
+        out["efficiency_basis"] = basis
+        break
+    return out
+

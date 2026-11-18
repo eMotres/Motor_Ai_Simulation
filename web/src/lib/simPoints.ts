@@ -39,6 +39,9 @@ export interface TreeDuty {
   star_delta?: string | null;
   result?: { efficiency_pct?: number | null; v_ll_peak_v?: number | null;
              build_sig?: string | null } | null;
+  /** Lead / phase-board loss as its own term and the efficiency AT THE TERMINALS (fractions); only when the configuration
+   *  states a `terminals:` block. The duty's own `result.efficiency_pct` is never replaced by it. */
+  terminal_loss?: { P_leads_board_W?: number | null; efficiency_at_terminals?: number | null } | null;
   primary_drive?: string;
   runs?: TreeRun[];
   duty_cycle?: Record<string, unknown> | null;
@@ -123,6 +126,7 @@ export function pointTip(d: TreeDuty, cfg: TreeCfg, driveName: (id: string) => s
     cur == null ? '' : `${f(perSetFromTotal(cur, sets))} A${sets === 2 ? '/set' : ''}`,
     num(d.gamma_deg) == null ? '' : `γ ${f(d.gamma_deg, 1)}°`,
     num(d.result?.efficiency_pct) == null ? '' : `η ${f(d.result?.efficiency_pct, 1)} %`,
+    num(d.terminal_loss?.efficiency_at_terminals) == null ? '' : `η at terminals ${f(num(d.terminal_loss?.efficiency_at_terminals)! * 100, 1)} % (leads + board ${f(d.terminal_loss?.P_leads_board_W, 1)} W)`,
   ].filter(Boolean);
   const drives = drivesOf(d);
   if (drives.length) bits.push(drives.map(driveName).join(' + '));

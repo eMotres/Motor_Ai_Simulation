@@ -1421,6 +1421,19 @@ def _with_mech_loss(d: Dict[str, Any]) -> Any:
     return r
 
 
+def _terminal_loss_view(d: Dict[str, Any], c: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """``terminals.duty_terminal_budget`` of the duty's stored summary and the configuration's ``terminals:`` block, or
+    None (no block, no summary, no phase current).  Never raises: a malformed block must not sink the tree."""
+    blk = (c or {}).get("terminals")
+    if not blk:
+        return None
+    try:
+        from motor_ai_sim.terminals import duty_terminal_budget
+        return duty_terminal_budget(d.get("summary"), blk)
+    except Exception:                                        # noqa: BLE001
+        return None
+
+
 def _die_doc_for_sig(die: str) -> dict:
     """The die document, for `_build_sig`.  Best-effort: a signature that cannot
     be computed must never fail a duty save."""
@@ -2482,6 +2495,10 @@ def _build_config_row(die: dict, c: dict, name: str, _dr_cfg: dict) -> dict:
                             or (d.get("summary") or {}).get("star_delta")),
              "torque_nm": d.get("torque_nm"), "power_kw": d.get("power_kw"),
              "note": d.get("note", ""), "result": _with_mech_loss(d),
+             # The lead / phase-board loss as its own term and the efficiency AT THE TERMINALS, derived at serve time from
+             # the configuration's `terminals:` block (owner 2026-11-18); absent when none is stated.  The duty's own
+             # `result` / `summary` above are never changed.
+             **({"terminal_loss": _tl} if (_tl := _terminal_loss_view(d, c)) else {}),
              # What the machine DOES with this point (S1 / S2 / S3 /
              # segments) — a handful of numbers, so the catalog row can
              # say "S3 ED 25 % · 60 s" without a second request.  None

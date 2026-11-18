@@ -50,7 +50,7 @@ import { shownStatus } from '../projectStage';
   import ProjectTimeline from './ProjectTimeline';
   import { hasProductionView, type ProjectProductionEntry } from '../projectProductions';
   import ProjectCover from './ProjectCover';
-  import SpecWizard from './specWizard/SpecWizard';
+  import SpecView from './specWizard/SpecView';
   import { useSpecFields } from './specWizard/useSpecFields';
   import { buildWizardSteps, stepCommentRefs } from './specWizard/steps';
   import { wizardProfile } from './specWizard/profile';
@@ -769,7 +769,7 @@ export default function DevelopmentPage() {
     </HeaderTabs>
     {(view === 'specification' || view === 'motors') && selected && <ProjectStatusBar data={activity} t={tr} />}
     {view === 'specification' && <Box sx={{ minWidth: 0 }}>
-      {!schema || !spec || !selected ? <CircularProgress size={18} /> : <SpecWizard key={selected.id} memoryScope={user?.email ? `${developmentViewScope(user.email)}.optional.${selected.id}` : null}
+      {!schema || !spec || !selected ? <CircularProgress size={18} /> : <SpecView key={selected.id} viewScope={user?.email ? developmentViewScope(user.email) : null} onRevealField={revealField} memoryScope={user?.email ? `${developmentViewScope(user.email)}.optional.${selected.id}` : null}
         project={selected} step={step} onStep={showCard} completeness={completeness} saving={saving} saveError={saveError}
         onRetrySave={() => void enqueueSave(selected.id, draftRef.current, projectToken.current).catch(() => {})} onReloadDraft={() => void reloadDraft()}
         rejectedNote={rejectedNote} submittedInfo={submitted?.project === selected.id ? { version: submitted.version, at: submitted.at, changed: submitted.atRevision === null || spec.revision !== submitted.atRevision || saving } : null}

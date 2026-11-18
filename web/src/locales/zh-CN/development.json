@@ -85,6 +85,19 @@
   },
   "requiredTip": "请填写必填项，或标记为“尚不清楚”。",
   "wizard": {
+    "table": {
+      "table": "表格",
+      "wizard": "向导",
+      "switch": "规格视图",
+      "tableTip": "在一页上显示规格的全部数值",
+      "wizardTip": "逐步填写或修改答案",
+      "parameter": "参数",
+      "value": "数值",
+      "unit": "单位",
+      "role": "类型",
+      "openField": "在向导中打开",
+      "comments": "{count, plural, other {# 条未解决的评论}}"
+    },
     "sections": "规格分区",
     "load": "负载",
     "mission": "任务工况",

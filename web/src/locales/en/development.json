@@ -85,6 +85,19 @@
   },
   "requiredTip": "Complete required fields or mark them as not known yet.",
   "wizard": {
+    "table": {
+      "table": "Table",
+      "wizard": "Wizard",
+      "switch": "Specification view",
+      "tableTip": "Every value of the specification on one page",
+      "wizardTip": "Step by step, to fill in or change answers",
+      "parameter": "Parameter",
+      "value": "Value",
+      "unit": "Unit",
+      "role": "Role",
+      "openField": "Open in the wizard",
+      "comments": "{count, plural, one {# open comment} other {# open comments}}"
+    },
     "sections": "Specification sections",
     "load": "Load",
     "mission": "Mission",

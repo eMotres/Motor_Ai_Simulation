@@ -378,10 +378,10 @@ SCHEMA_FALLBACK: Dict[str, dict] = {
     },
     "magnet_pocket_clearance": {
         "label": "Magnet pocket clearance", "unit": "mm", "type": "float",
-        "min": 0.0, "max": 0.5, "step": 0.005, "group": "rotor", "unset_ok": True,
+        "min": 0.0, "max": 0.1, "step": 0.005, "group": "rotor", "unset_ok": True,
         "description": (
-            "with magnet_flat: the rotor pocket is the magnet outline offset outward by this much on every side "
-            "(Fusion offset_rotor, 0.025); 0 / blank = the pocket is the magnet"),
+            "magnet-to-pocket clearance, mm per side (typical 0.035-0.04): the pocket is the magnet outline offset "
+            "outward, the ring is non-magnetic; every magnet shape. 0 / blank = the pocket is the magnet"),
     },
     "sleeve_thickness": {
         "label": "Sleeve thickness", "unit": "mm", "type": "float",

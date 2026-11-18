@@ -94,6 +94,10 @@ class MotorSection:
     materials: Dict[str, str] = field(default_factory=dict)
     pocket_sliver_mm2: float = 0.0
     polys_full: Optional[dict] = None
+    # geometry.magnet_pocket_clearance [mm per side]: the air ring between each magnet and its pocket wall.  It comes
+    # with the polygons (cadquery_geometry._pocket_clearance), so the 3-D section carries the SAME pocket as the 2-D
+    # solve; the ring is not a region of its own, it is part of the air every leg meshes around the solids.
+    pocket_clearance_mm: float = 0.0
 
     # -- convenience in metres --------------------------------------------
     @property
@@ -124,6 +128,8 @@ class MotorSection:
              f"mid-gap r = {self.mid_r_mm:.3f} mm",
              f"  Br = {self.Br_T:.3f} T, mu_rec = {self.mu_rec:.3f}",
              f"  materials {self.materials}"]
+        if self.pocket_clearance_mm > 0.0:
+            L.append(f"  magnet pocket clearance {self.pocket_clearance_mm:.3f} mm per side (air)")
         for r in self.regions:
             L.append(f"    {r.name:<12s} A = {r.area_mm2:9.4f} mm^2  "
                      f"mu_r {r.mu_r:8.1f}  |M| "
@@ -290,6 +296,27 @@ def _recut_rotor_pockets(polys: dict, tol_mm2: float = POCKET_SLIVER_MM2
     return out, removed
 
 
+def _check_pocket_clearance(polys: dict, p: dict) -> float:
+    """``magnet_pocket_clearance`` as built: 0 when it is not set (nothing is measured, the section is the one of every
+    stored machine).  When it is set, the rotor iron must stay clear of every magnet by at least half of it - a
+    pocket the builder did not open (or a weld that closed it again) would make the 3-D leg solve a machine without
+    the clearance while claiming one, so that raises."""
+    from motor_ai_sim.cadquery_geometry import _pocket_clearance
+    clr = _pocket_clearance(p)
+    if clr <= 0.0:
+        return 0.0
+    rotor = polys.get("rotor")
+    mags = [mp for mp, _pol in polys.get("magnets", []) if mp is not None and not mp.is_empty]
+    if rotor is None or rotor.is_empty or not mags:
+        return clr
+    gap = min(float(rotor.distance(mp)) for mp in mags)
+    if gap < 0.5 * clr:
+        raise ValueError(
+            f"magnet_pocket_clearance {clr:.4f} mm is set but the rotor iron comes within {gap:.4f} mm of a magnet: "
+            f"the pocket ring is not in the cross-section")
+    return clr
+
+
 def _cut_radius_canon(polys, a_sec: float, tol: float = CUT_SNAP_MM):
     """One radius per breakpoint, shared by BOTH sector cuts and ALL regions.
 
@@ -452,6 +479,7 @@ def load_motor_section(geo_override: Optional[dict] = None,
     # design and still raises, because a solve of an impossible machine is never
     # an answer.
     polys, sliver = _recut_rotor_pockets(polys)
+    clearance = _check_pocket_clearance(polys, p)
 
     # ...and then the cross-section is validated as usual.
     from motor_ai_sim.geometry_validation import validate_polygons, GeometryInvalid
@@ -545,4 +573,5 @@ def load_motor_section(geo_override: Optional[dict] = None,
         materials={k: v for k, v in assigns.items()
                    if k in ("stator_core", "rotor_core", "magnet", "shaft")},
         pocket_sliver_mm2=float(sliver),
-        polys_full=polys)
+        polys_full=polys,
+        pocket_clearance_mm=float(clearance))

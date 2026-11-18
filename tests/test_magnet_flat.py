@@ -112,11 +112,13 @@ def test_corners_are_where_the_sketch_puts_them():
 
 def test_without_the_keys_the_magnet_is_the_stored_one():
     old = _built(magnet_down_height=0.0)
-    again = _built(magnet_down_height=0.0, magnet_flat=0, magnet_pocket_clearance=0.025)   # the clearance needs magnet_flat
+    # the clearance opens the pocket for every magnet shape (#761) but never changes the magnet itself
+    again = _built(magnet_down_height=0.0, magnet_flat=0, magnet_pocket_clearance=0.025)
     a = [x[0] if isinstance(x, tuple) else x for x in old["magnets"]]
     b = [x[0] if isinstance(x, tuple) else x for x in again["magnets"]]
     assert all(p.equals(q) for p, q in zip(a, b))
-    assert old["rotor"].equals(again["rotor"]) if not isinstance(old["rotor"], tuple) else True
+    zero = _built(magnet_down_height=0.0, magnet_flat=0, magnet_pocket_clearance=0.0)
+    assert old["rotor"].equals(zero["rotor"]) if not isinstance(old["rotor"], tuple) else True
 
 
 def test_magnet_flat_needs_the_opening_pocket():

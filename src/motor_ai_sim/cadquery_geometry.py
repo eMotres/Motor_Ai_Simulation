@@ -810,15 +810,59 @@ def _magnet_flat(p: Dict) -> bool:
 
 
 def _pocket_clearance(p: Dict) -> float:
-    """``geometry.magnet_pocket_clearance`` [mm]: the rotor pocket is the magnet outline offset outward by this much (Fusion
-    ``offset_rotor`` 0.025).  Only with ``magnet_flat``; absent / <= 0 / unusable = 0 = the pocket is the magnet."""
-    if not _magnet_flat(p):
-        return 0.0
+    """``geometry.magnet_pocket_clearance`` [mm per side]: the rotor pocket is the magnet outline offset outward by this
+    much, and the ring between the two is AIR (the e-coat and the magnet epoxy inside it are non-magnetic).  Owner
+    2026-11-18: «у нас у всех магнитов есть зазор от 0.035-0.04».  Every magnet shape the builder draws:
+
+    * the arc-topped spoke magnet and the flat (``magnet_flat``) one, rotor_hole < 1: pocket = magnet.buffer(clearance),
+      mitre joins, plus the rotor_hole opening as before;
+    * rotor_hole >= 1 (the straight-sided pocket run to the OD, the magnet on the rotor surface under a sleeve): the
+      bottom edge (the layer between the magnet and the back iron) and both sides move out by the clearance, see
+      `_offset_magnet_local`.
+
+    Absent / None / '' / <= 0 / unusable = 0 = the pocket is the magnet, bit for bit (every stored machine)."""
     try:
-        v = float(p.get('magnet_pocket_clearance', 0.0) or 0.0)
+        v = float(p.get('magnet_pocket_clearance', 0.0) or 0.0) if p else 0.0
     except (TypeError, ValueError):
         return 0.0
     return v if (v == v and v > 0.0) else 0.0
+
+
+def _offset_magnet_local(mag_local, d: float):
+    """The six-corner magnet outline ``mp1..mp6`` (pole frame, counter-clockwise) with its bottom edge and its four side
+    segments moved OUTWARD by ``d`` (mitre corners): the outline the straight-sided (rotor_hole >= 1) pocket is built
+    on when ``magnet_pocket_clearance`` is set.  The two top corners (mp3, mp4) only follow their side line outward:
+    the pocket top is the rotor OD, so only the DIRECTION of the side matters there.  A collinear knee (``K`` the
+    midpoint of a straight side) moves along the side normal.  ``d`` <= 0 returns the outline unchanged (same list)."""
+    if not (d > 0.0):
+        return mag_local
+    P = [(float(x), float(y)) for x, y in mag_local]
+    n = len(P)
+
+    def _normal(i):                      # outward normal of the edge P[i] -> P[i+1] (ccw polygon: right-hand side)
+        (x0, y0), (x1, y1) = P[i], P[(i + 1) % n]
+        L = hypot(x1 - x0, y1 - y0)
+        return ((y1 - y0) / L, -(x1 - x0) / L) if L > 1e-12 else (0.0, 0.0)
+
+    out = []
+    for i in range(n):
+        if i == 2:                       # mp3: the +side top corner, on the side mp2 -> mp3
+            nx, ny = _normal(1)
+            out.append((P[i][0] + d * nx, P[i][1] + d * ny))
+            continue
+        if i == 3:                       # mp4: the -side top corner, on the side mp4 -> mp5
+            nx, ny = _normal(3)
+            out.append((P[i][0] + d * nx, P[i][1] + d * ny))
+            continue
+        n1, n2 = _normal((i - 1) % n), _normal(i)
+        c = n1[0] * n2[0] + n1[1] * n2[1]
+        if c > 1.0 - 1e-9:               # collinear: plain shift
+            out.append((P[i][0] + d * n1[0], P[i][1] + d * n1[1]))
+            continue
+        bx, by = n1[0] + n2[0], n1[1] + n2[1]          # mitre: along the bisector, d / cos(half the turn)
+        k = d / (1.0 + c)
+        out.append((P[i][0] + k * bx, P[i][1] + k * by))
+    return out
 
 
 def _flat_magnet_poly(pts, fillet_r: float, n_arc: int = 24):
@@ -2760,7 +2804,8 @@ class CadQueryMotor:
         # the same shape the mesher solves.  User 2026-09-06: "the rotor face
         # needs to be made straight".
         if _extended_pocket(p):
-            mag_local = _magnet_local_from_params(p)[0]
+            # magnet_pocket_clearance: bottom and sides out by the clearance (`_offset_magnet_local`; 0 = the same list)
+            mag_local = _offset_magnet_local(_magnet_local_from_params(p)[0], _pocket_clearance(p))
             for i in range(num_poles):
                 pts = _extended_pocket_pts(mag_local, rotor_outer_r,
                                            radians(i * pole_angle))
@@ -2774,13 +2819,26 @@ class CadQueryMotor:
             return rotor
 
         if _pocket_clearance(p) > 0.0:
-            # magnet_flat + magnet_pocket_clearance: the pocket is the magnet outline offset outward (Fusion offset_rotor)
-            _ml = _magnet_local_from_params(p)[0]
+            # magnet_pocket_clearance: the pocket is the magnet outline offset outward (Fusion offset_rotor), for the
+            # flat AND the arc-topped magnet - the SAME polygons get_2d_polygons cuts (see _pocket_clearance)
+            from shapely.geometry import Polygon as _SPoly
+            _ml, _aup = _magnet_local_from_params(p)
+            _fr = float(p.get('magnet_fill_radius', 0.0) or 0.0)
+            _rtop = rotor_outer_r - float(p.get('magnet_up_gap', 0.0) or 0.0)
+            _scale = 2.0 * float(p['stator_outer_radius'])
             for i in range(num_poles):
                 _a = radians(i * pole_angle)
                 _c, _s = cos(_a), sin(_a)
                 _pp = [(x * _c - y * _s, x * _s + y * _c) for x, y in _ml]
-                _off = _flat_magnet_poly(_pp, float(p.get('magnet_fill_radius', 0.0) or 0.0)).buffer(_pocket_clearance(p), join_style=2)
+                if _magnet_flat(p):
+                    _mp = _flat_magnet_poly(_pp, _fr)
+                else:
+                    _mp = _fillet_magnet_top_arc(_SPoly(_pp[:3] + _magnet_top_arc_global(_rtop, _aup, _a) + _pp[3:]),
+                                                 _fr, _rtop, _scale, open_top=(_rtop >= rotor_outer_r - 1e-9),
+                                                 open_wall=False)
+                if not _mp.is_valid:
+                    _mp = _mp.buffer(0)
+                _off = _mp.buffer(_pocket_clearance(p), join_style=2)
                 rotor = rotor.cut(cq.Workplane("XY").polyline([(float(x), float(y)) for x, y in list(_off.exterior.coords)[:-1]])
                                   .close().extrude(width + 1))
 
@@ -3269,8 +3327,8 @@ class CadQueryMotor:
             mp_pocket = mp.buffer(_clr, join_style=2) if _clr > 0.0 else mp   # mitre: round-join arc nodes are closer than the weld tolerance and would collapse
 
             if _ext_pocket:
-                hole = _extended_pocket_poly(SPoly, mag_local, rotor_or, a, mp,
-                                             node_tol=scale_mm * 1e-9)
+                hole = _extended_pocket_poly(SPoly, _offset_magnet_local(mag_local, _clr), rotor_or, a, mp,
+                                             node_tol=scale_mm * 1e-9)     # clearance 0: the same list, bit for bit
             elif _rd <= 0.0:
                 hole = mp_pocket        # no opening cut (see _pocket_cut_depth)
             else:
@@ -3867,8 +3925,8 @@ class CadQueryMotor:
             mp_pocket = mp.buffer(_clr, join_style=2) if _clr > 0.0 else mp   # mitre: round-join arc nodes are closer than the weld tolerance and would collapse
 
             if _ext_pocket:
-                hole = _extended_pocket_poly(SPoly, mag_local, rotor_or, a, mp,
-                                             node_tol=scale_mm * 1e-9)
+                hole = _extended_pocket_poly(SPoly, _offset_magnet_local(mag_local, _clr), rotor_or, a, mp,
+                                             node_tol=scale_mm * 1e-9)     # clearance 0: the same list, bit for bit
             elif _rd <= 0.0:
                 hole = mp_pocket        # no opening cut (see _pocket_cut_depth)
             else:

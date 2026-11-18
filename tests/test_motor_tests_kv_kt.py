@@ -100,17 +100,21 @@ def test_a_noload_point_solved_at_50_c_is_not_read_as_the_cards_150_c():
          "magnet_temp_used_c": 50.0, "magnet_temp_source": "typed", "magnet_card_temp_c": 150.0}
     m = model_source.from_docs({}, _cfg(s), {}, LIB)
     assert m["noload"][0]["magnet_temp_c"] == 50.0
-    rows = [{"rpm": n, "v_ll_pp_v": 2 * 0.1554 * n * BR_65 / BR_50} for n in (1000, 2000, 3000, 4000)]
-    rec = models.normalize({"kind": "free_run", "date": "2026-01-15", "conditions": {"magnet_temp_c": 65.0}, "rows": rows},
+    # a bench at 65 C is 15 K from the 50 C point: not comparable (no Br scaling); at 55 C it is compared directly
+    rows = [{"rpm": n, "v_ll_pp_v": 2 * 0.1554 * n} for n in (1000, 2000, 3000, 4000)]
+    far = models.normalize({"kind": "free_run", "date": "2026-01-15", "conditions": {"magnet_temp_c": 65.0}, "rows": rows},
                            who="eng@example.test")
-    g = {x["key"]: x for x in comparison.compare_record(rec, m, "D", "C")["groups"]}
+    g = {x["key"]: x for x in comparison.compare_record(far, m, "D", "C")["groups"]}
+    assert all(r["model"] is None and r["extra"]["not_comparable"] == "no_model_temp" for r in g["emf_peak"]["rows"])
+    near = models.normalize({"kind": "free_run", "date": "2026-01-15", "conditions": {"magnet_temp_c": 55.0}, "rows": rows},
+                            who="eng@example.test")
+    g = {x["key"]: x for x in comparison.compare_record(near, m, "D", "C")["groups"]}
     row = [r for r in g["emf_peak"]["rows"] if r["params"]["rpm"] == 3000][0]
-    assert row["extra"]["br_ratio"] == pytest.approx(BR_65 / BR_50)       # 0.986, not Br(65) / Br(150) = 1.12
-    assert row["model"] == pytest.approx(466.2 * BR_65 / BR_50) and row["delta_pct"] == pytest.approx(0.0, abs=1e-9)
-    # the old spellings still count, and the card is the last resort
+    assert row["model"] == pytest.approx(466.2) and row["delta_pct"] == pytest.approx(0.0, abs=1e-9)
+    # the old spellings still count; the card's quoted temperature is a label, not what was solved: unknown
     s2 = {k: v for k, v in s.items() if k != "magnet_temp_used_c"}
     assert model_source.from_docs({}, _cfg({**s2, "magnet_temp_c": 80.0}), {}, LIB)["noload"][0]["magnet_temp_c"] == 80.0
-    assert model_source.from_docs({}, _cfg(s2), {}, LIB)["noload"][0]["magnet_temp_c"] == 150.0
+    assert model_source.from_docs({}, _cfg(s2), {}, LIB)["noload"][0]["magnet_temp_c"] is None
 
 
 def test_compute_it_copies_the_reference_runs_magnet_temperature_from_the_same_stamp():

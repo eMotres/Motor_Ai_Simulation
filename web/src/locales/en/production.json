@@ -637,6 +637,8 @@
     "note": {
       "unexplained": "unexplained {w} W",
       "noModel": "no simulation point",
+      "notComparableNoBenchTemp": "not comparable: magnet temperature unknown",
+      "notComparableNoModelTemp": "not comparable: no model point at this temperature",
       "freqFlag": "{hz} Hz vs low-frequency simulation",
       "remaining": "{mohm} mΩ board and joints",
       "modelAbove": "simulation {mohm} mΩ above the reading",

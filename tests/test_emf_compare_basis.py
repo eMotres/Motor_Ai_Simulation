@@ -1,10 +1,9 @@
 """Free-run EMF comparison: the magnet-temperature basis and the voltage basis (EMF audit 2026-11-07).
 
-Temperature, in order of preference (``compare.emf_temperature_basis``):
-(a) a stored no-load point within 10 K of the bench magnet temperature is compared directly (speed scaling only);
-(b) else the EMF-to-Br elasticity fitted from this configuration's own stored no-load points at different temperatures;
-(c) else the old Br scaling (elasticity 1), labelled "temperature-scaled (approximate)".
-The rows and groups say which one was used.
+Temperature (``compare.emf_temperature_basis``, owner 2026-11-18, model-vs-bench investigation): a row is compared ONLY
+when the bench magnet temperature is known and a stored no-load point lies within 10 K of it; that point is compared directly
+(speed scaling only). Otherwise the row is "not comparable: magnet temperature unknown / no model point at this temperature"
+and carries no model value - never scaled with Br, a fitted elasticity, or Br^2 (the no-load loss).
 
 Voltage basis: the EMF-slope row compares the simulation on the bench's own basis (fundamental, rms x sqrt(2), waveform
 peak); Kv and Kt stay on the fundamental and say when the bench Kv is not.
@@ -48,46 +47,32 @@ def test_a_a_stored_point_within_10_k_is_compared_directly():
     assert tb["basis"] == C.TEMP_STORED_POINT and tb["factor"] == 1.0
     assert tb["ref"]["duty"] == "nl 50" and tb["model_temp_c"] == 50.0
     # 12 K away is not "close": a 62 C bench is not compared directly with the 50 C point
-    assert C.emf_temperature_basis(3000, refs, BR_PTS, 62.0)["basis"] == C.TEMP_FITTED
+    far = C.emf_temperature_basis(3000, refs, BR_PTS, 62.0)
+    assert far["basis"] == C.TEMP_NO_MODEL_T and far["comparable"] is False and "no model point at this temperature" in far["reason"]
     # among close points the nearest temperature wins over the nearest speed
     refs2 = [_ref("nl 50 @2000", 2000, 50.0, 0.17), _ref("nl 45 @3000", 3000, 45.0, 0.17)]
     assert C.emf_temperature_basis(3000, refs2, BR_PTS, 51.0)["ref"]["duty"] == "nl 50 @2000"
 
 
-def test_b_the_elasticity_is_fitted_from_the_configurations_own_points():
+def test_between_two_stored_points_is_not_comparable_and_nothing_is_fitted_or_scaled():
     refs = [_ref("nl 50", 3000, 50.0, _machine_e(50.0)), _ref("nl 120", 2000, 120.0, _machine_e(120.0))]
     tb = C.emf_temperature_basis(3000, refs, BR_PTS, 80.0)
-    assert tb["basis"] == C.TEMP_FITTED
-    assert tb["elasticity"] == pytest.approx(E_ELASTICITY, abs=1e-9)
-    assert tb["ref"]["duty"] == "nl 50"                                              # the point nearest in speed
-    assert tb["factor"] == pytest.approx((_br(80.0) / _br(50.0)) ** E_ELASTICITY)
-    emf = C.emf_model_at(3000, tb["ref"], tb["factor"])
-    assert emf["fund"] == pytest.approx(_machine_e(80.0) * 3000)                    # the machine's own EMF at 80 C
-    assert tb["fit"]["n"] == 2 and tb["fit"]["span_k"] == pytest.approx(70.0)
+    assert tb["basis"] == C.TEMP_NO_MODEL_T and tb["comparable"] is False
+    assert tb["factor"] == 1.0 and tb["elasticity"] is None and tb["fit"] is None and tb["br_ratio"] == 1.0
+    assert "50, 120" in tb["reason"]
 
 
-def test_b_an_unphysical_fit_is_refused_and_falls_back_to_c():
-    # EMF falling as Br rises: a broken pair of stored points, not a machine property
-    refs = [_ref("nl 50", 3000, 50.0, 0.17), _ref("nl 120", 2000, 120.0, 0.19)]
-    tb = C.emf_temperature_basis(3000, refs, BR_PTS, 80.0)
-    assert tb["basis"] == C.TEMP_BR_SCALED and tb["fit"]["accepted"] is False and tb["fit"]["elasticity"] < 0
-    # two points less than 10 K apart are not a fit either
-    close = [_ref("nl 50", 3000, 50.0, 0.17), _ref("nl 55", 2000, 55.0, 0.169)]
-    assert C.emf_temperature_basis(3000, close, BR_PTS, 90.0)["basis"] == C.TEMP_BR_SCALED
-
-
-def test_c_one_far_point_keeps_the_br_scaling_and_is_labelled_approximate():
+def test_one_far_point_is_not_comparable():
     refs = [_ref("nl 150", 3000, 150.0, 0.15)]
     tb = C.emf_temperature_basis(3000, refs, BR_PTS, 25.0)
-    assert tb["basis"] == C.TEMP_BR_SCALED
-    assert tb["factor"] == pytest.approx(_br(25.0) / _br(150.0)) == pytest.approx(tb["br_ratio"])
-    assert tb["elasticity"] is None and tb["fit"] is None
+    assert tb["basis"] == C.TEMP_NO_MODEL_T and tb["comparable"] is False and tb["factor"] == 1.0
 
 
 def test_no_bench_temperature_and_no_stored_point():
     refs = [_ref("nl 150", 3000, 150.0, 0.15)]
     tb = C.emf_temperature_basis(3000, refs, BR_PTS, None)
-    assert tb["basis"] == C.TEMP_NO_BENCH_T and tb["factor"] == 1.0
+    assert tb["basis"] == C.TEMP_NO_BENCH_T and tb["factor"] == 1.0 and tb["comparable"] is False
+    assert tb["reason"] == "not comparable: magnet temperature unknown"
     assert C.emf_temperature_basis(3000, [], BR_PTS, 50.0) is None
 
 
@@ -136,21 +121,45 @@ def test_the_groups_say_which_temperature_basis_was_used():
     assert row is None                                                              # no Vpp/2 read: no EMF peak group
     # (a) exactly at the stored temperature: the old wording, no suffix
     assert _groups(m, _rec(50.0))["kv_kt"]["basis_key"] == "kv_3d"
-    # (b) between the two points: the fitted elasticity, named with its value
-    b = _groups(m, _rec(85.0))
-    el = math.log(0.165 / 0.170) / math.log(C.br_at(br, 120.0) / C.br_at(br, 50.0))
-    assert b["kv_kt"]["basis_key"] == "kv_3d_fit" and b["kv_kt"]["basis_params"]["el"] == "%.2f" % el
-    f = (C.br_at(br, 85.0) / C.br_at(br, 50.0)) ** el
-    assert _rows(b["kv_kt"])["kv_slope"]["model"] == pytest.approx(170.0 * f * 0.95)
-    # (c) one stored point only, far from the bench: Br scaling, approximate
+    # between the two points (35 K from both): not comparable, the Kv row has no model value and says why
+    b = _groups(m, _rec(85.0, v_ll_pp_v=lambda n: 2 * 0.172 * n))
+    pk = b["emf_peak"]["rows"][0]
+    assert pk["model"] is None and pk["extra"]["not_comparable"] == "no_model_temp" and "no model point at this temperature" in pk["detail"]
+    assert _rows(b["kv_kt"])["kv_slope"]["model"] is None
+    # one stored point only, far from the bench: the same, no Br scaling
     m1 = _model([("nl 150", 3000, 150.0, 0.15)])
     c = _groups(m1, _rec(25.0, v_ll_pp_v=lambda n: 2 * 0.172 * n))
-    assert c["emf_peak"]["basis_key"] == "emf_2d_ts" and c["kv_kt"]["basis_key"] == "kv_2d_ts"
-    assert "temperature-scaled with Br (approximate)" in c["emf_peak"]["basis"]
-    pk = c["emf_peak"]["rows"][0]
-    assert pk["extra"]["emf_temp_basis"] == "br_scaled" and "approximate" in pk["detail"]
-    brm = m1["magnet"]["points"]
-    assert pk["model"] == pytest.approx(1.03 * 0.15 * 3000 * C.br_at(brm, 25.0) / C.br_at(brm, 150.0))
+    assert all(r["model"] is None and r["extra"]["not_comparable"] == "no_model_temp" for r in c["emf_peak"]["rows"])
+    # a bench record WITHOUT a magnet temperature: not comparable, "magnet temperature unknown"
+    rec = models.normalize({"kind": "free_run", "date": "2026-01-15", "conditions": {"ambient_c": 21.0},
+                            "rows": [{"rpm": 3000, "v_ll_pp_v": 2 * 0.172 * 3000, "temp_c": 40.0}]}, who="eng@example.test")
+    u = _groups(m1, rec)
+    r0 = u["emf_peak"]["rows"][0]
+    assert r0["model"] is None and r0["extra"]["not_comparable"] == "no_bench_temp" and "magnet temperature unknown" in r0["detail"]
+    assert r0["extra"]["magnet_temp_source"] == "unknown"
+
+
+def test_the_noload_loss_is_compared_directly_or_not_at_all():
+    s = {"rpm": 3000, "I_phase_rms_A": 0.0, "V_line_peak_V": 510.0, "V1_LL_V": 500.0, "V_line_rms_V": 360.0,
+         "magnet_temp_used_c": 50.0, "P_core_W": 10.0}
+    cfg = {"winding": {"star_delta": "star"}, "materials": {"magnet": "GRADE_20C"},
+           "duties": [{"name": "nl", "rpm": 3000, "current_arms": 0, "summary": s}]}
+    m = model_source.from_docs({}, cfg, {}, LIB)
+    rec = lambda t: models.normalize({"kind": "free_run", "date": "2026-01-15", "conditions": {"magnet_temp_c": t},
+                                      "rows": [{"rpm": 3000, "shaft_power_w": 12.0}]}, who="eng@example.test")
+    near = _rows(_groups(m, rec(55.0))["loss"])["loss"]
+    assert near["model"] is not None and near["extra"]["br_ratio"] == 1.0           # not x (Br ratio)^2
+    far = _rows(_groups(m, rec(120.0))["loss"])["loss"]
+    assert far["model"] is None and far["extra"]["not_comparable"] == "no_model_temp"
+
+
+def test_a_model_point_without_a_stamp_takes_the_saved_setting_not_the_cards_label():
+    s = {"rpm": 3000, "I_phase_rms_A": 0.0, "V_line_peak_V": 510.0, "V1_LL_V": 500.0}      # no magnet_temp_used_c
+    duty = {"name": "nl", "rpm": 3000, "current_arms": 0, "summary": dict(s), "mesh": {"sim.magnetTempC": 65.0}}
+    cfg = {"winding": {"star_delta": "star"}, "materials": {"magnet": "GRADE_150C"}, "duties": [duty]}
+    assert model_source.from_docs({}, cfg, {}, LIB)["noload"][0]["magnet_temp_c"] == 65.0
+    duty.pop("mesh")                                                                      # no setting either: unknown, not 150 C
+    assert model_source.from_docs({}, cfg, {}, LIB)["noload"][0]["magnet_temp_c"] is None
 
 
 def test_the_emf_slope_row_follows_the_bench_basis_and_kv_stays_on_the_fundamental():
@@ -188,6 +197,4 @@ def test_the_report_table_label_says_the_temperature_basis():
     from motor_ai_sim.motor_tests import report as R
     g = {"label": "EMF line-line peak (Vpp / 2)"}
     assert R._group_label({**g, "basis_key": "emf_3d"}) == g["label"]
-    assert "approximate" in R._group_label({**g, "basis_key": "emf_3d_ts"})
-    assert "0.20" in R._group_label({**g, "basis_key": "kv_2d_fit", "basis_params": {"el": "0.20"}})
     assert "50 C" in R._group_label({**g, "basis_key": "emf_2d_pt", "basis_params": {"sim": "50"}})

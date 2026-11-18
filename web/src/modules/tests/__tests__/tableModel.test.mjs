@@ -56,6 +56,13 @@ t('one table per test: group headers, rows, the empty info rows dropped, notes a
   assert.deepEqual(M.tableLines(null), []);
 });
 
+t('an EMF row that cannot be compared at this magnet temperature says why, never "no simulation point"', () => {
+  const a = row({ key: 'emf_peak', measured: 120, model: null, status: 'no_model', extra: { not_comparable: 'no_bench_temp' } });
+  assert.deepEqual(M.rowNote(a), { key: 'notComparableNoBenchTemp', params: {} });
+  const b = row({ key: 'emf_peak', measured: 120, model: null, status: 'no_model', extra: { not_comparable: 'no_model_temp' } });
+  assert.deepEqual(M.rowNote(b), { key: 'notComparableNoModelTemp', params: {} });
+});
+
 t('a cogging check with the bench value still to come shows the model and says pending', () => {
   const r = row({ key: 'cogging_pkpk', measured: null, model: 4.745, extra: { pending: true } });
   assert.deepEqual(M.rowNote(r), { key: 'benchPending', params: {} });

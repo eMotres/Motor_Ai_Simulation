@@ -162,7 +162,7 @@ def _cfg_doc():
             "Ld_mH": 0.045, "Lq_mH": 0.060, "T_em_avg_Nm": 30.0, "efficiency": 0.95, "mass_total_kg": 9.0,
             "V_line_peak_V": 400.0, "P_mech_W": 30.0 * 3000 * math.pi / 30.0, "P_loss_total_W": 500.0}},
         {"name": "no-load 3000", "rpm": 3000, "current_arms": 0, "summary": {
-            "rpm": 3000, "I_phase_rms_A": 0.0, "V_line_peak_V": 120.0, "V_line_rms_V": 84.0,
+            "rpm": 3000, "I_phase_rms_A": 0.0, "V_line_peak_V": 120.0, "V_line_rms_V": 84.0, "magnet_temp_used_c": 60.0,
             "P_core_terms": {"stator": {"hysteresis_W": 200.0, "eddy_W": 100.0, "excess_W": 50.0},
                              "rotor": {"hysteresis_W": 10.0, "eddy_W": 5.0, "excess_W": 2.0}},
             "P_core_W": 367.0, "P_solid_W": 40.0, "P_mag_W": 30.0}},
@@ -186,7 +186,7 @@ def test_model_source_reads_r_ldq_noload_and_the_magnet_grade():
     nl = m["noload"][0]
     assert nl["hyst"] == 210.0 and nl["eddy"] == 105.0 and nl["excess"] == 52.0 and nl["p_solid"] == 40.0
     assert m["magnet"]["grade"] == "GRADE" and len(m["magnet"]["points"]) == 3
-    assert nl["magnet_temp_c"] == 150.0                          # the card's own temperature
+    assert nl["magnet_temp_c"] == 60.0                           # the temperature the run was solved at (its stamp)
     assert m["mass_kg"] == 9.0
 
 
@@ -244,10 +244,10 @@ def test_free_run_emf_and_loss_with_bearings_windage_and_unexplained_remainder()
     g = {x["key"]: x for x in out["groups"]}
     e3000 = [r for r in g["emf_peak"]["rows"] if r["params"]["rpm"] == 3000][0]
     assert e3000["measured"] == pytest.approx(120.0)               # Vpp / 2
-    assert e3000["model"] == pytest.approx(120.0 * 1.125)          # the no-load duty x Br(60 C) / Br(150 C)
-    assert e3000["delta_pct"] == pytest.approx(12.5)
+    assert e3000["model"] == pytest.approx(120.0)                  # the no-load duty solved at 60 C, compared directly
+    assert e3000["delta_pct"] == pytest.approx(0.0)
     loss = [r for r in g["loss"]["rows"] if r["params"]["rpm"] == 3000][0]
-    em = (210 + 105 + 52 + 40) * 1.125 ** 2                        # 515.11 W at the duty's own speed
+    em = (210 + 105 + 52 + 40)                                     # 407 W at the duty's own speed, not scaled with Br^2
     assert loss["measured"] == pytest.approx(660.0)                # 100 * 3 + 40 * 9
     assert loss["extra"]["em_w"] == pytest.approx(em)
     assert loss["model"] == pytest.approx(em + 30.0 + 9.0)         # + bearings 0.01 n + windage 1e-6 n^2
@@ -372,16 +372,16 @@ def test_free_run_emf_carries_the_stage_a_flux_factor_and_says_so():
     g = {x["key"]: x for x in out["groups"]}
     pk = [r for r in g["emf_peak"]["rows"] if r["params"]["rpm"] == 3000][0]
     rms = [r for r in g["emf_rms"]["rows"] if r["params"]["rpm"] == 3000][0]
-    assert pk["model"] == pytest.approx(120.0 * 1.125 * 0.95)
+    assert pk["model"] == pytest.approx(120.0 * 0.95)
     assert pk["extra"]["corrected"] is True and "model_2d" not in pk["extra"] and "k_3d" not in pk["extra"]
-    assert rms["model"] == pytest.approx(84.0 * 1.125 * 0.95)
-    assert "Br ratio 1.125" in pk["detail"] and pk["detail"].endswith("corrected")
-    # one stored no-load point, 90 K from the bench: (c) Br scaling, said to be approximate (EMF audit 2026-11-07)
-    assert g["emf_peak"]["basis"] == "magnets at 60 C, simulation temperature-scaled with Br (approximate), corrected"
-    assert g["emf_peak"]["basis_key"] == "emf_3d_ts" and pk["extra"]["emf_temp_basis"] == "br_scaled"
+    assert rms["model"] == pytest.approx(84.0 * 0.95)
+    assert "stored point within 10 K, compared directly" in pk["detail"] and pk["detail"].endswith("corrected")
+    # the stored no-load point is at the bench temperature: compared directly, no temperature clause
+    assert g["emf_peak"]["basis"] == "magnets at 60 C, corrected"
+    assert g["emf_peak"]["basis_key"] == "emf_3d" and pk["extra"]["emf_temp_basis"] == "stored_point"
     # losses are not scaled by the flux factor
     loss = [r for r in g["loss"]["rows"] if r["params"]["rpm"] == 3000][0]
-    assert loss["extra"]["em_w"] == pytest.approx((210 + 105 + 52 + 40) * 1.125 ** 2)
+    assert loss["extra"]["em_w"] == pytest.approx(210 + 105 + 52 + 40)
     assert "2-D" not in g["loss"]["basis"] and "3-D" not in g["loss"]["basis"]
 
 
@@ -389,7 +389,7 @@ def test_without_a_factor_the_value_stays_and_says_not_corrected_yet():
     out = comparison.compare_record(_free_run_rec(), _model(), "D", "C")
     g = {x["key"]: x for x in out["groups"]}
     pk = [r for r in g["emf_peak"]["rows"] if r["params"]["rpm"] == 3000][0]
-    assert pk["model"] == pytest.approx(120.0 * 1.125) and pk["extra"]["corrected"] is False
+    assert pk["model"] == pytest.approx(120.0) and pk["extra"]["corrected"] is False
     assert pk["detail"].endswith("not corrected yet")
     assert g["emf_peak"]["basis"].endswith("not corrected yet")
 

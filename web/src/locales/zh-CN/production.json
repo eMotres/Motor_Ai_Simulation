@@ -637,6 +637,8 @@
     "note": {
       "unexplained": "无法解释 {w} W",
       "noModel": "无仿真点",
+      "notComparableNoBenchTemp": "不可比：磁钢温度未知",
+      "notComparableNoModelTemp": "不可比：该温度下无仿真点",
       "freqFlag": "{hz} Hz，仿真为低频",
       "remaining": "{mohm} mΩ 相位板和接头",
       "modelAbove": "仿真比读数高 {mohm} mΩ",

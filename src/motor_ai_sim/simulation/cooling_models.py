@@ -277,6 +277,13 @@ def radiation_h(t_wall_c: float, t_env_c: float,
     return e * STEFAN_BOLTZMANN * (tw * tw + te * te) * (tw + te)
 
 
+def gnielinski_nusselt(re: float, pr: float) -> float:
+    """Gnielinski with the Petukhov friction factor, fully developed flow."""
+    f = (0.79 * math.log(re) - 1.64) ** -2.0
+    return ((f / 8.0) * (re - 1000.0) * pr
+            / (1.0 + 12.7 * math.sqrt(f / 8.0) * (pr ** (2.0 / 3.0) - 1.0)))
+
+
 def pipe_nusselt(re: float, pr: float) -> Tuple[float, str]:
     """(Nu, regime) for fully developed flow INSIDE a duct — the model behind
     both the jacket channel and the bore.
@@ -304,18 +311,14 @@ def pipe_nusselt(re: float, pr: float) -> Tuple[float, str]:
     re = max(float(re), 0.0)
     pr = max(float(pr), 1e-6)
 
-    def _gnielinski(r):
-        f = (0.79 * math.log(r) - 1.64) ** -2.0
-        return ((f / 8.0) * (r - 1000.0) * pr
-                / (1.0 + 12.7 * math.sqrt(f / 8.0) * (pr ** (2.0 / 3.0) - 1.0)))
-
     if re < 2300.0:
         return 3.66, "laminar"
     if re < 3000.0:
         w = (re - 2300.0) / 700.0
-        return max((1.0 - w) * 3.66 + w * _gnielinski(3000.0), 3.66), "transitional"
+        return (max((1.0 - w) * 3.66 + w * gnielinski_nusselt(3000.0, pr), 3.66),
+                "transitional")
     if re < 1.0e4:
-        return max(_gnielinski(re), 3.66), "transitional"
+        return max(gnielinski_nusselt(re, pr), 3.66), "transitional"
     return max(0.023 * re ** 0.8 * pr ** 0.4, 3.66), "turbulent"
 
 
@@ -1257,7 +1260,7 @@ def heat_path_film(*, t_body_c: float, t_ambient_c: float,
 #             openings; a 1–2 mm aluminium wall makes this term small)
 #   film      1 / (h_out · A_out),    A_out = 2π·(r + t)·L, h_out = the outer
 #             boundary condition the request chose (water film, jacket pin, …)
-STATOR_OD_COOLING = ("direct", "sleeve_contact")
+STATOR_OD_COOLING = ("direct", "sleeve_contact", "sleeve_channels")
 #: Lamination OD ↔ sleeve contact: the same press-fit ``HOUSING_CONTACT_H``
 #: as the robotics housing (one number, so the two cannot drift).
 SLEEVE_WALL_DEFAULT_MM = 1.5
@@ -1298,6 +1301,114 @@ def sleeve_contact_path(*, r_od_m: float, stack_m: float,
             "G_sleeve_W_per_K": (g_s if math.isfinite(g_s) else None),
             "G_film_W_per_K": g_o, "h_out": float(h_out),
             "wall_mm": t * 1e3, "k_sleeve": float(k_sleeve)}
+
+
+# ---------------------------------------------------------------------------
+# SEAWATER THROUGH THE OD NOTCHES, under the same sleeve (2026-11-04)
+# ---------------------------------------------------------------------------
+# ``stator_od_cooling='sleeve_channels'``.  The sleeve stays and its arc path
+# stays as it is; the notches it closes become axial water channels at a given
+# TOTAL flow, a second path in parallel: notch iron wall -> channel water.  The
+# 2-D map says why this cannot be lumped onto the arc path: the iron at the
+# notch root is the hottest iron, so the film has to act on the notch facets of
+# the cross-section (a Robin surface of its own).
+#
+# THE FILM.  From the measured notch (``cadquery_geometry.stator_od_notches``):
+# D_h = 4A/P with P = iron + sleeve side, V = Q / (n A), Re = V D_h / nu.
+#   Re <= 2300        Sieder-Tate, thermally developing laminar,
+#                     Nu = 1.86 (Re Pr D_h/L)^(1/3), floored at the fully
+#                     developed 3.66.  The viscosity ratio (mu/mu_wall)^0.14 is
+#                     left at 1: the properties below are fixed, and a warm wall
+#                     would only raise Nu (about +10 % at 80 C wall on 35 C
+#                     water), so this is the conservative side.
+#   Re >= 4000        Gnielinski with its entrance factor [1 + (D_h/L)^(2/3)].
+#   2300 < Re < 4000  linear in Re between the two seam values, the intermittency
+#                     form Gnielinski (1995) recommends.
+#
+# THE WATER.  In = the outer boundary's sink (the jacket's inlet in 'liquid'
+# mode).  Out from the energy balance on what the channels remove, Q = m cp
+# (T_out - T_in); the film acts against the MEAN of the two.  That mean is
+# solved, not iterated: it is one lumped node of the conduction system, with
+# G = 2 m cp to the inlet temperature.  Flow -> 0 then takes the channels' heat
+# to 0 by itself and the map falls back on the sleeve's arcs.  The mean is an
+# axial average of a stream whose wall the 2-D section sees as one temperature;
+# it is right while NTU = h A / (m cp) is well below 1, and the payload warns
+# when T_out passes the wall.
+#
+# NOT MODELLED, stated: heat from the sleeve wall into the channel water (the
+# channel's sleeve side is unheated in the film; the sleeve then runs slightly
+# warmer than the water, so leaving this out errs on the hot side); buoyancy in
+# the channel; the notch's corners against a round duct of the same D_h; axial
+# conduction along the stack.
+#: Seawater at about 35 C, salinity about 35 g/kg.  Fixed for this mode rather
+#: than re-evaluated at the sink: a colder sea changes these by less than the
+#: scatter of the correlations.
+SEAWATER_35C = FluidProps(rho=1025.0, cp=3990.0, k=0.60, nu=0.8e-6,
+                          pr=0.8e-6 * 1025.0 * 3990.0 / 0.60)
+#: The vessel speed the intake momentum drag ``rho Q V`` is quoted at [m/s].
+OD_CHANNEL_DRAG_SPEED_MPS = 10.0
+#: The Reynolds band the channel film bridges.
+OD_CHANNEL_RE_LAM, OD_CHANNEL_RE_TURB = 2300.0, 4000.0
+
+
+def od_channel_nusselt(re: float, pr: float, d_over_l: float) -> Tuple[float, str]:
+    """(mean Nu, regime) of an OD notch channel — see the block above."""
+    re = max(float(re), 0.0)
+    pr = max(float(pr), 1e-6)
+    dl = max(float(d_over_l), 0.0)
+
+    def _lam(r):
+        return max(1.86 * (r * pr * dl) ** (1.0 / 3.0), 3.66)
+
+    def _turb(r):
+        return gnielinski_nusselt(r, pr) * (1.0 + dl ** (2.0 / 3.0))
+
+    if re <= OD_CHANNEL_RE_LAM:
+        return _lam(re), "laminar, developing (Sieder-Tate)"
+    if re >= OD_CHANNEL_RE_TURB:
+        return _turb(re), "turbulent (Gnielinski, entrance factor)"
+    w = (re - OD_CHANNEL_RE_LAM) / (OD_CHANNEL_RE_TURB - OD_CHANNEL_RE_LAM)
+    return ((1.0 - w) * _lam(OD_CHANNEL_RE_LAM) + w * _turb(OD_CHANNEL_RE_TURB),
+            "transitional (linear blend)")
+
+
+def od_channel_path(*, n_notches: int, area_per_notch_m2: float,
+                    iron_perimeter_per_notch_m: float,
+                    sleeve_width_per_notch_m: float, stack_m: float,
+                    flow_lpm: float,
+                    props: FluidProps = SEAWATER_35C) -> Dict[str, Any]:
+    """The film and the water of the notch channels, from the measured notch.
+
+    ``flow_lpm`` is the TOTAL flow, shared equally: the notches are alike.  The
+    film ``h_W_per_m2K`` acts on the iron only; ``G_bulk_W_per_K`` = 2 m cp is
+    the conductance from the mean water temperature to the inlet."""
+    n = max(int(n_notches), 1)
+    a = max(float(area_per_notch_m2), 1e-12)
+    iron = max(float(iron_perimeter_per_notch_m), 0.0)
+    per = max(iron + max(float(sleeve_width_per_notch_m), 0.0), 1e-9)
+    L = max(float(stack_m), 1e-6)
+    q = max(float(flow_lpm), 0.0) / 60000.0
+    dh = 4.0 * a / per
+    v = q / (n * a)
+    re = v * dh / props.nu
+    nu, regime = od_channel_nusselt(re, props.pr, dh / L)
+    h = nu * props.k / dh
+    m_dot = props.rho * q
+    m_cp = m_dot * props.cp
+    a_iron = n * iron * L
+    return {"n_notches": n, "area_per_notch_m2": a, "area_total_m2": n * a,
+            "iron_perimeter_per_notch_m": iron,
+            "wetted_perimeter_per_notch_m": per, "hydraulic_diameter_m": dh,
+            "flow_lpm": float(flow_lpm), "velocity_mps": v, "re": re,
+            "pr": props.pr, "gz": re * props.pr * dh / L, "nu": nu,
+            "regime": regime, "h_W_per_m2K": h, "iron_area_m2": a_iron,
+            "G_film_W_per_K": h * a_iron, "m_dot_kg_s": m_dot,
+            "m_cp_W_per_K": m_cp, "G_bulk_W_per_K": 2.0 * m_cp,
+            "ntu": (h * a_iron / m_cp if m_cp > 0.0 else float("inf")),
+            "drag_speed_mps": OD_CHANNEL_DRAG_SPEED_MPS,
+            "intake_drag_N": props.rho * q * OD_CHANNEL_DRAG_SPEED_MPS,
+            "props": {"rho": props.rho, "cp": props.cp, "k": props.k,
+                      "nu": props.nu, "pr": props.pr}}
 
 
 def housing_contact_g(*, d_stator_m: float, stack_m: float) -> float:

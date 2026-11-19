@@ -259,7 +259,8 @@ def admin_approve(case_id: str, body: dict = Body(default={}), admin: dict = Dep
 @admin_router.post("/{case_id}/deny")
 def admin_deny(case_id: str, body: dict = Body(default={}), admin: dict = Depends(require_admin)):
     reason = str(body.get("reason") or "")
-    return _act(case_id, admin, "deny", lambda c, a: SV.admin_deny(c, a, reason), reason=reason)
+    note = str(body.get("public_note") or "")
+    return _act(case_id, admin, "deny", lambda c, a: SV.admin_deny(c, a, reason, note), reason=reason, public_note=note)
 
 
 @admin_router.post("/{case_id}/request-info")

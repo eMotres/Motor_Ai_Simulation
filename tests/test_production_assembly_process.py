@@ -68,3 +68,16 @@ def test_the_process_is_read_behind_the_same_nda_gate_as_the_other_production_re
     assert denied.status_code == 403 and "nda_required" in denied.text
     assert c.get(_url(), headers=prod_env["oem_nda"]).status_code == 200
     assert c.get(_url(), headers=prod_env["engineer"]).status_code == 200
+
+
+def test_the_dry_list_names_the_factory_members_who_would_lose_the_view(prod_env):
+    import sys
+    from pathlib import Path
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
+    import assembly_nda_dry_list as D
+    from tests.test_production_access import OEM_NO_NDA
+    payload = {"title": {"en": "P", "zh": "P", "src_lang": "en", "status": {"en": "confirmed", "zh": "confirmed"}}, "order_quantity": 10,
+               "members": [{"email": ENGINEER, "role": "engineer"}, {"email": OEM_NDA, "role": "oem"}, {"email": OEM_NO_NDA, "role": "oem"}]}
+    assert prod_env["client"].post("/api/admin/production/%s/%s" % (DIE, CONFIG), json=payload, headers=prod_env["admin"]).status_code in (200, 201)
+    (row,) = D.members_without_view()
+    assert row["oem_members"] == 2 and row["would_lose"] == [OEM_NO_NDA.lower()]

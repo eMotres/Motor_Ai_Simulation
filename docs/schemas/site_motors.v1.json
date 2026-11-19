@@ -1,0 +1,254 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://aerostator.com/schemas/site_motors.v1.json",
+  "title": "Motors published for emotres.com",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "generated_at",
+    "count",
+    "motors"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "generated_at": {
+      "type": "string"
+    },
+    "count": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "motors": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/motor"
+      }
+    },
+    "motor": {
+      "$ref": "#/$defs/motor"
+    }
+  },
+  "$defs": {
+    "motor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "slug",
+        "designation",
+        "family",
+        "outer_diameter_mm",
+        "slots",
+        "poles",
+        "stack_length_mm",
+        "winding",
+        "steel",
+        "steel_class",
+        "mass_kg",
+        "rated_point",
+        "points",
+        "availability",
+        "lead_time_text",
+        "price_text",
+        "image_url",
+        "updated_at"
+      ],
+      "properties": {
+        "id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "slug": {
+          "type": "string",
+          "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$"
+        },
+        "designation": {
+          "type": "string",
+          "minLength": 1
+        },
+        "family": {
+          "type": "string"
+        },
+        "outer_diameter_mm": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "slots": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "poles": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "stack_length_mm": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "winding": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "code",
+            "words"
+          ],
+          "properties": {
+            "code": {
+              "type": "string"
+            },
+            "words": {
+              "type": "string"
+            }
+          }
+        },
+        "steel": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "steel_class": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "mass_kg": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "rated_point": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/point"
+            }
+          ]
+        },
+        "points": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/point"
+          }
+        },
+        "availability": {
+          "enum": [
+            "in_production",
+            "to_order",
+            "engineering_sample"
+          ]
+        },
+        "lead_time_text": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "price_text": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "image_url": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "updated_at": {
+          "type": "string"
+        }
+      }
+    },
+    "point": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "mode",
+        "speed_rpm",
+        "torque_nm",
+        "power_kw",
+        "phase_current_a_rms",
+        "efficiency_pct",
+        "line_voltage_peak_v",
+        "dc_bus_nominal_v",
+        "mass_kg"
+      ],
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "mode": {
+          "type": "string"
+        },
+        "speed_rpm": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "torque_nm": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "power_kw": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "phase_current_a_rms": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "efficiency_pct": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "line_voltage_peak_v": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "dc_bus_nominal_v": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "mass_kg": {
+          "type": [
+            "number",
+            "null"
+          ]
+        }
+      }
+    }
+  }
+}

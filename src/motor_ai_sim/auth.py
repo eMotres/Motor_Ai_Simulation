@@ -164,7 +164,9 @@ _ANON_OK_PREFIXES = ("/api/auth/login", "/api/auth/google", "/api/auth/logout",
                      "/api/erp-export",
                      # the server-to-server channel of the two regions: the HMAC signature is the credential, checked in
                      # routes/regions.py (404 when unsigned or when no peer is configured)
-                     "/api/peer")
+                     "/api/peer",
+                     # the motors emotres.com shows: flagged by an admin, whitelisted fields, read-only (site_publication.py)
+                     "/api/public/site")
 
 
 #: The worker-facing routes of docs/BYO_COMPUTE.md (heartbeat, lease, progress,

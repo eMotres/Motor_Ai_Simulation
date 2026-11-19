@@ -1015,6 +1015,23 @@ def step_production_lifecycle(ctx: Ctx) -> None:
         raise MoveBlocked(str(e)) from e
 
 
+def step_site_publication(ctx: Ctx) -> None:
+    """The site flag and fields of the motor follow a move or a rename; a copy is not on the site until an admin says so."""
+    if ctx.copy:
+        return
+    from motor_ai_sim import site_publication as SP
+    try:
+        path = SP.store_path()
+    except Exception:                                       # noqa: BLE001
+        return
+    try:
+        _json_rewrite(ctx, "site_publication", path,
+                      lambda doc: SP.move_config_in(doc, ctx.die, ctx.cfg, ctx.dst, ctx.new_cfg),
+                      "the site publication record follows the configuration")
+    except ValueError as e:
+        raise MoveBlocked(str(e)) from e
+
+
 def step_display_state(ctx: Ctx) -> None:
     """Active / Parked / Archived of the production (``<shared>/object_registry/display_state.json``) follows a move or
     a rename; a copy has no production, so its state stays with the source."""
@@ -1051,7 +1068,7 @@ def step_object_registry(ctx: Ctx) -> None:
 LOCAL_STEPS = (step_files, step_fields, step_duty_results, step_context, step_workspace_memory,
                step_catalog_cards)
 GLOBAL_STEPS = (step_grants, step_projects, step_cost_estimates, step_production, step_motor_tests,
-                step_motor_revisions, step_display_state, step_production_lifecycle, step_object_registry, step_cad, step_manual)
+                step_motor_revisions, step_display_state, step_production_lifecycle, step_site_publication, step_object_registry, step_cad, step_manual)
 
 
 def preflight(fam: Any, die: str, cfg: str, dst: str, *, copy: bool, new_cfg: str = "",

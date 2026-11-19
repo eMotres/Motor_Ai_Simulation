@@ -173,3 +173,15 @@ test('trimNumber keeps a small fraction faithful and drops trailing zeros', () =
   assert.equal(trimNumber(14.0, false), '14');
   assert.equal(trimNumber(14.4, true), '14');
 });
+
+test('the default step is never larger than the window: a 0.4 fill radius gets two points, not one', () => {
+  const r = bracketRange(0.4, { type: 'float', min: 0, max: 1, step: 0.1 });
+  assert.equal(r.min, 0.36); assert.equal(r.max, 0.44);
+  assert.ok(r.step <= r.max - r.min + 1e-9);
+  assert.equal(r.step, 0.08);
+  // a window wider than the step keeps the schema step
+  const w = bracketRange(40, { type: 'float', min: 0, max: 100, step: 0.5 });
+  assert.equal(w.step, 0.5);
+  // integers keep their step of 1
+  assert.equal(bracketRange(14, { type: 'int', min: 1, max: 100, step: 1 }).step, 1);
+});

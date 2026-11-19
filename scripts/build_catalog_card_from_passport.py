@@ -29,7 +29,7 @@ import argparse
 import json
 import math
 import sys
-from typing import Any, Dict, List
+from typing import Optional, Any, Dict, List
 
 #: fields copied unchanged from the static (same-build) card block
 STATIC_KEYS = ("N0", "L0_mm", "wireH0_mm", "I0_A", "rpm0", "nP0", "wire_parallel0",
@@ -43,8 +43,10 @@ def _val(block: Dict[str, Any], key: str) -> float:
     return float(block[key]["value"])
 
 
-def build_block(full: Dict[str, Any], static: Dict[str, Any]) -> Dict[str, Any]:
-    """The ``passport`` dict (inner block) of the card."""
+def build_block(full: Dict[str, Any], static: Dict[str, Any],
+                rpms: List[float] | None = None) -> Dict[str, Any]:
+    """The ``passport`` dict (inner block) of the card.  ``rpms``: the loss-grid
+    columns (default the Ø85's 250...2000 rpm)."""
     sp = static["passport"]["passport"]
     cold = full["card"]["constants_cold"]
     hot_mtpa = {round(float(m["fI"]), 4): m for m in full["hot_map"]["mtpa"]}
@@ -104,7 +106,7 @@ def build_block(full: Dict[str, Any], static: Dict[str, Any]) -> Dict[str, Any]:
     out["Vload0_fund_V"] = cur["V_peak_V"][i0_i]
 
     # -- loss grid (card state), rows = currents, cols = rpm ------------------
-    rpms = [250.0, 500.0, 1000.0, 1500.0, 2000.0]
+    rpms = [float(r) for r in (rpms or [250.0, 500.0, 1000.0, 1500.0, 2000.0])]
     pts_l = [p for p in full["loss_grid"]["points"] if p.get("groups_W")]
     cur_l = sorted({float(p["I_rms"]) for p in pts_l if p["rpm"] in rpms})
     grid: Dict[str, Any] = {"I_A": cur_l, "rpm": rpms, "Pfe_W": [], "Pmag_W": [], "cuAC": [],
@@ -150,8 +152,9 @@ def build_block(full: Dict[str, Any], static: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def build_card(full: Dict[str, Any], static_card: Dict[str, Any], card_id: str, name: str,
-               owner: str) -> Dict[str, Any]:
-    block = build_block(full, static_card)
+               owner: str, block: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """``block``: an already built passport block (e.g. with its own loss-grid speeds); built here when omitted."""
+    block = block if block is not None else build_block(full, static_card)
     sp = static_card["passport"]
     return {"id": card_id, "name": name, "diameter_mm": static_card["diameter_mm"], "owner": owner,
             "poles": static_card["poles"], "slots": static_card["slots"],

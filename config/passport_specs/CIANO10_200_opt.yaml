@@ -1,0 +1,48 @@
+# Passport spec - CIANO10 200 opt / "L155 motor" (Ø200, 12 slots / 10 poles, 155 mm stack, DELTA, 10 turns,
+# 1x9 mm strip, 750 V NMC 202S, N52UH_150C), 2026-10-13.  Schema: passport_v1/spec.py.
+# Owner 2026-10-13 ~23:00: "займись карточкой этого мотора L155 ... на всю ночь пусть сервер считает".
+# Stage 1 (2-D sine, hot map, demag, cold, losses, checks) + demag-current limit; 3-D Stage A last.
+# NOT computed (stated, see notes): coupled EM-thermal / cooling studies (no cooling settings are stored
+# for this configuration), PWM / controller anchors (24 kHz SiC bridge has no FEM anchor class yet),
+# rotor-stress / critical speeds (no Mechanical-tab inputs stored).
+die: "CIANO10 200 opt"
+inputs_subdir: die200
+origin: >-
+  /srv/motres/shared/dies/CIANO10 200 opt/ (die.yaml, "L155 motor.yaml"; L155 file as of 2026-10-13 22:44,
+  sha256 in snapshot) + /srv/motres/shared/{materials,bearings}_library.yaml, copied read-only 2026-10-13
+workspace_user: vadim@motresres.com
+report_stage1: PASSPORT_L155_STAGE1_2026-10-13.md
+title: "Ø200"
+plan:
+  loss_speed_factors: [0.25, 0.5, 1.0, 1.5]
+  envelope_max_factor: 4.0
+  # the passport's own placeholder margin (P24, default pending owner): the L155 controller block states
+  # 24 kHz and 0.5 us dead time (1 - 2*f*t_dead = 0.976), no minimum on-time, so the Ø40 controller's 0.89
+  # is NOT carried over
+  m_margin: 0.95
+  loss_floor_levels: [0.25]
+  refine_points: [[2.0, 42.5], [2.0, 57.5], [2.5, 42.5], [2.5, 57.5]]
+machines:
+  L155:
+    config: "L155 motor"
+    rated_duty: "rated 1x9 mm"
+    peak_duty: "peak 1x9 mm"
+    version: "202S"
+    owner_bus_V: [549.6, 750.4, 850.4]
+    owner_rated: {rpm: 14200.0, I_arms: 562.067}
+    owner_peak: {rpm: 20000.0, I_arms: 770.47}
+    audit: false
+    k3d: {k_T: k_psi}
+    stage_a_lengths_mm: [155.0]
+    controller: null
+    pwm_variants: []
+    mech:
+      critical_speeds: false
+      critical_note: >-
+        not computed: no shaft line / beam and no Mechanical-tab inputs (sleeve interference, contacts)
+        are stored for this configuration
+    notes: >-
+      Delta winding: the passport runs on the winding-current basis (terminal / sqrt(3)), see
+      passport_pilot.py prepare and psimap.set_winding_basis.  The hot map is solved at the RATED duty's
+      coupled-loop temperatures (magnet 104.2 C, winding 97.8 C, 2026-09-14); the peak duty's own hot state
+      (magnet 165.1 C, winding 139.2 C) is not a second hot map.

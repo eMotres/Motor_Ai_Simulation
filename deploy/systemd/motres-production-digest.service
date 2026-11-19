@@ -1,0 +1,23 @@
+# ONE production e-mail per member per day (owner 2026-11-19): everything recorded in the productions since the member's last digest, over
+# all his productions, English and Chinese in one mail.  Nothing new = no mail.
+#
+# Runs `python -m motor_ai_sim.digest.member_daily --send` inside the api container, once an hour.  Idempotent: it sends only when the
+# local hour (PRODUCTION_DIGEST_TZ, default Asia/Shanghai) is past PRODUCTION_DIGEST_HOUR (default 8) and the day's campaign has not gone
+# out; the mailing send log makes a restart harmless and a missed day is sent at the next run.  Needs SMTP like every other mail.
+#
+# Setup (orchestrator, on the server):
+#   sudo cp deploy/systemd/motres-production-digest.{service,timer} /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now motres-production-digest.timer
+# Dry run (what would go out now, sends nothing):
+#   bash /opt/motres/app/deploy/bluegreen.sh exec api python -m motor_ai_sim.digest.member_daily --force
+
+[Unit]
+Description=AeroStator daily production digest (one e-mail per member)
+After=docker.service
+
+[Service]
+Type=oneshot
+Nice=10
+WorkingDirectory=/opt/motres/app/deploy
+ExecStart=/bin/bash /opt/motres/app/deploy/bluegreen.sh exec api python -m motor_ai_sim.digest.member_daily --send

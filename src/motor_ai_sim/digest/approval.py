@@ -226,6 +226,10 @@ def run_daily(now: Optional[float] = None, *, scopes: Optional[list] = None, wri
 
     Returns the rows of ``build.run``; a row whose draft was handled automatically carries ``auto`` = the result of that send."""
     now = time.time() if now is None else now
+    from motor_ai_sim.digest import member_daily as MD
+    if scopes is None and MD.enabled():
+        # production notifications go out as ONE daily mail per member (digest.member_daily), not as a mail per production
+        scopes = [g.scope for g in B.list_groups() if g.kind != "production"]
     rows = B.run(now, scopes=scopes, write=write, results=results)
     if not (write and send):
         return rows

@@ -40,6 +40,13 @@ def at(offset_s: float) -> str:
     return DS.iso(T0 + offset_s)
 
 
+@pytest.fixture(autouse=True)
+def _per_production_digests(monkeypatch):
+    """These tests are about the per-production digests; the one-mail-per-member production digest (member_daily) has its own tests and,
+    while it is on, takes the production groups out of the automatic send."""
+    monkeypatch.setenv("PRODUCTION_MEMBER_DIGEST", "0")
+
+
 @pytest.fixture()
 def d(env, tmp_path, monkeypatch):                       # noqa: F811
     """The comm-prefs environment plus project/production/digest roots and a small world."""
@@ -399,7 +406,11 @@ def test_only_the_approval_module_can_reach_smtp_and_only_the_daily_jobs_call_th
     delivery = {"deliver", "smtplib", "send_message", "sendmail", "SMTP", "SMTP_SSL", "send_draft", "auto_send_draft", "run_daily",
                 "approval", "send"}
     reach = {py.name: _names(py) & delivery for py in sorted(SRC.glob("*.py"))}
-    assert {k for k, v in reach.items() if v} == {"approval.py", "routes.py", "__main__.py"}, reach
+    # member_daily.py (owner 2026-11-19) is the one-mail-per-member production digest: it sends through mailing.send from its own CLI /
+    # timer run only; it must not reach the draft approval path, and no route may import it
+    assert {k for k, v in reach.items() if v} == {"approval.py", "routes.py", "__main__.py", "member_daily.py"}, reach
+    assert not (reach["member_daily.py"] & {"send_draft", "auto_send_draft", "run_daily", "approval"}), reach["member_daily.py"]
+    assert "member_daily" not in _names(SRC / "routes.py")
     for scheduler in ("build.py", "collect.py", "store.py", "__init__.py"):
         assert not reach[scheduler], (scheduler, reach[scheduler])
     assert "mailing" not in _names(SRC / "__main__.py") and "mailing" not in _names(SRC / "store.py")

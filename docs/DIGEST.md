@@ -126,3 +126,18 @@ How the target survives a visit by someone who is not signed in:
 * a remembered copy of the canonical target is kept in the tab's sessionStorage and put back after sign-in if the bar lost the link.
 * the NDA step of a production is inside the page on the same URL, so it does not lose the target.
 * only same-origin paths of these exact shapes are accepted (no URL, no `//host`, unknown query keys dropped): no open redirect.
+
+## Production notifications: ONE mail per member per day (owner 2026-11-19)
+
+Everything recorded in a production (revision published, Discussion message, files, parts, tests, members) stays in the production at
+once and mails nobody. Once a day each member gets ONE e-mail with what was recorded since his last digest, over ALL his productions
+(`digest/member_daily.py`; lines from `collect.collect_production`, filtered to what his role may see; English then Chinese; one
+"open" link per production, "open and acknowledge" when a revision is in it). Nothing new = no mail.
+
+* Hour: `PRODUCTION_DIGEST_HOUR` (default 8) in `PRODUCTION_DIGEST_TZ` (default `Asia/Shanghai`); `PRODUCTION_MEMBER_DIGEST=0` switches it off.
+* Run: `python -m motor_ai_sim.digest.member_daily [--send] [--force]` (dry run by default); the hourly timer
+  `deploy/systemd/motres-production-digest.timer` sends only past the hour and once per member per day (mailing send log
+  `production_daily_<date>`; the watermark is written pending before the send and committed from the log at the next run).
+* While it is on, `approval.run_daily` leaves the production groups out (no per-production auto drafts); project digests are unchanged.
+* "Urgent: mail now" on the publish dialog (default off) mails the revision to every member at once and lists it in the next digest as
+  already e-mailed. The 24 h / 72 h acknowledgement reminders count from the digest that carried the revision to that member.

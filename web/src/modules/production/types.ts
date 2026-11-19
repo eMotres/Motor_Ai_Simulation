@@ -411,7 +411,7 @@ export interface Revision {
 
 /** The exact message the publish would send (nothing is sent or written by asking for it). */
 export interface RevisionPreview {
-  number: string; subject: string; body: string; link: string; will_send: boolean;
+  number: string; subject: string; body: string; link: string; will_send: boolean; mode?: 'digest' | 'urgent';
   recipients: Array<{ email: string; role: string }>;
   files: { new: RevisionFileRow[]; superseded: RevisionFileRow[] };
 }

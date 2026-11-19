@@ -2155,6 +2155,14 @@ def _revision_inputs(body: Any) -> tuple:
     return summary_norm, changes_norm, supersedes
 
 
+def _urgent_flag(body: Any) -> bool:
+    """"Urgent: mail now" of a publish / preview request (default off): only an explicit true counts."""
+    if not isinstance(body, dict):
+        return False
+    v = body.get("urgent")
+    return v is True or str(v).strip().lower() in ("1", "true", "yes", "on")
+
+
 def _require_change_line(changes: list, supersedes: list) -> None:
     """A revision that replaces a file needs at least one change line saying what changed (owner 2026-11-15)."""
     if supersedes and not any(models.bilingual_has_text(c) for c in changes):
@@ -2219,7 +2227,8 @@ async def preview_revision(request: Request, die: str, config: str):
     """The exact mail the publish would send and who gets it - nothing is written or sent (owner rule: he sees the final text and the
     recipients first; publishing is sending)."""
     user, production = require_editor_with_full_view(request, die, config)
-    summary, changes, supersedes = _revision_inputs(await _json_or_form(request))
+    body = await _json_or_form(request)
+    summary, changes, supersedes = _revision_inputs(body)
     existing = store.load_file(die, config, "revisions.json").get("revisions", [])
     number = models.next_revision_number(existing)
     try:
@@ -2228,15 +2237,17 @@ async def preview_revision(request: Request, die: str, config: str):
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc))
     revision = models.normalize_revision({"number": number, "author_email": _email(user), "summary": summary, "changes": changes, "files": files})
-    return revision_alert.preview(die, config, production, revision)
+    return revision_alert.preview(die, config, production, revision, urgent=_urgent_flag(body))
 
 
 @router.post("/{die}/{config}/revisions")
 async def publish_revision(request: Request, die: str, config: str):
     user, _production = require_editor_with_full_view(request, die, config)
-    summary_norm, changes_norm, supersedes = _revision_inputs(await _json_or_form(request))
+    body = await _json_or_form(request)
+    summary_norm, changes_norm, supersedes = _revision_inputs(body)
     try:
-        return await run_in_threadpool(_publish_revision, die, config, user, summary_norm, changes_norm, supersedes=supersedes)
+        return await run_in_threadpool(_publish_revision, die, config, user, summary_norm, changes_norm, supersedes=supersedes,
+                                       urgent=_urgent_flag(body))
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc))
 
@@ -2266,9 +2277,10 @@ async def ack_revision(request: Request, die: str, config: str, rev_number: str)
 
 
 def _publish_revision(die: str, config: str, user: dict, summary: dict, changes: list, *, supersedes: Optional[list] = None,
-                      notify: bool = True) -> dict:
-    """Publish a revision.  PUBLISHING IS SENDING (owner 2026-11-15): unless ``notify`` is False (tests of the bookkeeping only) the alert
-    goes to every member by mail and into the Discussion, and the record of who was mailed is stored on the revision and in the audit.
+                      notify: bool = True, urgent: bool = False) -> dict:
+    """Publish a revision.  Unless ``notify`` is False (tests of the bookkeeping only) the alert goes into the Discussion at once and the
+    revision waits for the members' daily digest (owner 2026-11-19); only ``urgent`` ("urgent: mail now", default off) mails every member
+    now (owner 2026-11-15 rule kept for a released drawing change).  The record is stored on the revision and in the audit.
     Marks the files it supersedes (kept, archived).  Server-side scripts and bulk tools publish through this function too."""
     existing = store.load_file(die, config, "revisions.json").get("revisions", [])
     number = models.next_revision_number(existing)
@@ -2289,7 +2301,7 @@ def _publish_revision(die: str, config: str, user: dict, summary: dict, changes:
     _audit(_email(user), die, config, "publish_revision", "revision", number, {"revision": revision})
     if notify:
         production = store.load_file(die, config, "production.json")
-        alert = revision_alert.deliver(die, config, production, revision, _email(user))
+        alert = revision_alert.deliver(die, config, production, revision, _email(user), urgent=urgent)
         def attach(d):                                   # returns None: json_store would take a return value as the new file content
             for r in d.get("revisions", []):
                 if isinstance(r, dict) and str(r.get("number")) == number:
@@ -2297,7 +2309,8 @@ def _publish_revision(die: str, config: str, user: dict, summary: dict, changes:
 
         store.mutate_file(die, config, "revisions.json", attach)
         _audit(_email(user), die, config, "revision_alert", "revision", number,
-               {"recipients": alert["recipients"], "subject": alert["subject"], "thread_id": alert.get("thread_id")})
+               {"recipients": alert["recipients"], "subject": alert["subject"], "thread_id": alert.get("thread_id"),
+                "mode": alert.get("mode")})
         revision = {**revision, "alert": alert}
     return revision
 

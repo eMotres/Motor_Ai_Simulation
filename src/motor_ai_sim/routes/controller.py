@@ -43,6 +43,7 @@ from motor_ai_sim.auth import require_admin
 
 from motor_ai_sim import duty_results as _DR
 from motor_ai_sim import run_history as _RH
+from motor_ai_sim import workspace as _WSP
 from motor_ai_sim.inverter import devices as _dev
 from motor_ai_sim.inverter import drive_source as _DS
 from motor_ai_sim.inverter import schematic as _schem
@@ -57,8 +58,9 @@ router = APIRouter(prefix="/api/controller", tags=["controller"])
 _HISTORY = _RH.history_for("controller.solve")
 _RH.register_kind("controller.solve")
 
-#: What ``GET /last`` serves — the tab's own restore, per process.
-_LAST: Dict[str, Any] = {}
+#: What ``GET /last`` serves - the tab's own restore, PER WORKSPACE (it was one dict per process: the last solve of whoever solved last).
+#: One entry, ``"last"``.
+_LAST = _WSP.ws_map("controller.last", 2)
 
 
 # ---------------------------------------------------------------------------
@@ -1568,7 +1570,7 @@ def post_solve(body: Dict[str, Any] = Body(default={}),
             out.update({"cached": True, "served_from_history": True,
                         "computed_at": hit["entry"].get("computed_at"),
                         "history_key": key})
-            _LAST.clear(); _LAST.update(out)
+            _LAST["last"] = dict(out)
             return out
 
     try:
@@ -1608,7 +1610,7 @@ def post_solve(body: Dict[str, Any] = Body(default={}),
                  extra={"context": ctx})
     if ctx:
         _DR.note_controller(out, ctx["die"], ctx["config"], ctx["duty"])
-    _LAST.clear(); _LAST.update(out)
+    _LAST["last"] = dict(out)
     return out
 
 
@@ -1624,7 +1626,7 @@ def _post_solve_standalone(body: Dict[str, Any], fresh: bool,
             out.update({"cached": True, "served_from_history": True,
                         "computed_at": hit["entry"].get("computed_at"),
                         "history_key": key})
-            _LAST.clear(); _LAST.update(out)
+            _LAST["last"] = dict(out)
             return out
     try:
         out = solve_controller(req)
@@ -1648,7 +1650,7 @@ def _post_solve_standalone(body: Dict[str, Any], fresh: bool,
         out["schematic_svg"] = None
     _HISTORY.put(key, params={k: req.get(k) for k in _KEY_FIELDS},
                  summary=_summary(req, out), payload=out, extra={"context": None})
-    _LAST.clear(); _LAST.update(out)
+    _LAST["last"] = dict(out)
     return out
 
 
@@ -1682,7 +1684,7 @@ def _rebuild_topology(req: Dict[str, Any]):
 @router.get("/last")
 def get_last() -> Dict[str, Any]:
     """What this tab last showed — ``{}`` when nothing has been solved."""
-    return dict(_LAST)
+    return dict(_LAST.get("last") or {})
 
 
 @router.get("/history")
@@ -1698,7 +1700,7 @@ def _load_history_entry(entry: Dict[str, Any],
     out.update({"cached": True, "served_from_history": True,
                 "computed_at": entry.get("computed_at"),
                 "history_key": entry.get("key")})
-    _LAST.clear(); _LAST.update(out)
+    _LAST["last"] = dict(out)
     return out
 
 

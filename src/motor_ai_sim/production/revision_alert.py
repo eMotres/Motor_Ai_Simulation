@@ -2,7 +2,7 @@
 
 Publishing a revision records it at once: one message in the Discussion (the thread of the part when the changes name exactly one part,
 else General), the acknowledgement requirement in the Changes tab and an entry in the production audit.  Its e-mail is NOT sent on its
-own any more (owner 2026-11-19: every production notification goes into ONE daily digest per member, ``digest.member_daily``); only a
+own any more (owner 2026-11-19: every production notification waits for the production's section of the daily digest, ``digest``); only a
 revision published with ``urgent`` ("urgent: mail now", default off) mails every member at once, as before, and is listed in the next
 digest as already sent.
 The text is English with a Chinese copy under it (the production's languages); the subject says the motor, the revision and

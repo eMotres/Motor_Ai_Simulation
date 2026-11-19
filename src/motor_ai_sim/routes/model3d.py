@@ -447,6 +447,9 @@ def get_bom_xlsx(die: str, config: str, request: Request, authorization: Optiona
         n = wb.create_sheet("Notice")
         n.append([stamp["notice"]])
         n.append([stamp["line"]])
+        from motor_ai_sim.spreadsheet_text import force_text_cells
+        force_text_cells(ws)                  # part names and materials are text, never a formula
+        force_text_cells(n)
         out = io.BytesIO()
         wb.save(out)
         return out.getvalue()

@@ -33,13 +33,6 @@ W0, W1 = B.window_for(DATE)
 WORLD_DAY = B.report_date_for(T0 + 17 * 3600)             # the report whose window holds the digest world's events (T0 - 1 h ...)
 
 
-@pytest.fixture(autouse=True)
-def _per_production_digests(monkeypatch):
-    """These tests are about the per-production digest drafts in the report; the one-mail-per-member production digest
-    (digest.member_daily, owner 2026-11-19) takes the production groups out of that automatic send while it is on."""
-    monkeypatch.setenv("PRODUCTION_MEMBER_DIGEST", "0")
-
-
 @pytest.fixture()
 def o(d, tmp_path, monkeypatch):                         # noqa: F811
     """The digest world plus isolated owner-report, audit, cluster, revision and ledger stores."""

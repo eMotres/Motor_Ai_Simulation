@@ -278,3 +278,17 @@ def test_http_preview_then_publish_sends_the_previewed_message_and_the_factory_c
         bad = client.post(base + "/revisions", json={**body, "supersedes": [{"old_doc_id": "x", "new_doc_id": "y"}]}, headers=h["eng"])
         assert bad.status_code == 422 and len(mail.sent) == 3                                                          # refused before anything is sent
         assert client.post(base + "/revisions/preview", json={"summary": "x"}, headers=h["eng"]).status_code == 400
+
+
+def test_publishing_without_urgent_mails_nobody_and_the_record_says_the_digest_carries_it():
+    """Owner 2026-11-19: every production notification waits for the daily digest; only "urgent: mail now" mails at once."""
+    with production() as mail:
+        rev = publish(urgent=False)
+        assert mail.sent == []
+        assert rev["alert"]["mode"] == "digest" and {r["mail"] for r in rev["alert"]["recipients"]} == {"digest"}
+        assert rev["alert"]["thread_id"]                                   # the Discussion message is still posted at once
+        pv = RA.preview(DIE, CFG, store.load_file(DIE, CFG, "production.json"), rev)
+        assert pv["mode"] == "digest" and pv["will_send"] is False
+    with production() as mail:
+        rev = publish(urgent=True)
+        assert rev["alert"]["mode"] == "urgent" and len(mail.sent) == 4

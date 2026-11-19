@@ -301,6 +301,14 @@ def compose(group: Group, items: list, more: int, start: float, end: float, bili
             if url:
                 t_lines.append(f"  {url}")
         h_parts.append("</ul>")
+        ack = next((it.link for it in reversed(items) if it.kind == "revision" and it.link), None) if group.kind == "production" else None
+        if ack:
+            # a revision is in this production's digest: ONE "open and acknowledge" link to the newest of them (owner 2026-11-19)
+            ack_url = _url(ack)
+            lab = "Open and acknowledge" if lang == "en" else "打开并确认"
+            t_lines += ["", f"{lab}: {ack_url}"]
+            h_parts.append(f'<p style="margin:0 0 12px;font-size:15px" lang="{attr}"><a href="{html.escape(ack_url, quote=True)}" '
+                           f'style="color:#2563eb;font-weight:bold">{lab}</a></p>')
         if more:
             url = _url(group.path)
             if url in seen:                                   # the group's page was already linked above: say it, without a repeat
@@ -469,6 +477,7 @@ def build_draft(group: Group, settings: dict, items: list, recipients: list[dict
         "bilingual": bilingual, "caps": sorted(caps), "frequency": settings.get("frequency", "daily"),
         "subject": subject, "text_body": text, "html_body": body_html,
         "items": [{"kind": i.kind, "ts": DS.iso(i.ts), "en": i.en, "zh": i.zh, "link": i.link, "link_policy": i.policy,
+                   **({"key": i.key} if i.kind == "revision" and i.key else {}),
                    "requires": sorted(i.requires), **({"motor": list(i.motor)} if i.motor else {}),
                    **({"group_en": i.group[0], "group_zh": i.group[1]} if i.group else {})} for i in shown],
         "more": more, "recipients": recipients, "skipped": skipped,

@@ -157,6 +157,7 @@ def _send(draft_id: str, who: str, content_hash: str, *, deliver: Callable, now:
     outstanding = [r.email for r in to_send if state.get(r.email) != "sent"]
     info = {"sent": len(delivered), "failed": len(outstanding), "skipped": result["skipped"], "aborted": result["aborted"]}
     stamp = DS.iso(now())                                  # the time of this send (the run's clock; the wall clock when it is time.time)
+    _stamp_production_revisions(draft, delivered, stamp)
     if not outstanding and not result["aborted"]:
         _close(draft, "sent", who, info, at=stamp)
         DS.append_log({"event": "sent", "scope": draft["scope"], "draft_id": draft_id, "by": who, "sent": info["sent"],
@@ -177,6 +178,38 @@ def _send(draft_id: str, who: str, content_hash: str, *, deliver: Callable, now:
         DS.append_log({"event": "send_failed", "scope": draft["scope"], "draft_id": draft_id, "by": who, "failed": result["failed"]})
     result["sent_total"], result["outstanding"] = info["sent"], outstanding
     return result
+
+
+def _stamp_production_revisions(draft: dict, emails: list, stamp: str) -> None:
+    """A production digest that carried revisions to ``emails``: remember it on each revision (``digest_sent``), because the 24 h / 72 h
+    acknowledgement reminders count from the digest, not from the publication (owner 2026-11-19).  A revision published ``urgent`` was
+    mailed at once and keeps counting from its publication.  Never raises: a stamp must not undo a sent mail."""
+    try:
+        parsed = DS.parse_scope(draft.get("scope"))
+        if not emails or not parsed or parsed[0] != "production":
+            return
+        die, config = parsed[1]
+        nums = {str(i.get("key"))[4:] for i in draft.get("items") or []
+                if i.get("kind") == "revision" and str(i.get("key") or "").startswith("rev:")}
+        if not nums:
+            return
+        from motor_ai_sim.production import store as PR
+        mine = {str(e).lower() for e in emails}
+
+        def mut(d):
+            for r in d.get("revisions", []):
+                if not isinstance(r, dict) or str(r.get("number")) not in nums:
+                    continue
+                if isinstance(r.get("alert"), dict) and r["alert"].get("mode") == "urgent":
+                    continue
+                rows = [x for x in r.get("digest_sent") or [] if isinstance(x, dict) and str(x.get("email")).lower() not in mine]
+                rows += [{"email": e, "sent_at": stamp} for e in sorted(mine)]
+                r["digest_sent"] = rows
+
+        PR.mutate_file(die, config, "revisions.json", mut)
+    except Exception as exc:                               # noqa: BLE001
+        import logging
+        logging.getLogger(__name__).warning("digest stamp for %s failed: %s", draft.get("scope"), exc)
 
 
 # -- the scheduled run: build the drafts, send the ones whose group is in mode ``auto`` --------------------------------------------
@@ -226,10 +259,6 @@ def run_daily(now: Optional[float] = None, *, scopes: Optional[list] = None, wri
 
     Returns the rows of ``build.run``; a row whose draft was handled automatically carries ``auto`` = the result of that send."""
     now = time.time() if now is None else now
-    from motor_ai_sim.digest import member_daily as MD
-    if scopes is None and MD.enabled():
-        # production notifications go out as ONE daily mail per member (digest.member_daily), not as a mail per production
-        scopes = [g.scope for g in B.list_groups() if g.kind != "production"]
     rows = B.run(now, scopes=scopes, write=write, results=results)
     if not (write and send):
         return rows

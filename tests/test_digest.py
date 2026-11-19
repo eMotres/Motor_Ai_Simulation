@@ -40,13 +40,6 @@ def at(offset_s: float) -> str:
     return DS.iso(T0 + offset_s)
 
 
-@pytest.fixture(autouse=True)
-def _per_production_digests(monkeypatch):
-    """These tests are about the per-production digests; the one-mail-per-member production digest (member_daily) has its own tests and,
-    while it is on, takes the production groups out of the automatic send."""
-    monkeypatch.setenv("PRODUCTION_MEMBER_DIGEST", "0")
-
-
 @pytest.fixture()
 def d(env, tmp_path, monkeypatch):                       # noqa: F811
     """The comm-prefs environment plus project/production/digest roots and a small world."""
@@ -406,11 +399,7 @@ def test_only_the_approval_module_can_reach_smtp_and_only_the_daily_jobs_call_th
     delivery = {"deliver", "smtplib", "send_message", "sendmail", "SMTP", "SMTP_SSL", "send_draft", "auto_send_draft", "run_daily",
                 "approval", "send"}
     reach = {py.name: _names(py) & delivery for py in sorted(SRC.glob("*.py"))}
-    # member_daily.py (owner 2026-11-19) is the one-mail-per-member production digest: it sends through mailing.send from its own CLI /
-    # timer run only; it must not reach the draft approval path, and no route may import it
-    assert {k for k, v in reach.items() if v} == {"approval.py", "routes.py", "__main__.py", "member_daily.py"}, reach
-    assert not (reach["member_daily.py"] & {"send_draft", "auto_send_draft", "run_daily", "approval"}), reach["member_daily.py"]
-    assert "member_daily" not in _names(SRC / "routes.py")
+    assert {k for k, v in reach.items() if v} == {"approval.py", "routes.py", "__main__.py"}, reach
     for scheduler in ("build.py", "collect.py", "store.py", "__init__.py"):
         assert not reach[scheduler], (scheduler, reach[scheduler])
     assert "mailing" not in _names(SRC / "__main__.py") and "mailing" not in _names(SRC / "store.py")
@@ -1114,3 +1103,49 @@ def test_computed_test_points_are_never_new_results_of_the_customer_digest(d):
     assert any(x.startswith("cruise:") for x in lines)
     assert not any(x.startswith(("test 4301", "noload_3021", "bench point")) for x in lines), lines
     assert C._is_test_result("Test 700 rpm 5.3 A", set()) and not C._is_test_result("cruise", set())
+
+
+# -- production changes are a section of the daily mailing (owner 2026-11-19) -------------------------------------------------------
+
+def _revisions_file(d, alert_mode="digest"):
+    d["PR"].save_file(DIE, CFG, "revisions.json", {"revisions": [{
+        "number": "1.1", "date": at(-3600), "acknowledgements": [],
+        "alert": {"sent_at": at(-3600), "mode": alert_mode, "recipients": [{"email": LI, "role": "oem", "mail": alert_mode}]}}]})
+
+
+def test_a_production_digest_has_one_open_and_acknowledge_link_and_the_factory_gets_zh_and_en(d):
+    _revisions_file(d)
+    run(d, scopes=[XSCOPE])
+    draft = draft_of(d, XSCOPE)
+    assert any(r["email"] == LI and r["lang"] == "zh-CN" for r in draft["recipients"])           # the factory member IS in the audience
+    assert draft["bilingual"] is True
+    text = draft["text_body"]
+    assert text.count("Open and acknowledge: ") == 1 and text.count("打开并确认: ") == 1
+    assert text.count("/changes?item=1.1") == 2                                                 # the revision line itself carries no link
+    assert "Revision 1.1 published: Slot liner thicker" in text and "版本 1.1 已发布" in text
+
+
+def test_a_revision_published_urgent_is_listed_as_already_mailed_and_is_not_stamped(d):
+    from motor_ai_sim.digest import approval as AP
+    _revisions_file(d, alert_mode="urgent")
+    daily(d)
+    sent = [x for x in d["DS"].list_drafts() if x["scope"] == XSCOPE][0]
+    assert "already e-mailed when it was published" in sent["text_body"] and "发布时已邮件通知" in sent["text_body"]
+    assert "digest_sent" not in d["PR"].load_file(DIE, CFG, "revisions.json")["revisions"][0]
+
+
+def test_the_digest_send_stamps_the_revision_and_the_reminders_count_from_it(d):
+    from motor_ai_sim.production import revision_ack as RK
+    _revisions_file(d)
+    daily(d)
+    rev = d["PR"].load_file(DIE, CFG, "revisions.json")["revisions"][0]
+    assert {x["email"] for x in rev["digest_sent"]} == {ANNA, LI}
+    got = RK._ts(rev["digest_sent"][0]["sent_at"])
+    prod = d["PR"].load_file(DIE, CFG, "production.json")
+    rows = RK.pending(DIE, CFG, prod, [rev], got + 30 * 3600)
+    assert [(r["email"], r["alerted"], int(r["hours"])) for r in rows] == [(LI, True, 30)]       # 30 h after the DIGEST, not the publication
+    # a revision that no digest carried yet: nothing to remind about, however long ago it was published
+    fresh = {**rev}
+    fresh.pop("digest_sent")
+    rows = RK.pending(DIE, CFG, prod, [fresh], got + 500 * 3600)
+    assert rows and not any(r["alerted"] for r in rows)

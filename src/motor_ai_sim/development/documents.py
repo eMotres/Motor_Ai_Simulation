@@ -238,7 +238,7 @@ async def patch_document(request: Request, project_id: str, doc_id: str):
 
     def apply(rows: list) -> None:
         for row in rows:
-            if row.get("id") == doc_id:
+            if row.get("id") == doc_id and _visible([row], staff_flag, True):      # a row this caller cannot list is "not found"
                 before = {k: row.get(k) for k in changes}
                 found["before"] = before
                 row.update(changes)
@@ -257,18 +257,18 @@ async def patch_document(request: Request, project_id: str, doc_id: str):
         _audit(project_id, user, "document.restore" if restored else "document.update", found["row"], {"changes": changed})
     if found["row"].get("internal") and store.clear_cover(project_id, doc_id):       # the cover is shown to the whole project
         store.append_audit(project_id, _email(user), "cover.clear", "project", project_id, {"reason": "document marked internal"})
-    return _public(found["row"], True)
+    return _public(found["row"], staff_flag)
 
 
 @router.delete("/{project_id}/documents/{doc_id}")
 def archive_document(request: Request, project_id: str, doc_id: str):
     """Archive = hide.  The file stays on disk and the audit trail keeps every row; ``PATCH {"archived": false}`` restores it."""
-    user, _project, _role, _staff_flag = _context(request, project_id, edit=True)
+    user, _project, _role, staff_flag = _context(request, project_id, edit=True)
     found: dict[str, Any] = {}
 
     def apply(rows: list) -> None:
         for row in rows:
-            if row.get("id") == doc_id:
+            if row.get("id") == doc_id and _visible([row], staff_flag, True):      # a row this caller cannot list is "not found"
                 found["was"] = bool(row.get("archived"))
                 if not row.get("archived"):
                     row["archived"] = True
@@ -284,7 +284,7 @@ def archive_document(request: Request, project_id: str, doc_id: str):
         _audit(project_id, user, "document.archive", found["row"])
         if store.clear_cover(project_id, doc_id):
             store.append_audit(project_id, _email(user), "cover.clear", "project", project_id, {"reason": "document archived"})
-    return _public(found["row"], True)
+    return _public(found["row"], staff_flag)
 
 
 # ── download ──────────────────────────────────────────────────────────────────

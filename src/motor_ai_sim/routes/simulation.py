@@ -7646,8 +7646,76 @@ _SUMMARY_SHAPE_V = 21   # v21: the FULL mass of the loaded configuration + the p
 # every result solved since carries the verdict from its own solve.
 
 
+#: A passport measured on an earlier geometry is lent to another geometry of the same machine only at a stack length
+#: this machine has been measured at (the same 5 % `end3d_factors.measured_k_T` uses for "the same length") or inside the
+#: span of its measured lengths (interpolated, never extrapolated): the end effect of a 40 mm stack is not that of a
+#: 200 mm one.
+_END3D_STACK_TOL = 0.05
+
+
+def _end3d_stack_at(rec: dict, stack_mm: float):
+    """``(k_flux at stack_mm, basis)`` from ONE stored passport, or ``(None, why)`` when it was measured at a different
+    stack length: its own table entry for the length (interpolated inside its span), else its scalar when its own stack
+    is within 5 %.  (The lookup itself uses the whole machine's curve, `_end3d_machine_curve`.)"""
+    pts = _end3d_rec_points(rec)
+    k = _end3d_curve_at(pts, stack_mm)
+    if k is not None:
+        return k[0], k[1]
+    if pts:
+        return None, "its stack lengths %g-%g mm do not cover %g mm" % (pts[0][0], pts[-1][0], stack_mm)
+    return None, "its stack length is not recorded"
+
+
+def _end3d_rec_points(rec: dict) -> list:
+    """The ``(stack_mm, k_flux)`` points ONE passport measured: its `k_flux_vs_L` table plus its scalar at its own
+    `stack_mm` when that is recorded, sorted by length."""
+    pts = {}
+    curve = rec.get("k_flux_vs_L")
+    if isinstance(curve, dict):
+        for a_, b_ in curve.items():
+            try:
+                pts[float(a_)] = float(b_)
+            except (TypeError, ValueError):
+                continue
+    try:
+        own = float(rec.get("stack_mm"))
+        if own > 0 and rec.get("k_flux") is not None:
+            pts.setdefault(own, float(rec["k_flux"]))
+    except (TypeError, ValueError):
+        pass
+    return sorted(pts.items())
+
+
+def _end3d_curve_at(pts: list, stack_mm: float):
+    """``(k, basis)`` at ``stack_mm`` on a length curve ``[(L, k), ...]`` (sorted): the measured point itself when one lies
+    within 5 % of the length (``"point"``), else linear interpolation between its neighbours inside the span
+    (``"curve"``); ``None`` outside the span - never extrapolated."""
+    if not pts or not stack_mm:
+        return None
+    near = min(pts, key=lambda q: abs(q[0] - stack_mm))
+    if abs(near[0] - stack_mm) <= _END3D_STACK_TOL * stack_mm:
+        return near[1], "point"
+    if stack_mm < pts[0][0] or stack_mm > pts[-1][0]:
+        return None
+    for (x0, y0), (x1, y1) in zip(pts, pts[1:]):
+        if x0 <= stack_mm <= x1:
+            return (y0 if x1 == x0 else y0 + (y1 - y0) * (stack_mm - x0) / (x1 - x0)), "curve"
+    return None
+
+
+def _end3d_machine_curve(cands: list, when) -> list:
+    """ONE length curve per machine from every passport of it (``cands`` = ``[(key, record), ...]``): all their table
+    entries and own-stack scalars merged, the newest passport winning where two measured the same length.
+    ``[(L, k, key), ...]`` sorted by length."""
+    best = {}
+    for key, rec in sorted(cands, key=lambda kv: when(kv[1])):          # oldest first, the newest overwrites
+        for L, k in _end3d_rec_points(rec):
+            best[L] = (k, key)
+    return [(L, k, key) for L, (k, key) in sorted(best.items())]
+
+
 def _end3d_lookup(geo_fp: Optional[str], geo: Optional[dict] = None,
-                  exact: bool = False) -> Optional[dict]:
+                  exact: bool = False, diag: Optional[dict] = None) -> Optional[dict]:
     """The Stage A end-effect passport for THIS machine, or None.
 
     config/end_effect_passports.json is keyed by the same `_geometry_fingerprint`
@@ -7655,7 +7723,13 @@ def _end3d_lookup(geo_fp: Optional[str], geo: Optional[dict] = None,
     different motor than the one on screen.  A 2-D transient overestimates the
     flux of a short stack (the field spills axially past the laminations); the
     3-D static Stage A measures the factor once per machine — 0.952 on the
-    40 mm, 0.927 on the 85 mm (stack 13 mm on Ø85 spills hard)."""
+    40 mm, 0.927 on the 85 mm (stack 13 mm on Ø85 spills hard).
+
+    The passports of EARLIER geometries of the same machine (slots / poles / OD) form ONE length curve k_flux(L) (their
+    table entries and own-stack scalars, the newest winning a repeated length).  A geometry without a passport of its own
+    takes the measured point within 5 % of its stack length, else the curve interpolated between its neighbours inside the
+    measured span - never extrapolated.  Outside the span the answer is None and, if `diag` is given, `diag["note"]` names
+    the span ("no 3-D factor", never a silent borrow)."""
     if not geo_fp:
         return None
     try:
@@ -7683,16 +7757,50 @@ def _end3d_lookup(geo_fp: Optional[str], geo: Optional[dict] = None,
                  and v.get("k_flux") is not None]
         if not cands:
             return None
+        stack = _geo_stack_mm(geo)
         _when = lambda v: str(v.get("adopted_utc") or v.get("generated_utc") or "")  # noqa: E731
-        k, v = max(cands, key=lambda kv: _when(kv[1]))
-        return _e3_enrich({**v, "inherited": True, "inherited_from": k,
+        curve = _end3d_machine_curve(cands, _when)
+        hit = _end3d_curve_at([(L, k) for L, k, _ in curve], stack) if stack else None
+        if hit is None:
+            if diag is not None:
+                if not stack:
+                    why = "this geometry has no stack length"
+                elif curve:
+                    why = ("stack %g mm is outside the measured span %g-%g mm of this machine"
+                           % (stack, curve[0][0], curve[-1][0]))
+                else:
+                    why = "no stack length is recorded in its passports"
+                diag["note"] = ("no 3-D factor: %s (%s); run Stage A for this geometry" % (why, desc))
+            return None
+        kf, basis = hit
+        # the passport the value belongs to: the one owning the nearest measured length (its other fields ride along)
+        near = min(curve, key=lambda q: abs(q[0] - stack))
+        v, k = store[near[2]], near[2]
+        span = (curve[0][0], curve[-1][0])
+        return _e3_enrich({**v, "k_flux": float(kf), "k_flux_passport": v.get("k_flux"), "inherited": True,
+                "inherited_from": k, "inherited_stack_basis": basis,
+                "inherited_curve": {"span_mm": [span[0], span[1]], "points": len(curve)},
                 "inherited_note": (
-                    f"coefficient of an EARLIER geometry of this machine "
-                    f"({desc}, passport {_when(v)[:10] or 'undated'}) — the "
-                    f"current geometry has no Stage A passport yet; recompute "
-                    f"to confirm or replace it")}, geo_fp, geo)
+                    f"coefficient of EARLIER geometries of this machine "
+                    f"({desc}) at the stack length {stack:g} mm "
+                    + ("(a measured length, within %d %%)" % int(_END3D_STACK_TOL * 100) if basis == "point"
+                       else "(interpolated on this machine's length curve, measured %g-%g mm)" % span)
+                    + " — the current geometry has no Stage A passport yet; recompute "
+                      "to confirm or replace it")}, geo_fp, geo)
     except Exception:   # noqa: BLE001 — no passport is a normal state
         return None
+
+
+def _geo_stack_mm(geo: Optional[dict] = None) -> float:
+    """Stack length [mm] of the live config geometry with an optional per-request override on top (0 when unknown)."""
+    try:
+        from motor_ai_sim.config import get_config as _gc
+        g = dict((_gc().get("geometry") or {}))
+        if geo:
+            g.update({kk: vv for kk, vv in dict(geo).items() if vv is not None})
+        return float(g.get("motor_length") or 0.0)
+    except Exception:   # noqa: BLE001
+        return 0.0
 
 
 def _machine_desc(geo: Optional[dict] = None) -> Optional[str]:
@@ -8195,6 +8303,7 @@ def _build_transient_summary(
     _Vpk = float(sbres.get("V_peak", 0.0))
     _Vrms = _Vpk / _math.sqrt(2)
     _Vlpk = _Vpk * (1.0 if _is_delta else _sq3)
+    _e3diag: dict = {}
     _Vlrms = _Vlpk / _math.sqrt(2)
     _vs = [sbres.get(k) for k in ("V_A", "V_B", "V_C")]
     if all(isinstance(v, (list, tuple)) and len(v) == len(_vs[0]) and len(v) >= 4
@@ -9025,7 +9134,9 @@ def _build_transient_summary(
                                                   or _r["k_flux"]), 3),
             "V_line_peak_corrected_V": (
                 round(_Vlpk * float(_r["k_flux"]), 2) if _Vlpk else None),
-        }))(_end3d_lookup(sbres.get("geo_fingerprint"), _geo_cfg)),
+        }))(_end3d_lookup(sbres.get("geo_fingerprint"), _geo_cfg, diag=_e3diag)),
+        # said out loud when another geometry's passport was NOT lent (stack length differs): the card shows 2-D
+        **({"end3d_note": _e3diag["note"]} if _e3diag.get("note") else {}),
         # Bench Ld/Lq — the LCR-meter measurement, simulated: small-signal
         # values at the I≈0 iron state, per machine + connection.  Cache READ
         # only (this builder also runs on restore rebuilds); the live-machine

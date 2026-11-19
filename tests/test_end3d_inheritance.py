@@ -28,39 +28,60 @@ def test_exact_fingerprint_is_returned_unchanged(env):
     assert r["k_flux"] == 0.9 and not r.get("inherited")
 
 
-def test_long_stack_passport_is_not_lent_to_a_short_stack(env):
-    env["store"] = {"old": _rec(0.9896, stack=200.0)}
+def test_outside_the_measured_span_there_is_no_factor_and_the_note_names_the_span(env):
+    env["store"] = {"old": _rec(0.9896, stack=200.0, curve={"40": 0.946, "200": 0.9896})}
     d = {}
+    env["stack"] = 25.0
     assert S._end3d_lookup("new", {}, diag=d) is None
-    assert "no 3-D factor" in d["note"] and "200" in d["note"]
+    assert "no 3-D factor" in d["note"] and "40-200" in d["note"]
+    env["stack"] = 230.0
+    assert S._end3d_lookup("new", {}) is None                           # never extrapolated
 
 
-def test_same_stack_within_five_percent_is_lent(env):
+def test_a_measured_length_within_five_percent_is_used_as_it_is(env):
     env["store"] = {"old": _rec(0.95, stack=41.5)}
     r = S._end3d_lookup("new", {})
-    assert r["inherited"] and r["k_flux"] == 0.95 and r["inherited_stack_basis"] == "stack_mm"
-    env["store"] = {"old": _rec(0.95, stack=43.0)}   # 7.5 % off
+    assert r["inherited"] and r["k_flux"] == 0.95 and r["inherited_stack_basis"] == "point"
+    env["store"] = {"old": _rec(0.95, stack=43.0)}                       # 7.5 % off and a single point: no span
     assert S._end3d_lookup("new", {}) is None
 
 
-def test_own_length_table_entry_wins_over_the_scalar(env):
-    env["store"] = {"old": _rec(0.9896, stack=200.0, curve={"12": 0.938, "40": 0.946, "65": 0.967, "200": 0.9896})}
+def test_one_curve_per_machine_is_merged_from_every_passport_and_interpolated(env):
+    env["store"] = {
+        "g2l40": _rec(0.94612, stack=40.0, when="2026-10-01T00:00:00Z"),
+        "g2l65": _rec(0.96701, stack=65.0, when="2026-10-02T00:00:00Z"),
+        "g1l170": _rec(0.98768, stack=170.0, when="2026-10-03T00:00:00Z"),
+        "m1l200": _rec(0.98961, stack=200.0, when="2026-10-04T00:00:00Z"),
+    }
+    env["stack"] = 60.0                                                  # a customer L60: between 40 and 65, 8 % from 65
     r = S._end3d_lookup("new", {})
-    assert r["k_flux"] == pytest.approx(0.946) and r["k_flux_passport"] == 0.9896
-    env["stack"] = 52.5
-    assert S._end3d_lookup("new", {})["k_flux"] == pytest.approx(0.946 + (0.967 - 0.946) * 12.5 / 25.0)
+    assert r["inherited_stack_basis"] == "curve"
+    assert r["k_flux"] == pytest.approx(0.94612 + (0.96701 - 0.94612) * 20.0 / 25.0)
+    assert r["inherited_curve"] == {"span_mm": [40.0, 200.0], "points": 4}
+    env["stack"] = 150.0
+    assert S._end3d_lookup("new", {})["k_flux"] == pytest.approx(0.96701 + (0.98768 - 0.96701) * 85.0 / 105.0)
+    env["stack"] = 66.0                                                  # within 5 % of a measured length: that point
+    assert S._end3d_lookup("new", {})["k_flux"] == 0.96701
+    env["stack"] = 300.0
+    d = {}
+    assert S._end3d_lookup("new", {}, diag=d) is None and "40-200" in d["note"]
 
 
-def test_table_does_not_extrapolate_beyond_five_percent(env):
-    env["store"] = {"old": _rec(0.95, curve={"65": 0.967, "200": 0.9896})}
-    env["stack"] = 40.0
-    assert S._end3d_lookup("new", {}) is None
+def test_the_newest_passport_wins_a_repeated_length_and_other_machines_are_ignored(env):
+    env["store"] = {"a": _rec(0.90, stack=100.0, when="2026-08-01T00:00:00Z"),
+                    "b": _rec(0.97, stack=100.0, when="2026-10-01T00:00:00Z"),
+                    "x": _rec(0.50, stack=100.0, desc="12s/14p OD 40")}
+    env["stack"] = 100.0
+    assert S._end3d_lookup("new", {})["k_flux"] == 0.97
 
 
-def test_newest_usable_passport_wins_and_unfit_ones_are_skipped(env):
-    env["store"] = {"a": _rec(0.97, stack=40.0, when="2026-08-01T00:00:00Z"),
-                    "b": _rec(0.99, stack=200.0, when="2026-10-01T00:00:00Z")}
-    assert S._end3d_lookup("new", {})["inherited_from"] == "a"
+def test_a_non_monotonic_table_is_used_as_stored(env):
+    env["store"] = {"c": _rec(0.97, stack=100.0, curve={"100": 0.97191, "110": 0.96955, "120": 0.97119})}
+    env["stack"] = 111.0                                                 # a measured length (within 5 %): that point
+    assert S._end3d_lookup("new", {})["k_flux"] == 0.96955
+    env["store"] = {"c": _rec(0.97, stack=100.0, curve={"100": 0.97191, "130": 0.96955})}
+    env["stack"] = 115.0                                                 # between two points: the straight line
+    assert S._end3d_lookup("new", {})["k_flux"] == pytest.approx((0.97191 + 0.96955) / 2)
 
 
 def test_unknown_stack_is_not_a_license_to_borrow(env):
@@ -109,8 +130,20 @@ def test_dry_list_old_and_new_on_a_tiny_catalog(tmp_path, monkeypatch):
     (d / "L40.yaml").write_text("geometry_overrides: {motor_length: 40.0}\n", encoding="utf-8")
     desc = S._machine_desc(ov)
     st = tmp_path / "store.json"
-    st.write_text(json.dumps({"x": _rec(0.9896, stack=200.0, desc=desc)}), encoding="utf-8")
+    st.write_text(json.dumps({"x": _rec(0.9896, stack=200.0, desc=desc),
+                              "y": _rec(0.946, stack=60.0, desc=desc, when="2026-10-01T00:00:00Z")}), encoding="utf-8")
     rep = D.run(tmp_path / "dies", st)
     assert rep["configs_checked"] == 1 and not rep["errors"], rep
     (row,) = rep["changed"]
-    assert row["old"] == 0.9896 and row["new"] is None and row["kind"] == "inherited -> no 3-D factor"
+    # the newest passport (60 mm) was the old pick; the 40 mm stack is within 5 % of nothing and below the span 60-200
+    assert row["new"] is None and row["kind"] == "inherited -> no 3-D factor" and "60-200" in row["new_basis"]
+    st.write_text(json.dumps({"x": _rec(0.9896, stack=200.0, desc=desc),
+                              "y": _rec(0.946, stack=40.0, desc=desc, when="2026-10-01T00:00:00Z")}), encoding="utf-8")
+    rep = D.run(tmp_path / "dies", st)
+    assert rep["changed"] == []                       # L40 is a measured length: same factor as before
+    # a customer L150 on the same two-point curve (40 .. 200): interpolated, not lent from the newest passport
+    (d / "L150.yaml").write_text("geometry_overrides: {motor_length: 150.0}\n", encoding="utf-8")
+    rep = D.run(tmp_path / "dies", st)
+    (row,) = rep["changed"]
+    assert row["config"] == "L150" and row["old"] == 0.946
+    assert row["new"] == pytest.approx(0.946 + (0.9896 - 0.946) * 110.0 / 160.0) and row["new_basis"] == "curve"

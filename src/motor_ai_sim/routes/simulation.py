@@ -7642,46 +7642,72 @@ _SUMMARY_SHAPE_V = 21   # v21: the FULL mass of the loaded configuration + the p
 # every result solved since carries the verdict from its own solve.
 
 
-#: A passport measured on an earlier geometry is lent to another geometry of the same machine only when the stack
-#: length agrees within this fraction (the same 5 % `end3d_factors.measured_k_T` uses): the end effect of a 40 mm
-#: stack is not that of a 200 mm one.
+#: A passport measured on an earlier geometry is lent to another geometry of the same machine only at a stack length
+#: this machine has been measured at (the same 5 % `end3d_factors.measured_k_T` uses for "the same length") or inside the
+#: span of its measured lengths (interpolated, never extrapolated): the end effect of a 40 mm stack is not that of a
+#: 200 mm one.
 _END3D_STACK_TOL = 0.05
 
 
 def _end3d_stack_at(rec: dict, stack_mm: float):
-    """``(k_flux at stack_mm, basis)`` from one stored passport, or ``(None, why)`` when it was measured at a
-    different stack length.  Its own `k_flux_vs_L` entry for this length comes first (interpolated inside the
-    measured span, 5 % slack at the ends); else the scalar `k_flux` when the passport's own stack is within the
-    tolerance."""
-    tol = _END3D_STACK_TOL
+    """``(k_flux at stack_mm, basis)`` from ONE stored passport, or ``(None, why)`` when it was measured at a different
+    stack length: its own table entry for the length (interpolated inside its span), else its scalar when its own stack
+    is within 5 %.  (The lookup itself uses the whole machine's curve, `_end3d_machine_curve`.)"""
+    pts = _end3d_rec_points(rec)
+    k = _end3d_curve_at(pts, stack_mm)
+    if k is not None:
+        return k[0], k[1]
+    if pts:
+        return None, "its stack lengths %g-%g mm do not cover %g mm" % (pts[0][0], pts[-1][0], stack_mm)
+    return None, "its stack length is not recorded"
+
+
+def _end3d_rec_points(rec: dict) -> list:
+    """The ``(stack_mm, k_flux)`` points ONE passport measured: its `k_flux_vs_L` table plus its scalar at its own
+    `stack_mm` when that is recorded, sorted by length."""
+    pts = {}
     curve = rec.get("k_flux_vs_L")
-    pts = []
     if isinstance(curve, dict):
         for a_, b_ in curve.items():
             try:
-                pts.append((float(a_), float(b_)))
+                pts[float(a_)] = float(b_)
             except (TypeError, ValueError):
                 continue
-    pts.sort()
-    if pts and pts[0][0] * (1.0 - tol) <= stack_mm <= pts[-1][0] * (1.0 + tol):
-        if stack_mm <= pts[0][0]:
-            return pts[0][1], "k_flux_vs_L"
-        if stack_mm >= pts[-1][0]:
-            return pts[-1][1], "k_flux_vs_L"
-        for (x0, y0), (x1, y1) in zip(pts, pts[1:]):
-            if x0 <= stack_mm <= x1:
-                return (y0 if x1 == x0 else y0 + (y1 - y0) * (stack_mm - x0) / (x1 - x0)), "k_flux_vs_L"
     try:
         own = float(rec.get("stack_mm"))
+        if own > 0 and rec.get("k_flux") is not None:
+            pts.setdefault(own, float(rec["k_flux"]))
     except (TypeError, ValueError):
-        own = 0.0
-    if own > 0 and abs(own - stack_mm) <= tol * stack_mm:
-        return float(rec["k_flux"]), "stack_mm"
-    if pts:
-        return None, "its stack lengths %g-%g mm do not cover %g mm" % (pts[0][0], pts[-1][0], stack_mm)
-    if own > 0:
-        return None, "measured at a %g mm stack, this one is %g mm" % (own, stack_mm)
-    return None, "its stack length is not recorded"
+        pass
+    return sorted(pts.items())
+
+
+def _end3d_curve_at(pts: list, stack_mm: float):
+    """``(k, basis)`` at ``stack_mm`` on a length curve ``[(L, k), ...]`` (sorted): the measured point itself when one lies
+    within 5 % of the length (``"point"``), else linear interpolation between its neighbours inside the span
+    (``"curve"``); ``None`` outside the span - never extrapolated."""
+    if not pts or not stack_mm:
+        return None
+    near = min(pts, key=lambda q: abs(q[0] - stack_mm))
+    if abs(near[0] - stack_mm) <= _END3D_STACK_TOL * stack_mm:
+        return near[1], "point"
+    if stack_mm < pts[0][0] or stack_mm > pts[-1][0]:
+        return None
+    for (x0, y0), (x1, y1) in zip(pts, pts[1:]):
+        if x0 <= stack_mm <= x1:
+            return (y0 if x1 == x0 else y0 + (y1 - y0) * (stack_mm - x0) / (x1 - x0)), "curve"
+    return None
+
+
+def _end3d_machine_curve(cands: list, when) -> list:
+    """ONE length curve per machine from every passport of it (``cands`` = ``[(key, record), ...]``): all their table
+    entries and own-stack scalars merged, the newest passport winning where two measured the same length.
+    ``[(L, k, key), ...]`` sorted by length."""
+    best = {}
+    for key, rec in sorted(cands, key=lambda kv: when(kv[1])):          # oldest first, the newest overwrites
+        for L, k in _end3d_rec_points(rec):
+            best[L] = (k, key)
+    return [(L, k, key) for L, (k, key) in sorted(best.items())]
 
 
 def _end3d_lookup(geo_fp: Optional[str], geo: Optional[dict] = None,
@@ -7695,9 +7721,11 @@ def _end3d_lookup(geo_fp: Optional[str], geo: Optional[dict] = None,
     3-D static Stage A measures the factor once per machine — 0.952 on the
     40 mm, 0.927 on the 85 mm (stack 13 mm on Ø85 spills hard).
 
-    A passport of an EARLIER geometry of the same machine is lent only at the same stack length (5 %); when none
-    fits the answer is None and, if `diag` is given, `diag["note"]` says why ("no 3-D factor", never a silent
-    borrow)."""
+    The passports of EARLIER geometries of the same machine (slots / poles / OD) form ONE length curve k_flux(L) (their
+    table entries and own-stack scalars, the newest winning a repeated length).  A geometry without a passport of its own
+    takes the measured point within 5 % of its stack length, else the curve interpolated between its neighbours inside the
+    measured span - never extrapolated.  Outside the span the answer is None and, if `diag` is given, `diag["note"]` names
+    the span ("no 3-D factor", never a silent borrow)."""
     if not geo_fp:
         return None
     try:
@@ -7727,32 +7755,34 @@ def _end3d_lookup(geo_fp: Optional[str], geo: Optional[dict] = None,
             return None
         stack = _geo_stack_mm(geo)
         _when = lambda v: str(v.get("adopted_utc") or v.get("generated_utc") or "")  # noqa: E731
-        fits, why = [], []
-        for k, v in sorted(cands, key=lambda kv: _when(kv[1]), reverse=True):
-            if not stack:
-                why.append((k, "this geometry has no stack length"))
-                continue
-            kf, basis = _end3d_stack_at(v, stack)
-            if kf is None:
-                why.append((k, basis))
-            else:
-                fits.append((k, v, kf, basis))
-        if not fits:
+        curve = _end3d_machine_curve(cands, _when)
+        hit = _end3d_curve_at([(L, k) for L, k, _ in curve], stack) if stack else None
+        if hit is None:
             if diag is not None:
-                diag["note"] = (
-                    "no 3-D factor: the passports of other geometries of this machine (%s) were measured at "
-                    "another stack length (%s); run Stage A for this geometry" % (desc, why[0][1] if why else "none"))
+                if not stack:
+                    why = "this geometry has no stack length"
+                elif curve:
+                    why = ("stack %g mm is outside the measured span %g-%g mm of this machine"
+                           % (stack, curve[0][0], curve[-1][0]))
+                else:
+                    why = "no stack length is recorded in its passports"
+                diag["note"] = ("no 3-D factor: %s (%s); run Stage A for this geometry" % (why, desc))
             return None
-        k, v, kf, basis = fits[0]
-        extra = {"k_flux": float(kf), "k_flux_passport": v.get("k_flux")} if basis == "k_flux_vs_L" else {}
-        return _e3_enrich({**v, **extra, "inherited": True, "inherited_from": k,
-                "inherited_stack_basis": basis,
+        kf, basis = hit
+        # the passport the value belongs to: the one owning the nearest measured length (its other fields ride along)
+        near = min(curve, key=lambda q: abs(q[0] - stack))
+        v, k = store[near[2]], near[2]
+        span = (curve[0][0], curve[-1][0])
+        return _e3_enrich({**v, "k_flux": float(kf), "k_flux_passport": v.get("k_flux"), "inherited": True,
+                "inherited_from": k, "inherited_stack_basis": basis,
+                "inherited_curve": {"span_mm": [span[0], span[1]], "points": len(curve)},
                 "inherited_note": (
-                    f"coefficient of an EARLIER geometry of this machine "
-                    f"({desc}, passport {_when(v)[:10] or 'undated'}) at the same "
-                    f"stack length ({stack:g} mm, within {int(_END3D_STACK_TOL * 100)} %) — the "
-                    f"current geometry has no Stage A passport yet; recompute "
-                    f"to confirm or replace it")}, geo_fp, geo)
+                    f"coefficient of EARLIER geometries of this machine "
+                    f"({desc}) at the stack length {stack:g} mm "
+                    + ("(a measured length, within %d %%)" % int(_END3D_STACK_TOL * 100) if basis == "point"
+                       else "(interpolated on this machine's length curve, measured %g-%g mm)" % span)
+                    + " — the current geometry has no Stage A passport yet; recompute "
+                      "to confirm or replace it")}, geo_fp, geo)
     except Exception:   # noqa: BLE001 — no passport is a normal state
         return None
 

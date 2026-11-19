@@ -35,7 +35,7 @@ def members_without_view(root: Path | None = None) -> List[Dict[str, Any]]:
             if not email or role != "oem":
                 continue                                              # owners and engineers are not gated by the NDA
             try:
-                ok = bool(M3.can_download({"id": email, "is_admin": False, "role": role}, rec))
+                ok = bool(M3.can_download({"id": email, "is_admin": False, "role": role}, U.get_user(email)))
             except Exception:                                         # noqa: BLE001 - when in doubt the gate refuses
                 ok = False
             if not ok:

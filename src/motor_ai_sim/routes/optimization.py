@@ -3968,12 +3968,22 @@ class DescentRequest(BaseModel):
     #  'product': the legacy (efficiency/eff0)^w_eff · (T/mass/td0)^w_td.
     #  'min_ripple' (opt-in): minimise T_ripple_pct at the operating point.  Use it with the hard
     #    limits below; no baseline line is measured.
+    #  'min_cogging' (opt-in): minimise the no-load cogging torque (pk-pk, N*m) of each candidate,
+    #    measured by the extra solve described at cogging_max_nm; the hard limits below still apply
+    #    (efficiency_min_pct is the "no efficiency loss" floor).  No baseline line is measured.
     objective: str = "baseline_line"
     current_bump_pct: float = 10.0    # 2nd baseline current = I·(1 + pct/100)
     # Opt-in HARD limits (0 = off): a design that breaks one never beats a feasible design.
     efficiency_min_pct: float = Field(0.0, ge=0.0, le=100.0)   # floor on efficiency [%]
     j_max_a_mm2: float = Field(0.0, ge=0.0)                    # cap on the coil current density [A/mm2]
     v_ll_peak_max_v: float = Field(0.0, ge=0.0)                # cap on the line-line peak voltage [V]
+    # Opt-in cogging torque (owner 2026-11-19).  When cogging_max_nm > 0 or objective is
+    # 'min_cogging', every candidate geometry gets ONE extra no-load solve in its own worker:
+    # 0 A, magnets at 20 C (owner rule: cogging at 20 C), cogging_steps_per_period steps
+    # (>= 120, owner rule; never the 48 of the load eval), eddy / rotor eddy / demag off, the
+    # run's mesh.  cogging_max_nm is a HARD cap on that pk-pk value [N*m], 0 = off.
+    cogging_max_nm: float = Field(0.0, ge=0.0)
+    cogging_steps_per_period: int = Field(144, ge=120)
     # See OptRequest.allow_new_lamination.
     allow_new_lamination: bool = False
     # Opt-in: the MTPA pre-sweep solves its angles with THIS run's eval
@@ -4038,6 +4048,9 @@ def _msum(m: Dict[str, Any]) -> Dict[str, Any]:
         "cogging_sampling_final_quality_sufficient": m.get(
             "cogging_sampling_final_quality_sufficient"),
                                                  # (auto-adjusted to hit the target torque)
+        # The no-load cogging torque of an opt-in cogging run (absent otherwise).
+        **({k: m.get(k) for k in ("cogging_pp_Nm", "cogging_steps_per_period", "cogging_error")
+            if k in m} if "cogging_pp_Nm" in m else {}),
     }
 
 
@@ -4079,7 +4092,9 @@ def _pt(out: Dict[str, Any], kind: str):
             "sampling_quality": ("standard" if r.get("cogging_sampling_purpose")
                                  in _FINAL_OK_PURPOSES
                                  and r.get("cogging_sampling_final_quality_sufficient") is True
-                                 else "preliminary")}
+                                 else "preliminary"),
+            # Only in a run that measures cogging (absent otherwise: the point is unchanged).
+            **({"cogging_pp": r.get("cogging_pp_Nm")} if "cogging_pp_Nm" in r else {})}
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -4189,10 +4204,74 @@ _THD_PEN = {"lam": 0.0, "max": 5.0}   # >0 → _descent_cost penalises THD_LL_pc
 # one and the search still sees which way to go.  "mode" None/"" = the request's own objective.
 _RUN_LIMITS = {"mode": "", "eff_min": 0.0, "j_max": 0.0, "vll_max": 0.0}
 _HARD_LIMIT_COST = 1000.0
+# Opt-in cogging measurement of the run (same per-run-global pattern): steps 0 = not measured,
+# max 0 = no cap.  Set together with _RUN_LIMITS by begin_descent_state, cleared with it.
+_COG_LIMIT = {"max": 0.0, "steps": 0}
 
 
 def _reset_run_limits() -> None:
     _RUN_LIMITS.update(mode="", eff_min=0.0, j_max=0.0, vll_max=0.0)
+    _COG_LIMIT.update(max=0.0, steps=0)
+
+
+def _cogging_on() -> bool:
+    """The run measures each candidate's no-load cogging torque (cap or objective set)."""
+    return int(_COG_LIMIT["steps"]) > 0
+
+
+def _defined_cogging(m: Dict[str, Any]) -> Optional[float]:
+    """Finite measured cogging pk-pk [N*m], or None (missing / failed: never assumed met)."""
+    try:
+        value = float(m.get("cogging_pp_Nm"))
+    except (TypeError, ValueError):
+        return None
+    return value if math.isfinite(value) else None
+
+
+_COGGING_TEMP_C = 20.0     # owner rule: cogging is measured at 20 C
+_COGGING_RPM = 100.0       # no current, no eddy: the speed only sets the time axis
+
+
+def _attach_cogging(o: Dict[str, Any], dd: Dict[str, float], memo: Dict[tuple, Dict[str, Any]],
+                    lock, eval_kw: Dict[str, Any]) -> Dict[str, Any]:
+    """Add the candidate's no-load cogging torque to a successful load eval (opt-in run only).
+
+    One extra solve per GEOMETRY (memo: the target-torque rescale, the final re-solve and the
+    baseline reuse it), run in the caller's own worker, so it never adds a parallel process.  The
+    value is kept only at final sampling quality (>= 6 raw samples per cogging cycle); otherwise
+    ``cogging_pp_Nm`` is None and a cap or the objective treats the design as broken."""
+    if not _cogging_on() or not isinstance(o, dict) or not o.get("ok") \
+            or not isinstance(o.get("res"), dict):
+        return o
+    geo = {k: v for k, v in dd.items() if k != "gamma_deg"}
+    key = tuple(sorted((k, round(float(v), 6)) for k, v in geo.items()))
+    steps = int(_COG_LIMIT["steps"])
+    with lock:
+        rec = memo.get(key)
+    if rec is None:
+        c = _subprocess_eval(geo, 0.0, steps, _COGGING_TEMP_C, n_periods=1.0, gamma_deg=0.0,
+                             rotor_eddy=False, demag=False, magnet_temp_c=_COGGING_TEMP_C,
+                             rpm=_COGGING_RPM, ripple_pct_gate=False,
+                             sampling_purpose="cogging_quality", owner="descent", **eval_kw)
+        pp, err = None, None
+        if c.get("ok") and isinstance(c.get("res"), dict):
+            r = c["res"]
+            if r.get("cogging_sampling_final_quality_sufficient") is True:
+                pp = _defined_cogging({"cogging_pp_Nm": r.get("T_ripple_pp_Nm")})
+                if pp is None:
+                    err = "cogging solve gave no finite pk-pk torque"
+            else:
+                err = "cogging solve below final sampling quality"
+        else:
+            err = "cogging solve failed: %s" % c.get("error")
+        rec = {"pp": pp, "error": err}
+        with lock:
+            memo[key] = rec
+    o["res"]["cogging_pp_Nm"] = rec["pp"]
+    o["res"]["cogging_steps_per_period"] = steps
+    if rec["error"]:
+        o["res"]["cogging_error"] = rec["error"]
+    return o
 
 
 def _limit_violation(m: Dict[str, Any]) -> float:
@@ -4210,7 +4289,8 @@ def _limit_violation(m: Dict[str, Any]) -> float:
         return max(0.0, (limit - v) / limit) if below else max(0.0, (v - limit) / limit)
     return (_over("efficiency", _RUN_LIMITS["eff_min"], True)
             + _over("J_coil_A_per_mm2", _RUN_LIMITS["j_max"], False)
-            + _over("V_line_peak_V", _RUN_LIMITS["vll_max"], False))
+            + _over("V_line_peak_V", _RUN_LIMITS["vll_max"], False)
+            + _over("cogging_pp_Nm", _COG_LIMIT["max"], False))
 
 
 def _defined_ripple_pct(metrics: Dict[str, Any]) -> Optional[float]:
@@ -4302,6 +4382,16 @@ def _descent_cost(m: Dict[str, Any], base: Dict[str, Any],
         # An undefined ripple already carries its 1e6 penalty; it contributes no ripple term here.
         r = 0.0 if _rip is None else float(_rip)
         return (r / 100.0 + pen), -r / 100.0
+    if _RUN_LIMITS["mode"] == "min_cogging":
+        # Opt-in objective: the lowest no-load cogging torque, relative to the start design's
+        # (absolute N*m when the start has none).  A missing value is never a good design.
+        cog = _defined_cogging(m)
+        if cog is None:
+            pen += 1e6
+            cog = 0.0
+        ref = _defined_cogging(base) if isinstance(base, dict) else None
+        scale = ref if ref is not None and ref > 0.0 else 1.0
+        return (cog / scale + pen), -cog / scale
     bl = base.get("_bline") if isinstance(base, dict) else None
     if bl:
         td  = float(m.get("torque_per_mass_Nm_kg", 0.0) or 0.0)
@@ -4353,7 +4443,8 @@ def _point_as_metrics(pt: Dict[str, Any]) -> Dict[str, Any]:
     """The objective fields retained on each preliminary chart point."""
     return {"torque_per_mass_Nm_kg": pt.get("td"),
             "efficiency": pt.get("eff"), "T_ripple_pct": pt.get("ripple"),
-            "V_peak": pt.get("v_peak"), "THD_LL_pct": pt.get("thd")}
+            "V_peak": pt.get("v_peak"), "THD_LL_pct": pt.get("thd"),
+            **({"cogging_pp_Nm": pt.get("cogging_pp")} if "cogging_pp" in pt else {})}
 
 
 def _finalize_standard_shortlist(
@@ -4715,6 +4806,14 @@ def _descent_worker(var_specs, op, ripple_max, w_eff, w_td, lam,
         _torque_tol = 0.02       # probe within ±2 % of target → accept, no 2nd solve
         warm = [I]               # warm-start probe current (last geometry's rated current)
 
+        _cog_memo: Dict[tuple, Dict[str, Any]] = {}     # opt-in cogging: one no-load solve per geometry
+        _cog_lock = threading.Lock()
+        _cog_kw = dict(mesh_size_mm=mesh_size, min_size_mm=min_size, n_sectors=n_sectors,
+                       pole_copy=pole_copy, torque_filter=torque_filter,
+                       end_winding_factor=end_winding, gap_layers=gap_layers,
+                       structured_gap=structured_gap, airgap_macro=airgap_macro,
+                       iron_template=iron_template, geo_mesh=geo_mesh, element_order=element_order)
+
         def _eval_at(d, cur, purpose="optimization"):
             o = _subprocess_eval(d, cur, steps, coil_temp, n_periods=1.0,
                                  gamma_deg=g, mesh_size_mm=mesh_size,
@@ -4737,7 +4836,7 @@ def _descent_worker(var_specs, op, ripple_max, w_eff, w_td, lam,
                 o["res"]["current_a"] = float(cur)   # record solved current in best
             if isinstance(o, dict):
                 o["overrides"] = dict(d)             # stamp design → chart click-to-apply
-            return o
+            return _attach_cogging(o, d, _cog_memo, _cog_lock, _cog_kw)
 
         def evalx(xx):
             # Target-torque: probe at the WARM-START current (the last geometry's
@@ -5127,6 +5226,14 @@ def _cmaes_worker(var_specs, op, ripple_max, w_eff, w_td, lam,
         _torque_tol = 0.02       # probe within ±2 % of target → accept, no 2nd solve
         warm = [I]               # warm-start probe current (shared starting guess)
 
+        _cog_memo: Dict[tuple, Dict[str, Any]] = {}     # opt-in cogging: one no-load solve per geometry
+        _cog_lock = threading.Lock()
+        _cog_kw = dict(mesh_size_mm=mesh_size, min_size_mm=min_size, n_sectors=n_sectors,
+                       pole_copy=pole_copy, torque_filter=torque_filter,
+                       end_winding_factor=end_winding, gap_layers=gap_layers,
+                       structured_gap=structured_gap, airgap_macro=airgap_macro,
+                       iron_template=iron_template, geo_mesh=geo_mesh, element_order=element_order)
+
         def _eval_at(dd, cur, purpose="optimization"):
             o = _subprocess_eval(dd, cur, steps, coil_temp, n_periods=1.0,
                                  gamma_deg=g, mesh_size_mm=mesh_size,
@@ -5149,7 +5256,7 @@ def _cmaes_worker(var_specs, op, ripple_max, w_eff, w_td, lam,
                 o["res"]["current_a"] = float(cur)
             if isinstance(o, dict):
                 o["overrides"] = dict(dd)            # stamp design → chart click-to-apply
-            return o
+            return _attach_cogging(o, dd, _cog_memo, _cog_lock, _cog_kw)
 
         def evalx(d):
             # Target-torque with warm-start + ±2 % band: probe at the warm-start
@@ -5620,9 +5727,12 @@ def prepare_descent(req: DescentRequest) -> Dict[str, Any]:
               str(req.objective or "baseline_line"),
               max(0.0, min(float(req.current_bump_pct), 100.0)),
               bool(req.structured_gap), bool(req.airgap_macro))
-    _lim = {"mode": ("min_ripple" if str(req.objective or "") == "min_ripple" else ""),
+    _obj = str(req.objective or "")
+    _lim = {"mode": (_obj if _obj in ("min_ripple", "min_cogging") else ""),
             "eff_min": float(req.efficiency_min_pct) / 100.0,
             "j_max": float(req.j_max_a_mm2), "vll_max": float(req.v_ll_peak_max_v)}
+    _cog = ({"max": float(req.cogging_max_nm), "steps": int(req.cogging_steps_per_period)}
+            if _obj == "min_cogging" or float(req.cogging_max_nm) > 0.0 else None)
     kwargs = {"iron_template": bool(getattr(req, "iron_template", True)),
                 "geo_mesh": bool(getattr(req, "geo_mesh", True)),
                 "element_order": int(getattr(req, "element_order", 2) or 2)}
@@ -5637,10 +5747,14 @@ def prepare_descent(req: DescentRequest) -> Dict[str, Any]:
     if _lim["mode"] or _lim["eff_min"] or _lim["j_max"] or _lim["vll_max"]:   # absent unless asked
         init_state["objective_limits"] = dict(_lim)
         response["objective_limits"] = dict(_lim)
+    if _cog:                                                                     # absent unless asked
+        init_state["cogging_limit"] = dict(_cog)
+        response["cogging_limit"] = dict(_cog)
     return {"var_specs": var_specs, "dropped": dropped, "worker": worker,
             "args": args, "kwargs": kwargs, "init_state": init_state,
             "ripple_pen0": _rp0, "thd_pen": (_thd_lam, _thd_max),
             "run_limits": _lim,
+            **({"cogging_limit": _cog} if _cog else {}),
             "response": response}
 
 
@@ -5654,6 +5768,7 @@ def begin_descent_state(plan: Dict[str, Any]) -> None:
     _RIPPLE_PEN_LAM["v0"] = plan["ripple_pen0"]
     _THD_PEN["lam"], _THD_PEN["max"] = plan["thd_pen"]
     _RUN_LIMITS.update(plan.get("run_limits") or {"mode": "", "eff_min": 0.0, "j_max": 0.0, "vll_max": 0.0})
+    _COG_LIMIT.update(plan.get("cogging_limit") or {"max": 0.0, "steps": 0})   # an older run's never stays
     with _descent_lock:
         _descent_external[0] = False   # this process owns the flag now
         _descent_state.update(plan["init_state"])

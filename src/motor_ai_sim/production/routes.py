@@ -2508,7 +2508,7 @@ async def _json_or_form(request: Request):
 @router.get("/{die}/{config}/assembly_process")
 def get_assembly_process(request: Request, die: str, config: str):
     from motor_ai_sim.production import process_steps as PS
-    access.require_member(request, die, config)
+    access.require_member_with_full_view(request, die, config)          # the same NDA / full-view gate as the neighbouring reads
     parts = store.load_file(die, config, "parts.json").get("parts") or []
     return PS.view(store.load_file(die, config, "assembly_process.json"), parts,
                    models.product_type_of(access.load_production(die, config)))

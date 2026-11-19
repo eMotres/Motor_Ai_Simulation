@@ -73,7 +73,7 @@ IDLE_REASON = "idle_timeout"
 #: The event log is trimmed to its second half when it grows past this.
 _EVENTS_MAX_BYTES = 20 * 1024 * 1024
 
-EVENTS = ("login", "logout", "renew", "reject", "store_unavailable", "revoke")   # idle close = "revoke", reason idle_timeout
+EVENTS = ("login", "logout", "renew", "reject", "store_unavailable", "revoke", "sidless")   # idle close = "revoke", reason idle_timeout
 
 
 class StoreUnavailable(RuntimeError):

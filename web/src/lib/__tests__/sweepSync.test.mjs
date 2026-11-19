@@ -49,3 +49,12 @@ test('stale tab scenario: a tab opened with an older copy cannot replace the fiv
   // even a real edit in the stale tab is refused at push time
   assert.equal(mayPush(stale.updatedAt, server.updatedAt), false);
 });
+
+import { isScanAlreadyRunning } from '../sweepSync.ts';
+
+test('a 409 "a scan is already running" is an attach, any other refusal is an error', () => {
+  assert.equal(isScanAlreadyRunning(409, '{"detail":"a scan is already running","code":"http.409","params":{}}'), true);
+  assert.equal(isScanAlreadyRunning(409, '{"detail":"something else"}'), false);
+  assert.equal(isScanAlreadyRunning(422, 'a scan is already running'), false);
+  assert.equal(isScanAlreadyRunning(409, undefined), false);
+});

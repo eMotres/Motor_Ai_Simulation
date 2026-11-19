@@ -46,3 +46,8 @@ export function mayPush(baseAt: number, serverAt: number): boolean {
   const b = Number(baseAt) || 0, s = Number(serverAt) || 0;
   return s === 0 || b >= s;
 }
+
+/** Did the server refuse a second scan because one is already running (HTTP 409)?  The panel then attaches to the running scan. */
+export function isScanAlreadyRunning(status: number, body: string): boolean {
+  return status === 409 && /already running/i.test(String(body ?? ''));
+}

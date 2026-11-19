@@ -144,3 +144,27 @@ Rejected: pooling the G32×11 KV130/48 V table — its C_T is ~20 % and C_P ~15 
 of the same page at the same rpm (pooled fit 11 % rms); stored with `use_in_fit: false`, as the
 older-CF-label tables are. Below each tested range the coefficients are held at the edge value and
 flagged `extrapolated` (only the G40 is tested down to this motor's speeds).
+
+## Heavy-lift 42-47 in additions (2026-10-20)
+
+For motors that need 30-45 N·m at 3500-4500 rpm (more than the G40×13.1 absorbs). All four are
+`torque_measured`, from T-Motor's own pages (access 2026-10-20):
+
+| id | geometry (product page) | test table | tested rpm | T-Motor limit rpm |
+|---|---|---|---|---|
+| `tmotor_hep_s_42x16` | 42 in (disc 1072.4 mm) × 16 in, 225 g/blade, one-piece | T-Motor lab, propeller-level (22 °C, 25 m) | 1670-4050 | 4050 (recommended max 3640) |
+| `tmotor_vz42x16_5` | 42.2 in (1071.9 mm) × 16.5 in, 273 g/blade, one-piece, VTOL | T-Motor lab, propeller-level (22 °C, 25 m) | 1660-4460 | 4460 (recommended max 3970) |
+| `tmotor_vz45x18` | 45 in (disc 1148.9 mm) × 18 in, 285 g/blade, one-piece, VTOL | T-Motor lab, propeller-level (22 °C, 25 m) | 1180-3780 | 3780 (recommended max 3380) |
+| `tmotor_ns47x18` | 47 × 18 in, 320 g/blade, 2 blades integrated | U15L KV43 combo, 24S motor bench (32 °C) | 1239-3210 | not published |
+
+- The HEP-S, VZ42 and VZ45 tables are propeller-level: rpm, torque, thrust and `Output Power`, which equals
+  τ·ω on every row (shaft power). They are stored as `Pshaft_W`, so there is no `Pel` in them. The NS47 table is a
+  motor-bench table, where `Power` is electrical input (`Pel`), as in the older G-series cards.
+- Density: the lab tables state 22 °C and 25 m, so ρ = 1.1924 kg/m³ (ISA pressure at 25 m). The U15L table states
+  32 °C and no altitude, so ρ = 1.1567 kg/m³ (sea-level pressure).
+- HEP-S naming: the store page headline and URL say "42*12", but its spec table gives pitch 16 in, and T-Motor's
+  catalogue lists the part as "HEP-S 42*16". The card follows the spec table.
+- T-Motor publishes no 46 in propeller (store.tmotor.com and uav-en.tmotor.com, checked 2026-10-20). The nearest
+  sizes with a torque column are VZ45×18 and NS47×18. NS47×18 has no published limit rpm and is tested only up to
+  3210 rpm. Above that its coefficients are held at the tested edge and flagged `extrapolated`.
+- Not added: VZ40×16.1 and VZ41.5×15.2 (sizes not requested); NS52/57/62 (out of the 42-47 in range).

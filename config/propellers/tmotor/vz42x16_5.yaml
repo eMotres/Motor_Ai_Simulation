@@ -1,0 +1,65 @@
+# T-Motor propeller catalogue entry (schema: config/propellers/README.md).
+# Numbers are as published by T-Motor unless marked estimated: true. Source URL + access date per table.
+# Added 2026-10-20: T-Motor heavy-lift props of 42-47 in with a published torque column, for motors that
+# need more propeller torque at 3500-4500 rpm than the G40x13.1 absorbs.
+schema: propeller-1
+id: tmotor_vz42x16_5
+vendor: T-MOTOR
+model: VZ42*16.5
+series: VZ series (VTOL carbon fiber, one-piece straight)
+status: current
+product_url: https://store.tmotor.com/product/vz42-16-5-carbon-fiber-vtol-propeller.html
+source_urls:
+- https://store.tmotor.com/product/vz42-16-5-carbon-fiber-vtol-propeller.html
+accessed: '2026-10-20'
+geometry:
+  diameter_in: 42.2          # spec table: "Diameter 42.2 (1071.9mm)"
+  diameter_mm: 1071.9
+  pitch_in: 16.5
+  pitch_mm: 419.1
+  blades: null               # "One-Piece Straight Propeller"; the blade count is not stated
+material: resin-based carbon fiber composite + PMI foam core, matte
+mass_single_blade_g: 273
+hub: {bore_mm: 12.0, bolt_circle_mm: 30.0, mount: "flange, 4 x 5 mm holes"}
+published_limits:
+  recommended_max_rpm: 3970
+  recommended_max_thrust_kg: 52.8
+  limit_rpm: 4460
+  limit_thrust_kg: 66
+  recommended_solution: "V13L KV65 + THUNDER 200A 24S / VL1165 KV60 + VL200A"
+  application: "VTOL fixed-wing UAVs, multicopter mode"
+performance:
+  data_quality: torque_measured
+  static_hover_only: true
+  test_density_kg_m3: 1.1924
+  density_basis: "T-Motor states 'Ambient Temperature 22 C, Altitude 25 m' for the table; density = ISA pressure at 25 m and 22 C (dry air)"
+  tables:
+    - id: vz42x16_5_lab
+      source_url: https://store.tmotor.com/product/vz42-16-5-carbon-fiber-vtol-propeller.html
+      accessed: '2026-10-20'
+      test_motor: "T-MOTOR laboratory propeller test (motor not named)"
+      prop_label_in_source: "VZ42*16.5"
+      identity: exact
+      use_in_fit: true
+      torque_resolution_Nm: 0.01
+      columns_published: ["rpm", "torque_Nm", "thrust_gf", "output_power_W", "efficiency_gf_per_W"]
+      note: "propeller-level table: torque, thrust and OUTPUT (shaft) power; output power = 2 pi n tau within 0.3 % on every row"
+      rows:
+      - {rpm: 1660, thrust_g: 9375, torque_Nm: 4.66, Pshaft_W: 810.21}
+      - {rpm: 1860, thrust_g: 11852, torque_Nm: 5.75, Pshaft_W: 1120.44}
+      - {rpm: 2060, thrust_g: 14572, torque_Nm: 6.98, Pshaft_W: 1505.47}
+      - {rpm: 2260, thrust_g: 17535, torque_Nm: 8.34, Pshaft_W: 1973.76}
+      - {rpm: 2460, thrust_g: 20742, torque_Nm: 9.84, Pshaft_W: 2533.78}
+      - {rpm: 2660, thrust_g: 24192, torque_Nm: 11.47, Pshaft_W: 3194.00}
+      - {rpm: 2860, thrust_g: 27886, torque_Nm: 13.23, Pshaft_W: 3962.90}
+      - {rpm: 3060, thrust_g: 31823, torque_Nm: 15.13, Pshaft_W: 4848.92}
+      - {rpm: 3260, thrust_g: 36003, torque_Nm: 17.17, Pshaft_W: 5860.55}
+      - {rpm: 3460, thrust_g: 40427, torque_Nm: 19.34, Pshaft_W: 7006.25}
+      - {rpm: 3660, thrust_g: 45094, torque_Nm: 21.64, Pshaft_W: 8294.49}
+      - {rpm: 3860, thrust_g: 50005, torque_Nm: 24.08, Pshaft_W: 9733.74}
+      - {rpm: 4060, thrust_g: 55159, torque_Nm: 26.65, Pshaft_W: 11332.46}
+      - {rpm: 4260, thrust_g: 60556, torque_Nm: 29.36, Pshaft_W: 13099.12}
+      - {rpm: 4460, thrust_g: 66197, torque_Nm: 32.21, Pshaft_W: 15042.19}
+notes:
+- The published 'Output Power (W)' is shaft power (equal to torque x omega); there is no electrical column in this table.
+- A VTOL lift propeller: static (hover) data only, like every entry of this catalogue.

@@ -410,6 +410,7 @@ def run_simulation(req: SimRunRequest, background_tasks: BackgroundTasks):
     """Enqueue a PINN training job and return a job_id to poll."""
     job_id = str(uuid.uuid4())[:8]
     _jobs[job_id] = {
+        "owner":    _JOBS.current_owner(),
         "status":   "queued",
         "progress": 0.0,
         "result":   None,
@@ -476,6 +477,9 @@ def get_result(job_id: str):
         raise HTTPException(status_code=404, detail=f"Job '{job_id}' not found")
 
     job = _jobs[job_id]
+    # a job is read by the account that started it (or an admin); anything else answers as an unknown id does
+    if not _WSP.is_admin() and job.get("owner") != _JOBS.current_owner():
+        raise HTTPException(status_code=404, detail=f"Job '{job_id}' not found")
     elapsed = None
     if job["start_t"]:
         elapsed = time.time() - job["start_t"]

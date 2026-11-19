@@ -235,3 +235,28 @@ def test_owner_report_lists_document_changes():
     assert text("document.archive", name="a.step", folder="3d")[0] == "document archived: a.step [3d]"
     assert text("document.update", name="a.step", changes={"folder": {}})[0] == "document updated: a.step (folder)"
     assert text("document.download", name="a.step")[1] == "documents"
+
+
+def test_a_document_the_caller_cannot_list_cannot_be_changed_or_archived_either(client, tmp_path):
+    """Ownership check on document changes: a row hidden from the customer side answers 'not found' to PATCH and DELETE and is not touched."""
+    doc = upload(client, name="drawing.pdf").json()
+    url = "/api/projects/ciano/documents/%s" % doc["id"]
+    assert client.patch(url, headers=hdr("t-admin"), json={"internal": True}).status_code == 200            # staff hides it afterwards
+    for body in ({"folder": "bom"}, {"revision": "Z"}, {"archived": False}):
+        r = client.patch(url, headers=hdr("t-owner"), json=body)
+        assert r.status_code == 404 and "drawing" not in r.text and doc["id"] not in r.text
+    assert client.delete(url, headers=hdr("t-owner")).status_code == 404
+    row = [d for d in client.get("/api/projects/ciano/documents", headers=hdr("t-admin")).json()["documents"] if d["id"] == doc["id"]][0]
+    assert row["folder"] == doc["folder"] and row["revision"] == doc["revision"] and row["internal"] is True and not row["archived"]
+    assert "document.archive" not in audit_actions(tmp_path)
+
+
+def test_a_visible_document_still_changes_for_the_editor_and_the_reply_does_not_use_the_staff_view(client):
+    doc = upload(client, name="notes.pdf").json()
+    url = "/api/projects/ciano/documents/%s" % doc["id"]
+    r = client.patch(url, headers=hdr("t-owner"), json={"folder": "bom", "revision": "B"})
+    assert r.status_code == 200 and (r.json()["folder"], r.json()["revision"]) == ("bom", "B")
+    assert OWNER not in r.text                                                    # the uploader's address is staff-only
+    d = client.delete(url, headers=hdr("t-owner"))
+    assert d.status_code == 200 and d.json()["archived"] is True and OWNER not in d.text
+    assert client.patch(url, headers=hdr("t-owner"), json={"archived": False}).json()["archived"] is False

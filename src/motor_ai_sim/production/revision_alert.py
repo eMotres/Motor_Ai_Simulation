@@ -1,7 +1,10 @@
 """Production revision alerts (owner 2026-11-15, "this is very important").
 
-Publishing a revision SENDS: one e-mail to every member of the production (factory, engineers, owner), one message in the Discussion
-(the thread of the part when the changes name exactly one part, else General) and an entry in the production audit with the recipients.
+Publishing a revision records it at once: one message in the Discussion (the thread of the part when the changes name exactly one part,
+else General), the acknowledgement requirement in the Changes tab and an entry in the production audit.  Its e-mail is NOT sent on its
+own any more (owner 2026-11-19: every production notification waits for the production's section of the daily digest, ``digest``); only a
+revision published with ``urgent`` ("urgent: mail now", default off) mails every member at once, as before, and is listed in the next
+digest as already sent.
 The text is English with a Chinese copy under it (the production's languages); the subject says the motor, the revision and
 "action required: acknowledge".  No prices.  ``preview`` returns the exact subject, body and recipient list the publish dialog shows
 BEFORE anything is sent; ``deliver`` sends exactly that.
@@ -99,9 +102,12 @@ def build(die: str, config: str, production: dict, revision: dict) -> Dict[str, 
             "files": {"new": new_rows, "superseded": old_rows}}
 
 
-def preview(die: str, config: str, production: dict, revision: dict) -> Dict[str, Any]:
+def preview(die: str, config: str, production: dict, revision: dict, urgent: bool = False) -> Dict[str, Any]:
+    """The mail text and the recipients.  ``mode`` says when it leaves: ``digest`` (listed in the members' next daily digest; nothing is
+    mailed now) or ``urgent`` (mailed at once)."""
     a = build(die, config, production, revision)
-    a["will_send"] = auth_email.smtp_configured()
+    a["mode"] = "urgent" if urgent else "digest"
+    a["will_send"] = bool(urgent) and auth_email.smtp_configured()
     return a
 
 
@@ -134,11 +140,19 @@ def _post_discussion(die: str, config: str, author: str, alert: dict, revision: 
     return {"thread_id": made.get("thread"), "message_id": msg["id"], "part_id": part_id}
 
 
-def deliver(die: str, config: str, production: dict, revision: dict, author: str) -> Dict[str, Any]:
-    """Send the alert for a PUBLISHED revision: mail to every member, the Discussion message; returns the record stored on the revision."""
+#: the ``mail`` status of a recipient whose notice waits for the daily digest
+DIGEST_STATUS = "digest"
+
+
+def deliver(die: str, config: str, production: dict, revision: dict, author: str, urgent: bool = False) -> Dict[str, Any]:
+    """Record the alert for a PUBLISHED revision: the Discussion message always; the mail to every member only when ``urgent``, else the
+    members' next daily digest carries it (``mail`` = ``digest``).  Returns the record stored on the revision (``mode`` = urgent | digest)."""
     a = build(die, config, production, revision)
     rows = []
     for r in a["recipients"]:
+        if not urgent:
+            rows.append({"email": r["email"], "role": r["role"], "mail": DIGEST_STATUS})
+            continue
         try:
             status = SEND(r["email"], a["subject"], a["body"])
         except Exception as exc:                                   # noqa: BLE001 - one bad address must not stop the others
@@ -150,4 +164,4 @@ def deliver(die: str, config: str, production: dict, revision: dict, author: str
     except Exception as exc:                                       # noqa: BLE001
         log.warning("revision alert: Discussion message failed: %s", exc)
         disc = {"thread_id": None, "message_id": None, "part_id": None}
-    return {"sent_at": models._now(), "subject": a["subject"], "recipients": rows, **disc}
+    return {"sent_at": models._now(), "mode": "urgent" if urgent else "digest", "subject": a["subject"], "recipients": rows, **disc}

@@ -2,7 +2,8 @@
 
 Each factory (``oem``) member acknowledges every revision.  The owner and the engineers see who has and who has not, with dates (the
 Changes tab).  A revision that was published WITH an alert (``revision_alert``) and is still unacknowledged by a factory member after
-24 h and again after 72 h sends that member ONE reminder mail each (the highest level due; a missed run does not send both); the owner's
+24 h and again after 72 h sends that member ONE reminder mail each (the highest level due; a missed run does not send both); the hours count
+from the daily digest that carried the revision to that member (urgent revisions: from the publication); the owner's
 daily report lists every unacknowledged revision in one line per member (old revisions that never had an alert are listed, not mailed).
 
 Mail goes through ``revision_alert.SEND`` (the existing mail module; a server without SMTP sends nothing).
@@ -60,9 +61,20 @@ def pending(die: str, config: str, production: dict, revisions: List[dict], now:
         for x in r.get("reminders") or []:
             if isinstance(x, dict):
                 done.setdefault(str(x.get("email")), []).append(int(x.get("level") or 0))
+        # A revision that waits for the daily digest (owner 2026-11-19) counts from the digest THIS member got it in, not from the
+        # publication: before that digest there is nothing to remind about (listed in the report, not mailed).
+        digest_mode = bool(alert and alert.get("mode") == "digest")
+        sent_in = {str(x.get("email") or "").lower(): x.get("sent_at") for x in r.get("digest_sent") or [] if isinstance(x, dict)}
         for em in sorted(req - acked):
-            rows.append({"number": str(r.get("number")), "email": em, "hours": max(0.0, (now - since) / 3600.0), "alerted": alert is not None,
-                         "reminders": sorted(done.get(em, [])), "since": (alert or {}).get("sent_at") or r.get("date")})
+            t0, alerted, stamp = since, alert is not None, (alert or {}).get("sent_at") or r.get("date")
+            if digest_mode:
+                got = _ts(sent_in.get(em))
+                if got is None:
+                    t0, alerted, stamp = since, False, r.get("date")
+                else:
+                    t0, alerted, stamp = got, True, sent_in.get(em)
+            rows.append({"number": str(r.get("number")), "email": em, "hours": max(0.0, (now - t0) / 3600.0), "alerted": alerted,
+                         "reminders": sorted(done.get(em, [])), "since": stamp})
     return rows
 
 

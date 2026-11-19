@@ -278,11 +278,11 @@ export const productionApi = {
 
   revisions: async (die: string, config: string) => unwrapList<Revision>(await call('GET', `${base(die, config)}/revisions`), 'revisions'),
   /** the exact mail + recipients a publish would send; nothing is sent or written */
-  previewRevision: (die: string, config: string, summary: Bilingual, changes: Bilingual[], supersedes: SupersedePair[] = []) =>
-    call<RevisionPreview>('POST', `${base(die, config)}/revisions/preview`, { summary, changes, supersedes }),
-  /** publishing IS sending: the same message goes to every member and into the Discussion */
-  publishRevision: (die: string, config: string, summary: Bilingual, changes: Bilingual[], supersedes: SupersedePair[] = []) =>
-    call<Revision>('POST', `${base(die, config)}/revisions`, { summary, changes, supersedes }),
+  previewRevision: (die: string, config: string, summary: Bilingual, changes: Bilingual[], supersedes: SupersedePair[] = [], urgent = false) =>
+    call<RevisionPreview>('POST', `${base(die, config)}/revisions/preview`, { summary, changes, supersedes, urgent }),
+  /** publishing records the revision and posts it in the Discussion at once; the e-mail waits for the daily digest, unless `urgent` (mail now) */
+  publishRevision: (die: string, config: string, summary: Bilingual, changes: Bilingual[], supersedes: SupersedePair[] = [], urgent = false) =>
+    call<Revision>('POST', `${base(die, config)}/revisions`, { summary, changes, supersedes, urgent }),
   ackRevision: (die: string, config: string, rev: string) =>
     call<Revision>('POST', `${base(die, config)}/revisions/${enc(rev)}/ack`, {}),
 

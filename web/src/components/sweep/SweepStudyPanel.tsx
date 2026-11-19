@@ -7,6 +7,7 @@
 // its Simulation value.  Runs the backend grid-scan (POST /api/optimization/scan)
 // and streams the points live.  Resumes a running scan on mount (reload-safe).
 // ─────────────────────────────────────────────────────────────────────────────
+import { isScanAlreadyRunning } from '../../lib/sweepSync';
 import { nsT } from '../../i18n/nsT';
 import { invertedRangeNames } from '../../lib/optVarRanges';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
@@ -591,9 +592,28 @@ const SweepStudyPanel: React.FC = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Set synchronously on the first click: a double click (or a retry) cannot start a second POST before React has
+  // re-rendered the button away.
+  const startingRef = useRef(false);
+  const [attachNote, setAttachNote] = useState<string | null>(null);
+  // The server already runs a scan (a second POST answered 409): this panel attaches to it - progress bar, Stop - instead
+  // of going back to idle with the raw JSON.
+  const attachToRunning = async () => {
+    const st = await (await fetch(`${API}/api/optimization/scan/progress`)).json();
+    if (!st?.running) return false;
+    runIdRef.current = String(st.run_id ?? '');
+    stopRef.current = false; setRunning(true);
+    adoptProgress(st);
+    setErr(null);
+    setAttachNote('A sweep is already running');
+    await poll(runIdRef.current);
+    return true;
+  };
   const run = async () => {
+    if (startingRef.current || running) return;
     const inv = invertedRangeNames(sweepConfig.variations as never);
     if (inv.length) { setErr(tx('optRunBlockedInverted', { names: inv.join(', ') })); return; }
+    startingRef.current = true; setAttachNote(null);
     setErr(null); setResult(null); setResultView(null); setRunning(true); setProgress(null); stopRef.current = false;
     // A user-started run is never a resume — the backend clears its own
     // `resumed_from_restart` on a fresh /scan POST, and the panel must not go
@@ -649,10 +669,14 @@ const SweepStudyPanel: React.FC = () => {
           allow_new_lamination: readAllowNewLamination(),
         }),
       });
-      if (!res.ok) throw new Error(`HTTP ${res.status}: ${(await res.text()).slice(0, 400)}`);
+      if (!res.ok) {
+        const body = (await res.text()).slice(0, 400);
+        if (isScanAlreadyRunning(res.status, body) && await attachToRunning()) return;
+        throw new Error(`HTTP ${res.status}: ${body}`);
+      }
       await poll(myRunId);
     } catch (e: any) { setErr(String(e?.message ?? e)); }
-    finally { setRunning(false); }
+    finally { startingRef.current = false; setRunning(false); }
   };
 
   const cancel = async () => {
@@ -1241,6 +1265,9 @@ const SweepStudyPanel: React.FC = () => {
             title="The variable cards above were re-added from the last sweep's own record (min / max / step and its γ / current points) because none were selected after the reload.">
             {restoredNote}
           </Typography>
+        )}
+        {running && attachNote && (
+          <Typography variant="body2" sx={{ color: 'var(--text-3)' }}>{attachNote}</Typography>
         )}
         {running && (() => {
           // All clocks below tick every second from CLIENT time — a sweep point

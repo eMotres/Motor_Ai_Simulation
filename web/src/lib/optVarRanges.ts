@@ -68,7 +68,9 @@ export function bracketRange(cur: number, sch?: RangeSchema | null, pct: number 
   if (lo !== null) min = Math.min(Math.max(min, lo), cur);
   if (hi !== null) max = Math.max(Math.min(max, hi), cur);
   if (!(max > min)) max = isInt ? min + 1 : r6(min + step);
-  return { min, max, step };
+  // The default step is never larger than the window (after rounding): a schema step of 0.1 on a 0.36 ... 0.44 window
+  // computed ONE point instead of two (owner 2026-11-19, rule #753: step = max - min).  The maximum is then a point.
+  return { min, max, step: Math.min(step, r6(max - min)) };
 }
 
 /** Does the stored range contain the value (with a hair of float tolerance)? */

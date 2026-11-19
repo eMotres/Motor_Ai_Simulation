@@ -1,3 +1,4 @@
+import { sweepContentKey, isRealEdit, mayPush } from '../lib/sweepSync';
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import { syncActiveMotor } from '../components/common/motorSettings';
@@ -276,6 +277,13 @@ interface MotorState {
 // after the store): _sweepHydrating suppresses echoing a server-driven hydrate
 // back to the server; _sweepSaveTimer debounces saves while the user edits.
 let _sweepHydrating = false;
+// The content (see lib/sweepSync) and edit stamp of the copy this browser last LOADED from, or PUSHED to, the server.
+let _sweepKnownKey: string | null = null;
+let _sweepBaseAt = 0;
+const _sweepMarkSynced = (cfg: { updatedAt?: number } | null | undefined) => {
+  _sweepKnownKey = sweepContentKey(cfg as never);
+  _sweepBaseAt = Number(cfg?.updatedAt) || 0;
+};
 let _sweepSaveTimer: ReturnType<typeof setTimeout> | undefined;
 // A config counts as "real" only if ≥1 variable is actually selected
 // (mode !== 'fixed').  A fresh browser carries all schema params as 'fixed', so
@@ -1322,13 +1330,14 @@ export const useMotorStore = create<MotorState>()(
                 modulation: config.modulation ?? local.modulation,
                 updatedAt: srvAt,
               } });
+              _sweepMarkSynced(get().sweepConfig);
               _sweepHydrating = false;
             } else if (_sweepSelected(local.variations) > 0) {
               // This browser's copy is the newer one → it becomes the server's.
               fetch(`${API_BASE_URL}/api/sweep/config`, {
                 method: 'PUT', headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(local),
-              }).catch(() => {});
+              }).then((pr) => { if (pr.ok) _sweepMarkSynced(local); }).catch(() => {});
             }
             return;
           }
@@ -1360,6 +1369,7 @@ export const useMotorStore = create<MotorState>()(
               vBusV: typeof config.vBusV === 'number' ? config.vBusV : local.vBusV,
               modulation: config.modulation ?? local.modulation,
             } });
+            _sweepMarkSynced({ ...get().sweepConfig, updatedAt: srvAt });
             _sweepHydrating = false;
           } else if (_geoSel(local.variations) > 0
                      || (_sweepSelected(local.variations) > 0 && _sweepSelected(srvVars) === 0)) {
@@ -1370,7 +1380,7 @@ export const useMotorStore = create<MotorState>()(
             fetch(`${API_BASE_URL}/api/sweep/config`, {
               method: 'PUT', headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify(local),
-            }).catch(() => {});
+            }).then((pr) => { if (pr.ok) _sweepMarkSynced(local); }).catch(() => {});
           }
         } catch { /* ignore */ }
       },
@@ -1397,11 +1407,15 @@ export const useMotorStore = create<MotorState>()(
 // not just the one that holds localStorage.  Hydrate is suppressed via the flag
 // so a server-driven load isn't echoed straight back.
 let _prevSweepConfig = useMotorStore.getState().sweepConfig;
+_sweepMarkSynced(_prevSweepConfig);   // the copy this browser booted with is the baseline
 let _sweepStamping = false;
 useMotorStore.subscribe((state) => {
   if (state.sweepConfig === _prevSweepConfig) return;
   _prevSweepConfig = state.sweepConfig;
   if (_sweepHydrating || _sweepStamping) return;
+  // Not an edit: the content is the one already known (an automatic re-apply of the operating point on mount, a schema
+  // init that changed nothing) - never stamped "now", never pushed (bug 2026-11-19).
+  if (!isRealEdit(_sweepKnownKey, state.sweepConfig)) return;
   // Never persist an all-'fixed' config — that's a fresh/just-loaded browser
   // (e.g. right after the schema populates every param as 'fixed'), and saving
   // it would wipe another browser's real selections off the server.
@@ -1417,12 +1431,24 @@ useMotorStore.subscribe((state) => {
   _prevSweepConfig = useMotorStore.getState().sweepConfig;
   if (!canWriteServer()) return;   // non-writers keep sweep setup local-only
   clearTimeout(_sweepSaveTimer);
-  _sweepSaveTimer = setTimeout(() => {
-    fetch(`${API_BASE_URL}/api/sweep/config`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(useMotorStore.getState().sweepConfig),
-    }).catch(() => { /* offline / backend down — localStorage still holds it */ });
+  _sweepSaveTimer = setTimeout(async () => {
+    try {
+      // compare-and-swap: a server copy NEWER than the one this browser last saw is somebody else's edit (another tab
+      // or browser) - adopt it, do not overwrite it
+      const cur = await fetch(`${API_BASE_URL}/api/sweep/config`).then((r) => (r.ok ? r.json() : null)).catch(() => null);
+      const srvAt = Number(cur?.config?.updatedAt) || 0;
+      if (!mayPush(_sweepBaseAt, srvAt)) {
+        await useMotorStore.getState().loadServerSweepConfig();
+        return;
+      }
+      const mine = useMotorStore.getState().sweepConfig;
+      const r = await fetch(`${API_BASE_URL}/api/sweep/config`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(mine),
+      });
+      if (r.ok) { _sweepKnownKey = sweepContentKey(mine); _sweepBaseAt = Number(mine.updatedAt) || _sweepBaseAt; }
+    } catch { /* offline / backend down — localStorage still holds it */ }
   }, 600);
 });
 
@@ -1443,6 +1469,7 @@ const _adoptSweepCopy = (cfg: SweepConfig) => {
   try {
     useMotorStore.setState({ sweepConfig: cfg });
     _prevSweepConfig = useMotorStore.getState().sweepConfig;
+    _sweepMarkSynced(cfg);
   } finally {
     _sweepHydrating = false;
   }

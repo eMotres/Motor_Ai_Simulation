@@ -109,7 +109,7 @@ def tables(die: str, cfg: str) -> List[Dict[str, Any]]:
             for r in g["rows"]:
                 if r["status"] == "info" and r["measured"] is None and r["model"] is None:
                     continue
-                model_txt = _fmt(r["model"]) if r["model"] is not None else ("no model point" if r["status"] == "no_model" else "—")
+                model_txt = _fmt(r["model"]) if r["model"] is not None else ("not comparable (magnet temperature)" if (r.get("extra") or {}).get("not_comparable") else "no model point" if r["status"] == "no_model" else "—")
                 rows.append(["  " + str(r["label"]), str(r.get("unit") or ""), _fmt(r["measured"]), model_txt,
                              _delta(r["delta_pct"])])
         out.append({"title": _title(rec), "rows": rows, "note": str(rec.get("note") or "")[:200]})

@@ -200,7 +200,7 @@ def curve(vec: Any, op: str, n: int = 11, v_inf: float = 0.0, polar_source: Any 
 
 def optimize(vec: Any, op: str, pop: Any = 12, generations: Any = 6, seed: Any = 1, objectives: Any = None, free: Any = None,
              enforce_tip_mach: Any = True, tip_mach_limit: Any = None,
-             structure_material: Any = None, min_safety_factor: Any = None, polar_source: Any = None) -> Dict[str, Any]:
+             structure_material: Any = None, min_safety_factor: Any = None, polar_source: Any = None, flight: Any = False) -> Dict[str, Any]:
     """Two-objective optimisation from the given design (diameter and blade count stay).  Synchronous and capped (pop x (generations + 1) <= 200);
     every evaluation is appended to ``<workspace>/propeller_designs/_runs/<run_id>.jsonl``."""
     from motor_ai_sim import propeller_optimize as po
@@ -221,6 +221,8 @@ def optimize(vec: Any, op: str, pop: Any = 12, generations: Any = 6, seed: Any =
         raise ApiProblem(422, "structure_material must be a material name")
     if min_safety_factor is not None and (isinstance(min_safety_factor, bool) or not isinstance(min_safety_factor, (int, float))):
         raise ApiProblem(422, "min_safety_factor must be a number")
+    if not isinstance(flight, bool):
+        raise ApiProblem(422, "flight must be true or false")
     kw: Dict[str, Any] = {"pop": pop, "generations": generations, "seed": seed, "enforce_tip_mach": enforce_tip_mach,
                           "tip_mach_limit": tip_mach_limit, "store_dir": _draft_dir() / "_runs"}
     if objectives is not None:
@@ -229,6 +231,8 @@ def optimize(vec: Any, op: str, pop: Any = 12, generations: Any = 6, seed: Any =
         kw["free"] = free
     if structure_material is not None or min_safety_factor is not None:
         kw.update(structure_material=structure_material, min_safety_factor=min_safety_factor)
+    if flight:
+        kw["flight"] = True
     try:
         return po.optimize(d, v, op, **kw)
     except po.OptimizeError as exc:

@@ -18,7 +18,7 @@ from motor_ai_sim.propeller import PropellerDataError
 
 GEOMETRY_SOURCES = ("measured", "published", "vendor", "inferred")
 INTERPOLATIONS = ("linear", "pchip")
-POLAR_SOURCES = ("neuralfoil", "xfoil_table", "measured", "flatplate_model", "camber_model")
+POLAR_SOURCES = ("neuralfoil", "xfoil_table", "measured", "flatplate_model", "camber_model", "mfoil_table")
 ROTATIONS = ("cw_from_front", "ccw_from_front")
 MIN_STATIONS = 8
 DEFAULT_PITCH_AXIS = 0.25            # fraction of chord from the leading edge

@@ -65,6 +65,7 @@ _PHI_LO, _PHI_HI = 1e-4, math.pi / 2.0 - 1e-4
 _F_MIN = 1e-6
 
 POLAR_DIR = Path(__file__).resolve().parents[2] / "config" / "propellers" / "_polars"
+MFOIL_POLAR_DIR = Path(__file__).resolve().parents[2] / "config" / "propellers" / "_polars_mfoil"   # viscous model tables (mfoil, MIT), 2026-11-19
 
 
 class BemtError(_pi.InflowModelError):
@@ -572,11 +573,14 @@ def polar_for(prop: _pp.Propeller, polar_dir: Optional[Path] = None) -> PolarPro
         return FlatPlatePolar(ar)
     if src == "camber_model":
         return CamberedPlatePolar(ar)
-    if src in ("xfoil_table", "measured"):
-        tp = TablePolar.from_dir(polar_dir or POLAR_DIR, ar)
+    if src in ("xfoil_table", "measured", "mfoil_table"):
+        root = polar_dir or (MFOIL_POLAR_DIR if src == "mfoil_table" else POLAR_DIR)
+        tp = TablePolar.from_dir(root, ar)
         missing = sorted({s.airfoil for s in b.stations} - set(tp.airfoils()))
         if missing:
-            raise BemtError("no polar table for airfoil(s) %s under %s" % (", ".join(missing), polar_dir or POLAR_DIR))
+            raise BemtError("no polar table for airfoil(s) %s under %s" % (", ".join(missing), root))
+        if src == "mfoil_table":
+            tp.estimated = True                            # a viscous model (panel + integral boundary layer), not a measurement
         return tp
     raise BemtError("polar source %r is not available in this build (this stage ships the table / Viterna "
                     "providers only; a trained-surrogate provider needs its weights' licence verified first)" % src)

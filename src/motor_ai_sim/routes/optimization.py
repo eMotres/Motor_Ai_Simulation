@@ -2073,6 +2073,25 @@ class ScanRequest(BaseModel):
     # that differs.  Every entry names the same keys; the keys obey the whitelist like any variable (a key that cannot be swept refuses
     # the request: dropping it would compare other designs than the ones asked for).  Combines with `variables` (points x grid).
     points: List[Dict[str, float]] = Field(default_factory=list)
+    # Opt-in: rank the finished sweep by the owner's winner rule (optimization/winner_rule.py: the highest efficiency vs N*m/kg line first,
+    # then the lowest ripple) and put the answer in the result as `winner_rule`.  Needs at least two operating points to make lines.
+    rank_winner: bool = False
+
+
+class WinnerRankRequest(BaseModel):
+    points: List[Dict[str, Any]]            # {geom, td (N*m/kg), eff (fraction), ripple (%), current_a?}
+    ripple_max_pct: float = Field(5.0, ge=0.0, le=100.0)
+    tie_band_pct: float = Field(0.2, ge=0.0, le=10.0)   # efficiency points within which two lines count as the same height
+
+
+@router.post("/winner_rank")
+def winner_rank(req: WinnerRankRequest):
+    """The owner's winner rule over a list of points (a Sweep's or a Descent's): highest efficiency vs N*m/kg line first, then the lowest
+    ripple inside that group; ripple above the requirement is marked.  Pure arithmetic over the points sent: nothing is solved."""
+    from motor_ai_sim.optimization import winner_rule as WR
+    if len(req.points) > 5000:
+        raise HTTPException(status_code=422, detail="at most 5000 points")
+    return WR.rank(req.points, ripple_max_pct=req.ripple_max_pct, tie_band=req.tie_band_pct / 100.0)
 
 
 def _enumerate_geometries(variables: List[Dict[str, Any]], max_geom: int,
@@ -2215,6 +2234,16 @@ def _scan_pins(rpm=None, magnet_temp_c=None, cogging_screen=False) -> Optional[D
     return pins or None
 
 
+def _winner_rule_of(points: List[Dict[str, Any]], ripple_max: float) -> Dict[str, Any]:
+    """The winner rule (optimization/winner_rule.py) over a Sweep's finished points: one design per geometry id, its points at the
+    different currents are its line.  Infeasible / failed points have no efficiency and drop out."""
+    from motor_ai_sim.optimization import winner_rule as WR
+    rows = [{"geom": p.get("geom_id"), "td": p.get("torque_per_mass_Nm_kg"), "eff": p.get("efficiency"),
+             "ripple": p.get("T_ripple_pct"), "current_a": p.get("current_a")}
+            for p in points if isinstance(p, dict) and p.get("feasible")]
+    return WR.rank(rows, ripple_max_pct=min(float(ripple_max), WR.RIPPLE_MAX_PCT))
+
+
 @_optimizer_job("scan")
 def _scan_worker(variables, operating_points, steps, coil_temp_c, ripple_max,
                  max_geom, seed, run_id, mesh_size_mm=4.0, min_size_mm=0.3,
@@ -2222,7 +2251,7 @@ def _scan_worker(variables, operating_points, steps, coil_temp_c, ripple_max,
                  end_winding=0.0, rotor_eddy=False, hi_fidelity=False,
                  structured_gap=False, airgap_macro=False, iron_template=True,
                  geo_mesh=True, element_order=2, demag=False,
-                 with_baseline=False, magnet_temp_c=None, cogging_screen=False) -> None:
+                 with_baseline=False, magnet_temp_c=None, cogging_screen=False, rank_winner=False) -> None:
     import numpy as np  # noqa: F401
     from concurrent.futures import wait, FIRST_COMPLETED
     # Workspace-carrying pool — see workspace.WorkspaceThreadPoolExecutor.
@@ -2693,6 +2722,8 @@ def _scan_worker(variables, operating_points, steps, coil_temp_c, ripple_max,
             "objective": "pareto_torque_density_vs_efficiency_FEM",
             "steps_per_period": int(steps), "fem": True,
             "final_validation_status": "preliminary",
+            # opt-in winner rule over the finished points (absent unless the request asked)
+            **({"winner_rule": _winner_rule_of(points, ripple_max)} if rank_winner else {}),
             # WHICH RUN THIS IS.  The panel polls one endpoint for "is my run
             # done" and "here is the result", and those were only ever the same
             # thing by luck: after a restart the state holds the RESTORED last
@@ -2964,6 +2995,8 @@ def prepare_scan(req: ScanRequest) -> Dict[str, Any]:
               else {"magnet_temp_c": float(req.magnet_temp_c)})
     if req.cogging_screen:
         kwargs["cogging_screen"] = True
+    if req.rank_winner:
+        kwargs["rank_winner"] = True
     response = {"started": True, **({"mesh_preset": _preset_rec} if _preset_rec else {}),
                 "steps_per_period": steps, "max_geometries": max_geom,
                 "mesh_size_mm": mesh_size, "min_size_mm": min_size,

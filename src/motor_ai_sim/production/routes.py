@@ -1989,6 +1989,7 @@ async def create_thread(request: Request, die: str, config: str):
 @router.post("/{die}/{config}/threads/{thread_id}/messages")
 async def post_message(request: Request, die: str, config: str, thread_id: str):
     user, _production = require_member_with_full_view(request, die, config)
+    _find_thread(die, config, thread_id)                   # an unknown thread is a 404 BEFORE any upload is stored or translation paid for
     text: Optional[dict] = None
     attachments: list[dict] = []
     src_lang = "en"

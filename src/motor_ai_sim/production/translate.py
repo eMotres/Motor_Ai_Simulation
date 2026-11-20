@@ -115,10 +115,30 @@ def translate_text(text: str, src_lang: str, tgt_lang: str,
         raise TranslateError("unsupported language pair %s -> %s" % (src_lang, tgt_lang))
     if not str(text or "").strip():
         return ""
+    # limits before anything is paid for (security review 2026-11-19): one text is capped, the characters are reserved against the
+    # account's and the server's daily allowance, and the provider calls run a few at a time (production.translate_budget)
+    from motor_ai_sim.production import translate_budget as TB
+    why = TB.check_length(str(text))
+    if why:
+        raise TranslateError("translation refused: " + why)
+    why = TB.reserve(len(str(text)))
+    if why:
+        raise TranslateError("translation refused: " + why)
+    try:
+        return _translate_checked(text, src_lang, tgt_lang, http_post, TB)
+    except BaseException:
+        TB.give_back(len(str(text)))                         # nothing was translated: the allowance is not spent
+        raise
+
+
+def _translate_checked(text: str, src_lang: str, tgt_lang: str, http_post, TB) -> str:
     from motor_ai_sim.regions import relay as RL
     if http_post is None and RL.relay_enabled():             # regions stage 2: no provider key here, the EU peer translates
         try:
-            out, served_by = RL.translate(text, src_lang, tgt_lang)
+            with TB.Slot():
+                out, served_by = RL.translate(text, src_lang, tgt_lang)
+        except TB.BusyError as e:
+            raise TranslateError(str(e)) from None
         except Exception as e:                              # noqa: BLE001
             log.warning("production translate relay failed (%s)", type(e).__name__)
             raise TranslateError("translation failed (%s)" % type(e).__name__) from None
@@ -128,7 +148,10 @@ def translate_text(text: str, src_lang: str, tgt_lang: str,
         return out
     payload = _payload(text, src_lang, tgt_lang)
     try:
-        out, served_by = _answer((http_post or _post)(payload, TIMEOUT_S))
+        with TB.Slot():
+            out, served_by = _answer((http_post or _post)(payload, TIMEOUT_S))
+    except TB.BusyError as e:
+        raise TranslateError(str(e)) from None
     except TranslateError:
         raise
     except Exception as e:                                  # noqa: BLE001 - any provider failure degrades to "pending"

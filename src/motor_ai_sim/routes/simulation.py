@@ -121,9 +121,14 @@ _VALID_MESH_COMPONENTS = ("stator", "rotor", "magnet", "coil", "shaft",
 
 def _parse_component_mesh(s: str) -> dict:
     """Parse the per-component mesh-size JSON ({comp: size_mm}) coming from the
-    UI into a clean {comp: float} dict.  Unknown keys / non-positive sizes are
-    dropped so a stray value can never corrupt the gmsh size field.  Returns {}
-    for an empty / malformed string (→ global size everywhere).
+    UI into a clean {comp: float} dict.  Non-positive sizes are dropped so a stray
+    value can never corrupt the gmsh size field.  Returns {} for an empty /
+    malformed string (→ global size everywhere).
+
+    An UNKNOWN key is refused with a 422 naming it and the valid ones (it used to be
+    dropped silently: "air" is not a key - the far-air size is "outer" - and a
+    request that thought it was coarsening the air did nothing; mesh study
+    2026-11-17, agreed with US · simulation).  Not an alias.
 
     "coil_rel" is the one dimensionless entry: it is snapped to the nearest of
     0.5 / 1 / 2 rather than dropped or rejected, so a hand-written or older
@@ -139,6 +144,12 @@ def _parse_component_mesh(s: str) -> dict:
     except Exception:
         return {}
     out = {}
+    unknown = sorted(str(k) for k in raw if str(k).lower() not in _VALID_MESH_COMPONENTS)
+    if unknown:
+        from fastapi import HTTPException as _HTTPException
+        raise _HTTPException(status_code=422, detail=(
+            "unknown component_mesh key(s): %s (valid: %s; the far-air size is \"outer\")"
+            % (", ".join(unknown), ", ".join(_VALID_MESH_COMPONENTS))))
     for k, v in raw.items():
         kk = str(k).lower()
         if kk not in _VALID_MESH_COMPONENTS:
@@ -4912,6 +4923,8 @@ def get_fem_transient(
     band_thickness_mm:   float = 0.4,
     gap_layers:          Optional[float] = None,  # ← element rows PER SIDE of the slip
                                           #   circle; None = the machine's Mesh setting
+    slip_per_period:     Optional[int]   = None,  # opt-in: air-gap ring nodes per electrical period (q);
+                                          #   None = the adaptive ring of gap_layers (bit-identical)
     n_sectors:           Optional[int]   = None,  # ┘ fallback only if none is saved
     stator_fillet_mm:    float = 0.0,
     include_frames:      bool  = False,   # ← if true, accumulate per-step field
@@ -5172,6 +5185,12 @@ def get_fem_transient(
             torque_method, (_get_cfg_tm() or {}).get("simulation", {}))
     except ValueError as _tme:
         raise HTTPException(status_code=422, detail=str(_tme))
+    if slip_per_period is not None:
+        if isinstance(slip_per_period, bool) or not (24 <= int(slip_per_period) <= 2400):
+            raise HTTPException(status_code=422, detail=(
+                "slip_per_period must be a whole number of ring nodes per electrical period, 24..2400 "
+                "(it is snapped up to a multiple of 24 and of the sector count)"))
+        slip_per_period = int(slip_per_period)
     # MESH SETTINGS come only from the Mesh tab (owner 2026-09-30): what the
     # request carries, else the machine's saved Mesh settings, else a labelled
     # last-resort fallback that the result reports (mesh_settings.py).
@@ -5769,6 +5788,8 @@ def get_fem_transient(
         _sb_key_fields["geo_ov"] = tuple(sorted(_geo_ov.items()))
     if ripple_refine:   # may step past the requested layers: never a plain entry
         _sb_key_fields["ripple_refine"] = ("ripple_refine", 1)
+    if slip_per_period is not None:     # a different ring is a different discretisation: its own entry (absent = every old key unchanged)
+        _sb_key_fields["slip_per_period"] = int(slip_per_period)
     _sb_key = tuple(_sb_key_fields.values())
     # Key of the field snapshot this run's last frame belongs under — built ONCE
     # here and used both to store it after the solve and to tell a cache hit
@@ -6166,6 +6187,7 @@ def get_fem_transient(
                 mesh_size_mm=float(mesh_size_mm), min_size_mm=float(min_size_mm),
                 outer_air_factor=float(outer_air_factor), gap_layers=float(gap_layers),
                 torque_method=_torque_method_eff,
+                **({} if slip_per_period is None else {"slip_per_period": int(slip_per_period)}),
                 gap_refine=bool(ripple_refine),
                 n_sectors=int(n_sectors), stator_fillet_mm=float(stator_fillet_mm),
                 coil_temp_c=float(coil_temp_c),
@@ -6801,6 +6823,11 @@ def get_fem_transient(
     except HTTPException:
         raise
     except Exception as _e:
+        if slip_per_period is not None and type(_e).__name__ == "TdmMeshNotPeriodic":
+            # an explicit ring density that this machine's rotor mesh cannot be tiled at: refused up front, naming the request
+            raise HTTPException(status_code=422, detail=(
+                f"slip_per_period {int(slip_per_period)} does not build on this machine (the rotor mesh is not pole-pair periodic "
+                f"at that ring density: {_e}). Choose another ring density, or leave slip_per_period out for the adaptive ring."))
         log.exception("sliding-band transient failed")
         raise HTTPException(status_code=500,
                             detail=f"sliding-band transient failed: {_e}")

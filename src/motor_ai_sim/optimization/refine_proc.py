@@ -143,7 +143,8 @@ def run_one(overrides: Dict[str, float], current_a: float, steps: int,
             magnet_temp_c: float | None = None,
             sampling_purpose: Literal["standard", "optimization", "cogging_quality"] =
             "optimization",
-            optimizer_candidate: bool = False) -> Dict[str, Any]:
+            optimizer_candidate: bool = False,
+            slip_per_period: int | None = None) -> Dict[str, Any]:
     """Run the sliding-band transient for one candidate and return mean
     performance metrics (torque, efficiency, ripple, losses, mass).
 
@@ -313,6 +314,7 @@ def run_one(overrides: Dict[str, float], current_a: float, steps: int,
         "min_size_mm": float(min_size_mm), "n_sectors": int(_ns),
         "coil_temp_c": float(coil_temp_c), # None = the machine's saved Mesh setting (the route resolves it)
         "gap_layers": (None if gap_layers is None else float(gap_layers)),
+        **({} if not slip_per_period else {"slip_per_period": int(slip_per_period)}),
         # MAGNET TEMPERATURE.  Omitted (None) = the assigned card exactly as the
         # library quotes it — what every study so far solved, so an omitted
         # argument changes no candidate's numbers.  Sent, every candidate is
@@ -729,6 +731,7 @@ if __name__ == "__main__":
                       pole_copy=spec.get("pole_copy"),
                       torque_filter=spec.get("torque_filter", True),
                       gap_layers=spec.get("gap_layers"),
+                      slip_per_period=spec.get("slip_per_period"),
                       end_winding_factor=spec.get("end_winding_factor", 0.0),
                       rotor_eddy=spec.get("rotor_eddy", False),
                       hi_fidelity=spec.get("hi_fidelity", False),

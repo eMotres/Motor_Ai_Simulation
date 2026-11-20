@@ -2806,6 +2806,16 @@ def _mesh_sizes(req, preset_rec):
     return ms, mn, clamped
 
 
+def _unused_key_reason(name: str) -> Optional[str]:
+    """Why a requested variable can never change a design: the geometry builder does not read it (``slot_hs``, owner 2026-09-14 and
+    2026-09-30: "not used at all").  None for every other name.  Said out loud instead of a silent drop - and refused even if it is
+    ever whitelisted, because a variable the builder ignores gives N identical designs."""
+    from motor_ai_sim.geometry.motor_geometry import UNUSED_GEOMETRY_KEYS
+    if name in UNUSED_GEOMETRY_KEYS:
+        return "not read by the geometry builder (it cannot change a design)"
+    return None
+
+
 def prepare_scan(req: ScanRequest) -> Dict[str, Any]:
     """Turn a ScanRequest into everything a Sweep needs, with no web process
     and no side effect: the whitelisted variables, the operating points, the
@@ -2819,9 +2829,10 @@ def prepare_scan(req: ScanRequest) -> Dict[str, Any]:
     allowed = set(wl or [])
     variables = [{"name": v.name, "min": float(v.min), "max": float(v.max),
                   "mode": v.mode, "step": float(v.step)} for v in req.variables
-                 if (not allowed) or v.name == "gamma_deg" or v.name in allowed]
-    dropped = [{"name": v.name, "reason": "not in sweep_whitelist"} for v in req.variables
-               if allowed and v.name != "gamma_deg" and v.name not in allowed]
+                 if _unused_key_reason(v.name) is None and ((not allowed) or v.name == "gamma_deg" or v.name in allowed)]
+    dropped = [{"name": v.name, "reason": _unused_key_reason(v.name) or "not in sweep_whitelist"} for v in req.variables
+               if _unused_key_reason(v.name) is not None
+               or (allowed and v.name != "gamma_deg" and v.name not in allowed)]
     ops = [{"gamma_deg": float(o.gamma_deg), "current_a": float(o.current_a),
             "rpm": float(o.rpm)} for o in (req.operating_points or [])] or \
           [{"gamma_deg": 0.0, "current_a": 85.0, "rpm": 3950.0}]
@@ -2923,7 +2934,9 @@ def prepare_scan(req: ScanRequest) -> Dict[str, Any]:
     response = {"started": True, **({"mesh_preset": _preset_rec} if _preset_rec else {}),
                 "steps_per_period": steps, "max_geometries": max_geom,
                 "mesh_size_mm": mesh_size, "min_size_mm": min_size,
-                **({"mesh_clamped": _mesh_clamped} if _mesh_clamped else {})}
+                **({"mesh_clamped": _mesh_clamped} if _mesh_clamped else {}),
+                # a requested variable that was left out is said in the answer (it used to be dropped silently); absent when none was
+                **({"dropped": dropped} if dropped else {})}
     return {"variables": variables, "dropped": dropped, "ops": ops, "args": args,
             "kwargs": kwargs, "init_state": init_state, "response": response}
 
@@ -5610,6 +5623,10 @@ def prepare_descent(req: DescentRequest) -> Dict[str, Any]:
     var_specs: List[Dict[str, Any]] = []
     dropped: List[Dict[str, Any]] = []
     for v in req.variables:
+        _why_unused = _unused_key_reason(v.name)
+        if _why_unused:
+            dropped.append({"name": v.name, "reason": _why_unused})
+            continue
         if allowed and v.name not in allowed:
             dropped.append({"name": v.name, "reason": "not in sweep_whitelist"})
             continue
@@ -5743,7 +5760,8 @@ def prepare_descent(req: DescentRequest) -> Dict[str, Any]:
             "n_variables": len(var_specs), "max_iters": max_iters, "auto_expand": auto_expand,
             "max_rounds": (max_rounds if auto_expand else 1),
             "variables": [s["name"] for s in var_specs], "steps_per_period": steps,
-            **({"mesh_clamped": _mesh_clamped} if _mesh_clamped else {})}
+            **({"mesh_clamped": _mesh_clamped} if _mesh_clamped else {}),
+            **({"dropped": dropped} if dropped else {})}
     if _lim["mode"] or _lim["eff_min"] or _lim["j_max"] or _lim["vll_max"]:   # absent unless asked
         init_state["objective_limits"] = dict(_lim)
         response["objective_limits"] = dict(_lim)

@@ -143,7 +143,8 @@ def run_one(overrides: Dict[str, float], current_a: float, steps: int,
             magnet_temp_c: float | None = None,
             sampling_purpose: Literal["standard", "optimization", "cogging_quality"] =
             "optimization",
-            optimizer_candidate: bool = False) -> Dict[str, Any]:
+            optimizer_candidate: bool = False,
+            export_unrounded: bool = False) -> Dict[str, Any]:
     """Run the sliding-band transient for one candidate and return mean
     performance metrics (torque, efficiency, ripple, losses, mass).
 
@@ -598,6 +599,14 @@ def run_one(overrides: Dict[str, float], current_a: float, steps: int,
         "k_end_used": round(k_end_used, 4) if k_end_used > 0.0 else None,
         "k_end_source": "typed" if float(end_winding_factor) > 0.0 else "coil",
         "V_line_peak_V": round(v_line_peak, 1),
+        # opt-in: the objective figures BEFORE the rounding above (close rankings need them; the rounded keys stay as they are)
+        **({"unrounded": {"T_em_Nm": float(Tavg), "efficiency": float(eff),
+                          "torque_per_mass_Nm_kg": (float(Tavg) / mass if mass > 0 else 0.0),
+                          "T_ripple_pct": (None if d.get("T_ripple_pct") is None else float(d["T_ripple_pct"])),
+                          "P_loss_total_W": float(ploss), "P_cu_W": float(cu), "P_fe_W": float(fe), "P_mag_W": float(mg),
+                          "P_shaft_W": float(sh), "P_mech_W": float(pmech), "J_coil_A_per_mm2": float(j_coil),
+                          "V_line_peak_V": float(v_line_peak), "V_peak": float(d["V_peak"]), "mass_total_kg": float(mass)}}
+           if export_unrounded else {}),
         "I_phase_rms_A": round(float(current_a), 2),     # TERMINAL, as set
         "I_winding_rms_A": round(_i_wind, 2),
         "star_delta": ("delta" if _delta else "star"),
@@ -744,7 +753,8 @@ if __name__ == "__main__":
                       magnet_temp_c=spec.get("magnet_temp_c"),
                       sampling_purpose=spec.get("sampling_purpose", "optimization"),
                       optimizer_candidate=bool(spec.get("optimizer_candidate",
-                                                        False)))
+                                                        False)),
+                      export_unrounded=bool(spec.get("export_unrounded", False)))
         sys.stdout.write("@@RESULT@@" + json.dumps({"ok": True, "res": res}))
     except Exception as e:  # noqa: BLE001
         sys.stdout.write("@@RESULT@@" + json.dumps(

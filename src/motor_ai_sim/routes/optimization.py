@@ -1512,7 +1512,8 @@ def _subprocess_eval(overrides: Dict[str, float], current_a: float, steps: int,
                      ripple_pct_gate: bool = True,
                      sampling_purpose: Literal["standard", "optimization", "cogging_quality"] =
                      "optimization",
-                     optimizer_candidate: bool = True) -> Dict[str, Any]:
+                     optimizer_candidate: bool = True,
+                     export_unrounded: bool = False) -> Dict[str, Any]:
     """Evaluate ONE (geometry, current, γ) with the real sliding-band transient
     in an isolated subprocess (FEM/LLVM crash → failed design, not a dead API).
     Rebuilds the CadQuery geometry + gmsh mesh for the candidate in-memory.
@@ -1558,6 +1559,7 @@ def _subprocess_eval(overrides: Dict[str, float], current_a: float, steps: int,
                        "element_order": int(element_order),
                        "optimizer_candidate": bool(optimizer_candidate)
                        and sampling_purpose == "optimization",
+                       **({"export_unrounded": True} if export_unrounded else {}),
                        # DEMAG: omitted (None) = the candidate subprocess falls
                        # back to the active config's simulation.demag, exactly
                        # as before.  Passed, the caller's flag wins.
@@ -3982,6 +3984,9 @@ class DescentRequest(BaseModel):
     # 0 A, magnets at 20 C (owner rule: cogging at 20 C), cogging_steps_per_period steps
     # (>= 120, owner rule; never the 48 of the load eval), eddy / rotor eddy / demag off, the
     # run's mesh.  cogging_max_nm is a HARD cap on that pk-pk value [N*m], 0 = off.
+    # Opt-in: every candidate also carries its objective figures BEFORE the rounding (`unrounded`) and the cost is formed from them
+    # (close rankings: torque / efficiency / losses are rounded to 3 / 5 / 1 decimals in the point record).  Off = as before.
+    unrounded_objective: bool = False
     cogging_max_nm: float = Field(0.0, ge=0.0)
     cogging_steps_per_period: int = Field(144, ge=120)
     # See OptRequest.allow_new_lamination.
@@ -4051,6 +4056,7 @@ def _msum(m: Dict[str, Any]) -> Dict[str, Any]:
         # The no-load cogging torque of an opt-in cogging run (absent otherwise).
         **({k: m.get(k) for k in ("cogging_pp_Nm", "cogging_steps_per_period", "cogging_error")
             if k in m} if "cogging_pp_Nm" in m else {}),
+        **({"unrounded": m["unrounded"]} if isinstance(m.get("unrounded"), dict) else {}),
     }
 
 
@@ -4094,7 +4100,8 @@ def _pt(out: Dict[str, Any], kind: str):
                                  and r.get("cogging_sampling_final_quality_sufficient") is True
                                  else "preliminary"),
             # Only in a run that measures cogging (absent otherwise: the point is unchanged).
-            **({"cogging_pp": r.get("cogging_pp_Nm")} if "cogging_pp_Nm" in r else {})}
+            **({"cogging_pp": r.get("cogging_pp_Nm")} if "cogging_pp_Nm" in r else {}),
+            **({"unrounded": r["unrounded"]} if isinstance(r.get("unrounded"), dict) else {})}
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -4207,11 +4214,14 @@ _HARD_LIMIT_COST = 1000.0
 # Opt-in cogging measurement of the run (same per-run-global pattern): steps 0 = not measured,
 # max 0 = no cap.  Set together with _RUN_LIMITS by begin_descent_state, cleared with it.
 _COG_LIMIT = {"max": 0.0, "steps": 0}
+# Opt-in: the evals export their unrounded objective figures and the cost reads them (per-run, cleared with the limits).
+_UNROUNDED = {"on": False}
 
 
 def _reset_run_limits() -> None:
     _RUN_LIMITS.update(mode="", eff_min=0.0, j_max=0.0, vll_max=0.0)
     _COG_LIMIT.update(max=0.0, steps=0)
+    _UNROUNDED["on"] = False
 
 
 def _cogging_on() -> bool:
@@ -4340,6 +4350,14 @@ def _ripple_ramp_step(best_metrics: Dict[str, Any], ripple_max: float,
             "gate": round(float(ripple_max), 2)}
 
 
+def _with_unrounded(m):
+    """The metrics with their UNROUNDED objective figures in place of the rounded ones, when the run asked for them
+    (``unrounded_objective``) and the eval carries them; otherwise the same object, untouched."""
+    if _UNROUNDED["on"] and isinstance(m, dict) and isinstance(m.get("unrounded"), dict):
+        return {**m, **{k: v for k, v in m["unrounded"].items() if v is not None}}
+    return m
+
+
 def _descent_cost(m: Dict[str, Any], base: Dict[str, Any],
                   ripple_max: float, w_eff: float, w_td: float, lam: float,
                   v_peak_limit: float = 1e9):
@@ -4359,6 +4377,7 @@ def _descent_cost(m: Dict[str, Any], base: Dict[str, Any],
       from the line itself (see _make_bline), so eff vs T/mass is balanced
       automatically.  F > 0 ⇒ the geometry beats just cranking current.
     • product (legacy fallback): F = (efficiency/eff0)^w_eff · (T/mass/td0)^w_td."""
+    m, base = _with_unrounded(m), _with_unrounded(base)
     vpk  = float(m.get("V_peak", 0.0) or 0.0)
     pen  = lam * max(0.0, vpk - v_peak_limit)
     _rp = float(_RIPPLE_PEN_LAM.get("v", 0.0) or 0.0)
@@ -4831,6 +4850,7 @@ def _descent_worker(var_specs, op, ripple_max, w_eff, w_td, lam,
                                  # whatever the Simulation tab said at eval time.
                                  rpm=(float(op.get("rpm")) if op.get("rpm") else None),
                                  owner="descent",
+                                 export_unrounded=bool(_UNROUNDED["on"]),
                                   sampling_purpose=purpose)
             if o.get("ok") and isinstance(o.get("res"), dict):
                 o["res"]["current_a"] = float(cur)   # record solved current in best
@@ -5248,6 +5268,7 @@ def _cmaes_worker(var_specs, op, ripple_max, w_eff, w_td, lam,
                                  # gradient worker above.
                                  rpm=(float(op.get("rpm")) if op.get("rpm") else None),
                                  owner="descent",
+                                 export_unrounded=bool(_UNROUNDED["on"]),
                                   sampling_purpose=purpose)
             # Stamp the SOLVED current onto the result so the best records the
             # operating point it was found at (target-torque solves for it) →
@@ -5750,11 +5771,15 @@ def prepare_descent(req: DescentRequest) -> Dict[str, Any]:
     if _cog:                                                                     # absent unless asked
         init_state["cogging_limit"] = dict(_cog)
         response["cogging_limit"] = dict(_cog)
+    if req.unrounded_objective:                                                  # absent unless asked
+        init_state["unrounded_objective"] = True
+        response["unrounded_objective"] = True
     return {"var_specs": var_specs, "dropped": dropped, "worker": worker,
             "args": args, "kwargs": kwargs, "init_state": init_state,
             "ripple_pen0": _rp0, "thd_pen": (_thd_lam, _thd_max),
             "run_limits": _lim,
             **({"cogging_limit": _cog} if _cog else {}),
+            **({"unrounded_objective": True} if req.unrounded_objective else {}),
             "response": response}
 
 
@@ -5769,6 +5794,7 @@ def begin_descent_state(plan: Dict[str, Any]) -> None:
     _THD_PEN["lam"], _THD_PEN["max"] = plan["thd_pen"]
     _RUN_LIMITS.update(plan.get("run_limits") or {"mode": "", "eff_min": 0.0, "j_max": 0.0, "vll_max": 0.0})
     _COG_LIMIT.update(plan.get("cogging_limit") or {"max": 0.0, "steps": 0})   # an older run's never stays
+    _UNROUNDED["on"] = bool(plan.get("unrounded_objective"))
     with _descent_lock:
         _descent_external[0] = False   # this process owns the flag now
         _descent_state.update(plan["init_state"])

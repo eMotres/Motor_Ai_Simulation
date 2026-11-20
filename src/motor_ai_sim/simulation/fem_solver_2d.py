@@ -5865,6 +5865,15 @@ def _fem_transient_sliding_band_once(
                     " | ".join(_build_prov["events"]))
     if _build_prov.get("notes"):
         log.info("mesh build path: %s", " | ".join(_build_prov["notes"]))
+    _mesh_telemetry = None
+    from motor_ai_sim.simulation import mesh_telemetry as _MT
+    if _MT.enabled():
+        try:                                   # diagnostic only: a failure here never touches the solve
+            _mesh_telemetry = _MT.collect(
+                [{"name": "stator", "mesh": ms, "tags": ts}, {"name": "rotor", "mesh": mr, "tags": tr}],
+                _build_prov.get("belts") or [], float(getattr(motor, "parameters", {}).get("stator_inner_radius", 0.0) or 0.0))
+        except Exception as _e_mt:             # noqa: BLE001
+            log.warning("mesh telemetry skipped: %s", _e_mt)
     Ps, Tts = ms.p.copy(), ms.t.copy(); Pr, Ttr = mr.p.copy(), mr.t.copy()
     nsn = Ps.shape[1]
     Pall = np.hstack([Ps, Pr]); Tall = np.hstack([Tts, Ttr + nsn])
@@ -15247,6 +15256,7 @@ def _fem_transient_sliding_band_once(
         # / structured cells actually materialised (False on the free-gap
         # fallback even when structured_gap=True was requested).
         "mesh_build_events": list(_build_prov["events"]),
+        **({"mesh_telemetry": _mesh_telemetry} if _mesh_telemetry is not None else {}),
         # Deterministic build-path decisions (a sleeve → geometry mesher):
         # reported, never a rejection.
         "mesh_build_notes": list(_build_prov.get("notes") or []),

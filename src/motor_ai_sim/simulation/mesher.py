@@ -1390,6 +1390,7 @@ def _trace_reset() -> None:
     _BUILD_TRACE.notes = []
     _BUILD_TRACE.structured_gap_effective = False
     _BUILD_TRACE.mesher = None
+    _BUILD_TRACE.belts = []
 
 
 def _trace_event(msg: str) -> None:
@@ -1459,7 +1460,8 @@ def build_trace() -> Dict[str, object]:
                 bool(getattr(_BUILD_TRACE, "structured_gap_effective", False)),
             # which mesher built the halves: "geo_cdt/<triangle|gmsh>",
             # "iron_template" or "gmsh_occ" (the plain gmsh build)
-            "mesher": getattr(_BUILD_TRACE, "mesher", None)}
+            "mesher": getattr(_BUILD_TRACE, "mesher", None),
+            "belts": list(getattr(_BUILD_TRACE, "belts", []) or [])}
 
 
 def _build_sliding_band_meshes(
@@ -2706,6 +2708,14 @@ def _weld_belt_into_half(mesh, tags, spec: dict, half: str, n_sectors: int):
     tags_out = tags_all[good]
     log.info("belt[%s]: %d iron boundary nodes, %d uniform rings x %d, %d tris",
              half, m, len(rows_r), ncell, bt.shape[1])
+    from motor_ai_sim.simulation import mesh_telemetry as _MT
+    if _MT.enabled():                          # diagnostic only: nothing below reads it back
+        try:
+            _belts = list(getattr(_BUILD_TRACE, "belts", []) or [])
+            _belts.append(_MT.belt_entry(half, m, N, len(rows_r), ncell, ns, n0, bp.shape[1], bt, iron))
+            _BUILD_TRACE.belts = _belts
+        except Exception as _e_mt:             # noqa: BLE001
+            log.debug("belt telemetry skipped: %s", _e_mt)
     return mesh_out, tags_out
 
 def _structured_gap_sm(n_slip: int, n_sectors: int,

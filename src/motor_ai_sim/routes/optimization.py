@@ -2068,6 +2068,30 @@ class ScanRequest(BaseModel):
     run_id: str = ""
     # See OptRequest.allow_new_lamination.
     allow_new_lamination: bool = False
+    # Opt-in "list of points" mode (owner 2026-11-18, comparing configurations): the candidate geometries are exactly these override sets,
+    # one per entry, instead of a grid - two configurations at two currents are four runs, not a Cartesian product of every key
+    # that differs.  Every entry names the same keys; the keys obey the whitelist like any variable (a key that cannot be swept refuses
+    # the request: dropping it would compare other designs than the ones asked for).  Combines with `variables` (points x grid).
+    points: List[Dict[str, float]] = Field(default_factory=list)
+    # Opt-in: rank the finished sweep by the owner's winner rule (optimization/winner_rule.py: the highest efficiency vs N*m/kg line first,
+    # then the lowest ripple) and put the answer in the result as `winner_rule`.  Needs at least two operating points to make lines.
+    rank_winner: bool = False
+
+
+class WinnerRankRequest(BaseModel):
+    points: List[Dict[str, Any]]            # {geom, td (N*m/kg), eff (fraction), ripple (%), current_a?}
+    ripple_max_pct: float = Field(5.0, ge=0.0, le=100.0)
+    tie_band_pct: float = Field(0.2, ge=0.0, le=10.0)   # efficiency points within which two lines count as the same height
+
+
+@router.post("/winner_rank")
+def winner_rank(req: WinnerRankRequest):
+    """The owner's winner rule over a list of points (a Sweep's or a Descent's): highest efficiency vs N*m/kg line first, then the lowest
+    ripple inside that group; ripple above the requirement is marked.  Pure arithmetic over the points sent: nothing is solved."""
+    from motor_ai_sim.optimization import winner_rule as WR
+    if len(req.points) > 5000:
+        raise HTTPException(status_code=422, detail="at most 5000 points")
+    return WR.rank(req.points, ripple_max_pct=req.ripple_max_pct, tie_band=req.tie_band_pct / 100.0)
 
 
 def _enumerate_geometries(variables: List[Dict[str, Any]], max_geom: int,
@@ -2080,6 +2104,12 @@ def _enumerate_geometries(variables: List[Dict[str, Any]], max_geom: int,
     if not gvars:
         return [{}]
     axes = []
+    lvars = [v for v in gvars if v.get("mode") == "list" and v.get("values")]
+    if lvars:
+        # LIST mode: the i-th value of every list variable belongs to the i-th point; the points are ONE axis of the product
+        n_pts = len(lvars[0]["values"])
+        axes.append([tuple((v["name"], round(float(v["values"][i]), 4)) for v in lvars) for i in range(n_pts)])
+        gvars = [v for v in gvars if v not in lvars]
     for v in gvars:
         lo, hi = float(v["min"]), float(v["max"])
         if v.get("mode") == "sweep" and float(v.get("step", 0)) > 0 and hi > lo:
@@ -2098,7 +2128,7 @@ def _enumerate_geometries(variables: List[Dict[str, Any]], max_geom: int,
     # gets precisely the points their Sweep Variables define.
     combos: List[Dict[str, float]] = []
     for c in itertools.product(*axes):
-        combos.append(dict(c))
+        combos.append({k: v for part in c for k, v in (part if (part and isinstance(part[0], tuple)) else (part,))})
         if len(combos) >= max_geom:
             break
     return combos
@@ -2204,6 +2234,16 @@ def _scan_pins(rpm=None, magnet_temp_c=None, cogging_screen=False) -> Optional[D
     return pins or None
 
 
+def _winner_rule_of(points: List[Dict[str, Any]], ripple_max: float) -> Dict[str, Any]:
+    """The winner rule (optimization/winner_rule.py) over a Sweep's finished points: one design per geometry id, its points at the
+    different currents are its line.  Infeasible / failed points have no efficiency and drop out."""
+    from motor_ai_sim.optimization import winner_rule as WR
+    rows = [{"geom": p.get("geom_id"), "td": p.get("torque_per_mass_Nm_kg"), "eff": p.get("efficiency"),
+             "ripple": p.get("T_ripple_pct"), "current_a": p.get("current_a")}
+            for p in points if isinstance(p, dict) and p.get("feasible")]
+    return WR.rank(rows, ripple_max_pct=min(float(ripple_max), WR.RIPPLE_MAX_PCT))
+
+
 @_optimizer_job("scan")
 def _scan_worker(variables, operating_points, steps, coil_temp_c, ripple_max,
                  max_geom, seed, run_id, mesh_size_mm=4.0, min_size_mm=0.3,
@@ -2211,7 +2251,7 @@ def _scan_worker(variables, operating_points, steps, coil_temp_c, ripple_max,
                  end_winding=0.0, rotor_eddy=False, hi_fidelity=False,
                  structured_gap=False, airgap_macro=False, iron_template=True,
                  geo_mesh=True, element_order=2, demag=False,
-                 with_baseline=False, magnet_temp_c=None, cogging_screen=False) -> None:
+                 with_baseline=False, magnet_temp_c=None, cogging_screen=False, rank_winner=False) -> None:
     import numpy as np  # noqa: F401
     from concurrent.futures import wait, FIRST_COMPLETED
     # Workspace-carrying pool — see workspace.WorkspaceThreadPoolExecutor.
@@ -2682,6 +2722,8 @@ def _scan_worker(variables, operating_points, steps, coil_temp_c, ripple_max,
             "objective": "pareto_torque_density_vs_efficiency_FEM",
             "steps_per_period": int(steps), "fem": True,
             "final_validation_status": "preliminary",
+            # opt-in winner rule over the finished points (absent unless the request asked)
+            **({"winner_rule": _winner_rule_of(points, ripple_max)} if rank_winner else {}),
             # WHICH RUN THIS IS.  The panel polls one endpoint for "is my run
             # done" and "here is the result", and those were only ever the same
             # thing by luck: after a restart the state holds the RESTORED last
@@ -2806,6 +2848,16 @@ def _mesh_sizes(req, preset_rec):
     return ms, mn, clamped
 
 
+def _unused_key_reason(name: str) -> Optional[str]:
+    """Why a requested variable can never change a design: the geometry builder does not read it (``slot_hs``, owner 2026-09-14 and
+    2026-09-30: "not used at all").  None for every other name.  Said out loud instead of a silent drop - and refused even if it is
+    ever whitelisted, because a variable the builder ignores gives N identical designs."""
+    from motor_ai_sim.geometry.motor_geometry import UNUSED_GEOMETRY_KEYS
+    if name in UNUSED_GEOMETRY_KEYS:
+        return "not read by the geometry builder (it cannot change a design)"
+    return None
+
+
 def prepare_scan(req: ScanRequest) -> Dict[str, Any]:
     """Turn a ScanRequest into everything a Sweep needs, with no web process
     and no side effect: the whitelisted variables, the operating points, the
@@ -2819,9 +2871,32 @@ def prepare_scan(req: ScanRequest) -> Dict[str, Any]:
     allowed = set(wl or [])
     variables = [{"name": v.name, "min": float(v.min), "max": float(v.max),
                   "mode": v.mode, "step": float(v.step)} for v in req.variables
-                 if (not allowed) or v.name == "gamma_deg" or v.name in allowed]
-    dropped = [{"name": v.name, "reason": "not in sweep_whitelist"} for v in req.variables
-               if allowed and v.name != "gamma_deg" and v.name not in allowed]
+                 if _unused_key_reason(v.name) is None and ((not allowed) or v.name == "gamma_deg" or v.name in allowed)]
+    dropped = [{"name": v.name, "reason": _unused_key_reason(v.name) or "not in sweep_whitelist"} for v in req.variables
+               if _unused_key_reason(v.name) is not None
+               or (allowed and v.name != "gamma_deg" and v.name not in allowed)]
+    if req.points:
+        # LIST mode: each entry is one candidate geometry.  Same keys in every entry, every key sweepable; otherwise the request is
+        # refused (never a silent change of what is compared).
+        keys = sorted(req.points[0])
+        for i, pt in enumerate(req.points):
+            if sorted(pt) != keys:
+                raise HTTPException(status_code=422, detail=f"points[{i}] names other keys than points[0]: {sorted(pt)} vs {keys}")
+            for k, v in pt.items():
+                if isinstance(v, bool) or not math.isfinite(float(v)):
+                    raise HTTPException(status_code=422, detail=f"points[{i}].{k} is not a finite number")
+        if not keys:
+            raise HTTPException(status_code=422, detail="points: every entry needs at least one geometry key")
+        if len(req.points) > max(1, min(int(req.max_geometries), 400)):
+            raise HTTPException(status_code=422, detail=f"{len(req.points)} points exceed max_geometries; raise max_geometries")
+        refused = [{"name": k, "reason": _unused_key_reason(k) or "not in sweep_whitelist"} for k in keys
+                   if _unused_key_reason(k) is not None or (allowed and k != "gamma_deg" and k not in allowed)]
+        if refused:
+            raise HTTPException(status_code=422, detail="points name keys that cannot be swept: " + "; ".join(
+                f"{d['name']} ({d['reason']})" for d in refused))
+        for k in keys:
+            vals = [float(pt[k]) for pt in req.points]
+            variables.append({"name": k, "min": min(vals), "max": max(vals), "mode": "list", "step": 0.0, "values": vals})
     ops = [{"gamma_deg": float(o.gamma_deg), "current_a": float(o.current_a),
             "rpm": float(o.rpm)} for o in (req.operating_points or [])] or \
           [{"gamma_deg": 0.0, "current_a": 85.0, "rpm": 3950.0}]
@@ -2920,10 +2995,14 @@ def prepare_scan(req: ScanRequest) -> Dict[str, Any]:
               else {"magnet_temp_c": float(req.magnet_temp_c)})
     if req.cogging_screen:
         kwargs["cogging_screen"] = True
+    if req.rank_winner:
+        kwargs["rank_winner"] = True
     response = {"started": True, **({"mesh_preset": _preset_rec} if _preset_rec else {}),
                 "steps_per_period": steps, "max_geometries": max_geom,
                 "mesh_size_mm": mesh_size, "min_size_mm": min_size,
-                **({"mesh_clamped": _mesh_clamped} if _mesh_clamped else {})}
+                **({"mesh_clamped": _mesh_clamped} if _mesh_clamped else {}),
+                # a requested variable that was left out is said in the answer (it used to be dropped silently); absent when none was
+                **({"dropped": dropped} if dropped else {})}
     return {"variables": variables, "dropped": dropped, "ops": ops, "args": args,
             "kwargs": kwargs, "init_state": init_state, "response": response}
 
@@ -5610,6 +5689,10 @@ def prepare_descent(req: DescentRequest) -> Dict[str, Any]:
     var_specs: List[Dict[str, Any]] = []
     dropped: List[Dict[str, Any]] = []
     for v in req.variables:
+        _why_unused = _unused_key_reason(v.name)
+        if _why_unused:
+            dropped.append({"name": v.name, "reason": _why_unused})
+            continue
         if allowed and v.name not in allowed:
             dropped.append({"name": v.name, "reason": "not in sweep_whitelist"})
             continue
@@ -5743,7 +5826,8 @@ def prepare_descent(req: DescentRequest) -> Dict[str, Any]:
             "n_variables": len(var_specs), "max_iters": max_iters, "auto_expand": auto_expand,
             "max_rounds": (max_rounds if auto_expand else 1),
             "variables": [s["name"] for s in var_specs], "steps_per_period": steps,
-            **({"mesh_clamped": _mesh_clamped} if _mesh_clamped else {})}
+            **({"mesh_clamped": _mesh_clamped} if _mesh_clamped else {}),
+            **({"dropped": dropped} if dropped else {})}
     if _lim["mode"] or _lim["eff_min"] or _lim["j_max"] or _lim["vll_max"]:   # absent unless asked
         init_state["objective_limits"] = dict(_lim)
         response["objective_limits"] = dict(_lim)

@@ -26,5 +26,7 @@ def test_every_key_the_app_and_the_presets_send_is_valid():
     from motor_ai_sim import mesh_presets as MP
     for k in ("stator", "rotor", "magnet", "outer", "coil_rel"):                          # web/src/lib/meshPresets.ts
         assert k in S._VALID_MESH_COMPONENTS
-    cm = MP.resolve("optimization", {"stator_diameter": 80.0, "num_slots": 12, "num_poles": 10, "stator_outer_radius": 40.0})["values"].get("component_mesh", {})
-    assert set(cm) <= set(S._VALID_MESH_COMPONENTS)
+    from test_mesh_presets import _machine
+    for name in ("optimization", "simulation"):
+        cm = MP.resolve(name, _machine(80.0, 12, 10))["values"]["component_mesh"]
+        assert set(cm) <= set(S._VALID_MESH_COMPONENTS) and "air" not in cm

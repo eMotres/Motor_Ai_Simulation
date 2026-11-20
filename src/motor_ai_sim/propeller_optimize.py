@@ -4,7 +4,11 @@ NSGA-II (fast non-dominated sorting with constrained domination, crowding distan
 variables of ``propeller_design``.  The result is a PARETO FRONT of the objectives, never one weighted number:
 
 * ``thrust_per_shaft_W``   — maximise (objective 1);
-* ``cooling_air_axial_ms`` — maximise (objective 2: mean axial speed at the disc in the motor band; ``None`` = the model has no value, ranked worst).
+* ``cooling_air_axial_ms`` — maximise (objective 2: mean axial speed at the disc in the motor band; ``None`` = the model has no value, ranked worst);
+* ``flight_thrust_N``      — maximise, only with ``flight=True`` (owner 2026-11-19: forward flight at the operating point's ``flight_speed_ms``;
+  the candidate must take the rated torque at the rated rpm, ``propeller_design.FLIGHT_RPM_TOL``, so the thrust is compared at the rated power).
+  Opt-in ``chord_max_step``: the chord must rise to one maximum and fall to the tip, neighbouring control points within that step
+  (``propeller_design.chord_shape_violation``) — without it a jagged chord can win on the model alone.
 
 Either one alone is allowed (``objectives=[...]``).  Constraints: the candidate's own validity rules (bounds, manufacturing limits; a
 candidate that cannot be repaired is infeasible and is not evaluated), the motor torque limit (met by construction of the operating speed), the tip
@@ -30,7 +34,8 @@ import numpy as np
 
 from motor_ai_sim import propeller_design as pd
 
-OBJECTIVES = ("thrust_per_shaft_W", "cooling_air_axial_ms")
+OBJECTIVES = ("thrust_per_shaft_W", "cooling_air_axial_ms", "flight_thrust_N")
+DEFAULT_OBJECTIVES = ("thrust_per_shaft_W", "cooling_air_axial_ms")
 FREE_GROUPS = ("outer", "inner", "airfoil")
 EVAL_SCHEMA = "propeller-eval-1"
 MAX_POP, MAX_GEN, MAX_EVALS = 20, 10, 200
@@ -199,6 +204,8 @@ def _violation(rec: Dict[str, Any], enforce_tip_mach: bool, limit: float) -> flo
         v += 1.0
     if not c.get("bemt_converged", True):
         v += 1.0
+    if not c.get("rpm_matches_rated", True):              # flight mode: graded by how far the matched rpm is from the rated one
+        v += abs((rec.get("flight") or {}).get("rpm_error_vs_rated") or 1.0) / pd.FLIGHT_RPM_TOL
     if enforce_tip_mach and rec.get("tip_mach", 0.0) > limit:
         v += (rec["tip_mach"] - limit) / limit
     return v
@@ -220,11 +227,11 @@ def _structure_violation(design: pd.Design, vec: Dict[str, Any], rec: Dict[str, 
     return 0.0 if sf >= sf_min else (sf_min - sf) / sf_min
 
 
-def optimize(design: pd.Design, base: Dict[str, Any], op: str, *, objectives: Sequence[str] = OBJECTIVES, pop: int = 12, generations: int = 6,
+def optimize(design: pd.Design, base: Dict[str, Any], op: str, *, objectives: Sequence[str] = DEFAULT_OBJECTIVES, pop: int = 12, generations: int = 6,
              seed: int = 1, free: Sequence[str] = FREE_GROUPS, enforce_tip_mach: bool = True, tip_mach_limit: Optional[float] = None,
              evaluate: Optional[Callable[[pd.Design, Dict[str, Any], str], Dict[str, Any]]] = None,
              store_dir: Optional[Path] = None, structure_material: Optional[str] = None,
-             min_safety_factor: Optional[float] = None) -> Dict[str, Any]:
+             min_safety_factor: Optional[float] = None, flight: bool = False, chord_max_step: Optional[float] = None) -> Dict[str, Any]:
     """Run NSGA-II from ``base`` (diameter and blade count stay as given).  Returns the evaluations, the front (indices) and the settings."""
     t0 = time.time()
     objectives = list(objectives)
@@ -236,6 +243,12 @@ def optimize(design: pd.Design, base: Dict[str, Any], op: str, *, objectives: Se
         raise OptimizeError("at most %d evaluations per run (pop x (generations + 1))" % MAX_EVALS)
     if op not in design.operating_points:
         raise OptimizeError("unknown operating point %r; known: %s" % (op, sorted(design.operating_points)))
+    if "flight_thrust_N" in objectives and not flight:
+        raise OptimizeError("flight_thrust_N needs flight=True")
+    if chord_max_step is not None and not (isinstance(chord_max_step, (int, float)) and not isinstance(chord_max_step, bool) and 0.01 <= chord_max_step <= 0.3):
+        raise OptimizeError("chord_max_step must be a number between 0.01 and 0.3 (chord/R)")
+    if flight and design.operating_points[op].flight_speed_ms is None:
+        raise OptimizeError("operating point %r has no flight_speed_ms" % op)
     free = [g for g in free if g in FREE_GROUPS]
     if not free:
         raise OptimizeError("choose at least one group to vary: %s" % list(FREE_GROUPS))
@@ -261,7 +274,7 @@ def optimize(design: pd.Design, base: Dict[str, Any], op: str, *, objectives: Se
             raise OptimizeError("min_safety_factor must be a number between 1 and 10")
     elif min_safety_factor is not None:
         raise OptimizeError("min_safety_factor needs structure_material")
-    evalf = evaluate or (lambda dz, v, o: pd.evaluate_candidate(dz, v, o))
+    evalf = evaluate or (lambda dz, v, o: pd.evaluate_candidate(dz, v, o, flight=flight))
     rows = _free_names(design, base, free)
     zones = [z for z in ("root", "mid", "tip")] if "airfoil" in free else []
     rng = np.random.default_rng(int(seed))
@@ -298,6 +311,8 @@ def optimize(design: pd.Design, base: Dict[str, Any], op: str, *, objectives: Se
                 ind.viol = _violation(rec, enforce_tip_mach, limit)
                 if sf_min is not None:
                     ind.viol += _structure_violation(design, ind.vector, rec, structure_material, sf_min)
+                if chord_max_step is not None:              # opt-in makeable chord shape (one maximum, bounded steps)
+                    ind.viol += pd.chord_shape_violation(design, ind.vector, float(chord_max_step))
         ind.index = len(evaluations)
         evaluations.append(ind)
         cache[key] = ind

@@ -65,6 +65,7 @@ _PHI_LO, _PHI_HI = 1e-4, math.pi / 2.0 - 1e-4
 _F_MIN = 1e-6
 
 POLAR_DIR = Path(__file__).resolve().parents[2] / "config" / "propellers" / "_polars"
+MFOIL_POLAR_DIR = Path(__file__).resolve().parents[2] / "config" / "propellers" / "_polars_mfoil"   # viscous model tables (mfoil, MIT), 2026-11-19
 
 
 class BemtError(_pi.InflowModelError):
@@ -198,6 +199,25 @@ class CamberedPlatePolar(FlatPlatePolar):
     def eval(self, airfoil: str, alpha, Re, mach, thickness):
         cl, cd, flags = super().eval(airfoil, np.asarray(alpha, float) - self.alpha0(airfoil), Re, mach, thickness)
         return cl, cd, set(flags) | {"camber_thin_airfoil"}
+
+
+class PrandtlGlauertPolar(PolarProvider):
+    """Wraps a polar: lift scaled by 1 / sqrt(1 - M^2) at the element Mach number (opt-in, 2026-11-20).  The correction is held at
+    ``M_CAP`` above it (flag ``mach_above_prandtl_glauert``); drag is left as tabulated (no wave drag)."""
+
+    M_CAP = 0.75
+
+    def __init__(self, base: PolarProvider):
+        self.base = base
+        self.estimated = True
+
+    def eval(self, airfoil: str, alpha, Re, mach, thickness):
+        cl, cd, flags = self.base.eval(airfoil, alpha, Re, mach, thickness)
+        m = np.asarray(mach, float)
+        flags = set(flags) | {"prandtl_glauert"}
+        if np.any(m > self.M_CAP):
+            flags.add("mach_above_prandtl_glauert")
+        return cl / np.sqrt(1.0 - np.minimum(m, self.M_CAP) ** 2), cd, flags
 
 
 @dataclass(frozen=True)
@@ -564,7 +584,14 @@ def om_tip_mach(Om: float, rtip: float, V: float, a: float) -> float:
 # ---------------------------------------------------------------------------
 
 def polar_for(prop: _pp.Propeller, polar_dir: Optional[Path] = None) -> PolarProvider:
-    """The polar provider a propeller-2 entry asks for (``blade.polars.source``)."""
+    """The polar provider a propeller-2 entry asks for (``blade.polars.source``, wrapped by ``blade.polars.compressibility``)."""
+    base = _polar_base(prop, polar_dir)
+    if getattr(prop.blade, "polars_compressibility", None) == "prandtl_glauert":
+        return PrandtlGlauertPolar(base)
+    return base
+
+
+def _polar_base(prop: _pp.Propeller, polar_dir: Optional[Path] = None) -> PolarProvider:
     b = prop.blade
     src = b.polars_source or "flatplate_model"
     ar = max((b.tip_radius_m - b.root_cutout_m) / max(float(np.mean([s.chord_m for s in b.stations])), 1e-9), 1.0)
@@ -572,11 +599,14 @@ def polar_for(prop: _pp.Propeller, polar_dir: Optional[Path] = None) -> PolarPro
         return FlatPlatePolar(ar)
     if src == "camber_model":
         return CamberedPlatePolar(ar)
-    if src in ("xfoil_table", "measured"):
-        tp = TablePolar.from_dir(polar_dir or POLAR_DIR, ar)
+    if src in ("xfoil_table", "measured", "mfoil_table"):
+        root = polar_dir or (MFOIL_POLAR_DIR if src == "mfoil_table" else POLAR_DIR)
+        tp = TablePolar.from_dir(root, ar)
         missing = sorted({s.airfoil for s in b.stations} - set(tp.airfoils()))
         if missing:
-            raise BemtError("no polar table for airfoil(s) %s under %s" % (", ".join(missing), polar_dir or POLAR_DIR))
+            raise BemtError("no polar table for airfoil(s) %s under %s" % (", ".join(missing), root))
+        if src == "mfoil_table":
+            tp.estimated = True                            # a viscous model (panel + integral boundary layer), not a measurement
         return tp
     raise BemtError("polar source %r is not available in this build (this stage ships the table / Viterna "
                     "providers only; a trained-surrogate provider needs its weights' licence verified first)" % src)

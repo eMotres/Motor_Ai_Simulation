@@ -43,4 +43,8 @@ Environment=MOTRES_HEALTH_URL=https://aerostator.com/api/me
 # one fewer thing to be wrong about at 3 a.m.
 ExecStart=/bin/bash -c 'body=$(curl -fsS --max-time 20 -H "Accept: application/json" "$0") || { echo "health: GET $0 failed" >&2; exit 1; }; case "$body" in *tier*) echo "health: ok - $body";; *) echo "health: answered but no tier field: $body" >&2; exit 1;; esac' ${MOTRES_HEALTH_URL}
 
+# A stale nginx upstream (the API container was recreated and nginx still holds its old address) looks exactly like a failed probe: when
+# the probe failed, `heal-edge` reloads nginx if - and only if - the live API colour answers directly (idempotent, ignored when it cannot).
+ExecStopPost=-/bin/bash -c 'if [ "$SERVICE_RESULT" != success ]; then /bin/bash /opt/motres/app/deploy/bluegreen.sh heal-edge; fi'
+
 TimeoutStartSec=60

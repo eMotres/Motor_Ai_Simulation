@@ -140,7 +140,13 @@ if echo "$*" | grep -q -- ' -D '; then          # response headers: which proces
   esac
   printf 'HTTP/1.1 200 OK\r\nx-motres-instance: %s\r\n\r\n' "$inst"; exit 0
 fi
-if echo "$*" | grep -q -- ' -w '; then printf 200; exit 0; fi
+if echo "$*" | grep -q -- ' -w '; then
+  case "$url" in
+    $MOTRES_EDGE/api/health) [ -e "$FAKE/edge_health" ] && printf 200 || printf 000;;      # an edge with nothing behind it answers nothing
+    *) printf 200;;
+  esac
+  exit 0
+fi
 case "$url" in
   */api/health) [ -e "$FAKE/edge_health" ] && cat "$FAKE/edge_health" || exit 7;;
   */api/worker/state) echo '{"detail":"internal only"}';;
@@ -852,3 +858,46 @@ def test_deploy_scripts_ignore_hangup_and_trap_int_term():
     assert "trap 'on_signal INT' INT" in cut and "trap 'on_signal TERM' TERM" in cut
     mod = (DEPLOY / "deploy_module.sh").read_text(encoding="utf-8")
     assert "trap undrain EXIT" in mod and "exit 130" in mod and "exit 143" in mod
+
+
+# -- a recreated live colour: nginx resolved its old address (US outage 2026-11-18) ----------------------------------------------------
+
+def test_start_active_reloads_nginx_when_the_web_container_runs(st):
+    _live_blue(st)
+    (st.fake / "reloads").unlink(missing_ok=True)
+    r = st.bg("start-active")
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert (st.fake / "reloads").read_text().split() == ["blue"], "the recreated live colour must make nginx resolve it again"
+    assert st.upstream() == "server api-blue:8001;"
+
+
+def test_start_active_without_a_web_container_reloads_nothing(st):
+    _live_blue(st)
+    (st.fake / "running" / "deploy-web-1").unlink()
+    (st.fake / "reloads").unlink(missing_ok=True)
+    assert st.bg("start-active").returncode == 0
+    assert not (st.fake / "reloads").exists()
+
+
+def test_reload_edge_reloads_the_live_colour_and_refuses_when_nginx_t_fails(st):
+    _live_blue(st)
+    (st.fake / "reloads").unlink(missing_ok=True)
+    assert st.bg("reload-edge").returncode == 0 and (st.fake / "reloads").read_text().split() == ["blue"]
+    (st.fake / "nginx_t_rc").write_text("1")
+    r = st.bg("reload-edge")
+    assert r.returncode != 0 and st.upstream() == "server api-blue:8001;"            # the previous line is still in place
+
+
+def test_heal_edge_reloads_only_when_the_edge_is_down_and_the_live_colour_is_healthy(st):
+    _live_blue(st)
+    (st.fake / "reloads").unlink(missing_ok=True)
+    (st.fake / "edge_health").write_text(json.dumps({"status": "healthy", "instance": "blue", "build": "aaa111"}))
+    assert st.bg("heal-edge").returncode == 0 and not (st.fake / "reloads").exists(), "a healthy edge is left alone"
+    (st.fake / "edge_health").unlink()                                              # the edge answers nothing
+    r = st.bg("heal-edge")
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert (st.fake / "reloads").read_text().split() == ["blue"]
+    (st.fake / "edge_health").unlink()                                              # down again ...
+    (st.fake / "running" / "deploy-api-blue-1").unlink()                            # ... and the live colour is down too: nothing to heal
+    (st.fake / "reloads").unlink(missing_ok=True)
+    assert st.bg("heal-edge").returncode != 0 and not (st.fake / "reloads").exists()

@@ -12,6 +12,9 @@
 #   bash bluegreen.sh stop-idle                  stop the colour nginx does not point at (a failed start / switch)
 #   bash bluegreen.sh rollback                   switch nginx back to the previous colour (starts it if it was stopped)
 #   bash bluegreen.sh exec <api|worker> CMD...   run CMD in the active API container / the worker (systemd units, README)
+#   bash bluegreen.sh reload-edge                the live colour was recreated by something else (a plain `compose up`): re-point and reload nginx,
+#                                                nginx resolved the OLD container address when it loaded its config (US outage 2026-11-18, 44 min)
+#   bash bluegreen.sh heal-edge                  the same, only when the edge does not answer while the live colour is healthy (the health timer)
 #
 # The upstream is ONE line in $WEB/upstream/api.conf (`server api-green:8001;`), included by the web container's nginx
 # (deploy/nginx.conf).  `switch` rewrites it with a rename (atomic), runs `nginx -t` and `nginx -s reload`: new connections
@@ -129,6 +132,25 @@ cmd_start_idle() {  # <sha>
 cmd_start_active() {    # the cutover: bring up the colour the state calls active (nginx will point at it)
   load_state
   bring_up "$ACTIVE" "$(sha_of "$ACTIVE")"
+  # a recreated container has a NEW address and nginx resolved the old one when it loaded its config: re-point it (a reload)
+  if running "$WEB_CTR"; then point_nginx_at "$ACTIVE" || die "nginx did not take the recreated api-$ACTIVE - reload it by hand" 6; fi
+}
+
+cmd_reload_edge() {    # the live colour was recreated by anything other than this script: make nginx resolve it again
+  load_state
+  running "$WEB_CTR" || die "the web container is not running - nothing to reload" 5
+  point_nginx_at "$ACTIVE" || die "nginx refused the reload (nginx -t failed) - the previous upstream is still in place" 6
+  note "nginx reloaded: upstream api-$ACTIVE"
+}
+
+cmd_heal_edge() {    # for the health timer: when the edge does not answer but the live colour does, reload nginx (idempotent)
+  load_state
+  local code
+  code=$("$CURL" -s -o /dev/null -m 8 -w '%{http_code}' "$EDGE/api/health" 2>/dev/null)
+  case "$code" in 2??) return 0;; esac
+  running "$(ctr api-$ACTIVE)" && colour_health "$ACTIVE" >/dev/null || { echo "bluegreen: the edge answers '$code' and api-$ACTIVE is not healthy either - nothing to heal" >&2; return 1; }
+  note "the edge answers '$code' while api-$ACTIVE is healthy - the upstream address is stale; reloading nginx"
+  cmd_reload_edge
 }
 
 bring_up() {    # <colour> <sha>: start api-<colour> on deploy-api:<sha>, wait healthy, warm it up, check nginx can reach it
@@ -280,6 +302,8 @@ case "$sub" in
   init) cmd_init "$@";;
   start-idle) cmd_start_idle "$@";;
   start-active) cmd_start_active;;
+  reload-edge) cmd_reload_edge;;
+  heal-edge) cmd_heal_edge;;
   first-start) cmd_first_start;;
   switch) cmd_switch;;
   drain-old) cmd_drain_old "$@";;

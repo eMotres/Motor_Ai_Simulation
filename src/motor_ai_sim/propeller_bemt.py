@@ -201,6 +201,25 @@ class CamberedPlatePolar(FlatPlatePolar):
         return cl, cd, set(flags) | {"camber_thin_airfoil"}
 
 
+class PrandtlGlauertPolar(PolarProvider):
+    """Wraps a polar: lift scaled by 1 / sqrt(1 - M^2) at the element Mach number (opt-in, 2026-11-20).  The correction is held at
+    ``M_CAP`` above it (flag ``mach_above_prandtl_glauert``); drag is left as tabulated (no wave drag)."""
+
+    M_CAP = 0.75
+
+    def __init__(self, base: PolarProvider):
+        self.base = base
+        self.estimated = True
+
+    def eval(self, airfoil: str, alpha, Re, mach, thickness):
+        cl, cd, flags = self.base.eval(airfoil, alpha, Re, mach, thickness)
+        m = np.asarray(mach, float)
+        flags = set(flags) | {"prandtl_glauert"}
+        if np.any(m > self.M_CAP):
+            flags.add("mach_above_prandtl_glauert")
+        return cl / np.sqrt(1.0 - np.minimum(m, self.M_CAP) ** 2), cd, flags
+
+
 @dataclass(frozen=True)
 class PolarTable:
     airfoil: str
@@ -565,7 +584,14 @@ def om_tip_mach(Om: float, rtip: float, V: float, a: float) -> float:
 # ---------------------------------------------------------------------------
 
 def polar_for(prop: _pp.Propeller, polar_dir: Optional[Path] = None) -> PolarProvider:
-    """The polar provider a propeller-2 entry asks for (``blade.polars.source``)."""
+    """The polar provider a propeller-2 entry asks for (``blade.polars.source``, wrapped by ``blade.polars.compressibility``)."""
+    base = _polar_base(prop, polar_dir)
+    if getattr(prop.blade, "polars_compressibility", None) == "prandtl_glauert":
+        return PrandtlGlauertPolar(base)
+    return base
+
+
+def _polar_base(prop: _pp.Propeller, polar_dir: Optional[Path] = None) -> PolarProvider:
     b = prop.blade
     src = b.polars_source or "flatplate_model"
     ar = max((b.tip_radius_m - b.root_cutout_m) / max(float(np.mean([s.chord_m for s in b.stations])), 1e-9), 1.0)

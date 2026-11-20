@@ -7,6 +7,8 @@ variables of ``propeller_design``.  The result is a PARETO FRONT of the objectiv
 * ``cooling_air_axial_ms`` — maximise (objective 2: mean axial speed at the disc in the motor band; ``None`` = the model has no value, ranked worst);
 * ``flight_thrust_N``      — maximise, only with ``flight=True`` (owner 2026-11-19: forward flight at the operating point's ``flight_speed_ms``;
   the candidate must take the rated torque at the rated rpm, ``propeller_design.FLIGHT_RPM_TOL``, so the thrust is compared at the rated power).
+  Opt-in ``chord_max_step``: the chord must rise to one maximum and fall to the tip, neighbouring control points within that step
+  (``propeller_design.chord_shape_violation``) — without it a jagged chord can win on the model alone.
 
 Either one alone is allowed (``objectives=[...]``).  Constraints: the candidate's own validity rules (bounds, manufacturing limits; a
 candidate that cannot be repaired is infeasible and is not evaluated), the motor torque limit (met by construction of the operating speed), the tip
@@ -229,7 +231,7 @@ def optimize(design: pd.Design, base: Dict[str, Any], op: str, *, objectives: Se
              seed: int = 1, free: Sequence[str] = FREE_GROUPS, enforce_tip_mach: bool = True, tip_mach_limit: Optional[float] = None,
              evaluate: Optional[Callable[[pd.Design, Dict[str, Any], str], Dict[str, Any]]] = None,
              store_dir: Optional[Path] = None, structure_material: Optional[str] = None,
-             min_safety_factor: Optional[float] = None, flight: bool = False) -> Dict[str, Any]:
+             min_safety_factor: Optional[float] = None, flight: bool = False, chord_max_step: Optional[float] = None) -> Dict[str, Any]:
     """Run NSGA-II from ``base`` (diameter and blade count stay as given).  Returns the evaluations, the front (indices) and the settings."""
     t0 = time.time()
     objectives = list(objectives)
@@ -243,6 +245,8 @@ def optimize(design: pd.Design, base: Dict[str, Any], op: str, *, objectives: Se
         raise OptimizeError("unknown operating point %r; known: %s" % (op, sorted(design.operating_points)))
     if "flight_thrust_N" in objectives and not flight:
         raise OptimizeError("flight_thrust_N needs flight=True")
+    if chord_max_step is not None and not (isinstance(chord_max_step, (int, float)) and not isinstance(chord_max_step, bool) and 0.01 <= chord_max_step <= 0.3):
+        raise OptimizeError("chord_max_step must be a number between 0.01 and 0.3 (chord/R)")
     if flight and design.operating_points[op].flight_speed_ms is None:
         raise OptimizeError("operating point %r has no flight_speed_ms" % op)
     free = [g for g in free if g in FREE_GROUPS]
@@ -307,6 +311,8 @@ def optimize(design: pd.Design, base: Dict[str, Any], op: str, *, objectives: Se
                 ind.viol = _violation(rec, enforce_tip_mach, limit)
                 if sf_min is not None:
                     ind.viol += _structure_violation(design, ind.vector, rec, structure_material, sf_min)
+                if chord_max_step is not None:              # opt-in makeable chord shape (one maximum, bounded steps)
+                    ind.viol += pd.chord_shape_violation(design, ind.vector, float(chord_max_step))
         ind.index = len(evaluations)
         evaluations.append(ind)
         cache[key] = ind

@@ -98,6 +98,25 @@ def with_polar_source(d: "Design", source: Optional[str]) -> "Design":
     return dataclasses.replace(d, raw=dict(d.raw, polars_source=source))
 
 
+def with_compressibility(d: "Design", model: Optional[str]) -> "Design":
+    """A copy of the design whose candidates use a compressibility correction of the section lift (None = unchanged)."""
+    if model is None:
+        return d
+    if model != "prandtl_glauert":
+        raise DesignError("compressibility must be 'prandtl_glauert', got %r" % (model,))
+    return dataclasses.replace(d, raw=dict(d.raw, polars_compressibility=model))
+
+
+def chord_shape_violation(d: "Design", vec: Dict[str, Any], max_step: float = 0.08) -> float:
+    """0 for a makeable chord shape, else how far it is from one (opt-in optimiser rule, 2026-11-20): chord/R rises to ONE maximum
+    and then falls to the tip (no second bulge), and neighbouring control points differ by at most ``max_step`` (chord/R)."""
+    c = [float(vec[_cname("chord_R", r)]) for r in d.control]
+    k = int(np.argmax(c))
+    v = sum(max(0.0, c[i] - c[i + 1]) for i in range(k)) + sum(max(0.0, c[i + 1] - c[i]) for i in range(k, len(c) - 1))
+    v += sum(max(0.0, abs(c[i + 1] - c[i]) - max_step) for i in range(len(c) - 1))
+    return v / max_step
+
+
 def load_design(path: Path = DESIGN_PATH) -> Design:
     try:
         raw = yaml.safe_load(Path(path).read_text(encoding="utf-8"))
@@ -208,7 +227,8 @@ def candidate_to_propeller2(d: Design, vec: Dict[str, Any]) -> Dict[str, Any]:
     blade = {"geometry_source": "inferred", "source_ref": "parametric family %s (propeller_design.py)" % d.id, "estimated": True,
              "method": "parametric blade from design variables; generic generated airfoils; not a measured geometry",
              "hub_radius_mm": float(vec["hub_radius_mm"]), "root_cutout_mm": max(float(vec["root_cutout_mm"]), float(vec["hub_radius_mm"])),
-             "interpolation": "pchip", "pitch_axis": 0.25, "stations": st, "polars": {"source": polar_source(d)},
+             "interpolation": "pchip", "pitch_axis": 0.25, "stations": st, "polars": dict({"source": polar_source(d)}, **({"compressibility": d.raw["polars_compressibility"]}
+                                                                                         if d.raw.get("polars_compressibility") else {})),
              "manufacturing": man}
     return {"schema": "propeller-2", "id": "own_%din_%db_%s" % (int(vec["diameter_in"]), int(vec["blades"]), h),
             "vendor": "MOTRES", "model": "%d in %d-blade design %s" % (int(vec["diameter_in"]), int(vec["blades"]), h), "status": "design",

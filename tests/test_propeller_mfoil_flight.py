@@ -62,3 +62,33 @@ def test_optimizer_flight_run(design):
     res = po.optimize(design, pd.seed_vector(design, 10, 3), "L12", objectives=["flight_thrust_N"], pop=4, generations=1, flight=True)
     vals = [e["objectives"]["flight_thrust_N"] for e in res["evaluations"] if e["objectives"].get("flight_thrust_N") is not None]
     assert vals and max(vals) > 0                    # a low-pitch candidate may brake at the flight speed (negative thrust): ranked last, not an error
+
+
+def test_prandtl_glauert_is_opt_in_and_raises_lift_at_high_mach(design):
+    d = pd.with_polar_source(design, "mfoil_table")
+    v = pd.seed_vector(d, 13, 2)
+    plain = pd.evaluate_candidate(d, v, "L20", flight=True)
+    pg = pd.evaluate_candidate(pd.with_compressibility(d, "prandtl_glauert"), v, "L20", flight=True)
+    assert "prandtl_glauert" in pg["flags"] and "prandtl_glauert" not in plain["flags"]
+    assert pg["torque_Nm"] == pytest.approx(plain["torque_Nm"], rel=0.02)      # both meet the torque limit
+    assert pg["operating"]["rpm"] < plain["operating"]["rpm"]                 # more lift per rpm -> the limit is met earlier
+    with pytest.raises(pd.DesignError):
+        pd.with_compressibility(d, "karman_tsien")
+
+
+def test_chord_shape_rule(design):
+    v = pd.seed_vector(design, 10, 3)
+    assert pd.chord_shape_violation(design, v) == 0.0
+    jag = dict(v)
+    jag["chord_R@0.65"], jag["chord_R@0.85"], jag["chord_R@1"] = 0.29, 0.05, 0.27
+    assert pd.chord_shape_violation(design, jag) > 1.0
+
+
+def test_optimizer_chord_rule_is_opt_in(design):
+    base = pd.seed_vector(design, 10, 3)
+    res = po.optimize(design, base, "L12", objectives=["flight_thrust_N"], pop=4, generations=1, flight=True, chord_max_step=0.08)
+    for e in res["evaluations"]:
+        if e["violation"] == 0:
+            assert pd.chord_shape_violation(design, e["vector"], 0.08) == 0.0
+    with pytest.raises(po.OptimizeError):
+        po.optimize(design, base, "L12", pop=4, generations=1, chord_max_step=0.9)

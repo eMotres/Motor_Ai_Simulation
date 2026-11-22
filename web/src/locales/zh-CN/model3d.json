@@ -117,5 +117,31 @@
     "backRight": "后右方"
   },
   "orthographic": "正交",
-  "perspective": "透视"
+  "perspective": "透视",
+  "project": {
+    "tab": "3D 模型",
+    "source": "模型来源",
+    "generated": "生成的",
+    "uploaded": "已上传",
+    "generatedTip": "项目所关联电机配置的 3D 模型，与 Configure 中显示的完全相同。",
+    "uploadedTip": "实际 CAD 的 STEP 文件（完整装配或用于客户壳体的简化集成模型）。首先打开最新的未归档文件。",
+    "upload": "上传 STEP",
+    "uploadTitle": "上传项目模型",
+    "pickFile": "选择 STEP 文件",
+    "revision": "版本",
+    "note": "变更内容",
+    "visible": "对客户可见",
+    "visibleShort": "客户",
+    "visibleTip": "关闭：只有 MOTRES 员工可见此模型。客户方须签署保密协议并完成账户验证后才能下载 STEP。",
+    "cancel": "取消",
+    "history": "版本记录",
+    "showArchived": "显示已归档",
+    "archived": "已归档",
+    "archive": "归档",
+    "restore": "恢复",
+    "file": "文件",
+    "date": "上传时间",
+    "noUpload": "本项目尚未上传模型。",
+    "noLinkedMotor": "本项目尚未关联电机。"
+  }
 }

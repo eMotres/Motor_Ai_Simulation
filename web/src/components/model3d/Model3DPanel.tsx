@@ -30,10 +30,17 @@ import {
 const API = ((import.meta.env.VITE_API_URL ?? 'http://localhost:8001') as string).replace(/\/$/, '');
 const REMEMBER = 'model3d.last';
 
+const onlyKey = (only: ReadonlyArray<{ die: string; config: string }> | null): string => (only ? only.map((o) => `${o.die}\u0000${o.config}`).join('\u0001') : '');
 const rd = (k: string): string | null => { try { return localStorage.getItem(k); } catch { return null; } };
 const wr = (k: string, v: string): void => { try { localStorage.setItem(k, v); } catch { /* private window */ } };
 
-const Model3DPanel: React.FC = () => {
+export interface Model3DPanelProps {
+  /** the project's "3D model" tab (owner 2026-11-22): only these motors (the project's linked configurations), the first one that
+   * has a model opens; nothing is remembered for Configure.  Absent = the Configure tab (every model this account may open). */
+  only?: ReadonlyArray<{ die: string; config: string }> | null;
+}
+
+const Model3DPanel: React.FC<Model3DPanelProps> = ({ only = null }) => {
   // `ready` = the lazy namespace has arrived: until then t() would print the raw key ("downloadLocked", "nda.sign").
   const { t, ready } = useTranslation('model3d');
   const { selection: openMotor } = useLastMotorState();
@@ -55,9 +62,10 @@ const Model3DPanel: React.FC = () => {
   const model = useMemo(() => models?.find((m) => modelKey(m) === key) ?? null, [models, key]);
 
   useEffect(() => {
+    if (only) return undefined;            // the Configure header names the model open in ITS tab, not the project's
     window.dispatchEvent(new CustomEvent('model3d-view-selected', { detail: { name: model ? modelLabel(model) : null } }));
     return () => { window.dispatchEvent(new CustomEvent('model3d-view-selected', { detail: { name: null } })); };
-  }, [model]);
+  }, [model, !!only]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // the list of models this account may open
   useEffect(() => {
@@ -70,17 +78,20 @@ const Model3DPanel: React.FC = () => {
         if (!live) return;
         setCanDownload(j.can_download === true);
         setAccess(parseAccess(j.access, j.can_download === true));
-        setModels(j.models as ModelInfo[]);
+        const all = j.models as ModelInfo[];
+        setModels(only ? all.filter((m) => only.some((o) => o.die === m.die && o.config === m.config)) : all);
       } catch (e: any) { if (live) setErr(e?.message ?? String(e)); }
     })();
     return () => { live = false; };
-  }, [reload]);
+  }, [reload, onlyKey(only)]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // what the tab opens on: the motor open in Configure, until the person picks one here himself
   const pickedHere = useRef(false);
   useEffect(() => {
     if (!models || pickedHere.current) return;
-    const pick = resolveModel(models, rd(REMEMBER), openMotor);
+    // the project tab: the first linked motor (in the project's order) that has a model; none = "in preparation"
+    const first = only ? only.map((o) => models.find((m) => modelKey(m) === modelKey(o))).find((m) => !!m) ?? null : null;
+    const pick = only ? { model: first, preparing: !first && only.length > 0 } : resolveModel(models, rd(REMEMBER), openMotor);
     setKey(pick.model ? modelKey(pick.model) : '');
     setPreparing(pick.preparing);
   }, [models, openMotor?.die, openMotor?.config]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -133,7 +144,7 @@ const Model3DPanel: React.FC = () => {
 
   const picker = (
     <Select size="small" fullWidth value={key} displayEmpty disabled={!models?.length}
-      onChange={(e) => { pickedHere.current = true; setKey(String(e.target.value)); setPreparing(false); wr(REMEMBER, String(e.target.value)); }}
+      onChange={(e) => { pickedHere.current = true; setKey(String(e.target.value)); setPreparing(false); if (!only) wr(REMEMBER, String(e.target.value)); }}
       renderValue={(v) => (v ? modelLabel(models?.find((m) => modelKey(m) === v) ?? { die: '', config: '' }) : (openMotor ? `${openMotor.die} · ${openMotor.config}` : ''))}
       sx={{ fontSize: 13 }}>
       {(models ?? []).map((m) => <MenuItem key={modelKey(m)} value={modelKey(m)} sx={{ fontSize: 13 }}>{modelLabel(m)}</MenuItem>)}

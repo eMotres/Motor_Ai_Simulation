@@ -1,4 +1,4 @@
-"""Parametric model of the own propeller, 10 / 11 / 12 / 13 in — stage P1 of docs/PROPELLER_MODULE_PLAN_2026-11-15.md (sections 8-10).
+"""Parametric model of the own propeller, 10-14 in (half inches) — stage P1 of docs/PROPELLER_MODULE_PLAN_2026-11-15.md (sections 8-10).
 
 A candidate is a flat dict of DESIGN VARIABLES (``chord_R@0.2`` ... , ``twist_deg@0.2`` ..., ``hub_radius_mm``, ``root_cutout_mm``,
 ``airfoil_root|mid|tip``, ``blades``, ``diameter_in``).  ``candidate_to_propeller2`` turns it into a valid ``propeller-2`` dictionary
@@ -72,7 +72,7 @@ class OperatingPoint:
 class Design:
     raw: Dict[str, Any]
     id: str
-    diameters_in: Tuple[int, ...]
+    diameters_in: Tuple[float, ...]
     control: Tuple[float, ...]
     operating_points: Dict[str, OperatingPoint]
     manufacturing: af.ManufacturingProfile
@@ -113,6 +113,50 @@ def with_compressibility(d: "Design", model: Optional[str]) -> "Design":
     return dataclasses.replace(d, raw=dict(d.raw, polars_compressibility=model))
 
 
+def _diameter(v: Any) -> Any:
+    """A diameter as given, integers kept as int (stored designs and ids unchanged), half inches as float (round 6: an int() cast
+    silently ran 11.5 in as 11 in)."""
+    f = float(v)
+    return int(f) if f.is_integer() else f
+
+
+def family_diameters(d: "Design") -> List[Any]:
+    return [_diameter(x) for x in d.diameters_in]
+
+
+def in_family(d: "Design", v: Any) -> bool:
+    """True only for a diameter that is exactly one of the family's (no truncation, no rounding)."""
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        return False
+    return math.isfinite(f) and any(abs(f - x) < 1e-9 for x in d.diameters_in)
+
+
+def with_operating_point(d: "Design", op: str, rpm: Optional[float] = None, power_W: Optional[float] = None) -> "Design":
+    """A copy of the design whose operating point ``op`` runs at ``rpm`` (None = the stored rated rpm) and, when ``power_W`` is
+    given, takes that shaft power there (torque = P / omega; otherwise the stored torque limit).  Opt-in (owner 2026-11-22: design
+    L12 for 800 W and L20 for 1300 W, and vary the rpm to find the optimum).  The override is recorded in ``raw`` so every result
+    says which point it used; the motor's ability to hold that point is checked by the caller (S1), not here."""
+    if rpm is None and power_W is None:
+        return d
+    if op not in d.operating_points:
+        raise DesignError("unknown operating point %r; known: %s" % (op, sorted(d.operating_points)))
+    o = d.operating_points[op]
+    for name, v, lo, hi in (("rpm", rpm, 1000.0, 60000.0), ("power_W", power_W, 10.0, 20000.0)):
+        if v is not None and (isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v) or not lo <= v <= hi):
+            raise DesignError("%s must be a number between %g and %g" % (name, lo, hi))
+    r = float(rpm) if rpm is not None else o.rated_rpm_ref
+    q = float(power_W) / (2.0 * math.pi * r / 60.0) if power_W is not None else o.torque_limit_Nm
+    o2 = dataclasses.replace(o, rated_rpm_ref=r, torque_limit_Nm=q, rpm_search_max=max(o.rpm_search_max, 1.3 * r),
+                             source="%s; override rpm %g, %s (opt-in)" % (o.source, r, ("power %g W" % power_W) if power_W is not None
+                                                                             else "stored torque limit"))
+    ov = dict(d.raw.get("operating_override") or {})
+    ov[op] = {"rpm": r, "torque_limit_Nm": q, "power_W": float(power_W) if power_W is not None else None,
+              "stored_rpm": o.rated_rpm_ref, "stored_torque_limit_Nm": o.torque_limit_Nm}
+    return dataclasses.replace(d, raw=dict(d.raw, operating_override=ov), operating_points={**d.operating_points, op: o2})
+
+
 def chord_shape_violation(d: "Design", vec: Dict[str, Any], max_step: float = 0.08) -> float:
     """0 for a makeable chord shape, else how far it is from one (opt-in optimiser rule, 2026-11-20): chord/R rises to ONE maximum
     and then falls to the tip (no second bulge), and neighbouring control points differ by at most ``max_step`` (chord/R)."""
@@ -135,7 +179,7 @@ def load_design(path: Path = DESIGN_PATH) -> Design:
         ops[name] = OperatingPoint(name, o["die"], o["config"], float(o["torque_limit_Nm"]), float(o["rated_rpm_ref"]),
                                    float(o["rpm_search_max"]), float(o["motor_radius_mm"]), str(o["source"]),
                                    float(o["flight_speed_ms"]) if o.get("flight_speed_ms") is not None else None)
-    return Design(raw, str(raw["id"]), tuple(int(d) for d in raw["diameters_in"]),
+    return Design(raw, str(raw["id"]), tuple(float(d) for d in raw["diameters_in"]),
                   tuple(float(c) for c in raw["control_r_over_R"]), ops, af.parse_manufacturing(raw.get("manufacturing")))
 
 
@@ -148,7 +192,7 @@ def variable_names(d: Design) -> List[str]:
             + ["hub_radius_mm", "root_cutout_mm", "airfoil_root", "airfoil_mid", "airfoil_tip", "blades", "diameter_in"])
 
 
-def seed_vector(d: Design, diameter_in: int = 10, blades: int = 2) -> Dict[str, Any]:
+def seed_vector(d: Design, diameter_in: float = 10, blades: int = 2) -> Dict[str, Any]:
     s = d.raw["seed"]
     v: Dict[str, Any] = {}
     for r, c in zip(d.control, s["chord_over_R"]):
@@ -156,7 +200,7 @@ def seed_vector(d: Design, diameter_in: int = 10, blades: int = 2) -> Dict[str, 
         v[_cname("twist_deg", r)] = math.degrees(math.atan((float(s["pitch_ratio"])) / (math.pi * r)))
     v.update(hub_radius_mm=float(s["hub_radius_mm"]), root_cutout_mm=float(s["root_cutout_mm"]),
              airfoil_root=s["airfoil"]["root"], airfoil_mid=s["airfoil"]["mid"], airfoil_tip=s["airfoil"]["tip"],
-             blades=int(blades), diameter_in=int(diameter_in))
+             blades=int(blades), diameter_in=_diameter(diameter_in))
     return v
 
 
@@ -179,8 +223,8 @@ def variables_table(d: Design, vec: Dict[str, Any]) -> List[Dict[str, Any]]:
                          group="airfoil", basis="generic generated sections", confirmed=False))
     rows.append(dict(name="blades", value=vec["blades"], options=d.blades_options, unit="-", group="topology",
                      basis="owner 2026-11-15: compare 2 and 3", confirmed=bool(d.raw["blades"].get("confirmed_by"))))
-    rows.append(dict(name="diameter_in", value=vec["diameter_in"], options=list(d.diameters_in), unit="in", group="topology",
-                     basis="family 10 / 11 / 12 / 13 in", confirmed=True))
+    rows.append(dict(name="diameter_in", value=vec["diameter_in"], options=family_diameters(d), unit="in", group="topology",
+                     basis="family 10-14 in in half inches", confirmed=True))
     return rows
 
 
@@ -212,8 +256,8 @@ def candidate_to_propeller2(d: Design, vec: Dict[str, Any]) -> Dict[str, Any]:
     for n in variable_names(d):
         if n not in vec:
             raise DesignError("missing design variable %s" % n)
-    if int(vec["diameter_in"]) not in d.diameters_in:
-        raise DesignError("diameter_in must be one of %s" % list(d.diameters_in))
+    if not in_family(d, vec["diameter_in"]):
+        raise DesignError("diameter_in must be one of %s" % family_diameters(d))
     R_mm, r_mm, chord_mm, twist_deg, rR = _stations(d, vec)
     st = []
     for i in range(N_STATIONS):
@@ -236,8 +280,8 @@ def candidate_to_propeller2(d: Design, vec: Dict[str, Any]) -> Dict[str, Any]:
              "interpolation": "pchip", "pitch_axis": 0.25, "stations": st, "polars": dict({"source": polar_source(d)}, **({"compressibility": d.raw["polars_compressibility"]}
                                                                                          if d.raw.get("polars_compressibility") else {})),
              "manufacturing": man}
-    return {"schema": "propeller-2", "id": "own_%din_%db_%s" % (int(vec["diameter_in"]), int(vec["blades"]), h),
-            "vendor": "MOTRES", "model": "%d in %d-blade design %s" % (int(vec["diameter_in"]), int(vec["blades"]), h), "status": "design",
+    return {"schema": "propeller-2", "id": "own_%gin_%db_%s" % (float(vec["diameter_in"]), int(vec["blades"]), h),
+            "vendor": "MOTRES", "model": "%g in %d-blade design %s" % (float(vec["diameter_in"]), int(vec["blades"]), h), "status": "design",
             "geometry": {"diameter_in": float(vec["diameter_in"]), "diameter_mm": D_mm, "blades": int(vec["blades"])},
             "performance": {"data_quality": "geometry_only"}, "blade": blade}
 
@@ -267,8 +311,8 @@ def check_candidate(d: Design, vec: Dict[str, Any]) -> List[Dict[str, Any]]:
             viol("missing", n, None, None)
     if out:
         return out
-    if int(vec["diameter_in"]) not in d.diameters_in:
-        viol("diameter_not_in_family", "diameter_in", vec["diameter_in"], list(d.diameters_in))
+    if not in_family(d, vec["diameter_in"]):
+        viol("diameter_not_in_family", "diameter_in", vec["diameter_in"], family_diameters(d))
     if int(vec["blades"]) not in d.blades_options:
         viol("blades_not_offered", "blades", vec["blades"], d.blades_options)
     for r in d.control:
@@ -396,7 +440,8 @@ def evaluate_candidate(d: Design, vec: Dict[str, Any], op_name: str, *, v_inf: f
     rec = {
         "model_id": pb.MODEL_BEMT, "design_family": d.id, "design_id": ident, "operating_point": op.name,
         "operating": {"rpm": rpm, "rho_kg_m3": rho, "v_inf_ms": v_inf, "air_temp_c": temp, "torque_limit_Nm": op.torque_limit_Nm,
-                      "rated_rpm_ref": op.rated_rpm_ref, "motor_radius_mm": op.motor_radius_mm},
+                      "rated_rpm_ref": op.rated_rpm_ref, "motor_radius_mm": op.motor_radius_mm,
+                      **({"override": d.raw["operating_override"][op.name]} if op.name in (d.raw.get("operating_override") or {}) else {})},
         "thrust_N": res.thrust_N, "torque_Nm": res.torque_Nm, "shaft_power_W": res.shaft_power_W, "tip_mach": mach,
         "objectives": {"thrust_per_shaft_W": thrust_per_w, "cooling_air_axial_ms": res.air_speed_ms},
         "constraints": constraints, "constraints_met": all(constraints.values()),

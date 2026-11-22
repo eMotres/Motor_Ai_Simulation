@@ -242,11 +242,30 @@ def _feasible(i: "Individual") -> bool:
     return bool(i.record is not None and i.viol == 0 and i.objs and all(o is not None for o in i.objs))
 
 
+
+def _best_feasible(evaluations: Sequence["Individual"], objectives: Sequence[str]) -> Dict[str, Any]:
+    """Per objective: the feasible evaluation that is best on it (index, value, rpm, thrust, power, tip Mach), for the run list."""
+    out: Dict[str, Any] = {}
+    feas = [i for i in evaluations if _feasible(i)]
+    for k, name in enumerate(objectives):
+        if not feas:
+            out[name] = None
+            continue
+        i = max(feas, key=lambda e: e.objs[k])                 # every objective is maximised
+        r = i.record or {}
+        out[name] = {"index": i.index, "value": i.objs[k], "rpm": (r.get("operating") or {}).get("rpm"), "thrust_N": r.get("thrust_N"),
+                     "shaft_power_W": r.get("shaft_power_W"), "tip_mach": r.get("tip_mach")}
+    return out
+
+RUN_SCHEMA = "propeller-opt-run-1"
+
+
 def optimize(design: pd.Design, base: Dict[str, Any], op: str, *, objectives: Sequence[str] = DEFAULT_OBJECTIVES, pop: int = 12, generations: int = 6,
              seed: int = 1, free: Sequence[str] = FREE_GROUPS, enforce_tip_mach: bool = True, tip_mach_limit: Optional[float] = None,
              evaluate: Optional[Callable[[pd.Design, Dict[str, Any], str], Dict[str, Any]]] = None,
              store_dir: Optional[Path] = None, structure_material: Optional[str] = None,
-             min_safety_factor: Optional[float] = None, flight: bool = False, chord_max_step: Optional[float] = None) -> Dict[str, Any]:
+             min_safety_factor: Optional[float] = None, flight: bool = False, chord_max_step: Optional[float] = None,
+             motor_check: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """Run NSGA-II from ``base`` (diameter and blade count stay as given).  Returns the evaluations, the front (indices) and the settings."""
     t0 = time.time()
     objectives = list(objectives)
@@ -385,15 +404,20 @@ def optimize(design: pd.Design, base: Dict[str, Any], op: str, *, objectives: Se
         "chord_max_step": float(chord_max_step) if chord_max_step is not None else "off",
     }
     not_checked = (["structure"] if sf_min is None else []) + (["chord_shape"] if chord_max_step is None else []) + \
-        (["tip_mach"] if not enforce_tip_mach else []) + ["full_structure", "motor_envelope"]
-    return {
+        (["tip_mach"] if not enforce_tip_mach else []) + ["full_structure"] + \
+        ([] if (motor_check or {}).get("status") == "ok" else ["motor_envelope"])
+    o = design.operating_points[op]
+    operating = {"name": op, "rpm": o.rated_rpm_ref, "torque_limit_Nm": o.torque_limit_Nm,
+                 "shaft_power_W": o.torque_limit_Nm * o.rated_rpm_ref * math.pi / 30.0, "flight_speed_ms": o.flight_speed_ms if flight else None,
+                 "override": (design.raw.get("operating_override") or {}).get(op), "motor_check": motor_check}
+    result = {
         "run_id": run_id, "banner": pd.BANNER, "operating_point": op, "objectives": objectives, "front": front,
         "settings": {"pop": pop, "generations": generations, "seed": int(seed), "free": free, "enforce_tip_mach": enforce_tip_mach,
                      "tip_mach_limit": limit, **({"structure_material": structure_material, "min_safety_factor": sf_min} if sf_min is not None else {}),
                      "tip_mach_limit_confirmed": bool(design.raw["tip_mach_limit"].get("confirmed_by")),
                      "diameter_in": base["diameter_in"], "blades": base["blades"],
                      "requirements": requirements, "constraints_disabled": [] if enforce_tip_mach else ["tip_mach_within_limit"],
-                     "qualified": False, "not_checked": not_checked},
+                     "qualified": False, "not_checked": not_checked, "operating": operating},
         "evaluations": [{"index": i.index, "generation": i.generation, "vector": i.vector,
                          "objectives": dict(zip(objectives, i.objs or [])), "violation": i.viol, "note": i.note,
                          "design_id": (i.record or {}).get("design_id"), "rpm": (i.record or {}).get("operating", {}).get("rpm"),
@@ -404,3 +428,11 @@ def optimize(design: pd.Design, base: Dict[str, Any], op: str, *, objectives: Se
                         for i in evaluations],
         "elapsed_s": round(time.time() - t0, 2), "stored": str(out_file) if out_file else None, "estimated": True, "validated_against": None,
     }
+    if out_file is not None:                             # the run's settings beside its records: the Designer lists stored runs from these
+        out_file.with_suffix(".run.json").write_text(json.dumps(
+            {"schema": RUN_SCHEMA, "run_id": run_id, "created_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(t0)),
+             "operating_point": op, "objectives": objectives, "settings": result["settings"], "front": front,
+             "n_evaluations": len(evaluations), "n_feasible": sum(1 for i in evaluations if _feasible(i)), "elapsed_s": result["elapsed_s"],
+             "best": _best_feasible(evaluations, objectives)},
+            default=str, indent=1), encoding="utf-8")
+    return result

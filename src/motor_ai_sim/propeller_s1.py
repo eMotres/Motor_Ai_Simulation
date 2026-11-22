@@ -1929,3 +1929,50 @@ def s1_rating(m: Mapping[str, Any], prop: pp.Propeller, *, ambient_c: float = 25
                   "current, the demagnetisation limit at the magnet temperature and (if given) the pack's "
                   "continuous current; limit by bisection",
     }
+
+
+def continuous_torque(m: Mapping[str, Any], rpm: float, air_speed_ms: float, *, ambient_c: float = 25.0,
+                      q_max_Nm: float = 3.0, step_Nm: float = 0.05) -> Dict[str, Any]:
+    """The largest continuous LOAD torque the motor holds at ``rpm`` with ``air_speed_ms`` over the housing (no slipstream credit
+    unless the caller adds it): ``load_point`` at rising torque (steps of ``step_Nm``, then bisection at the last passing step)
+    until the winding or magnet limit, the current cap or the voltage at the pack minimum (``voltage_check``) stops it.
+    Used to check an opt-in propeller operating point (rpm, power) against the motor (owner 2026-11-22).
+    ``torque_Nm`` 0.0 = not even the first step holds; ``stops`` = what the next step breaks."""
+    lims = limits_of(m)
+    drv = resolve_drive(m)
+    pk = resolve_pack(m)
+    h = housing_film(float(air_speed_ms), ambient_c, float(m["thermal_geom"]["statorOD_mm"]) / 1000.0)
+
+    def at(q: float) -> Tuple[bool, Dict[str, Any]]:
+        p = load_point(m, rpm, q, h, ambient_c)
+        if not p or p.get("state") != "converged":
+            return False, {"state": (p or {}).get("state"), "status": (p or {}).get("status")}
+        I = float(p["current_A"])
+        vc = voltage_check(m, drv, rpm, I, p["T_magnet_C"], p["T_winding_C"], pk.get("v_min"))
+        if vc["status"] == "infeasible":
+            return False, {"state": "voltage_infeasible", "voltage": vc["status"]}
+        I = max(I, _num(vc.get("I_A")) or I)
+        info = {"current_A": I, "T_winding_C": p["T_winding_C"], "T_magnet_C": p["T_magnet_C"], "voltage": vc["status"]}
+        return (p["T_winding_C"] <= lims["winding_C"] and p["T_magnet_C"] <= lims["magnet_C"] and I <= lims["I_max_A"]), info
+
+    last, last_info, stop = None, None, None
+    q = step_Nm
+    while q <= q_max_Nm + 1e-12:
+        ok, info = at(q)
+        if ok:
+            last, last_info = q, info
+        else:
+            stop = info
+            break
+        q += step_Nm
+    if last is None:
+        return {"torque_Nm": 0.0, "at": None, "stops": stop, "air_speed_ms": float(air_speed_ms), "h_W_m2K": h, "limits": lims}
+    lo, hi = last, last + step_Nm
+    for _ in range(20):
+        mid = 0.5 * (lo + hi)
+        ok, info = at(mid)
+        if ok:
+            lo, last_info = mid, info
+        else:
+            hi, stop = mid, info
+    return {"torque_Nm": lo, "at": last_info, "stops": stop, "air_speed_ms": float(air_speed_ms), "h_W_m2K": h, "limits": lims}

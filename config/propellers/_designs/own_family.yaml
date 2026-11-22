@@ -1,11 +1,11 @@
-# Parametric family of the own propeller, 10 / 11 / 12 / 13 in (stage P1 of docs/PROPELLER_MODULE_PLAN_2026-11-15.md).
+# Parametric family of the own propeller, 10-14 in (half inches) (stage P1 of docs/PROPELLER_MODULE_PLAN_2026-11-15.md).
 # EVERY number below is either derived from a stated rule or a PLACEHOLDER marked as such; nothing is a confirmed design value.
 # `confirmed_by: null` means: editable parameter, applied, and flagged "design_inputs_unconfirmed" in every result.
 schema: propeller-design-1
 id: own_family
-diameters_in: [10, 11, 12, 13]
+diameters_in: [10, 10.5, 11, 11.5, 12, 12.5, 13, 13.5, 14]   # half inches and 14 in added 2026-11-22 (owner: L12 11-12 in, L20 13-14 in)
 
-# Scaling rule between the four diameters (explicit): the PLANFORM is geometrically similar - chord/R, twist(r/R), thickness ratio and the
+# Scaling rule between the diameters (explicit): the PLANFORM is geometrically similar - chord/R, twist(r/R), thickness ratio and the
 # airfoil per zone are the same functions of r/R for every diameter, so chord scales with D. EXCEPT: hub radius and root cut-out are
 # absolute (mm; the hub/motor interface does not scale), and every manufacturing minimum is absolute (mm), so the thickness RATIO of a
 # small propeller rises when a minimum governs. The chord Reynolds number is NOT preserved (it grows with D^2 at equal rpm).

@@ -11,12 +11,13 @@ import { oneOf } from '../../lib/viewMemory';
 import { useRememberedView } from '../../lib/useRememberedView';
 import * as api from '../../lib/propellerDesignApi';
 import { CurveChart, Panel, PlanformChart, ProfileChart, ParetoView, ResultTiles, VariablesPanel, ZoneTable } from './DesignerParts';
+import { StoredRunsPanel } from './StoredRuns';
 
 const MAX_RUNS = 200;
 
 export default function DesignerPage() {
   const { t } = useTranslation('simulation');
-  const [diameter, setDiameter] = useRememberedView<string>('propellers.designer.diameter', '10', oneOf(['10', '11', '12', '13']));
+  const [diameter, setDiameter] = useRememberedView<string>('propellers.designer.diameter', '10', oneOf(['10', '10.5', '11', '11.5', '12', '12.5', '13', '13.5', '14']));
   const [blades, setBlades] = useRememberedView<string>('propellers.designer.blades', '2', oneOf(['2', '3']));
   const [op, setOp] = useRememberedView<string>('propellers.designer.op', 'L12', oneOf(['L12', 'L20']));
   const [polar, setPolar] = useRememberedView<string>('propellers.designer.polar', 'flatplate_model', oneOf(['flatplate_model', 'camber_model', 'mfoil_table']));
@@ -144,6 +145,12 @@ export default function DesignerPage() {
     if (r.vector.blades != null) setBlades(String(r.vector.blades));
   };
 
+  const loadVector = (v: Vector) => {
+    setVector({ ...v });
+    if (v.diameter_in != null) setDiameter(String(v.diameter_in));
+    if (v.blades != null) setBlades(String(v.blades));
+  };
+
   const saveDraft = async () => {
     if (!vector || !draftName.trim()) return;
     try { await api.putDraft(draftName.trim(), vector, op); refreshDrafts(); setError(null); } catch (e) { setError(t('propError', { error: (e as Error).message })); }
@@ -265,6 +272,7 @@ export default function DesignerPage() {
           <ParetoView runs={opRuns} selectedId={selected} onPick={onPick} onClear={() => { setRuns([]); setSelected(null); lastRunVector.current = null; }} cost={cost} />
         </Box>
       </Box>
+      <StoredRunsPanel op={op} onLoad={loadVector} />
     </Box>
   );
 }

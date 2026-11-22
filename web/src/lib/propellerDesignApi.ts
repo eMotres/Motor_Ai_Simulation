@@ -69,3 +69,15 @@ export const listDrafts = () => call<{ drafts: DraftInfo[] }>('GET', '/drafts');
 export const getDraft = (name: string) => call<{ vector: Vector; operating_point: string }>('GET', `/drafts/${encodeURIComponent(name)}`);
 export const putDraft = (name: string, vector: Vector, op: string) => call<{ saved: boolean; valid: boolean }>('PUT', `/drafts/${encodeURIComponent(name)}`, { vector, op });
 export const deleteDraft = (name: string) => call<{ deleted: boolean }>('DELETE', `/drafts/${encodeURIComponent(name)}`);
+
+/** Stored optimisation runs (the workspace's _runs folder): the list and one run with its evaluations. */
+export interface RunBest { index: number; value: number; rpm: number | null; thrust_N: number | null; shaft_power_W: number | null; tip_mach: number | null }
+export interface RunOperating { name: string; rpm: number; torque_limit_Nm: number; shaft_power_W: number; flight_speed_ms: number | null;
+  override: { power_W: number | null; rpm: number } | null; motor_check: { status: string; torque_continuous_Nm?: number } | null }
+export interface StoredRun { run_id: string; created_utc: string | null; operating_point: string; objectives: string[]; diameter_in: number; blades: number;
+  operating: RunOperating | null; not_checked: string[] | null; n_evaluations: number; n_feasible: number; best: Record<string, RunBest | null> | null;
+  label: string | null; source: string | null }
+export interface StoredEval { index: number; generation: number; objectives: Record<string, number | null>; violation: number; feasible: boolean; note: string | null;
+  rpm: number | null; thrust_N: number | null; shaft_power_W: number | null; eta: number | null; tip_mach: number | null; vector: Vector }
+export const listRuns = () => call<{ runs: StoredRun[] }>('GET', '/runs');
+export const getRun = (runId: string) => call<StoredRun & { evaluations: StoredEval[] }>('GET', `/runs/${encodeURIComponent(runId)}`);

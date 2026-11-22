@@ -64,28 +64,23 @@ def _audit_path(project_id: str):
 
 
 def _written_event_ids(project_id: str) -> set:
-    """The event ids of the COMPLETE, parsed records of ``audit.jsonl`` (call under its lock).
-
-    A torn tail - the bytes after the last newline, from an append cut short (a partial JSON line, a UTF-8 sequence cut in
-    two) - is moved to ``audit.jsonl.torn-<time>`` and cut off, so it never counts as written and the next append starts on
-    a clean line.  A line in the middle that does not parse is not a record either; it stays where it is."""
+    """The event ids of the complete, parsed records of ``audit.jsonl`` (call under its lock).  NON-DESTRUCTIVE (coordinator
+    2026-11-22): the file is never truncated or rewritten.  Bytes that are not UTF-8 are read as replacement characters and a line
+    that does not parse is skipped, so a torn line never counts as written and never raises.  When the file does not end with a
+    newline, one is appended (append-only), so the next record starts on its own line."""
     path = _audit_path(project_id)
     try:
         raw = path.read_bytes()
     except FileNotFoundError:
         return set()
-    cut = raw.rfind(b"\n") + 1
-    if cut < len(raw):
-        stamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%S%f")
-        path.with_name(path.name + ".torn-" + stamp).write_bytes(raw[cut:])
-        with path.open("r+b") as fh:
-            fh.truncate(cut)
-        raw = raw[:cut]
+    if raw and not raw.endswith(b"\n"):
+        with path.open("ab") as fh:
+            fh.write(b"\r\n")
     ids = set()
-    for line in raw.splitlines():
+    for line in raw.decode("utf-8", errors="replace").splitlines():
         try:
-            rec = json.loads(line.decode("utf-8"))
-        except (UnicodeDecodeError, ValueError):
+            rec = json.loads(line)
+        except ValueError:
             continue
         details = rec.get("details") if isinstance(rec, dict) else None
         if isinstance(details, dict) and details.get("event_id"):
@@ -94,8 +89,8 @@ def _written_event_ids(project_id: str) -> set:
 
 
 def flush_events(project_id: str, json_name: str) -> None:
-    """Append every pending event of one store to the project audit and drop it from the store.  Under the audit's lock: a torn
-    tail is repaired first, only complete records count as written, and an event is dropped only after its own append returned.
+    """Append every pending event of one store to the project audit and drop it from the store.  Under the audit's lock: only
+    complete, parsed records count as written, and an event is dropped only after its own append returned.
     A failing append raises ``OSError`` and leaves the events pending (the store is not rewritten), so nothing is lost and
     nothing is written twice."""
     current = store.load_json(project_id, json_name, {})
@@ -120,5 +115,5 @@ def flush_events(project_id: str, json_name: str) -> None:
     try:
         with json_store.lock_for(_audit_path(project_id)):
             store.mutate_json(project_id, json_name, apply, default={})
-    except (UnicodeError, ValueError) as exc:               # never a bare 500: the caller turns OSError into a 503
+    except ValueError as exc:                               # never a bare 500: the caller turns OSError into a 503
         raise OSError("audit log unreadable: %s" % exc) from exc

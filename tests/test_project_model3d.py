@@ -63,8 +63,14 @@ def upload(client, who="t-staff", name="assembly.step", data=STEP, **fields):
 
 
 def audit_actions(tmp_path):
-    lines = (tmp_path / "projects" / "proj1" / "audit.jsonl").read_text(encoding="utf-8").splitlines()
-    return [json.loads(line)["action"] for line in lines if line.strip()]
+    """The actions of the complete records (a torn line stays in the file and is skipped, like every reader does)."""
+    out = []
+    for line in (tmp_path / "projects" / "proj1" / "audit.jsonl").read_bytes().decode("utf-8", errors="replace").splitlines():
+        try:
+            out.append(json.loads(line)["action"])
+        except ValueError:
+            continue
+    return out
 
 
 def test_staff_upload_is_internal_by_default_and_hidden_from_the_customer_side(client, tmp_path):
@@ -269,8 +275,9 @@ def test_a_torn_audit_line_holding_the_event_id_is_not_taken_as_written(client, 
     audit = _pending_upload(client, tmp_path, monkeypatch, b'{"action": "model3d.upload", "details": {"event_id": EVENT, "na')
     assert client.get(URL, headers=hdr("t-staff")).status_code == 200         # the replay repairs the tail and writes the row
     lines = audit.read_bytes().splitlines()
-    assert [json.loads(x)["action"] for x in lines] == ["model3d.upload"]      # one complete record, nothing torn left
-    assert list(audit.parent.glob("audit.jsonl.torn-*"))                       # the torn bytes are kept aside
+    assert lines[0].startswith(b'{"action": "model3d.upload", "details": {"event_id": ')   # the torn line stays, untouched
+    assert [json.loads(x)["action"] for x in lines[1:]] == ["model3d.upload"]               # the complete record follows it
+    assert not list(audit.parent.glob("audit.jsonl.torn-*"))
     doc = json.loads((tmp_path / "projects" / "proj1" / "model3d" / "models.json").read_text())
     assert "pending_audit" not in doc
     assert upload(client).status_code == 200 and audit_actions(tmp_path).count("model3d.upload") == 2
@@ -280,3 +287,25 @@ def test_a_cut_utf8_tail_never_blocks_the_store(client, tmp_path, monkeypatch):
     _pending_upload(client, tmp_path, monkeypatch, '{"note": "Рот'.encode("utf-8")[:-1])
     assert upload(client).status_code == 200                                    # repaired, replayed, then the new change
     assert audit_actions(tmp_path).count("model3d.upload") == 2
+
+
+
+def test_a_complete_last_record_without_its_newline_counts_and_nothing_is_cut(client, tmp_path, monkeypatch):
+    real = store.append_jsonl
+    audit = tmp_path / "projects" / "proj1" / "audit.jsonl"
+
+    def no_newline(project_id, name, entry):
+        if name == "audit.jsonl":
+            with audit.open("ab") as fh:
+                fh.write(json.dumps(entry, ensure_ascii=False, sort_keys=True).encode())
+            raise OSError("cut before the newline")
+        return real(project_id, name, entry)
+
+    monkeypatch.setattr(store, "append_jsonl", no_newline)
+    assert upload(client).status_code == 200
+    monkeypatch.setattr(store, "append_jsonl", real)
+    before = audit.read_bytes()
+    assert client.get(URL, headers=hdr("t-staff")).status_code == 200
+    after = audit.read_bytes()
+    assert after.startswith(before) and after[len(before):] == b"\r\n"          # append-only: one newline, the record kept
+    assert audit_actions(tmp_path).count("model3d.upload") == 1                 # not written twice

@@ -50,6 +50,11 @@ _SECRET_KEYS = (r"password|passwd|pwd|new_password|old_password|secret|client_se
                 r"smtp_password|auth_secret")
 # key=value (query strings, k=v log fragments).  Stops at & , ; whitespace quote.
 _KV_RE = re.compile(r"(?i)\b(" + _SECRET_KEYS + r")=([^&\s,;'\"]+)")
+# Mail links (class: a path / query segment that is itself a usable one-time credential): the short ids
+# ``/api/auth/link/r/<id>`` and ``/link/v/<id>``, and the long legacy ``/link/verify|reset?t=<token>``.
+_LINK_PATH_RE = re.compile(r"(/link/[rv]/)[A-Za-z0-9_-]{6,}")
+_LINK_QUERY_RE = re.compile(r"(/link/(?:verify|reset)\?(?:[^\s'\"]*&)?(?:t|token)=)[^&\s'\"]+")
+_LEGACY_QS_RE = re.compile(r"([?&](?:verify|reset)=)[^&\s'\"]+")
 # "key": "value"  /  'key': 'value'  (JSON / repr of a dict)
 _JSON_RE = re.compile(r"(?i)([\"'](?:" + _SECRET_KEYS + r")[\"']\s*:\s*)([\"'])(.*?)(\2)")
 # Candidates only; each is validated by ipaddress before it is replaced.
@@ -123,6 +128,9 @@ def redact(text: str) -> str:
         s = _BEARER_RE.sub(lambda m: f"{m.group(1)} {_REDACTED}", text)
         s = _JWT_RE.sub("[JWT]", s)
         s = _OWN_TOKEN_RE.sub(lambda m: m.group(1) + _REDACTED, s)
+        s = _LINK_PATH_RE.sub(lambda m: m.group(1) + _REDACTED, s)
+        s = _LINK_QUERY_RE.sub(lambda m: m.group(1) + _REDACTED, s)
+        s = _LEGACY_QS_RE.sub(lambda m: m.group(1) + _REDACTED, s)
         s = _KV_RE.sub(lambda m: f"{m.group(1)}={_REDACTED}", s)
         s = _JSON_RE.sub(lambda m: f"{m.group(1)}{m.group(2)}{_REDACTED}{m.group(4)}", s)
         s = _IPV4_RE.sub(_ip_sub, s)

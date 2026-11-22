@@ -192,3 +192,21 @@ def test_a_housed_or_liquid_solve_refuses_zones_by_name(em_run):
     with pytest.raises(HTTPException) as e:
         solve(frame="housed", air_zones=Z({"stator_ends": 5.0}))
     assert e.value.detail["invalid_parameters"][0]["field"] == "air_zones"
+
+
+def test_the_component_mean_is_the_area_mean_not_the_vertex_mean(em_run):
+    """Astra thermal audit 2026-11-21, F09: the reported bulk temperature drives the copper resistance and the magnet; it must not
+    move with the local mesh density.  Recomputed here from the returned P1 field: the area-weighted mean over the winding."""
+    import numpy as np
+    r = solve(open_air_speed_mps=8.0)
+    P = np.asarray(r["vertices"], float)
+    t = np.asarray(r["triangles"], int)
+    T = np.asarray(r["temperature_per_node"], float)
+    tag = np.asarray(r["domain_per_tri"], int)
+    m = tag == 2                                   # the winding domain
+    a, b, c = P[t[m, 0]], P[t[m, 1]], P[t[m, 2]]
+    area = 0.5 * np.abs((b[:, 0] - a[:, 0]) * (c[:, 1] - a[:, 1]) - (c[:, 0] - a[:, 0]) * (b[:, 1] - a[:, 1]))
+    expect = float((area * T[t[m]].mean(axis=1)).sum() / area.sum())
+    w = r["components"]["winding"]
+    assert abs(w["avg"] - expect) <= 0.051
+    assert "avg_vertex" in w and w["avg_vertex"] == round(float(T[np.unique(t[m])].mean()), 1)

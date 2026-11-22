@@ -331,7 +331,8 @@ def get_production(request: Request, die: str, config: str):
         # a member of the project that links this motor: the header only, read-only (project_link)
         return {**_with_product_revision(project_link.viewer_header(production)), "access": "project",
                 "project_id": viewer["project_id"]}
-    return _with_product_revision(production)
+    from motor_ai_sim.production import company_routes
+    return {**_with_product_revision(production), **company_routes.payload_flags(role, die, config)}
 
 
 # ── shared links: who may open a production's page, and how a stranger asks ─────

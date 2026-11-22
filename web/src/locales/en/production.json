@@ -51,6 +51,7 @@
     "assembly": "Assembly process",
     "tooling": "Tooling",
     "tests": "Tests",
+    "company": "Company details",
     "certification": "Certification"
   },
   "bilingual": {
@@ -304,6 +305,67 @@
   "unread": {
     "tip": "{count} unread messages",
     "new": "New"
+  },
+  "company": {
+    "title": "Company details",
+    "group": {
+      "legal": "Company",
+      "contact": "Contact",
+      "bank": "Bank",
+      "invoice": "VAT special invoice",
+      "flags": "Taxpayer and seal"
+    },
+    "field": {
+      "name_zh": "Registered name (Chinese)",
+      "name_en": "Registered name (English)",
+      "uscc": "Unified social credit code",
+      "reg_address": "Registered address",
+      "legal_representative": "Legal representative",
+      "contact_person": "Contact person",
+      "contact_phone": "Phone",
+      "contact_wechat": "WeChat",
+      "docs_email": "E-mail for documents",
+      "bank_name": "Bank (CNY account)",
+      "bank_account": "Account number (CNY)",
+      "inv_taxpayer_name": "Invoice title (taxpayer name)",
+      "inv_taxpayer_code": "Taxpayer code",
+      "inv_address_phone": "Invoice address and phone",
+      "inv_bank_name": "Invoice bank",
+      "inv_bank_account": "Invoice bank account",
+      "general_vat_taxpayer": "General VAT taxpayer",
+      "company_seal": "Company seal on contracts"
+    },
+    "tip": {
+      "name_zh": "Full registered name in Chinese, as on the business licence.",
+      "name_en": "The English name of the company, as it is to appear in the contract.",
+      "uscc": "18 characters, digits and capital letters.",
+      "reg_address": "Registered address as on the business licence.",
+      "legal_representative": "Name of the legal representative.",
+      "contact_person": "Person who handles the contract.",
+      "contact_phone": "Phone number of the contact person.",
+      "contact_wechat": "WeChat ID of the contact person.",
+      "docs_email": "Contracts and invoices are sent to this address.",
+      "bank_name": "Bank and branch of the CNY account. Visible only to MOTRES staff and your company.",
+      "bank_account": "Visible only to MOTRES staff and your company; it is never written to logs, digests or the change history.",
+      "inv_taxpayer_name": "Taxpayer name for the VAT special invoice.",
+      "inv_taxpayer_code": "Taxpayer identification number for the VAT special invoice (15-20 characters).",
+      "inv_address_phone": "Address and phone number printed on the VAT special invoice.",
+      "inv_bank_name": "Bank for the VAT special invoice. Visible only to MOTRES staff and your company.",
+      "inv_bank_account": "Visible only to MOTRES staff and your company; never written to logs, digests or the change history.",
+      "general_vat_taxpayer": "Yes if the company is a general VAT taxpayer.",
+      "company_seal": "Yes if contracts are sealed with the company seal."
+    },
+    "save": "Save",
+    "confirm": "Confirm",
+    "confirmedBy": "Confirmed by {{by}} on {{date}}",
+    "notConfirmed": "Not confirmed",
+    "copyFrom": "Copy from another production",
+    "copyTip": "Copies the company details of one of your other productions into this form; nothing is saved until you press Save.",
+    "yes": "Yes",
+    "no": "No",
+    "unset": "Not set",
+    "needed": "Company details needed for the contract",
+    "name": "OEM company: {{name}}"
   },
   "discussion": {
     "active": "With messages",

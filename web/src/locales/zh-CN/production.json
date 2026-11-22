@@ -51,6 +51,7 @@
     "assembly": "装配流程",
     "tooling": "工装",
     "tests": "测试",
+    "company": "公司信息",
     "certification": "认证"
   },
   "bilingual": {
@@ -304,6 +305,67 @@
   "unread": {
     "tip": "{count} 条未读消息",
     "new": "新消息"
+  },
+  "company": {
+    "title": "公司信息",
+    "group": {
+      "legal": "公司信息",
+      "contact": "联系方式",
+      "bank": "银行账户",
+      "invoice": "增值税专用发票",
+      "flags": "纳税人与印章"
+    },
+    "field": {
+      "name_zh": "公司全称（中文）",
+      "name_en": "公司全称（英文）",
+      "uscc": "统一社会信用代码",
+      "reg_address": "注册地址",
+      "legal_representative": "法定代表人",
+      "contact_person": "联系人",
+      "contact_phone": "电话",
+      "contact_wechat": "微信",
+      "docs_email": "接收文件的邮箱",
+      "bank_name": "开户银行（人民币账户）",
+      "bank_account": "银行账号（人民币）",
+      "inv_taxpayer_name": "发票抬头（纳税人名称）",
+      "inv_taxpayer_code": "纳税人识别号",
+      "inv_address_phone": "发票地址、电话",
+      "inv_bank_name": "发票开户行",
+      "inv_bank_account": "发票银行账号",
+      "general_vat_taxpayer": "一般纳税人",
+      "company_seal": "合同加盖公章"
+    },
+    "tip": {
+      "name_zh": "营业执照上的中文全称。",
+      "name_en": "合同中使用的公司英文名称。",
+      "uscc": "18位，数字和大写字母。",
+      "reg_address": "营业执照上的注册地址。",
+      "legal_representative": "法定代表人姓名。",
+      "contact_person": "负责合同事务的联系人。",
+      "contact_phone": "联系人的电话号码。",
+      "contact_wechat": "联系人的微信号。",
+      "docs_email": "合同和发票将发送到此邮箱。",
+      "bank_name": "人民币账户的开户行及支行。仅 MOTRES 员工和贵公司可见。",
+      "bank_account": "仅 MOTRES 员工和贵公司可见；不会写入日志、摘要或变更记录。",
+      "inv_taxpayer_name": "增值税专用发票的纳税人名称。",
+      "inv_taxpayer_code": "增值税专用发票的纳税人识别号（15-20位）。",
+      "inv_address_phone": "增值税专用发票上的地址和电话。",
+      "inv_bank_name": "增值税专用发票的开户行。仅 MOTRES 员工和贵公司可见。",
+      "inv_bank_account": "仅 MOTRES 员工和贵公司可见；不会写入日志、摘要或变更记录。",
+      "general_vat_taxpayer": "公司是增值税一般纳税人时选“是”。",
+      "company_seal": "合同加盖公司公章时选“是”。"
+    },
+    "save": "保存",
+    "confirm": "确认",
+    "confirmedBy": "{{by}} 于 {{date}} 确认",
+    "notConfirmed": "尚未确认",
+    "copyFrom": "从其他生产复制",
+    "copyTip": "将您其他生产的公司信息复制到此表单；点击保存前不会保存。",
+    "yes": "是",
+    "no": "否",
+    "unset": "未设置",
+    "needed": "合同需要填写公司信息",
+    "name": "OEM公司：{{name}}"
   },
   "discussion": {
     "active": "有消息的话题",

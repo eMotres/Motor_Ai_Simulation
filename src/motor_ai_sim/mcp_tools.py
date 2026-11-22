@@ -75,7 +75,7 @@ COMMERCIAL_DENYLIST = frozenset({
     # through the MCP either (``price`` / ``quote`` / ``payment`` are also caught by the tokens)
     "payment_terms", "quote_shared", "shared_quote", "exchange_rates", "per_eur", "total_price",
     # the company details form (owner 2026-11-22): legal, bank and delivery data of a customer / factory company
-    "company_details", "company_placeholders",
+    "company_details", "company_placeholders", "oem_company", "oem_company_missing",
 })
 COMMERCIAL_TOKENS = frozenset({
     "price", "prices", "pricing", "priced", "cost", "costs", "costing", "markup", "quote", "quotes", "quoted",

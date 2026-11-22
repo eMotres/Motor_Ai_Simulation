@@ -3,7 +3,7 @@
 import { errorInfo, productionDocumentsZipPath, supersededPrompt, productionProcessDocumentFilename, productionProcessDocumentPath, productionZipFilename, safeFileName, unwrapList } from './helpers';
 import type {
   AssemblyProcessView, AssemblyStep, AssemblyTree, Bilingual, BomImportPlan, BomRow, CostRow, CostsData, CertStatus, DocumentRec, ExtraCost, Member, MemberRole, Part, PartFiles, ProcessSection, Production, Proposal, Revision, RevisionPreview, SupersedePair,
-  ProductionAccess, Thread, TranslationRef, Lang, ProcurementData, ProcurementLine, ScheduleData, ScheduleBaseline, TimelineData,
+  ProductionAccess, OemCompanyDetails, Thread, TranslationRef, Lang, ProcurementData, ProcurementLine, ScheduleData, ScheduleBaseline, TimelineData,
 } from './types';
 
 const API = (import.meta.env.VITE_API_URL ?? 'http://localhost:8001') as string;
@@ -183,6 +183,12 @@ export const productionApi = {
   // -- caller routes ---------------------------------------------------------------------------------------------------
   list: async (): Promise<Production[]> => unwrapList<Production>(await call('GET', '/api/production'), 'productions'),
   get: (die: string, config: string) => call<Production>('GET', base(die, config)),
+  /** The factory's Company details of this production: its OEM members, the production's staff and admins only (404 for anybody else). */
+  companyDetails: (die: string, config: string) => call<OemCompanyDetails>('GET', `${base(die, config)}/company-details`),
+  saveCompanyDetails: (die: string, config: string, values: Record<string, string | boolean | null>) => call<OemCompanyDetails>('PUT', `${base(die, config)}/company-details`, { values }),
+  confirmCompanyDetails: (die: string, config: string) => call<OemCompanyDetails>('POST', `${base(die, config)}/company-details/confirm`, {}),
+  companyDetailsSources: async (die: string, config: string) => (await call<{ sources: Array<{ die: string; config: string; company: string }> }>('GET', `${base(die, config)}/company-details/sources`)).sources ?? [],
+  copyCompanyDetails: (die: string, config: string, from: { die: string; config: string }) => call<OemCompanyDetails>('POST', `${base(die, config)}/company-details/copy-from`, from),
   /** What the caller may do behind a shared link: `member` (with the role), or `none` - a nameless answer, same for a missing production. */
   access: (die: string, config: string) => call<ProductionAccess>('GET', `${base(die, config)}/access`),
   /** A stranger asks the team for access (one ticket in the admin inbox; nothing is granted). */

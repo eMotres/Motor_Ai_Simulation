@@ -223,10 +223,14 @@ def company_state(project: dict) -> dict:
 def contract_store_root() -> Optional[Path]:
     """Where the section's server-side documents live (coordinator 2026-11-22): the SHARED root, like the object registry -
     ``<shared root>/contract/`` (override ``MOTRES_CONTRACT_STORE_ROOT``) - the same place on every server, never this public
-    repository.  None when there is no shared root."""
+    repository.  None when no shared store is configured (then the private checkout is the development fallback)."""
     env = (os.environ.get("MOTRES_CONTRACT_STORE_ROOT") or "").strip()
     if env:
         return Path(env).expanduser()
+    # only a CONFIGURED shared store (a server: SHARED_ROOT or the workspace layering; both set in production): shared_root()
+    # alone falls back to the process config directory, which is not a store - then the private checkout is the fallback
+    if not ((os.environ.get("SHARED_ROOT") or "").strip() or (os.environ.get("WORKSPACES_ROOT") or "").strip()):
+        return None
     try:
         from motor_ai_sim.workspace import shared_root
         return Path(str(shared_root())) / "contract"

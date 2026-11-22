@@ -110,11 +110,28 @@ def test_a_hand_edited_scheme_that_breaks_the_schema_is_not_served(client, tmp_p
     assert client.get("/api/projects/proj1/contract", headers=hdr("t-staff")).json()["staff_scheme"] is None
 
 
-def test_without_a_shared_root_the_default_is_the_workspace_shared_root(monkeypatch, tmp_path):
+def test_the_shared_store_is_used_only_when_one_is_configured(monkeypatch, tmp_path):
     monkeypatch.delenv("MOTRES_CONTRACT_STORE_ROOT", raising=False)
+    monkeypatch.delenv("SHARED_ROOT", raising=False)
+    monkeypatch.delenv("WORKSPACES_ROOT", raising=False)
     from motor_ai_sim import workspace as W
     monkeypatch.setattr(W, "shared_root", lambda: tmp_path / "srv" / "shared")
-    assert PC.contract_store_root() == tmp_path / "srv" / "shared" / "contract"
+    assert PC.contract_store_root() is None                                     # the process config dir is not a store
+    for var in ("SHARED_ROOT", "WORKSPACES_ROOT"):
+        monkeypatch.setenv(var, str(tmp_path / "srv" / var.lower()))
+        assert PC.contract_store_root() == tmp_path / "srv" / "shared" / "contract"
+        monkeypatch.delenv(var)
+
+
+def test_without_a_configured_store_the_private_checkout_serves(monkeypatch, tmp_path):
+    monkeypatch.delenv("MOTRES_CONTRACT_STORE_ROOT", raising=False)
+    monkeypatch.delenv("SHARED_ROOT", raising=False)
+    monkeypatch.delenv("WORKSPACES_ROOT", raising=False)
+    private = tmp_path / "private"
+    (private / "config" / "contract").mkdir(parents=True)
+    (private / "config" / "contract" / "supply_scheme_staff.json").write_text(json.dumps({**SCHEME, "version": "private"}))
+    monkeypatch.setenv("MOTOR_AI_SIM_PRIVATE_DATA", str(private))
+    assert PC.staff_scheme()["version"] == "private"
 
 
 

@@ -93,6 +93,6 @@ def gap_distance_bins(mesh, r_gap_mm: float) -> Dict[str, int]:
 
 def collect(halves: List[Dict[str, Any]], belts: List[Dict[str, Any]], r_gap_mm: float) -> Dict[str, Any]:
     """The ``mesh_telemetry`` block: ``halves`` = ``[{"name", "mesh", "tags"}]``, ``belts`` = the entries recorded at the welds."""
-    return {"units": "mm", "belt": list(belts),
+    return {"units": "mm", "r_gap_mm": float(r_gap_mm), "belt": list(belts),
             "regions": {h["name"]: regions(h["mesh"], h["tags"]) for h in halves},
             "gap_distance_bins_mm": {h["name"]: gap_distance_bins(h["mesh"], r_gap_mm) for h in halves}}

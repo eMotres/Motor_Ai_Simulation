@@ -4485,6 +4485,38 @@ def _boundary_strict() -> bool:
 
 
 @_pardiso_scope          # each attempt owns (and releases) its PARDISO handles
+def _slip_radius_from_polys(mid: float, polys) -> float:
+    """The slip-circle radius (m): the radii formula, moved out to the polygons' ``mid_r_mm`` when a retaining sleeve
+    puts the mechanical gap further out (strictly greater, so a sleeve-less build keeps the old value bit-for-bit)."""
+    _mid_poly = polys.get("mid_r_mm")
+    if _mid_poly is not None:
+        try:
+            _mid_m = float(_mid_poly) * 1e-3
+            if _mid_m > mid + 1e-12:
+                log.info("slip surface: %.4f mm from the built polygons "
+                         "(radii formula says %.4f mm — a retaining sleeve "
+                         "moved the mechanical gap)", _mid_m * 1e3, mid * 1e3)
+                mid = _mid_m
+        except (TypeError, ValueError):
+            pass
+    return mid
+
+
+def _collect_mesh_telemetry(ms, ts, mr, tr, build_prov, slip_radius_m):
+    """The ``mesh_telemetry`` block or None (off, or a failure that never touches the solve); distances are from the
+    resolved slip circle, ``slip_radius_m`` in metres, reported in mm as ``r_gap_mm``."""
+    from motor_ai_sim.simulation import mesh_telemetry as _MT
+    if not _MT.enabled():
+        return None
+    try:
+        return _MT.collect(
+            [{"name": "stator", "mesh": ms, "tags": ts}, {"name": "rotor", "mesh": mr, "tags": tr}],
+            build_prov.get("belts") or [], float(slip_radius_m) * 1e3)
+    except Exception as _e_mt:                 # noqa: BLE001
+        log.warning("mesh telemetry skipped: %s", _e_mt)
+        return None
+
+
 def _fem_transient_sliding_band_once(
     n_steps_per_period: int = 12,
     sampling_purpose: SamplingPurpose = "standard",
@@ -5865,15 +5897,6 @@ def _fem_transient_sliding_band_once(
                     " | ".join(_build_prov["events"]))
     if _build_prov.get("notes"):
         log.info("mesh build path: %s", " | ".join(_build_prov["notes"]))
-    _mesh_telemetry = None
-    from motor_ai_sim.simulation import mesh_telemetry as _MT
-    if _MT.enabled():
-        try:                                   # diagnostic only: a failure here never touches the solve
-            _mesh_telemetry = _MT.collect(
-                [{"name": "stator", "mesh": ms, "tags": ts}, {"name": "rotor", "mesh": mr, "tags": tr}],
-                _build_prov.get("belts") or [], float(getattr(motor, "parameters", {}).get("stator_inner_radius", 0.0) or 0.0))
-        except Exception as _e_mt:             # noqa: BLE001
-            log.warning("mesh telemetry skipped: %s", _e_mt)
     Ps, Tts = ms.p.copy(), ms.t.copy(); Pr, Ttr = mr.p.copy(), mr.t.copy()
     nsn = Ps.shape[1]
     Pall = np.hstack([Ps, Pr]); Tall = np.hstack([Tts, Ttr + nsn])
@@ -5913,17 +5936,9 @@ def _fem_transient_sliding_band_once(
     #
     # WITHOUT a sleeve the two expressions are the same number, and the guard
     # below (strictly greater) keeps the old value bit-for-bit.
-    _mid_poly = polys.get("mid_r_mm")
-    if _mid_poly is not None:
-        try:
-            _mid_m = float(_mid_poly) * 1e-3
-            if _mid_m > mid + 1e-12:
-                log.info("slip surface: %.4f mm from the built polygons "
-                         "(radii formula says %.4f mm — a retaining sleeve "
-                         "moved the mechanical gap)", _mid_m * 1e3, mid * 1e3)
-                mid = _mid_m
-        except (TypeError, ValueError):
-            pass
+    mid = _slip_radius_from_polys(mid, polys)
+    # Mesh telemetry (diagnostic, off by default) is read against the slip circle the solver really uses.
+    _mesh_telemetry = _collect_mesh_telemetry(ms, ts, mr, tr, _build_prov, mid)
     rring = _ring(Pr, mid)
     sring = _ring(Ps, mid)
     Nring = min(sring.size, rring.size)

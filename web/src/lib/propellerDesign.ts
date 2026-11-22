@@ -48,6 +48,8 @@ export interface RunRecord {
   air_ms: number | null;
   constraintsMet: boolean;
   tipMach: number;
+  /** polar source the run was computed with (runs of different polars are never compared on one front) */
+  polar?: string;
 }
 
 export const GROUP_KEYS: Record<Group, string> = {
@@ -96,19 +98,19 @@ export function runLabel(prev: Vector | null, next: Vector, max = 3): string {
   return head.join(', ') + (ch.length > max ? ` +${ch.length - max}` : '');
 }
 
-export function toRun(id: number, label: string, vector: Vector, r: EvalRecord): RunRecord {
+export function toRun(id: number, label: string, vector: Vector, r: EvalRecord, polar?: string): RunRecord {
   return {
     id, label, vector: { ...vector }, designId: r.design_id, op: r.operating_point, rpm: r.operating.rpm,
     thrust_per_shaft_W: r.objectives.thrust_per_shaft_W, air_ms: r.objectives.cooling_air_axial_ms,
-    constraintsMet: r.constraints_met, tipMach: r.tip_mach,
+    constraintsMet: r.constraints_met, tipMach: r.tip_mach, polar,
   };
 }
 
-/** Indices of the non-dominated runs when BOTH objectives are to be maximised.  A run with a missing objective, or one that does not
- *  meet its constraints (constraintsMet === false), is never on the front (review 2026-11-21 H3). */
+/** Indices of the non-dominated runs when BOTH objectives are to be maximised.  Only runs known to meet their constraints
+ *  (constraintsMet === true) with both objectives enter the front; unknown feasibility counts as not feasible (reviews H3). */
 export function paretoFront(runs: ReadonlyArray<Pick<RunRecord, 'thrust_per_shaft_W' | 'air_ms'> & { constraintsMet?: boolean }>): number[] {
   const ok = runs.map((r, i) => ({ r, i }))
-    .filter(({ r }) => r.thrust_per_shaft_W != null && r.air_ms != null && r.constraintsMet !== false);
+    .filter(({ r }) => r.thrust_per_shaft_W != null && r.air_ms != null && r.constraintsMet === true);
   const front: number[] = [];
   for (const { r, i } of ok) {
     const dominated = ok.some(({ r: q, i: j }) => j !== i

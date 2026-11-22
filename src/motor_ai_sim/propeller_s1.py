@@ -199,6 +199,43 @@ def _table(v: Any, n_rpm: int, n_i: int, name: str) -> List[List[Optional[float]
     return [[_num(x) for x in r] for r in v]
 
 
+#: ``loss_groups.<group>.status`` values that declare a group absent from the grid on purpose (pre-merge review 2026-11-22, H10):
+#: ``lumped`` = contained in another group, ``per drive`` = from the drive's own grid (0 for a sine drive), ``zero`` /
+#: ``not_applicable`` = physically none.  ``grid`` means the grid has it; ``omitted`` is only allowed for ``mech``.
+LOSS_ABSENT_OK = ("lumped", "per drive", "zero", "not_applicable")
+LOSS_STATUSES = ("grid", "omitted") + LOSS_ABSENT_OK
+
+
+def _check_loss_declarations(raw: Mapping[str, Any], grid: Mapping[str, Any]) -> None:
+    """Validate ``loss_groups`` / ``loss_groups_zero``: known groups and statuses, and no declaration that contradicts the grid."""
+    decl = raw.get("loss_groups") or {}
+    if not isinstance(decl, Mapping):
+        raise S1Error("model: loss_groups must be a mapping")
+    for k, d in decl.items():
+        st = (d or {}).get("status") if isinstance(d, Mapping) else None
+        if k not in LOSS_GROUPS + ("mech",) or st not in LOSS_STATUSES:
+            raise S1Error("model: loss_groups.%s: unknown group or status %r (use %s)" % (k, st, ", ".join(LOSS_STATUSES)))
+        if st == "grid" and k in LOSS_GROUPS and k not in grid["loss_W"]:
+            raise S1Error("model: loss_groups.%s says 'grid' but grid.loss_W has no %s" % (k, k))
+        if st == "omitted" and k != "mech":
+            raise S1Error("model: loss_groups.%s: a motor loss group cannot be 'omitted'; give it, or declare it %s" % (k, "/".join(LOSS_ABSENT_OK)))
+    zero = raw.get("loss_groups_zero") or ()
+    if isinstance(zero, (str, bytes)) or not all(z in LOSS_GROUPS for z in zero):
+        raise S1Error("model: loss_groups_zero must list groups of %s" % (LOSS_GROUPS,))
+    both = [z for z in zero if z in grid["loss_W"]]
+    if both:
+        raise S1Error("model: loss_groups_zero lists %s, which the grid has" % ", ".join(both))
+
+
+def _absent_ok(m: Mapping[str, Any], k: str) -> bool:
+    """True when the model declares the absent loss group on purpose (see ``LOSS_ABSENT_OK``); ``pwm_extra`` is a drive term and is
+    always allowed absent from the motor grid (0 for a sine drive)."""
+    if k == "pwm_extra" or k in (m.get("loss_groups_zero") or ()):
+        return True
+    d = (m.get("loss_groups") or {}).get(k)
+    return isinstance(d, Mapping) and d.get("status") in LOSS_ABSENT_OK
+
+
 def validate_model(raw: Mapping[str, Any]) -> Dict[str, Any]:
     """Check a model dict and return a normalised copy (``S1Error`` on anything wrong)."""
     if not isinstance(raw, Mapping) or raw.get("schema") not in SCHEMAS:
@@ -229,6 +266,7 @@ def validate_model(raw: Mapping[str, Any]) -> Dict[str, Any]:
     if g.get("gamma_deg") is not None:
         grid["gamma_deg"] = _table(g.get("gamma_deg"), len(rpm), len(cur), "grid.gamma_deg")
     m["grid"] = grid
+    _check_loss_declarations(raw, grid)
     m["drives"] = {str(k): _drive_of(d, str(k)) for k, d in (raw.get("drives") or {}).items()}
     if raw.get("sine_controller") is not None:
         m["sine_controller"] = _controller_block(raw.get("sine_controller"), "sine_controller")
@@ -640,14 +678,13 @@ def losses(m: Mapping[str, Any], rpm: float, I: float, t_winding_c: float,
     below_n = below_i = False
     unavailable: List[str] = []
     drive_unavailable: List[str] = []
-    zero_ok = set(m.get("loss_groups_zero") or ())          # groups the model declares physically zero / not applicable
     missing: List[str] = []
     for k in LOSS_GROUPS:
         t = g["loss_W"].get(k)
         if t is None:
             out[k] = 0.0
-            if k not in zero_ok and not (k == "pwm_extra" and (drive or {}).get("pwm_extra_W") is not None):
-                missing.append(k)                       # review 2026-11-21 H10: absent from the model, counted 0 W, now said so
+            if not _absent_ok(m, k):
+                missing.append(k)                       # review H10: absent and not declared -> the caller refuses the point
             continue
         v, bn, bi = grid_eval(g["rpm"], g["I_A"], t, rpm, I, kind="loss", floors=g.get("I_floor_A"))
         below_n, below_i = below_n or bn, below_i or bi
@@ -1218,7 +1255,7 @@ def thermal_at(m: Mapping[str, Any], rpm: float, I: float, h: float, ambient_c: 
     damping, last_res = 1.0, float("inf")
     for it in range(1, max_it + 1):
         ls = losses(m, rpm, I, t_w, drive)
-        if ls["unavailable"]:
+        if ls["unavailable"] or ls["missing_loss_groups"]:
             return None
         th = temperatures(m["thermal_geom"], ls["cu_dc"] + ls["cu_ac"], ls["fe_rotor"] + ls["rotor_eddy"],
                           ls["motor_total"], h, ambient_c, cal)
@@ -1354,8 +1391,8 @@ def _fixed_point(m: Mapping[str, Any], rpm: float, q_em: float, h: float, ambien
         if I > current_cap(m) + 1e-9:
             return {"state": "no_current", "status": "current", "t_w": t_w, "t_m": t_m, "it": it, "voltage": vc}
         ls = losses(m, rpm, I, t_w, drive)
-        if ls["unavailable"]:
-            return {"state": "loss_data", "groups": ls["unavailable"], "I": I, "it": it, "voltage": vc}
+        if ls["unavailable"] or ls["missing_loss_groups"]:
+            return {"state": "loss_data", "groups": ls["unavailable"] + ls["missing_loss_groups"], "I": I, "it": it, "voltage": vc}
         th = temperatures(m["thermal_geom"], ls["cu_dc"] + ls["cu_ac"], ls["fe_rotor"] + ls["rotor_eddy"],
                           ls["motor_total"], h, ambient_c, cal)
         res = max(abs(th["winding"] - t_w), abs(th["magnet"] - t_m))
@@ -1474,7 +1511,7 @@ def solve_point(m: Mapping[str, Any], prop: pp.Propeller, rpm: float, *, ambient
                below_loss_grid_speed=bool(ls["below_loss_grid_speed"]),
                below_loss_grid_current=bool(ls["below_loss_grid_current"]),
                drive_losses_unavailable=list(ls["drive_unavailable"]),
-               losses_missing=list(ls["missing_loss_groups"]),     # review H10: groups absent from the model (counted 0 W)
+               losses_missing=list(ls["missing_loss_groups"]),     # review H10: undeclared absent groups (the point is refused)
                electrical_power_W=p_in, controller_loss_W=pc, battery_power_W=p_batt,
                battery_current_A=i_batt, demag_limit_A=i_dm, demag_basis=dm_basis,
                margin_winding_K=lims["winding_C"] - th["winding"],

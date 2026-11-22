@@ -44,7 +44,10 @@ _POLAR_FLAG = {"flatplate_model": F_AIRFOIL, "camber_model": F_AIRFOIL_DRAG, "mf
 F_MACH_BEYOND_POLAR = "tip_mach_beyond_polar_model"     # relative tip Mach above MFOIL_MACH_LIMIT with Mach-0 table polars
 F_THICKNESS_NOT_IN_POLAR = "manufactured_thickness_not_in_polar"   # moulded t/c differs > 2 % from the tabulated section
 MFOIL_MACH_LIMIT = 0.7
-FLIGHT_TORQUE_TOL = 0.02                                 # flight mode: at the rated rpm the torque must be within +-2 % of the limit (review H4)
+TORQUE_TOL = 0.01                                        # the torque limit may be exceeded by 1 % (search tolerance)
+FLIGHT_TORQUE_TOL = TORQUE_TOL                           # flight mode: torque within +-1 % of the limit at the rated rpm (reviews H4,
+                                                         # 2026-11-22: one symmetric band, the same as the cap)
+F_POLAR_UNSUPPORTED = ("polar_alpha_gap", "polar_beyond_table")   # table flags: angles without a converged table solution
 IN = 0.0254
 
 
@@ -360,7 +363,7 @@ def evaluate_candidate(d: Design, vec: Dict[str, Any], op_name: str, *, v_inf: f
         flags.add("rpm_search_not_converged")
     R_m = prop.blade.tip_radius_m
     mach = _tip_mach(R_m, rpm, temp)
-    if flight:                                           # review 2026-11-21 H7: in flight the tip sees the helical (relative) speed
+    if v_inf:                                            # review H7: with oncoming air the tip sees the helical (relative) speed
         mach = math.hypot(mach, v_inf / pb.sound_speed(temp))
     flags |= set(res.flags) | {F_ROOT, F_HUB, _POLAR_FLAG.get(polar_source(d), F_AIRFOIL_DRAG)}
     if d.inputs_unconfirmed():
@@ -368,18 +371,23 @@ def evaluate_candidate(d: Design, vec: Dict[str, Any], op_name: str, *, v_inf: f
     flags |= set(d.manufacturing.flags())
     thrust_per_w = res.thrust_N / res.shaft_power_W if res.shaft_power_W > 0 else None
     constraints = {
-        "torque_within_limit": res.torque_Nm <= op.torque_limit_Nm * 1.01,
+        "torque_within_limit": res.torque_Nm <= op.torque_limit_Nm * (1.0 + TORQUE_TOL),
         "tip_mach_within_limit": mach <= d.tip_mach_limit,
         "bemt_converged": not any(f.startswith("unconverged_elements") for f in flags),
     }
     torque_error = res.torque_Nm / op.torque_limit_Nm - 1.0
     if flight:
         constraints["torque_matches_rated"] = abs(torque_error) <= FLIGHT_TORQUE_TOL
+    else:                                                # review 2026-11-22 H4: an unmatched torque search is not a design point
+        constraints["rpm_search_converged"] = "rpm_search_not_converged" not in flags
     p2 = candidate_to_propeller2(d, vec)
     ident = p2["id"]
     if polar_source(d) == "mfoil_table":
         if mach > MFOIL_MACH_LIMIT:                       # review H7: the tables are Mach 0 viscous solutions (PG only scales lift)
             flags.add(F_MACH_BEYOND_POLAR)
+        # review 2026-11-22 H5 / H7: outside the tables' validity the result is not a design point (constraints, not only flags)
+        constraints["tip_mach_within_polar_model"] = mach <= MFOIL_MACH_LIMIT
+        constraints["polar_data_supported"] = not (flags & set(F_POLAR_UNSUPPORTED))
         for st in p2["blade"]["stations"]:                # review H6: the table is for the nominal section, not the moulded one
             aid = str(st["airfoil"])
             if aid.startswith("naca4-") and abs(float(st["thickness_rel"]) / (int(aid[-2:]) / 100.0) - 1.0) > 0.02:

@@ -24,7 +24,9 @@ from typing import Any, Dict, Mapping, Optional, Tuple
 from motor_ai_sim import propeller_inflow as _pi
 
 MODEL_ZONES = "zone-1"
-MIN_ZONE_COVERAGE = 0.5          # a zone is exported only when the model covers at least half of its area (else omitted, never 0)
+MIN_ZONE_COVERAGE = 0.5          # below half of its area modelled a zone's mean is not even reported (flag *_coverage_too_small)
+FULL_ZONE_COVERAGE = 0.99         # only a zone modelled over (practically) all of its area goes into the thermal request (review
+                                  # 2026-11-22 H9: a partial mean is not a whole-zone film); partial zones are reported in ``partial_zones``
 ZONE_KEYS = ("housing_outer", "stator_ends", "rotor_ends")
 
 
@@ -59,7 +61,8 @@ def band_mean(field: _pi.AirField, r_lo: float, r_hi: float) -> Optional[float]:
 
 
 def zone_air_detail(field: _pi.AirField, die_radii: Mapping[str, Any]) -> Dict[str, Any]:
-    """``{"air_zones": <request field>, "flags": [...], "coverage": {zone: fraction of the zone area with a modelled band}}``.
+    """``{"air_zones": <request field>, "flags": [...], "coverage": {zone: fraction of the zone area with a modelled band},
+    "partial_zones": {zone: {"axial_ms", "coverage"}}}``; a partly modelled zone is NOT in the request field (see ``FULL_ZONE_COVERAGE``).
 
     ``die_radii`` in m: ``rotor_outer_radius_m`` and ``stator_outer_radius_m`` (required), ``housing_outer_radius_m`` (optional)."""
     r_rot = _radius(die_radii, "rotor_outer_radius_m", True)
@@ -77,6 +80,7 @@ def zone_air_detail(field: _pi.AirField, die_radii: Mapping[str, Any]) -> Dict[s
         flags.add("housing_outer_not_given")
     zones: Dict[str, float] = {}
     coverage: Dict[str, float] = {}
+    partial: Dict[str, Dict[str, float]] = {}
     for z in ZONE_KEYS:
         if z not in ranges:
             continue
@@ -96,12 +100,14 @@ def zone_air_detail(field: _pi.AirField, die_radii: Mapping[str, Any]) -> Dict[s
         if coverage[z] < MIN_ZONE_COVERAGE:              # review 2026-11-21 H9: a small modelled sliver is not the zone's air speed
             flags.add("%s_coverage_too_small" % z)
             continue
-        if coverage[z] < 1.0 - 1e-9:
+        if coverage[z] < FULL_ZONE_COVERAGE:
             flags.add("%s_partly_modelled" % z)
+            partial[z] = {"axial_ms": max(0.0, float(v)), "coverage": coverage[z]}
+            continue
         zones[z] = max(0.0, float(v))
     source = "%s | %s | %.0f rpm | axial at the disc, area-weighted per zone" % (field.model_id, field.propeller_id, field.rpm)
     return {"air_zones": {"model_id": MODEL_ZONES, "source": source, "zones": zones, "calibration": None},
-            "flags": sorted(flags | set(field.flags)), "coverage": coverage}
+            "flags": sorted(flags | set(field.flags)), "coverage": coverage, "partial_zones": partial}
 
 
 def zone_air(field: _pi.AirField, die_radii: Mapping[str, Any]) -> Dict[str, Any]:

@@ -32,17 +32,25 @@ class ApiProblem(Exception):
         self.status, self.detail = status, detail
 
 
-def _design(polar_source: Any = None) -> pd.Design:
-    """The family design; ``polar_source`` (None = the file's, default flat plate) selects the section polar for this request only."""
+def _design(polar_source: Any = None, compressibility: Any = None) -> pd.Design:
+    """The family design; ``polar_source`` (None = the file's, default flat plate) selects the section polar and ``compressibility``
+    (None = off, ``"prandtl_glauert"``) the opt-in lift correction, for this request only."""
     d = pd.load_design()
-    if polar_source is None:
-        return d
-    if not isinstance(polar_source, str):
-        raise ApiProblem(422, "polar_source must be one of %s" % list(pd.POLAR_CHOICES))
-    try:
-        return pd.with_polar_source(d, polar_source)
-    except pd.DesignError as exc:
-        raise ApiProblem(422, str(exc))
+    if polar_source is not None:
+        if not isinstance(polar_source, str):
+            raise ApiProblem(422, "polar_source must be one of %s" % list(pd.POLAR_CHOICES))
+        try:
+            d = pd.with_polar_source(d, polar_source)
+        except pd.DesignError as exc:
+            raise ApiProblem(422, str(exc))
+    if compressibility is not None:
+        if not isinstance(compressibility, str):
+            raise ApiProblem(422, "compressibility must be a model name or null")
+        try:
+            d = pd.with_compressibility(d, compressibility)
+        except pd.DesignError as exc:
+            raise ApiProblem(422, str(exc))
+    return d
 
 
 def _clean_vector(vec: Any) -> Dict[str, Any]:
@@ -117,8 +125,12 @@ def geometry(vec: Any) -> Dict[str, Any]:
             "outline": [{"r_mm": s["r_mm"], "chord_mm": s["chord_mm"], "twist_deg": s["twist_deg"]} for s in raw["blade"]["stations"]]}
 
 
-def evaluate(vec: Any, op: str, v_inf: float = 0.0, polar_source: Any = None) -> Dict[str, Any]:
-    d = _design(polar_source)
+def evaluate(vec: Any, op: str, v_inf: float = 0.0, polar_source: Any = None, flight: Any = False,
+             compressibility: Any = None) -> Dict[str, Any]:
+    """One candidate: static (``v_inf`` 0), at ``v_inf``, or ``flight=True`` = at the rated rpm and the point's flight speed."""
+    d = _design(polar_source, compressibility)
+    if not isinstance(flight, bool):
+        raise ApiProblem(422, "flight must be true or false")
     v = _clean_vector(vec)
     if op not in d.operating_points:
         raise ApiProblem(422, "unknown operating point %r; known: %s" % (op, sorted(d.operating_points)))
@@ -128,7 +140,7 @@ def evaluate(vec: Any, op: str, v_inf: float = 0.0, polar_source: Any = None) ->
     if viol:
         raise ApiProblem(422, {"message": "invalid candidate", "violations": viol})
     try:
-        return pd.evaluate_candidate(d, v, op, v_inf=float(v_inf))
+        return pd.evaluate_candidate(d, v, op, flight=True) if flight else pd.evaluate_candidate(d, v, op, v_inf=float(v_inf))
     except pd.DesignError as exc:
         raise ApiProblem(422, str(exc))
 
@@ -200,11 +212,12 @@ def curve(vec: Any, op: str, n: int = 11, v_inf: float = 0.0, polar_source: Any 
 
 def optimize(vec: Any, op: str, pop: Any = 12, generations: Any = 6, seed: Any = 1, objectives: Any = None, free: Any = None,
              enforce_tip_mach: Any = True, tip_mach_limit: Any = None,
-             structure_material: Any = None, min_safety_factor: Any = None, polar_source: Any = None, flight: Any = False) -> Dict[str, Any]:
+             structure_material: Any = None, min_safety_factor: Any = None, polar_source: Any = None, flight: Any = False,
+             chord_max_step: Any = None, compressibility: Any = None) -> Dict[str, Any]:
     """Two-objective optimisation from the given design (diameter and blade count stay).  Synchronous and capped (pop x (generations + 1) <= 200);
     every evaluation is appended to ``<workspace>/propeller_designs/_runs/<run_id>.jsonl``."""
     from motor_ai_sim import propeller_optimize as po
-    d = _design(polar_source)
+    d = _design(polar_source, compressibility)
     v = _clean_vector(vec)
     if not isinstance(pop, int) or isinstance(pop, bool) or not isinstance(generations, int) or isinstance(generations, bool) \
             or not isinstance(seed, int) or isinstance(seed, bool):
@@ -233,6 +246,10 @@ def optimize(vec: Any, op: str, pop: Any = 12, generations: Any = 6, seed: Any =
         kw.update(structure_material=structure_material, min_safety_factor=min_safety_factor)
     if flight:
         kw["flight"] = True
+    if chord_max_step is not None:
+        if isinstance(chord_max_step, bool) or not isinstance(chord_max_step, (int, float)):
+            raise ApiProblem(422, "chord_max_step must be a number or null")
+        kw["chord_max_step"] = chord_max_step
     try:
         return po.optimize(d, v, op, **kw)
     except po.OptimizeError as exc:

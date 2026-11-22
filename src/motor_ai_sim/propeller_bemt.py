@@ -309,16 +309,26 @@ class TablePolar(PolarProvider):
             cl, cd = np.where(lo, -v_cl, cl), np.where(lo, v_cd, cd)
         return cl, cd
 
-    GAP_HALF_WIDTH = math.radians(0.5)
+    @staticmethod
+    def gap_intervals(t: PolarTable) -> List[Tuple[float, float]]:
+        """The open alpha intervals (rad) bridged by interpolation across a failed solution: from the converged angle below each failed
+        angle to the converged angle above it (review 2026-11-22 H5: the whole bridge is unsupported, not only the failed angle)."""
+        out = []
+        for g in t.gaps:
+            below, above = t.alpha[t.alpha < g], t.alpha[t.alpha > g]
+            if len(below) and len(above):
+                out.append((float(below[-1]), float(above[0])))
+        return out
 
     def _table_flags(self, tabs, a) -> set:
-        """``polar_alpha_gap`` when an angle falls within 0.5 deg of a bridged failed solution of a table in use; ``polar_beyond_table``
-        when it lies outside the converged range (the Viterna extension, not a computed stall)."""
+        """``polar_alpha_gap`` when an angle falls inside a bridged interval of a table in use (``gap_intervals``);
+        ``polar_beyond_table`` when it lies outside the converged range (the Viterna extension, not a computed stall)."""
         f = set()
+        aa = np.ravel(a)
         for t in tabs:
-            if t.gaps and np.any(np.abs(np.subtract.outer(np.ravel(a), np.asarray(t.gaps))) < self.GAP_HALF_WIDTH):
+            if any(np.any((aa > lo) & (aa < hi)) for lo, hi in self.gap_intervals(t)):
                 f.add("polar_alpha_gap")
-            if np.any(a > t.alpha[-1]) or np.any(a < t.alpha[0]):
+            if np.any(aa > t.alpha[-1]) or np.any(aa < t.alpha[0]):
                 f.add("polar_beyond_table")
         return f
 

@@ -1227,6 +1227,8 @@
     }
   },
   "customerQuote": {
+    "nextUnit": "Next unit",
+    "nextUnitTip": "One more motor of the same design after the first: no tooling and no development.",
     "col": {
       "iteration": "Iteration",
       "motors": "Motors",
@@ -1322,7 +1324,21 @@
       "rule": "Rule",
       "dhl": "DHL quote"
     },
+    "nextUnit": {
+      "title": "Next unit",
+      "tip": "The price of one more motor after the first (a repeat order: no tooling, no development): manufacturing of one motor + testing when ticked + shipping of one motor. Type a value to overwrite the derived one.",
+      "manufacturing": "Manufacturing, one motor",
+      "testing": "With testing",
+      "shipping": "Shipping, one motor (EUR)",
+      "auto": "auto",
+      "price": "Price (EUR)",
+      "priceTip": "Derived: {derived}. Typed here, it replaces the derived price.",
+      "weeks": "Weeks",
+      "total": "Next unit, before contingency",
+      "unavailable": "Not computable yet."
+    },
     "origin": {
+      "dhlTable": "Rate table {date}, zone {zone} ({basis}), {from}→{to}, {weight} kg chargeable, +{margin} %",
       "production": "From production {ref}, ×{factor} by active mass",
       "estimate": "From estimate of project {ref}, iteration {iteration}",
       "converted": "Converted from the old detailed estimate. {note}",
@@ -1406,6 +1422,17 @@
       "noRate": "No rate for {currency}: the total stays in EUR."
     },
     "dhl": {
+      "table": "Rate table {date}: zone {zone} ({basis}), {parcels} parcel(s), {kg} kg chargeable (volumetric weight L×W×H / 5000), +{fuel} % fuel, {days} days.",
+      "postal": "Postal code",
+      "perMotor": "1 per motor",
+      "zoneBasis": {
+        "calibrated": "calibrated on a real quote",
+        "estimate": "estimate, no real quote yet"
+      },
+      "service": {
+        "express": "Express courier",
+        "air_freight": "Air freight"
+      },
       "title": "Shipping (DHL)",
       "country": "Country (ISO)",
       "city": "City",

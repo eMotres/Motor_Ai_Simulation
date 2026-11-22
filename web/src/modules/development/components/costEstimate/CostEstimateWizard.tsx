@@ -10,6 +10,7 @@ import {
 } from '@mui/material';
 import CostEstimateTable from './CostEstimateTable';
 import CostShipping from './CostShipping';
+import CostNextUnit from './CostNextUnit';
 import CheckIcon from '@mui/icons-material/Check';
 import HelpTip from '../../../../components/common/HelpTip';
 import { BigNumber, StepCard, TOUCH } from '../specWizard/ui';
@@ -341,6 +342,7 @@ export default function CostEstimateWizard({ projectId, language, t, who, onShar
       </Box>
     </Stack>
     <CostShipping estimate={estimate} schema={schema} lang={lang} t={t} today={today} onChange={change} />
+    <CostNextUnit estimate={estimate} computed={computed} t={t} today={today} who={who} onChange={change} />
     <Stack spacing={0.6} data-testid="payment-terms" sx={{ borderTop: '1px solid var(--line-soft)', pt: 1.5 }}>
       <Stack direction="row" spacing={0.5} alignItems="center"><Typography sx={{ fontSize: 14, fontWeight: 600, color: 'var(--text-0)' }}>{t('costEstimate.paymentTerms')}</Typography><HelpTip title={t('costEstimate.paymentTermsTip')} /></Stack>
       <TextField size="small" value={String(estimate.settings.payment_terms ?? '')} onChange={(e) => change(setSetting(estimate, schema, 'payment_terms', e.target.value.slice(0, 300)))}

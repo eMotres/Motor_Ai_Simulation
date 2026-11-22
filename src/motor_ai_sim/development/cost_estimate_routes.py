@@ -178,6 +178,8 @@ async def put_estimate(project_id: str, request: Request, response: Response, di
     # the automatic DHL lines follow the iteration's motors on EVERY save (owner 2026-11-03); the motor mass is read before the lock
     auto = any((it["lines"]["shipping"].get("status") == "filled" and it["lines"]["shipping"].get("source") == "dhl")
                for it in candidate["iterations"])
+    nu_ship = (candidate.get("next_unit") or {}).get("shipping") or {}
+    auto = auto or (nu_ship.get("status") == "filled" and nu_ship.get("source") == "dhl")
     ship = SRC.ship_data(candidate, schema) if auto else None
     auto_changes: list = []
 

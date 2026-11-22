@@ -1,0 +1,38 @@
+{
+  "version": 1,
+  "date": "2026-11-22",
+  "origin": "CN Shanghai",
+  "currency": "CNY",
+  "note": "Express / air freight rate table, NOT a carrier tariff. Zone SA is calibrated on the one real quote we have (2026-11-02, Shanghai -> Buenos Aires, 2 x 75 kg, air freight CNY 20169.14 excl. VAT, 16 days); every other zone is the same curve scaled by an ESTIMATED zone factor and is marked 'estimate' until a quote for it is entered. No paid API, no credentials.",
+  "volumetric_divisor": 5000,
+  "fuel_surcharge_pct": 15,
+  "default_density_kg_m3": 500,
+  "services": {
+    "express": {"label": {"en": "Express courier", "zh-CN": "快递"}, "factor": 1.0},
+    "air_freight": {"label": {"en": "Air freight", "zh-CN": "空运"}, "factor": 1.0}
+  },
+  "default_service": "express",
+  "breaks": [
+    {"from_kg": 0, "multiplier": 1.45},
+    {"from_kg": 45, "multiplier": 1.2},
+    {"from_kg": 100, "multiplier": 1.0}
+  ],
+  "base_cny_per_kg": 116.922551,
+  "min_charge_cny": 900,
+  "zones": {
+    "SA": {"name": {"en": "South America", "zh-CN": "南美"}, "factor": 1.0, "transit_days": 16, "basis": "calibrated",
+           "countries": ["AR", "BO", "BR", "CL", "CO", "EC", "GY", "PY", "PE", "SR", "UY", "VE"]},
+    "EU": {"name": {"en": "Europe", "zh-CN": "欧洲"}, "factor": 0.55, "transit_days": 6, "basis": "estimate",
+           "countries": ["AT", "BE", "BG", "CH", "CY", "CZ", "DE", "DK", "EE", "ES", "FI", "FR", "GB", "GR", "HR", "HU", "IE", "IS", "IT", "LT", "LU", "LV", "MT", "NL", "NO", "PL", "PT", "RO", "RS", "SE", "SI", "SK", "UA"]},
+    "NA": {"name": {"en": "North America", "zh-CN": "北美"}, "factor": 0.7, "transit_days": 7, "basis": "estimate",
+           "countries": ["CA", "MX", "US"]},
+    "AS": {"name": {"en": "East and South-East Asia", "zh-CN": "东亚和东南亚"}, "factor": 0.4, "transit_days": 5, "basis": "estimate",
+           "countries": ["HK", "ID", "JP", "KR", "MY", "PH", "SG", "TH", "TW", "VN"]},
+    "SW": {"name": {"en": "South Asia, Middle East, Turkey", "zh-CN": "南亚、中东、土耳其"}, "factor": 0.7, "transit_days": 8, "basis": "estimate",
+           "countries": ["AE", "BD", "IL", "IN", "LK", "PK", "QA", "SA", "TR"]},
+    "OC": {"name": {"en": "Oceania", "zh-CN": "大洋洲"}, "factor": 0.8, "transit_days": 8, "basis": "estimate",
+           "countries": ["AU", "NZ"]},
+    "AF": {"name": {"en": "Africa", "zh-CN": "非洲"}, "factor": 1.1, "transit_days": 14, "basis": "estimate",
+           "countries": ["DZ", "EG", "ET", "GH", "KE", "MA", "NG", "TN", "TZ", "ZA"]}
+  }
+}

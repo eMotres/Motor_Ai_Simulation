@@ -59,7 +59,7 @@ def test_schema_has_exactly_the_four_lines_and_the_settings(schema):
     assert est["settings"] == {"complex": False, "iterations": 2, "currency": "EUR", "contingency_pct": 10.0,
                                "display_currency": None, "target_motor": None,
                                "ship_from": "CN Shanghai", "ship_to": None, "ship_margin_pct": 20.0, "ship_round_eur": 100.0,
-                               "payment_terms": ""}
+                               "payment_terms": "", "ship_parcels": None, "ship_box_cm": None, "ship_service": "express"}
 
 
 def test_schema_refuses_a_fifth_line(tmp_path, schema):
@@ -404,7 +404,7 @@ def test_old_shape_is_summed_into_the_four_lines(schema):
     assert est["settings"] == {"complex": False, "iterations": 2, "currency": "EUR", "contingency_pct": 15.0,
                                "display_currency": None, "target_motor": {"die": "DIE-A", "config": "big"},
                                "ship_from": "CN Shanghai", "ship_to": None, "ship_margin_pct": 20.0, "ship_round_eur": 100.0,
-                               "payment_terms": ""}
+                               "payment_terms": "", "ship_parcels": None, "ship_box_cm": None, "ship_service": "express"}
     l1, l2 = (it["lines"] for it in est["iterations"])
     assert est["iterations"][0]["bench"] == "both" and est["iterations"][0]["motors"] == 2
     assert l1["tooling"]["amount"] == 10000.0 and l1["tooling"]["source"] == "converted"
@@ -987,10 +987,11 @@ def test_dhl_scales_the_nearest_quote_per_kg_adds_the_margin_and_converts_to_eur
 
 
 def test_dhl_without_a_lane_destination_mass_or_rate_is_missing_with_the_reason(schema):
-    est = _ship(schema, ship_to={"country": "DE", "city": "Munich"})
-    assert CE.dhl_suggestion(est, est["iterations"][0], schema, 20.0) == (None, "no DHL quote for DE; add one")
+    est = _ship(schema, ship_to={"country": "KP", "city": "Pyongyang"})        # no lane and no zone of the rate table
+    assert CE.dhl_suggestion(est, est["iterations"][0], schema, 20.0) == (
+        None, "the rate table has no zone for KP: add a DHL quote for it")
     est = _ship(schema, ship_from="CN Ningbo")                                # same country, another origin: no quote
-    assert CE.dhl_suggestion(est, est["iterations"][0], schema, 20.0)[1] == "no DHL quote for AR; add one"
+    assert CE.dhl_suggestion(est, est["iterations"][0], schema, 20.0)[1].startswith("no DHL quote for AR from CN Ningbo")
     est = _ship(schema, ship_to=None)
     assert "ship to is missing" in CE.dhl_suggestion(est, est["iterations"][0], schema, 20.0)[1]
     est = _ship(schema)
@@ -1008,14 +1009,14 @@ def test_suggest_fills_shipping_from_dhl_and_an_empty_duration_but_never_the_own
     assert s1["source"] == "dhl" and s1["amount"] == 1800.0 and s1["weeks"] == 4.0
     assert s1["by"] == "suggest" and s1["source_ref"]["dhl"]["weight_kg"] == 85.0
     assert s2["source"] == "dhl" and s2["weeks"] == 6.0
-    assert report["weeks_filled"] == [{"iteration": 1, "line": "shipping", "weeks": 4.0}]
+    assert report["weeks_filled"][0] == {"iteration": 1, "line": "shipping", "weeks": 4.0}        # (then the next unit's own)
     assert CE.normalize_estimate(new, schema, "alpha")["iterations"][0]["lines"]["shipping"] == s1     # saves as it is
     # a manual shipping amount is kept; no lane -> missing with the hint
     _fill(est["iterations"][0]["lines"]["shipping"], 999.0)
-    est["settings"]["ship_to"] = {"country": "BR", "city": ""}
+    est["settings"]["ship_to"] = {"country": "KP", "city": ""}
     new, _ = CE.suggest(est, schema, data, today="2026-11-02")
     assert new["iterations"][0]["lines"]["shipping"]["amount"] == 999.0
-    assert new["iterations"][1]["lines"]["shipping"]["hint"] == "no DHL quote for BR; add one"
+    assert new["iterations"][1]["lines"]["shipping"]["hint"] == "the rate table has no zone for KP: add a DHL quote for it"
     # with refresh an earlier DHL suggestion follows a new margin
     est = _ship(schema)
     first, _ = CE.suggest(est, schema, data, today="2026-11-02")
@@ -1175,18 +1176,18 @@ def test_refresh_never_touches_a_manual_or_converted_shipping_line_or_the_owners
 
 def test_refresh_without_a_lane_destination_mass_or_rate_keeps_the_value_and_says_why(schema):
     est = _auto(schema, motors=2)
-    est["settings"]["ship_to"] = {"country": "BR", "city": ""}
+    est["settings"]["ship_to"] = {"country": "KP", "city": ""}              # no lane and no zone of the rate table
     new, changes = CE.refresh_dhl(est, schema, 20.0, "complete")
     line = new["iterations"][0]["lines"]["shipping"]
     assert line["amount"] == 1800.0 and line["source"] == "dhl" and line["status"] == "filled"     # the last value stays
-    assert line["hint"] == "no DHL quote for BR; add one" and changes[0]["stale"] is True
+    assert line["hint"] == "the rate table has no zone for KP: add a DHL quote for it" and changes[0]["stale"] is True
     assert CE.normalize_estimate(new, schema, "alpha")["iterations"][0]["lines"]["shipping"]["hint"] == line["hint"]   # the hint survives a save
     assert "no known mass" in CE.refresh_dhl(est, schema, None)[0]["iterations"][0]["lines"]["shipping"]["hint"]
     est["settings"]["ship_to"] = None
     assert "ship to is missing" in CE.refresh_dhl(est, schema, 20.0)[0]["iterations"][0]["lines"]["shipping"]["hint"]
     # when the quote is back the hint goes
     est["settings"]["ship_to"] = {"country": "AR", "city": ""}
-    est["iterations"][0]["lines"]["shipping"]["hint"] = "no DHL quote for BR; add one"
+    est["iterations"][0]["lines"]["shipping"]["hint"] = "the rate table has no zone for KP: add a DHL quote for it"
     assert CE.refresh_dhl(est, schema, 20.0)[0]["iterations"][0]["lines"]["shipping"]["hint"] == ""
 
 
@@ -1243,7 +1244,9 @@ def test_put_recomputes_the_automatic_dhl_line_when_the_motors_change(client, mo
     est = client.get(url).json()["estimate"]
     est["dhl_lanes"] = []
     kept = client.put(url, json=est).json()["estimate"]["iterations"][0]["lines"]["shipping"]
-    assert kept["amount"] == third["amount"] and kept["hint"] == "no DHL quote for AR; add one" and kept["source"] == "dhl"
+    # no real quote any more: the rate table takes over (basis said, an estimate-free calibrated zone), still automatic
+    assert kept["source"] == "dhl" and kept["hint"] == "" and kept["source_ref"]["dhl"]["basis"] == "rate_table"
+    assert kept["source_ref"]["dhl"]["zone"] == "SA" and kept["source_ref"]["dhl"]["zone_basis"] == "calibrated"
 
     # the preview (the web updates the cell before the save) gives the same numbers without saving anything
     est = client.get(url).json()["estimate"]

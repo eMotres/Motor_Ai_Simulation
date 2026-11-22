@@ -7,7 +7,7 @@ import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
 import EditOutlinedIcon from '@mui/icons-material/EditOutlined';
 import HelpTip from '../../../../components/common/HelpTip';
 import {
-  blankLane, laneErrors, removeLane, setSetting, setShipTo, txt, upsertLane,
+  blankLane, laneErrors, removeLane, setSetting, setShipPostal, setShipTo, txt, upsertLane,
   type CostEstimate, type CostLang, type CostSchema, type DhlLane, type T,
 } from '../../costEstimate';
 
@@ -58,6 +58,8 @@ export default function CostShipping({ estimate, schema, lang, t, today, onChang
           <TextField size="small" value={shipTo?.city ?? ''} disabled={!shipTo} placeholder={t('costEstimate.dhl.city')} sx={{ flex: 1 }}
             onChange={(e) => onChange(setShipTo(estimate, shipTo?.country ?? '', e.target.value))} slotProps={{ htmlInput: { 'aria-label': t('costEstimate.dhl.city') } }} />
         </Stack></Tooltip>
+        <TextField size="small" value={shipTo?.postal ?? ''} disabled={!shipTo} placeholder={t('costEstimate.dhl.postal')}
+          onChange={(e) => onChange(setShipPostal(estimate, e.target.value))} slotProps={{ htmlInput: { 'aria-label': t('costEstimate.dhl.postal'), maxLength: 20 } }} />
       </Stack>
       <Stack spacing={0.6}>{head('ship_margin_pct')}<TextField size="small" type="number" value={estimate.settings.ship_margin_pct ?? ''}
         onChange={(e) => { const n = Number(e.target.value); if (e.target.value !== '' && Number.isFinite(n)) onChange(setSetting(estimate, schema, 'ship_margin_pct', Math.min(100, Math.max(0, n)))); }}
@@ -65,6 +67,22 @@ export default function CostShipping({ estimate, schema, lang, t, today, onChang
       <Stack spacing={0.6}>{head('ship_round_eur')}<TextField size="small" type="number" value={estimate.settings.ship_round_eur ?? ''}
         onChange={(e) => { const n = Number(e.target.value); if (e.target.value !== '' && Number.isFinite(n)) onChange(setSetting(estimate, schema, 'ship_round_eur', Math.min(10000, Math.max(0, n)))); }}
         slotProps={{ htmlInput: { 'aria-label': label('ship_round_eur'), min: 0, max: 10000 }, input: { endAdornment: <Typography component="span" sx={{ fontSize: 12, color: 'var(--text-3)' }}>€</Typography> } }} /></Stack>
+    </Box>
+    <Box sx={{ display: 'grid', gap: 2, gridTemplateColumns: { xs: '1fr', md: '1fr 2fr 1fr' } }} data-testid="ship-table-inputs">
+      <Stack spacing={0.6}>{head('ship_parcels')}<TextField size="small" type="number" value={estimate.settings.ship_parcels ?? ''} placeholder={t('costEstimate.dhl.perMotor')}
+        onChange={(e) => { const n = Math.round(Number(e.target.value)); onChange(setSetting(estimate, schema, 'ship_parcels', e.target.value === '' || !Number.isFinite(n) ? null : Math.min(50, Math.max(1, n)))); }}
+        slotProps={{ htmlInput: { 'aria-label': label('ship_parcels'), min: 1, max: 50 } }} /></Stack>
+      <Stack spacing={0.6}>{head('ship_box_cm')}
+        <Stack direction="row" spacing={1}>{[0, 1, 2].map((i) => <TextField key={i} size="small" type="number" value={estimate.settings.ship_box_cm?.[i] ?? ''} placeholder={['L', 'W', 'H'][i]}
+          onChange={(e) => {
+            const cur: number[] = [...(estimate.settings.ship_box_cm ?? [0, 0, 0])];
+            cur[i] = Math.min(400, Math.max(0, Number(e.target.value) || 0));
+            onChange(setSetting(estimate, schema, 'ship_box_cm', cur.every((v) => v > 0) ? cur : (cur.some((v) => v > 0) ? estimate.settings.ship_box_cm ?? null : null)));
+          }}
+          slotProps={{ htmlInput: { 'aria-label': `${label('ship_box_cm')} ${['L', 'W', 'H'][i]}`, min: 1, max: 400 } }} />)}</Stack>
+      </Stack>
+      <Stack spacing={0.6}>{head('ship_service')}<Select size="small" value={estimate.settings.ship_service ?? 'express'} onChange={(e) => onChange(setSetting(estimate, schema, 'ship_service', String(e.target.value)))}
+        inputProps={{ 'aria-label': label('ship_service') }}>{['express', 'air_freight'].map((v) => <MenuItem key={v} value={v}>{t(`costEstimate.dhl.service.${v}`)}</MenuItem>)}</Select></Stack>
     </Box>
     <Stack direction="row" spacing={0.5} alignItems="center"><Typography sx={{ fontSize: 13, fontWeight: 600, color: 'var(--text-1)' }}>{t('costEstimate.dhl.lanes')}</Typography><HelpTip title={t('costEstimate.dhl.lanesTip')} /></Stack>
     <Box sx={{ overflowX: 'auto', minWidth: 0 }}>

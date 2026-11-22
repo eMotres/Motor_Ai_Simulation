@@ -197,3 +197,55 @@ def test_points_and_summaries_carry_cogging_only_when_measured():
     assert pt["cogging_pp"] == 0.7
     assert O._point_as_metrics(pt)["cogging_pp_Nm"] == 0.7
     assert O._msum(meas["res"])["cogging_pp_Nm"] == 0.7
+
+
+# ── Astra review of #774 (2026-11-21): a penalty guides the search, it never certifies ────────────────────────
+
+def _final_out(cog=0.5, eff=0.97, error=None):
+    res = {"efficiency": eff, "torque_per_mass_Nm_kg": 4.0, "T_ripple_pct": 5.0, "T_em_Nm": 1.0,
+           "current_a": 10.0, "nonlinear_converged": True, "cogging_sampling_purpose": "standard",
+           "cogging_sampling_final_quality_sufficient": True, "eddy_settled": True,
+           "cogging_pp_Nm": cog}
+    if error:
+        res["cogging_error"] = error
+    return {"ok": True, "res": res}
+
+
+def _finalize(evaluate_cog, cap=0.0, steps=144):
+    O._COG_LIMIT.update(max=cap, steps=steps)
+    points = [{"kind": "cmaes", "overrides": {"g": 2}, "current_a": 10.0, "eff": 0.8, "td": 4.0,
+               "ripple": 4.0, "v_peak": 2.0, "thd": 1.0}]
+    return O._finalize_standard_shortlist(
+        points=points, best_x={"g": 1}, best_metrics={"efficiency": 0.9, "current_a": 10.0},
+        coarse_base={"efficiency": 0.5, "_bline": {"w_td": 1.0, "w_eff": 1.0}}, base_x={"g": 0},
+        base_current=10.0, bump_pct=10.0,
+        evaluate=lambda x, current: _final_out(**evaluate_cog(x, current)),
+        score=lambda m, b: (-float(m["efficiency"]), float(m["efficiency"])))
+
+
+def test_a_final_with_no_cogging_measurement_is_not_certified_when_the_run_measures_it():
+    out = _finalize(lambda x, c: {"cog": None, "error": "cogging solve failed: boom"} if x["g"] else {"cog": 0.5})
+    assert out["status"] == "failed" and out["failed"]
+    assert "cogging" in out["failed"][0]["reason"]
+
+
+def test_a_final_over_the_cogging_cap_is_not_certified_and_a_feasible_one_still_wins():
+    out = _finalize(lambda x, c: {"cog": 2.0 if x["g"] == 2 else 0.5}, cap=1.0)
+    assert out["status"] == "certified" and out["winner"]["x"] == {"g": 1}
+    assert [f["overrides"] for f in out["failed"]] == [{"g": 2}]
+    assert "hard limit" in out["failed"][0]["reason"]
+    allover = _finalize(lambda x, c: {"cog": 2.0 if x["g"] else 0.5}, cap=1.0)
+    assert allover["status"] == "failed"
+
+
+def test_an_unrelated_run_without_cogging_is_unchanged():
+    out = _finalize(lambda x, c: {"cog": None}, steps=0)
+    assert out["status"] == "certified"
+
+
+def test_a_near_zero_start_cogging_does_not_let_a_broken_design_win():
+    base = _m(cogging_pp_Nm=1e-6)
+    feasible, _ = _cost(_m(cogging_pp_Nm=0.002), base=base, mode="min_cogging")
+    O._RUN_LIMITS["eff_min"] = 0.90
+    broken, _ = O._descent_cost(_m(cogging_pp_Nm=1e-7, efficiency=0.89), base, 6.0, 1.0, 1.0, 1.0)
+    assert feasible < broken

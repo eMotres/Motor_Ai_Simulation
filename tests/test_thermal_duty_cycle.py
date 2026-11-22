@@ -416,6 +416,18 @@ def test_a_point_that_never_reaches_the_limit_says_this_is_S1(net_robot, caps):
     assert out["s2_time_to_limit_s"] is None
     assert out["s2_limiting_part"] is None
     assert "S1" in out["note"]
+    assert out["settled"] is True and out["s1_established"] is True
+
+
+def test_not_reaching_a_limit_inside_a_short_horizon_is_not_continuous(net_robot, caps):
+    """Astra thermal audit 2026-11-21, F07: a finite integration with no crossing is not S1 unless the machine has settled."""
+    prof = dc.normalise_spec({"kind": "S2", "duty": "rated", "t_on_s": 60.0,
+                              "t_start_c": 40.0}, DUTIES,
+                             thermal_by_duty=THERMAL_BY_DUTY)
+    out = dc.time_to_limit(prof, net_robot, caps, t_max_s=5.0)      # asked for a horizon too short to settle in
+    assert out["s2_time_to_limit_s"] is None
+    assert out["settled"] is False and out["s1_established"] is False and out["drift_K_per_h"] >= 1.0
+    assert "S1" not in out["note"] and "NOT settled" in out["note"] and "not established" in out["note"]
 
 
 def test_the_S3_cycle_reaches_a_periodic_state_and_the_budget_closes(net_robot,

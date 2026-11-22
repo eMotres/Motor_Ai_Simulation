@@ -2240,6 +2240,10 @@ def _runaway_stop_c(limits) -> float:
     return max([RUNAWAY_C] + [v + 100.0 for v in vals])
 
 
+#: the longest horizon ``time_to_limit`` extends to while the machine is still drifting (about 23 days)
+S1_HORIZON_MAX_S = 2.0e6
+
+
 def time_to_limit(profile: Profile, network: Network, caps: Mapping[str, Any],
                   *, limits: Optional[Mapping[str, float]] = None,
                   T0: Optional[Mapping[str, float]] = None,
@@ -2249,8 +2253,14 @@ def time_to_limit(profile: Profile, network: Network, caps: Mapping[str, Any],
 
     The S2 question.  The winding is judged on its HOT SPOT (mean + the
     calibration map's constant offset); every other node on its own mean.
-    ``None`` with ``"this point is S1"`` when nothing is reached — the machine
-    settles below every limit and may run for ever.
+    ``None`` with ``"this point is S1"`` when nothing is reached AND the machine
+    has settled (drift under 1 K/h, no runaway) - it settles below every limit
+    and may run for ever.  Not reaching a limit inside the horizon is NOT that
+    (Astra thermal audit 2026-11-21, F07): the horizon is a heuristic
+    (sum C / sum G of the external paths) that a slow internal mode outlasts, so
+    an unsettled end state extends the horizon tenfold, up to ``S1_HORIZON_MAX_S``,
+    and if it is still moving the answer says ``s1_established: false`` and
+    never "continuous".
     """
     from scipy.integrate import solve_ivp
 
@@ -2335,9 +2345,25 @@ def time_to_limit(profile: Profile, network: Network, caps: Mapping[str, Any],
                             "it passes %.0f °C after %.1f s and the "
                             "integration stops there" % (_stop_c, runaway_t))
     else:
-        out["note"] = ("no part reaches its limit within %.0f s — at this "
-                       "operating point the machine settles below every limit, "
-                       "i.e. this point is S1 (continuous)." % t_end)
+        d_end, _P, _F = _derivatives(seg, end_state, network, C)
+        drift_k_per_h = max(abs(v) for v in d_end.values()) * 3600.0
+        out["drift_K_per_h"] = round(drift_k_per_h, 4)
+        settled = bool(drift_k_per_h < 1.0 and runaway_t is None)
+        out["settled"] = settled
+        if not settled and t_max_s is None and t_end < S1_HORIZON_MAX_S:
+            # a slow internal mode outlasts the heuristic horizon: look again, ten times as far
+            return time_to_limit(profile, network, caps, limits=limits, T0=T0,
+                                 t_max_s=min(10.0 * t_end, S1_HORIZON_MAX_S))
+        out["s1_established"] = settled
+        if settled:
+            out["note"] = ("no part reaches its limit within %.0f s and the machine has "
+                           "settled (%.2g K/h) — at this operating point it settles "
+                           "below every limit, i.e. this point is S1 (continuous)."
+                           % (t_end, drift_k_per_h))
+        else:
+            out["note"] = ("no part reaches its limit within %.0f s, but the machine has NOT "
+                           "settled (%.3g K/h): continuous operation is not established "
+                           "at this point." % (t_end, drift_k_per_h))
     return out
 
 

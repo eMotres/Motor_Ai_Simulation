@@ -433,6 +433,8 @@ def _s2_times(model: CycleModel) -> Dict[str, Any]:
         "s2_winding_hot_end_c": cold["winding_hot_end_c"],
         "s2_end_state_c": cold["end_state_c"],
         "s2_note": cold["note"],
+        # None while the end state still drifts: "no limit reached" is then NOT "continuous" (Astra audit F07)
+        "s2_s1_established": cold.get("s1_established"),
     })
     if model.rated_state_c:
         warm = _time_to_limit(model, T0=model.rated_state_c)

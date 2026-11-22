@@ -7,8 +7,10 @@
  * 1. An automatic store change that does not change the CONTENT (the panel re-applying the Simulation tab's operating
  *    point on every mount, the schema init, a re-hydrate) is not an edit: it is neither stamped "now" nor pushed.  A
  *    stale tab used to win the "newest copy wins" rule just by being opened.
- * 2. A push is a compare-and-swap: it goes out only if the server copy is not NEWER than the copy this browser last
- *    loaded or pushed (`baseAt`).  Otherwise the server copy is adopted and the push is dropped.
+ * 2. A push is a compare-and-swap decided BY THE SERVER (review 2026-11-21): the push states the server-issued revision this
+ *    browser last saw, and the server refuses (409) when the stored copy has moved on.  The refused local copy is kept
+ *    (`sweepKeepConflictCopy`), the stored copy is adopted, and nothing is written back.  `mayPush` is the older
+ *    client-side timestamp check and no longer guards the push.
  */
 
 export interface SweepContent {
@@ -50,4 +52,21 @@ export function mayPush(baseAt: number, serverAt: number): boolean {
 /** Did the server refuse a second scan because one is already running (HTTP 409)?  The panel then attaches to the running scan. */
 export function isScanAlreadyRunning(status: number, body: string): boolean {
   return status === 409 && /already running/i.test(String(body ?? ''));
+}
+
+/** The PUT address of the sweep config: ``expected_revision`` is stated whenever the revision this browser saw is known. */
+export function sweepPutUrl(base: string, revision: number | null | undefined): string {
+  const url = `${base}/api/sweep/config`;
+  return revision === null || revision === undefined || !Number.isFinite(Number(revision))
+    ? url : `${url}?expected_revision=${Number(revision)}`;
+}
+
+export const SWEEP_CONFLICT_KEY = 'motor-sweep-conflict-copy';
+
+/** Keep the local copy a refused push would have lost, so the user can get it back (localStorage; never throws). */
+export function sweepKeepConflictCopy(cfg: unknown, now: number = Date.now()): void {
+  try {
+    const ls = (globalThis as { localStorage?: Storage }).localStorage;
+    ls?.setItem(SWEEP_CONFLICT_KEY, JSON.stringify({ at: now, config: cfg }));
+  } catch { /* storage blocked: nothing more to do */ }
 }

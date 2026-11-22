@@ -58,3 +58,22 @@ test('a 409 "a scan is already running" is an attach, any other refusal is an er
   assert.equal(isScanAlreadyRunning(422, 'a scan is already running'), false);
   assert.equal(isScanAlreadyRunning(409, undefined), false);
 });
+
+import { sweepPutUrl, sweepKeepConflictCopy, SWEEP_CONFLICT_KEY } from '../sweepSync.ts';
+
+test('a push states the revision it saw, and only when it is known', () => {
+  assert.equal(sweepPutUrl('http://x', 3), 'http://x/api/sweep/config?expected_revision=3');
+  assert.equal(sweepPutUrl('http://x', 0), 'http://x/api/sweep/config?expected_revision=0');
+  assert.equal(sweepPutUrl('http://x', null), 'http://x/api/sweep/config');
+  assert.equal(sweepPutUrl('http://x', undefined), 'http://x/api/sweep/config');
+});
+
+test('a refused local copy is kept recoverable and a blocked storage never throws', () => {
+  const store = {};
+  globalThis.localStorage = { setItem: (k, v) => { store[k] = v; } };
+  sweepKeepConflictCopy({ variations: { a: 1 } }, 5);
+  assert.deepEqual(JSON.parse(store[SWEEP_CONFLICT_KEY]), { at: 5, config: { variations: { a: 1 } } });
+  globalThis.localStorage = { setItem: () => { throw new Error('blocked'); } };
+  assert.doesNotThrow(() => sweepKeepConflictCopy({}, 6));
+  delete globalThis.localStorage;
+});

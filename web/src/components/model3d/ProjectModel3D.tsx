@@ -19,6 +19,8 @@ import HelpTip from '../common/HelpTip';
 import { UnifiedViewer } from '../../modules/viewer3d';
 import { filenameFromDisposition, formatBytes } from '../../lib/model3d';
 import Model3DPanel from './Model3DPanel';
+import { useRememberedView } from '../../lib/useRememberedView';
+import { bool, oneOf, readView, writeView } from '../../lib/viewMemory';
 
 const API = ((import.meta.env.VITE_API_URL ?? 'http://localhost:8001') as string).replace(/\/$/, '');
 const enc = encodeURIComponent;
@@ -77,10 +79,18 @@ const UploadDialog: React.FC<{ open: boolean; busy: boolean; onClose: () => void
 
 const ProjectModel3D: React.FC<{ projectId: string; motors: ReadonlyArray<{ die: string; config: string }>; language?: string }> = ({ projectId, motors, language }) => {
   const { t, ready } = useTranslation('model3d');
-  const [source, setSource] = useState<'generated' | 'uploaded'>('generated');
+  // remembered across reloads (owner rule: every page remembers where the user was): the source, Show archived, and per project
+  // the revision picked; a picked revision that has gone (archived, not visible) falls back to the latest
+  const [source, setSource] = useRememberedView<'generated' | 'uploaded'>('project.model3d.source', 'generated', oneOf(['generated', 'uploaded'] as const));
   const [list, setList] = useState<ProjectModelList | null>(null);
-  const [showArchived, setShowArchived] = useState(false);
-  const [picked, setPicked] = useState<string>('');
+  const [showArchived, setShowArchived] = useRememberedView<boolean>('project.model3d.showArchived', false, (raw) => bool(raw) ?? null);
+  const pickKey = `project.model3d.pick.${projectId}`;
+  const [picked, setPickedState] = useState<string>('');
+  const setPicked = (next: string | ((cur: string) => string)) => setPickedState((cur) => {
+    const value = typeof next === 'function' ? next(cur) : next;
+    if (value) writeView(pickKey, value);
+    return value;
+  });
   const [uploadOpen, setUploadOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -100,7 +110,9 @@ const ProjectModel3D: React.FC<{ projectId: string; motors: ReadonlyArray<{ die:
         if (!live) return;
         setList(j);
         // the latest upload opens first (and again after an upload)
-        setPicked((cur) => (cur && j.models.some((m) => m.id === cur && !m.archived) ? cur : j.latest ?? ''));
+        const isLive = (id: string | null | undefined) => !!id && j.models.some((m) => m.id === id && !m.archived);
+        const remembered = readView(pickKey, (raw) => (typeof raw === 'string' ? raw : null));
+        setPicked((cur) => (isLive(cur) ? cur : isLive(remembered) ? remembered! : j.latest ?? ''));
       } catch (e: any) { if (live) setErr(e?.message ?? String(e)); }
     })();
     return () => { live = false; };

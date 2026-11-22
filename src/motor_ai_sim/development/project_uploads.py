@@ -63,22 +63,42 @@ def _audit_path(project_id: str):
     return store.path_for(project_id) / "audit.jsonl"
 
 
+#: per audit file: (device, inode, offset read so far, event ids seen) - the replay reads only what was appended since
+_CURSORS: dict = {}
+_CURSORS_MAX = 512
+
+
 def _written_event_ids(project_id: str) -> set:
     """The event ids of the complete, parsed records of ``audit.jsonl`` (call under its lock).  NON-DESTRUCTIVE (coordinator
     2026-11-22): the file is never truncated or rewritten.  Bytes that are not UTF-8 are read as replacement characters and a line
     that does not parse is skipped, so a torn line never counts as written and never raises.  When the file does not end with a
-    newline, one is appended (append-only), so the next record starts on its own line."""
+    newline, one is appended (append-only), so the next record starts on its own line.
+
+    STREAMED (Astra follow-up of #819): a cursor per file remembers how far it was read and which ids it held; a flush reads
+    only the bytes appended since, up to the last newline.  A file that shrank or was replaced (another inode) is read again
+    from the start."""
     path = _audit_path(project_id)
     try:
-        raw = path.read_bytes()
+        st = path.stat()
     except FileNotFoundError:
+        _CURSORS.pop(str(path), None)
         return set()
-    if raw and not raw.endswith(b"\n"):
-        with path.open("ab") as fh:
+    key = str(path)
+    dev_ino = (st.st_dev, st.st_ino)
+    cur = _CURSORS.get(key)
+    if cur is None or cur[0] != dev_ino or cur[1] > st.st_size:
+        cur = (dev_ino, 0, set())
+    _dev, offset, ids = cur
+    with path.open("rb") as fh:
+        fh.seek(offset)
+        tail = fh.read()
+    if tail and not tail.endswith(b"\n"):
+        with path.open("ab") as fh:                         # end the cut line (append-only); it stays as it is
             fh.write(b"\r\n")
-    ids = set()
+        tail += b"\r\n"
+    end = tail.rfind(b"\n") + 1
     # split ONLY on "\n": str.splitlines() also breaks on U+0085 / U+2028 / U+2029, which a file name inside a JSON string may hold
-    for line in raw.decode("utf-8", errors="replace").split("\n"):
+    for line in tail[:end].decode("utf-8", errors="replace").split("\n"):
         try:
             rec = json.loads(line)
         except ValueError:
@@ -86,7 +106,10 @@ def _written_event_ids(project_id: str) -> set:
         details = rec.get("details") if isinstance(rec, dict) else None
         if isinstance(details, dict) and details.get("event_id"):
             ids.add(str(details["event_id"]))
-    return ids
+    if len(_CURSORS) >= _CURSORS_MAX and key not in _CURSORS:
+        _CURSORS.pop(next(iter(_CURSORS)))
+    _CURSORS[key] = (dev_ino, offset + end, ids)
+    return set(ids)
 
 
 def flush_events(project_id: str, json_name: str) -> None:

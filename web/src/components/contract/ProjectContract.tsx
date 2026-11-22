@@ -14,6 +14,8 @@ import LockOutlinedIcon from '@mui/icons-material/LockOutlined';
 import { useTranslation } from 'react-i18next';
 import HelpTip from '../common/HelpTip';
 import ContractScheme from './ContractScheme';
+import { useRememberedView } from '../../lib/useRememberedView';
+import { bool, oneOf } from '../../lib/viewMemory';
 import {
   CUSTOMER_SCHEME, KIND_ORDER, STATUS_ORDER, contractApi,
   type ContractFile, type ContractFileRef, type ContractKind, type ContractView, type Seen,
@@ -51,8 +53,9 @@ const UploadDialog: React.FC<{ kind: ContractKind | null; busy: boolean; onClose
 const ProjectContract: React.FC<{ projectId: string; isAdmin?: boolean }> = ({ projectId, isAdmin = false }) => {
   const { t, i18n, ready } = useTranslation('contract');
   const [view, setView] = useState<ContractView | null>(null);
-  const [archived, setArchived] = useState(false);
-  const [scheme, setScheme] = useState<'customer' | 'staff'>('customer');
+  // remembered across reloads: Show archived and the scheme view (the staff view falls back to the customer one for a non-staff reader)
+  const [archived, setArchived] = useRememberedView<boolean>('project.contract.showArchived', false, (raw) => bool(raw) ?? null);
+  const [scheme, setScheme] = useRememberedView<'customer' | 'staff'>('project.contract.scheme', 'customer', oneOf(['customer', 'staff'] as const));
   // the upload dialog: its kind AND what was on screen when it opened (revision + terms), sent as they were; a refusal closes it
   const [upload, setUpload] = useState<{ kind: ContractKind; seen: Seen } | null>(null);
   const uploadKind = upload?.kind ?? null;

@@ -244,3 +244,28 @@ def test_an_unhashable_or_wrong_type_audience_is_refused_not_a_500(client, tmp_p
     (d / "scheme_customer.json").write_text(json.dumps(bad))                           # placed by hand
     r = client.get("/api/projects/proj1/contract", headers=hdr("t-owner"))
     assert r.status_code == 200 and r.json()["customer_scheme"] is None
+
+
+GRID = {"audience": "staff", "nodes": [{"id": "customer", "label": "Customer", "col": 0, "row": 1},
+                                       {"id": "motres", "label": {"en": "MOTRES d.o.o.", "zh": "MOTRES d.o.o."}, "col": 1, "row": 0}],
+        "edges": [{"from": "customer", "to": "motres", "kind": "money", "label": "100 % in advance"}]}
+
+
+def test_a_grid_scheme_without_x_y_is_valid_and_an_old_one_stays_valid(client):
+    r = client.put("/api/contract-scheme?kind=staff", headers=hdr("t-admin"), content=json.dumps(GRID))
+    assert r.status_code == 200, r.text
+    assert r.json()["scheme"]["nodes"][0] == {"id": "customer", "label": "Customer", "col": 0, "row": 1}
+    assert client.put("/api/contract-scheme?kind=staff", headers=hdr("t-admin"), content=json.dumps(SCHEME)).status_code == 200
+
+
+@pytest.mark.parametrize("nodes", [
+    [{"id": "a", "label": "A", "col": 0, "row": 0}, {"id": "b", "label": "B", "col": 0, "row": 0}],      # one cell twice
+    [{"id": "a", "label": "A", "col": 9, "row": 0}],
+    [{"id": "a", "label": "A", "col": 1.5, "row": 0}],
+    [{"id": "a", "label": "A", "col": True, "row": 0}],
+    [{"id": "a", "label": "A", "col": 0}],                                                               # row missing
+    [{"id": "a", "label": "A"}],                                                                         # neither grid nor x / y
+])
+def test_a_wrong_grid_cell_is_refused(client, nodes):
+    bad = {"audience": "staff", "nodes": nodes, "edges": []}
+    assert client.put("/api/contract-scheme?kind=staff", headers=hdr("t-admin"), content=json.dumps(bad)).status_code == 422

@@ -30,7 +30,8 @@
     "confirmCustomer": "{name} 将成为合同栏目所有读者（包括客户）看到的示意图。",
     "confirmStaff": "{name} 将成为内部示意图：仅 MOTRES 员工可见。",
     "audienceMismatch": "该文件标注的受众为“{marked}”，而非“{kind}”：不会发布。请在文件中设置 \"audience\"。",
-    "confirmPublish": "发布"
+    "confirmPublish": "发布",
+    "fit": "适应屏幕"
   },
   "steps": {
     "title": "项目步骤",

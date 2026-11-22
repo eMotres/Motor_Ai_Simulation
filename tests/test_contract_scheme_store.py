@@ -117,10 +117,10 @@ def test_the_shared_store_is_used_only_when_one_is_configured(monkeypatch, tmp_p
     from motor_ai_sim import workspace as W
     monkeypatch.setattr(W, "shared_root", lambda: tmp_path / "srv" / "shared")
     assert PC.contract_store_root() is None                                     # the process config dir is not a store
-    for var in ("SHARED_ROOT", "WORKSPACES_ROOT"):
-        monkeypatch.setenv(var, str(tmp_path / "srv" / var.lower()))
-        assert PC.contract_store_root() == tmp_path / "srv" / "shared" / "contract"
-        monkeypatch.delenv(var)
+    monkeypatch.setenv("WORKSPACES_ROOT", str(tmp_path / "srv" / "ws"))
+    assert PC.contract_store_root() is None                                     # WORKSPACES_ROOT alone names no shared store
+    monkeypatch.setenv("SHARED_ROOT", str(tmp_path / "srv" / "shared"))
+    assert PC.contract_store_root() == tmp_path / "srv" / "shared" / "contract"
 
 
 def test_without_a_configured_store_the_private_checkout_serves(monkeypatch, tmp_path):

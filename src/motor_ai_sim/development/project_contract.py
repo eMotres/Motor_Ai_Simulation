@@ -227,9 +227,9 @@ def contract_store_root() -> Optional[Path]:
     env = (os.environ.get("MOTRES_CONTRACT_STORE_ROOT") or "").strip()
     if env:
         return Path(env).expanduser()
-    # only a CONFIGURED shared store (a server: SHARED_ROOT or the workspace layering; both set in production): shared_root()
-    # alone falls back to the process config directory, which is not a store - then the private checkout is the fallback
-    if not ((os.environ.get("SHARED_ROOT") or "").strip() or (os.environ.get("WORKSPACES_ROOT") or "").strip()):
+    # only a CONFIGURED shared store: SHARED_ROOT (set on both production servers).  shared_root() alone - and with only
+    # WORKSPACES_ROOT set - falls back to the process config directory, which is not a store; then the private checkout serves
+    if not (os.environ.get("SHARED_ROOT") or "").strip():
         return None
     try:
         from motor_ai_sim.workspace import shared_root

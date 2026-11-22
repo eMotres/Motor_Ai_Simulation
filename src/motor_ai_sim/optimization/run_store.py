@@ -10,6 +10,7 @@ opens ``state`` into the chart it already renders; the machine fingerprint insid
 re-check / Apply path against the machine that is live at that moment, exactly as for the run of the last session.
 """
 from __future__ import annotations
+from motor_ai_sim.config_overrides import geo_overrides
 
 import json
 import re
@@ -105,7 +106,7 @@ def designations(state: Dict[str, Any], die: str, config: str, request: Any = No
         if machine is not None and isinstance(machine.get("geometry"), dict) and machine["geometry"]:
             die_doc, cfg_doc, rev = stored
             geo = dict(machine["geometry"]) if machine.get("replace_geometry") else {**(die_doc.get("geometry") or {}),
-                                                                                     **(cfg_doc.get("geometry_overrides") or {}),
+                                                                                     **geo_overrides(cfg_doc),
                                                                                      **machine["geometry"]}
             cfg_doc = {**cfg_doc, "geometry_overrides": geo,
                        "winding": {**(cfg_doc.get("winding") or {}), **(machine.get("winding") or {})},

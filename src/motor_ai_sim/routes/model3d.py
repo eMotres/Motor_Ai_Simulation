@@ -20,6 +20,7 @@ dialect) and ``/model.fcstd`` (the parametric FreeCAD model; engineer and admin 
 FreeCAD file, owner 2026-10-13).
 """
 from __future__ import annotations
+from motor_ai_sim.config_overrides import geo_overrides
 
 import datetime
 import logging
@@ -470,7 +471,7 @@ def full_param_rows(die: str, config: str) -> list:
     dy = yaml.safe_load((ddir / "die.yaml").read_text(encoding="utf-8")) or {}
     cy = yaml.safe_load((ddir / ("%s.yaml" % config)).read_text(encoding="utf-8")) or {}
     geo = dict(dy.get("geometry") or {})
-    geo.update(cy.get("geometry_overrides") or {})
+    geo.update(geo_overrides(cy))
     names = FU._name_map()
     out = []
     for k, v, unit, desc in FC._params_rows(geo):

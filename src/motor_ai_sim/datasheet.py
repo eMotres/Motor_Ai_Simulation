@@ -16,6 +16,7 @@ Sheets:
     Notes        what each number means and how it was obtained
 """
 from __future__ import annotations
+from motor_ai_sim.config_overrides import geo_overrides
 
 import io
 import logging
@@ -990,7 +991,7 @@ def build_datasheet(*, die: str, cfg: str, die_doc: Dict[str, Any],
     from openpyxl.utils import get_column_letter
 
     geo = dict(die_doc.get("geometry") or {})
-    geo.update(cfg_doc.get("geometry_overrides") or {})
+    geo.update(geo_overrides(cfg_doc))
     wind = cfg_doc.get("winding") or {}
     mats = cfg_doc.get("materials") or {}
     batt = cfg_doc.get("battery") or {}

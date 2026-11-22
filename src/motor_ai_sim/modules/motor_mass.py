@@ -17,6 +17,7 @@ part's basis says so.  CAD-only assembly clearances (magnet pocket offsets etc.)
 masses: the magnet is the nominal magnet, the clearance is air (docs/CAD_GENERATOR.md).
 """
 from __future__ import annotations
+from motor_ai_sim.config_overrides import geo_overrides
 
 import csv
 import logging
@@ -134,7 +135,7 @@ def config_build(die: str, config: str, *, dies_dir: Optional[os.PathLike] = Non
         return None
     try:
         geo = dict((_ro_yaml(ddir / "die.yaml") or {}).get("geometry") or {})
-        geo.update((_ro_yaml(ddir / f"{config}.yaml") or {}).get("geometry_overrides") or {})
+        geo.update(geo_overrides(_ro_yaml(ddir / f"{config}.yaml")))
         return {"L_mm": float(geo["motor_length"]), "N": float(geo["num_wires_per_slot"]), "wireH_mm": float(geo["wire_height"])}
     except (KeyError, TypeError, ValueError):
         return None
@@ -155,7 +156,7 @@ def app_motor_mass(die: str, config: str, *, dies_dir: Optional[os.PathLike] = N
     dy = _fsc_read_yaml(dfile) or {}
     cy = _fsc_read_yaml(cfile) or {}
     geo = dict(dy.get("geometry") or {})
-    geo.update(cy.get("geometry_overrides") or {})
+    geo.update(geo_overrides(cy))
     cfg_doc = _default_config_doc()
     assigned = {k: v for k, v in (cfg_doc.get("materials") or {}).items()
                 if k in ("stator_core", "rotor_core", "magnet", "slot", "shaft") and v}

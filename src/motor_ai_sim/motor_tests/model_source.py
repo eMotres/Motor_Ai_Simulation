@@ -12,6 +12,7 @@ Sources, in order of preference:
 the tests drive.
 """
 from __future__ import annotations
+from motor_ai_sim.config_overrides import geo_overrides
 
 import logging
 import re
@@ -159,7 +160,7 @@ def resolve_end3d(die_doc: Dict[str, Any], cfg_doc: Dict[str, Any]) -> Optional[
     from motor_ai_sim.routes import family
     from motor_ai_sim.routes.simulation import _end3d_lookup, _geometry_fingerprint
     geo = dict((die_doc or {}).get("geometry") or {})
-    geo.update({k: v for k, v in ((cfg_doc or {}).get("geometry_overrides") or {}).items() if v is not None})
+    geo.update({k: v for k, v in geo_overrides(cfg_doc).items() if v is not None})
     for k, v in family._ABSENT_MEANS.items():
         if geo.get(k) is None:
             geo[k] = v

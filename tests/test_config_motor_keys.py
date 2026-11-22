@@ -269,3 +269,58 @@ def test_the_dry_list_finds_a_stored_fill_override(cat, tmp_path):
     _write(cat / DIE / f"{CFG}.yaml", c)
     (row,) = D.scan(cat)
     assert row["die"] == DIE and row["config"] == CFG and row["keys"] == {"magnet_fill_up": {"override": 0.54, "die": 0.44}}
+
+
+# ── the readers: a stored rotor-shape override is quarantined everywhere (Astra pre-merge review of #793) ──────────────
+def _with_fill(cat, v=0.54):
+    c = _yaml(cat / DIE / f"{CFG}.yaml")
+    c["geometry_overrides"]["magnet_fill_up"] = v
+    _write(cat / DIE / f"{CFG}.yaml", c)
+
+
+def test_the_payload_does_not_apply_a_stored_fill_and_names_it(cat, monkeypatch):
+    _with_fill(cat)
+    monkeypatch.setattr(fam, "_require_die_access", lambda *_a, **_k: None)
+    out = fam.payload(DIE, CFG, None, None)
+    assert out["geometry"]["magnet_fill_up"] == 0.44                          # the die's rotor, not 0.54
+    assert out["rotor_shape_quarantined"] == {"magnet_fill_up": 0.54}
+    assert out["geometry"]["motor_length"] == 150                              # the approved overrides still apply
+
+
+def test_a_clean_configuration_payload_has_no_new_key(cat, monkeypatch):
+    monkeypatch.setattr(fam, "_require_die_access", lambda *_a, **_k: None)
+    assert "rotor_shape_quarantined" not in fam.payload(DIE, CFG, None, None)
+
+
+def test_mass_and_build_readers_ignore_a_stored_fill(cat):
+    from motor_ai_sim.modules import motor_mass
+    from motor_ai_sim.config_overrides import geo_overrides, shape_overrides
+    _with_fill(cat)
+    cdoc = _yaml(cat / DIE / f"{CFG}.yaml")
+    assert "magnet_fill_up" not in geo_overrides(cdoc) and shape_overrides(cdoc) == {"magnet_fill_up": 0.54}
+    assert geo_overrides(cdoc)["motor_length"] == 150
+    assert motor_mass.config_build(DIE, CFG, dies_dir=cat)["L_mm"] == 150.0   # the non-HTTP reader still reads the build
+
+
+def test_duty_geometry_diff_reports_a_duty_saved_on_the_old_fill_as_a_difference(cat):
+    _with_fill(cat)
+    die_doc, cfg_doc = _yaml(cat / DIE / "die.yaml"), _yaml(cat / DIE / f"{CFG}.yaml")
+    duty = {"name": "rated", "geometry": dict(GEO, **WIRE, magnet_fill_up=0.54)}   # solved while the override was live
+    keys = {d["key"] for d in fam.duty_geometry_diff(die_doc, cfg_doc, duty)}
+    assert "magnet_fill_up" in keys                                            # live is the die's 0.44: not "consistent"
+    ok = {"name": "rated", "geometry": dict(GEO, **WIRE)}
+    assert not {d["key"] for d in fam.duty_geometry_diff(die_doc, cfg_doc, ok)} & set(fam.ROTOR_SHAPE_KEYS)
+
+
+def test_the_build_signature_ignores_the_quarantined_key_so_old_results_read_as_an_older_build(cat):
+    clean = _sig(cat)
+    _with_fill(cat)
+    assert _sig(cat) == clean                              # a result stamped with the old (override-carrying) signature now differs
+    out = _patch({"magnet_fill_up": None})
+    assert _sig(cat) == clean and out["rotor_shape_overrides_left"] == {}
+
+
+def test_a_copy_check_uses_the_die_rotor_only(cat):
+    _with_fill(cat)
+    cdoc = _yaml(cat / DIE / f"{CFG}.yaml")
+    assert not (set(fam.geo_overrides(cdoc)) & set(fam.ROTOR_SHAPE_KEYS))

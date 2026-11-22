@@ -85,13 +85,8 @@ MOTOR_GEO_KEYS = (
     "magnet_lamination",
 )
 #: shape keys that decide the rotor pocket: refused as overrides, clearable
-ROTOR_SHAPE_KEYS = ("magnet_fill_up", "magnet_fill_down", "magnet_fill_radius")
-
-
-def stored_shape_overrides(cfg_doc: Optional[dict]) -> Dict[str, float]:
-    """The rotor-shape overrides a configuration still carries (they are not honoured as motor keys; clear them)."""
-    ov = (cfg_doc or {}).get("geometry_overrides") or {}
-    return {k: ov[k] for k in ROTOR_SHAPE_KEYS if ov.get(k) is not None}
+from motor_ai_sim.config_overrides import ROTOR_SHAPE_KEYS, geo_overrides  # noqa: E402
+from motor_ai_sim.config_overrides import shape_overrides as stored_shape_overrides  # noqa: E402
 
 
 def _motor_key_overrides(cfg_doc: Optional[dict]) -> Dict[str, float]:
@@ -1322,7 +1317,8 @@ def _build_sig_of(die_doc: dict, cfg_doc: dict, materials: dict) -> str:
     import json as _json
     src = {
         "geo": die_doc.get("geometry") or {},
-        "ov": cfg_doc.get("geometry_overrides") or {},
+        # the quarantined rotor-shape keys are not part of the build: a stored result computed with one reads as an older build
+        "ov": geo_overrides(cfg_doc),
         "winding": cfg_doc.get("winding") or {},
         "materials": materials or {},
         # Per-part accounting states (included / reference / excluded).  A
@@ -3533,7 +3529,7 @@ def _config_build_check(src_dir: Path, dst_dir: Path, cfg_doc: dict) -> Dict[str
     duties whose saved build differs from what loading them on the target would build."""
     sd = _load_yaml(src_dir / "die.yaml", "die")
     td = _load_yaml(dst_dir / "die.yaml", "die")
-    ov = {k: v for k, v in (cfg_doc.get("geometry_overrides") or {}).items() if v is not None}
+    ov = {k: v for k, v in geo_overrides(cfg_doc).items() if v is not None}
     src_eff = dict(sd.get("geometry") or {}, **ov)
     dst_eff = dict(td.get("geometry") or {}, **ov)
     stale = {}
@@ -4650,7 +4646,7 @@ def _live_matches_config(die_geo: dict, cfg: Optional[str], die: str, live_geo: 
     except HTTPException:
         return None
     stored = dict(die_geo)
-    stored.update(c.get("geometry_overrides") or {})
+    stored.update(geo_overrides(c))
     for k, v in stored.items():
         if isinstance(v, (dict, list)) or k not in live_geo:
             continue
@@ -5787,7 +5783,7 @@ def duty_geometry_diff(die_doc: dict, cfg_doc: dict,
     if not saved:
         return []
     live = dict((die_doc or {}).get("geometry") or {})
-    live.update({k: v for k, v in ((cfg_doc or {}).get("geometry_overrides") or {}).items()
+    live.update({k: v for k, v in geo_overrides(cfg_doc).items()
                  if v is not None})
     die_keys = set((die_doc or {}).get("geometry") or {}) - set(FREE_GEO_KEYS)
     out: List[Dict[str, Any]] = []
@@ -6774,7 +6770,7 @@ def _config_coil_view(die: str, cfg: str, die_doc: dict, c: dict) -> Dict[str, A
         from motor_ai_sim.modules.motor_mass import _default_config_doc
         from motor_ai_sim.simulation.geometry_2d import merge_geo_override, params_from_config
         geo = dict(die_geo)
-        geo.update({k: v for k, v in (c.get("geometry_overrides") or {}).items() if v is not None})
+        geo.update({k: v for k, v in geo_overrides(c).items() if v is not None})
         p = params_from_config(geo_override=geo)
         g = merge_geo_override(dict(_default_config_doc().get("geometry") or {}), geo)
         # the same scope the catalog mass uses (modules.motor_mass): THIS configuration's file
@@ -7447,7 +7443,7 @@ def geometry_lock_check(update: dict) -> Optional[dict]:
     if not die_locked and not cfg_locked:
         return None
     die_geo = d.get("geometry") or {}
-    ov = c.get("geometry_overrides") or {}
+    ov = geo_overrides(c)
     from motor_ai_sim.geometry.motor_geometry import is_compared_geometry_input
     _canon_geo = {**die_geo, **{k: v for k, v in ov.items() if v is not None}}
     _after = {**_canon_geo, **update}
@@ -7666,7 +7662,7 @@ def datasheet(die: str, cfg: str, authorization: str = Header(default=None)):
             # build matches — otherwise its curves belong to another machine
             p = hit["passport"]["passport"]
             g = dict((d.get("geometry") or {}))
-            g.update(c.get("geometry_overrides") or {})
+            g.update(geo_overrides(c))
             same = (abs(float(p.get("L0_mm") or 0) - float(g.get("motor_length") or 0)) < 1e-6
                     and abs(float(p.get("N0") or 0)
                             - float(g.get("num_wires_per_slot") or 0)) < 1e-6)
@@ -7747,7 +7743,7 @@ def payload(die: str, cfg: str, duty: Optional[str] = None,
     geo = dict(d.get("geometry") or {})
     # A null override is an override that says nothing — the die's value stands
     # (older saves wrote `wire_parallel: null` for "not set").
-    geo.update({k: v for k, v in (c.get("geometry_overrides") or {}).items()
+    geo.update({k: v for k, v in geo_overrides(c).items()
                 if v is not None})
     # A key the die never carried is a key the frontend's PUT leaves at the
     # PREVIOUS machine's value — PUT /api/geometry merges over what is loaded.
@@ -7845,6 +7841,8 @@ def payload(die: str, cfg: str, duty: Optional[str] = None,
         # under — applied the same way its materials are, so a frameless
         # configuration loads frameless instead of silently regrowing a shaft.
         "parts": c.get("parts") or {},
+        # a stored rotor-shape override is quarantined (not applied above): named so the load can say it
+        **({"rotor_shape_quarantined": stored_shape_overrides(c)} if stored_shape_overrides(c) else {}),
         "sim": {
             "end_winding_factor": c.get("end_winding_factor"),
             "daxis_deg": d.get("daxis_deg"),

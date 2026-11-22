@@ -48,7 +48,7 @@ const UploadDialog: React.FC<{ kind: ContractKind | null; busy: boolean; onClose
   );
 };
 
-const ProjectContract: React.FC<{ projectId: string }> = ({ projectId }) => {
+const ProjectContract: React.FC<{ projectId: string; isAdmin?: boolean }> = ({ projectId, isAdmin = false }) => {
   const { t, i18n, ready } = useTranslation('contract');
   const [view, setView] = useState<ContractView | null>(null);
   const [archived, setArchived] = useState(false);
@@ -112,7 +112,7 @@ const ProjectContract: React.FC<{ projectId: string }> = ({ projectId }) => {
           ? <ContractScheme data={view.staff_scheme} step={view.step} steps={view.steps} translate={false} />
           : <Alert severity="info">{t('scheme.staffMissing')}</Alert>)
         : null}
-      {scheme === 'staff' && view.staff && (
+      {scheme === 'staff' && view.staff && isAdmin && (   // staff read the scheme, admins upload it
         <Box sx={{ display: 'flex', justifyContent: 'flex-end' }}>
           <Button size="small" component="label" sx={btn} startIcon={<UploadIcon sx={{ fontSize: 16 }} />} disabled={busy} data-testid="contract-scheme-upload">
             {t('scheme.upload')}

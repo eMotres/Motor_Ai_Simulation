@@ -29,8 +29,9 @@ the change itself (``project_uploads``).
 The scheme: the customer view is fixed text of the product (``web/src/locales/*/contract.json``); the STAFF view of the full
 supply chain is internal and lives in the server's SHARED store (``<shared root>/contract/supply_scheme_staff.json``, the same
 place on every server; the private data checkout as the development fallback), never in this public repository.  Admins upload
-it through ``PUT /api/contract-scheme`` (checked against :func:`validate_scheme`); without it the staff view says it is not
-configured.  Annex A generation waits for the guaranteed-values task.
+it through ``PUT /api/contract-scheme`` (checked against :func:`validate_scheme`); every MOTRES staff member (admin or engineer)
+reads it, in the section and through ``GET /api/contract-scheme``; the customer side and the factory never.  Without it the
+staff view says it is not configured.  Annex A generation waits for the guaranteed-values task.
 """
 from __future__ import annotations
 
@@ -303,7 +304,8 @@ def validate_scheme(doc: Any) -> dict:
     out_edges = []
     for i, e in enumerate(edges):
         where = f"edges[{i}]"
-        if not isinstance(e, dict) or e.get("from") not in ids or e.get("to") not in ids or e.get("kind") not in _SCHEME_KINDS:
+        if not isinstance(e, dict) or not all(isinstance(e.get(k), str) for k in ("from", "to", "kind")) \
+                or e["from"] not in ids or e["to"] not in ids or e["kind"] not in _SCHEME_KINDS:
             raise ValueError(f"{where}: from / to name existing nodes, kind is one of {', '.join(_SCHEME_KINDS)}")
         edge = {"from": e["from"], "to": e["to"], "kind": e["kind"]}
         if "label" in e:
@@ -773,36 +775,82 @@ def download_file(request: Request, project_id: str, file_id: str):
                         headers={"Cache-Control": "no-store"})
 
 
-# ── the staff scheme, managed by admins ─────────────────────────────────────────────────────────────────────────────
+# ── the staff scheme: staff read it, admins upload it ─────────────────────────────────────────────────────────────
+
+SCHEME_MAX_BYTES = 256 * 1024
+
+
+def _scheme_reader(request: Request) -> dict:
+    """MOTRES staff (global admin / engineer) read the scheme - the same people the project section shows it to."""
+    user = access.require_signed_in(request)
+    if not _staff(user):
+        raise HTTPException(status_code=403, detail="Only MOTRES staff read the staff scheme")
+    return user
+
 
 def _scheme_admin(request: Request) -> dict:
     user = access.require_signed_in(request)
     if str(user.get("role") or "").lower() != "admin":
-        raise HTTPException(status_code=403, detail="Only MOTRES admins manage the staff scheme")
+        raise HTTPException(status_code=403, detail="Only MOTRES admins upload the staff scheme")
     return user
+
+
+def write_strict(path: Path, data: bytes) -> None:
+    """Atomic or nothing: a new file beside ``path`` (exclusive create), flushed and synced, then ``os.replace``.  No in-place
+    fallback - any failure removes the new file and raises ``OSError`` (the route answers 503)."""
+    tmp = path.with_name(".%s.%s.tmp" % (path.name, secrets.token_hex(8)))
+    try:
+        with open(tmp, "xb") as fh:
+            fh.write(data)
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            tmp.unlink()
+        except OSError:
+            pass
+        raise
+
+
+def _keep_previous(path: Path) -> None:
+    """The previous file beside it as ``supply_scheme_staff.<time>-<random>.json``, created exclusively (never overwritten)."""
+    stamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+    backup = path.with_name("supply_scheme_staff.%s-%s.json" % (stamp, secrets.token_hex(4)))
+    with open(backup, "xb") as fh:
+        fh.write(path.read_bytes())
+        fh.flush()
+        os.fsync(fh.fileno())
 
 
 @scheme_router.get("")
 def get_scheme(request: Request):
-    _scheme_admin(request)
+    """Where the scheme is and what it holds, for staff; the read is in the admin audit (who and the route, not the content)."""
+    user = _scheme_reader(request)
     path = staff_scheme_path()
-    return {"store": str(contract_store_root() or ""), "source": "shared" if path and contract_store_root() and
-            path.parent == contract_store_root() else ("private" if path else None), "scheme": staff_scheme()}
+    base = contract_store_root()
+    from motor_ai_sim import admin_audit as _AA
+    _AA.record(_email(user), "contract.scheme_read", "GET /api/contract-scheme")
+    return {"store": str(base or ""), "source": "shared" if path and base and path.parent == base else ("private" if path else None),
+            "scheme": staff_scheme(), "can_upload": str(user.get("role") or "").lower() == "admin"}
 
 
 @scheme_router.put("")
-async def put_scheme(request: Request):
-    """The staff scheme as JSON (validated by :func:`validate_scheme`), written to the shared-root store; the previous one is
-    kept beside it as ``supply_scheme_staff.<time>.json``.  Admin only, admin audit ``contract.scheme``."""
+async def put_scheme(request: Request, replace_damaged: bool = False):
+    """The staff scheme as JSON (:func:`validate_scheme`), admins only, written atomically to the shared store; the previous file
+    is kept beside it.  A stored file that is damaged is not replaced silently: 409 unless ``?replace_damaged=true`` (its bytes
+    are kept as the previous version either way).  The body is capped while it arrives (413).  Admin audit ``contract.scheme``."""
     user = _scheme_admin(request)
     base = contract_store_root()
     if base is None:
         raise HTTPException(status_code=503, detail="This server has no shared store for the contract documents")
-    raw = await request.body()
-    if len(raw) > 256 * 1024:
-        raise HTTPException(status_code=413, detail="The scheme is larger than 256 KB")
+    raw = bytearray()
+    async for chunk in request.stream():
+        raw += chunk
+        if len(raw) > SCHEME_MAX_BYTES:
+            raise HTTPException(status_code=413, detail="The scheme is larger than 256 KB")
     try:
-        scheme = validate_scheme(json.loads(raw.decode("utf-8")))
+        scheme = validate_scheme(json.loads(bytes(raw).decode("utf-8")))
     except (UnicodeDecodeError, ValueError) as exc:
         raise HTTPException(status_code=422, detail=f"The scheme is not valid: {exc}")
     from motor_ai_sim import json_store
@@ -811,13 +859,20 @@ async def put_scheme(request: Request):
         base.mkdir(parents=True, exist_ok=True)
         with json_store.lock_for(path):
             if path.is_file():
-                stamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
-                (base / f"supply_scheme_staff.{stamp}.json").write_bytes(path.read_bytes())
-            json_store.atomic_write_json(path, scheme)
+                try:
+                    validate_scheme(json.loads(path.read_text(encoding="utf-8")))
+                except (OSError, UnicodeDecodeError, ValueError):
+                    if not replace_damaged:
+                        raise HTTPException(status_code=409, detail=(
+                            "The stored staff scheme is damaged; it is kept as it is. Upload again with replace_damaged=true to "
+                            "replace it (its bytes are kept as the previous version)"))
+                _keep_previous(path)
+            write_strict(path, (json.dumps(scheme, ensure_ascii=False, indent=2) + "\n").encode("utf-8"))
     except OSError as exc:
         log.error("contract: staff scheme not writable (%s)", exc)
-        raise HTTPException(status_code=503, detail="The staff scheme cannot be written on this server")
+        raise HTTPException(status_code=503, detail="The staff scheme cannot be written on this server; nothing was changed")
     from motor_ai_sim import admin_audit as _AA
     _AA.record(_email(user), "contract.scheme", "supply_scheme_staff",
-               details={"nodes": len(scheme["nodes"]), "edges": len(scheme["edges"]), "version": scheme.get("version")})
+               details={"nodes": len(scheme["nodes"]), "edges": len(scheme["edges"]), "version": scheme.get("version"),
+                        "replaced_damaged": bool(replace_damaged)})
     return {"ok": True, "scheme": scheme}

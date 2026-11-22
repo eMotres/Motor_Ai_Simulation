@@ -52,11 +52,18 @@ def test_an_admin_uploads_the_scheme_and_staff_see_it_the_customer_never(client,
     assert client.get("/api/contract-scheme", headers=hdr("t-admin")).json()["source"] == "shared"
 
 
-def test_only_admins_manage_it(client):
+def test_staff_read_it_only_admins_upload_it(client, tmp_path):
     for who in ("t-staff", "t-owner"):
         assert client.put("/api/contract-scheme", headers=hdr(who), content=json.dumps(SCHEME)).status_code == 403
-        assert client.get("/api/contract-scheme", headers=hdr(who)).status_code == 403
     assert client.put("/api/contract-scheme", content=json.dumps(SCHEME)).status_code == 401
+    client.put("/api/contract-scheme", headers=hdr("t-admin"), content=json.dumps(SCHEME))
+    r = client.get("/api/contract-scheme", headers=hdr("t-staff"))
+    assert r.status_code == 200 and r.json()["scheme"]["version"] == "v0.2" and r.json()["can_upload"] is False
+    assert client.get("/api/contract-scheme", headers=hdr("t-admin")).json()["can_upload"] is True
+    assert client.get("/api/contract-scheme", headers=hdr("t-owner")).status_code == 403
+    reads = [json.loads(x) for x in (tmp_path / "admin_audit.jsonl").read_text().splitlines()]
+    assert [r["action"] for r in reads].count("contract.scheme_read") == 2
+    assert all("nodes" not in json.dumps(r.get("details") or {}) for r in reads if r["action"] == "contract.scheme_read")
 
 
 @pytest.mark.parametrize("bad", [
@@ -67,6 +74,9 @@ def test_only_admins_manage_it(client):
     {"nodes": [{"id": "a", "label": "x", "x": 1, "y": 1}], "edges": [{"from": "a", "to": "a", "kind": "profit"}]},
     {"nodes": [{"id": "a", "label": {"de": "x"}, "x": 1, "y": 1}]},
     {"nodes": [{"id": "a", "label": "x" * 201, "x": 1, "y": 1}]},
+    {"nodes": [{"id": "a", "label": "x", "x": 1, "y": 1}], "edges": [{"from": ["a"], "to": "a", "kind": "money"}]},
+    {"nodes": [{"id": "a", "label": "x", "x": 1, "y": 1}], "edges": [{"from": "a", "to": {"a": 1}, "kind": "money"}]},
+    {"nodes": [{"id": "a", "label": "x", "x": 1, "y": 1}], "edges": [{"from": "a", "to": "a", "kind": ["money"]}]},
 ])
 def test_a_scheme_that_does_not_fit_the_schema_is_refused_and_changes_nothing(client, tmp_path, bad):
     r = client.put("/api/contract-scheme", headers=hdr("t-admin"), content=json.dumps(bad))
@@ -105,3 +115,43 @@ def test_without_a_shared_root_the_default_is_the_workspace_shared_root(monkeypa
     from motor_ai_sim import workspace as W
     monkeypatch.setattr(W, "shared_root", lambda: tmp_path / "srv" / "shared")
     assert PC.contract_store_root() == tmp_path / "srv" / "shared" / "contract"
+
+
+
+def test_every_previous_version_is_kept_under_its_own_name(client, tmp_path):
+    for v in ("v1", "v2", "v3"):
+        assert client.put("/api/contract-scheme", headers=hdr("t-admin"), content=json.dumps({**SCHEME, "version": v})).status_code == 200
+    kept = sorted(json.loads(p.read_text())["version"] for p in (tmp_path / "shared" / "contract").glob("supply_scheme_staff.*.json"))
+    assert kept == ["v1", "v2"]
+
+
+def test_a_damaged_stored_scheme_is_not_replaced_silently(client, tmp_path):
+    store_dir = tmp_path / "shared" / "contract"
+    store_dir.mkdir(parents=True)
+    (store_dir / "supply_scheme_staff.json").write_bytes(b'{"nodes": "damaged"}')
+    r = client.put("/api/contract-scheme", headers=hdr("t-admin"), content=json.dumps(SCHEME))
+    assert r.status_code == 409 and (store_dir / "supply_scheme_staff.json").read_bytes() == b'{"nodes": "damaged"}'
+    r = client.put("/api/contract-scheme?replace_damaged=true", headers=hdr("t-admin"), content=json.dumps(SCHEME))
+    assert r.status_code == 200
+    assert [p.read_bytes() for p in store_dir.glob("supply_scheme_staff.*.json")] == [b'{"nodes": "damaged"}']
+
+
+def test_the_body_cap_holds_while_it_arrives(client):
+    big = json.dumps({**SCHEME, "notes": ["x" * 199] * 20}).encode() + b" " * (300 * 1024)
+
+    def chunked():
+        for i in range(0, len(big), 8192):
+            yield big[i:i + 8192]
+
+    assert client.put("/api/contract-scheme", headers=hdr("t-admin"), content=chunked()).status_code == 413
+
+
+def test_a_failed_atomic_write_changes_nothing(client, tmp_path, monkeypatch):
+    client.put("/api/contract-scheme", headers=hdr("t-admin"), content=json.dumps(SCHEME))
+    path = tmp_path / "shared" / "contract" / "supply_scheme_staff.json"
+    before = path.read_bytes()
+    import os
+    monkeypatch.setattr(os, "replace", lambda a, b: (_ for _ in ()).throw(OSError("rename failed")))
+    r = client.put("/api/contract-scheme", headers=hdr("t-admin"), content=json.dumps({**SCHEME, "version": "v9"}))
+    assert r.status_code == 503 and path.read_bytes() == before
+    assert not list(path.parent.glob(".*.tmp"))

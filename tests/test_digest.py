@@ -1149,3 +1149,81 @@ def test_the_digest_send_stamps_the_revision_and_the_reminders_count_from_it(d):
     fresh.pop("digest_sent")
     rows = RK.pending(DIE, CFG, prod, [fresh], got + 500 * 3600)
     assert rows and not any(r["alerted"] for r in rows)
+
+
+# -- the revision delivery ledger (Astra review of #773) ---------------------------------------------------------------------------------
+
+def _ledger_file(d, pending, sent=None):
+    rev = {"number": "1.1", "date": at(-3600), "acknowledgements": [], "digest_pending": list(pending),
+           "alert": {"sent_at": at(-3600), "mode": "digest", "recipients": []}}
+    if sent:
+        rev["digest_sent"] = sent
+    d["PR"].save_file(DIE, CFG, "revisions.json", {"revisions": [rev]})
+
+
+def test_a_revision_beyond_the_line_cap_is_still_in_the_digest(d):
+    """25 newer lines used to push the revision into "and N more" - no mail line, no stamp, no reminder."""
+    _ledger_file(d, [ANNA, LI])
+    d["PR"].append_audit(DIE, CFG, {"time": at(-3500), "who": ANNA, "action": "publish_revision", "entity": "revision", "entity_id": "1.1",
+                                    "snapshot": {"revision": {"summary": {"en": "Old one"}, "changes": []}}})
+    for i in range(25):
+        d["PR"].append_audit(DIE, CFG, {"time": at(-3000 + i), "who": LI, "action": "create", "entity": "thread_message",
+                                        "entity_id": f"extra{i}", "snapshot": {"thread_id": "th_1"}})
+    run(d, scopes=[XSCOPE])
+    draft = draft_of(d, XSCOPE)
+    assert any(i["kind"] == "revision" and i.get("key") == "rev:1.1" for i in draft["items"])
+    assert draft["more"] > 0 and len(draft["items"]) <= 20 + 1
+
+
+def test_a_revision_older_than_the_cursor_is_repeated_while_somebody_is_still_owed_it(d):
+    from motor_ai_sim.digest import collect as C
+    _ledger_file(d, [LI])
+    prod = d["PR"].load_file(DIE, CFG, "production.json")
+    d["PR"].append_audit(DIE, CFG, {"time": at(-3500), "who": ANNA, "action": "publish_revision", "entity": "revision", "entity_id": "1.1",
+                                    "snapshot": {"revision": {"summary": {"en": "Old one"}, "changes": []}}})
+    items = C.owed_revision_items(prod, [LI], before=T0 - 600, end=T0)
+    assert [i.key for i in items] == ["rev:1.1"] and "repeated" in items[0].en
+    assert C.owed_revision_items(prod, [ANNA], before=T0 - 600, end=T0) == []              # nobody owed: nothing repeated
+    assert C.owed_revision_items(prod, [LI], before=T0 - 7200, end=T0) == []               # inside the period: it is a normal line
+
+
+def test_the_first_delivery_is_the_clock_of_the_reminders_and_a_retry_never_moves_it(d):
+    from motor_ai_sim.digest import approval as AP
+    _ledger_file(d, [ANNA, LI])
+    draft = {"scope": XSCOPE, "items": [{"kind": "revision", "key": "rev:1.1"}]}
+    AP._stamp_production_revisions(draft, [LI], "2026-09-21T06:00:00")
+    AP._stamp_production_revisions(draft, [LI, ANNA], "2026-09-23T06:00:00")               # a partial retry two days later
+    rev = d["PR"].load_file(DIE, CFG, "revisions.json")["revisions"][0]
+    assert {x["email"]: x["sent_at"] for x in rev["digest_sent"]} == {LI: "2026-09-21T06:00:00", ANNA: "2026-09-23T06:00:00"}
+    assert rev["digest_pending"] == []
+
+
+def test_reminders_see_a_revision_that_only_has_the_ledger(d):
+    from motor_ai_sim.production import revision_ack as RK
+    rev = {"number": "1.1", "date": at(-3600), "acknowledgements": [], "digest_pending": [LI]}        # published with notify=False: no alert
+    prod = d["PR"].load_file(DIE, CFG, "production.json")
+    rows = RK.pending(DIE, CFG, prod, [rev], T0 + 500 * 3600)
+    assert rows and not any(r["alerted"] for r in rows)                                           # no digest yet: nothing to remind about
+    rev2 = {**rev, "digest_sent": [{"email": LI, "sent_at": at(0)}], "digest_pending": []}
+    rows = RK.pending(DIE, CFG, prod, [rev2], T0 + 30 * 3600)
+    assert [(r["email"], r["alerted"], int(r["hours"])) for r in rows] == [(LI, True, 30)]
+
+
+def test_the_acknowledge_link_goes_to_the_newest_revision(d):
+    from motor_ai_sim.digest import build as B, collect as C
+    group = B.get_group(XSCOPE)
+    older = C.Item("revision", T0 - 7200, "Revision 1.0 published: a", "版本 1.0", "/production/x/L12/changes?item=1.0", frozenset(), key="rev:1.0", link_policy="none")
+    newer = C.Item("revision", T0 - 60, "Revision 1.1 published: b", "版本 1.1", "/production/x/L12/changes?item=1.1", frozenset(), key="rev:1.1", link_policy="none")
+    text, _ = B.compose(group, [newer, older], 0, T0 - 9000, T0, False)                           # the draft passes them newest first
+    assert text.count("item=1.1") == 1 and "item=1.0" not in text
+
+
+def test_publishing_writes_the_ledger_for_every_revision_but_an_urgent_one(d, monkeypatch):
+    from motor_ai_sim.production import routes as R, revision_alert as RA
+    monkeypatch.setattr(RA, "SEND", lambda to, s, b: "sent")
+    user = {"email": ANNA, "role": "owner"}
+    bil = lambda t: {"en": t, "zh": t, "src_lang": "en", "status": {"en": "confirmed", "zh": "confirmed"}}      # noqa: E731
+    r1 = R._publish_revision(DIE, CFG, user, bil("quiet"), [bil("c")], notify=False)
+    assert sorted(r1["digest_pending"]) == sorted([ANNA, LI]) and "alert" not in r1
+    r2 = R._publish_revision(DIE, CFG, user, bil("loud"), [bil("c")], urgent=True)
+    assert "digest_pending" not in r2 and r2["alert"]["mode"] == "urgent"

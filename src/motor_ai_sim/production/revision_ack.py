@@ -63,7 +63,7 @@ def pending(die: str, config: str, production: dict, revisions: List[dict], now:
                 done.setdefault(str(x.get("email")), []).append(int(x.get("level") or 0))
         # A revision that waits for the daily digest (owner 2026-11-19) counts from the digest THIS member got it in, not from the
         # publication: before that digest there is nothing to remind about (listed in the report, not mailed).
-        digest_mode = bool(alert and alert.get("mode") == "digest")
+        digest_mode = bool(alert and alert.get("mode") == "digest") or bool(r.get("digest_sent")) or bool(r.get("digest_pending"))
         sent_in = {str(x.get("email") or "").lower(): x.get("sent_at") for x in r.get("digest_sent") or [] if isinstance(x, dict)}
         for em in sorted(req - acked):
             t0, alerted, stamp = since, alert is not None, (alert or {}).get("sent_at") or r.get("date")

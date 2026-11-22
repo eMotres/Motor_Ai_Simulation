@@ -202,9 +202,13 @@ def _stamp_production_revisions(draft: dict, emails: list, stamp: str) -> None:
                     continue
                 if isinstance(r.get("alert"), dict) and r["alert"].get("mode") == "urgent":
                     continue
-                rows = [x for x in r.get("digest_sent") or [] if isinstance(x, dict) and str(x.get("email")).lower() not in mine]
-                rows += [{"email": e, "sent_at": stamp} for e in sorted(mine)]
+                # the FIRST successful delivery to a member is the clock of his reminders: a retry (which includes members already
+                # served) never moves it (Astra review of #773)
+                rows = [x for x in r.get("digest_sent") or [] if isinstance(x, dict)]
+                have = {str(x.get("email")).lower() for x in rows}
+                rows += [{"email": e, "sent_at": stamp} for e in sorted(mine) if e not in have]
                 r["digest_sent"] = rows
+                r["digest_pending"] = [e for e in r.get("digest_pending") or [] if str(e).lower() not in mine]
 
         PR.mutate_file(die, config, "revisions.json", mut)
     except Exception as exc:                               # noqa: BLE001

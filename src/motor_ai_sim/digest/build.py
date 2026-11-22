@@ -301,7 +301,8 @@ def compose(group: Group, items: list, more: int, start: float, end: float, bili
             if url:
                 t_lines.append(f"  {url}")
         h_parts.append("</ul>")
-        ack = next((it.link for it in reversed(items) if it.kind == "revision" and it.link), None) if group.kind == "production" else None
+        _revs = [it for it in items if it.kind == "revision" and it.link] if group.kind == "production" else []
+        ack = max(_revs, key=lambda it: it.ts).link if _revs else None          # the NEWEST revision
         if ack:
             # a revision is in this production's digest: ONE "open and acknowledge" link to the newest of them (owner 2026-11-19)
             ack_url = _url(ack)
@@ -462,7 +463,11 @@ def build_draft(group: Group, settings: dict, items: list, recipients: list[dict
                      key=lambda i: i.ts, reverse=True)
     if not visible:
         return None
-    shown, more = visible[:MAX_ITEMS], max(0, len(visible) - MAX_ITEMS)
+    # a revision line is a delivery obligation, never cut by the line cap (Astra review of #773): the other lines give way
+    rev_items = [i for i in visible if i.kind == "revision"]
+    room = max(0, MAX_ITEMS - len(rev_items))
+    shown = sorted(rev_items + [i for i in visible if i.kind != "revision"][:room], key=lambda i: i.ts, reverse=True)
+    more = max(0, len(visible) - len(shown))
     bilingual = any(r["lang"] == "zh-CN" for r in recipients)
     text, body_html = compose(group, shown, more, start, end, bilingual)
     now = DS.iso()
@@ -531,6 +536,11 @@ def run(now: Optional[float] = None, *, scopes: Optional[list] = None, write: bo
         else:
             items = C.collect_production(group.record, start, now)
         recipients, skipped = resolve_recipients(group, settings)
+        if group.kind == "production" and recipients:
+            # revisions some current recipient has not been told about yet, from before this period (the cursor moved on)
+            owed = C.owed_revision_items(group.record, [r["email"] for r in recipients], start, now)
+            have = {i.key for i in items}
+            items = list(items) + [i for i in owed if i.key not in have]
         revision = int((pending or {}).get("revision") or 0)
         draft = build_draft(group, settings, items, recipients, skipped, start, now, existing=pending, revision=revision)
         if draft is None:

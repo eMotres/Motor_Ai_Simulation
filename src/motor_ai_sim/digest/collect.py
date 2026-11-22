@@ -602,3 +602,29 @@ def collect_production(production: dict, start: float, end: float) -> list[Item]
     for (part_id, internal), g in doc_groups.items():
         items.append(_document_item(g, part_id, internal, pnames, link))
     return _merge(items)
+
+
+def owed_revision_items(production: dict, emails: Iterable[str], before: float, end: float) -> list:
+    """Revision lines OLDER than ``before`` that some of ``emails`` have not been told about yet (``digest_pending`` of the revision).
+
+    The group's activity cursor moves on whether or not every member received a digest (a member who was unverified, without the NDA
+    or out of the text's access when it went out, a send that failed, a revision beyond the line cap): an obligation to tell
+    somebody about a revision must not depend on the cursor (Astra review of #773).  The line says it is a repeat."""
+    from motor_ai_sim.production import store as PR
+    die, config = str(production.get("die") or ""), str(production.get("config") or "")
+    want = {str(e).strip().lower() for e in emails}
+    try:
+        revs = (PR.load_file(die, config, "revisions.json") or {}).get("revisions", [])
+    except Exception:                                      # noqa: BLE001
+        return []
+    nums = {str(r.get("number")) for r in revs if isinstance(r, dict)
+            and want & {str(x).strip().lower() for x in r.get("digest_pending") or []}}
+    if not nums:
+        return []
+    out = []
+    for it in collect_production(production, 0.0, end):
+        if it.kind == "revision" and it.key.startswith("rev:") and it.key[4:] in nums and it.ts < before:
+            out.append(Item(it.kind, it.ts, it.en + " (repeated: not yet delivered to everyone)",
+                            it.zh + "（重复：尚未送达所有人）", it.link, it.requires, it.key, it.motor, it.group, it.link_policy))
+    return out
+

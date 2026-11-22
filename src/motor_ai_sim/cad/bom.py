@@ -771,9 +771,10 @@ def write_csv(bom, path, extra_columns=None):
     t, c = bom["totals"], bom["comparison"]
     with open(path, "w", encoding="utf-8-sig", newline="") as fh:
         w = csv.writer(fh)
+        from motor_ai_sim.spreadsheet_text import csv_safe_row
         w.writerow([title for _, title in CSV_COLUMNS] + list(extra_columns))
         for l in bom["lines"]:
-            w.writerow([_csv_value(l, k) for k in keys] + [extra_columns[col].get(l["key"], "") for col in extra_columns])
+            w.writerow(csv_safe_row([_csv_value(l, k) for k in keys] + [extra_columns[col].get(l["key"], "") for col in extra_columns]))
         w.writerow(row(dict(item="T1", part=("TOTAL mass of the frameless kit (BOM lines, model)" if t.get("scope") == FRAMELESS_SCOPE
                                               else "TOTAL mass of the BOM lines (model)"), type="total", unit="g", total_mass_g=t["motor_mass_g"])))
         w.writerow(row(dict(item="T2", part="Simulation passport mass (%s)" % c["sim_source"], type="total", unit="g", sim_mass_g=c["sim_total_g"])))
@@ -840,6 +841,8 @@ def write_xlsx(bom, path, banner="", extra_sheets=None, sheet_name=None):
     for l in bom["lines"]:
         for j, (k, _) in enumerate(CSV_COLUMNS, 1):
             c = ws.cell(r, j, _csv_value(l, k))
+            from motor_ai_sim.spreadsheet_text import force_text_cell
+            force_text_cell(c)                  # user text (part names, notes) stays text; the sheet's real formulas are elsewhere
             c.alignment = Alignment(wrap_text=True, vertical="top")
             c.border = box
             if k == "tbs" and l["to_be_specified"]:

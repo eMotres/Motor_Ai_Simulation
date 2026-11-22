@@ -4229,6 +4229,7 @@ def _defined_cogging(m: Dict[str, Any]) -> Optional[float]:
 
 
 _COGGING_TEMP_C = 20.0     # owner rule: cogging is measured at 20 C
+_COG_SCALE_FLOOR_NM = 1e-3  # smallest reference cogging [N*m] the min_cogging objective is normalised by
 _COGGING_RPM = 100.0       # no current, no eddy: the speed only sets the time axis
 
 
@@ -4390,7 +4391,9 @@ def _descent_cost(m: Dict[str, Any], base: Dict[str, Any],
             pen += 1e6
             cog = 0.0
         ref = _defined_cogging(base) if isinstance(base, dict) else None
-        scale = ref if ref is not None and ref > 0.0 else 1.0
+        # A near-zero start design must not blow the normalised objective past the penalties (a broken design
+        # then beat a feasible one): the scale never drops below _COG_SCALE_FLOOR_NM.
+        scale = max(ref, _COG_SCALE_FLOOR_NM) if ref is not None and ref > 0.0 else 1.0
         return (cog / scale + pen), -cog / scale
     bl = base.get("_bline") if isinstance(base, dict) else None
     if bl:
@@ -4436,6 +4439,19 @@ def _standard_quality(out: Dict[str, Any]) -> tuple[bool, str]:
                        % (r.get("steady_state_note") or "demag transient"))
     if r.get("qualified") is False or r.get("tdm_experimental"):
         return False, "experimental (not qualified) eddy result"
+    return True, ""
+
+
+def _final_feasibility(res: Dict[str, Any]) -> tuple[bool, str]:
+    """Acceptance gate of a FINAL design: a penalty guides the search, it never certifies.  A run that
+    measures cogging needs a finite valid measurement, and no hard limit of the run may be violated."""
+    if _cogging_on():
+        if _defined_cogging(res) is None:
+            return False, ("no valid no-load cogging measurement (%s)"
+                           % (res.get("cogging_error") or "missing"))
+    viol = _limit_violation(res)
+    if viol > 0.0:
+        return False, "hard limit violated (summed relative overshoot %.3g)" % viol
     return True, ""
 
 
@@ -4569,6 +4585,10 @@ def _finalize_standard_shortlist(
         if out is None:
             failed.append({"overrides": x, "current_a": current, "reason": why})
             continue
+        _feasible, _why_infeasible = _final_feasibility(out["res"])
+        if not _feasible:
+            failed.append({"overrides": x, "current_a": current, "reason": _why_infeasible})
+            continue
         cost, F = score(out["res"], standard_base)
         if not math.isfinite(float(cost)) or not math.isfinite(float(F)):
             failed.append({"overrides": x, "current_a": current,
@@ -4584,7 +4604,7 @@ def _finalize_standard_shortlist(
                     "; ".join("%s @ %.4g A: %s" % (f["overrides"], f["current_a"],
                                                     f["reason"]) for f in failed))
     if not validated:
-        return dict(initial, reason="no shortlisted design passed standard FEM",
+        return dict(initial, reason="no shortlisted design passed standard FEM and the final acceptance gate",
                     failed=failed, shortlist_count=len(shortlisted))
     validated.sort(key=lambda row: row["cost"])
     winner = validated[0]

@@ -504,6 +504,27 @@ def _air_zones_stamp(zones: Dict[str, Any]) -> Dict[str, Any]:
             "calibration": zones.get("calibration")}
 
 
+def numerical_acceptance_of(*, n_nonfinite: int, iterating: bool, passes: int, last_move_c: float, tol_c: float,
+                            closures: Dict[str, Any], generated_w: float) -> Dict[str, Any]:
+    """Is this thermal map a SOLUTION (Astra thermal audit 2026-11-21, F02)?  It is finite, its boundary loop settled inside its
+    tolerance (not merely stopped at the pass cap) and its rotor / stator heat balances close to max(0.5 W, 1 % of the losses).
+    A non-finite temperature (a disconnected island replaced by ambient) is a failed solve: the route answers ``ok: false``."""
+    reasons: List[str] = []
+    if n_nonfinite:
+        reasons.append("%d non-finite node temperature(s) were replaced by ambient (a disconnected island)" % n_nonfinite)
+    if iterating and last_move_c >= tol_c:
+        reasons.append("the boundary loop stopped at %d passes with the last pass still moving %.2f K (tolerance %.1f K)"
+                       % (passes, last_move_c, tol_c))
+    clos = {k: float(v or 0.0) for k, v in closures.items()}
+    tol_w = max(0.5, 0.01 * abs(float(generated_w)))
+    for k, v in clos.items():
+        if abs(v) > tol_w:
+            reasons.append("%s does not close: %.2f W (tolerance %.2f W)" % (k, v, tol_w))
+    return {"accepted": not reasons, "reasons": reasons, "finite": n_nonfinite == 0, "passes": int(passes),
+            "last_pass_move_c": round(float(last_move_c), 3), "tolerance_c": tol_c,
+            "closure_W": {k: round(v, 3) for k, v in clos.items()}, "closure_tolerance_W": round(tol_w, 3)}
+
+
 def _cooling_bc(*, mode: str, t_ambient_c: float, air_speed_mps: float,
                 fluid: str, fluid_temp_in_c: float, flow_lpm: float,
                 p_loss_w: float, r_housing_m: float, length_m: float,
@@ -5944,6 +5965,7 @@ def solve_thermal_field(
     cooling = bore_cooling = None
     gap = None
     passes = 0
+    _last_move_c = 0.0          # the last pass's outlet / wall move [K]: >= OUTLET_TOL_C at the cap means NOT converged
     _ef_reports: Dict[str, Dict[str, Any]] = {}
     _gf_report: Dict[str, Any] = {}
     _gf_share: Dict[str, float] = {}
@@ -6334,6 +6356,7 @@ def solve_thermal_field(
                 for _n in _GF_NAMES:
                     _d = max(_d, _wall_move(
                         _n, (_sk_by_name.get(_n) or {}).get("t_mean_c")))
+        _last_move_c = _d
         if _d < OUTLET_TOL_C:
             break
 
@@ -7207,8 +7230,16 @@ def solve_thermal_field(
         nodes = _np.unique(ts[mask])
         return {"max": round(float(Tn[nodes].max()), 1), "avg": round(float(Tn[nodes].mean()), 1)}
 
+    # NUMERICAL ACCEPTANCE (Astra thermal audit 2026-11-21, F02): see ``numerical_acceptance_of``.
+    _n_bad = int(th.get("n_nonfinite") or 0)
+    numerical_acceptance = numerical_acceptance_of(
+        n_nonfinite=_n_bad, iterating=bool(_iterating), passes=passes, last_move_c=_last_move_c, tol_c=OUTLET_TOL_C,
+        closures={k: (heat_budget.get(k) or {}).get("closure_W") for k in ("rotor_heat_split", "stator_heat_split")},
+        generated_w=_gen_w)
+
     result = {
-        "ok": True,
+        "ok": _n_bad == 0,
+        "numerical_acceptance": numerical_acceptance,
         "n_vertices": len(th["vertices"]), "n_triangles": len(th["triangles"]),
         "vertices": th["vertices"], "triangles": th["triangles"],
         "domain_per_tri": th["cell_tags"],

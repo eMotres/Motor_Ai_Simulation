@@ -179,6 +179,7 @@ def test_a_faster_zone_cools_what_it_serves_and_the_heat_budget_closes(em_run):
         assert r["T_max"] < base["T_max"] and r["T_min"] < base["T_min"], (zones, r["T_max"], base["T_max"])
         hb = r["cooling"]["heat_budget"]
         assert abs(hb["residual_W"]) < 1e-6 and abs(hb["residual_pct"]) < 1e-6        # physics check: the budget closes
+        assert r["numerical_acceptance"]["finite"] is True and r["ok"] is True
         assert r["air_zones"]["zones"] == zones
     # the rotor zone acts on the rotor, the ends zone on the winding side: the rotor-end speed cools the magnets most
     rot = solve(open_air_speed_mps=8.0, air_zones=Z({"rotor_ends": 25.0}))

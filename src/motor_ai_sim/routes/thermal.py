@@ -7376,6 +7376,9 @@ def solve_thermal_field(
         # loop's feedback runs through it and 0.1 W is not a resolution a fixed
         # point can converge on (see `Pcu` above).
         "P_cu_exact_W": float(Pcu),
+        # the AC (skin / proximity) share of that copper at the map's temperature: the transient's copper feedback needs it to
+        # scale DC with r and AC with 1/r like the fixed point does (Astra thermal audit 2026-11-21, F05)
+        "P_cu_ac_exact_W": float(em.get("P_cu_ac_exact_W", em.get("P_cu_ac_solve_W")) or 0.0),
         # the copper heat the conduction solve deposited — P_cu itself unless
         # a six-phase set is open (then every slot at the hottest set's density)
         **({"P_cu_heat_W": round(float(Pcu_heat), 3),

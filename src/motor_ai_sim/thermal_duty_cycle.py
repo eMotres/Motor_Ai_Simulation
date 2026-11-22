@@ -320,6 +320,10 @@ class Segment:
     #: for a like-for-like comparison against a 2-D map, which was itself solved
     #: at ONE fixed coil temperature.
     copper_feedback: bool = True
+    #: the AC share of the winding watts at ``coil_ref_c``.  With it the copper feedback is ``P_dc*r + P_ac/r`` (the law of the
+    #: thermal fixed point, ``routes.thermal``); with 0 it is ``P*r`` as before - exact for a pure-DC winding (Astra thermal
+    #: audit 2026-11-21, F05: 1 kW with 30 % AC is 620 W cold under ``P*r`` and 918 W under the split law).
+    winding_ac_ref_W: float = 0.0
 
     @property
     def total_W(self) -> float:
@@ -553,6 +557,8 @@ def losses_by_node(summary: Mapping[str, Any],
         "rotor": round(p_r, 4),
         "magnet": round(p_mag, 4),
         "split": split,
+        # the AC part of the copper at the map's temperature (0 when the map does not carry it: the old P*r law)
+        "winding_ac_W": min(max(float(th.get("P_cu_ac_exact_W") or 0.0), 0.0), p_w),
         "coil_ref_c": float(s.get("coil_temp_C") or th.get("coil_temp_c") or 20.0),
         "rpm": float(s.get("rpm") or th.get("rpm") or 0.0),
         "notes": notes,
@@ -667,7 +673,8 @@ def normalise_spec(block: Mapping[str, Any], duties: Any, *,
                 "or pick a duty with rpm > 0.")
         return Segment(nm, t, node_watts(loss),
                        coil_ref_c=float(loss["coil_ref_c"]), rpm=rpm,
-                       note="; ".join(loss["notes"]))
+                       note="; ".join(loss["notes"]),
+                       winding_ac_ref_W=float(loss.get("winding_ac_W") or 0.0))
 
     if kind == "S1":
         nm = blk.get("duty") or calib
@@ -1816,7 +1823,9 @@ def _seg_powers(seg: Segment, T: Mapping[str, float],
     out = {n: float(seg.losses.get(n, 0.0)) for n in NODES}
     if out["winding"] and seg.copper_feedback:
         tw = float(T[network.rep("winding")])
-        out["winding"] *= (cu_rho_ratio(tw) / cu_rho_ratio(seg.coil_ref_c))
+        r = cu_rho_ratio(tw) / cu_rho_ratio(seg.coil_ref_c)
+        p_ac = min(max(float(seg.winding_ac_ref_W or 0.0), 0.0), out["winding"])
+        out["winding"] = (out["winding"] - p_ac) * r + (p_ac / r if r > 1e-9 else p_ac)
     return out
 
 

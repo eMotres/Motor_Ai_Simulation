@@ -548,7 +548,9 @@ def _segment_at(loss: Mapping[str, Any], p_cu_ref_w: float, s: float,
     return tdc.Segment(str(duty or "continuous"), t_s=1.0, losses=watts,
                        coil_ref_c=float(loss["coil_ref_c"]),
                        rpm=float(loss.get("rpm") or 0.0),
-                       note="; ".join(loss.get("notes") or ()))
+                       note="; ".join(loss.get("notes") or ()),
+                       winding_ac_ref_W=(float(loss.get("winding_ac_W") or 0.0) / max(float(loss.get("winding") or 0.0), 1e-12)
+                                         * float(p_cu_ref_w) * float(s) * float(s)))
 
 
 # ---------------------------------------------------------------------------

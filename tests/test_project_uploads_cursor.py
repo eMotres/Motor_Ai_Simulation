@@ -94,3 +94,42 @@ def test_the_cursor_keeps_no_ids(audit):
 
 def test_a_missing_file_has_no_ids(audit):
     assert ids({"e1"}) == set()
+
+
+def _pending_store(audit, eid="ev1"):
+    doc = {"pending_audit": [{"event_id": eid, "time": "t", "actor_email": "a@example.test", "action": "x.y", "entity": "e",
+                              "entity_id": "1", "details": {}}]}
+    store.save_json("proj1", "s.json", doc)
+
+
+def test_a_failed_store_save_never_appends_the_same_event_twice(audit, monkeypatch):
+    """Astra on #823 r2: 12 failed saves after the append must leave ONE record, not one per second retry."""
+    _pending_store(audit)
+    real = store.mutate_json
+    fails = {"n": 12}
+
+    def failing(project_id, name, fn, default=None):
+        if name == "s.json" and fails["n"] > 0:
+            fails["n"] -= 1
+            doc = json.loads(json.dumps(store.load_json(project_id, name, {})))
+            fn(doc)                                                           # the appends happen ...
+            raise OSError("save failed")                                      # ... the pending removal does not commit
+        return real(project_id, name, fn, default=default)
+
+    monkeypatch.setattr(store, "mutate_json", failing)
+    for _ in range(12):
+        with pytest.raises(OSError):
+            PU.flush_events("proj1", "s.json")
+    PU.flush_events("proj1", "s.json")
+    lines = [json.loads(x) for x in audit.read_bytes().decode().split("\n") if x.strip()]
+    assert [r["details"]["event_id"] for r in lines] == ["ev1"]
+    assert "pending_audit" not in store.load_json("proj1", "s.json", {})
+
+
+def test_an_empty_pending_set_reads_nothing(audit, monkeypatch):
+    audit.write_bytes(b"".join(_line(f"e{i}") for i in range(100)))
+    monkeypatch.setattr(PU, "_scan", lambda *a: (_ for _ in ()).throw(AssertionError("scanned with nothing pending")))
+    assert PU._written_event_ids("proj1", "s.json", set()) == set()
+    store.save_json("proj1", "s.json", {"pending_audit": []})
+    PU.flush_events("proj1", "s.json")                                        # nothing pending: no scan, no cursor
+    assert (str(audit), "s.json") not in PU._CURSORS

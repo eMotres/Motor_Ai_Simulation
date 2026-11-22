@@ -72,7 +72,7 @@ _FP = 64                                    # bytes before the offset that prove
 _CHUNK = 1024 * 1024
 
 
-def _written_event_ids(project_id: str, json_name: str = "", wanted: Optional[set] = None) -> set:
+def _written_event_ids(project_id: str, json_name: str = "", wanted: Optional[set] = None, staged: Optional[dict] = None) -> set:
     """Which of the ``wanted`` event ids already have a COMPLETE, parsed record in ``audit.jsonl`` (call under its lock).
 
     NON-DESTRUCTIVE (coordinator 2026-11-22): the file is never truncated or rewritten; bytes that are not UTF-8 read as
@@ -89,6 +89,8 @@ def _written_event_ids(project_id: str, json_name: str = "", wanted: Optional[se
     path = _audit_path(project_id)
     wanted = set(wanted or ())
     key = (str(path), json_name)
+    if not wanted:                                          # nothing pending: nothing to look for (never "collect everything")
+        return set()
     try:
         fh = path.open("rb")
     except FileNotFoundError:
@@ -125,16 +127,25 @@ def _written_event_ids(project_id: str, json_name: str = "", wanted: Optional[se
     with path.open("rb") as again:
         again.seek(max(0, end - _FP))
         fp = again.read(min(_FP, end))
+    # the cursor is only PROPOSED here when the caller stages it: flush_events stores it once its pending removal has
+    # committed, and drops the store's cursor on any failure - a failed save never leaves a cursor past an unremoved event
+    if staged is not None:
+        staged[key] = (dev_ino, end, fp)
+    else:
+        _store_cursor(key, (dev_ino, end, fp))
+    return found
+
+
+def _store_cursor(key: tuple, value: tuple) -> None:
     if len(_CURSORS) >= _CURSORS_MAX and key not in _CURSORS:
         _CURSORS.pop(next(iter(_CURSORS)))
-    _CURSORS[key] = (dev_ino, end, fp)
-    return found
+    _CURSORS[key] = value
 
 
 def _scan(data: bytes, wanted: set, found: set) -> None:
     # split ONLY on "\n": str.splitlines() also breaks on U+0085 / U+2028 / U+2029, which a file name inside a JSON string may hold
     for line in data.decode("utf-8", errors="replace").split("\n"):
-        if not line.strip() or (wanted and not any(w in line for w in wanted)):
+        if not line.strip() or not any(w in line for w in wanted):
             continue
         try:
             rec = json.loads(line)
@@ -142,7 +153,7 @@ def _scan(data: bytes, wanted: set, found: set) -> None:
             continue
         details = rec.get("details") if isinstance(rec, dict) else None
         eid = str(details.get("event_id")) if isinstance(details, dict) and details.get("event_id") else ""
-        if eid and (not wanted or eid in wanted):
+        if eid and eid in wanted:
             found.add(eid)
 
 
@@ -156,8 +167,13 @@ def flush_events(project_id: str, json_name: str) -> None:
         return
     from motor_ai_sim import json_store
 
+    staged: dict = {}
+
     def apply(doc: Any) -> None:
-        written = _written_event_ids(project_id, json_name, {str(e.get("event_id")) for e in doc.get(PENDING) or []})
+        pending = doc.get(PENDING) or []                    # re-checked INSIDE the mutation: what is pending now
+        if not pending:
+            return
+        written = _written_event_ids(project_id, json_name, {str(e.get("event_id")) for e in pending}, staged)
         for event in list(doc.get(PENDING) or []):
             eid = str(event.get("event_id"))
             if eid not in written:
@@ -170,8 +186,14 @@ def flush_events(project_id: str, json_name: str) -> None:
         if not doc.get(PENDING):
             doc.pop(PENDING, None)
 
+    key = (str(_audit_path(project_id)), json_name)
     try:
         with json_store.lock_for(_audit_path(project_id)):
             store.mutate_json(project_id, json_name, apply, default={})
-    except ValueError as exc:                               # never a bare 500: the caller turns OSError into a 503
-        raise OSError("audit log unreadable: %s" % exc) from exc
+            for k, v in staged.items():                     # the pending removal committed: now the cursor may move on
+                _store_cursor(k, v)
+    except BaseException as exc:
+        _CURSORS.pop(key, None)                             # a failed flush keeps no progress: the next one rescans
+        if isinstance(exc, ValueError):                     # never a bare 500: the caller turns OSError into a 503
+            raise OSError("audit log unreadable: %s" % exc) from exc
+        raise

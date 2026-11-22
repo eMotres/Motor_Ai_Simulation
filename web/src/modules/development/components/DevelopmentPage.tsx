@@ -54,6 +54,7 @@ import { shownStatus } from '../projectStage';
   import { watchChunkImport as watchContractChunk } from '../../../lib/chunkReload';
   import CostEstimateWizard from './costEstimate/CostEstimateWizard';
   import ProjectQuote from './ProjectQuote';
+  import CompanyDetailsPanel from './CompanyDetailsPanel';
   import ProjectTimeline from './ProjectTimeline';
   import { hasProductionView, type ProjectProductionEntry } from '../projectProductions';
   import ProjectCover from './ProjectCover';
@@ -84,7 +85,7 @@ import { shownStatus } from '../projectStage';
   import DigestSettings from '../../../components/digest/DigestSettings';
 const ProjectModel3D = lazyModel3d(watchModel3dChunk(() => import('../../../components/model3d/ProjectModel3D')));   // tab "3D model" (owner 2026-11-22): the viewer loads when the tab opens
 const ProjectContract = lazyContract(watchContractChunk(() => import('../../../components/contract/ProjectContract')));   // section "Contract" (owner 2026-11-22): loads when the tab opens
-type ViewTab = 'specification' | 'motors' | 'messages' | 'notes' | 'documents' | 'production' | 'timeline' | 'quote' | 'cost' | 'model3d' | 'contract';
+type ViewTab = 'specification' | 'motors' | 'messages' | 'notes' | 'documents' | 'production' | 'timeline' | 'quote' | 'cost' | 'model3d' | 'contract' | 'company';
 const DEFAULT_DRAFT: SpecDraft = { schema_version: 2, fields: {}, mission_profile: [], production: {} };
 /** The ONE progress number everywhere (owner 2026-11-06): the required fields ANSWERED of all required.  A field marked "Answer later" is not
  *  answered; `filled_required` of the API counts it, so it is only the fallback of an answer that has no `answered`. */
@@ -206,6 +207,7 @@ export default function DevelopmentPage() {
   const [versionB, setVersionB] = useState<SpecSnapshot | null>(null);
   const [lang, setLang] = useState(i18n.resolvedLanguage || document.documentElement.lang || 'en');
   const canManageGlobally = isAdmin || role === 'engineer';
+  const showCompany = !!selected && (canManageGlobally || selected.members.some((m) => !m.pending && m.role === 'owner' && m.email.toLowerCase() === (user?.email ?? '').toLowerCase()));
   // Active / Parked / Archived (owner 2026-11-16): staff only; customers keep the "show closed" box exactly as before
   const { states: displayStates, reload: reloadDisplayStates } = useDisplayStates(canManageGlobally);
   const [displayFilter, setDisplayFilter] = useRememberedView<DisplayFilter>('development.displayFilter', 'active', oneOf(DISPLAY_FILTERS));
@@ -775,6 +777,8 @@ export default function DevelopmentPage() {
         // the project timeline (owner 2026-11-03): read-only for the project's members, edited by admins
         ...(selected.timeline_ready || isAdmin ? [{ id: 'timeline' as const, label: tr('tabs.timeline') }] : []),
         ...(selected.quote_shared ? [{ id: 'quote' as const, label: tr('tabs.quote') }] : []),
+        // the customer company's legal / delivery data (owner 2026-11-22): project owners and staff; the server decides, others get 404
+        ...(showCompany ? [{ id: 'company' as const, label: tr('tabs.company') }] : []),
         // ADMIN ONLY (owner 2026-11-02): the project cost estimate; never for the customer, a viewer, the factory or an agent
         ...(contractVisible ? [{ id: 'contract' as const, label: <ContractTabLabel /> }] : []),   // next to Cost estimate (owner 2026-11-22)
         ...(isAdmin ? [{ id: 'cost' as const, label: tr('tabs.cost') }] : []),
@@ -853,6 +857,7 @@ export default function DevelopmentPage() {
     {view === 'production' && <ProjectProductions projectId={selected.id} entries={productions} language={i18n.language} t={tr} />}
     {view === 'timeline' && (selected.timeline_ready || isAdmin) && <ProjectTimeline key={selected.id} projectId={selected.id} isAdmin={isAdmin} language={i18n.language} t={tr}
       onReady={(value) => setSelected((cur) => (cur && cur.id === selected.id && cur.timeline_ready !== value ? { ...cur, timeline_ready: value } : cur))} />}
+    {view === 'company' && showCompany && <CompanyDetailsPanel key={selected.id} projectId={selected.id} t={tr} />}
     {view === 'quote' && selected.quote_shared && <ProjectQuote key={selected.id} projectId={selected.id} t={tr} />}
     {view === 'cost' && isAdmin && <CostEstimateWizard key={selected.id} projectId={selected.id} language={i18n.language} t={tr} who={user?.email ?? 'admin'}
       onShared={(value) => setSelected((cur) => (cur && cur.id === selected.id ? { ...cur, quote_shared: value } : cur))} />}

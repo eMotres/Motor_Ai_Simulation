@@ -372,6 +372,7 @@
     "documents": "Documents",
     "production": "Production",
     "cost": "Cost estimate",
+    "company": "Company details",
     "quote": "Quote",
     "timeline": "Timeline"
   },
@@ -1225,6 +1226,64 @@
       "addIteration": "Add an iteration",
       "removeIteration": "Remove the last iteration"
     }
+  },
+  "company": {
+    "title": "Company details",
+    "group": {
+      "legal": "Legal",
+      "signatory": "Signatory and billing",
+      "delivery": "Delivery"
+    },
+    "field": {
+      "legal_name": "Registered name",
+      "legal_form": "Legal form",
+      "reg_no": "Registration number",
+      "vat_no": "VAT / tax number",
+      "reg_address": "Registered address",
+      "country": "Country",
+      "signatory_name": "Signatory",
+      "signatory_title": "Signatory title",
+      "signatory_email": "Signatory e-mail",
+      "billing_email": "Billing e-mail",
+      "delivery_address": "Delivery address",
+      "delivery_city": "City",
+      "delivery_postal": "Postal code",
+      "delivery_country": "Delivery country",
+      "carrier_contact_name": "Carrier contact",
+      "carrier_contact_phone": "Carrier phone",
+      "importer_name": "Importer of record",
+      "eori": "EORI / import number",
+      "preferred_carrier": "Preferred carrier"
+    },
+    "tip": {
+      "legal_name": "Full registered name of the company, as in the commercial register.",
+      "legal_form": "For example GmbH, Ltd, S.A., LLC.",
+      "reg_no": "Commercial register number.",
+      "vat_no": "VAT or tax identification number; the format is only checked loosely.",
+      "reg_address": "Registered office address, as it must appear in the contract.",
+      "country": "Two-letter ISO country code of the registered office, e.g. DE.",
+      "signatory_name": "Person who signs the contract for the company.",
+      "signatory_title": "Position of the signatory.",
+      "signatory_email": "E-mail of the signatory.",
+      "billing_email": "Invoices are sent to this address.",
+      "delivery_address": "Where the goods are delivered, if different from the registered address.",
+      "delivery_city": "City of delivery; it is also the default shipping destination of a new cost estimate.",
+      "delivery_postal": "Postal code of the delivery address.",
+      "delivery_country": "Two-letter ISO code; empty means the registered country.",
+      "carrier_contact_name": "Person the carrier calls on delivery.",
+      "carrier_contact_phone": "Phone number for the carrier.",
+      "importer_name": "Company named as importer on the customs documents.",
+      "eori": "EORI number, or the local import number; optional.",
+      "preferred_carrier": "Optional."
+    },
+    "save": "Save",
+    "confirm": "Confirm",
+    "confirmedBy": "Confirmed by {{by}} on {{date}}",
+    "notConfirmed": "Not confirmed",
+    "copyFrom": "Copy from another project",
+    "copyTip": "Copies the details of one of your other projects into this form; nothing is saved until you press Save.",
+    "prefillTip": "Filled in from your earlier agreement or verification; check and save.",
+    "saved": "Saved"
   },
   "customerQuote": {
     "col": {

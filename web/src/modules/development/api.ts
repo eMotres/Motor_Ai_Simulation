@@ -5,6 +5,7 @@ import type { ProjectProductionEntry } from './projectProductions';
 import type { CostEstimate, CostEstimateAnswer, CostSnapshot, CostSuggestions } from './costEstimate';
 import type { OrderRequest } from './orderRequests';
 import type { ProjectQuote, SharedQuoteMark } from './quote';
+import type { CompanyDetails } from './company';
 import type { SimStoredPoints, SimStoredRun } from '../../lib/simReadOnly';
 import type { AdminTimeline, ProjectTimeline, TimelineDoc } from './timeline';
 import type { ProjectDocument, ProjectDocumentList, DevelopmentSchema, FieldKind, MotorPointsAnswer, MotorView, StoredField, ProjectSummary, ProjectThreadMessage, ProjectMotor, ProjectMotorPickerItem, ProjectSnapshot, SpecState, SpecSnapshot } from './types';
@@ -144,6 +145,12 @@ export const developmentApi = {
   unshareCostEstimate: (id: string) => call<{ shared: null }>('DELETE', `${ce(id)}/share`),
   /** The shared quote of a project: its members and admins only (404 for anybody else, and while nothing is shared). */
   projectQuote: (id: string) => call<ProjectQuote>('GET', `${p(id)}/quote`),
+  /** The project's Company details form (owner 2026-11-22): project owners and staff only (404 for anybody else). */
+  companyDetails: (id: string) => call<CompanyDetails>('GET', `${p(id)}/company-details`),
+  saveCompanyDetails: (id: string, values: Record<string, string | null>) => call<CompanyDetails>('PUT', `${p(id)}/company-details`, { values }),
+  confirmCompanyDetails: (id: string) => call<CompanyDetails>('POST', `${p(id)}/company-details/confirm`, {}),
+  companyDetailsSources: async (id: string) => (await call<{ sources: Array<{ project_id: string; title: string; company: string }> }>('GET', `${p(id)}/company-details/sources`)).sources ?? [],
+  copyCompanyDetails: (id: string, from: string) => call<CompanyDetails>('POST', `${p(id)}/company-details/copy-from`, { project_id: from }),
   /** The project timeline (owner 2026-11-03): its members and admins only (404 for anybody else, and while there is none). */
   projectTimeline: (id: string) => call<ProjectTimeline>('GET', `${p(id)}/timeline`),
   /** ADMIN ONLY: the stored timeline, the computed lanes and the customer view; save / create from the cost estimate / freeze. */

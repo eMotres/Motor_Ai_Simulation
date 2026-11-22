@@ -30,7 +30,7 @@ function wrap(text: string, n: number): string[] {
 export function anchor(a: SchemeNode, b: SchemeNode, shift = 0): [number, number] {
   const aw = a.w ?? NODE_W; const ah = a.h ?? NODE_H; const bw = b.w ?? NODE_W; const bh = b.h ?? NODE_H;
   const ax = a.x + aw / 2; const ay = a.y + ah / 2; const bx = b.x + bw / 2; const by = b.y + bh / 2;
-  const clamp = (v: number, lo: number, hi: number) => Math.min(Math.max(v, lo), hi);
+  const clamp = (v: number, lo: number, hi: number) => (hi < lo ? (lo + hi) / 2 : Math.min(Math.max(v, lo), hi));   // a side under 24 px: its middle
   if (Math.abs(bx - ax) * ah > Math.abs(by - ay) * aw) return [bx > ax ? a.x + aw : a.x, clamp(ay + shift, a.y + 12, a.y + ah - 12)];
   return [clamp(ax + shift, a.x + 12, a.x + aw - 12), by > ay ? a.y + ah : a.y];
 }

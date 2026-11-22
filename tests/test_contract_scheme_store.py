@@ -14,7 +14,7 @@ from motor_ai_sim.development import store
 
 ROLES = {"t-admin": ("admin@example.test", "admin"), "t-staff": ("engineer@example.test", "engineer"),
          "t-owner": ("owner@example.test", "user")}
-SCHEME = {"version": "v0.2", "nodes": [{"id": "customer", "label": {"en": "Customer", "zh": "客户"}, "x": 30, "y": 150},
+SCHEME = {"version": "v0.2", "audience": "staff", "nodes": [{"id": "customer", "label": {"en": "Customer", "zh": "客户"}, "x": 30, "y": 150},
                                        {"id": "motres", "label": "MOTRES d.o.o.", "sub": "Slovenia", "x": 720, "y": 20, "w": 250}],
           "edges": [{"from": "customer", "to": "motres", "kind": "money", "label": "100 % in advance", "bend": -35}],
           "notes": [{"en": "To be confirmed by the accountants.", "zh": "须由会计师确认。"}]}
@@ -86,7 +86,7 @@ def test_a_scheme_that_does_not_fit_the_schema_is_refused_and_changes_nothing(cl
 
 def test_the_previous_scheme_is_kept_and_unknown_fields_are_dropped(client, tmp_path):
     client.put("/api/contract-scheme", headers=hdr("t-admin"), content=json.dumps(SCHEME))
-    newer = {**SCHEME, "version": "v0.3", "secret_note": "never stored"}
+    newer = {**SCHEME, "version": "v0.3", "secret_note": "never stored"}                # unknown fields are dropped
     client.put("/api/contract-scheme", headers=hdr("t-admin"), content=json.dumps(newer))
     kept = list((tmp_path / "shared" / "contract").glob("supply_scheme_staff.*.json"))
     assert len(kept) == 1 and json.loads(kept[0].read_text())["version"] == "v0.2"
@@ -175,7 +175,7 @@ def test_a_failed_atomic_write_changes_nothing(client, tmp_path, monkeypatch):
 
 
 def test_the_customer_scheme_is_stored_too_and_every_reader_of_the_section_sees_it(client, tmp_path):
-    cust = {**SCHEME, "version": "customer v1"}
+    cust = {**SCHEME, "version": "customer v1", "audience": "customer"}
     assert client.get("/api/projects/proj1/contract", headers=hdr("t-owner")).json()["customer_scheme"] is None   # built-in shown
     assert client.put("/api/contract-scheme?kind=customer", headers=hdr("t-staff"), content=json.dumps(cust)).status_code == 403
     r = client.put("/api/contract-scheme?kind=customer", headers=hdr("t-admin"), content=json.dumps(cust))
@@ -183,12 +183,64 @@ def test_the_customer_scheme_is_stored_too_and_every_reader_of_the_section_sees_
     assert (tmp_path / "shared" / "contract" / "scheme_customer.json").is_file()
     assert client.get("/api/projects/proj1/contract", headers=hdr("t-owner")).json()["customer_scheme"]["version"] == "customer v1"
     got = client.get("/api/contract-scheme?kind=customer", headers=hdr("t-owner"))
-    assert got.status_code == 200 and got.json()["scheme"]["version"] == "customer v1" and got.json()["store"] == ""
+    assert got.status_code == 200 and got.json()["scheme"]["version"] == "customer v1"
+    assert "store" not in got.json() and "source" not in got.json()                     # where it lives: staff only
+    assert client.get("/api/contract-scheme?kind=customer", headers=hdr("t-staff")).json()["source"] == "shared"
     assert client.get("/api/projects/proj1/contract", headers=hdr("t-staff")).json()["staff_scheme"] is None     # kinds are separate
     assert client.get("/api/contract-scheme?kind=other", headers=hdr("t-admin")).status_code == 422
     assert client.put("/api/contract-scheme?kind=customer", headers=hdr("t-admin"), content=json.dumps({"nodes": []})).status_code == 422
 
 
+def test_a_file_must_say_it_is_for_the_audience_it_is_published_to(client, tmp_path):
+    """#825 follow-up F1: the staff and the customer scheme share one schema - the internal chain never reaches customers by mistake."""
+    r = client.put("/api/contract-scheme?kind=customer", headers=hdr("t-admin"), content=json.dumps(SCHEME))     # a staff file
+    assert r.status_code == 422 and "audience" in r.json()["detail"]
+    unmarked = {k: v for k, v in SCHEME.items() if k != "audience"}
+    assert client.put("/api/contract-scheme?kind=staff", headers=hdr("t-admin"), content=json.dumps(unmarked)).status_code == 422
+    assert client.put("/api/contract-scheme?kind=staff", headers=hdr("t-admin"), content=json.dumps({**SCHEME, "audience": "all"})).status_code == 422
+    assert not (tmp_path / "shared" / "contract" / "scheme_customer.json").exists()
+
+
+def test_a_stored_file_marked_for_the_other_audience_is_never_served(client, tmp_path):
+    d = tmp_path / "shared" / "contract"
+    d.mkdir(parents=True)
+    (d / "scheme_customer.json").write_text(json.dumps(SCHEME))                        # placed by hand, marked "staff"
+    assert client.get("/api/projects/proj1/contract", headers=hdr("t-owner")).json()["customer_scheme"] is None
+    legacy = {k: v for k, v in SCHEME.items() if k != "audience"}
+    (d / "scheme_customer.json").write_text(json.dumps(legacy))                        # uploaded before the marker existed
+    assert client.get("/api/projects/proj1/contract", headers=hdr("t-owner")).json()["customer_scheme"] is None   # customers: strict
+    (d / "supply_scheme_staff.json").write_text(json.dumps(legacy))
+    assert client.get("/api/projects/proj1/contract", headers=hdr("t-staff")).json()["staff_scheme"]["version"] == "v0.2"  # staff: lenient
+
+
+def test_boxes_are_at_least_24_px(client):
+    tiny = {**SCHEME, "nodes": [{**SCHEME["nodes"][0], "w": 20}, SCHEME["nodes"][1]]}
+    assert client.put("/api/contract-scheme?kind=staff", headers=hdr("t-admin"), content=json.dumps(tiny)).status_code == 422
+
+
 def test_a_factory_account_does_not_read_the_customer_scheme(client, monkeypatch):
     monkeypatch.setitem(ROLES, "t-oem", ("factory@example.test", "oem"))
     assert client.get("/api/contract-scheme?kind=customer", headers=hdr("t-oem")).status_code == 403
+
+
+
+def test_a_stored_file_with_a_20_px_box_stays_served_and_is_not_damaged(client, tmp_path):
+    d = tmp_path / "shared" / "contract"
+    d.mkdir(parents=True)
+    narrow = {**SCHEME, "nodes": [{**SCHEME["nodes"][0], "w": 20}, SCHEME["nodes"][1]]}
+    (d / "supply_scheme_staff.json").write_text(json.dumps(narrow))                    # valid under #825 (minimum 20)
+    assert client.get("/api/projects/proj1/contract", headers=hdr("t-staff")).json()["staff_scheme"]["nodes"][0]["w"] == 20
+    r = client.put("/api/contract-scheme?kind=staff", headers=hdr("t-admin"), content=json.dumps(SCHEME))
+    assert r.status_code == 200                                                        # not "damaged": a normal replacement
+    assert client.put("/api/contract-scheme?kind=staff", headers=hdr("t-admin"), content=json.dumps(narrow)).status_code == 422
+
+
+@pytest.mark.parametrize("audience", [["customer"], {"a": 1}, 3, None])
+def test_an_unhashable_or_wrong_type_audience_is_refused_not_a_500(client, tmp_path, audience):
+    bad = {**SCHEME, "audience": audience}
+    assert client.put("/api/contract-scheme?kind=staff", headers=hdr("t-admin"), content=json.dumps(bad)).status_code == 422
+    d = tmp_path / "shared" / "contract"
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "scheme_customer.json").write_text(json.dumps(bad))                           # placed by hand
+    r = client.get("/api/projects/proj1/contract", headers=hdr("t-owner"))
+    assert r.status_code == 200 and r.json()["customer_scheme"] is None

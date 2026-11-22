@@ -57,7 +57,7 @@ from motor_ai_sim.development.project_uploads import bounded_form, flush_events,
 
 log = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/projects", tags=["development-contract"])
-#: the staff scheme, managed by admins (coordinator 2026-11-22: no file is placed on a server by hand)
+#: the contract schemes (staff, customer), managed by admins (coordinator 2026-11-22: no file is placed on a server by hand)
 scheme_router = APIRouter(prefix="/api/contract-scheme", tags=["contract-scheme"])
 
 CONTRACT_JSON = "contract/contract.json"
@@ -258,10 +258,19 @@ def stored_scheme(kind: str = "staff") -> Optional[dict]:
     if path is None:
         return None
     try:
-        return validate_scheme(json.loads(path.read_text(encoding="utf-8")))
+        doc = validate_scheme(json.loads(path.read_text(encoding="utf-8")))
     except (OSError, ValueError) as exc:
         log.warning("contract: %s scheme unreadable (%s)", kind, exc)
         return None
+    if doc.get("audience", kind) != kind:                  # a file marked for the other audience is never served here
+        log.error("contract: the stored %s scheme is marked for audience %r - not served", kind, doc.get("audience"))
+        return None
+    if kind == "customer" and doc.get("audience") != "customer":
+        # strict for what customers see: an unmarked file (stored before the marker existed) is not served - the page shows
+        # its built-in customer view until a marked file is uploaded
+        log.warning("contract: the stored customer scheme has no audience marker - not served; upload a marked file")
+        return None
+    return doc
 
 
 def staff_scheme_path() -> Optional[Path]:
@@ -291,11 +300,13 @@ def _num(v: Any, lo: float, hi: float, where: str) -> float:
     return v
 
 
-def validate_scheme(doc: Any) -> dict:
-    """The staff scheme's schema (the shape ``web/src/components/contract/contractModel.ts`` draws): ``nodes`` (1..20: id,
-    label, sub?, x, y, w?, h? on the 1000 x 420 grid), ``edges`` (0..40: from / to an existing node, kind money | goods |
-    documents, label?, bend?), ``notes`` (0..20 texts), optional ``version``.  Raises ``ValueError`` naming what is wrong;
-    returns only the known fields."""
+def validate_scheme(doc: Any, strict: bool = False) -> dict:
+    """The contract schemes' schema, staff and customer alike (the shape ``web/src/components/contract/contractModel.ts``
+    draws): ``nodes`` (1..20: id, label, sub?, x, y, w? / h? of at least 24 on the 1000 x 420 grid), ``edges`` (0..40: from /
+    to an existing node, kind money | goods | documents, label?, bend?), ``notes`` (0..20 texts), optional ``version`` and
+    ``audience`` (customer | staff; required on upload).  ``strict`` (an upload) adds the rules a stored file is not held to
+    (boxes at least 24 px; a file stored before keeps its old minimum of 20, so it is never turned away on read).  Raises
+    ``ValueError`` naming what is wrong; returns only the known fields."""
     if not isinstance(doc, dict):
         raise ValueError("the scheme is a JSON object")
     nodes, edges, notes = doc.get("nodes"), doc.get("edges", []), doc.get("notes", [])
@@ -317,7 +328,7 @@ def validate_scheme(doc: Any) -> dict:
             node["sub"] = _scheme_text(n["sub"], where + ".sub")
         for k, hi in (("w", 1000), ("h", 420)):
             if k in n:
-                node[k] = _num(n[k], 20, hi, f"{where}.{k}")
+                node[k] = _num(n[k], 24 if strict else 20, hi, f"{where}.{k}")   # an upload: at least 24 (arrow ends inside the corners)
         out_nodes.append(node)
     out_edges = []
     for i, e in enumerate(edges):
@@ -334,6 +345,10 @@ def validate_scheme(doc: Any) -> dict:
     out = {"nodes": out_nodes, "edges": out_edges, "notes": [_scheme_text(t, f"notes[{i}]") for i, t in enumerate(notes)]}
     if "version" in doc:
         out["version"] = _scheme_text(doc["version"], "version")
+    if "audience" in doc:
+        if not isinstance(doc["audience"], str) or doc["audience"] not in SCHEME_FILES:   # a list / object is refused, never a 500
+            raise ValueError("audience: customer or staff")
+        out["audience"] = doc["audience"]
     return out
 
 
@@ -879,7 +894,7 @@ def download_file(request: Request, project_id: str, file_id: str):
                         headers={"Cache-Control": "no-store"})
 
 
-# ── the staff scheme: staff read it, admins upload it ─────────────────────────────────────────────────────────────
+# ── the contract schemes: staff read the staff one, every section reader the customer one, admins upload ─────────────────────────────────────────────────────────────
 
 SCHEME_MAX_BYTES = 256 * 1024
 
@@ -948,15 +963,18 @@ def get_scheme(request: Request, kind: str = "staff"):
             raise HTTPException(status_code=403, detail="Not available")
     path = scheme_path(kind)
     base = contract_store_root()
-    return {"kind": kind, "store": str(base or "") if _staff(user) else "",
-            "source": "shared" if path and base and path.parent == base else ("private" if path else None),
-            "scheme": stored_scheme(kind), "can_upload": str(user.get("role") or "").lower() == "admin"}
+    out = {"kind": kind, "scheme": stored_scheme(kind), "can_upload": str(user.get("role") or "").lower() == "admin"}
+    if _staff(user):                                        # where it is stored is for staff only
+        out.update(store=str(base or ""), source="shared" if path and base and path.parent == base else ("private" if path else None))
+    return out
 
 
 @scheme_router.put("")
 async def put_scheme(request: Request, replace_damaged: bool = False, kind: str = "staff"):
-    """The staff scheme as JSON (:func:`validate_scheme`), admins only, written atomically to the shared store; the previous file
-    is kept beside it.  A stored file that is damaged is not replaced silently: 409 unless ``?replace_damaged=true`` (its bytes
+    """A contract scheme (``kind`` = staff | customer) as JSON (:func:`validate_scheme`), admins only, written atomically to the
+    shared store; the previous file is kept beside it.  The file must say whom it is for (``"audience"``) and that must be
+    ``kind``: the two share one schema, so a staff scheme can never be published to the customer view by mistake (422).
+    A stored file that is damaged is not replaced silently: 409 unless ``?replace_damaged=true`` (its bytes
     are kept as the previous version either way).  The body is capped while it arrives (413).  Admin audit ``contract.scheme``."""
     user = _scheme_admin(request)
     kind = _kind(kind)
@@ -969,9 +987,13 @@ async def put_scheme(request: Request, replace_damaged: bool = False, kind: str 
         if len(raw) > SCHEME_MAX_BYTES:
             raise HTTPException(status_code=413, detail="The scheme is larger than 256 KB")
     try:
-        scheme = validate_scheme(json.loads(bytes(raw).decode("utf-8")))
+        scheme = validate_scheme(json.loads(bytes(raw).decode("utf-8")), strict=True)
     except (UnicodeDecodeError, ValueError) as exc:
         raise HTTPException(status_code=422, detail=f"The scheme is not valid: {exc}")
+    if scheme.get("audience") != kind:
+        raise HTTPException(status_code=422, detail=(
+            f'This file is for audience {scheme.get("audience")!r}, not {kind!r}: add "audience": "{kind}" only if it is meant for '
+            + ("every reader of the Contract section (customers)" if kind == "customer" else "MOTRES staff")))
     from motor_ai_sim import json_store
     path = base / SCHEME_FILES[kind]
     try:

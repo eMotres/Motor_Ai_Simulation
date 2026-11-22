@@ -5522,7 +5522,10 @@ def _fem_transient_sliding_band_once(
         # slip(gap_layers) coupling).  Snapped UP to the 24k grid so the wedge
         # node counts (n_slip/n_sectors) stay integral for sector models too.
         _spo = int(slip_per_period or _SLIP_PER_PERIOD_OVERRIDE)
-        _slip_per_period = 24 * max(1, math.ceil(_spo / 24.0))
+        # UP to a multiple of 24, and to the next one for which the sector wedge ring is whole (pole_pairs * q divisible by the
+        # sector count): a per-request q is snapped to multiples of 24 and of N (simulation/slip_ring.py, 2026-11-20)
+        from motor_ai_sim.simulation.slip_ring import snap_slip_per_period as _snap_q
+        _slip_per_period = _snap_q(_spo, pole_pairs, n_sectors)
         n_slip_eff = pole_pairs * _slip_per_period
 
     # ── Snap steps/period so the rotor lands on whole slip nodes ──────────
@@ -15254,6 +15257,10 @@ def _fem_transient_sliding_band_once(
         "mesher": _geo_mesher_provenance(_build_prov.get("mesher")),
         "structured_gap_effective": bool(_build_prov["structured_gap_effective"]),
         "slip_nodes_per_period": int(_nodes_per_period),
+        # a per-request ring density (slip_per_period): what was asked, beside what ran (absent when the ring is the adaptive one)
+        **({"slip_per_period_requested": int(slip_per_period), "slip_per_period_pole_pairs": int(pole_pairs),
+            "slip_per_period_n_sectors": int(max(1, abs(int(n_sectors)))), "slip_per_period_gap_layers": float(gap_layers)}
+           if slip_per_period else {}),
         "n_periods": float(n_periods), "rpm": rpm, "f_elec_Hz": f_elec,
         "dt_s": dt, "T_period_s": (1.0 / f_elec if f_elec > 1e-9 else 0.0),
         "time_s": _tt, "rotor_angle_deg": _ang,
@@ -15864,6 +15871,7 @@ def em_transient_eval(
                                      # away, so the field views can render the run's own
                                      # field instead of re-solving it.
     torque_method: Optional[str] = None,  # "coulomb" (default) | "hybrid_maxwell_ac" | None
+    slip_per_period: Optional[int] = None,  # ring nodes per electrical period (None = the adaptive ring); snapped to 24k and to n_sectors
     gap_refine: bool = False,        # EXPLICIT opt-in only: re-solve with more gap layers per
                                      # side when the Coulomb self-check fails its 5 % gate.
                                      # Default: the configured layers run and the verdict is
@@ -15878,6 +15886,8 @@ def em_transient_eval(
     disk-save (those UI concerns stay in the route, which wraps this). Returns the
     raw sliding-band result dict (sbres).
     """
+    from motor_ai_sim.simulation import slip_ring as _slip_ring
+    _ext_q = _slip_ring.validate_slip_per_period(slip_per_period)   # the external request, captured once at the boundary
     _kw = dict(
         n_steps_per_period=int(n_steps_per_period), n_periods=float(n_periods),
         sampling_purpose=_sampling_purpose(sampling_purpose),
@@ -15917,8 +15927,11 @@ def em_transient_eval(
         # field_first is NOT set: the snapshot is the LAST frame, the one whose
         # B(t) history is complete, which is what the loss map and the coupled
         # eddy J are derived from.
-        return_field=bool(return_field), torque_method=torque_method)
-    return _solve_with_gap_refinement(_kw, gap_refine=bool(gap_refine))
+        return_field=bool(return_field), torque_method=torque_method,
+        **({} if _ext_q is None else {"slip_per_period": _ext_q}))
+    # refinement / probe re-solves run on the effective ring and stamp it as "requested": put the external request back
+    return _slip_ring.restore_request_provenance(
+        _solve_with_gap_refinement(_kw, gap_refine=bool(gap_refine)), _ext_q)
 
 
 # Opt-in until a physical qualification demonstrates that the probe rule is safe.

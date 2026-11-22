@@ -4923,6 +4923,8 @@ def get_fem_transient(
     band_thickness_mm:   float = 0.4,
     gap_layers:          Optional[float] = None,  # ← element rows PER SIDE of the slip
                                           #   circle; None = the machine's Mesh setting
+    slip_per_period:     Optional[int]   = None,  # opt-in: air-gap ring nodes per electrical period (q);
+                                          #   None = the adaptive ring of gap_layers (bit-identical)
     n_sectors:           Optional[int]   = None,  # ┘ fallback only if none is saved
     stator_fillet_mm:    float = 0.0,
     include_frames:      bool  = False,   # ← if true, accumulate per-step field
@@ -5183,6 +5185,12 @@ def get_fem_transient(
             torque_method, (_get_cfg_tm() or {}).get("simulation", {}))
     except ValueError as _tme:
         raise HTTPException(status_code=422, detail=str(_tme))
+    if slip_per_period is not None:     # the same strict check as the kernel and run_one (no int() truncation of 25.9)
+        from motor_ai_sim.simulation.slip_ring import validate_slip_per_period as _vq
+        try:
+            slip_per_period = _vq(slip_per_period)
+        except ValueError as _qe:
+            raise HTTPException(status_code=422, detail=str(_qe))
     # MESH SETTINGS come only from the Mesh tab (owner 2026-09-30): what the
     # request carries, else the machine's saved Mesh settings, else a labelled
     # last-resort fallback that the result reports (mesh_settings.py).
@@ -5780,6 +5788,8 @@ def get_fem_transient(
         _sb_key_fields["geo_ov"] = tuple(sorted(_geo_ov.items()))
     if ripple_refine:   # may step past the requested layers: never a plain entry
         _sb_key_fields["ripple_refine"] = ("ripple_refine", 1)
+    if slip_per_period is not None:     # a different ring is a different discretisation: its own entry (absent = every old key unchanged)
+        _sb_key_fields["slip_per_period"] = int(slip_per_period)
     _sb_key = tuple(_sb_key_fields.values())
     # Key of the field snapshot this run's last frame belongs under — built ONCE
     # here and used both to store it after the solve and to tell a cache hit
@@ -6177,6 +6187,7 @@ def get_fem_transient(
                 mesh_size_mm=float(mesh_size_mm), min_size_mm=float(min_size_mm),
                 outer_air_factor=float(outer_air_factor), gap_layers=float(gap_layers),
                 torque_method=_torque_method_eff,
+                **({} if slip_per_period is None else {"slip_per_period": int(slip_per_period)}),
                 gap_refine=bool(ripple_refine),
                 n_sectors=int(n_sectors), stator_fillet_mm=float(stator_fillet_mm),
                 coil_temp_c=float(coil_temp_c),
@@ -6812,6 +6823,11 @@ def get_fem_transient(
     except HTTPException:
         raise
     except Exception as _e:
+        if slip_per_period is not None and type(_e).__name__ == "TdmMeshNotPeriodic":
+            # an explicit ring density that this machine's rotor mesh cannot be tiled at: refused up front, naming the request
+            raise HTTPException(status_code=422, detail=(
+                f"slip_per_period {int(slip_per_period)} does not build on this machine (the rotor mesh is not pole-pair periodic "
+                f"at that ring density: {_e}). Choose another ring density, or leave slip_per_period out for the adaptive ring."))
         log.exception("sliding-band transient failed")
         raise HTTPException(status_code=500,
                             detail=f"sliding-band transient failed: {_e}")

@@ -501,6 +501,8 @@ from motor_ai_sim.development.contract_templates import router as contract_templ
 app.include_router(contract_templates_router)   # /api/contract-templates: the standard agreement of every project (admins, owner 2026-11-22)
 app.include_router(development_motors_router)
 app.include_router(development_activity_router)      # GET /api/projects/{id}/activity: live runs on the project's motors
+from motor_ai_sim.production.company_routes import router as production_company_router
+app.include_router(production_company_router)   # /api/production/{die}/{config}/company-details: the factory's company record
 from motor_ai_sim.development.productions import router as development_productions_router
 app.include_router(development_productions_router)   # GET /api/projects/{id}/productions: productions of the linked motors
 from motor_ai_sim.development.spec_assistant_routes import router as development_spec_assistant_router

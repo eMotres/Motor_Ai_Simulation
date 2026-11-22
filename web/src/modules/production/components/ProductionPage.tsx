@@ -36,6 +36,7 @@ import { productionStateKey } from '../../../lib/displayState';
 import { displayStateApi, useDisplayStates } from '../../../lib/displayStateApi';
 import { productionUnreadKey } from '../../../lib/unreadMessages';
 import { useUnreadCounts } from '../../../lib/useUnreadMessages';
+import OemCompanyPanel from './OemCompanyPanel';
 import type {
   BomRow, DocumentRec, Part, ProcessSection, Production, Proposal, Revision, Thread,
 } from '../types';
@@ -43,7 +44,7 @@ import type {
 // 'process' merged into the Assembly tab (owner 2026-10-18): the graph on top, the process document below it
 // 'tests' (owner 2026-10-26): bench tests of this configuration against the simulation (modules/tests)
 // 'proposals' (owner 2026-11-15) is gone: Discussion and Changes stay.  An old link or remembered tab 'proposals' opens Discussion (see legacyTab).
-const TABS = ['bom', 'tooling', 'assembly', 'timeline', 'documents', 'certification', 'tests', 'discussion', 'changes'] as const;
+const TABS = ['bom', 'tooling', 'assembly', 'timeline', 'documents', 'certification', 'company', 'tests', 'discussion', 'changes'] as const;
 type TabId = typeof TABS[number];
 
 // Where the user stopped (owner 2026-10-18): the open production and its sub-tab survive a page reload.  Browser
@@ -183,6 +184,7 @@ const ProductionPage: React.FC<{ die: string; config: string; onBack: () => void
             <Chip size="small" label={t(`status.${prod.status}`)} sx={{ height: 18, fontSize: 10.5, fontWeight: 700, bgcolor: 'var(--panel)', color: 'var(--text-2)' }} />
             {displayStates && <DisplayStateControl rec={displayStates.productions[productionStateKey(die, config)]}
               onChange={async (next, reason) => { try { await displayStateApi.set({ kind: 'production', die, config }, next, reason); } finally { reloadDisplayStates(); } }} />}
+            {prod.oem_company && <Chip size="small" label={t('company.name', { name: prod.oem_company })} data-testid="oem-company" sx={{ height: 18, fontSize: 10.5, fontWeight: 700, bgcolor: 'var(--panel)', color: 'var(--text-2)' }} />}
             {role && <Chip size="small" label={t(`role.${role}`)} sx={{ height: 18, fontSize: 10.5, fontWeight: 700, bgcolor: 'var(--panel)', color: 'var(--text-3)' }} />}
             <Box sx={{ minWidth: 0 }}><BilingualText value={prod.title} size={13} canConfirm={ctx.canEdit} die={die} config={config}
               tref={{ entity: 'production', entity_id: `${die}/${config}`, field: 'title' }} onChanged={ctx.reload} /></Box>
@@ -190,6 +192,7 @@ const ProductionPage: React.FC<{ die: string; config: string; onBack: () => void
         )}
       </Box>
 
+      {prod?.oem_company_missing && tab !== 'company' && <Alert severity="warning" sx={{ mb: 1 }} action={<Button color="inherit" size="small" onClick={() => setTab('company')}>{t('tabs.company')}</Button>}>{t('company.needed')}</Alert>}
       {prod && !loading && (
         // owner 2026-10-17: the tab menu stays fixed while the page scrolls; since 2026-10-30 it is in the shared header row
         <HeaderTabs tab="production">
@@ -265,6 +268,7 @@ const ProductionPage: React.FC<{ die: string; config: string; onBack: () => void
           {tab === 'timeline' && <TimelineView ctx={ctx} prod={prod} />}
           {tab === 'documents' && <DocumentsPanel documents={plainDocuments(data.documents)} parts={data.parts} ctx={ctx} sections={data.process} link={link} onLinkChange={setLink} unackedFiles={unackedFiles(data.revisions, ctx.email)} />}
           {tab === 'certification' && <CertificationPanel documents={data.documents} ctx={ctx} />}
+          {tab === 'company' && <OemCompanyPanel die={die} config={config} onChanged={ctx.reload} />}
           {tab === 'tests' && <TestsPanel die={die} config={config} source={{ kind: 'production' }}
             onOpenDocument={(fileId, name) => { void downloadFile(die, config, fileId, name).catch((e) => setErr(String(e))); }}
             onLoadDocument={(fileId, onProgress) => fetchFileBlob(die, config, fileId, onProgress)} />}

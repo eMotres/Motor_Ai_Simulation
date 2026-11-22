@@ -65,6 +65,28 @@ PROJECT_FORM = Form(
 )
 
 
+#: The factory's company of one production (owner 2026-11-22), for a Chinese company: names in Chinese and English, unified
+#: social credit code, legal representative, contact, bank account for CNY and the invoicing title for the VAT special invoice.
+OEM_FORM = Form(
+    key="oem",
+    fields=(
+        Field("name_zh", "legal"), Field("name_en", "legal"), Field("uscc", "legal", "uscc"),
+        Field("reg_address", "legal", "multiline", 400), Field("legal_representative", "legal"),
+        Field("contact_person", "contact"), Field("contact_phone", "contact", "phone"), Field("contact_wechat", "contact", max_len=60),
+        Field("docs_email", "contact", "email"),
+        Field("bank_name", "bank", bank=True), Field("bank_account", "bank", max_len=60, bank=True),
+        Field("inv_taxpayer_name", "invoice"), Field("inv_taxpayer_code", "invoice", "taxcode"),
+        Field("inv_address_phone", "invoice", "multiline", 300), Field("inv_bank_name", "invoice", bank=True),
+        Field("inv_bank_account", "invoice", max_len=60, bank=True),
+        Field("general_vat_taxpayer", "flags", "bool"), Field("company_seal", "flags", "bool"),
+    ),
+    required=(),
+    any_of=(("name_zh", "name_en"),),
+    complete=("name_zh", "name_en", "uscc", "reg_address", "legal_representative", "contact_person", "docs_email",
+              "bank_name", "bank_account", "general_vat_taxpayer", "company_seal"),
+)
+
+
 def _now() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
 

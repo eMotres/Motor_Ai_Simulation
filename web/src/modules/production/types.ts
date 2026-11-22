@@ -32,6 +32,9 @@ export interface Production {
   share_costs_with_oem?: boolean;
   /** what is produced: a motor (default) or electronics (the 800 V controller) */
   product_type?: 'motor' | 'electronics';
+  /** staff only: the factory's company name (Company details of the production); the factory's own members get `oem_company_missing` instead */
+  oem_company?: string;
+  oem_company_missing?: boolean;
   members: Member[];
   created_at: string;
   updated_at: string;
@@ -477,3 +480,14 @@ export interface AssemblyProcessView { default: boolean; steps: AssemblyStep[] }
 export type ProductionAccess =
   | { access: 'member'; role: MemberRole | 'admin' | 'viewer'; can_share: boolean; factory: boolean }
   | { access: 'none'; requested: boolean };
+
+/** The factory's Company details of a production (owner 2026-11-22). */
+export interface OemCompanyDetails {
+  values: Record<string, string | boolean>;
+  confirmed: { by: string; at: string } | null;
+  completed: boolean;
+  ready_to_confirm: boolean;
+  fields: Array<{ id: string; group: string; kind: string; bank: boolean }>;
+  any_of: string[][];
+}
+export const OEM_COMPANY_GROUPS = ['legal', 'contact', 'bank', 'invoice', 'flags'] as const;

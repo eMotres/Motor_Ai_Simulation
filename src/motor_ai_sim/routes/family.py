@@ -73,14 +73,25 @@ FREE_GEO_KEYS = (
     "stator_outer_notches",
 )
 
-# MOTOR keys (owner 2026-11-18, one die per size and pole count): the magnet fill of the rotor pocket and the magnet
-# segmentation belong to the MOTOR, not to the stamped lamination, so a configuration may override them on top of its
-# die (``geometry_overrides``, written only by ``PATCH /config/{die}/{cfg}/motor_keys``).  The die check of a duty save
-# compares these keys with die + override; every other die key is still compared with the die alone.  A configuration
-# without such an override behaves exactly as before.
+# MOTOR keys (owner 2026-11-18, one die per size and pole count): what a configuration may override on top of its die
+# (``geometry_overrides``, written only by ``PATCH /config/{die}/{cfg}/motor_keys``).  ONLY the magnet segmentation
+# (``magnet_lamination``), which does not touch the rotor steel.  The magnet FILL keys (``magnet_fill_up`` / ``_down`` /
+# ``_radius``) are NOT overridable (Astra review 2026-11-21 of #765): the fill sets the width of the rotor pocket opening and the
+# extended pocket polygons, so a per-configuration fill is a different rotor lamination under an unchanged die.yaml -
+# one die = one rotor.  A stored fill override (from the first version of this route) is read as what it is, a difference
+# from the die, and can only be CLEARED (null).  The die check of a duty save compares these keys with die + override; every
+# other die key is compared with the die alone.
 MOTOR_GEO_KEYS = (
-    "magnet_fill_up", "magnet_fill_down", "magnet_fill_radius", "magnet_lamination",
+    "magnet_lamination",
 )
+#: shape keys that decide the rotor pocket: refused as overrides, clearable
+ROTOR_SHAPE_KEYS = ("magnet_fill_up", "magnet_fill_down", "magnet_fill_radius")
+
+
+def stored_shape_overrides(cfg_doc: Optional[dict]) -> Dict[str, float]:
+    """The rotor-shape overrides a configuration still carries (they are not honoured as motor keys; clear them)."""
+    ov = (cfg_doc or {}).get("geometry_overrides") or {}
+    return {k: ov[k] for k in ROTOR_SHAPE_KEYS if ov.get(k) is not None}
 
 
 def _motor_key_overrides(cfg_doc: Optional[dict]) -> Dict[str, float]:
@@ -3731,7 +3742,8 @@ def _upsert_duty(req: DutyCreate, _w: dict, *, may_move: bool = True) -> dict:
                 if c.get("locked") is True:
                     _diffs.extend(_free_diffs)
                 else:
-                    c["geometry_overrides"] = {**_live_build, **_motor_ov}
+                    # a stored rotor-shape override (refused today) is never dropped silently: it stays until it is cleared
+                    c["geometry_overrides"] = {**_live_build, **_motor_ov, **stored_shape_overrides(c)}
                     _build_adopted = True
                     # A stored end-winding factor belongs to the build it was
                     # measured on: after a stack/wire change it is a different
@@ -6907,8 +6919,9 @@ def _motor_key_value(key: str, raw: Any) -> Optional[float]:
 @router.patch("/config/{die}/{cfg}/motor_keys")
 def patch_config_motor_keys(die: str, cfg: str, req: MotorKeysPatch, dry_run: bool = False,
                             _w: dict = Depends(require_catalog_write)):
-    """Admin: set or clear the configuration's own MOTOR keys (``MOTOR_GEO_KEYS``: the magnet fill and segmentation)
-    on top of its die (owner 2026-11-18: one die per size and pole count, the magnet fill belongs to the motor).
+    """Admin: set or clear the configuration's own MOTOR keys (``MOTOR_GEO_KEYS``: the magnet segmentation) on top of its
+    die.  The magnet FILL keys cannot be set (422: they change the rotor pocket, one die = one rotor); a stored one can be
+    cleared with null.
 
     A key that is NOT SENT is left unchanged; ``null``, or the die's own value, clears the override.  Any other key is
     refused (422): the lamination stays the die's.  ``dry_run`` (body or ``?dry_run=1``) writes nothing and answers the
@@ -6920,7 +6933,12 @@ def patch_config_motor_keys(die: str, cfg: str, req: MotorKeysPatch, dry_run: bo
         raise HTTPException(403, detail="only an admin may set a configuration's motor keys")
     die, cfg = _check_name(die, "die"), _check_name(cfg, "configuration")
     _require_die_write(die, _w, cfg)
-    bad = sorted(k for k in (req.keys or {}) if k not in MOTOR_GEO_KEYS)
+    shape = sorted(k for k, v in (req.keys or {}).items() if k in ROTOR_SHAPE_KEYS and v is not None)
+    if shape:
+        raise HTTPException(422, detail=(
+            "%s decide the width of the rotor pocket: a configuration cannot have its own (one die = one rotor). Change the die "
+            "instead (structure session, owner's yes); an existing override can be cleared with null." % ", ".join(shape)))
+    bad = sorted(k for k in (req.keys or {}) if k not in MOTOR_GEO_KEYS and k not in ROTOR_SHAPE_KEYS)
     if bad:
         raise HTTPException(422, detail=("not a motor key: %s (allowed: %s)"
                                          % (", ".join(bad), ", ".join(MOTOR_GEO_KEYS))))
@@ -6943,12 +6961,16 @@ def patch_config_motor_keys(die: str, cfg: str, req: MotorKeysPatch, dry_run: bo
     c2 = dict(c, geometry_overrides=ov)
     after = _motor_key_overrides(c2)
     changed = sorted(k for k in MOTOR_GEO_KEYS if before.get(k) != after.get(k))
+    shape_before, shape_after = stored_shape_overrides(c), stored_shape_overrides(c2)
+    changed = sorted(set(changed) | {k for k in shape_before if k not in shape_after})
     if changed and c.get("locked") is True:
         raise HTTPException(409, detail=f"configuration '{die}/{cfg}' is locked: unlock it to change its motor keys")
     has_results = any(isinstance(x, dict) and (x.get("result") or x.get("summary") or x.get("runs"))
                       for x in (c.get("duties") or []))
     out = {"ok": True, "dry_run": dry, "die": die, "config": cfg, "changed": changed,
-           "before": {k: before.get(k) for k in changed}, "after": {k: after.get(k) for k in changed},
+           "before": {k: (before.get(k) if k in MOTOR_GEO_KEYS else shape_before.get(k)) for k in changed},
+           "after": {k: (after.get(k) if k in MOTOR_GEO_KEYS else shape_after.get(k)) for k in changed},
+           "rotor_shape_overrides_left": shape_after,
            "die_values": {k: die_geo.get(k) for k in MOTOR_GEO_KEYS},
            "build_sig_before": _build_sig(d, c), "build_sig_after": _build_sig(d, c2),
            "results_stale": bool(changed) and has_results}
@@ -6956,9 +6978,9 @@ def patch_config_motor_keys(die: str, cfg: str, req: MotorKeysPatch, dry_run: bo
         return out
     _save_yaml(cfile, c2)
     actor = str((_w.get("user") or {}).get("email") or "local-dev").strip().lower()
-    _AA.record(actor, "config.motor_keys", f"{die}/{cfg}", details={"from": before, "to": after})
+    _AA.record(actor, "config.motor_keys", f"{die}/{cfg}", details={"from": {**before, **shape_before}, "to": {**after, **shape_after}})
     log.info("family: motor keys of '%s/%s': %s", die, cfg,
-             ", ".join("%s %s -> %s" % (k, before.get(k), after.get(k)) for k in changed))
+             ", ".join("%s %s -> %s" % (k, out["before"].get(k), out["after"].get(k)) for k in changed))
     return out
 
 

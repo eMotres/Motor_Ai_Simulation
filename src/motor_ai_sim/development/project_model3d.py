@@ -34,6 +34,7 @@ from fastapi.responses import FileResponse, Response
 
 from motor_ai_sim import users
 from motor_ai_sim.development import access, models, store
+from motor_ai_sim.development.project_uploads import bounded_form, flush_events, queue_event
 
 log = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/projects", tags=["development-model3d"])
@@ -78,12 +79,15 @@ def load_rows(project_id: str) -> list[dict]:
     return [r for r in rows if isinstance(r, dict)] if isinstance(rows, list) else []
 
 
-def _mutate(project_id: str, mutator) -> Any:
+
+
+def _mutate_doc(project_id: str, mutator) -> Any:
+    """``mutator(doc)`` on the whole store document (rows and pending audit events) under the lock."""
     result: dict = {}
 
     def apply(doc: dict) -> None:
-        rows = doc.setdefault("models", [])
-        result["value"] = mutator(rows)
+        doc.setdefault("models", [])
+        result["value"] = mutator(doc)
 
     store.mutate_json(project_id, MODELS_JSON, apply, default={"models": []})
     return result.get("value")
@@ -160,11 +164,33 @@ def _public(row: dict, staff: bool) -> dict:
     return out
 
 
-def _audit(project_id: str, user: dict, action: str, row: dict, extra: dict | None = None) -> None:
+def _details(row: dict, extra: dict | None = None) -> dict:
     details = {"name": row.get("name"), "revision": row.get("revision"), "sha256": row.get("sha256"),
                "visible_to_customer": bool(row.get("visible_to_customer"))}
     details.update(extra or {})
-    store.append_audit(project_id, _email(user), action, "model3d", str(row.get("id") or ""), details)
+    return details
+
+
+def _queue(doc: dict, user: dict, action: str, row: dict, extra: dict | None = None) -> None:
+    """The audit row of a change, written into the store together with it (``project_uploads``)."""
+    queue_event(doc, _email(user), action, "model3d", str(row.get("id") or ""), _details(row, extra))
+
+
+def _flush(project_id: str) -> None:
+    """Write the pending audit rows; a new change is refused (503) while the audit cannot be written."""
+    try:
+        flush_events(project_id, MODELS_JSON)
+    except OSError as exc:
+        log.error("project model3d: audit not writable (%s) - change refused", exc)
+        raise HTTPException(status_code=503, detail="Audit log unavailable; try again later.")
+
+
+def _flush_after(project_id: str) -> None:
+    """After a committed change: its audit row is in the store already, so a failing append only leaves it pending for the next call."""
+    try:
+        flush_events(project_id, MODELS_JSON)
+    except Exception as exc:                                # noqa: BLE001
+        log.error("project model3d: audit row left pending (%s); written by the next call", exc)
 
 
 # ── access ────────────────────────────────────────────────────────────────────
@@ -173,6 +199,9 @@ def _context(request: Request, project_id: str):
     if not store.valid_id(project_id):
         raise HTTPException(status_code=404, detail="Project not found")
     user, project, role = access.require_project(request, project_id)
+    if str(user.get("role") or "").lower() == "oem":
+        # the factory never sees the project model, even when it is (also) a project member: it has Production (owner 2026-11-22)
+        raise HTTPException(status_code=404, detail="Project not found")
     return user, project, role, _staff(user)
 
 
@@ -231,6 +260,7 @@ def _trace(request: Request, user: dict, project_id: str, row: dict, kind: str) 
 @router.get("/{project_id}/model3d")
 def list_models(request: Request, project_id: str, archived: bool = False):
     user, _project, _role, staff = _context(request, project_id)
+    _flush_after(project_id)                                # an audit row a failed append left pending
     rows = visible_rows(load_rows(project_id), staff, include_archived=archived and staff)
     rows = sorted(rows, key=lambda r: str(r.get("uploaded_at") or ""), reverse=True)
     top = latest(rows)
@@ -243,13 +273,15 @@ async def upload_model(request: Request, project_id: str):
     """One STEP per request: ``file``, ``revision`` (required), ``note`` (what changed), ``visible_to_customer`` (default internal)."""
     user, _project, _role, staff = _context(request, project_id)
     _require_staff(staff)
+    _flush(project_id)
+    form = await bounded_form(request, MAX_BYTES)
     try:
-        declared = int(request.headers.get("content-length") or 0)
-    except ValueError:
-        declared = 0
-    if declared > MAX_BYTES + 2 * _CHUNK:
-        raise HTTPException(status_code=413, detail="The file is larger than %d MB" % (MAX_BYTES // (1024 * 1024)))
-    form = await request.form()
+        return await _upload(project_id, user, form)
+    finally:
+        await form.close()
+
+
+async def _upload(project_id: str, user: dict, form) -> dict:
     uploaded = form.get("file")
     if uploaded is None or isinstance(uploaded, str):
         raise HTTPException(status_code=400, detail="No file uploaded")
@@ -287,12 +319,17 @@ async def upload_model(request: Request, project_id: str):
     row = {"id": file_id, "name": name[:200], "revision": revision, "note": note, "size": size, "sha256": sha256,
            "uploaded_at": _now(), "uploader_email": _email(user), "visible_to_customer": _flag(form.get("visible_to_customer")),
            "archived": False, "archived_at": None}
+
+    def add(doc: dict) -> None:
+        doc["models"].append(row)
+        _queue(doc, user, "model3d.upload", row, {"note": note})
+
     try:
-        _mutate(project_id, lambda rows: rows.append(row))
+        _mutate_doc(project_id, add)
     except BaseException:
         (files_dir(project_id) / file_id).unlink(missing_ok=True)     # the row is the index of the file: no row, no bytes
         raise
-    _audit(project_id, user, "model3d.upload", row, {"note": note})
+    _flush_after(project_id)
     return _public(row, True)
 
 
@@ -314,10 +351,11 @@ async def patch_model(request: Request, project_id: str, model_id: str):
         if not isinstance(body[key], bool):
             raise HTTPException(status_code=422, detail="%s must be true or false" % key)
     _find(project_id, model_id, True, include_archived=True)
+    _flush(project_id)
     changes: dict = {}
 
-    def apply(rows: list) -> dict | None:
-        for r in rows:
+    def apply(doc: dict) -> dict | None:
+        for r in doc["models"]:
             if r.get("id") == model_id:
                 if "visible_to_customer" in body and bool(r.get("visible_to_customer")) != body["visible_to_customer"]:
                     r["visible_to_customer"] = body["visible_to_customer"]
@@ -326,16 +364,17 @@ async def patch_model(request: Request, project_id: str, model_id: str):
                     r["archived"] = body["archived"]
                     r["archived_at"] = _now() if body["archived"] else None
                     changes["archived"] = body["archived"]
+                if "archived" in changes:
+                    _queue(doc, user, "model3d.archive" if changes["archived"] else "model3d.restore", r)
+                if "visible_to_customer" in changes:
+                    _queue(doc, user, "model3d.visibility", r)
                 return dict(r)
         return None
 
-    row = _mutate(project_id, apply)
+    row = _mutate_doc(project_id, apply)
     if row is None:
         raise HTTPException(status_code=404, detail="Model not found")
-    if "archived" in changes:
-        _audit(project_id, user, "model3d.archive" if changes["archived"] else "model3d.restore", row)
-    if "visible_to_customer" in changes:
-        _audit(project_id, user, "model3d.visibility", row)
+    _flush_after(project_id)
     return _public(row, True)
 
 
@@ -371,6 +410,6 @@ def download_model(request: Request, project_id: str, model_id: str):
     if path is None:
         raise HTTPException(status_code=404, detail="Model not found")
     _trace(request, user, project_id, row, "project_model3d_step")
-    _audit(project_id, user, "model3d.download", row)
+    store.append_audit(project_id, _email(user), "model3d.download", "model3d", model_id, _details(row))   # a read: no file without its row
     return FileResponse(path, media_type="application/octet-stream", filename=str(row.get("name") or "model.step"),
                         headers={"Cache-Control": "no-store"})

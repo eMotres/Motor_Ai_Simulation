@@ -142,6 +142,7 @@
     "file": "File",
     "date": "Uploaded",
     "noUpload": "No model has been uploaded for this project yet.",
-    "noLinkedMotor": "No motor is linked to this project yet."
+    "noLinkedMotor": "No motor is linked to this project yet.",
+    "noLive": "No current model; switch on Show archived to restore one."
   }
 }

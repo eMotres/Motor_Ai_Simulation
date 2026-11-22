@@ -203,7 +203,7 @@ const ProjectModel3D: React.FC<{ projectId: string; motors: ReadonlyArray<{ die:
                   contextLostText={t('contextLost')} noViewText="" onError={(m) => m && setErr(m)} />
               : <Typography sx={{ p: 2, fontSize: 13, color: 'var(--text-3)' }}>{list ? t('project.noUpload') : ''}</Typography>}
           </Box>
-          {staff && (list?.models.length ?? 0) > 0 && (
+          {staff && (   // always for staff: archiving the last live model must not hide Show archived and Restore
             <Box>
               <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
                 <Typography sx={{ fontSize: 13, fontWeight: 700, flex: 1 }}>{t('project.history')}</Typography>
@@ -216,6 +216,7 @@ const ProjectModel3D: React.FC<{ projectId: string; motors: ReadonlyArray<{ die:
                   <TableCell>{t('project.date')}</TableCell><TableCell>{t('project.visibleShort')}</TableCell><TableCell />
                 </TableRow></TableHead>
                 <TableBody>
+                  {list!.models.length === 0 && <TableRow><TableCell colSpan={6} sx={{ fontSize: 12.5, color: 'var(--text-3)' }}>{t(showArchived ? 'project.noUpload' : 'project.noLive')}</TableCell></TableRow>}
                   {list!.models.map((m) => (
                     <TableRow key={m.id} hover selected={m.id === picked} sx={{ opacity: m.archived ? 0.55 : 1, cursor: m.archived ? 'default' : 'pointer' }}
                       onClick={() => { if (!m.archived) setPicked(m.id); }}>

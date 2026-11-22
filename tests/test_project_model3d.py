@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import pytest
 from fastapi import FastAPI
@@ -18,8 +19,9 @@ CUSTOMER = "customer@example.test"
 OUTSIDER = "outsider@example.test"
 STAFF = "engineer@example.test"
 ADMIN = "admin@example.test"
+FACTORY = "factory@example.test"
 ROLES = {"t-owner": (OWNER, "user"), "t-customer": (CUSTOMER, "user"), "t-outsider": (OUTSIDER, "user"),
-         "t-staff": (STAFF, "engineer"), "t-admin": (ADMIN, "admin")}
+         "t-staff": (STAFF, "engineer"), "t-admin": (ADMIN, "admin"), "t-oem": (FACTORY, "oem")}
 STEP = b"ISO-10303-21;\nHEADER;\nENDSEC;\nDATA;\nENDSEC;\nEND-ISO-10303-21;\n"
 URL = "/api/projects/proj1/model3d"
 
@@ -188,5 +190,58 @@ def test_the_production_seam_reads_the_same_storage(client):
     shown = upload(client, revision="B", visible_to_customer="1").json()
     staff = PM.models_for_project("proj1", staff=True)
     assert [m["id"] for m in staff] == [shown["id"], hidden["id"]]
-    assert all(m["path"].endswith("/model3d/files/" + m["id"]) for m in staff)
+    assert all(Path(m["path"]).parts[-3:] == ("model3d", "files", m["id"]) for m in staff)
     assert [m["id"] for m in PM.models_for_project("proj1", staff=False)] == [shown["id"]]
+
+
+@pytest.mark.parametrize("membership", [None, "customer", "owner"])
+def test_a_factory_account_never_sees_the_project_model(client, membership):
+    row = upload(client, visible_to_customer="1").json()
+    if membership:
+        store.mutate_project("proj1", lambda p: p["members"].append({"email": FACTORY, "role": membership}))
+    for path in (URL, f"{URL}/{row['id']}/model.glb", f"{URL}/{row['id']}/download"):
+        assert client.get(path, headers=hdr("t-oem")).status_code == 404, path
+    assert upload(client, who="t-oem").status_code == 404
+    assert client.patch(f"{URL}/{row['id']}", headers=hdr("t-oem"), json={"archived": True}).status_code == 404
+
+
+def test_a_failed_audit_append_keeps_the_change_with_its_event_and_is_written_once_later(client, tmp_path, monkeypatch):
+    real = store.append_jsonl
+
+    def broken(project_id, name, entry):
+        if name == "audit.jsonl":
+            raise OSError("disk full")
+        return real(project_id, name, entry)
+
+    monkeypatch.setattr(store, "append_jsonl", broken)
+    r = upload(client)
+    assert r.status_code == 200                                         # the change is committed together with its event
+    doc = json.loads((tmp_path / "projects" / "proj1" / "model3d" / "models.json").read_text())
+    assert [e["action"] for e in doc["pending_audit"]] == ["model3d.upload"]
+    assert upload(client).status_code == 503                            # no NEW change while the audit cannot be written
+    monkeypatch.setattr(store, "append_jsonl", real)
+    client.get(URL, headers=hdr("t-staff"))
+    client.get(URL, headers=hdr("t-staff"))
+    assert audit_actions(tmp_path).count("model3d.upload") == 1         # replayed exactly once
+    doc = json.loads((tmp_path / "projects" / "proj1" / "model3d" / "models.json").read_text())
+    assert "pending_audit" not in doc and len(doc["models"]) == 1
+
+
+def test_the_byte_cap_holds_without_content_length_and_one_file_only(client, tmp_path, monkeypatch):
+    monkeypatch.setattr(PM, "MAX_BYTES", 1000)
+    big = STEP + b"x" * 200_000
+    boundary = "b0undary"
+    body = (f"--{boundary}\r\nContent-Disposition: form-data; name=\"revision\"\r\n\r\nA\r\n"
+            f"--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"a.step\"\r\n\r\n").encode() + big + f"\r\n--{boundary}--\r\n".encode()
+
+    def chunked():
+        for i in range(0, len(body), 8192):
+            yield body[i:i + 8192]
+
+    r = client.post(URL, headers={**hdr("t-staff"), "Content-Type": f"multipart/form-data; boundary={boundary}"}, content=chunked())
+    assert r.status_code == 413
+    two = client.post(URL, headers=hdr("t-staff"), data={"revision": "A"},
+                      files=[("file", ("a.step", STEP)), ("other", ("b.step", STEP))])
+    assert two.status_code == 400
+    files = tmp_path / "projects" / "proj1" / "model3d" / "files"
+    assert not files.exists() or list(files.iterdir()) == []

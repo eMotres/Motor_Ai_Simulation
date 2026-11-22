@@ -4167,6 +4167,7 @@ def _make_bline(base_m: Dict[str, Any], bump_m: Dict[str, Any],
       w on eff    = T/mass_B − T/mass_A   (torque-density gained from +current)
     The signed perpendicular distance of any point P above this line is then
     [w_td·(td_P − td_A) + w_eff·(eff_P − eff_A)] / hypot(w_td, w_eff)."""
+    base_m, bump_m = _with_unrounded(base_m), _with_unrounded(bump_m)   # the opt-in run draws its line from the unrounded figures too
     td_a  = float(base_m.get("torque_per_mass_Nm_kg", 0.0) or 0.0)
     eff_a = float(base_m.get("efficiency", 0.0) or 0.0)
     td_b  = float(bump_m.get("torque_per_mass_Nm_kg", 0.0) or 0.0)
@@ -4222,6 +4223,17 @@ def _reset_run_limits() -> None:
     _RUN_LIMITS.update(mode="", eff_min=0.0, j_max=0.0, vll_max=0.0)
     _COG_LIMIT.update(max=0.0, steps=0)
     _UNROUNDED["on"] = False
+
+
+# The opt-in keys a run puts into the shared state (absent unless asked).  `dict.update` keeps an older run's key, so a
+# run that does not ask for them must drop them, or the state would report an option the run never used.
+_RUN_OPT_STATE_KEYS = ("objective_limits", "cogging_limit", "unrounded_objective")
+
+
+def _forget_run_opt_state() -> None:
+    """Drop the previous run's opt-in keys from ``_descent_state`` (the caller holds ``_descent_lock``)."""
+    for k in _RUN_OPT_STATE_KEYS:
+        _descent_state.pop(k, None)
 
 
 def _cogging_on() -> bool:
@@ -4463,7 +4475,8 @@ def _point_as_metrics(pt: Dict[str, Any]) -> Dict[str, Any]:
     return {"torque_per_mass_Nm_kg": pt.get("td"),
             "efficiency": pt.get("eff"), "T_ripple_pct": pt.get("ripple"),
             "V_peak": pt.get("v_peak"), "THD_LL_pct": pt.get("thd"),
-            **({"cogging_pp_Nm": pt.get("cogging_pp")} if "cogging_pp" in pt else {})}
+            **({"cogging_pp_Nm": pt.get("cogging_pp")} if "cogging_pp" in pt else {}),
+            **({"unrounded": pt["unrounded"]} if isinstance(pt.get("unrounded"), dict) else {})}
 
 
 def _finalize_standard_shortlist(
@@ -5797,6 +5810,7 @@ def begin_descent_state(plan: Dict[str, Any]) -> None:
     _UNROUNDED["on"] = bool(plan.get("unrounded_objective"))
     with _descent_lock:
         _descent_external[0] = False   # this process owns the flag now
+        _forget_run_opt_state()
         _descent_state.update(plan["init_state"])
 
 
@@ -7424,6 +7438,8 @@ def _auto_worker(plan: Dict[str, Any], run_id: str, bucket: str,
         _RIPPLE_PEN_LAM["v0"] = _AUTO_RIPPLE_LAMBDA
         _THD_PEN["lam"] = 0.0
         _reset_run_limits()
+        with _descent_lock:
+            _forget_run_opt_state()
 
         n_evals = 0
         all_pts = []
@@ -8009,6 +8025,7 @@ def _screen_worker(plan: Dict[str, Any], run_id: str, bucket: str,
         _reset_run_limits()
 
         with _descent_lock:
+            _forget_run_opt_state()
             _descent_state["phase"] = "baseline"
         _save_descent_state()
 
@@ -8558,6 +8575,7 @@ def auto_start(req: AutoOptRequest, request: Request):
 
     with _descent_lock:
         _descent_external[0] = False   # this process owns the flag now
+        _forget_run_opt_state()
         _descent_state.update({
             "running": True, "iter": 0, "max_iters": int(plan["generations"]),
             "n_evals": 0, "best": None, "current": None, "history": [],

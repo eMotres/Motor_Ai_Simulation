@@ -74,3 +74,88 @@ def test_run_one_and_the_subprocess_spec_export_it_only_on_request():
     assert inspect.signature(O._subprocess_eval).parameters["export_unrounded"].default is False
     src = inspect.getsource(O._subprocess_eval)
     assert '"export_unrounded": True} if export_unrounded else {}' in src
+
+
+# --- the final shortlist and the baseline line read the unrounded figures when the flag is on (Astra pre-merge, #791) ---
+
+def _std(x, current):
+    return {"ok": True, "res": {"T_em_Nm": 1.0, "efficiency": 0.9, "torque_per_mass_Nm_kg": 5.0, "T_ripple_pct": 2.0,
+                                "current_a": current, "nonlinear_converged": True, "cogging_sampling_purpose": "standard",
+                                "cogging_sampling_final_quality_sufficient": True, "eddy_settled": True}}
+
+
+def _pt(g, td_raw):
+    m = _m(td_raw, 0.900004)
+    return {"kind": "cmaes", "overrides": {"g": g}, "current_a": 10.0, "td": m["torque_per_mass_Nm_kg"], "eff": m["efficiency"],
+            "ripple": 2.0, "v_peak": 10.0, "thd": 1.0, "unrounded": m["unrounded"]}
+
+
+def _shortlisted(flag):
+    O._UNROUNDED["on"] = flag
+    calls = []
+
+    def evaluate(x, current):
+        calls.append(dict(x))
+        return _std(x, current)
+
+    points = [_pt(1, 5.000041), _pt(2, 5.000049)]                    # the same rounded figures, 2 is the better one
+    O._finalize_standard_shortlist(points=points, best_x={"g": 9}, best_metrics={"current_a": 10.0}, coarse_base=BASE,
+                                   base_x={"g": 0}, base_current=10.0, bump_pct=10.0, evaluate=evaluate, limit=2,
+                                   score=lambda m, b: O._descent_cost(m, b, 5.0, 1.0, 1.0, 0.0))
+    return [c["g"] for c in calls[2:]]                                # after baselines A and B
+
+
+def test_the_point_record_keeps_the_block_for_the_shortlist():
+    pt = _pt(1, 5.1)
+    assert O._point_as_metrics(pt)["unrounded"] == pt["unrounded"]
+    assert "unrounded" not in O._point_as_metrics({k: v for k, v in pt.items() if k != "unrounded"})
+
+
+def test_on_the_shortlist_is_ranked_on_the_unrounded_figures():
+    assert 2 in _shortlisted(True) and 1 not in _shortlisted(True)
+
+
+def test_off_the_shortlist_is_ranked_as_it_always_was():
+    off = _shortlisted(False)                                         # tie on the rounded figures: the first point wins, as before
+    assert 1 in off and 2 not in off
+
+
+def test_the_baseline_line_reads_the_unrounded_figures_only_when_on():
+    a, b = _m(5.000041, 0.900004), _m(5.00104, 0.8999)
+    off = O._make_bline(a, b, 10.0)
+    O._UNROUNDED["on"] = True
+    on = O._make_bline(a, b, 10.0)
+    assert off["td_a"] == 5.0 and on["td_a"] == 5.000041
+    assert on["eff_a"] == 0.900004 and off["eff_a"] == 0.9
+
+
+# --- the shared state never reports an option the run did not ask for ---
+
+def _plan(machine_unused=None, **kw):
+    var = [{"name": "tooth_width", "min": 1.0, "max": 1.2, "step": 0.05}]
+    return O.prepare_descent(O.DescentRequest(variables=var, **kw))
+
+
+def test_an_on_run_followed_by_an_off_run_leaves_no_flag_in_the_state(machine):
+    O.begin_descent_state(_plan(unrounded_objective=True))
+    assert O._descent_state["unrounded_objective"] is True
+    O.begin_descent_state(_plan())
+    assert "unrounded_objective" not in O._descent_state and O._UNROUNDED["on"] is False
+
+
+def test_a_descent_followed_by_auto_or_screen_clears_the_state_flag(machine):
+    for _ in ("auto", "screen"):
+        O.begin_descent_state(_plan(unrounded_objective=True))
+        O._reset_run_limits()
+        with O._descent_lock:
+            O._forget_run_opt_state()
+        assert "unrounded_objective" not in O._descent_state and O._UNROUNDED["on"] is False
+    src = inspect.getsource(O.auto_start) + inspect.getsource(O)
+    assert src.count("_forget_run_opt_state()") >= 4                  # begin, auto_start, auto worker, screen worker
+
+
+def test_a_restart_does_not_revive_the_flag_of_the_process(machine):
+    O.begin_descent_state(_plan(unrounded_objective=True))
+    O._UNROUNDED["on"] = False                                        # a fresh process: the module default
+    O.begin_descent_state(_plan())
+    assert "unrounded_objective" not in O._descent_state

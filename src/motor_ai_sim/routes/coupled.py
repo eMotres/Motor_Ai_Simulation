@@ -4447,6 +4447,8 @@ def _thermal_solve(body: Dict[str, Any], cooling: Dict[str, Any], *,
         out = th.solve_thermal_field(progress=th._progress.callback(), **kw)
     finally:
         th._progress.finish()
+    # Astra pre-merge 2026-11-22 (F02): an unsettled, unbalanced or non-finite map is not a result any loop may feed on.
+    th.refuse_unaccepted_map(out)
     try:
         # `geo` is dropped from the remembered params for the same reason the
         # thermal route never stores it: it is the whole machine as a JSON
@@ -8522,7 +8524,9 @@ def _cr_solve_map(point: Dict[str, Any], cooling: Dict[str, Any], *,
         kw["_em_loss_source"] = dict(em_source or {})
     if capture is not None:
         kw["_em_capture"] = capture
-    return th.solve_thermal_field(**kw)
+    out = th.solve_thermal_field(**kw)
+    th.refuse_unaccepted_map(out)
+    return out
 
 
 def _cr_conditions(body: Dict[str, Any]) -> List[Any]:

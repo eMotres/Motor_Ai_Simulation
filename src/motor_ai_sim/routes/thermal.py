@@ -508,21 +508,54 @@ def numerical_acceptance_of(*, n_nonfinite: int, iterating: bool, passes: int, l
                             closures: Dict[str, Any], generated_w: float) -> Dict[str, Any]:
     """Is this thermal map a SOLUTION (Astra thermal audit 2026-11-21, F02)?  It is finite, its boundary loop settled inside its
     tolerance (not merely stopped at the pass cap) and its rotor / stator heat balances close to max(0.5 W, 1 % of the losses).
-    A non-finite temperature (a disconnected island replaced by ambient) is a failed solve: the route answers ``ok: false``."""
+    A non-finite temperature (a disconnected island replaced by ambient) is a failed solve: the route answers ``ok: false``.
+    FAIL CLOSED (Astra pre-merge 2026-11-22): a diagnostic that is missing or not a finite number (the last pass's move, the
+    generated heat, a closure) is itself a reason, never a pass."""
+    def _num(v: Any) -> Optional[float]:
+        try:
+            x = float(v)
+        except (TypeError, ValueError):
+            return None
+        return x if math.isfinite(x) else None
+
     reasons: List[str] = []
     if n_nonfinite:
         reasons.append("%d non-finite node temperature(s) were replaced by ambient (a disconnected island)" % n_nonfinite)
-    if iterating and last_move_c >= tol_c:
-        reasons.append("the boundary loop stopped at %d passes with the last pass still moving %.2f K (tolerance %.1f K)"
-                       % (passes, last_move_c, tol_c))
-    clos = {k: float(v or 0.0) for k, v in closures.items()}
-    tol_w = max(0.5, 0.01 * abs(float(generated_w)))
-    for k, v in clos.items():
-        if abs(v) > tol_w:
-            reasons.append("%s does not close: %.2f W (tolerance %.2f W)" % (k, v, tol_w))
+    mv = _num(last_move_c)
+    if iterating:
+        if mv is None:
+            reasons.append("the last pass's boundary move is missing or not finite, so the loop's convergence is unknown")
+        elif mv >= tol_c:
+            reasons.append("the boundary loop stopped at %d passes with the last pass still moving %.2f K (tolerance %.1f K)"
+                           % (passes, mv, tol_c))
+    gen = _num(generated_w)
+    if gen is None:
+        reasons.append("the generated heat is missing or not finite, so the heat balances cannot be judged")
+    tol_w = max(0.5, 0.01 * abs(gen)) if gen is not None else 0.5
+    clos: Dict[str, float] = {}
+    for k, v in closures.items():
+        x = _num(v)
+        if x is None:
+            reasons.append("%s is missing or not finite: the heat balance is not shown to close" % k)
+            continue
+        clos[k] = x
+        if gen is not None and abs(x) > tol_w:
+            reasons.append("%s does not close: %.2f W (tolerance %.2f W)" % (k, x, tol_w))
     return {"accepted": not reasons, "reasons": reasons, "finite": n_nonfinite == 0, "passes": int(passes),
-            "last_pass_move_c": round(float(last_move_c), 3), "tolerance_c": tol_c,
+            "last_pass_move_c": None if mv is None else round(mv, 3), "tolerance_c": tol_c,
             "closure_W": {k: round(v, 3) for k, v in clos.items()}, "closure_tolerance_W": round(tol_w, 3)}
+
+
+def refuse_unaccepted_map(field: Any) -> None:
+    """The consumers' gate (coupled / duty / rating): a map that carries a numerical-acceptance verdict and was not accepted
+    must not feed a temperature back into the loop or into storage.  Raises ``HTTPException(422)`` with the reasons.
+    A dict without the verdict (a stubbed or legacy answer) is not judged."""
+    if not isinstance(field, dict):
+        return
+    acc = field.get("numerical_acceptance")
+    if (isinstance(acc, dict) and not acc.get("accepted", True)) or field.get("ok") is False:
+        why = "; ".join((acc or {}).get("reasons") or ["the thermal solve answered ok = false"])
+        raise HTTPException(422, "the thermal map is not a numerical solution, so no temperature is taken from it: " + why)
 
 
 def _cooling_bc(*, mode: str, t_ambient_c: float, air_speed_mps: float,
@@ -7249,7 +7282,7 @@ def solve_thermal_field(
         generated_w=_gen_w)
 
     result = {
-        "ok": _n_bad == 0,
+        "ok": bool(numerical_acceptance["accepted"]),
         "numerical_acceptance": numerical_acceptance,
         "n_vertices": len(th["vertices"]), "n_triangles": len(th["triangles"]),
         "vertices": th["vertices"], "triangles": th["triangles"],
@@ -9132,6 +9165,7 @@ def duty_cycle(body: Dict[str, Any] = Body(default_factory=dict),
                 geo=body.get("geo"), op_mode=_ep["op_mode"],
                 magnet_temp_c=magnet_temp_c, _em_run=em_run_sel,
                 progress=_cal_progress, **point, **em_sel, **cooling)
+            refuse_unaccepted_map(steady)
         _progress.update(done=2, phase="duty cycle — integrating")
         t_cycle = time.time()
 

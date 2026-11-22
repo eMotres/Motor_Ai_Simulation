@@ -12,6 +12,7 @@ out what is plainly not a document of the named type, and never try to parse a P
 from __future__ import annotations
 
 import zipfile
+import zlib
 from pathlib import Path
 from xml.etree import ElementTree
 
@@ -91,7 +92,7 @@ def valid_docx(path: Path) -> bool:
                     return False
             types = z.read("[Content_Types].xml")
             doc = z.read("word/document.xml")
-    except (zipfile.BadZipFile, OSError, RuntimeError, ValueError, NotImplementedError):
+    except (zipfile.BadZipFile, OSError, RuntimeError, ValueError, NotImplementedError, EOFError, zlib.error):   # a corrupt DEFLATE stream is invalid content
         return False
     if _WORD_MAIN not in types:
         return False

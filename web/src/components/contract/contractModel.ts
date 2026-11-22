@@ -13,12 +13,19 @@ export const STATUS_ORDER: readonly ContractStatus[] = ['draft', 'sent', 'signed
 export const KIND_ORDER: readonly ContractKind[] = ['agreement', 'annex_a', 'annex_b', 'signed_customer', 'signed_motres', 'other'];
 
 export interface ContractFile { id: string; kind: ContractKind; name: string; note: string; size: number; sha256: string; uploaded_at: string; uploader: string; archived: boolean; archived_at?: string | null; /** the contract revision it was uploaded in */ revision?: number; /** the current revision's signing rests on it: no replacement, no archive */ frozen?: boolean }
-export interface ContractFileRef { id: string; kind: ContractKind; name: string; sha256: string }
+export interface ContractFileRef { id: string; kind: ContractKind; name: string; sha256: string; template?: boolean; version?: string }
+export interface ContractTemplate { kind: 'agreement' | 'annex_a' | 'annex_b'; version: string; name: string; size: number; sha256: string; uploaded_at: string }
 export interface ContractView {
   status: ContractStatus; revision: number; history: Array<{ status: ContractStatus | 'scan_uploaded' | 'scan_rejected'; at: string; by: string; revision?: number; files?: ContractFileRef[]; reason?: string }>; files: ContractFile[];
   current: Partial<Record<ContractKind, string>>; sample_iteration: 1 | 2; step: ContractStep | null; steps: ContractStep[];
   /** the digest of the terms a signature is about; captured with the revision when a dialog opens */
   terms_digest: string;
+  /** the standard documents of every project (owner 2026-11-22): the current version of each, or null */
+  templates: Record<'agreement' | 'annex_a' | 'annex_b', ContractTemplate | null> & { /** the store needs repair: nothing is shown or sent */ unavailable?: boolean };
+  /** a draft with no terms of its own: the standard agreement is what would be sent */
+  template_only: boolean;
+  /** what the current revision was sent with (a template is named by its version) */
+  sent_files: ContractFileRef[];
   /** a signed scan awaiting the MOTRES check (staff confirm or reject exactly this file) */
   pending_scan: (ContractFileRef & { revision: number }) | null;
   company: { available: boolean; filled: boolean; confirmed_on: string; confirmed_by: string };
@@ -86,6 +93,24 @@ export const contractApi = {
   /** admins: the staff scheme as JSON, checked by the server (422 names what is wrong) */
   putScheme: (text: string) => fetch(`${API}/api/contract-scheme`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: text })
     .then((r) => json<{ ok: boolean }>(r)),
+  /** the standard document (current, or the version a sent revision was made from) */
+  downloadTemplate: async (projectId: string, kind: string, name: string, version?: string, sha256?: string) => {
+    // a sent document by its frozen identity (version + hash); the current one by the version the page shows
+    const q = [version ? `version=${enc(version)}` : '', sha256 ? `sha256=${enc(sha256)}` : ''].filter(Boolean).join('&');
+    const r = await fetch(`${contractBase(projectId)}/template/${enc(kind)}/download${q ? `?${q}` : ''}`);
+    if (!r.ok) throw new Error(await failure(r));
+    const href = URL.createObjectURL(await r.blob());
+    const a = document.createElement('a');
+    a.href = href; a.download = name;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(href), 10_000);
+  },
+  /** admins: a new version of a standard document - every project shows it */
+  uploadTemplate: (kind: string, version: string, file: File) => {
+    const form = new FormData();
+    form.append('kind', kind); form.append('version', version); form.append('file', file, file.name);
+    return fetch(`${API}/api/contract-templates`, { method: 'POST', body: form }).then((r) => json<ContractTemplate>(r));
+  },
   archive: (projectId: string, fileId: string, archived: boolean) =>
     fetch(`${contractBase(projectId)}/files/${enc(fileId)}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ archived }) }).then((r) => json<ContractView>(r)),
   download: async (projectId: string, file: ContractFile) => {

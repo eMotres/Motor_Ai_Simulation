@@ -106,5 +106,19 @@
     "reject": "Reject",
     "rejectTitle": "Reject the scan",
     "reason": "Reason"
+  },
+  "template": {
+    "only": "Template only",
+    "onlyTip": "No terms of the project's own yet: the standard agreement is what is sent.",
+    "agreement": "Standard agreement (template {version})",
+    "annex_a": "Annex A blank (template {version})",
+    "annex_b": "Annex B blank (template {version})",
+    "upload": "New template version",
+    "uploadTitle": "New version of a standard document",
+    "kind": "Document",
+    "version": "Version",
+    "pickFile": "Choose a file (PDF, DOCX)",
+    "ref": "standard agreement {version}",
+    "unavailable": "The standard contract documents need repair on this server: none is shown or sent."
   }
 }

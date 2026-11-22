@@ -495,6 +495,8 @@ from motor_ai_sim.development.project_contract import router as development_cont
 app.include_router(development_contract_router)   # /api/projects/{id}/contract: section "Contract", owner + staff + sees_prices (owner 2026-11-22)
 from motor_ai_sim.development.project_contract import scheme_router as contract_scheme_router
 app.include_router(contract_scheme_router)   # /api/contract-scheme: the staff scheme in the shared store (admins, 2026-11-22)
+from motor_ai_sim.development.contract_templates import router as contract_templates_router
+app.include_router(contract_templates_router)   # /api/contract-templates: the standard agreement of every project (admins, owner 2026-11-22)
 app.include_router(development_motors_router)
 app.include_router(development_activity_router)      # GET /api/projects/{id}/activity: live runs on the project's motors
 from motor_ai_sim.development.productions import router as development_productions_router

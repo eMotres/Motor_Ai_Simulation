@@ -107,8 +107,7 @@ def test_the_rotor_mesh_is_pole_pair_periodic_at_wide_magnet_fill(fill_up):
     from motor_ai_sim.simulation.rotor_window import period_shift_map
     from tests.test_mesh_periodicity import _h, _p2_dofs
     mr, ns, bc_sign, num_poles = _rotor_mesh_at(fill_up)
-    if mr is None:
-        pytest.skip("the solver did not reach the mesh build at this fill")
+    assert mr is not None, "the solver did not reach the mesh build at fill_up %g" % fill_up
     dofs, h = _p2_dofs(mr), _h(mr)
     period_deg = 360.0 / (num_poles // 2)
     for frac in (1.0, 0.5):
@@ -130,3 +129,61 @@ def test_a_refused_rotor_mesh_names_the_point_in_plain_words():
     words = _tdm_not_periodic_words(info)
     assert "no pole-pair image" in words and "radius" in words and "angle" in words
     assert "no pole-pair image" in str(TdmMeshNotPeriodic(words))
+
+
+# ── the counterexample of the pre-merge review: a radial sector cut must never join the seam ring ───────────────
+def _cut_wedge(r_m=0.006, inward_um=10.0, n_out=9, span_deg=90.0):
+    """A valid annular wedge: n_out outer vertices exactly on the circle, one inner vertex per outer vertex
+    ``inward_um`` below it (so the two radial cut edges are 10 um long), two triangles per cell."""
+    from skfem import MeshTri
+    ang = np.radians(np.linspace(0.0, span_deg, n_out))
+    ro, ri = r_m, r_m - inward_um * 1e-6
+    P = np.hstack([np.vstack([ro * np.cos(ang), ro * np.sin(ang)]), np.vstack([ri * np.cos(ang), ri * np.sin(ang)])])
+    T = []
+    for i in range(n_out - 1):
+        T += [(i, i + 1, n_out + i), (i + 1, n_out + i + 1, n_out + i)]
+    return MeshTri(P, np.array(T).T), n_out, r_m
+
+
+@pytest.mark.parametrize("r_m", [0.006, 0.015, 0.02, 0.07255])
+def test_a_radial_cut_end_does_not_join_the_ring(r_m):
+    mesh, n_out, r0 = _cut_wedge(r_m=r_m)
+    P, T = np.asarray(mesh.p), np.asarray(mesh.t)
+    ring, rP = _plain(P, r0)
+    assert ring.tolist() == list(range(n_out))
+    assert join(P, T, ring, rP, r0).tolist() == ring.tolist()
+
+
+def _areas(mesh):
+    P, T = np.asarray(mesh.p), np.asarray(mesh.t)
+    a, b, c = P[:, T[0]], P[:, T[1]], P[:, T[2]]
+    return 0.5 * ((b[0] - a[0]) * (c[1] - a[1]) - (c[0] - a[0]) * (b[1] - a[1]))
+
+
+def test_the_weld_of_a_cut_wedge_is_valid_and_unchanged_by_the_helper(monkeypatch):
+    """The belt weld on the wedge: no zero-area seam triangle, and the same mesh as without the helper."""
+    from motor_ai_sim.simulation import mesher as M
+    spec = dict(n_slip=36, K=2, r_lo=6.0, r_hi=6.6)
+    mesh, _, _ = _cut_wedge()
+    tags = np.ones(np.asarray(mesh.t).shape[1], int)
+    new, tn = M._weld_belt_into_half(mesh, tags, spec, "rotor", 4)
+    monkeypatch.setattr(M, "_belt_ring_with_boundary_neighbours", lambda P, T, ring, rP, r, reach=15e-6: ring)
+    old, to = M._weld_belt_into_half(mesh, tags, spec, "rotor", 4)
+    assert np.array_equal(np.asarray(new.p), np.asarray(old.p)) and np.array_equal(np.asarray(new.t), np.asarray(old.t))
+    assert np.array_equal(tn, to)
+    assert np.all(np.abs(_areas(new)) > 1e-14)
+
+
+def test_the_weld_keeps_a_ray_node_inside_the_circle_without_a_degenerate_seam(monkeypatch):
+    """A ray node 2.6 um inside the circle is part of the seam: one more seam triangle than without it, all valid."""
+    from skfem import MeshTri
+    from motor_ai_sim.simulation import mesher as M
+    P, T, r0 = _fan([0.0, 0.0, 0.0, 0.0, -2.6, 0.0, 0.0, 0.0, 0.0], list(np.linspace(0.0, 90.0, 9)), r0_m=0.006)
+    mesh = MeshTri(P, T)
+    spec = dict(n_slip=36, K=2, r_lo=6.0, r_hi=6.6)
+    tags = np.ones(T.shape[1], int)
+    new, _ = M._weld_belt_into_half(mesh, tags, spec, "rotor", 4)
+    monkeypatch.setattr(M, "_belt_ring_with_boundary_neighbours", lambda P_, T_, ring, rP, r, reach=15e-6: ring)
+    old, _ = M._weld_belt_into_half(mesh, tags, spec, "rotor", 4)
+    assert np.asarray(new.t).shape[1] == np.asarray(old.t).shape[1] + 1
+    assert np.all(np.abs(_areas(new)) > 1e-14)

@@ -2602,7 +2602,8 @@ def _resample_ring_arcs(geom, r_ring: float, n_grid: int, tol_mm: float = 0.02,
 
 def _belt_ring_with_boundary_neighbours(P, T, ring_idx, rP, r_iron, reach=15e-6):
     """The belt's iron-side ring: the nodes within 2 um of the ring circle PLUS every node that is joined to one of them
-    by a BOUNDARY edge of the half mesh (an edge of exactly one triangle) and lies within ``reach`` of the circle.
+    by a BOUNDARY edge of the half mesh (an edge of exactly one triangle) that runs along the circle (a radial sector cut
+    does not count) and lies within ``reach`` of the circle.
 
     Why: a rotor cell tiled by ``geo_mesh._tile_cells`` carries ray nodes whose radius was snapped to the mean of a
     cluster of cut-ray radii (``_symmetrize_cuts``), so on some geometries (magnet_fill_up 1 to 2 on a 28-pole rotor)
@@ -2622,10 +2623,15 @@ def _belt_ring_with_boundary_neighbours(P, T, ring_idx, rP, r_iron, reach=15e-6)
     ba = bk // np.int64(P.shape[1]); bb = bk % np.int64(P.shape[1])
     inring = np.zeros(P.shape[1], bool); inring[ring] = True
     near = np.abs(rP - r_iron) < reach
+    # Only the gap-facing outline chain: a boundary edge that runs ALONG the circle.  A radial sector cut is a boundary
+    # edge too, but it leaves the circle at a right angle, and its inner end must never join the seam ring (it would
+    # make a zero-area seam triangle that overlaps the cells below it).
+    elen = np.hypot(P[0, bb] - P[0, ba], P[1, bb] - P[1, ba])
+    along = np.abs(rP[bb] - rP[ba]) <= 0.1 * elen
     add = np.zeros(P.shape[1], bool)
-    m = inring[ba] & ~inring[bb] & near[bb]
+    m = inring[ba] & ~inring[bb] & near[bb] & along
     add[bb[m]] = True
-    m = inring[bb] & ~inring[ba] & near[ba]
+    m = inring[bb] & ~inring[ba] & near[ba] & along
     add[ba[m]] = True
     if not add.any():
         return ring

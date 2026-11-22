@@ -172,3 +172,23 @@ def test_a_failed_atomic_write_changes_nothing(client, tmp_path, monkeypatch):
     r = client.put("/api/contract-scheme", headers=hdr("t-admin"), content=json.dumps({**SCHEME, "version": "v9"}))
     assert r.status_code == 503 and path.read_bytes() == before
     assert not list(path.parent.glob(".*.tmp"))
+
+
+def test_the_customer_scheme_is_stored_too_and_every_reader_of_the_section_sees_it(client, tmp_path):
+    cust = {**SCHEME, "version": "customer v1"}
+    assert client.get("/api/projects/proj1/contract", headers=hdr("t-owner")).json()["customer_scheme"] is None   # built-in shown
+    assert client.put("/api/contract-scheme?kind=customer", headers=hdr("t-staff"), content=json.dumps(cust)).status_code == 403
+    r = client.put("/api/contract-scheme?kind=customer", headers=hdr("t-admin"), content=json.dumps(cust))
+    assert r.status_code == 200, r.text
+    assert (tmp_path / "shared" / "contract" / "scheme_customer.json").is_file()
+    assert client.get("/api/projects/proj1/contract", headers=hdr("t-owner")).json()["customer_scheme"]["version"] == "customer v1"
+    got = client.get("/api/contract-scheme?kind=customer", headers=hdr("t-owner"))
+    assert got.status_code == 200 and got.json()["scheme"]["version"] == "customer v1" and got.json()["store"] == ""
+    assert client.get("/api/projects/proj1/contract", headers=hdr("t-staff")).json()["staff_scheme"] is None     # kinds are separate
+    assert client.get("/api/contract-scheme?kind=other", headers=hdr("t-admin")).status_code == 422
+    assert client.put("/api/contract-scheme?kind=customer", headers=hdr("t-admin"), content=json.dumps({"nodes": []})).status_code == 422
+
+
+def test_a_factory_account_does_not_read_the_customer_scheme(client, monkeypatch):
+    monkeypatch.setitem(ROLES, "t-oem", ("factory@example.test", "oem"))
+    assert client.get("/api/contract-scheme?kind=customer", headers=hdr("t-oem")).status_code == 403

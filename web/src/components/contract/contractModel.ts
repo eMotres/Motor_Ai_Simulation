@@ -30,6 +30,8 @@ export interface ContractView {
   pending_scan: (ContractFileRef & { revision: number }) | null;
   company: { available: boolean; filled: boolean; confirmed_on: string; confirmed_by: string };
   staff: boolean; can_manage: boolean; upload_kinds: ContractKind[]; staff_scheme: SchemeData | null;
+  /** the stored customer view (null: the page's built-in one) */
+  customer_scheme?: SchemeData | null;
 }
 
 /** One scheme: boxes on a 1000 x 420 grid and arrows between them.  Labels are either translation keys (the customer view, in the
@@ -91,7 +93,7 @@ export const contractApi = {
   reject: (projectId: string, scan: ContractFileRef, seen: Seen, reason: string) => post<ContractView>(`${contractBase(projectId)}/reject`,
     { file_id: scan.id, sha256: scan.sha256, ...seen, reason }),
   /** admins: the staff scheme as JSON, checked by the server (422 names what is wrong) */
-  putScheme: (text: string) => fetch(`${API}/api/contract-scheme`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: text })
+  putScheme: (text: string, kind: 'staff' | 'customer' = 'staff') => fetch(`${API}/api/contract-scheme?kind=${kind}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: text })
     .then((r) => json<{ ok: boolean }>(r)),
   /** the standard document (current, or the version a sent revision was made from) */
   downloadTemplate: async (projectId: string, kind: string, name: string, version?: string, sha256?: string) => {

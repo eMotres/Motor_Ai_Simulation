@@ -119,17 +119,21 @@ const ProjectContract: React.FC<{ projectId: string; isAdmin?: boolean }> = ({ p
           ? <ContractScheme data={view.staff_scheme} step={view.step} steps={view.steps} translate={false} />
           : <Alert severity="info">{t('scheme.staffMissing')}</Alert>)
         : null}
-      {scheme === 'staff' && view.staff && isAdmin && (   // staff read the scheme, admins upload it
+      {scheme === 'staff' && view.staff ? null
+        // the customer view: the stored one when an admin uploaded it (no deploy for a text change), else the built-in one
+        : view.customer_scheme
+          ? <ContractScheme data={view.customer_scheme} step={view.step} steps={view.steps} translate={false} />
+          : <ContractScheme data={CUSTOMER_SCHEME} step={view.step} steps={view.steps} translate />}
+      {isAdmin && (   // everybody who reads the section sees the schemes; admins upload them (the one on screen)
         <Box sx={{ display: 'flex', justifyContent: 'flex-end' }}>
           <Button size="small" component="label" sx={btn} startIcon={<UploadIcon sx={{ fontSize: 16 }} />} disabled={busy} data-testid="contract-scheme-upload">
-            {t('scheme.upload')}
+            {t(scheme === 'staff' && view.staff ? 'scheme.upload' : 'scheme.uploadCustomer')}
             <input hidden type="file" accept=".json,application/json" onChange={(e) => { const f = e.target.files?.[0]; e.target.value = '';
-              if (f) void run(async () => { await contractApi.putScheme(await f.text()); await load(); }); }} />
+              const kind = scheme === 'staff' && view.staff ? 'staff' : 'customer';
+              if (f) void run(async () => { await contractApi.putScheme(await f.text(), kind); await load(); }); }} />
           </Button>
         </Box>
       )}
-      {scheme === 'staff' && view.staff ? null
-        : <ContractScheme data={CUSTOMER_SCHEME} step={view.step} steps={view.steps} translate />}
 
       <Paper variant="outlined" sx={{ p: 1.25, bgcolor: 'var(--panel)' }}>
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap', mb: 1 }}>

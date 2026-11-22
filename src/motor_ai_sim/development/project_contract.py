@@ -63,6 +63,8 @@ scheme_router = APIRouter(prefix="/api/contract-scheme", tags=["contract-scheme"
 CONTRACT_JSON = "contract/contract.json"
 FILES_DIR = "contract/files"
 STAFF_SCHEME = ("config", "contract", "supply_scheme_staff.json")
+#: the two stored schemes (owner 2026-11-22: a text change of the customer view needs no deploy): file name per kind
+SCHEME_FILES = {"staff": "supply_scheme_staff.json", "customer": "scheme_customer.json"}
 MAX_BYTES = 30 * 1024 * 1024
 _CHUNK = 1024 * 1024
 _NOTE_MAX = 300
@@ -239,25 +241,36 @@ def contract_store_root() -> Optional[Path]:
         return None
 
 
-def staff_scheme_path() -> Optional[Path]:
-    """The staff scheme: the shared-root store first, then the private data checkout (development), else None."""
+def scheme_path(kind: str = "staff") -> Optional[Path]:
+    """A stored scheme (``staff`` | ``customer``): the shared-root store first, then the private data checkout (development)."""
+    name = SCHEME_FILES[kind]
     base = contract_store_root()
-    if base is not None and (base / STAFF_SCHEME[-1]).is_file():
-        return base / STAFF_SCHEME[-1]
+    if base is not None and (base / name).is_file():
+        return base / name
     from motor_ai_sim.private_data import private_path
-    return private_path(*STAFF_SCHEME)
+    return private_path("config", "contract", name)
 
 
-def staff_scheme() -> Optional[dict]:
-    """The internal supply-chain scheme, or None when it is not configured (or does not pass :func:`validate_scheme`)."""
-    path = staff_scheme_path()
+def stored_scheme(kind: str = "staff") -> Optional[dict]:
+    """A stored scheme, or None when there is none (or it does not pass :func:`validate_scheme`) - the customer view then
+    shows the built-in one of the page, the staff view "not configured"."""
+    path = scheme_path(kind)
     if path is None:
         return None
     try:
         return validate_scheme(json.loads(path.read_text(encoding="utf-8")))
     except (OSError, ValueError) as exc:
-        log.warning("contract: staff scheme unreadable (%s)", exc)
+        log.warning("contract: %s scheme unreadable (%s)", kind, exc)
         return None
+
+
+def staff_scheme_path() -> Optional[Path]:
+    return scheme_path("staff")
+
+
+def staff_scheme() -> Optional[dict]:
+    """The internal supply-chain scheme, or None when it is not configured."""
+    return stored_scheme("staff")
 
 
 _SCHEME_TEXT_MAX = 200
@@ -412,6 +425,7 @@ def _view(project: dict, user: dict, contract: dict, include_archived: bool) -> 
             "staff": staff, "can_manage": staff, "upload_kinds": _upload_kinds(contract, staff),
             "terms_digest": terms_digest(contract, snap), "pending_scan": pending,
             "staff_scheme": staff_scheme() if staff else None,
+            "customer_scheme": stored_scheme("customer"),       # None: the page shows its built-in customer view
             # the standard documents of every project (owner 2026-11-22), read-only here; what a sent revision was made from
             "templates": templates,
             "template_only": status == "draft" and bool(templates.get("agreement")) and not any(
@@ -881,7 +895,7 @@ def _scheme_reader(request: Request) -> dict:
 def _scheme_admin(request: Request) -> dict:
     user = access.require_signed_in(request)
     if str(user.get("role") or "").lower() != "admin":
-        raise HTTPException(status_code=403, detail="Only MOTRES admins upload the staff scheme")
+        raise HTTPException(status_code=403, detail="Only MOTRES admins upload a contract scheme")
     return user
 
 
@@ -904,33 +918,48 @@ def write_strict(path: Path, data: bytes) -> None:
 
 
 def _keep_previous(path: Path) -> None:
-    """The previous file beside it as ``supply_scheme_staff.<time>-<random>.json``, created exclusively (never overwritten)."""
+    """The previous file beside it as ``<name>.<time>-<random>.json``, created exclusively (never overwritten)."""
     stamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
-    backup = path.with_name("supply_scheme_staff.%s-%s.json" % (stamp, secrets.token_hex(4)))
+    backup = path.with_name("%s.%s-%s.json" % (path.stem, stamp, secrets.token_hex(4)))
     with open(backup, "xb") as fh:
         fh.write(path.read_bytes())
         fh.flush()
         os.fsync(fh.fileno())
 
 
+def _kind(kind: str) -> str:
+    if kind not in SCHEME_FILES:
+        raise HTTPException(status_code=422, detail="kind is staff or customer")
+    return kind
+
+
 @scheme_router.get("")
-def get_scheme(request: Request):
-    """Where the scheme is and what it holds, for staff; the read is in the admin audit (who and the route, not the content)."""
-    user = _scheme_reader(request)
-    path = staff_scheme_path()
+def get_scheme(request: Request, kind: str = "staff"):
+    """Where a scheme is and what it holds.  ``staff``: MOTRES staff, the read is in the admin audit (who and the route, not the
+    content).  ``customer``: every signed-in account but a factory one (it is what every Contract section shows; no prices)."""
+    kind = _kind(kind)
+    if kind == "staff":
+        user = _scheme_reader(request)
+        from motor_ai_sim import admin_audit as _AA
+        _AA.record(_email(user), "contract.scheme_read", "GET /api/contract-scheme")
+    else:
+        user = access.require_signed_in(request)
+        if str(user.get("role") or "").lower() == "oem":
+            raise HTTPException(status_code=403, detail="Not available")
+    path = scheme_path(kind)
     base = contract_store_root()
-    from motor_ai_sim import admin_audit as _AA
-    _AA.record(_email(user), "contract.scheme_read", "GET /api/contract-scheme")
-    return {"store": str(base or ""), "source": "shared" if path and base and path.parent == base else ("private" if path else None),
-            "scheme": staff_scheme(), "can_upload": str(user.get("role") or "").lower() == "admin"}
+    return {"kind": kind, "store": str(base or "") if _staff(user) else "",
+            "source": "shared" if path and base and path.parent == base else ("private" if path else None),
+            "scheme": stored_scheme(kind), "can_upload": str(user.get("role") or "").lower() == "admin"}
 
 
 @scheme_router.put("")
-async def put_scheme(request: Request, replace_damaged: bool = False):
+async def put_scheme(request: Request, replace_damaged: bool = False, kind: str = "staff"):
     """The staff scheme as JSON (:func:`validate_scheme`), admins only, written atomically to the shared store; the previous file
     is kept beside it.  A stored file that is damaged is not replaced silently: 409 unless ``?replace_damaged=true`` (its bytes
     are kept as the previous version either way).  The body is capped while it arrives (413).  Admin audit ``contract.scheme``."""
     user = _scheme_admin(request)
+    kind = _kind(kind)
     base = contract_store_root()
     if base is None:
         raise HTTPException(status_code=503, detail="This server has no shared store for the contract documents")
@@ -944,7 +973,7 @@ async def put_scheme(request: Request, replace_damaged: bool = False):
     except (UnicodeDecodeError, ValueError) as exc:
         raise HTTPException(status_code=422, detail=f"The scheme is not valid: {exc}")
     from motor_ai_sim import json_store
-    path = base / STAFF_SCHEME[-1]
+    path = base / SCHEME_FILES[kind]
     try:
         base.mkdir(parents=True, exist_ok=True)
         with json_store.lock_for(path):
@@ -954,15 +983,15 @@ async def put_scheme(request: Request, replace_damaged: bool = False):
                 except (OSError, UnicodeDecodeError, ValueError):
                     if not replace_damaged:
                         raise HTTPException(status_code=409, detail=(
-                            "The stored staff scheme is damaged; it is kept as it is. Upload again with replace_damaged=true to "
+                            f"The stored {kind} scheme is damaged; it is kept as it is. Upload again with replace_damaged=true to "
                             "replace it (its bytes are kept as the previous version)"))
                 _keep_previous(path)
             write_strict(path, (json.dumps(scheme, ensure_ascii=False, indent=2) + "\n").encode("utf-8"))
     except OSError as exc:
-        log.error("contract: staff scheme not writable (%s)", exc)
-        raise HTTPException(status_code=503, detail="The staff scheme cannot be written on this server; nothing was changed")
+        log.error("contract: %s scheme not writable (%s)", kind, exc)
+        raise HTTPException(status_code=503, detail=f"The {kind} scheme cannot be written on this server; nothing was changed")
     from motor_ai_sim import admin_audit as _AA
-    _AA.record(_email(user), "contract.scheme", "supply_scheme_staff",
+    _AA.record(_email(user), "contract.scheme", SCHEME_FILES[kind],
                details={"nodes": len(scheme["nodes"]), "edges": len(scheme["edges"]), "version": scheme.get("version"),
                         "replaced_damaged": bool(replace_damaged)})
     return {"ok": True, "scheme": scheme}

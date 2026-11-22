@@ -112,6 +112,16 @@ def test_a_progress_only_entry_and_a_node_job_follow_the_same_rule(monkeypatch):
         assert e.value.status_code == 404
 
 
+def test_an_ownerless_progress_entry_is_not_readable_by_another_account():
+    P.registry().entry("pr0", create=True, route="transient", owner="")
+    with _as(B):
+        with pytest.raises(HTTPException) as e:
+            API.get_job("pr0")
+        assert e.value.status_code == 404
+    with _as(ADM, admin=True):
+        assert API.get_job("pr0")["state"] == "unknown"
+
+
 def test_the_legacy_result_poll_is_the_starters_only():
     from motor_ai_sim.routes import simulation as S
     S._jobs["leg1"] = {"owner": A, "status": "done", "progress": 1.0, "result": {"x": 1}, "error": None, "start_t": None}

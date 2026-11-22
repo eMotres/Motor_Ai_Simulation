@@ -112,7 +112,8 @@ def get_job(run_id: str) -> Dict[str, Any]:
         # It may still have a progress entry - a solve that never went through
         # the queue (a nested one, or a route not yet admitted) still reports.
         e = _PROG.registry().entry(run_id)
-        if e is None or (e.owner and not _may_read(e.owner)):
+        # An entry with NO owner is not public: an opaque run id is not authorisation (admin-only in layered mode).
+        if e is None or not _may_read(e.owner):
             raise HTTPException(status_code=404, detail="no such run")
         return {"run_id": run_id, "state": "unknown", "kind": e.kind,
                 "progress": {**e.snapshot(), "kind": e.kind}}

@@ -48,10 +48,58 @@ def test_run_one_hands_q_to_the_transient_only_when_it_is_set(monkeypatch):
 
     monkeypatch.setattr(R, "_kernel", lambda: K())
     for q in (None, 144):
-        with pytest.raises(Exception):
+        with pytest.raises(RuntimeError, match="stop here"):
             R.run_one({}, 10.0, 48, 120.0, slip_per_period=q)
-    if len(seen) == 2:                                                # (run_one may stop earlier on a bare config)
-        assert "slip_per_period" not in seen[0] and seen[1]["slip_per_period"] == 144
+    assert len(seen) == 2                                             # unconditional: both calls reached the kernel seam
+    assert "slip_per_period" not in seen[0] and seen[1]["slip_per_period"] == 144
+
+
+@pytest.mark.parametrize("bad", [25.9, "bad", True, float("nan"), 0, 23, 2401, "144"])
+def test_one_strict_whole_number_check_on_every_transport(bad):
+    from motor_ai_sim.simulation.slip_ring import validate_slip_per_period as v
+    with pytest.raises(ValueError, match="slip_per_period"):
+        v(bad)
+    import motor_ai_sim.optimization.refine_proc as R
+    with pytest.raises(ValueError, match="slip_per_period"):      # run_one refuses before any work, never int()-truncates
+        R.run_one({}, 10.0, 48, 120.0, slip_per_period=bad)
+    from motor_ai_sim.routes.simulation import get_fem_transient
+    with pytest.raises(HTTPException) as e:                        # the route as the kernel seam calls it (no FastAPI parsing)
+        get_fem_transient(slip_per_period=bad, n_steps_per_period=48)
+    assert e.value.status_code == 422 and "slip_per_period" in e.value.detail
+
+
+def test_a_whole_valued_q_is_accepted_and_none_stays_none():
+    from motor_ai_sim.simulation.slip_ring import validate_slip_per_period as v
+    assert v(None) is None and v(144) == 144 and v(144.0) == 144 and v(24) == 24 and v(2400) == 2400
+
+
+def test_the_kernel_seam_refuses_a_fractional_or_text_q_with_a_failed_result():
+    from motor_ai_sim.modules.solvers import EmTransientSolver
+    for bad in (25.9, "bad"):
+        out = EmTransientSolver().run({"slip_per_period": bad, "n_steps_per_period": 48})
+        assert "slip_per_period" in str(out.model_dump() if hasattr(out, "model_dump") else out)
+
+
+def _stamped(q):
+    return {"T_avg_Nm": 1.0, "slip_per_period_requested": q, "slip_per_period_pole_pairs": 5,
+            "slip_per_period_n_sectors": 1, "slip_per_period_gap_layers": 1.0}
+
+
+@pytest.mark.parametrize("asked,internal", [(None, 48), (25, 48), (144, 144)])
+def test_refinement_keeps_the_external_request_and_adds_no_key_when_none_was_asked(monkeypatch, asked, internal):
+    """The refinement / probe re-solves stamp their effective ring as 'requested'; the public boundary puts the real request back."""
+    import motor_ai_sim.simulation.fem_solver_2d as F
+    monkeypatch.setattr(F, "_solve_with_gap_refinement", lambda kw, gap_refine=False: _stamped(internal))
+    res = F.em_transient_eval(n_steps_per_period=48, n_periods=1.0, gamma_deg=0.0, I_phase_rms=10.0, slip_per_period=asked)
+    if asked is None:
+        assert not [k for k in res if k.startswith("slip_per_period")]
+    else:
+        assert res["slip_per_period_requested"] == asked              # 25 stays 25 although the effective ring is 48
+
+
+def test_restore_helper_is_pure_on_a_result_without_the_keys():
+    from motor_ai_sim.simulation.slip_ring import restore_request_provenance as r
+    assert r({"a": 1}, None) == {"a": 1} and r({"a": 1}, 48) == {"a": 1, "slip_per_period_requested": 48}
 
 
 def test_the_solver_reports_the_request_next_to_the_effective_ring():

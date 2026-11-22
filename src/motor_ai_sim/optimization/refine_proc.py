@@ -164,6 +164,8 @@ def run_one(overrides: Dict[str, float], current_a: float, steps: int,
     import numpy as np, json
     if sampling_purpose not in ("standard", "optimization", "cogging_quality"):
         raise ValueError("invalid sampling_purpose")
+    from motor_ai_sim.simulation.slip_ring import validate_slip_per_period as _vq
+    _q = _vq(slip_per_period)       # strict whole number or ValueError: never int()-truncated on the way to the kernel
     optimizer_candidate = bool(optimizer_candidate) and sampling_purpose == "optimization"
     from motor_ai_sim.optimization.design_eval import build_params, _masses
     from motor_ai_sim.config import get_config
@@ -314,7 +316,7 @@ def run_one(overrides: Dict[str, float], current_a: float, steps: int,
         "min_size_mm": float(min_size_mm), "n_sectors": int(_ns),
         "coil_temp_c": float(coil_temp_c), # None = the machine's saved Mesh setting (the route resolves it)
         "gap_layers": (None if gap_layers is None else float(gap_layers)),
-        **({} if not slip_per_period else {"slip_per_period": int(slip_per_period)}),
+        **({} if _q is None else {"slip_per_period": _q}),
         # MAGNET TEMPERATURE.  Omitted (None) = the assigned card exactly as the
         # library quotes it — what every study so far solved, so an omitted
         # argument changes no candidate's numbers.  Sent, every candidate is

@@ -15886,6 +15886,8 @@ def em_transient_eval(
     disk-save (those UI concerns stay in the route, which wraps this). Returns the
     raw sliding-band result dict (sbres).
     """
+    from motor_ai_sim.simulation import slip_ring as _slip_ring
+    _ext_q = _slip_ring.validate_slip_per_period(slip_per_period)   # the external request, captured once at the boundary
     _kw = dict(
         n_steps_per_period=int(n_steps_per_period), n_periods=float(n_periods),
         sampling_purpose=_sampling_purpose(sampling_purpose),
@@ -15926,8 +15928,10 @@ def em_transient_eval(
         # B(t) history is complete, which is what the loss map and the coupled
         # eddy J are derived from.
         return_field=bool(return_field), torque_method=torque_method,
-        **({} if not slip_per_period else {"slip_per_period": int(slip_per_period)}))
-    return _solve_with_gap_refinement(_kw, gap_refine=bool(gap_refine))
+        **({} if _ext_q is None else {"slip_per_period": _ext_q}))
+    # refinement / probe re-solves run on the effective ring and stamp it as "requested": put the external request back
+    return _slip_ring.restore_request_provenance(
+        _solve_with_gap_refinement(_kw, gap_refine=bool(gap_refine)), _ext_q)
 
 
 # Opt-in until a physical qualification demonstrates that the probe rule is safe.

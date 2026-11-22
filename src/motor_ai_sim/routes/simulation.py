@@ -5185,12 +5185,12 @@ def get_fem_transient(
             torque_method, (_get_cfg_tm() or {}).get("simulation", {}))
     except ValueError as _tme:
         raise HTTPException(status_code=422, detail=str(_tme))
-    if slip_per_period is not None:
-        if isinstance(slip_per_period, bool) or not (24 <= int(slip_per_period) <= 2400):
-            raise HTTPException(status_code=422, detail=(
-                "slip_per_period must be a whole number of ring nodes per electrical period, 24..2400 "
-                "(it is snapped up to a multiple of 24 and of the sector count)"))
-        slip_per_period = int(slip_per_period)
+    if slip_per_period is not None:     # the same strict check as the kernel and run_one (no int() truncation of 25.9)
+        from motor_ai_sim.simulation.slip_ring import validate_slip_per_period as _vq
+        try:
+            slip_per_period = _vq(slip_per_period)
+        except ValueError as _qe:
+            raise HTTPException(status_code=422, detail=str(_qe))
     # MESH SETTINGS come only from the Mesh tab (owner 2026-09-30): what the
     # request carries, else the machine's saved Mesh settings, else a labelled
     # last-resort fallback that the result reports (mesh_settings.py).

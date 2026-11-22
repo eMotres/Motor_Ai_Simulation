@@ -1,0 +1,130 @@
+{
+  "tab": "合同",
+  "scheme": {
+    "title": "运作方式",
+    "tip": "谁与谁签约，资金如何流动，货物如何流动。",
+    "view": "示意图视图",
+    "customerView": "客户视图",
+    "staffView": "内部视图",
+    "staffMissing": "本服务器尚未配置内部示意图。",
+    "customer": "客户",
+    "customerSub": "签署合同、付款，并作为货物的进口方",
+    "motres": "MOTRES d.o.o.",
+    "motresSub": "斯洛文尼亚。合同与唯一发票；开发、仿真与技术支持",
+    "china": "中国制造",
+    "chinaSub": "由 MOTRES 上海公司出口，直接发运给客户",
+    "money": "付款：100 % 预付",
+    "goods": "货物：DAP，直接发运",
+    "docsMotres": "合同、发票、测试报告",
+    "docsChina": "装箱单",
+    "noteImporter": "客户为进口方，承担进口关税和进口增值税。",
+    "noteSupport": "开发、仿真与技术支持由 MOTRES d.o.o. 提供。",
+    "legend": {
+      "money": "资金",
+      "goods": "货物",
+      "documents": "文件"
+    },
+    "upload": "上传示意图（JSON）",
+    "uploadCustomer": "上传客户示意图（JSON）",
+    "confirmTitle": "发布示意图",
+    "confirmCustomer": "{name} 将成为合同栏目所有读者（包括客户）看到的示意图。",
+    "confirmStaff": "{name} 将成为内部示意图：仅 MOTRES 员工可见。",
+    "audienceMismatch": "该文件标注的受众为“{marked}”，而非“{kind}”：不会发布。请在文件中设置 \"audience\"。",
+    "confirmPublish": "发布"
+  },
+  "steps": {
+    "title": "项目步骤",
+    "specification": "规格",
+    "simulation_agreement": "仿真与确认",
+    "contract_payment": "合同与付款",
+    "samples_1": "样品第 1 轮（测试）",
+    "samples_2": "样品第 2 轮（测试）",
+    "series": "批量"
+  },
+  "status": {
+    "title": "状态",
+    "tip": "每一步都记录日期和操作人。签署方式：下载 PDF，签字后上传扫描件。",
+    "draft": "草稿",
+    "sent": "已发送",
+    "signed_customer": "客户已签署",
+    "signed_both": "双方已签署",
+    "set": {
+      "sent": "标记为已发送",
+      "newRevision": "创建新版本"
+    },
+    "sendTip": "冻结本版本的合同和附件；随后由客户上传签字扫描件。",
+    "newRevisionTip": "作为新版本退回草稿：条款可修改，双方需重新签署。",
+    "scan_uploaded": "已上传扫描件",
+    "scan_rejected": "扫描件被退回"
+  },
+  "sampleIteration": "样品轮次",
+  "files": {
+    "title": "合同与附件",
+    "tip": "每次上传都是一个新版本，之前的版本会保留。",
+    "none": "尚未上传。"
+  },
+  "kind": {
+    "agreement": "合同",
+    "annex_a": "附件 A：产品、保证值、测试条件",
+    "annex_b": "附件 B：商务条款",
+    "signed_customer": "客户签署的扫描件",
+    "signed_motres": "MOTRES 签署的扫描件",
+    "other": "其他"
+  },
+  "annexATip": "附件 A 将根据项目的保证值生成；在此之前以上传方式提供。",
+  "company": {
+    "filled": "公司信息已填写",
+    "confirmed": "公司信息已于 {date} 确认",
+    "missing": "缺少公司信息",
+    "filledTip": "附件 B 中的客户公司信息取自“公司信息”表单。",
+    "missingTip": "客户填写“公司信息”表单后，附件 B 将采用其中的公司信息。",
+    "notYetTip": "“公司信息”表单暂不可用。"
+  },
+  "terms": {
+    "title": "标准条款",
+    "tip": "标准合同对所有客户相同。",
+    "advance": "付款：100 % 预付。",
+    "samples": "样品为测试件，不提供质保；样品未达到的保证值将在下一轮中予以考虑。",
+    "series": "批量：自 DAP 交付起质保 12 个月，前提是至少完成两轮样品并经过完整测试。",
+    "dispatch": "收到付款后两个月内发货。",
+    "supply": "由中国直接供货给客户。",
+    "law": "适用斯洛文尼亚法律；由卢布尔雅那法院管辖。"
+  },
+  "pickFile": "选择文件（PDF、DOCX、PNG、JPG）",
+  "note": "备注",
+  "cancel": "取消",
+  "upload": "上传",
+  "uploadNew": "上传新版本",
+  "download": "下载",
+  "archive": "归档",
+  "restore": "恢复",
+  "archived": "已归档",
+  "showArchived": "显示已归档",
+  "revision": "版本 {n}",
+  "revisionShort": "第 {n} 版",
+  "frozenTip": "本版本的签署依据此文件：不可替换或归档。如需修改条款，请创建新版本。",
+  "review": {
+    "awaitingCustomer": "您的签字扫描件 {name} 正在等待 MOTRES 审核。",
+    "awaitingStaff": "签字扫描件 {name} 等待您审核：打开后确认或退回。",
+    "open": "打开",
+    "confirmCustomer": "确认客户已签署",
+    "confirmBoth": "确认双方已签署",
+    "reject": "退回",
+    "rejectTitle": "退回扫描件",
+    "reason": "原因"
+  },
+  "template": {
+    "only": "仅模板",
+    "onlyTip": "项目尚无自己的条款：发送的是标准合同。",
+    "agreement": "标准合同（模板 {version}）",
+    "annex_a": "附件 A 空白（模板 {version}）",
+    "annex_b": "附件 B 空白（模板 {version}）",
+    "upload": "新模板版本",
+    "uploadTitle": "标准文件的新版本",
+    "kind": "文件",
+    "version": "版本",
+    "pickFile": "选择文件（PDF、DOCX）",
+    "ref": "标准合同 {version}",
+    "unavailable": "本服务器上的标准合同文件需要修复：目前不显示也不发送。"
+  }
+}

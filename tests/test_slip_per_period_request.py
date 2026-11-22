@@ -106,3 +106,13 @@ def test_the_solver_reports_the_request_next_to_the_effective_ring():
     import motor_ai_sim.simulation.fem_solver_2d as F
     src = inspect.getsource(F._fem_transient_sliding_band_once)
     assert '"slip_per_period_requested"' in src and '"slip_nodes_per_period"' in src and "snap_slip_per_period" in src
+
+
+def test_numpy_whole_numbers_are_accepted_and_numpy_fractions_refused():
+    import numpy as np
+    from motor_ai_sim.simulation.slip_ring import validate_slip_per_period as v
+    assert v(np.int64(96)) == 96 and type(v(np.int64(96))) is int
+    assert v(np.float64(96.0)) == 96
+    for bad in (np.float64(25.9), np.float64("nan"), np.bool_(True)):
+        with pytest.raises(ValueError):
+            v(bad)

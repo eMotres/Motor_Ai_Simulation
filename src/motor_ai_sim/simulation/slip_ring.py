@@ -8,6 +8,7 @@ result next to the requested q.  Pure; used by ``fem_solver_2d``.
 from __future__ import annotations
 
 import math
+import numbers
 
 GRID = 24
 Q_MIN, Q_MAX = 24, 2400
@@ -26,10 +27,14 @@ def validate_slip_per_period(q):
         return None
     msg = ("slip_per_period must be a whole number of ring nodes per electrical period, %d..%d "
            "(it is snapped up to a multiple of 24 and of the sector count)" % (Q_MIN, Q_MAX))
-    if isinstance(q, bool) or not isinstance(q, (int, float)):
+    if isinstance(q, bool) or not isinstance(q, numbers.Real):      # numpy ints and floats are Real
         raise ValueError(msg)
-    if isinstance(q, float) and (not math.isfinite(q) or q != int(q)):
-        raise ValueError(msg)
+    if not isinstance(q, numbers.Integral):
+        try:
+            if not math.isfinite(q) or q != int(q):
+                raise ValueError(msg)
+        except (OverflowError, TypeError):
+            raise ValueError(msg)
     if not (Q_MIN <= int(q) <= Q_MAX):
         raise ValueError(msg)
     return int(q)

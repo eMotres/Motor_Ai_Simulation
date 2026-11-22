@@ -39,7 +39,7 @@ export interface ContractView {
 export type SchemeText = string | { en?: string; zh?: string };
 export interface SchemeNode { id: string; label: SchemeText; sub?: SchemeText; x: number; y: number; w?: number; h?: number }
 export interface SchemeEdge { from: string; to: string; kind: 'money' | 'goods' | 'documents'; label?: SchemeText; bend?: number }
-export interface SchemeData { nodes: SchemeNode[]; edges: SchemeEdge[]; notes?: SchemeText[] }
+export interface SchemeData { nodes: SchemeNode[]; edges: SchemeEdge[]; notes?: SchemeText[]; /** whom the file is for */ audience?: 'customer' | 'staff' }
 
 /** The customer view (task 2026-11-22): no factory name, no internal prices, no transfer price; the customer is the importer. */
 export const CUSTOMER_SCHEME: SchemeData = {
@@ -92,7 +92,8 @@ export const contractApi = {
     { file_id: scan.id, sha256: scan.sha256, ...seen }),
   reject: (projectId: string, scan: ContractFileRef, seen: Seen, reason: string) => post<ContractView>(`${contractBase(projectId)}/reject`,
     { file_id: scan.id, sha256: scan.sha256, ...seen, reason }),
-  /** admins: the staff scheme as JSON, checked by the server (422 names what is wrong) */
+  /** admins: a contract scheme (staff or customer) as JSON, checked by the server (422 names what is wrong, also an
+   *  "audience" that is not ``kind``) */
   putScheme: (text: string, kind: 'staff' | 'customer' = 'staff') => fetch(`${API}/api/contract-scheme?kind=${kind}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: text })
     .then((r) => json<{ ok: boolean }>(r)),
   /** the standard document (current, or the version a sent revision was made from) */

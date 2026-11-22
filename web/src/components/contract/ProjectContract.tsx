@@ -62,6 +62,7 @@ const ProjectContract: React.FC<{ projectId: string; isAdmin?: boolean }> = ({ p
   const [rejecting, setRejecting] = useState<{ scan: ContractFileRef; seen: Seen } | null>(null);
   const [rejectReason, setRejectReason] = useState('');
   const [tplOpen, setTplOpen] = useState(false);
+  const [schemeUpload, setSchemeUpload] = useState<{ kind: 'staff' | 'customer'; text: string; name: string; marked: string | null } | null>(null);
   const [tplKind, setTplKind] = useState<'agreement' | 'annex_a' | 'annex_b'>('agreement');
   const [tplVersion, setTplVersion] = useState('');
   const [tplFile, setTplFile] = useState<File | null>(null);
@@ -130,7 +131,11 @@ const ProjectContract: React.FC<{ projectId: string; isAdmin?: boolean }> = ({ p
             {t(scheme === 'staff' && view.staff ? 'scheme.upload' : 'scheme.uploadCustomer')}
             <input hidden type="file" accept=".json,application/json" onChange={(e) => { const f = e.target.files?.[0]; e.target.value = '';
               const kind = scheme === 'staff' && view.staff ? 'staff' : 'customer';
-              if (f) void run(async () => { await contractApi.putScheme(await f.text(), kind); await load(); }); }} />
+              if (f) void f.text().then((text) => {                  // asked first: whom does this go to (the file says whom it is for)
+                let marked: string | null = null;
+                try { const a = (JSON.parse(text) as { audience?: unknown }).audience; marked = typeof a === 'string' ? a : null; } catch { /* the server names it */ }
+                setSchemeUpload({ kind, text, name: f.name, marked });
+              }); }} />
           </Button>
         </Box>
       )}
@@ -277,6 +282,25 @@ const ProjectContract: React.FC<{ projectId: string; isAdmin?: boolean }> = ({ p
 
       <UploadDialog kind={uploadKind} busy={busy} onClose={() => setUpload(null)}
         onSubmit={(f, note) => { const u = upload; if (u) void run(async () => { try { return await contractApi.upload(projectId, u.kind, f, note, u.seen); } finally { setUpload(null); } }); }} />
+      <Dialog open={schemeUpload !== null} onClose={busy ? undefined : () => setSchemeUpload(null)} maxWidth="xs" fullWidth>
+        <DialogTitle sx={{ fontSize: 16 }}>{t('scheme.confirmTitle')}</DialogTitle>
+        <DialogContent sx={{ display: 'flex', flexDirection: 'column', gap: 1, pt: '8px !important' }}>
+          <Alert severity={schemeUpload?.kind === 'customer' ? 'warning' : 'info'} data-testid="contract-scheme-audience">
+            {t(schemeUpload?.kind === 'customer' ? 'scheme.confirmCustomer' : 'scheme.confirmStaff', { name: schemeUpload?.name ?? '' })}
+          </Alert>
+          {schemeUpload && schemeUpload.marked !== schemeUpload.kind && (
+            <Alert severity="error">{t('scheme.audienceMismatch', { marked: schemeUpload.marked ?? '-', kind: schemeUpload.kind })}</Alert>
+          )}
+        </DialogContent>
+        <DialogActions>
+          <Button size="small" onClick={() => setSchemeUpload(null)} disabled={busy}>{t('cancel')}</Button>
+          <Button size="small" variant="contained" color={schemeUpload?.kind === 'customer' ? 'warning' : 'primary'} data-testid="contract-scheme-confirm"
+            disabled={busy || !schemeUpload || schemeUpload.marked !== schemeUpload.kind}
+            onClick={() => { const u = schemeUpload; if (u) void run(async () => { try { await contractApi.putScheme(u.text, u.kind); } finally { setSchemeUpload(null); } await load(); }); }}>
+            {t('scheme.confirmPublish')}
+          </Button>
+        </DialogActions>
+      </Dialog>
       <Dialog open={tplOpen} onClose={busy ? undefined : () => setTplOpen(false)} maxWidth="xs" fullWidth>
         <DialogTitle sx={{ fontSize: 16 }}>{t('template.uploadTitle')}</DialogTitle>
         <DialogContent sx={{ display: 'flex', flexDirection: 'column', gap: 1.5, pt: '8px !important' }}>

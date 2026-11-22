@@ -45,6 +45,13 @@ import { shownStatus } from '../projectStage';
   import { createFromHandoff } from '../../../lib/support';
   import ProjectDocuments from './ProjectDocuments';
   import ProjectProductions from './ProjectProductions';
+  import ProjectModel3DTabLabel from '../../../components/model3d/ProjectModel3DTabLabel';   // tab "3D model" (owner 2026-11-22); the viewer is lazy
+  import { lazy as lazyModel3d, Suspense as Model3DSuspense } from 'react';
+  import { watchChunkImport as watchModel3dChunk } from '../../../lib/chunkReload';
+  import ContractTabLabel from '../../../components/contract/ContractTabLabel';   // section "Contract" (owner 2026-11-22); the section is lazy
+  import { useContractVisible } from '../../../components/contract/contractModel';
+  import { lazy as lazyContract, Suspense as ContractSuspense } from 'react';
+  import { watchChunkImport as watchContractChunk } from '../../../lib/chunkReload';
   import CostEstimateWizard from './costEstimate/CostEstimateWizard';
   import ProjectQuote from './ProjectQuote';
   import ProjectTimeline from './ProjectTimeline';
@@ -75,7 +82,9 @@ import { shownStatus } from '../projectStage';
   import { developmentViewScope, parseDevelopmentView, restorableView, type DevelopmentView } from '../viewState';
   import { appLinkPath, newProjectIntent, parseAppLink, type AppLink } from '../../../lib/appLink';
   import DigestSettings from '../../../components/digest/DigestSettings';
-type ViewTab = 'specification' | 'motors' | 'messages' | 'notes' | 'documents' | 'production' | 'timeline' | 'quote' | 'cost';
+const ProjectModel3D = lazyModel3d(watchModel3dChunk(() => import('../../../components/model3d/ProjectModel3D')));   // tab "3D model" (owner 2026-11-22): the viewer loads when the tab opens
+const ProjectContract = lazyContract(watchContractChunk(() => import('../../../components/contract/ProjectContract')));   // section "Contract" (owner 2026-11-22): loads when the tab opens
+type ViewTab = 'specification' | 'motors' | 'messages' | 'notes' | 'documents' | 'production' | 'timeline' | 'quote' | 'cost' | 'model3d' | 'contract';
 const DEFAULT_DRAFT: SpecDraft = { schema_version: 2, fields: {}, mission_profile: [], production: {} };
 /** The ONE progress number everywhere (owner 2026-11-06): the required fields ANSWERED of all required.  A field marked "Answer later" is not
  *  answered; `filled_required` of the API counts it, so it is only the fallback of an answer that has no `answered`. */
@@ -102,6 +111,8 @@ export default function DevelopmentPage() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [view, setView] = useState<ViewTab>('specification');
+  const contractVisible = useContractVisible(selected?.id);   // the server decides (staff, owner, members who see prices); null = not known yet
+  useEffect(() => { if (view === 'contract' && contractVisible === false) setView('specification'); }, [view, contractVisible]);   // a remembered Contract view the caller may not open
   const [viewMode, setViewMode] = useViewMode(VIEW_MODE_KEYS.development, 'cards');
   // a closed project leaves the list; the box brings the closed ones back (owner 2026-11-12)
   const [showClosed, setShowClosed] = useState(false);
@@ -622,7 +633,7 @@ export default function DevelopmentPage() {
     const id = selected.id; const token = projectToken.current;
     try {
       if (tab === 'messages') { const result = await developmentApi.thread(id); if (projectToken.current === token && currentProjectRef.current === id) setMessages(result); }
-      if (tab === 'motors') await loadProjectMotors(id, token);
+      if (tab === 'motors' || tab === 'model3d') await loadProjectMotors(id, token);   // 3D model: the linked configurations (owner 2026-11-22)
     } catch (e) { if (projectToken.current === token && currentProjectRef.current === id) setError(e instanceof Error ? e.message : String(e)); }
   };
   // ...and once that project is loaded, show the view the link named (a motor step opens the Motors view)
@@ -766,6 +777,7 @@ export default function DevelopmentPage() {
         { id: 'motors', label: tr('tabs.motors') },
         { id: 'messages', label: projectUnread(selected) > 0 ? <Tooltip title={tr('unread.tip', { count: projectUnread(selected) })}><span>{tr('tabs.messages')} <Chip size="small" color="primary" label={unreadLabel(projectUnread(selected))} sx={{ height: 16, fontSize: 10, ml: 0.5 }} /></span></Tooltip> : tr('tabs.messages') },
         { id: 'documents' as const, label: tr('tabs.documents') },
+        { id: 'model3d' as const, label: <ProjectModel3DTabLabel /> },   // the SAME viewer as Configure (owner 2026-11-22)
         ...(hasProductionView(productions) ? [{ id: 'production' as const, label: tr('tabs.production') }] : []),
         ...(canManageGlobally ? [{ id: 'notes' as const, label: tr('tabs.notes') }] : []),
         // the quote an admin shared (owner 2026-11-03): read-only, for the project's members (the server decides who may read it)
@@ -773,6 +785,7 @@ export default function DevelopmentPage() {
         ...(selected.timeline_ready || isAdmin ? [{ id: 'timeline' as const, label: tr('tabs.timeline') }] : []),
         ...(selected.quote_shared ? [{ id: 'quote' as const, label: tr('tabs.quote') }] : []),
         // ADMIN ONLY (owner 2026-11-02): the project cost estimate; never for the customer, a viewer, the factory or an agent
+        ...(contractVisible ? [{ id: 'contract' as const, label: <ContractTabLabel /> }] : []),   // next to Cost estimate (owner 2026-11-22)
         ...(isAdmin ? [{ id: 'cost' as const, label: tr('tabs.cost') }] : []),
       ]} />
       </Box>
@@ -844,6 +857,8 @@ export default function DevelopmentPage() {
     </Box>}
     {view === 'messages' && <Box><Stack spacing={0.8} sx={{ mb: 1 }}>{messages.map((m, i) => <Box key={`${m.created_at}-${i}`}>{i === firstUnreadIndex(messages, shownUnread) && <Divider sx={{ mb: 0.8, fontSize: 10.5 }}><Chip size="small" color="primary" label={tr('unread.new')} sx={{ height: 16, fontSize: 10 }} /></Divider>}<Paper sx={{ p: 1, bgcolor: 'var(--panel-2)', ...(m.id && shownUnread.has(m.id) ? { borderLeft: '3px solid', borderLeftColor: 'primary.main' } : {}) }}><Typography sx={{ fontSize: 10, color: 'var(--text-3)' }}>{m.author_display_name || tr('projectMember')} · {m.created_at}</Typography><Typography sx={{ fontSize: 12, whiteSpace: 'pre-wrap', color: 'var(--text-1)' }}>{m.text}</Typography>{m.field_ref && <Chip size="small" label={m.field_ref} />}</Paper></Box>)}</Stack><Box sx={{ display: 'flex', gap: 1 }}><TextField size="small" fullWidth multiline maxRows={4} value={message} onChange={(e) => setMessage(e.target.value)} placeholder={tr('writeMessage')} /><Select size="small" displayEmpty value={messageFieldRef} onChange={(e) => setMessageFieldRef(e.target.value)}><MenuItem value="">{tr('noFieldReference')}</MenuItem>{sections.flatMap((section) => (section.fields ?? []).map((f) => <MenuItem key={`${section.id}:${f.id}`} value={`${section.id}:${f.id}`}>{label(f.short_label ?? f.label)}</MenuItem>))}</Select><Button disabled={busy || !message.trim()} onClick={() => void postMessage()}>{tr('send')}</Button></Box><Typography sx={{ mt: 0.5, fontSize: 10.5, color: 'var(--text-4)' }}>{tr('noEmail')}</Typography></Box>}
     {view === 'documents' && <ProjectDocuments projectId={selected.id} language={i18n.language} t={tr} onCoverChange={(version) => { setSelected((cur) => (cur && cur.id === selected.id ? { ...cur, cover_version: version } : cur)); }} />}
+    {view === 'model3d' && <Model3DSuspense fallback={<CircularProgress size={18} />}><ProjectModel3D projectId={selected.id} motors={[...motors.filter((m) => m.kind !== 'history' && m.recommended), ...motors.filter((m) => m.kind !== 'history' && !m.recommended)]} language={i18n.language} /></Model3DSuspense>}
+    {view === 'contract' && contractVisible && <ContractSuspense fallback={<CircularProgress size={18} />}><ProjectContract projectId={selected.id} isAdmin={isAdmin} /></ContractSuspense>}
     {view === 'production' && <ProjectProductions projectId={selected.id} entries={productions} language={i18n.language} t={tr} />}
     {view === 'timeline' && (selected.timeline_ready || isAdmin) && <ProjectTimeline key={selected.id} projectId={selected.id} isAdmin={isAdmin} language={i18n.language} t={tr}
       onReady={(value) => setSelected((cur) => (cur && cur.id === selected.id && cur.timeline_ready !== value ? { ...cur, timeline_ready: value } : cur))} />}

@@ -1152,9 +1152,12 @@ def _release_member_grants(project: dict, project_id: str, email: str, reason: s
         log.warning("project %s: motor grants of %s not released", project_id, email, exc_info=True)
 
 
-def _apply_member(project_id: str, email: str, role: str) -> tuple[dict, bool]:
+def _apply_member(project_id: str, email: str, role: str, sees_prices: bool | None = None) -> tuple[dict, bool]:
     """Add or re-role `email` on a project: a member when the account exists, else a pending invite.
-    Returns (entry, account_found). Shared by POST /members and by the sign-in invite claim."""
+    Returns (entry, account_found). Shared by POST /members and by the sign-in invite claim.
+
+    ``sees_prices`` (owner 2026-11-22): None keeps what the member (or the pending invite) already carries, True / False sets it;
+    an owner never carries the flag (owners always see prices) and it is stored only when true."""
     entry = {"email": email, "role": role}
     from motor_ai_sim.development.motors import transaction, _sync_grants, _mark_removal_candidates, _key, MOTOR_GRANT_ROLES
     with transaction(), users._LOCK:
@@ -1167,6 +1170,11 @@ def _apply_member(project_id: str, email: str, role: str) -> tuple[dict, bool]:
         project_before = copy.deepcopy(project)
         membership_before = store.load_membership_index()
         old_role = next((m.get("role") for m in project.get("members", []) if m.get("email", "").lower() == email), None)
+        if sees_prices is None:
+            sees_prices = any(m.get("sees_prices") is True for m in [*project.get("members", []), *project.get("pending_invites", [])]
+                              if str(m.get("email") or "").lower() == email)
+        if sees_prices and role != "owner":
+            entry["sees_prices"] = True
         updated = copy.deepcopy(project)
         updated["members"] = [m for m in updated.get("members", []) if m.get("email", "").lower() != email]
         if account:
@@ -1223,7 +1231,7 @@ def claim_pending_invites(email: str) -> list[str]:
         if not invite:
             continue
         role = str(invite.get("role") or "customer")
-        _entry, found = _apply_member(project["id"], email, role)
+        _entry, found = _apply_member(project["id"], email, role, sees_prices=invite.get("sees_prices") is True)
         if found:
             store.append_audit(project["id"], email, "invite_claimed", "member", email, {"role": role})
             claimed.append(project["id"])
@@ -1281,10 +1289,19 @@ async def add_member(request: Request, project_id: str):
     if not email or not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", email) or role not in ("customer", "engineer", "owner"):
         raise HTTPException(status_code=422, detail="Valid email and role required")
     before = store.get_project(project_id) or {}
+    want_prices = body.get("sees_prices") if isinstance(body, dict) else None
+    if want_prices is not None and not isinstance(want_prices, bool):
+        raise HTTPException(status_code=422, detail="sees_prices must be true or false")
+    # only an owner of the project or an admin decides who sees the prices: an engineer member can neither switch the flag nor make
+    # somebody (himself included) an owner, which would be the same thing (owner 2026-11-22)
+    if (want_prices is not None or role == "owner") and not (access.sees_prices(user, before) and (
+            str(user.get("role") or "").lower() == "admin" or access.membership(_email(user), before) == "owner")):
+        raise HTTPException(status_code=403, detail="Only a project owner or an admin sets who sees the prices")
     known = any(str(m.get("email") or "").lower() == email for m in [*before.get("members", []), *before.get("pending_invites", [])])
-    entry, found = _apply_member(project_id, email, role)
+    entry, found = _apply_member(project_id, email, role, sees_prices=want_prices)
     account = found
-    store.append_audit(project_id, _email(user), "invite", "member", email, {"role": role, "pending": not bool(account)})
+    store.append_audit(project_id, _email(user), "invite", "member", email,
+                       {"role": role, "pending": not bool(account), **({"sees_prices": want_prices} if want_prices is not None else {})})
     if not known:
         _notify_added_member(project_id, email, user)
     answer = {"invited": True, "email": email, "role": role}
@@ -1293,6 +1310,43 @@ async def add_member(request: Request, project_id: str):
         # address has an account or not
         answer.update(member=entry if account else None, pending=not bool(account))
     return answer
+
+
+@router.patch("/{project_id}/members/sees_prices")
+async def set_member_sees_prices(request: Request, project_id: str):
+    """The project owner (or an admin) switches ONE member's ``sees_prices`` (owner 2026-11-22).  Owners always see prices and are
+    not switchable; a pending invite carries the flag until it is claimed.  Audited: who, when, for whom."""
+    user, _, _ = access.require_project(request, project_id, edit=True)
+    body = await request.json()
+    email = str(body.get("email") or "").strip().lower() if isinstance(body, dict) else ""
+    value = body.get("sees_prices") if isinstance(body, dict) else None
+    if not email or not isinstance(value, bool):
+        raise HTTPException(status_code=422, detail="email and sees_prices (true / false) required")
+    project = store.get_project(project_id) or {}
+    if not (str(user.get("role") or "").lower() == "admin" or access.membership(_email(user), project) == "owner"):
+        raise HTTPException(status_code=403, detail="Only a project owner or an admin sets who sees the prices")
+    holder = next((m for m in [*project.get("members", []), *project.get("pending_invites", [])]
+                   if str(m.get("email") or "").lower() == email), None)
+    if holder is None:
+        raise HTTPException(status_code=404, detail="Member not found")
+    if holder.get("role") == "owner":
+        raise HTTPException(status_code=422, detail="A project owner always sees the prices")
+    before = holder.get("sees_prices") is True
+
+    def mutate(doc: dict) -> None:
+        for key in ("members", "pending_invites"):
+            for m in doc.get(key, []):
+                if isinstance(m, dict) and str(m.get("email") or "").lower() == email:
+                    if value:
+                        m["sees_prices"] = True
+                    else:
+                        m.pop("sees_prices", None)
+        doc["updated_at"] = models.now()
+
+    store.mutate_project(project_id, mutate)
+    if before != value:
+        store.append_audit(project_id, _email(user), "sees_prices", "member", email, {"from": before, "to": value})
+    return {"email": email, "sees_prices": value}
 
 
 @router.delete("/{project_id}/members")

@@ -17,6 +17,21 @@ def membership(email: str, project: dict) -> str | None:
     return None
 
 
+def sees_prices(user: dict | None, project: dict) -> bool:
+    """Who may read the project's prices (owner 2026-11-22: "the owner must be able to regulate who sees the price"): a global
+    admin, every project OWNER (always, not switchable) and a member whose entry carries ``sees_prices: true``.  The quote, the
+    documents and the messages marked price-restricted all ask this one question.  Never a global engineer who is no member."""
+    if not user:
+        return False
+    if str(user.get("role") or "").lower() == "admin":
+        return True
+    email = str(user.get("email") or "").strip().lower()
+    for member in project.get("members", []):
+        if isinstance(member, dict) and str(member.get("email") or "").strip().lower() == email:
+            return str(member.get("role") or "").lower() == "owner" or member.get("sees_prices") is True
+    return False
+
+
 def can_view(user: dict, project: dict) -> bool:
     return is_engineer(user) or membership(str(user.get("email") or ""), project) is not None
 

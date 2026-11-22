@@ -598,6 +598,8 @@
   "noEmail": "Messages stay in this project; email delivery is not enabled.",
   "invite": "Invite member",
   "email": "Account email",
+  "seesPrices": "Sees prices",
+  "seesPricesTip": "Price - restricted: the shared quote, and the documents and messages marked price-restricted, are shown to this member. Project owners always see them.",
   "memberRole": {
     "customer": "Customer",
     "engineer": "Engineer",

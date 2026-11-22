@@ -36,8 +36,10 @@ USERS = {
     "other": {"email": "other@example.test", "role": "user"},             # member of beta only
     "staff": {"email": "staff@example.test", "role": "engineer"},         # a global engineer, member of nothing
     "stranger": {"email": "stranger@example.test", "role": "user"},
+    "owner2": {"email": "owner2@example.test", "role": "user"},           # a SECOND project owner of alpha
 }
 MEMBERS = ("owner", "member-eng", "viewer")
+NON_OWNER_MEMBERS = ("member-eng", "viewer")
 FORBIDDEN_KEYS = {"note", "notes", "source", "source_ref", "contingency", "contingency_pct", "factor", "hint", "pct", "by",
                   "dhl", "dhl_lanes", "manual", "ecb", "fx", "revision", "snapshot_n", "shared_by", "diff", "estimate",
                   "updated_by", "analog_mass_kg", "target_mass_kg", "production", "project"}
@@ -68,7 +70,8 @@ def client(tmp_path, monkeypatch):
     store.create_project({**base, "id": "alpha", "title": "Alpha",
                           "members": [{"email": "customer@example.test", "role": "owner"},
                                       {"email": "eng@example.test", "role": "engineer"},
-                                      {"email": "viewer@example.test", "role": "customer"}]})
+                                      {"email": "viewer@example.test", "role": "customer"},
+                                      {"email": "owner2@example.test", "role": "owner"}]})
     store.create_project({**base, "id": "beta", "title": "Beta", "members": [{"email": "other@example.test", "role": "owner"}]})
     app = FastAPI()
     app.include_router(R.router)
@@ -126,14 +129,78 @@ def _keys(obj, out=None):
 
 # ── access ──────────────────────────────────────────────────────────────────────────────────────────────────────────
 
-@pytest.mark.parametrize("who", MEMBERS + ("admin",))
-def test_members_of_the_project_and_admins_read_the_shared_quote(client, who):
+def _switch(client, email, value, who="owner"):
+    return client.patch("/api/projects/alpha/members/sees_prices", json={"email": email, "sees_prices": value}, headers=_h(who))
+
+
+@pytest.mark.parametrize("who", ("owner", "owner2", "admin"))
+def test_owners_and_admins_read_the_shared_quote(client, who):
+    """Owner 2026-11-22: every project owner sees the prices, always."""
     _complete(client)
     assert _share(client).status_code == 200
     resp = _quote(client, who)
     assert resp.status_code == 200, resp.text
     assert resp.headers["cache-control"] == "no-store"
     assert resp.json()["total_price"] > 0
+
+
+@pytest.mark.parametrize("who", NON_OWNER_MEMBERS)
+def test_an_engineer_or_customer_member_sees_no_price_by_default(client, who):
+    _complete(client)
+    assert _share(client).status_code == 200
+    resp = _quote(client, who)
+    assert resp.status_code == 404 and resp.json()["detail"] == "Quote not found"
+    assert _quote(client, who, "nope").json() == resp.json()          # the answer of a project with no quote
+    assert client.get("/api/projects/alpha", headers=_h(who)).json()["quote_shared"] is False
+    assert client.get("/api/projects/alpha", headers=_h("owner")).json()["quote_shared"] is True
+
+
+def test_the_owner_switches_one_member_on_and_off(client):
+    _complete(client)
+    _share(client)
+    assert _switch(client, "viewer@example.test", True).json() == {"email": "viewer@example.test", "sees_prices": True}
+    assert _quote(client, "viewer").status_code == 200 and _quote(client, "member-eng").status_code == 404
+    assert client.get("/api/projects/alpha", headers=_h("viewer")).json()["quote_shared"] is True
+    assert _switch(client, "viewer@example.test", False, "owner2").status_code == 200       # the second owner may switch it off
+    assert _quote(client, "viewer").status_code == 404
+    assert _switch(client, "viewer@example.test", True, "admin").status_code == 200         # and so may an admin
+    assert _quote(client, "viewer").status_code == 200
+    import json
+    rows = [json.loads(x) for x in store._file("alpha", "audit.jsonl").read_text(encoding="utf-8").splitlines() if x.strip()]
+    rows = [r for r in rows if r["action"] == "sees_prices"]
+    assert [(r["actor_email"], r["entity_id"], r["details"]["to"]) for r in rows] == [
+        ("customer@example.test", "viewer@example.test", True), ("owner2@example.test", "viewer@example.test", False),
+        ("admin@example.test", "viewer@example.test", True)] and all(r["time"] for r in rows)
+
+
+def test_an_engineer_member_cannot_grant_anybody_the_flag_nor_make_an_owner(client):
+    _complete(client)
+    _share(client)
+    assert _switch(client, "eng@example.test", True, "member-eng").status_code == 403          # not himself
+    assert _switch(client, "viewer@example.test", True, "member-eng").status_code == 403
+    assert _switch(client, "viewer@example.test", True, "viewer").status_code in (403, 404)
+    add = lambda body, who: client.post("/api/projects/alpha/members", json=body, headers=_h(who))        # noqa: E731
+    assert add({"email": "eng@example.test", "role": "owner"}, "member-eng").status_code == 403
+    assert add({"email": "new@example.test", "role": "customer", "sees_prices": True}, "member-eng").status_code == 403
+    assert _quote(client, "member-eng").status_code == 404
+
+
+def test_owners_are_not_switchable_and_unknown_members_are_refused(client):
+    assert _switch(client, "owner2@example.test", False).status_code == 422
+    assert _switch(client, "nobody@example.test", True).status_code == 404
+    assert client.patch("/api/projects/alpha/members/sees_prices", json={"email": "viewer@example.test", "sees_prices": "yes"},
+                        headers=_h("owner")).status_code == 422
+    assert _switch(client, "viewer@example.test", True, "stranger").status_code in (403, 404)
+
+
+def test_a_pending_invite_carries_the_flag_until_it_is_claimed(client):
+    r = client.post("/api/projects/alpha/members", json={"email": "later@example.test", "role": "customer", "sees_prices": True},
+                    headers=_h("owner"))
+    assert r.status_code == 200
+    pending = store.get_project("alpha")["pending_invites"]
+    assert [p.get("sees_prices") for p in pending if p["email"] == "later@example.test"] == [True]
+    assert _switch(client, "later@example.test", False).status_code == 200
+    assert not [p for p in store.get_project("alpha")["pending_invites"] if p["email"] == "later@example.test"][0].get("sees_prices")
 
 
 @pytest.mark.parametrize("who", ["stranger", "other", "staff"])
@@ -264,6 +331,7 @@ def test_share_and_unshare_are_audited(client, tmp_path):
 def test_the_payload_is_exactly_the_whitelist(client):
     _complete(client)
     _share(client)
+    _switch(client, "viewer@example.test", True)
     q = _quote(client, "viewer").json()
     assert tuple(q) == Q.QUOTE_KEYS
     assert all(tuple(it) == Q.ITERATION_KEYS for it in q["iterations"])
@@ -328,6 +396,8 @@ def test_the_project_payload_carries_only_the_flag(client):
     for who in ("owner", "viewer"):
         assert client.get("/api/projects/alpha", headers=_h(who)).json()["quote_shared"] is False
     _share(client)
+    for email in ("eng@example.test", "viewer@example.test"):
+        assert _switch(client, email, True).status_code == 200
     for who in MEMBERS + ("admin",):
         got = client.get("/api/projects/alpha", headers=_h(who))
         assert got.status_code == 200 and got.json()["quote_shared"] is True, who

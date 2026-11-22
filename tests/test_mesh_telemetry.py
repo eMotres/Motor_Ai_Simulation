@@ -108,3 +108,11 @@ def test_telemetry_off_returns_none_and_failure_never_raises(monkeypatch):
     assert F._collect_mesh_telemetry(mesh, tags, mesh, tags, {"belts": []}, 9.5e-3) is None
     monkeypatch.setenv(MT.ENV, "1")
     assert F._collect_mesh_telemetry(None, tags, mesh, tags, {"belts": []}, 9.5e-3) is None
+
+
+def test_pardiso_scope_wraps_the_solve_attempt_not_the_helpers():
+    """Each solve attempt owns its PARDISO handles: the decorator sits on the attempt, never on a helper."""
+    from motor_ai_sim.simulation import fem_solver_2d as F
+    assert hasattr(F._fem_transient_sliding_band_once, "__wrapped__")
+    assert not hasattr(F._slip_radius_from_polys, "__wrapped__")
+    assert not hasattr(F._collect_mesh_telemetry, "__wrapped__")

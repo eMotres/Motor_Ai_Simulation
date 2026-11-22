@@ -4484,7 +4484,6 @@ def _boundary_strict() -> bool:
     return _os_sb.environ.get("SB_BOUNDARY_STRICT", "1") != "0"
 
 
-@_pardiso_scope          # each attempt owns (and releases) its PARDISO handles
 def _slip_radius_from_polys(mid: float, polys) -> float:
     """The slip-circle radius (m): the radii formula, moved out to the polygons' ``mid_r_mm`` when a retaining sleeve
     puts the mechanical gap further out (strictly greater, so a sleeve-less build keeps the old value bit-for-bit)."""
@@ -4517,6 +4516,7 @@ def _collect_mesh_telemetry(ms, ts, mr, tr, build_prov, slip_radius_m):
         return None
 
 
+@_pardiso_scope          # each attempt owns (and releases) its PARDISO handles
 def _fem_transient_sliding_band_once(
     n_steps_per_period: int = 12,
     sampling_purpose: SamplingPurpose = "standard",

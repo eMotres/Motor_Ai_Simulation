@@ -7201,11 +7201,22 @@ def solve_thermal_field(
     Tn = _np.asarray(th["T_node"]); ts = _np.asarray(th["triangles"], int)
     tg = _np.asarray(th["cell_tags"], int)
 
+    _Pv = _np.asarray(th["vertices"], float)
+
     def _comp(mask):
         if not mask.any():
             return None
         nodes = _np.unique(ts[mask])
-        return {"max": round(float(Tn[nodes].max()), 1), "avg": round(float(Tn[nodes].mean()), 1)}
+        # "avg" is the AREA mean of the P1 field over the component (exact: each triangle's mean node temperature weighted by its
+        # area).  It was the plain mean over the unique mesh vertices, which moves with the local mesh density without the field
+        # changing (Astra thermal audit 2026-11-21, F09: 65.6 vs 85 C on one exact field); `avg_vertex` keeps that old value.
+        tm = ts[mask].T                                    # (3, k): node indices of the component's triangles
+        a = _Pv[tm[0]]; b = _Pv[tm[1]]; c = _Pv[tm[2]]
+        area = 0.5 * _np.abs((b[:, 0] - a[:, 0]) * (c[:, 1] - a[:, 1]) - (c[:, 0] - a[:, 0]) * (b[:, 1] - a[:, 1]))
+        tri_t = (Tn[tm[0]] + Tn[tm[1]] + Tn[tm[2]]) / 3.0
+        avg = float((area * tri_t).sum() / area.sum()) if float(area.sum()) > 0.0 else float(Tn[nodes].mean())
+        return {"max": round(float(Tn[nodes].max()), 1), "avg": round(avg, 1),
+                "avg_vertex": round(float(Tn[nodes].mean()), 1)}
 
     result = {
         "ok": True,

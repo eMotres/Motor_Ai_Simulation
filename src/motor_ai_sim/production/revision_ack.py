@@ -59,11 +59,12 @@ def pending(die: str, config: str, production: dict, revisions: List[dict], now:
         acked = {str(a.get("email") or "").lower() for a in r.get("acknowledgements") or [] if isinstance(a, dict)}
         done: Dict[str, List[int]] = {}
         for x in r.get("reminders") or []:
-            if isinstance(x, dict):
+            if isinstance(x, dict) and x.get("mail") != "not_configured":      # an unsent notice (no SMTP then) is not a reminder given
                 done.setdefault(str(x.get("email")), []).append(int(x.get("level") or 0))
         # A revision that waits for the daily digest (owner 2026-11-19) counts from the digest THIS member got it in, not from the
         # publication: before that digest there is nothing to remind about (listed in the report, not mailed).
-        digest_mode = bool(alert and alert.get("mode") == "digest") or bool(r.get("digest_sent")) or bool(r.get("digest_pending"))
+        urgent = bool(alert and alert.get("mode") == "urgent")         # urgent: the clock is the publication, a failed mail or not
+        digest_mode = bool(alert and alert.get("mode") == "digest") or bool(r.get("digest_sent")) or (bool(r.get("digest_pending")) and not urgent)
         sent_in = {str(x.get("email") or "").lower(): x.get("sent_at") for x in r.get("digest_sent") or [] if isinstance(x, dict)}
         for em in sorted(req - acked):
             t0, alerted, stamp = since, alert is not None, (alert or {}).get("sent_at") or r.get("date")
@@ -102,6 +103,47 @@ def _productions(root: Optional[Any] = None) -> List[tuple]:
     return out
 
 
+#: a reservation older than this is taken as the trace of a crashed worker and may be taken over
+CLAIM_TTL_S = 900.0
+
+
+def _reserve(die: str, config: str, number: str, email: str, level: int, now: float) -> bool:
+    """Reserve (revision, member, level) before the mail goes out, so two workers (or two overlapping runs) never send the same
+    reminder.  False when somebody else holds a fresh reservation or the level is already recorded."""
+    won: Dict[str, bool] = {"ok": False}
+
+    def mut(d):
+        for r in d.get("revisions", []):
+            if not isinstance(r, dict) or str(r.get("number")) != number:
+                continue
+            if any(x.get("email") == email and int(x.get("level") or 0) == level and x.get("mail") != "not_configured"
+                   for x in r.get("reminders") or [] if isinstance(x, dict)):
+                return
+            claims = [c for c in r.get("reminder_claims") or [] if isinstance(c, dict)]
+            for c in claims:
+                if c.get("email") == email and c.get("level") == level and now - float(c.get("at") or 0) < CLAIM_TTL_S:
+                    return
+            r["reminder_claims"] = [c for c in claims if not (c.get("email") == email and c.get("level") == level)] + [
+                {"email": email, "level": level, "at": now}]
+            won["ok"] = True
+
+    store.mutate_file(die, config, "revisions.json", mut)
+    return won["ok"]
+
+
+def _release(die: str, config: str, number: str, email: str, level: int) -> None:
+    def mut(d):
+        for r in d.get("revisions", []):
+            if isinstance(r, dict) and str(r.get("number")) == number:
+                r["reminder_claims"] = [c for c in r.get("reminder_claims") or []
+                                        if not (c.get("email") == email and c.get("level") == level)]
+
+    try:
+        store.mutate_file(die, config, "revisions.json", mut)
+    except Exception as exc:                                              # noqa: BLE001
+        log.warning("revision reminder claim not released: %s", exc)
+
+
 def run_reminders(now: Optional[float] = None, *, root: Optional[Any] = None, send: Optional[Callable[[str, str, str], str]] = None) -> List[Dict[str, Any]]:
     """Send the reminders that are due; returns one row per mail (``{die, config, revision, email, level, mail}``).  Safe to run any number of
     times a day: a level is sent once per member and revision.  A mail that FAILED is not recorded and is tried again by the next run."""
@@ -117,21 +159,26 @@ def run_reminders(now: Optional[float] = None, *, root: Optional[Any] = None, se
                 lvl = due_level(row["hours"], row["reminders"])
                 if lvl is None:
                     continue
+                if not _reserve(die, config, row["number"], row["email"], lvl, now):
+                    continue                                              # another worker is sending exactly this reminder
                 mail = reminder_mail(die, config, row["number"], row["hours"], lvl)
                 try:
                     status = sender(row["email"], mail["subject"], mail["body"])
-                except Exception as exc:                              # noqa: BLE001 - one bad address must not stop the others
+                except Exception as exc:                                  # noqa: BLE001 - one bad address must not stop the others
                     log.warning("revision reminder to %s failed: %s", row["email"], type(exc).__name__)
                     status = "failed"
                 sent_rows.append({"die": die, "config": config, "revision": row["number"], "email": row["email"], "level": lvl, "mail": status})
-                if status == "failed":
+                if status != "sent":                                      # failed / not_configured: nothing was delivered, the level stays due
+                    _release(die, config, row["number"], row["email"], lvl)
                     continue
                 entry = {"email": row["email"], "level": lvl, "sent_at": models._now(), "mail": status}
 
-                def attach(d, number=row["number"], entry=entry):
+                def attach(d, number=row["number"], entry=entry, lvl=lvl):
                     for r in d.get("revisions", []):
                         if isinstance(r, dict) and str(r.get("number")) == number:
                             r.setdefault("reminders", []).append(entry)
+                            r["reminder_claims"] = [c for c in r.get("reminder_claims") or []
+                                                    if not (c.get("email") == entry["email"] and c.get("level") == lvl)]
 
                 store.mutate_file(die, config, "revisions.json", attach)
                 store.append_audit(die, config, models.audit_entry("system/reminder", "revision_reminder", "revision", row["number"],

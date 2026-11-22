@@ -861,6 +861,11 @@ def normalize_revision(raw: dict) -> dict:
         extra["alert"] = raw["alert"]
     if isinstance(raw.get("reminders"), list):
         extra["reminders"] = [x for x in raw["reminders"] if isinstance(x, dict)]
+    for k in ("digest_sent", "reminder_claims"):                   # the delivery ledger rides along (digest.approval, revision_ack)
+        if isinstance(raw.get(k), list):
+            extra[k] = [x for x in raw[k] if isinstance(x, dict)]
+    if isinstance(raw.get("digest_pending"), list):
+        extra["digest_pending"] = [str(x) for x in raw["digest_pending"] if x]
     out = {
         "number": str(raw.get("number") or "1.0"),
         "date": str(raw.get("date") or _now()),

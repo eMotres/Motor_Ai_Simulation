@@ -2312,6 +2312,10 @@ def _publish_revision(die: str, config: str, user: dict, summary: dict, changes:
             for r in d.get("revisions", []):
                 if isinstance(r, dict) and str(r.get("number")) == number:
                     r["alert"] = alert
+                    if urgent:                           # an urgent mail that did not go out is still owed (the digest carries it)
+                        missed = [x["email"] for x in alert.get("recipients") or [] if x.get("mail") != "sent"]
+                        if missed:
+                            r["digest_pending"] = missed
 
         store.mutate_file(die, config, "revisions.json", attach)
         _audit(_email(user), die, config, "revision_alert", "revision", number,

@@ -92,9 +92,23 @@ def production_scope(die: str, config: str) -> str:
     return f"production:{die}/{config}"
 
 
+#: suffix of the scope of a production's "revisions not yet delivered" draft: its own draft and cursor, the settings of the production
+OWED_SUFFIX = "#owed"
+
+
+def base_scope(scope: Any) -> str:
+    """The scope of the group itself (the suffix of an owed-revisions draft cut off)."""
+    scope = str(scope or "")
+    return scope[:-len(OWED_SUFFIX)] if scope.endswith(OWED_SUFFIX) else scope
+
+
+def owed_scope(scope: str) -> str:
+    return base_scope(scope) + OWED_SUFFIX
+
+
 def parse_scope(scope: str) -> Optional[tuple[str, tuple[str, ...]]]:
     """``('project', (id,))`` / ``('production', (die, config))`` or None."""
-    scope = str(scope or "")
+    scope = base_scope(scope)
     if scope.startswith("project:") and len(scope) > 8:
         return "project", (scope[8:],)
     if scope.startswith("production:"):
@@ -227,7 +241,7 @@ def migrate_auto_default() -> list:
 def get_settings(scope: str) -> dict:
     migrate_auto_default()
     doc = json_store.read_json(_settings_file(), {})
-    return normalise_settings(doc.get(scope) if isinstance(doc, dict) else None)
+    return normalise_settings(doc.get(base_scope(scope)) if isinstance(doc, dict) else None)
 
 
 def all_settings() -> dict:

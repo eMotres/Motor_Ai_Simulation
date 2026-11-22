@@ -1227,3 +1227,178 @@ def test_publishing_writes_the_ledger_for_every_revision_but_an_urgent_one(d, mo
     assert sorted(r1["digest_pending"]) == sorted([ANNA, LI]) and "alert" not in r1
     r2 = R._publish_revision(DIE, CFG, user, bil("loud"), [bil("c")], urgent=True)
     assert "digest_pending" not in r2 and r2["alert"]["mode"] == "urgent"
+
+
+# -- Astra pre-merge review of #794: per-recipient delivery, ledger from the records, stamp failure, urgent failure, reminders -----------
+
+def _owed_world(d, pending, sent=(), number="1.1", with_audit=True):
+    """Revision ``number`` published an hour before the cursor; ``sent`` were stamped, ``pending`` still owed."""
+    rev = {"number": number, "date": at(-3600), "acknowledgements": [], "digest_pending": list(pending),
+           "digest_sent": [{"email": e, "sent_at": at(-3000)} for e in sent],
+           "alert": {"sent_at": at(-3600), "mode": "digest",
+                     "recipients": [{"email": e, "role": "oem", "mail": "digest"} for e in dict.fromkeys((ANNA, LI, *sent, *pending))]}}
+    d["PR"].save_file(DIE, CFG, "revisions.json", {"revisions": [rev]})
+    d["DS"].set_state(XSCOPE, cursor=at(-600))                # the period of the ordinary draft starts after the revision
+
+
+def _recipients_of(d, scope):
+    st = d["DS"].get_state(scope)
+    return sorted(r["email"] for r in d["DS"].load_draft(st["draft_id"])["recipients"])
+
+
+def test_backfill_goes_to_the_member_who_owes_it_and_never_to_one_already_served(d):
+    _owed_world(d, pending=[LI], sent=[ANNA])
+    run(d, scopes=[XSCOPE])
+    owed_scope = d["DS"].owed_scope(XSCOPE)
+    assert _recipients_of(d, owed_scope) == [LI]                                   # ANNA was served: not in this draft
+    draft = draft_of(d, owed_scope)
+    assert [i["key"] for i in draft["items"]] == ["rev:1.1"] and "repeated" in draft["items"][0]["en"]
+    assert d["DS"].get_state(XSCOPE).get("draft_id") in (None, "")                  # nothing else to say in the ordinary period
+    go(d, draft["id"])
+    assert [m["To"] for m in d["delivered"]] == [LI]
+    rev = d["PR"].load_file(DIE, CFG, "revisions.json")["revisions"][0]
+    assert rev["digest_pending"] == [] and {x["email"] for x in rev["digest_sent"]} == {ANNA, LI}
+    run(d, scopes=[XSCOPE])
+    assert d["DS"].get_state(d["DS"].owed_scope(XSCOPE)).get("draft_id") in (None, "")   # delivered: nothing owed any more
+
+
+def test_the_owed_draft_uses_the_settings_and_the_unsubscribe_of_the_production(d):
+    from motor_ai_sim.digest import build as B
+    _owed_world(d, pending=[LI])
+    d["DS"].set_settings(XSCOPE, {"mode": "off"}, by=ADMIN)
+    run(d, scopes=[XSCOPE])
+    assert d["DS"].get_state(d["DS"].owed_scope(XSCOPE)).get("draft_id") in (None, "")   # switched off: no owed mail either
+    d["DS"].set_settings(XSCOPE, {"mode": "approve"}, by=ADMIN)
+    run(d, scopes=[XSCOPE])
+    draft = draft_of(d, d["DS"].owed_scope(XSCOPE))
+    tok = lambda sc: B.unsub_url(LI, sc, "https://x").split("/unsubscribe/")[1].split("/")[0]      # noqa: E731
+    assert tok(draft["scope"]) == tok(XSCOPE)                                      # leaves the production's digest, not a side scope
+    assert d["DS"].parse_scope(draft["scope"]) == ("production", (DIE, CFG))
+
+
+def test_the_owed_line_is_built_from_the_revision_record_when_the_audit_has_none(d):
+    from motor_ai_sim.digest import collect as C
+    d["PR"].save_file(DIE, CFG, "revisions.json", {"revisions": [{
+        "number": "2.0", "date": at(-3600), "acknowledgements": [], "digest_pending": [LI],
+        "summary": {"en": "Winding changed", "zh": "绕组变更", "src_lang": "en", "status": {"en": "confirmed", "zh": "confirmed"}},
+        "changes": [{"en": "x"}]}]})                                                  # no publish_revision event for 2.0 in the audit
+    prod = d["PR"].load_file(DIE, CFG, "production.json")
+    items = C.owed_revision_items(prod, [LI], before=T0, end=T0)
+    assert [i.key for i in items] == ["rev:2.0"] and "Winding changed" in items[0].en and "repeated" in items[0].en
+
+
+def test_a_stamp_write_failure_keeps_the_draft_open_and_a_retry_mails_nobody_twice(d, monkeypatch):
+    _owed_world(d, pending=[LI])
+    run(d, scopes=[XSCOPE])
+    draft = draft_of(d, d["DS"].owed_scope(XSCOPE))
+    real = d["PR"].mutate_file
+
+    def boom(die, config, name, mutator):
+        if name == "revisions.json":
+            raise OSError("disk full")
+        return real(die, config, name, mutator)
+
+    monkeypatch.setattr(d["PR"], "mutate_file", boom)
+    res = go(d, draft["id"])
+    after = d["DS"].load_draft(draft["id"])
+    assert after["status"] == "pending" and after["last_error"]["code"] == "ledger_stamp_failed"     # not closed, cursor not moved
+    assert d["DS"].get_state(d["DS"].owed_scope(XSCOPE)).get("cursor") is None
+    assert [m["To"] for m in d["delivered"]] == [LI]
+    monkeypatch.setattr(d["PR"], "mutate_file", real)
+    go(d, draft["id"])                                                              # the retry skips the send log's "sent" and stamps
+    assert [m["To"] for m in d["delivered"]] == [LI]                                 # still ONE mail
+    assert d["DS"].load_draft(draft["id"])["status"] == "sent"
+    assert d["PR"].load_file(DIE, CFG, "revisions.json")["revisions"][0]["digest_pending"] == []
+
+
+def test_reconciliation_repairs_a_lost_stamp_from_the_durable_send_log(d, monkeypatch):
+    from motor_ai_sim.digest import collect as C
+    _owed_world(d, pending=[LI])
+    run(d, scopes=[XSCOPE])
+    draft = draft_of(d, d["DS"].owed_scope(XSCOPE))
+    real = d["PR"].mutate_file
+    monkeypatch.setattr(d["PR"], "mutate_file", lambda die, config, name, m: (_ for _ in ()).throw(OSError("x")) if name == "revisions.json"
+                        else real(die, config, name, m))
+    go(d, draft["id"])
+    monkeypatch.setattr(d["PR"], "mutate_file", real)
+    prod = d["PR"].load_file(DIE, CFG, "production.json")
+    assert C.reconcile_ledger(prod, T0, write=False)                                # a dry run reports and writes nothing
+    assert d["PR"].load_file(DIE, CFG, "revisions.json")["revisions"][0]["digest_pending"] == [LI]
+    C.reconcile_ledger(prod, T0)
+    rev = d["PR"].load_file(DIE, CFG, "revisions.json")["revisions"][0]
+    assert rev["digest_pending"] == [] and [x["email"] for x in rev["digest_sent"]] == [LI]
+    assert any(json.loads(x)["action"] == "revision_ledger_reconcile" for x in d["PR"].audit_path(DIE, CFG).read_text().splitlines())
+    assert C.reconcile_ledger(prod, T0) == []                                       # idempotent
+
+
+def test_an_old_revision_without_a_ledger_is_checked_against_the_send_logs(d):
+    """Before the ledger: what a sent digest demonstrably carried is delivered; everything else that is not acknowledged is owed."""
+    from motor_ai_sim.digest import collect as C
+    _revisions_file(d)                                                              # 1.1: alert mode digest, no ledger keys, member LI
+    d["PR"].save_file(DIE, CFG, "revisions.json", {"revisions": [
+        {"number": "1.0", "date": at(-90000), "acknowledgements": [],
+         "alert": {"sent_at": at(-90000), "mode": "digest", "recipients": [{"email": LI, "role": "oem", "mail": "digest"},
+                                                                          {"email": ANNA, "role": "owner", "mail": "digest"}]}},
+        {"number": "1.1", "date": at(-3600), "acknowledgements": [{"email": ANNA, "time": at(-100)}],
+         "alert": {"sent_at": at(-3600), "mode": "digest", "recipients": [{"email": LI, "role": "oem", "mail": "digest"},
+                                                                          {"email": ANNA, "role": "owner", "mail": "digest"}]}}]})
+    prod = d["PR"].load_file(DIE, CFG, "production.json")
+    C.reconcile_ledger(prod, T0)
+    revs = {r["number"]: r for r in d["PR"].load_file(DIE, CFG, "revisions.json")["revisions"]}
+    assert sorted(revs["1.0"]["digest_pending"]) == sorted([ANNA, LI])                  # nothing proves it was delivered: owed
+    assert revs["1.1"]["digest_pending"] == [LI]                                        # ANNA acknowledged it: not owed
+
+
+def test_a_member_who_joined_after_the_publication_owes_the_newest_revision_only(d):
+    from motor_ai_sim.digest import collect as C
+    _owed_world(d, pending=[], sent=[ANNA, LI])
+    prod = d["PR"].load_file(DIE, CFG, "production.json")
+    prod["members"].append({"email": "newbie@example.com", "role": "oem"})
+    d["PR"].save_file(DIE, CFG, "production.json", prod)
+    C.reconcile_ledger(prod, T0)
+    rev = d["PR"].load_file(DIE, CFG, "revisions.json")["revisions"][0]
+    assert rev["digest_pending"] == ["newbie@example.com"]
+
+
+def test_an_urgent_mail_that_did_not_go_out_stays_owed_to_the_digest(d, monkeypatch):
+    from motor_ai_sim.production import routes as R, revision_alert as RA
+    monkeypatch.setattr(RA, "SEND", lambda to, s, b: "failed" if to == LI else "sent")
+    user = {"email": ANNA, "role": "owner"}
+    bil = lambda t: {"en": t, "zh": t, "src_lang": "en", "status": {"en": "confirmed", "zh": "confirmed"}}      # noqa: E731
+    r = R._publish_revision(DIE, CFG, user, bil("loud"), [bil("c")], urgent=True)
+    stored = d["PR"].load_file(DIE, CFG, "revisions.json")["revisions"][-1]
+    assert stored["number"] == r["number"] and stored["digest_pending"] == [LI]
+
+
+def test_a_reminder_is_consumed_only_by_a_confirmed_send_and_a_second_worker_cannot_send_it(d):
+    from motor_ai_sim.production import revision_ack as RK
+    d["PR"].save_file(DIE, CFG, "revisions.json", {"revisions": [{
+        "number": "1.1", "date": at(-90000), "acknowledgements": [],
+        "alert": {"sent_at": at(-90000), "mode": "urgent", "recipients": []}}]})
+    root = d["PR"].production_root()
+    sent: list = []
+    now = T0 + 100                                                                  # ~25 h after the publication: level 24 due
+    rows = RK.run_reminders(now, root=root, send=lambda to, s, b: "not_configured")
+    assert rows and rows[0]["mail"] == "not_configured"
+    assert not d["PR"].load_file(DIE, CFG, "revisions.json")["revisions"][0].get("reminders")      # nothing was recorded as given
+    rows = RK.run_reminders(now + 3600, root=root, send=lambda to, s, b: sent.append(to) or "sent")   # SMTP is up an hour later
+    assert sent == [LI]
+    assert RK.run_reminders(now + 7200, root=root, send=lambda to, s, b: sent.append(to) or "sent") == []   # once only
+    # a fresh reservation held by another worker blocks the send; a stale one (crashed worker) is taken over
+    d["PR"].mutate_file(DIE, CFG, "revisions.json", lambda doc: doc["revisions"][0].update(
+        reminders=[], reminder_claims=[{"email": LI, "level": 24, "at": now + 8000}]))
+    assert RK.run_reminders(now + 8100, root=root, send=lambda to, s, b: "sent") == []
+    assert [r["email"] for r in RK.run_reminders(now + 8000 + RK.CLAIM_TTL_S + 60, root=root, send=lambda to, s, b: "sent")] == [LI]
+
+
+def test_a_failed_urgent_mail_is_repeated_by_the_digest_without_claiming_it_was_mailed(d):
+    from motor_ai_sim.digest import approval as AP, collect as C
+    d["PR"].save_file(DIE, CFG, "revisions.json", {"revisions": [{
+        "number": "1.1", "date": at(-3600), "acknowledgements": [], "digest_pending": [LI],
+        "alert": {"sent_at": at(-3600), "mode": "urgent", "recipients": [{"email": LI, "role": "oem", "mail": "failed"}]}}]})
+    prod = d["PR"].load_file(DIE, CFG, "production.json")
+    items = C.owed_revision_items(prod, [LI], before=T0, end=T0)
+    assert items and "already e-mailed" not in items[0].en and "repeated" in items[0].en
+    AP._stamp_production_revisions({"scope": XSCOPE, "items": [{"kind": "revision", "key": "rev:1.1"}]}, [LI], "2026-09-21T06:00:00Z")
+    rev = d["PR"].load_file(DIE, CFG, "revisions.json")["revisions"][0]
+    assert rev["digest_pending"] == [] and "digest_sent" not in rev                 # settled; the reminder clock stays the publication

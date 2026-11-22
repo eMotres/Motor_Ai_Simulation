@@ -901,3 +901,31 @@ def test_heal_edge_reloads_only_when_the_edge_is_down_and_the_live_colour_is_hea
     (st.fake / "running" / "deploy-api-blue-1").unlink()                            # ... and the live colour is down too: nothing to heal
     (st.fake / "reloads").unlink(missing_ok=True)
     assert st.bg("heal-edge").returncode != 0 and not (st.fake / "reloads").exists()
+
+
+# ── the web step: a recreated web container is re-pointed before the pages are judged; a partial result says so ──────────
+def _web_step():
+    src = (DEPLOY / "deploy_module.sh").read_text(encoding="utf-8")
+    return src[src.index("if [ $WANT_WEB = 1 ]; then\n  publish_web"):src.index("# 4) THE WORKER")]
+
+
+def test_the_web_check_reloads_the_edge_and_retries_before_it_rolls_back():
+    step = _web_step()
+    check = step[step.index("code=000"):step.index("web_rollback\n")]
+    assert "seq" not in check and "for i in 1 2 3 4 5 6" in check
+    assert "reload-edge" in check and check.index("reload-edge") < check.index("done")
+    assert step.index("web container recreated") < step.index("code=000"), "the check follows the recreate"
+
+
+def test_a_rolled_back_web_step_is_a_loud_non_zero_end():
+    step = _web_step()
+    tail = step[step.index("web_rollback\n"):]
+    assert "DEPLOY PARTIAL" in tail and "NOT a finished deploy" in tail
+    assert tail.index("DEPLOY PARTIAL") < tail.index("exit 6")
+
+
+def test_the_web_step_of_a_deployed_commit_can_be_re_applied_alone():
+    src = (DEPLOY / "deploy_module.sh").read_text(encoding="utf-8")
+    assert "re-applies only the web step" in src
+    gate = src[src.index('[ "$MODE" = worker ] && [ "$PREV" = "$SHA" ]'):][:200]
+    assert '.deployed_commit' in gate and '= "$PREV"' in gate        # PREV == SHA passes the deployed-commit gate

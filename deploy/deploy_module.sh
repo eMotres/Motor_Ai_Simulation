@@ -8,6 +8,8 @@
 #             api    - only the API: blue-green - the idle colour is built into a container, warmed up, nginx is switched,
 #                      the old colour drains and stops.  Nobody waits, nothing is restarted in place, no 502.
 #             worker - only the compute worker: drain, wait until it is idle, restart (never while a job runs)
+#             web with PREV = SHA re-applies only the web step (image, nginx setup, pages) of a deployed commit, e.g. after a
+#                      web step that was rolled back; nothing else is touched
 #             webapi - web + api            back   - api + worker        full - web + api + worker
 #     MODULES comma list of live_status modules the WORKER change touches ("all" = any): the worker restart waits until
 #             none of them has a user or a request and no job is queued or running anywhere
@@ -168,8 +170,21 @@ if [ $WANT_WEB = 1 ]; then
   else
     echo "web published without restart: current -> $(readlink $WEB/current)"
   fi
-  code=$("$CURL" -s -o /dev/null -w '%{http_code}' https://aerostator.com/build.json)
-  [ "$code" = 200 ] || { echo "web check failed ($code)"; web_rollback; exit 6; }
+  # a recreated web container has nginx resolving the API colour at its start: it answers 502 until the upstream is
+  # re-pointed and reloaded (US and EU 2026-11-22).  Reload the edge and look again before deciding anything is wrong.
+  code=000
+  for i in 1 2 3 4 5 6; do
+    code=$("$CURL" -s -o /dev/null -w '%{http_code}' https://aerostator.com/build.json)
+    [ "$code" = 200 ] && break
+    echo "web check: $code (try $i of 6) - reloading the edge"
+    $BG reload-edge >/dev/null 2>&1 || true
+    nap 5
+  done
+  if [ "$code" != 200 ]; then
+    echo "web check failed ($code)"; web_rollback
+    echo "DEPLOY PARTIAL: the pages and the web container were ROLLED BACK to $PREV; the API is on $SHA - NOT a finished deploy"
+    exit 6
+  fi
   [ $WANT_API = 0 ] && echo "$SHA" > $APP/.deployed_commit
   echo "pages: $("$CURL" -s https://aerostator.com/build.json)"
 fi

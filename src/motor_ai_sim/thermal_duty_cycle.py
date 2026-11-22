@@ -1817,6 +1817,18 @@ class Trace:
         return {n: self.T_c[n][-1] for n in self.T_c}
 
 
+def copper_power_w(p_ref_w: float, p_ac_ref_w: float, r: float, scale: float = 1.0) -> float:
+    """THE copper law, in one place (Astra thermal audit F05 and pre-merge 2026-11-22): at the resistivity ratio ``r`` against
+    the reference temperature the DC share follows the resistance and the AC share follows its inverse,
+    ``P = scale^2 * (P_dc * r + P_ac / r)`` with ``P_dc = P_ref - P_ac_ref``.  ``scale`` is the current ratio.  With no AC
+    share it is the plain ``scale^2 * P_ref * r``.  The duty segments, the continuous rating's search, its re-solve request
+    and its reported power all call this, so they cannot disagree."""
+    p_ref = float(p_ref_w)
+    p_ac = min(max(float(p_ac_ref_w or 0.0), 0.0), max(p_ref, 0.0))
+    rr = float(r)
+    return float(scale) ** 2 * ((p_ref - p_ac) * rr + (p_ac / rr if rr > 1e-9 else p_ac))
+
+
 def _seg_powers(seg: Segment, T: Mapping[str, float],
                 network: Network) -> Dict[str, float]:
     """Losses at the CURRENT temperatures — only copper moves (stated)."""
@@ -1824,8 +1836,7 @@ def _seg_powers(seg: Segment, T: Mapping[str, float],
     if out["winding"] and seg.copper_feedback:
         tw = float(T[network.rep("winding")])
         r = cu_rho_ratio(tw) / cu_rho_ratio(seg.coil_ref_c)
-        p_ac = min(max(float(seg.winding_ac_ref_W or 0.0), 0.0), out["winding"])
-        out["winding"] = (out["winding"] - p_ac) * r + (p_ac / r if r > 1e-9 else p_ac)
+        out["winding"] = copper_power_w(out["winding"], seg.winding_ac_ref_W, r)
     return out
 
 

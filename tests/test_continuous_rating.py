@@ -885,3 +885,65 @@ def test_a_missed_verification_says_by_how_much():
                                   "I_cont_A_rms": 24.0, "verified": False,
                                   "miss_K": 6.2}}
     assert ccr.headline(block).endswith("(estimate, real pass +6.2 K)")
+
+
+# --- ONE copper law for the search, the re-solve request and the reported power (Astra pre-merge 2026-11-22, F05) --------------
+
+def _ac_loss() -> Dict[str, Any]:
+    return dict(_loss(1000.0, coil_ref_c=200.0), winding_ac_W=300.0)
+
+
+def test_the_search_the_resolve_and_the_report_use_one_copper_law():
+    loss, net = _ac_loss(), _one_node_network(1.0, 35.0)
+    # 1000 W at 200 C, 300 W of it AC, s = 1, winding at 35 C: 700*r + 300/r with r = rho(35)/rho(200)
+    r = dc.cu_rho_ratio(35.0) / dc.cu_rho_ratio(200.0)
+    want = 700.0 * r + 300.0 / r
+    assert want == pytest.approx(917.854, abs=1e-2)
+    assert ccr.copper_heat_w(loss, 1000.0, 1.0, 35.0) == pytest.approx(want)
+    seg = ccr._segment_at(loss, 1000.0, 1.0, "continuous")
+    assert dc._seg_powers(seg, {n: 35.0 for n in NODES}, net)["winding"] == pytest.approx(want)         # the Segment
+    blk = ccr._power_block({"rpm": 0.0}, loss, 1000.0, 1.0, 35.0)
+    assert blk["P_cu_W"] == pytest.approx(want)                                                          # the report
+    assert blk["P_cu_W"] > 620.3 + 290.0                                                                  # not the old s^2 * r * P
+    assert "P_dc*r + P_ac/r" in blk["copper_law"]
+    # current scaling is s^2 on top of both shares
+    assert ccr.copper_heat_w(loss, 1000.0, 0.5, 35.0) == pytest.approx(0.25 * want)
+
+
+def test_a_map_without_an_ac_share_keeps_the_legacy_law_and_says_so():
+    loss = _loss(1000.0, coil_ref_c=200.0)                                   # no winding_ac_W: pure DC / a payload from before
+    r = dc.cu_rho_ratio(35.0) / dc.cu_rho_ratio(200.0)
+    assert ccr.copper_heat_w(loss, 1000.0, 1.0, 35.0) == pytest.approx(1000.0 * r)
+    blk = ccr._power_block({"rpm": 0.0}, loss, 1000.0, 1.0, 35.0)
+    assert blk["P_cu_W"] == pytest.approx(1000.0 * r) and "legacy" in blk["copper_law"]
+
+
+def test_the_resolve_request_is_the_heat_the_search_used(caps, monkeypatch):
+    p_cu_ref = float(RATED_MAP["P_cu_exact_W"])
+    seen = []
+    real = ccr.copper_heat_w
+
+    def spy(loss, p_ref, s, t_w):
+        v = real(loss, p_ref, s, t_w)
+        seen.append((float(p_ref), v))
+        return v
+
+    monkeypatch.setattr(ccr, "copper_heat_w", spy)
+    factors = []
+
+    def resolve(factor: float) -> Mapping[str, Any]:
+        factors.append(float(factor))
+        m = _linear_map(p_cu_ref * float(factor))
+        m["P_cu_ac_exact_W"] = 0.3 * m["P_cu_exact_W"]
+        return m
+
+    first = _linear_map(p_cu_ref)
+    first["P_cu_ac_exact_W"] = 0.3 * p_cu_ref
+    out = ccr.rate(thermal_result=first, em_summary=RATED_SUMMARY, caps=caps,
+                   limits=[_limit("winding", "winding", 180.0, 3.0)], geometry=L13_GEO,
+                   cooling={"ambient_temp": 40.0}, d_housing_m=D_HOUSING_M, resolve=resolve, duty="rated")
+    assert factors and out["feasible"] is True
+    unit = [v for p, v in seen if p == 1.0]                                   # the re-solve's own calls (reference copper = 1)
+    for f in factors:
+        assert any(f == pytest.approx(v) for v in unit)
+    assert out["power"]["copper_law"].startswith("P_dc*r + P_ac/r")

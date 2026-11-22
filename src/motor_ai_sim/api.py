@@ -491,6 +491,8 @@ app.include_router(development_timeline_router)   # GET /api/projects/{id}/timel
 app.include_router(development_timeline_admin_router)   # /api/admin/projects/{id}/timeline: admin edit, seed, baseline
 from motor_ai_sim.development.project_model3d import router as development_model3d_router
 app.include_router(development_model3d_router)   # /api/projects/{id}/model3d: the uploaded STEP of the project, tab "3D model" (owner 2026-11-22)
+from motor_ai_sim.development.project_contract import router as development_contract_router
+app.include_router(development_contract_router)   # /api/projects/{id}/contract: section "Contract", owner + staff + sees_prices (owner 2026-11-22)
 app.include_router(development_motors_router)
 app.include_router(development_activity_router)      # GET /api/projects/{id}/activity: live runs on the project's motors
 from motor_ai_sim.development.productions import router as development_productions_router

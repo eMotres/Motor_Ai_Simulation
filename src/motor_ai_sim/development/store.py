@@ -156,6 +156,14 @@ def append_jsonl(project_id: str, name: str, entry: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     line = json.dumps(entry, ensure_ascii=False, sort_keys=True) + "\r\n"
     with json_store.lock_for(path):
+        # A line an earlier append left without its newline (cut short) would swallow this record: end it first, append-only.
+        try:
+            with path.open("rb") as tail:
+                tail.seek(-1, 2)
+                if tail.read(1) != b"\n":
+                    line = "\r\n" + line
+        except OSError:                                     # missing or empty file: nothing to end
+            pass
         # The serialized line already contains CRLF. Disable newline
         # translation so Windows does not turn it into CRCRLF and introduce
         # blank, non-JSON audit records.

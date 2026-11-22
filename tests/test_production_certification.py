@@ -81,3 +81,29 @@ def test_the_factory_cannot_patch_a_document(prod_env):
     d = _upload(prod_env, "engineer", {"section": "certification", "internal": "false"}).json()
     r = prod_env["client"].patch("%s/%s" % (BASE, d["id"]), headers=prod_env["oem_nda"], json={"cert_status": "signed"})
     assert r.status_code in (403, 404)
+
+
+def test_a_project_viewer_never_gets_a_certification_file_listed_or_downloadable():
+    from motor_ai_sim.production import project_link
+    docs = [{"id": "a", "file_id": "f1" + "0" * 30},
+            {"id": "b", "file_id": "f2" + "0" * 30, "section": "certification", "internal": False},
+            {"id": "c", "file_id": "f3" + "0" * 30, "internal": True}]
+    assert [d["id"] for d in project_link.visible_documents(docs)] == ["a"]
+
+
+def test_a_refused_certification_upload_stores_no_file(prod_env, monkeypatch):
+    from motor_ai_sim.production import routes
+    stored = []
+    real = routes._store_upload
+
+    async def _spy(*a, **k):
+        stored.append(1)
+        return await real(*a, **k)
+    monkeypatch.setattr(routes, "_store_upload", _spy)
+    _create(prod_env)
+    assert _upload(prod_env, "oem_nda", {"section": "certification"}).status_code == 403
+    assert _upload(prod_env, "engineer", {"section": "other"}).status_code == 422
+    assert _upload(prod_env, "engineer", {"section": "certification", "cert_status": "x"}).status_code == 422
+    assert stored == []
+    assert _upload(prod_env, "engineer", {"section": "certification"}).status_code == 200
+    assert stored == [1]

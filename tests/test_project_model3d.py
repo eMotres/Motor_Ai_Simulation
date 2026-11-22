@@ -65,7 +65,7 @@ def upload(client, who="t-staff", name="assembly.step", data=STEP, **fields):
 def audit_actions(tmp_path):
     """The actions of the complete records (a torn line stays in the file and is skipped, like every reader does)."""
     out = []
-    for line in (tmp_path / "projects" / "proj1" / "audit.jsonl").read_bytes().decode("utf-8", errors="replace").splitlines():
+    for line in (tmp_path / "projects" / "proj1" / "audit.jsonl").read_bytes().decode("utf-8", errors="replace").split("\n"):
         try:
             out.append(json.loads(line)["action"])
         except ValueError:
@@ -309,3 +309,26 @@ def test_a_complete_last_record_without_its_newline_counts_and_nothing_is_cut(cl
     after = audit.read_bytes()
     assert after.startswith(before) and after[len(before):] == b"\r\n"          # append-only: one newline, the record kept
     assert audit_actions(tmp_path).count("model3d.upload") == 1                 # not written twice
+
+
+
+def test_a_name_with_a_line_separator_is_recognised_once_written(client, tmp_path, monkeypatch):
+    """U+2028 / U+2029 / U+0085 in a file name sit inside a JSON string: the record is still one line, written exactly once."""
+    real = store.append_jsonl
+    fails = {"n": 2}
+
+    def flaky(project_id, name, entry):
+        if name == "audit.jsonl" and fails["n"] > 0:
+            fails["n"] -= 1
+            raise OSError("disk full")
+        return real(project_id, name, entry)
+
+    monkeypatch.setattr(store, "append_jsonl", flaky)
+    assert upload(client, name="assembly\u2028rev\u2029B\u0085.step").status_code == 200   # committed; the audit append fails
+    client.get(URL, headers=hdr("t-staff"))                                       # the replay fails once more
+    client.get(URL, headers=hdr("t-staff"))                                       # now it is written
+    client.get(URL, headers=hdr("t-staff"))                                       # and never again
+    client.get(URL, headers=hdr("t-staff"))
+    assert audit_actions(tmp_path).count("model3d.upload") == 1
+    doc = json.loads((tmp_path / "projects" / "proj1" / "model3d" / "models.json").read_text())
+    assert "pending_audit" not in doc

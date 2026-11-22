@@ -77,7 +77,8 @@ def _written_event_ids(project_id: str) -> set:
         with path.open("ab") as fh:
             fh.write(b"\r\n")
     ids = set()
-    for line in raw.decode("utf-8", errors="replace").splitlines():
+    # split ONLY on "\n": str.splitlines() also breaks on U+0085 / U+2028 / U+2029, which a file name inside a JSON string may hold
+    for line in raw.decode("utf-8", errors="replace").split("\n"):
         try:
             rec = json.loads(line)
         except ValueError:

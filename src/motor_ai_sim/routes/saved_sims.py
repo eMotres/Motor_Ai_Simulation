@@ -135,8 +135,15 @@ def append_sim(bucket: str, name: str, params: Dict[str, Any],
 
 @router.get("/saved")
 def list_saved(request: Request):
-    """This user's saved simulation snapshots (newest first)."""
-    return {"sims": _load_all().get(_bucket(request), [])}
+    """This user's saved simulation snapshots (newest first).  A snapshot of an archived configuration (its params name the
+    die and the configuration) is left out for a non-admin, like the configuration itself (owner 2026-11-22)."""
+    sims = _load_all().get(_bucket(request), [])
+    from motor_ai_sim import config_archive as CA
+    from motor_ai_sim import motor_access as MA
+    if not MA.catalog_access(request.headers.get("authorization")).get("is_admin"):
+        sims = [s for s in sims if not CA.is_archived(str((s.get("params") or {}).get("die") or ""),
+                                                      str((s.get("params") or {}).get("config") or ""))]
+    return {"sims": sims}
 
 
 @router.post("/saved")

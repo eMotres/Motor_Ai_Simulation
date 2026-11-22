@@ -646,15 +646,7 @@ def step_config_archive(ctx: Ctx) -> None:
     """The configuration archive (``<shared>/object_registry/config_archive.json``, keyed ``<die>/<config>``): an archived
     configuration stays archived, with its history, under the new die name."""
     from motor_ai_sim import config_archive as CA
-    try:
-        path = CA.store_path()
-    except Exception:                                       # noqa: BLE001
-        return
-    try:
-        _json_file_rename(ctx, "config_archive", path, lambda doc: CA.rename_in(doc, ctx.old, ctx.new),
-                          "an archived configuration stays archived under the new die name")
-    except ValueError as e:
-        raise RenameBlocked(str(e)) from e
+    CA.rename_step(ctx, ctx.old, ctx.new, blocked=RenameBlocked)     # under the archive's lock, with its own undo
 # ── end configuration archive ──
 
 

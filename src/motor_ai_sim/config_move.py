@@ -1055,16 +1055,7 @@ def step_config_archive(ctx: Ctx) -> None:
     if ctx.copy:
         return
     from motor_ai_sim import config_archive as CA
-    try:
-        path = CA.store_path()
-    except Exception:                                       # noqa: BLE001
-        return
-    try:
-        _json_rewrite(ctx, "config_archive", path,
-                      lambda doc: CA.rename_in(doc, ctx.die, ctx.dst, ctx.cfg, ctx.new_cfg or ctx.cfg),
-                      "an archived configuration stays archived")
-    except ValueError as e:
-        raise MoveBlocked(str(e)) from e
+    CA.rename_step(ctx, ctx.die, ctx.dst, ctx.cfg, ctx.new_cfg or ctx.cfg, blocked=MoveBlocked)   # under the archive's lock
 # ── end configuration archive ──
 
 

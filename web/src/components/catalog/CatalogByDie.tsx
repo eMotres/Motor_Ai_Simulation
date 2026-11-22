@@ -36,6 +36,8 @@ export interface ByDieActions {
   deleteCfg: (die: string, cfg: string) => void;
   /** admins: archive ONE configuration (owner 2026-11-22) */
   archiveCfg?: (die: string, cfg: string) => void;
+  /** only a configuration of a SHARED-catalog die is archived */
+  archivable?: (die: string) => boolean;
 }
 
 interface Props {
@@ -114,7 +116,7 @@ export function motorMenuItems(m: Pick<MotorRow, 'die' | 'config'>, who: Who, a:
       { key: 'bat', label: t('byDie.battery'), run: () => a.battery(die, config) });
     if (who.isAdmin) out.push({ key: 'mov', label: t('byDie.move'), run: () => a.moveCfg(die, config, 'move') },
       { key: 'cpy', label: t('byDie.copy'), run: () => a.moveCfg(die, config, 'copy') });
-    if (who.isAdmin && a.archiveCfg) out.push({ key: 'arch', label: t('byDie.archiveMotor'), run: () => a.archiveCfg?.(die, config) });
+    if (who.isAdmin && a.archiveCfg && (a.archivable?.(die) ?? true)) out.push({ key: 'arch', label: t('byDie.archiveMotor'), run: () => a.archiveCfg?.(die, config) });
   }
   out.push({ key: 'ds', label: t('byDie.datasheet'), run: () => a.datasheet(die, config) },
     { key: 'rep', label: t('byDie.report'), run: () => a.report(die, config, false) },

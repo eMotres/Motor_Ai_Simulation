@@ -523,12 +523,10 @@ def config_visible(access: dict, die: str, cfg: Optional[str], path=None, *,
 
 
 def _cfg_archived(die: str, cfg: Optional[str]) -> bool:
-    """Is ``<die>/<cfg>`` in the configuration archive (``config_archive``)?  An unreadable archive archives nothing."""
-    try:
-        from motor_ai_sim import config_archive as _CA
-        return _CA.is_archived(str(die), str(cfg) if cfg else None)
-    except Exception:                           # noqa: BLE001
-        return False
+    """Is ``<die>/<cfg>`` in the configuration archive (``config_archive``)?  FAIL CLOSED: a damaged archive store counts
+    every configuration as archived (``config_archive.is_archived``)."""
+    from motor_ai_sim import config_archive as _CA
+    return _CA.is_archived(str(die), str(cfg) if cfg else None)
 
 
 def _own_workspace_file(die: str, cfg: str, path=None) -> bool:
@@ -654,11 +652,9 @@ def drop_private_config_cards(cards: list, access: dict) -> list:
     ``"<die> <config>"`` (or carrying ``die`` + ``config``) for a configuration
     :func:`config_visible` refuses is dropped.  Admins keep everything; a card
     that names no configuration of the catalog is left to the caller's own rule."""
-    if not cards:
-        return cards
-    cards = _drop_archived_cards(cards)          # an archived configuration has no card, for anybody (owner 2026-11-22)
-    if access.get("is_admin"):
-        return cards
+    if access.get("is_admin") or not cards:
+        return cards                             # an admin reads every card, an archived configuration's too (direct links)
+    cards = _drop_archived_cards(cards)          # an archived configuration has no card (owner 2026-11-22)
     hidden = hidden_config_names(access)
     if not hidden:
         return cards
@@ -675,11 +671,11 @@ def drop_private_config_cards(cards: list, access: dict) -> list:
 
 
 def _drop_archived_cards(cards: list) -> list:
+    from motor_ai_sim import config_archive as _CA
     try:
-        from motor_ai_sim import config_archive as _CA
         keys = _CA.archived_keys()
-    except Exception:                           # noqa: BLE001
-        return cards
+    except _CA.ArchiveUnavailable:
+        return [m for m in cards if not (m.get("die") or m.get("name"))]      # fail closed: no card of the catalog is shown
     if not keys:
         return cards
     names = {k.replace("/", " ", 1).casefold() for k in keys}
@@ -840,6 +836,8 @@ def hidden_for_request(die: str, cfg: Optional[str]) -> bool:
     """
     if not cfg or not request_is_bound() or _PROCESS_VIEW.get():
         return False
+    if _cfg_archived(die, cfg):                # BEFORE the public shortcut: a public configuration is archived like any other
+        return not catalog_access(None).get("is_admin")
     if config_visibility(str(die), str(cfg)) == CFG_PUBLIC:
         return False
     return not config_visible(catalog_access(None), str(die), str(cfg))

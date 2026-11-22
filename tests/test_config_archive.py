@@ -28,6 +28,8 @@ NEWCFG = "L60-14t"
 ADMIN = "admin@example.com"
 A = "alice@example.com"
 F = "factory@example.com"
+OTHER = "OTHERDIE 12_40"
+WSDIE = "WSDIE 12_40"
 
 client = TestClient(app)
 
@@ -67,6 +69,7 @@ def env(tmp_path, monkeypatch):
     for d in (shared / "dies", published, works):
         d.mkdir(parents=True)
     _put_die(shared / "dies", DIE, cfgs=(OLDCFG, NEWCFG))
+    _put_die(shared / "dies", OTHER, cfgs=())
     shutil.copy2(_ROOT / "config" / "motor_config.yaml", shared / "motor_config.yaml")
     monkeypatch.setenv("WORKSPACES_ROOT", str(works))
     monkeypatch.setenv("SHARED_ROOT", str(shared))
@@ -93,6 +96,7 @@ def env(tmp_path, monkeypatch):
     U.create_user(F, "password-f", role="oem", name="Factory")
     U.set_motor_grants(F, all_motors=True)
     ids = {e: W.workspace_id(e) for e in (ADMIN, A)}
+    _put_die(works / ids[ADMIN] / "dies", WSDIE, cfgs=(OLDCFG,))          # a workspace-only die of the admin
     monkeypatch.setattr("motor_ai_sim.config.DEFAULT_CONFIG_PATH", str(tmp_path / "identity" / "motor_config.yaml"))
     (tmp_path / "identity").mkdir(exist_ok=True)
     yield {"srv": srv, "tmp": tmp_path, "ids": ids,
@@ -113,8 +117,9 @@ def _audit(env) -> list:
     return [json.loads(l)["action"] for l in p.read_text().splitlines()] if p.exists() else []
 
 
-def _archive(env, cfg=OLDCFG, who="admin", die=DIE):
-    return client.post(f"/api/config-archive/{die}/{cfg}/archive", headers=env[who], json={"reason": "replaced by L60-14t"})
+def _archive(env, cfg=OLDCFG, who="admin", die=DIE, reason="replaced by L60-14t"):
+    body = {} if reason is None else {"reason": reason}
+    return client.post(f"/api/config-archive/{die}/{cfg}/archive", headers=env[who], json=body)
 
 
 def test_an_admin_archives_one_configuration_and_restores_it_nothing_on_disk_changes(env):
@@ -146,7 +151,9 @@ def test_an_admin_archives_one_configuration_and_restores_it_nothing_on_disk_cha
 
 @pytest.mark.parametrize("who", ["a", "f"])
 def test_a_customer_and_a_factory_account_see_it_exactly_like_a_missing_configuration(env, who):
-    _archive(env)
+    assert client.get(f"/api/family/payload/{DIE}/{OLDCFG}", headers=env[who]).status_code == 200     # visible before
+    assert OLDCFG in json.dumps(client.get("/api/family/tree", headers=env[who]).json())
+    assert _archive(env).status_code == 200
     for path in (f"/api/family/payload/{DIE}/{OLDCFG}",):
         hidden = client.get(path, headers=env[who])
         missing = client.get(path.replace(OLDCFG, "NOPE-1t"), headers=env[who])
@@ -183,7 +190,6 @@ def test_refusals_name_what_holds_the_configuration():
     assert CA.refusals("D", "C", **clear) == []
     assert CA.refusals("D", "C", **{**clear, "projects": [proj("closed", "C"), proj("design", "OTHER")]}) == []
     assert CA.refusals("D", "C", **{**clear, "projects": [proj("design", "C")]}) == [{"code": "project_link", "names": ["P"]}]
-    assert CA.refusals("D", "C", **{**clear, "productions": [{"die": "D", "config": "C", "status": "archived"}]}) == []
     assert CA.refusals("D", "C", **{**clear, "productions": [{"die": "D", "config": "C", "status": "active"}]}) == [
         {"code": "production", "names": ["D/C"]}]
     assert CA.refusals("D", "C", **{**clear, "jobs": [{"die": "D", "where": "job x"}, {"die": "E", "where": "job y"}]}) == [
@@ -197,14 +203,15 @@ def test_the_last_configuration_of_a_die_may_go_and_the_die_stays(env):
     assert (env["srv"] / "shared" / "dies" / DIE / "die.yaml").is_file()
 
 
-def test_archived_cards_are_dropped_for_everybody(tmp_path, monkeypatch):
+def test_archived_cards_are_dropped_for_everybody_but_admins(tmp_path, monkeypatch):
     from motor_ai_sim import motor_access as MA
     monkeypatch.setenv("MOTRES_OBJECT_REGISTRY_ROOT", str(tmp_path / "registry"))
-    CA.archive("D", "C", by="admin")
+    CA.archive("D", "C", by="admin", reason="old")
     cards = [{"name": "D C"}, {"name": "D C2"}, {"die": "D", "config": "C", "name": "x"}]
-    assert MA.drop_private_config_cards(cards, {"is_admin": True}) == [{"name": "D C2"}]
+    assert MA.drop_private_config_cards(cards, {"is_admin": True}) == cards                 # an admin's direct card links keep working
+    assert MA._drop_archived_cards(cards) == [{"name": "D C2"}]                             # everybody else: no card
     CA.restore("D", "C", by="admin")
-    assert MA.drop_private_config_cards(cards, {"is_admin": True}) == cards
+    assert MA._drop_archived_cards(cards) == cards
 
 
 def test_a_configuration_rename_and_move_keep_the_archive_and_its_history(env):
@@ -230,3 +237,106 @@ def test_a_die_rename_keeps_the_archive(env):
     r = client.patch(f"/api/family/die/{DIE}", headers=env["admin"], json={"name": "NEWDIE 12_40 b"})
     assert r.status_code == 200, r.text
     assert CA.is_archived("NEWDIE 12_40 b", OLDCFG) and [h["to"] for h in CA.history("NEWDIE 12_40 b", OLDCFG)] == ["archived"]
+
+
+
+@pytest.mark.parametrize("reason", [None, "", "   "])
+def test_a_reason_is_required(env, reason):
+    assert _archive(env, reason=reason).status_code == 422
+    assert _archive(env, reason="x" * 201).status_code == 422
+    assert not CA.is_archived(DIE, OLDCFG)
+
+
+def test_only_shared_catalog_configurations_are_archived(env):
+    r = _archive(env, die=WSDIE)
+    assert r.status_code == 409 and r.json().get("code") == "config.archive_shared_only", r.text
+
+
+def test_a_case_alias_archives_the_stored_name(env):
+    r = _archive(env, cfg=OLDCFG.upper())
+    assert r.status_code == 200 and r.json()["config"] == OLDCFG and CA.is_archived(DIE, OLDCFG)
+
+
+def test_a_public_configuration_is_archived_too(env, monkeypatch):
+    from motor_ai_sim import motor_access as MA
+    MA.set_config_visibility(DIE, OLDCFG, "public")
+    assert client.get(f"/api/family/payload/{DIE}/{OLDCFG}", headers=env["a"]).status_code == 200
+    _archive(env)
+    assert client.get(f"/api/family/payload/{DIE}/{OLDCFG}", headers=env["a"]).status_code == 404
+    monkeypatch.setattr(MA, "request_is_bound", lambda: True)
+    monkeypatch.setattr(MA, "catalog_access", lambda authorization=None: {"is_admin": False, "mode": "granted", "dies": frozenset(), "configs": frozenset()})
+    assert MA.hidden_for_request(DIE, OLDCFG) is True                            # the low-level readers (controller, duty results)
+    monkeypatch.setattr(MA, "catalog_access", lambda authorization=None: {"is_admin": True})
+    assert MA.hidden_for_request(DIE, OLDCFG) is False
+
+
+def test_a_damaged_store_fails_closed_and_is_never_overwritten(env):
+    assert _archive(env).status_code == 200
+    path = CA.store_path()
+    path.write_text("{ not json", encoding="utf-8")
+    assert CA.is_archived(DIE, NEWCFG) is True                                   # every configuration counts as archived
+    assert NEWCFG not in json.dumps(client.get("/api/family/tree", headers=env["a"]).json())
+    assert _archive(env, cfg=NEWCFG).status_code == 503
+    assert client.post(f"/api/config-archive/{DIE}/{OLDCFG}/restore", headers=env["admin"]).status_code == 503
+    assert client.get("/api/config-archive", headers=env["admin"]).status_code == 503
+    assert path.read_text(encoding="utf-8") == "{ not json"                      # the history it holds is not replaced
+
+
+def test_a_project_link_and_a_production_are_refused_for_an_archived_configuration(env):
+    from motor_ai_sim.development import store
+    store.create_project({"id": "p2", "title": "Fan", "status": "design", "customer_org": "Org", "created_at": "t",
+                          "updated_at": "t", "notes": "", "members": [], "pending_invites": [], "linked_motors": []})
+    _archive(env)
+    r = client.post("/api/projects/p2/motors", headers=env["admin"], json={"die": DIE, "config": OLDCFG})
+    assert r.status_code == 409 and "archived" in r.json()["detail"]
+    r = client.post(f"/api/admin/production/{DIE}/{OLDCFG}", headers=env["admin"], json={"title": {"en": "x"}})
+    assert r.status_code == 409 and "archived" in r.json()["detail"]
+    assert store.get_project("p2")["linked_motors"] == []
+
+
+def test_any_production_record_refuses_and_jobs_count_per_configuration():
+    clear = dict(projects=[], productions=[], jobs=[])
+    assert CA.refusals("D", "C", **{**clear, "productions": [{"die": "D", "config": "C", "status": "archived"}]}) == [
+        {"code": "production", "names": ["D/C"]}]
+    assert CA.refusals("D", "C", **{**clear, "jobs": [{"die": "D", "config": "C2", "where": "job x"}]}) == []
+    assert CA.refusals("D", "C", **{**clear, "jobs": [{"die": "D", "config": "", "where": "job y"}]}) == [
+        {"code": "running_job", "names": ["job y"]}]
+
+
+def test_an_unreadable_refusal_source_refuses_the_archive(env, monkeypatch):
+    from motor_ai_sim.development import store
+    monkeypatch.setattr(store, "list_projects", lambda: (_ for _ in ()).throw(OSError("projects unreadable")))
+    assert _archive(env).status_code == 503 and not CA.is_archived(DIE, OLDCFG)
+
+
+def test_a_cross_die_move_through_the_route_keeps_the_archive(env):
+    _archive(env)
+    r = client.post(f"/api/family/config/{DIE}/{OLDCFG}/move", headers=env["admin"], json={"target_die": OTHER})
+    assert r.status_code == 200, r.text
+    assert CA.is_archived(OTHER, OLDCFG) and not CA.is_archived(DIE, OLDCFG)
+    assert [h["to"] for h in CA.history(OTHER, OLDCFG)] == ["archived"]
+
+
+def test_the_rename_hook_runs_under_the_lock_and_its_undo_keeps_later_writes(env):
+    _archive(env)
+
+    class Ctx:
+        dry_run = False
+
+        def __init__(self):
+            self.changes, self.undo = [], []
+
+        def add(self, store, where, change, **extra):
+            self.changes.append(store)
+
+    ctx = Ctx()
+    CA.rename_step(ctx, DIE, OTHER)
+    assert CA.is_archived(OTHER, OLDCFG) and ctx.changes == ["config_archive"]
+    CA.archive(DIE, NEWCFG, by=ADMIN, reason="later write")                     # acknowledged after the rename
+    for u in reversed(ctx.undo):
+        u()
+    assert CA.is_archived(DIE, OLDCFG) and CA.is_archived(DIE, NEWCFG)           # undo moved the key back, the later write stays
+    dry = Ctx()
+    dry.dry_run = True
+    CA.rename_step(dry, DIE, OTHER)
+    assert dry.changes == ["config_archive"] and dry.undo == [] and CA.is_archived(DIE, OLDCFG)

@@ -746,8 +746,8 @@ const FamilyCatalog: React.FC<{
     label: tx('configArchive.reason'), initial: '',
     hint: tx('configArchive.hint'),
     okLabel: tx('configArchive.confirm'),
-    onSubmit: (reason) => mutate(tx('configArchive.done', { die, config: cfg }),
-      () => post(configArchiveApi.archivePath(die, cfg), { reason: reason.trim() })),
+    onSubmit: (reason) => { if (!reason.trim()) { setMsg(`✗ ${tx('configArchive.reasonRequired')}`); return; }
+      void mutate(tx('configArchive.done', { die, config: cfg }), () => post(configArchiveApi.archivePath(die, cfg), { reason: reason.trim() })); },
   });
   const restoreCfg = (c: ArchivedConfig) => mutate(tx('configArchive.restored', { die: c.die, config: c.config }),
     () => post(configArchiveApi.restorePath(c.die, c.config), {}));
@@ -910,7 +910,7 @@ const FamilyCatalog: React.FC<{
     cfgHistory: (d, c) => setHistOf({ die: d, config: c }), duplicateCfg, moveCfg,
     datasheet: (d, c) => void runExport('datasheet', d, c), report: (d, c, pdf) => void runExport('report', d, c, pdf),
     toMyMotors: duplicateToMySpace, battery: (d, c) => { const x = cfgOf(d, c); if (x) editBattery(d, x); }, deleteCfg,
-    archiveCfg,
+    archiveCfg, archivable: (d) => dieOf(d)?.layer === 'shared',
   };
 
   const body = (

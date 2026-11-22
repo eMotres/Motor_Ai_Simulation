@@ -441,6 +441,16 @@ def _mark_removal_candidates(project: dict, motor_key: str, *, reason: str,
 
 
 def link_motor(project_id: str, die: str, config: str, request: Request) -> dict:
+    """Link a motor to a project - under the configuration archive's lifecycle lock (owner 2026-11-22): an archived
+    configuration is not linked, and an archive that checked "no project links it" can never interleave with this link."""
+    from motor_ai_sim import config_archive as _CA
+    with _CA.lifecycle_lock():
+        if _CA.is_archived(str(die or "").strip(), str(config or "").strip()):
+            raise HTTPException(409, detail="This configuration is archived; restore it in the catalog before linking it")
+        return _link_motor_unlocked(project_id, die, config, request)
+
+
+def _link_motor_unlocked(project_id: str, die: str, config: str, request: Request) -> dict:
     die = str(die or "").strip(); config = str(config or "").strip()
     if not die or not config or any(x in die + config for x in ("/", "\\", "..")):
         raise HTTPException(422, detail="Invalid motor identity")

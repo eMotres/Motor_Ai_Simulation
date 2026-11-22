@@ -304,8 +304,7 @@ def test_any_production_record_refuses_and_jobs_count_per_configuration():
 
 
 def test_an_unreadable_refusal_source_refuses_the_archive(env, monkeypatch):
-    from motor_ai_sim.development import store
-    monkeypatch.setattr(store, "list_projects", lambda: (_ for _ in ()).throw(OSError("projects unreadable")))
+    monkeypatch.setattr(CA, "_projects_strict", lambda: (_ for _ in ()).throw(OSError("projects unreadable")))
     assert _archive(env).status_code == 503 and not CA.is_archived(DIE, OLDCFG)
 
 
@@ -340,3 +339,92 @@ def test_the_rename_hook_runs_under_the_lock_and_its_undo_keeps_later_writes(env
     dry.dry_run = True
     CA.rename_step(dry, DIE, OTHER)
     assert dry.changes == ["config_archive"] and dry.undo == [] and CA.is_archived(DIE, OLDCFG)
+
+
+
+def test_a_damaged_store_hides_only_shared_state_from_non_admins_and_admins_recover(env):
+    assert _archive(env).status_code == 200
+    CA.store_path().write_text("{ not json", encoding="utf-8")
+    assert NEWCFG not in json.dumps(client.get("/api/family/tree", headers=env["a"]).json())       # non-admin: unknown = hidden
+    assert _tree(env["admin"])[DIE] == [NEWCFG, OLDCFG]                                            # admin listing: recovery view
+    assert _tree(env["admin"])[WSDIE] == [OLDCFG]                                                  # another layer: untouched
+    r = client.post("/api/config-archive/recover", headers=env["admin"])
+    assert r.status_code == 200, r.text
+    assert CA.is_archived(DIE, OLDCFG) and not CA.is_archived(DIE, NEWCFG)
+    assert list(CA.store_path().parent.glob("config_archive.damaged-*.json"))
+    assert client.post("/api/config-archive/recover", headers=env["a"]).status_code == 403
+
+
+@pytest.mark.parametrize("doc", [{}, {"version": 1, "history": []}, {"version": 1, "configs": {}},
+                                 {"version": 1, "configs": {"D/C": {"by": "x"}}, "history": []},
+                                 {"version": 2, "configs": {}, "history": []}])
+def test_valid_json_missing_the_schema_is_damage_not_an_empty_archive(env, doc):
+    CA.store_path().parent.mkdir(parents=True, exist_ok=True)
+    CA.store_path().write_text(json.dumps(doc), encoding="utf-8")
+    assert CA.state(DIE, OLDCFG) == CA.UNKNOWN
+    assert _archive(env).status_code == 503
+    assert json.loads(CA.store_path().read_text()) == doc                                         # never overwritten
+
+
+def test_a_damaged_project_or_production_record_refuses_the_archive(env, tmp_path):
+    from motor_ai_sim.development import store
+    store.create_project({"id": "p9", "title": "X", "status": "design", "customer_org": "Org", "created_at": "t",
+                          "updated_at": "t", "notes": "", "members": [], "pending_invites": [], "linked_motors": []})
+    (store.path_for("p9") / "project.json").write_text("{ broken", encoding="utf-8")
+    assert _archive(env).status_code == 503 and not CA.is_archived(DIE, OLDCFG)
+    (store.path_for("p9") / "project.json").write_text(json.dumps({"id": "p9", "status": "design", "linked_motors": []}))
+    from motor_ai_sim.production import store as PS
+    PS.path_for(DIE, OLDCFG).mkdir(parents=True, exist_ok=True)
+    (PS.path_for(DIE, OLDCFG) / "production.json").write_text("{ also broken", encoding="utf-8")
+    r = _archive(env)
+    assert r.status_code == 409 and r.json().get("code") == "config.in_use"
+
+
+def test_an_automatic_link_never_links_an_archived_configuration(env):
+    from motor_ai_sim.development import autolink, store
+    store.create_project({"id": "p3", "title": "Auto", "status": "design", "customer_org": "Org", "created_at": "t",
+                          "updated_at": "t", "notes": "", "members": [], "pending_invites": [], "linked_motors": []})
+    _archive(env)
+    assert autolink._link("p3", DIE, OLDCFG, ADMIN) is False
+    assert store.get_project("p3")["linked_motors"] == []
+    with pytest.raises(CA.Archived):
+        with CA.admission(DIE, OLDCFG):
+            pass
+
+
+def test_a_case_alias_is_archived_too_on_a_case_insensitive_file_system(env, monkeypatch):
+    _archive(env)
+    monkeypatch.setitem(CA._CACHE, "ci", True)
+    assert CA.state(DIE, OLDCFG.lower()) == CA.ARCHIVED
+    monkeypatch.setitem(CA._CACHE, "ci", False)
+    assert CA.state(DIE, OLDCFG.lower()) == CA.ACTIVE                                              # distinct files there
+
+
+def test_saved_snapshots_carry_their_source_and_follow_the_archive(env, monkeypatch):
+    from motor_ai_sim.routes import family as fam
+    monkeypatch.setattr(fam, "_read_ctx", lambda: {"die": DIE, "config": OLDCFG, "duty": "rated"})
+    r = client.post("/api/sims/saved", headers=env["a"], json={"name": "run", "params": {"rpm": 1000}, "results": {}})
+    if r.status_code == 404:
+        pytest.skip("saved simulations router not mounted here")
+    assert r.json()["source"] == {"die": DIE, "config": OLDCFG}
+    assert [x["name"] for x in client.get("/api/sims/saved", headers=env["a"]).json()["sims"]] == ["run"]
+    _archive(env)
+    assert client.get("/api/sims/saved", headers=env["a"]).json()["sims"] == []
+
+
+def test_the_support_digest_cache_follows_the_archive(env):
+    from motor_ai_sim import support_catalog as SC
+    before = SC._archive_generation()
+    _archive(env)
+    assert SC._archive_generation() != before
+    CA.store_path().write_text("{ broken", encoding="utf-8")
+    assert SC._archive_generation()[0] == "unknown" and SC._archive_generation() != SC._archive_generation()
+
+
+def test_admin_card_listing_drops_archived_cards_but_keeps_them_while_damaged(env):
+    from motor_ai_sim import motor_access as MA
+    cards = [{"name": f"{DIE} {OLDCFG}"}, {"name": f"{DIE} {NEWCFG}"}]
+    _archive(env)
+    assert MA._drop_archived_cards(cards, admin=True) == [cards[1]]
+    CA.store_path().write_text("{ broken", encoding="utf-8")
+    assert MA._drop_archived_cards(cards, admin=True) == cards and MA._drop_archived_cards(cards) == []

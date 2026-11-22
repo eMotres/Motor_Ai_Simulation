@@ -141,9 +141,26 @@ def list_saved(request: Request):
     from motor_ai_sim import config_archive as CA
     from motor_ai_sim import motor_access as MA
     if not MA.catalog_access(request.headers.get("authorization")).get("is_admin"):
-        sims = [s for s in sims if not CA.is_archived(str((s.get("params") or {}).get("die") or ""),
-                                                      str((s.get("params") or {}).get("config") or ""))]
+        sims = [s for s in sims if not CA.is_archived(*_source_of(s))]
     return {"sims": sims}
+
+
+def _source_of(entry: dict) -> tuple:
+    """``(die, config)`` the snapshot was made from: its ``source`` (stamped at save since 2026-11-22), else what its params name;
+    ``("", "")`` for an older snapshot that names none (it then belongs to no catalog configuration and stays listed)."""
+    src = entry.get("source") if isinstance(entry.get("source"), dict) else {}
+    params = entry.get("params") if isinstance(entry.get("params"), dict) else {}
+    return (str(src.get("die") or params.get("die") or ""), str(src.get("config") or params.get("config") or ""))
+
+
+def _active_source() -> dict:
+    """The configuration open in the editor when the snapshot is saved (the family context), or ``{}``."""
+    try:
+        from motor_ai_sim.routes import family as F
+        ctx = F._read_ctx() or {}
+        return {"die": str(ctx.get("die") or ""), "config": str(ctx.get("config") or "")} if ctx.get("config") else {}
+    except Exception:                                       # noqa: BLE001 - a snapshot never fails for this
+        return {}
 
 
 @router.post("/saved")
@@ -160,6 +177,7 @@ def save_sim(req: SaveSimRequest, request: Request):
             "created": time.strftime("%Y-%m-%d %H:%M:%S"),
             "params": req.params or {},
             "results": req.results or {},
+            "source": _active_source(),           # which configuration it was made from: an archived one's snapshots follow it
         }
         items.insert(0, entry)               # newest first
         store[bucket] = items

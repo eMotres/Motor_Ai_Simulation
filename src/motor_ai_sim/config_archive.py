@@ -22,6 +22,7 @@ The same idea as ``die_archive`` one level down:
 from __future__ import annotations
 
 import json
+import os
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -63,14 +64,19 @@ class ArchiveUnavailable(Exception):
 
 
 def _validate(data: Any) -> Dict[str, Any]:
-    if not isinstance(data, dict) or not isinstance(data.get("configs", {}), dict) or not isinstance(data.get("history", []), list):
+    """The WHOLE schema of an existing store: version 1, a ``configs`` object of ``<die>/<cfg>`` -> {by, at, reason}, a
+    ``history`` list of {key, to, by, at} rows.  Anything missing or malformed is damage (only an ABSENT file is an empty
+    archive)."""
+    if not isinstance(data, dict) or data.get("version") != 1 or not isinstance(data.get("configs"), dict) \
+            or not isinstance(data.get("history"), list):
         raise ArchiveUnavailable("config_archive.json has the wrong shape")
-    configs = data.get("configs") or {}
-    if any(not isinstance(k, str) or "/" not in k or not isinstance(v, dict) for k, v in configs.items()):
-        raise ArchiveUnavailable("config_archive.json has a malformed entry")
-    data.setdefault("version", 1)
-    data.setdefault("configs", {})
-    data.setdefault("history", [])
+    for k, v in data["configs"].items():
+        if not isinstance(k, str) or k.count("/") < 1 or not k.split("/", 1)[0] or not k.split("/", 1)[1] \
+                or not isinstance(v, dict) or not all(isinstance(v.get(f), str) for f in ("by", "at", "reason")):
+            raise ArchiveUnavailable("config_archive.json has a malformed entry")
+    for h in data["history"]:
+        if not isinstance(h, dict) or not isinstance(h.get("key"), str) or h.get("to") not in ("archived", "active"):
+            raise ArchiveUnavailable("config_archive.json has a malformed history row")
     return data
 
 
@@ -124,19 +130,56 @@ def archived_keys() -> frozenset:
     return _CACHE["keys"]
 
 
-def is_archived(die: str, cfg: Optional[str]) -> bool:
-    """FAIL CLOSED: True for every configuration while the store is damaged (logged once per state of the file)."""
+ARCHIVED, ACTIVE, UNKNOWN = "archived", "active", "unknown"
+
+
+def _case_insensitive_fs() -> bool:
+    """Does the catalog's file system ignore letter case (Windows, macOS)?  Then ``C.yaml`` and ``c.yaml`` are ONE file and the
+    archive key is compared without case; on a case-sensitive file system they are distinct configurations."""
+    hit = _CACHE.get("ci")
+    if hit is None:
+        probe = store_path().parent
+        try:
+            probe.mkdir(parents=True, exist_ok=True)
+            hit = (probe / "X").exists() == (probe / "x").exists() and os.path.normcase("A") == "a" or \
+                Path(str(probe).swapcase()).exists() and str(probe).swapcase() != str(probe)
+        except OSError:
+            hit = False
+        _CACHE["ci"] = bool(hit)
+    return bool(_CACHE["ci"])
+
+
+def state(die: str, cfg: Optional[str]) -> str:
+    """``archived`` | ``active`` | ``unknown`` (the store is damaged: the state of this configuration cannot be known)."""
     if not die or not cfg:
-        return False
+        return ACTIVE
     try:
         keys = archived_keys()
     except ArchiveUnavailable as exc:
         if _CACHE.get("logged") != _CACHE.get("sig"):
             _CACHE["logged"] = _CACHE.get("sig")
             import logging
-            logging.getLogger(__name__).error("config archive unavailable (%s): every configuration is treated as archived", exc)
-        return True
-    return bool(keys) and f"{die}/{cfg}" in keys
+            logging.getLogger(__name__).error("config archive unavailable (%s): shared configurations are hidden from "
+                                              "non-admins until it is restored", exc)
+        return UNKNOWN
+    if not keys:
+        return ACTIVE
+    k = f"{die}/{cfg}"
+    if k in keys:
+        return ARCHIVED
+    if _case_insensitive_fs() and k.casefold() in {x.casefold() for x in keys}:
+        return ARCHIVED
+    return ACTIVE
+
+
+def is_archived(die: str, cfg: Optional[str]) -> bool:
+    """True when archived OR unknown (a damaged store fails closed for the shared catalog; callers that must keep an admin's
+    recovery view or another layer ask :func:`state` / pass the layer to ``motor_access``)."""
+    return state(die, cfg) != ACTIVE
+
+
+def backup_path() -> Path:
+    return store_path().with_name("config_archive.recovery.json")
 
 
 def listing(die: Optional[str] = None) -> List[Dict[str, Any]]:
@@ -165,8 +208,26 @@ def _mutate(fn) -> Dict[str, Any]:
         fn(data, out)
         if len(data["history"]) > HISTORY_MAX:
             del data["history"][: len(data["history"]) - HISTORY_MAX]
+        data["generation"] = int(data.get("generation") or 0) + 1
         json_store.atomic_write_json(path, data)
+        json_store.atomic_write_json(backup_path(), data)   # the recovery copy an admin can restore (restore_from_recovery)
     return out
+
+
+def restore_from_recovery(*, by: str) -> Dict[str, Any]:
+    """Admin recovery of a damaged store: the last recovery copy (validated) becomes the store again; the damaged file is kept
+    beside it as ``config_archive.damaged-<time>.json``.  Raises :class:`ArchiveUnavailable` when there is no valid copy."""
+    path = store_path()
+    with lifecycle_lock():
+        try:
+            data = _validate(json.loads(backup_path().read_text(encoding="utf-8")))
+        except (OSError, ValueError, ArchiveUnavailable) as exc:
+            raise ArchiveUnavailable(f"no valid recovery copy: {exc}") from exc
+        if path.exists():
+            path.replace(path.with_name("config_archive.damaged-%s.json" % _now().replace(":", "")))
+        data["history"].append({"key": "*", "to": "active", "by": str(by or ""), "at": _now(), "reason": "restored from the recovery copy"})
+        json_store.atomic_write_json(path, data)
+    return {"configs": len(data["configs"]), "generation": data.get("generation")}
 
 
 def archive(die: str, cfg: str, *, by: str, reason: str) -> Dict[str, Any]:
@@ -220,6 +281,50 @@ def _live_jobs_strict(die: str) -> List[Dict[str, str]]:
     return out
 
 
+def _projects_strict() -> List[dict]:
+    """Every project record, read STRICTLY: a project.json that cannot be parsed raises (its links are unknown, so the archive is
+    refused) - unlike the tolerant listing readers, which skip it."""
+    from motor_ai_sim.development import store as _ps
+    base = _ps.root()
+    out: List[dict] = []
+    if not base.is_dir():
+        return out
+    for d in sorted(p for p in base.iterdir() if p.is_dir() and not p.name.startswith(".")):
+        f = d / "project.json"
+        if not f.exists():
+            continue
+        doc = json.loads(f.read_text(encoding="utf-8"))
+        if not isinstance(doc, dict):
+            raise ValueError(f"{f} is not a project record")
+        out.append(doc)
+    return out
+
+
+def _productions_strict(die: str, cfg: str) -> List[dict]:
+    """A Production record of ``<die>/<cfg>``: its FILE existing is enough (any state, any content - damaged too)."""
+    from motor_ai_sim.production import store as _prs
+    f = _prs.path_for(die, cfg) / "production.json"
+    return [{"die": die, "config": cfg}] if f.exists() else []
+
+
+class Archived(Exception):
+    """The configuration is archived (or its state is unknown): it is not linked, and no production is made of it."""
+
+
+from contextlib import contextmanager  # noqa: E402
+
+
+@contextmanager
+def admission(die: str, cfg: str):
+    """THE way to make a configuration in use (a project link - manual or automatic - or a Production record): under the
+    lifecycle lock, re-checking its state; raises :class:`Archived` when it is archived or unknown.  The caller writes its link
+    / record inside the ``with`` block, so an archive can never interleave."""
+    with lifecycle_lock():
+        if state(str(die), str(cfg)) != ACTIVE:
+            raise Archived(f"'{die}/{cfg}' is archived; restore it in the catalog first")
+        yield
+
+
 def refusals(die: str, cfg: str, *, projects: Optional[List[dict]] = None, productions: Optional[List[dict]] = None,
              jobs: Optional[List[Dict[str, str]]] = None) -> List[Dict[str, Any]]:
     """Why ``<die>/<cfg>`` cannot be archived now: ``[{"code", "names"}]``, empty when it can.  Sources that cannot be read
@@ -227,11 +332,9 @@ def refusals(die: str, cfg: str, *, projects: Optional[List[dict]] = None, produ
     catalog, so an archived configuration never has one."""
     die, cfg = str(die), str(cfg)
     if projects is None:
-        from motor_ai_sim.development import store as _ps
-        projects = _ps.list_projects()
+        projects = _projects_strict()
     if productions is None:
-        from motor_ai_sim.production import routes as _PR
-        productions = _PR._production_list_for("", True)
+        productions = _productions_strict(die, cfg)
     if jobs is None:
         jobs = _live_jobs_strict(die)
     out: List[Dict[str, Any]] = []
@@ -298,20 +401,21 @@ def rename_step(ctx: Any, old_die: str, new_die: str, old_cfg: Optional[str] = N
     """The rename / move hook of ``die_rename`` and ``config_move``: a dry run lists what would move; a real run moves the keys
     under the lifecycle lock and registers an undo that moves them back the same way (never a byte restore that could erase a
     later write).  A damaged store refuses the rename (``blocked``)."""
-    try:
-        doc = load()
-    except ArchiveUnavailable as exc:
-        raise blocked(str(exc)) from exc
-    probe = json.loads(json.dumps(doc))
-    try:
-        n = rename_in(probe, old_die, new_die, old_cfg, new_cfg)
-    except ValueError as exc:
-        raise blocked(str(exc)) from exc
-    if not n:
-        return
-    ctx.add("config_archive", store_path(), f"an archived configuration stays archived under its new name ({n})")
-    if getattr(ctx, "dry_run", False):
-        return
-    rename(old_die, new_die, old_cfg, new_cfg)
+    with lifecycle_lock():                                  # the decision AND the move under the same lock as an archive
+        try:
+            doc = load()
+        except ArchiveUnavailable as exc:
+            raise blocked(str(exc)) from exc
+        probe = json.loads(json.dumps(doc))
+        try:
+            n = rename_in(probe, old_die, new_die, old_cfg, new_cfg)
+        except ValueError as exc:
+            raise blocked(str(exc)) from exc
+        if not n:
+            return
+        ctx.add("config_archive", store_path(), f"an archived configuration stays archived under its new name ({n})")
+        if getattr(ctx, "dry_run", False):
+            return
+        rename(old_die, new_die, old_cfg, new_cfg)
     back_cfg = (new_cfg, old_cfg) if old_cfg is not None else (None, None)
     ctx.undo.append(lambda: rename(new_die, old_die, back_cfg[0], back_cfg[1]))

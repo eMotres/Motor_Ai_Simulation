@@ -99,12 +99,12 @@ def archive_config(die: str, cfg: str, req: ArchiveRequest, w: dict = Depends(F.
     from motor_ai_sim import admin_audit as _AA
     from motor_ai_sim.api_errors import ApiError
     by = _admin(w)
-    die, cfg = _existing(die, cfg)
     reason = " ".join(str(req.reason or "").split())
     if not reason:
         raise HTTPException(422, detail="a reason is required")
-    # the refusal and the archive under ONE lock, which a project link and a production creation also take
+    # identity, refusal and archive under ONE lock, which every link, production creation and rename step also take
     with CA.lifecycle_lock():
+        die, cfg = _existing(die, cfg)
         try:
             if f"{die}/{cfg}" in CA.archived_keys():
                 raise ApiError(409, "config.already_archived", f"'{die}/{cfg}' is archived already", params={"die": die, "config": cfg})
@@ -139,3 +139,18 @@ def restore_config(die: str, cfg: str, w: dict = Depends(F.require_catalog_write
     _AA.record(by, "config.unarchive", f"{die}/{cfg}")
     log.warning("config_archive: '%s/%s' restored by %s", die, cfg, by)
     return {"ok": True, "die": die, "config": cfg, "archived": False}
+
+
+@router.post("/recover")
+def recover(w: dict = Depends(F.require_catalog_write)):
+    """Admin recovery of a damaged archive store: the last recovery copy (written after every change) becomes the store again;
+    the damaged file is kept beside it.  Until then non-admins see no SHARED configuration whose state is unknown, and admins'
+    listings keep showing everything."""
+    from motor_ai_sim import admin_audit as _AA
+    by = _admin(w)
+    try:
+        out = CA.restore_from_recovery(by=by)
+    except CA.ArchiveUnavailable as exc:
+        raise HTTPException(409, detail=f"The archive cannot be recovered automatically: {exc}")
+    _AA.record(by, "config.archive_recover", "config_archive", details=out)
+    return {"ok": True, **out}

@@ -498,9 +498,9 @@ def config_visible(access: dict, die: str, cfg: Optional[str], path=None, *,
         return may_see_die(access, die)
     if access.get("is_admin"):
         return True
-    if _cfg_archived(die, cfg):
-        return False                            # an archived configuration reads exactly like a missing one (owner 2026-11-22)
     lay = _die_layer_of(die, layer)
+    if lay == "shared" and _cfg_archived(die, cfg):
+        return False                            # an archived (or unknown) SHARED configuration reads exactly like a missing one
     if lay == "workspace":
         if _own_workspace_file(die, cfg, path):
             return True                         # the caller's own copy is theirs
@@ -522,11 +522,13 @@ def config_visible(access: dict, die: str, cfg: Optional[str], path=None, *,
     return die_open(access, die)
 
 
-def _cfg_archived(die: str, cfg: Optional[str]) -> bool:
-    """Is ``<die>/<cfg>`` in the configuration archive (``config_archive``)?  FAIL CLOSED: a damaged archive store counts
-    every configuration as archived (``config_archive.is_archived``)."""
+def _cfg_archived(die: str, cfg: Optional[str], *, admin: bool = False) -> bool:
+    """Is the SHARED configuration ``<die>/<cfg>`` archived (``config_archive``)?  Callers ask only for the shared layer: the
+    archive never touches a workspace or published copy.  FAIL CLOSED for readers: an unknown state (a damaged store) counts as
+    archived - except for an ``admin`` listing, which keeps showing everything so the admin can see and restore it."""
     from motor_ai_sim import config_archive as _CA
-    return _CA.is_archived(str(die), str(cfg) if cfg else None)
+    st = _CA.state(str(die), str(cfg) if cfg else None)
+    return st == _CA.ARCHIVED or (st == _CA.UNKNOWN and not admin)
 
 
 def _own_workspace_file(die: str, cfg: str, path=None) -> bool:
@@ -670,12 +672,14 @@ def drop_private_config_cards(cards: list, access: dict) -> list:
     return keep
 
 
-def _drop_archived_cards(cards: list) -> list:
+def _drop_archived_cards(cards: list, *, admin: bool = False) -> list:
+    """The cards whose configuration is not archived.  A damaged archive store: no catalog card for a non-admin (fail closed),
+    every card for an admin (recovery)."""
     from motor_ai_sim import config_archive as _CA
     try:
         keys = _CA.archived_keys()
     except _CA.ArchiveUnavailable:
-        return [m for m in cards if not (m.get("die") or m.get("name"))]      # fail closed: no card of the catalog is shown
+        return cards if admin else [m for m in cards if not (m.get("die") or m.get("name"))]
     if not keys:
         return cards
     names = {k.replace("/", " ", 1).casefold() for k in keys}
@@ -715,8 +719,9 @@ def may_see_config_file(access: dict, die: str, cfg: str, path,
                         layer: Optional[str] = None) -> bool:
     """:func:`config_visible` for a caller that already holds the file ``path``
     (and, in a listing, the die's ``layer``).  Every LISTING asks this, so an archived configuration is left out of it for
-    everybody, admins too (they reach it through its direct link and the die view's Archived group)."""
-    if _cfg_archived(die, cfg):
+    everybody, admins too (they reach it through its direct link and the die view's Archived group).  Only a SHARED-layer
+    configuration is ever archived; while the store is damaged an admin's listing keeps everything (recovery)."""
+    if cfg and _die_layer_of(die, layer) == "shared" and _cfg_archived(die, cfg, admin=bool(access.get("is_admin"))):
         return False
     return config_visible(access, die, cfg, path, layer=layer)
 
@@ -836,7 +841,7 @@ def hidden_for_request(die: str, cfg: Optional[str]) -> bool:
     """
     if not cfg or not request_is_bound() or _PROCESS_VIEW.get():
         return False
-    if _cfg_archived(die, cfg):                # BEFORE the public shortcut: a public configuration is archived like any other
+    if _die_layer_of(str(die)) == "shared" and _cfg_archived(die, cfg):   # BEFORE the public shortcut
         return not catalog_access(None).get("is_admin")
     if config_visibility(str(die), str(cfg)) == CFG_PUBLIC:
         return False

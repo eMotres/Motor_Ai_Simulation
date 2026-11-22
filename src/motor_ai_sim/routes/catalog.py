@@ -187,6 +187,13 @@ def get_catalog(authorization: Optional[str] = Header(default=None)):
         cat["by_diameter"] = {d: [i for i in ids
                                   if any(m["id"] == i for m in cat["motors"])]
                               for d, ids in cat["by_diameter"].items()}
+    else:
+        # the LISTING leaves an archived configuration's card out for admins too (configuration archive, 2026-11-22); an
+        # admin's direct card reads (load, passport) still find it
+        from motor_ai_sim import motor_access as _ma
+        cat["motors"] = _ma._drop_archived_cards(cat.get("motors", []), admin=True)
+        cat["by_diameter"] = {d: [i for i in ids if any(m["id"] == i for m in cat["motors"])]
+                              for d, ids in cat["by_diameter"].items()}
     return cat
 
 

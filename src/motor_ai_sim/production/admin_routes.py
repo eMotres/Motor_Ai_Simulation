@@ -69,10 +69,11 @@ async def admin_create(request: Request, die: str, config: str, admin_user: dict
     members = models.normalize_members(body.get("members"))
     share_costs = bool(body.get("share_costs_with_oem", False))
     from motor_ai_sim import config_archive as _CA
-    with _CA.lifecycle_lock():             # an archived configuration gets no Production record; never interleaved with an archive
-        if _CA.is_archived(die, config):
-            raise HTTPException(status_code=409, detail="This configuration is archived; restore it in the catalog first")
-        return _admin_create_unlocked(die, config, body, title, order_quantity, members, share_costs, admin_user)
+    try:                                   # an archived configuration gets no Production record; never interleaved with an archive
+        with _CA.admission(die, config):
+            return _admin_create_unlocked(die, config, body, title, order_quantity, members, share_costs, admin_user)
+    except _CA.Archived:
+        raise HTTPException(status_code=409, detail="This configuration is archived; restore it in the catalog first")
 
 
 def _admin_create_unlocked(die, config, body, title, order_quantity, members, share_costs, admin_user):

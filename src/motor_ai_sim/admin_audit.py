@@ -63,7 +63,7 @@ ACTIONS = frozenset({
     "support.requests.status", "support.requests.delete",
     "support.chats.read", "support.config",
     # catalog / workspaces
-    "die.access", "die.rename", "die.retire", "die.restore", "die.archive", "die.unarchive", "config.archive", "config.unarchive", "production.lifecycle", "workspace.read", "workspace.export",
+    "die.access", "die.rename", "die.retire", "die.restore", "die.archive", "die.unarchive", "config.archive", "config.unarchive", "config.archive_recover", "production.lifecycle", "workspace.read", "workspace.export",
     "config.applications", "config.cad_mass",
     # config_move.py: a configuration moved / copied to another die, or renamed (every store keyed by the pair follows)
     "config.move", "config.copy", "config.rename",

@@ -164,6 +164,14 @@ def _summary(project: dict, user: dict) -> dict:
     # Only expose the current caller's member record to customers.
     if not access.is_engineer(user):
         projection["members"] = [m for m in project.get("members", []) if m.get("email", "").lower() == _email(user)]
+    # the price switches (owner 2026-11-22): a project owner or an admin manages them, so they get the minimal list the Members dialog
+    # needs - address, role, pending, flag - for the members AND the pending invites; never the notes or the grant ledgers
+    if str(user.get("role") or "").lower() == "admin" or role == "owner":
+        projection["member_switches"] = [
+            {"email": str(m.get("email") or "").lower(), "role": m.get("role"), "pending": pending,
+             "sees_prices": m.get("role") == "owner" or m.get("sees_prices") is True}
+            for pending, rows in ((False, project.get("members", [])), (True, project.get("pending_invites", [])))
+            for m in rows if isinstance(m, dict) and m.get("email")]
     return projection
 
 

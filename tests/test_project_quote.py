@@ -411,3 +411,82 @@ def test_the_project_payload_carries_only_the_flag(client):
     assert client.get("/api/projects", headers=_h("other")).json()["projects"][0]["quote_shared"] is False
     client.delete("/api/admin/projects/alpha/cost-estimate/share", headers=_h("admin"))
     assert client.get("/api/projects/alpha", headers=_h("owner")).json()["quote_shared"] is False
+
+
+# ── the owner's member list for the switches (Astra pre-merge 2026-11-22) ───────────────────────────────────────────
+
+def _switches(client, who, project="alpha"):
+    return client.get(f"/api/projects/{project}", headers=_h(who)).json().get("member_switches")
+
+
+def _invite(client, email, role="customer", who="owner", **extra):
+    return client.post("/api/projects/alpha/members", json={"email": email, "role": role, **extra}, headers=_h(who))
+
+
+@pytest.mark.parametrize("who", ("owner", "owner2", "admin"))
+def test_an_ordinary_owner_gets_every_member_and_pending_invite_with_the_flag(client, who):
+    """The summary of an ordinary (non-staff) owner holds only his own member record; the switches need the whole list."""
+    assert _invite(client, "later@example.test", "engineer", sees_prices=True).status_code == 200
+    assert _switch(client, "viewer@example.test", True).status_code == 200
+    rows = {r["email"]: r for r in _switches(client, who)}
+    assert set(rows) == {"customer@example.test", "eng@example.test", "viewer@example.test", "owner2@example.test", "later@example.test"}
+    assert rows["customer@example.test"]["sees_prices"] is True and rows["owner2@example.test"]["sees_prices"] is True
+    assert rows["eng@example.test"]["sees_prices"] is False and rows["viewer@example.test"]["sees_prices"] is True
+    assert (rows["later@example.test"]["pending"], rows["later@example.test"]["role"], rows["later@example.test"]["sees_prices"]) == (True, "engineer", True)
+    assert all(set(r) == {"email", "role", "pending", "sees_prices"} for r in rows.values())
+    if who != "admin":
+        mine = client.get("/api/projects/alpha", headers=_h(who)).json()
+        assert [m["email"] for m in mine["members"]] == [f"{'customer' if who == 'owner' else 'owner2'}@example.test"]
+        assert "notes" not in mine and "project_motor_grants" not in mine and "grant_removal_candidates" not in mine
+
+
+def test_a_pending_invite_is_toggled_from_that_list(client):
+    assert _invite(client, "later@example.test").status_code == 200
+    assert {r["email"]: r["sees_prices"] for r in _switches(client, "owner")}["later@example.test"] is False
+    assert _switch(client, "later@example.test", True).status_code == 200
+    assert {r["email"]: r["sees_prices"] for r in _switches(client, "owner")}["later@example.test"] is True
+
+
+@pytest.mark.parametrize("who", ("member-eng", "viewer", "staff", "stranger", "other"))
+def test_no_other_caller_gets_the_switch_list(client, who):
+    got = client.get("/api/projects/alpha", headers=_h(who))
+    if got.status_code == 200:
+        assert "member_switches" not in got.json()
+    if who != "other":                    # "other" owns the project beta and gets the list of THAT project only
+        assert "member_switches" not in client.get("/api/projects", headers=_h(who)).text
+
+
+def test_a_re_role_keeps_the_flag_and_an_owner_role_drops_it(client):
+    assert _invite(client, "later@example.test", "engineer", sees_prices=True).status_code == 200
+    assert _invite(client, "later@example.test", "customer").status_code == 200                       # None keeps it
+    assert {r["email"]: r["sees_prices"] for r in _switches(client, "owner")}["later@example.test"] is True
+    assert _invite(client, "later@example.test", "owner").status_code == 200
+    got = [p for p in store.get_project("alpha")["pending_invites"] if p["email"] == "later@example.test"][0]
+    assert got["role"] == "owner" and "sees_prices" not in got
+    assert _invite(client, "later@example.test", "customer").status_code == 200                       # back down: no stale flag
+    assert {r["email"]: r["sees_prices"] for r in _switches(client, "owner")}["later@example.test"] is False
+
+
+def test_a_revoked_member_who_is_invited_again_starts_without_the_flag(client):
+    _complete(client)
+    _share(client)
+    assert _switch(client, "viewer@example.test", True).status_code == 200
+    assert _quote(client, "viewer").status_code == 200
+    assert _switch(client, "viewer@example.test", False).status_code == 200
+    assert _quote(client, "viewer").status_code == 404
+    assert client.delete("/api/projects/alpha/members?email=viewer@example.test", headers=_h("owner")).status_code == 200
+    assert "viewer@example.test" not in {r["email"] for r in _switches(client, "owner")}
+    assert _invite(client, "viewer@example.test").status_code == 200
+    assert {r["email"]: r["sees_prices"] for r in _switches(client, "owner")}["viewer@example.test"] is False
+
+
+def test_the_access_matrix_with_a_populated_next_unit(client):
+    """Owners, admin and the switched-on member read the quote including the next unit; everybody else gets the same 404."""
+    _complete(client)
+    assert _share(client).status_code == 200
+    assert _switch(client, "viewer@example.test", True).status_code == 200
+    for who in ("owner", "owner2", "admin", "viewer"):
+        assert _quote(client, who).status_code == 200, who
+    for who in ("member-eng", "staff", "stranger", "other"):
+        assert _quote(client, who).status_code == 404, who
+    assert _quote(client, "").status_code in (401, 403)

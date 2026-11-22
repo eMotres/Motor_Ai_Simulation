@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import datetime
+import json
 import secrets
 from typing import Any
 
@@ -58,30 +59,66 @@ def queue_event(doc: dict, actor_email: str, action: str, entity: str, entity_id
         "actor_email": actor_email, "action": action, "entity": entity, "entity_id": entity_id, "details": dict(details or {})})
 
 
-def _in_audit(project_id: str, event_id: str) -> bool:
-    path = store.path_for(project_id) / "audit.jsonl"
+def _audit_path(project_id: str):
+    return store.path_for(project_id) / "audit.jsonl"
+
+
+def _written_event_ids(project_id: str) -> set:
+    """The event ids of the COMPLETE, parsed records of ``audit.jsonl`` (call under its lock).
+
+    A torn tail - the bytes after the last newline, from an append cut short (a partial JSON line, a UTF-8 sequence cut in
+    two) - is moved to ``audit.jsonl.torn-<time>`` and cut off, so it never counts as written and the next append starts on
+    a clean line.  A line in the middle that does not parse is not a record either; it stays where it is."""
+    path = _audit_path(project_id)
     try:
-        return ('"event_id": "%s"' % event_id) in path.read_text(encoding="utf-8")
-    except OSError:
-        return False
+        raw = path.read_bytes()
+    except FileNotFoundError:
+        return set()
+    cut = raw.rfind(b"\n") + 1
+    if cut < len(raw):
+        stamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%S%f")
+        path.with_name(path.name + ".torn-" + stamp).write_bytes(raw[cut:])
+        with path.open("r+b") as fh:
+            fh.truncate(cut)
+        raw = raw[:cut]
+    ids = set()
+    for line in raw.splitlines():
+        try:
+            rec = json.loads(line.decode("utf-8"))
+        except (UnicodeDecodeError, ValueError):
+            continue
+        details = rec.get("details") if isinstance(rec, dict) else None
+        if isinstance(details, dict) and details.get("event_id"):
+            ids.add(str(details["event_id"]))
+    return ids
 
 
 def flush_events(project_id: str, json_name: str) -> None:
-    """Append every pending event of one store to the project audit and drop it from the store.  A failing append raises and
-    leaves the events pending (the store is not rewritten), so nothing is lost and nothing is written twice."""
+    """Append every pending event of one store to the project audit and drop it from the store.  Under the audit's lock: a torn
+    tail is repaired first, only complete records count as written, and an event is dropped only after its own append returned.
+    A failing append raises ``OSError`` and leaves the events pending (the store is not rewritten), so nothing is lost and
+    nothing is written twice."""
     current = store.load_json(project_id, json_name, {})
     if not (isinstance(current, dict) and current.get(PENDING)):
         return
+    from motor_ai_sim import json_store
 
     def apply(doc: Any) -> None:
+        written = _written_event_ids(project_id)
         for event in list(doc.get(PENDING) or []):
-            if not _in_audit(project_id, str(event.get("event_id"))):
+            eid = str(event.get("event_id"))
+            if eid not in written:
                 store.append_jsonl(project_id, "audit.jsonl", {
                     "time": event.get("time"), "actor_email": str(event.get("actor_email") or "").lower(), "action": event.get("action"),
                     "entity": event.get("entity"), "entity_id": event.get("entity_id"),
-                    "details": {**(event.get("details") or {}), "event_id": event.get("event_id")}})
+                    "details": {**(event.get("details") or {}), "event_id": eid}})
+                written.add(eid)
             doc[PENDING].remove(event)
         if not doc.get(PENDING):
             doc.pop(PENDING, None)
 
-    store.mutate_json(project_id, json_name, apply, default={})
+    try:
+        with json_store.lock_for(_audit_path(project_id)):
+            store.mutate_json(project_id, json_name, apply, default={})
+    except (UnicodeError, ValueError) as exc:               # never a bare 500: the caller turns OSError into a 503
+        raise OSError("audit log unreadable: %s" % exc) from exc

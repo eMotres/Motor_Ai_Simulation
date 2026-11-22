@@ -245,3 +245,38 @@ def test_the_byte_cap_holds_without_content_length_and_one_file_only(client, tmp
     assert two.status_code == 400
     files = tmp_path / "projects" / "proj1" / "model3d" / "files"
     assert not files.exists() or list(files.iterdir()) == []
+
+
+def _pending_upload(client, tmp_path, monkeypatch, tail: bytes):
+    """One committed upload whose audit append was cut short: ``tail`` is what reached the file."""
+    real = store.append_jsonl
+    audit = tmp_path / "projects" / "proj1" / "audit.jsonl"
+
+    def torn(project_id, name, entry):
+        if name == "audit.jsonl":
+            with audit.open("ab") as fh:
+                fh.write(tail.replace(b"EVENT", json.dumps(entry["details"].get("event_id", "")).encode()))
+            raise OSError("cut short")
+        return real(project_id, name, entry)
+
+    monkeypatch.setattr(store, "append_jsonl", torn)
+    assert upload(client, note="Ротор ✓").status_code == 200
+    monkeypatch.setattr(store, "append_jsonl", real)
+    return audit
+
+
+def test_a_torn_audit_line_holding_the_event_id_is_not_taken_as_written(client, tmp_path, monkeypatch):
+    audit = _pending_upload(client, tmp_path, monkeypatch, b'{"action": "model3d.upload", "details": {"event_id": EVENT, "na')
+    assert client.get(URL, headers=hdr("t-staff")).status_code == 200         # the replay repairs the tail and writes the row
+    lines = audit.read_bytes().splitlines()
+    assert [json.loads(x)["action"] for x in lines] == ["model3d.upload"]      # one complete record, nothing torn left
+    assert list(audit.parent.glob("audit.jsonl.torn-*"))                       # the torn bytes are kept aside
+    doc = json.loads((tmp_path / "projects" / "proj1" / "model3d" / "models.json").read_text())
+    assert "pending_audit" not in doc
+    assert upload(client).status_code == 200 and audit_actions(tmp_path).count("model3d.upload") == 2
+
+
+def test_a_cut_utf8_tail_never_blocks_the_store(client, tmp_path, monkeypatch):
+    _pending_upload(client, tmp_path, monkeypatch, '{"note": "Рот'.encode("utf-8")[:-1])
+    assert upload(client).status_code == 200                                    # repaired, replayed, then the new change
+    assert audit_actions(tmp_path).count("model3d.upload") == 2

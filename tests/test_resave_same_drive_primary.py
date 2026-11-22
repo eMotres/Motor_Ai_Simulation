@@ -116,3 +116,56 @@ def test_result_of_another_drive_stays_beside_a_current_primary(make):
     _write(root / DIE / f"{CFG}.yaml", c)
     out = _record("custom_current")
     assert out["primary"] is False and _stored(root)["result"]["efficiency_pct"] == 50.0
+
+
+def _result_only_duty(root):
+    """A duty with no summary and no mesh at all (what a result-only save leaves behind)."""
+    p = root / DIE / f"{CFG}.yaml"
+    c = yaml.safe_load(p.read_text(encoding="utf-8"))
+    c["duties"][0] = {k: v for k, v in c["duties"][0].items() if k not in ("summary", "mesh", "result")}
+    _write(p, c)
+
+
+def _record_value(drive, eff):
+    return fam.record_duty_result(fam.DutyResult(die=DIE, config=CFG, duty=DUTY, result={"efficiency_pct": eff},
+                                                 drive=drive), _w={})
+
+
+def test_a_result_only_custom_primary_is_refreshed_by_the_next_result_of_the_same_drive(make):
+    """Astra review of #766: first custom_current result 80 % (primary, no summary), second 90 % must replace it."""
+    build, root = make
+    build("custom_current")
+    _result_only_duty(root)
+    assert _record_value("custom_current", 80.0)["primary"] is True
+    d = _stored(root)
+    assert d["primary_drive"] == "custom_current" and fam._primary_drive(d) == "custom_current"
+    assert _record_value("custom_current", 90.0)["primary"] is True
+    assert _stored(root)["result"]["efficiency_pct"] == 90.0
+
+
+def test_a_result_of_another_drive_stays_beside_a_result_only_primary(make):
+    build, root = make
+    build("custom_current")
+    _result_only_duty(root)
+    _record_value("custom_current", 80.0)
+    assert _record_value("pwm_voltage", 70.0)["primary"] is False
+    assert _stored(root)["result"]["efficiency_pct"] == 80.0
+
+
+def test_a_sine_result_takes_over_and_drops_the_stored_witness(make):
+    build, root = make
+    build("custom_current")
+    _result_only_duty(root)
+    _record_value("custom_current", 80.0)
+    assert _record_value("current", 91.0)["primary"] is True
+    d = _stored(root)
+    assert "primary_drive" not in d and d["result"]["efficiency_pct"] == 91.0
+
+
+def test_rows_without_the_witness_read_as_before(make):
+    build, root = make
+    build("current")
+    d = _stored(root)
+    assert "primary_drive" not in d and fam._primary_drive(d) == "current"
+    assert fam._primary_drive({}) == "current"
+    assert fam._primary_drive({"primary_drive": "custom_current", "summary": {"drive": "current"}}) == "current"

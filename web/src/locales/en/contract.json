@@ -23,7 +23,8 @@
       "money": "Money",
       "goods": "Goods",
       "documents": "Documents"
-    }
+    },
+    "upload": "Upload scheme (JSON)"
   },
   "steps": {
     "title": "Project steps",

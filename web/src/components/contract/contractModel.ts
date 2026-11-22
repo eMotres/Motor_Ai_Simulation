@@ -83,6 +83,9 @@ export const contractApi = {
     { file_id: scan.id, sha256: scan.sha256, ...seen }),
   reject: (projectId: string, scan: ContractFileRef, seen: Seen, reason: string) => post<ContractView>(`${contractBase(projectId)}/reject`,
     { file_id: scan.id, sha256: scan.sha256, ...seen, reason }),
+  /** admins: the staff scheme as JSON, checked by the server (422 names what is wrong) */
+  putScheme: (text: string) => fetch(`${API}/api/contract-scheme`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: text })
+    .then((r) => json<{ ok: boolean }>(r)),
   archive: (projectId: string, fileId: string, archived: boolean) =>
     fetch(`${contractBase(projectId)}/files/${enc(fileId)}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ archived }) }).then((r) => json<ContractView>(r)),
   download: async (projectId: string, file: ContractFile) => {

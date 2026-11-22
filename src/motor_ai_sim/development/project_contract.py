@@ -27,8 +27,10 @@ Documents or Messages, and it sends no mail: a change is a project audit row (``
 the change itself (``project_uploads``).
 
 The scheme: the customer view is fixed text of the product (``web/src/locales/*/contract.json``); the STAFF view of the full
-supply chain is internal and lives in the private data checkout (``config/contract/supply_scheme_staff.json``), never in this
-public repository - without it the staff view says it is not configured.  Annex A generation waits for the guaranteed-values task.
+supply chain is internal and lives in the server's SHARED store (``<shared root>/contract/supply_scheme_staff.json``, the same
+place on every server; the private data checkout as the development fallback), never in this public repository.  Admins upload
+it through ``PUT /api/contract-scheme`` (checked against :func:`validate_scheme`); without it the staff view says it is not
+configured.  Annex A generation waits for the guaranteed-values task.
 """
 from __future__ import annotations
 
@@ -36,6 +38,7 @@ import datetime
 import hashlib
 import json
 import logging
+import os
 import re
 import secrets
 from pathlib import Path
@@ -52,6 +55,8 @@ from motor_ai_sim.development.project_uploads import bounded_form, flush_events,
 
 log = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/projects", tags=["development-contract"])
+#: the staff scheme, managed by admins (coordinator 2026-11-22: no file is placed on a server by hand)
+scheme_router = APIRouter(prefix="/api/contract-scheme", tags=["contract-scheme"])
 
 CONTRACT_JSON = "contract/contract.json"
 FILES_DIR = "contract/files"
@@ -214,18 +219,102 @@ def company_state(project: dict) -> dict:
             "confirmed_by": values.get("company_confirmed_by", "")}
 
 
-def staff_scheme() -> Optional[dict]:
-    """The internal supply-chain scheme from the private data checkout, or None when it is not there."""
+def contract_store_root() -> Optional[Path]:
+    """Where the section's server-side documents live (coordinator 2026-11-22): the SHARED root, like the object registry -
+    ``<shared root>/contract/`` (override ``MOTRES_CONTRACT_STORE_ROOT``) - the same place on every server, never this public
+    repository.  None when there is no shared root."""
+    env = (os.environ.get("MOTRES_CONTRACT_STORE_ROOT") or "").strip()
+    if env:
+        return Path(env).expanduser()
+    try:
+        from motor_ai_sim.workspace import shared_root
+        return Path(str(shared_root())) / "contract"
+    except Exception:                                       # noqa: BLE001 - no workspace layer in this process
+        return None
+
+
+def staff_scheme_path() -> Optional[Path]:
+    """The staff scheme: the shared-root store first, then the private data checkout (development), else None."""
+    base = contract_store_root()
+    if base is not None and (base / STAFF_SCHEME[-1]).is_file():
+        return base / STAFF_SCHEME[-1]
     from motor_ai_sim.private_data import private_path
-    path = private_path(*STAFF_SCHEME)
+    return private_path(*STAFF_SCHEME)
+
+
+def staff_scheme() -> Optional[dict]:
+    """The internal supply-chain scheme, or None when it is not configured (or does not pass :func:`validate_scheme`)."""
+    path = staff_scheme_path()
     if path is None:
         return None
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
+        return validate_scheme(json.loads(path.read_text(encoding="utf-8")))
     except (OSError, ValueError) as exc:
         log.warning("contract: staff scheme unreadable (%s)", exc)
         return None
-    return data if isinstance(data, dict) else None
+
+
+_SCHEME_TEXT_MAX = 200
+_SCHEME_KINDS = ("money", "goods", "documents")
+
+
+def _scheme_text(v: Any, where: str) -> Any:
+    if isinstance(v, str) and len(v) <= _SCHEME_TEXT_MAX:
+        return v
+    if isinstance(v, dict) and v and set(v) <= {"en", "zh"} and all(isinstance(x, str) and len(x) <= _SCHEME_TEXT_MAX for x in v.values()):
+        return {k: v[k] for k in ("en", "zh") if k in v}
+    raise ValueError(f"{where}: a text or {{en, zh}} of at most {_SCHEME_TEXT_MAX} characters")
+
+
+def _num(v: Any, lo: float, hi: float, where: str) -> float:
+    if isinstance(v, bool) or not isinstance(v, (int, float)) or not lo <= v <= hi:
+        raise ValueError(f"{where}: a number from {lo} to {hi}")
+    return v
+
+
+def validate_scheme(doc: Any) -> dict:
+    """The staff scheme's schema (the shape ``web/src/components/contract/contractModel.ts`` draws): ``nodes`` (1..20: id,
+    label, sub?, x, y, w?, h? on the 1000 x 420 grid), ``edges`` (0..40: from / to an existing node, kind money | goods |
+    documents, label?, bend?), ``notes`` (0..20 texts), optional ``version``.  Raises ``ValueError`` naming what is wrong;
+    returns only the known fields."""
+    if not isinstance(doc, dict):
+        raise ValueError("the scheme is a JSON object")
+    nodes, edges, notes = doc.get("nodes"), doc.get("edges", []), doc.get("notes", [])
+    if not isinstance(nodes, list) or not 1 <= len(nodes) <= 20:
+        raise ValueError("nodes: a list of 1 to 20 boxes")
+    if not isinstance(edges, list) or len(edges) > 40 or not isinstance(notes, list) or len(notes) > 20:
+        raise ValueError("edges (at most 40) and notes (at most 20) are lists")
+    out_nodes, ids = [], set()
+    for i, n in enumerate(nodes):
+        where = f"nodes[{i}]"
+        if not isinstance(n, dict) or not isinstance(n.get("id"), str) or not re.fullmatch(r"[a-z][a-z0-9_]{0,31}", n["id"]):
+            raise ValueError(f"{where}: id of lowercase letters, digits and _")
+        if n["id"] in ids:
+            raise ValueError(f"{where}: id '{n['id']}' is used twice")
+        ids.add(n["id"])
+        node = {"id": n["id"], "label": _scheme_text(n.get("label"), where + ".label"),
+                "x": _num(n.get("x"), 0, 1000, where + ".x"), "y": _num(n.get("y"), 0, 420, where + ".y")}
+        if "sub" in n:
+            node["sub"] = _scheme_text(n["sub"], where + ".sub")
+        for k, hi in (("w", 1000), ("h", 420)):
+            if k in n:
+                node[k] = _num(n[k], 20, hi, f"{where}.{k}")
+        out_nodes.append(node)
+    out_edges = []
+    for i, e in enumerate(edges):
+        where = f"edges[{i}]"
+        if not isinstance(e, dict) or e.get("from") not in ids or e.get("to") not in ids or e.get("kind") not in _SCHEME_KINDS:
+            raise ValueError(f"{where}: from / to name existing nodes, kind is one of {', '.join(_SCHEME_KINDS)}")
+        edge = {"from": e["from"], "to": e["to"], "kind": e["kind"]}
+        if "label" in e:
+            edge["label"] = _scheme_text(e["label"], where + ".label")
+        if "bend" in e:
+            edge["bend"] = _num(e["bend"], -400, 400, where + ".bend")
+        out_edges.append(edge)
+    out = {"nodes": out_nodes, "edges": out_edges, "notes": [_scheme_text(t, f"notes[{i}]") for i, t in enumerate(notes)]}
+    if "version" in doc:
+        out["version"] = _scheme_text(doc["version"], "version")
+    return out
 
 
 def _display(email: str, staff: bool) -> str:
@@ -682,3 +771,53 @@ def download_file(request: Request, project_id: str, file_id: str):
                        {"kind": row.get("kind"), "name": row.get("name")})
     return FileResponse(path, media_type="application/octet-stream", filename=str(row.get("name") or "contract.pdf"),
                         headers={"Cache-Control": "no-store"})
+
+
+# ── the staff scheme, managed by admins ─────────────────────────────────────────────────────────────────────────────
+
+def _scheme_admin(request: Request) -> dict:
+    user = access.require_signed_in(request)
+    if str(user.get("role") or "").lower() != "admin":
+        raise HTTPException(status_code=403, detail="Only MOTRES admins manage the staff scheme")
+    return user
+
+
+@scheme_router.get("")
+def get_scheme(request: Request):
+    _scheme_admin(request)
+    path = staff_scheme_path()
+    return {"store": str(contract_store_root() or ""), "source": "shared" if path and contract_store_root() and
+            path.parent == contract_store_root() else ("private" if path else None), "scheme": staff_scheme()}
+
+
+@scheme_router.put("")
+async def put_scheme(request: Request):
+    """The staff scheme as JSON (validated by :func:`validate_scheme`), written to the shared-root store; the previous one is
+    kept beside it as ``supply_scheme_staff.<time>.json``.  Admin only, admin audit ``contract.scheme``."""
+    user = _scheme_admin(request)
+    base = contract_store_root()
+    if base is None:
+        raise HTTPException(status_code=503, detail="This server has no shared store for the contract documents")
+    raw = await request.body()
+    if len(raw) > 256 * 1024:
+        raise HTTPException(status_code=413, detail="The scheme is larger than 256 KB")
+    try:
+        scheme = validate_scheme(json.loads(raw.decode("utf-8")))
+    except (UnicodeDecodeError, ValueError) as exc:
+        raise HTTPException(status_code=422, detail=f"The scheme is not valid: {exc}")
+    from motor_ai_sim import json_store
+    path = base / STAFF_SCHEME[-1]
+    try:
+        base.mkdir(parents=True, exist_ok=True)
+        with json_store.lock_for(path):
+            if path.is_file():
+                stamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+                (base / f"supply_scheme_staff.{stamp}.json").write_bytes(path.read_bytes())
+            json_store.atomic_write_json(path, scheme)
+    except OSError as exc:
+        log.error("contract: staff scheme not writable (%s)", exc)
+        raise HTTPException(status_code=503, detail="The staff scheme cannot be written on this server")
+    from motor_ai_sim import admin_audit as _AA
+    _AA.record(_email(user), "contract.scheme", "supply_scheme_staff",
+               details={"nodes": len(scheme["nodes"]), "edges": len(scheme["edges"]), "version": scheme.get("version")})
+    return {"ok": True, "scheme": scheme}

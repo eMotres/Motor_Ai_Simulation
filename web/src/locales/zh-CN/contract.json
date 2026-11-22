@@ -23,7 +23,8 @@
       "money": "资金",
       "goods": "货物",
       "documents": "文件"
-    }
+    },
+    "upload": "上传示意图（JSON）"
   },
   "steps": {
     "title": "项目步骤",

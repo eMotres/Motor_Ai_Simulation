@@ -25,17 +25,32 @@ function wrap(text: string, n: number): string[] {
   return out;
 }
 
-function anchor(a: SchemeNode, b: SchemeNode): [number, number] {
+/** Where an arrow leaves box ``a`` towards box ``b``: the middle of the facing side, moved ``shift`` along that side (two
+ *  arrows between one pair of boxes get separate ends; the point always stays on the side, inside its corners). */
+export function anchor(a: SchemeNode, b: SchemeNode, shift = 0): [number, number] {
   const aw = a.w ?? NODE_W; const ah = a.h ?? NODE_H; const bw = b.w ?? NODE_W; const bh = b.h ?? NODE_H;
   const ax = a.x + aw / 2; const ay = a.y + ah / 2; const bx = b.x + bw / 2; const by = b.y + bh / 2;
-  if (Math.abs(bx - ax) * ah > Math.abs(by - ay) * aw) return [bx > ax ? a.x + aw : a.x, ay];
-  return [ax, by > ay ? a.y + ah : a.y];
+  const clamp = (v: number, lo: number, hi: number) => Math.min(Math.max(v, lo), hi);
+  if (Math.abs(bx - ax) * ah > Math.abs(by - ay) * aw) return [bx > ax ? a.x + aw : a.x, clamp(ay + shift, a.y + 12, a.y + ah - 12)];
+  return [clamp(ax + shift, a.x + 12, a.x + aw - 12), by > ay ? a.y + ah : a.y];
 }
 
-const Edge: React.FC<{ e: SchemeEdge; nodes: Map<string, SchemeNode>; text: (t?: SchemeText) => string; id: string }> = ({ e, nodes, text, id }) => {
+/** The along-the-side shift of every edge: edges between the same two boxes are spread 26 px apart, in a fixed order. */
+export function edgeShifts(edges: readonly SchemeEdge[]): number[] {
+  const groups = new Map<string, number[]>();
+  edges.forEach((e, i) => { const k = [e.from, e.to].sort().join('\u0000'); groups.set(k, [...(groups.get(k) ?? []), i]); });
+  const out = edges.map(() => 0);
+  for (const idx of groups.values()) idx.forEach((i, j) => { out[i] = (j - (idx.length - 1) / 2) * 26; });
+  return out;
+}
+
+/** The width a label line takes at 12.5 px (CJK about one em, Latin about 0.55 em): for its background. */
+const lineWidth = (l: string) => [...l].reduce((w, ch) => w + (/[\u2E80-\u9FFF\uFF00-\uFFEF]/.test(ch) ? 12.5 : 6.9), 0);
+
+const Edge: React.FC<{ e: SchemeEdge; nodes: Map<string, SchemeNode>; text: (t?: SchemeText) => string; id: string; shift: number; part: 'line' | 'label' }> = ({ e, nodes, text, id, shift, part }) => {
   const a = nodes.get(e.from); const b = nodes.get(e.to);
   if (!a || !b) return null;
-  const [x1, y1] = anchor(a, b); const [x2, y2] = anchor(b, a);
+  const [x1, y1] = anchor(a, b, shift); const [x2, y2] = anchor(b, a, shift);
   const mx = (x1 + x2) / 2; const my = (y1 + y2) / 2;
   const len = Math.hypot(x2 - x1, y2 - y1) || 1;
   const bend = e.bend ?? 0;
@@ -43,13 +58,21 @@ const Edge: React.FC<{ e: SchemeEdge; nodes: Map<string, SchemeNode>; text: (t?:
   const colour = ARROW[e.kind];
   const lx = (mx + cx) / 2; const ly = (my + cy) / 2;
   const lines = wrap(text(e.label), 30);
-  return (
-    <g data-kind={e.kind}>
-      <path d={`M ${x1} ${y1} Q ${cx} ${cy} ${x2} ${y2}`} fill="none" stroke={colour} strokeWidth={e.kind === 'documents' ? 1.6 : 4}
+  if (part === 'line') {
+    return (
+      <path data-kind={e.kind} d={`M ${x1} ${y1} Q ${cx} ${cy} ${x2} ${y2}`} fill="none" stroke={colour} strokeWidth={e.kind === 'documents' ? 1.6 : 4}
         strokeDasharray={e.kind === 'documents' ? '6 5' : undefined} markerEnd={`url(#${id}-${e.kind})`} />
+    );
+  }
+  return (
+    <g data-kind={e.kind} data-part="label">
+      {lines.length > 0 && (() => {                  // a background behind the label: the line never runs through its text
+        const w = Math.max(...lines.map(lineWidth)) + 10; const h = lines.length * 15 + 6;
+        return <rect x={lx - w / 2} y={ly - h / 2} width={w} height={h} rx={4} fill="var(--panel)" opacity={0.94} />;
+      })()}
       {lines.map((l, i) => (
         <text key={i} x={lx} y={ly + (i - (lines.length - 1) / 2) * 15} textAnchor="middle" dominantBaseline="middle" fontSize={12.5}
-          fontWeight={e.kind === 'documents' ? 400 : 700} fill={colour} stroke="var(--panel)" strokeWidth={4} paintOrder="stroke">{l}</text>
+          fontWeight={e.kind === 'documents' ? 400 : 700} fill={colour}>{l}</text>
       ))}
     </g>
   );
@@ -61,6 +84,7 @@ const ContractScheme: React.FC<{ data: SchemeData; step: ContractStep | null; st
   // the customer view carries translation keys, the staff view EN / ZH pairs
   const text = (v?: SchemeText): string => (v === undefined ? '' : typeof v === 'string' ? (translate ? t(v) : v) : (zh ? v.zh || v.en : v.en || v.zh) || '');
   const nodes = useMemo(() => new Map(data.nodes.map((n) => [n.id, n])), [data]);
+  const shifts = useMemo(() => edgeShifts(data.edges), [data]);
   const id = useMemo(() => `scheme${Math.random().toString(36).slice(2, 8)}`, []);
   return (
     <Box data-testid="contract-scheme" sx={{ border: '1px solid var(--line-soft)', borderRadius: 1.5, bgcolor: 'var(--panel)', p: 1.25 }}>
@@ -83,7 +107,9 @@ const ContractScheme: React.FC<{ data: SchemeData; step: ContractStep | null; st
             </g>
           );
         })}
-        {data.edges.map((e, i) => <Edge key={i} e={e} nodes={nodes} text={text} id={id} />)}
+        {/* every line first, then every label on top: no line ever runs through a label */}
+        {data.edges.map((e, i) => <Edge key={`l${i}`} e={e} nodes={nodes} text={text} id={id} shift={shifts[i]} part="line" />)}
+        {data.edges.map((e, i) => <Edge key={`t${i}`} e={e} nodes={nodes} text={text} id={id} shift={shifts[i]} part="label" />)}
       </Box>
       <Box sx={{ display: 'flex', gap: 2, flexWrap: 'wrap', alignItems: 'center', mt: 0.75 }} data-testid="contract-scheme-legend">
         {(Object.keys(ARROW) as Array<keyof typeof ARROW>).map((k) => (

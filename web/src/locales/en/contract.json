@@ -24,7 +24,8 @@
       "goods": "Goods",
       "documents": "Documents"
     },
-    "upload": "Upload scheme (JSON)"
+    "upload": "Upload scheme (JSON)",
+    "uploadCustomer": "Upload customer scheme (JSON)"
   },
   "steps": {
     "title": "Project steps",

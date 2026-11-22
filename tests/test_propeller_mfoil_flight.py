@@ -30,7 +30,7 @@ def test_mfoil_polar_static_evaluation_is_flagged(design):
 def test_static_record_unchanged_without_flight(design):
     rec = pd.evaluate_candidate(design, pd.seed_vector(design, 10, 3), "L12")
     assert set(rec["objectives"]) == {"thrust_per_shaft_W", "cooling_air_axial_ms"}
-    assert "flight" not in rec and "rpm_matches_rated" not in rec["constraints"]
+    assert "flight" not in rec and "torque_matches_rated" not in rec["constraints"]
     assert rec["operating"]["v_inf_ms"] == 0.0
 
 
@@ -39,9 +39,11 @@ def test_flight_mode_uses_the_flight_speed_and_checks_the_rated_rpm(design):
     op = design.operating_points["L12"]
     assert rec["operating"]["v_inf_ms"] == op.flight_speed_ms == 17.0
     assert rec["objectives"]["flight_thrust_N"] == rec["thrust_N"]
-    err = rec["operating"]["rpm"] / op.rated_rpm_ref - 1.0
-    assert rec["flight"]["rpm_error_vs_rated"] == pytest.approx(err)
-    assert rec["constraints"]["rpm_matches_rated"] == (abs(err) <= pd.FLIGHT_RPM_TOL)
+    assert rec["operating"]["rpm"] == op.rated_rpm_ref                       # review H4: evaluated AT the rated rpm, no search
+    err = rec["torque_Nm"] / op.torque_limit_Nm - 1.0
+    assert rec["flight"]["torque_error_vs_limit"] == pytest.approx(err)
+    assert rec["constraints"]["torque_matches_rated"] == (abs(err) <= pd.FLIGHT_TORQUE_TOL)
+    assert rec["flight"]["rated_power_W"] == pytest.approx(op.torque_limit_Nm * op.rated_rpm_ref * 3.141592653589793 / 30.0)
     assert 0.0 < rec["flight"]["propulsive_efficiency"] < 1.0
 
 
@@ -70,8 +72,8 @@ def test_prandtl_glauert_is_opt_in_and_raises_lift_at_high_mach(design):
     plain = pd.evaluate_candidate(d, v, "L20", flight=True)
     pg = pd.evaluate_candidate(pd.with_compressibility(d, "prandtl_glauert"), v, "L20", flight=True)
     assert "prandtl_glauert" in pg["flags"] and "prandtl_glauert" not in plain["flags"]
-    assert pg["torque_Nm"] == pytest.approx(plain["torque_Nm"], rel=0.02)      # both meet the torque limit
-    assert pg["operating"]["rpm"] < plain["operating"]["rpm"]                 # more lift per rpm -> the limit is met earlier
+    assert pg["operating"]["rpm"] == plain["operating"]["rpm"]                # flight: both at the rated rpm
+    assert pg["thrust_N"] > plain["thrust_N"] and pg["torque_Nm"] > plain["torque_Nm"]   # more lift at the same rpm
     with pytest.raises(pd.DesignError):
         pd.with_compressibility(d, "karman_tsien")
 
@@ -92,3 +94,27 @@ def test_optimizer_chord_rule_is_opt_in(design):
             assert pd.chord_shape_violation(design, e["vector"], 0.08) == 0.0
     with pytest.raises(po.OptimizeError):
         po.optimize(design, base, "L12", pop=4, generations=1, chord_max_step=0.9)
+
+
+def test_failed_loads_never_pass_the_structure_check(design):
+    from motor_ai_sim import propeller_structure as ps
+    p2 = pd.candidate_to_propeller2(design, pd.seed_vector(design, 10, 3))
+    loads = ps.bemt_blade_loads(p2, 1000.0)
+    bad = dict(loads, dT_dr_N_per_m=[0.0] * len(loads["dT_dr_N_per_m"]), dQ_dr_Nm_per_m=[0.0] * len(loads["dQ_dr_Nm_per_m"]),
+               flags=list(loads.get("flags", [])) + ["unconverged_elements:%d" % len(loads["r_m"])])
+    good = ps.root_stress(p2, 1000.0, "pa6_gf30", loads)
+    failed = ps.root_stress(p2, 1000.0, "pa6_gf30", bad)
+    assert good["load_valid"] is True
+    assert failed["load_valid"] is False and failed["passes"] is False and failed["load_problems"]
+
+
+def test_flight_tip_mach_is_relative_and_polar_range_is_flagged(design):
+    d = pd.with_polar_source(design, "mfoil_table")
+    v = pd.seed_vector(d, 13, 2)
+    st = pd.evaluate_candidate(d, v, "L20")
+    fl = pd.evaluate_candidate(d, v, "L20", flight=True)
+    rot = fl["operating"]["rpm"] * 3.141592653589793 / 30.0 * 13 * 0.0254 / 2
+    assert fl["tip_mach"] > rot / 340.6 * 0.99                                # includes the flight speed
+    assert (pd.F_MACH_BEYOND_POLAR in fl["flags"]) == (fl["tip_mach"] > pd.MFOIL_MACH_LIMIT)
+    assert pd.F_MACH_BEYOND_POLAR not in pd.evaluate_candidate(design, v, "L20")["flags"]   # only for the Mach-0 tables
+    assert st["tip_mach"] > 0

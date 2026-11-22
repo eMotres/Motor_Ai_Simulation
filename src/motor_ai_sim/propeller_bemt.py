@@ -228,6 +228,7 @@ class PolarTable:
     cl: np.ndarray
     cd: np.ndarray
     source: str
+    gaps: Tuple[float, ...] = ()     # rad; failed solutions bridged by interpolation (``# kept:`` header of a generated table)
 
 
 def load_polar_csv(path: Path) -> PolarTable:
@@ -266,7 +267,12 @@ def load_polar_csv(path: Path) -> PolarTable:
     re = float(meta["re"])
     if not re > 0:
         raise BemtError(f"{where}: re must be positive")
-    return PolarTable(meta["airfoil"], re, a, np.array([r[1] for r in rows]), np.array([r[2] for r in rows]), meta["source"])
+    gaps: Tuple[float, ...] = ()
+    kept = meta.get("kept", "")
+    if "interpolation):" in kept:                       # review 2026-11-21 H5: keep the failed angles, do not lose them
+        txt = kept.split("interpolation):", 1)[1].split(";", 1)[0]
+        gaps = tuple(float(g) * math.pi / 180.0 for g in txt.split() if g.lstrip("-").replace(".", "", 1).isdigit())
+    return PolarTable(meta["airfoil"], re, a, np.array([r[1] for r in rows]), np.array([r[2] for r in rows]), meta["source"], gaps)
 
 
 class TablePolar(PolarProvider):
@@ -303,6 +309,19 @@ class TablePolar(PolarProvider):
             cl, cd = np.where(lo, -v_cl, cl), np.where(lo, v_cd, cd)
         return cl, cd
 
+    GAP_HALF_WIDTH = math.radians(0.5)
+
+    def _table_flags(self, tabs, a) -> set:
+        """``polar_alpha_gap`` when an angle falls within 0.5 deg of a bridged failed solution of a table in use; ``polar_beyond_table``
+        when it lies outside the converged range (the Viterna extension, not a computed stall)."""
+        f = set()
+        for t in tabs:
+            if t.gaps and np.any(np.abs(np.subtract.outer(np.ravel(a), np.asarray(t.gaps))) < self.GAP_HALF_WIDTH):
+                f.add("polar_alpha_gap")
+            if np.any(a > t.alpha[-1]) or np.any(a < t.alpha[0]):
+                f.add("polar_beyond_table")
+        return f
+
     def _eval_half(self, airfoil, alpha, Re, mach, thickness):
         tabs = self._by.get(airfoil)
         if not tabs:
@@ -312,7 +331,7 @@ class TablePolar(PolarProvider):
         if len(tabs) == 1:
             cl, cd = self._one(tabs[0], a)
             flags.add("single_re_table")
-            return cl, cd, flags
+            return cl, cd, flags | self._table_flags(tabs, a)
         logs = np.log([t.re for t in tabs])
         x = np.log(np.maximum(np.asarray(Re, float), 1.0))
         if np.any(x < logs[0]) or np.any(x > logs[-1]):
@@ -324,6 +343,7 @@ class TablePolar(PolarProvider):
         cd = np.empty(a.shape)
         for k in np.unique(j):
             m = j == k
+            flags |= self._table_flags((tabs[k], tabs[k + 1]), a[m])
             c1, d1 = self._one(tabs[k], a[m])
             c2, d2 = self._one(tabs[k + 1], a[m])
             w = (x[m] - logs[k]) / (logs[k + 1] - logs[k])

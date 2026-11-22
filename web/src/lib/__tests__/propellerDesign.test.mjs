@@ -62,6 +62,15 @@ t('the Pareto front keeps the non-dominated runs, ignores runs with a missing ob
   assert.deepEqual(P.paretoFront([{ thrust_per_shaft_W: null, air_ms: null }]), []);
 });
 
+t('an infeasible run never enters the front, even with the best objectives (review 2026-11-21 H3)', () => {
+  const runs = [
+    { thrust_per_shaft_W: 0.050, air_ms: 20, constraintsMet: false },   // 0 best numbers, infeasible
+    { thrust_per_shaft_W: 0.040, air_ms: 9, constraintsMet: true },     // 1 front
+    { thrust_per_shaft_W: 0.030, air_ms: 14 },                          // 2 front (no flag = not refused)
+  ];
+  assert.deepEqual(P.paretoFront(runs), [1, 2]);
+});
+
 t('front cost: efficiency given up per m/s gained, null with fewer than two points', () => {
   const runs = [{ thrust_per_shaft_W: 0.040, air_ms: 9 }, { thrust_per_shaft_W: 0.030, air_ms: 14 }];
   assert.equal(P.frontCost(runs, [0, 1]), (0.040 - 0.030) / 5);

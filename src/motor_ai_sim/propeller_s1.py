@@ -248,8 +248,10 @@ def validate_model(raw: Mapping[str, Any]) -> Dict[str, Any]:
         m["battery"] = dict(bat)
     mech = raw.get("mech_W") or {}
     if mech:
-        m["mech_W"] = {"rpm": _axis(mech.get("rpm"), "mech_W.rpm"),
-                       "W": [_num(x) or 0.0 for x in (mech.get("W") or [])]}
+        ws = [_num(x) for x in (mech.get("W") or [])]
+        if any(x is None for x in ws):                  # review 2026-11-21 H10: a missing sample is not 0 W
+            raise S1Error("model: mech_W.W must be numbers")
+        m["mech_W"] = {"rpm": _axis(mech.get("rpm"), "mech_W.rpm"), "W": ws}
         if len(m["mech_W"]["W"]) != len(m["mech_W"]["rpm"]):
             raise S1Error("model: mech_W.W must match mech_W.rpm")
     ctrl = raw.get("controller")
@@ -638,10 +640,14 @@ def losses(m: Mapping[str, Any], rpm: float, I: float, t_winding_c: float,
     below_n = below_i = False
     unavailable: List[str] = []
     drive_unavailable: List[str] = []
+    zero_ok = set(m.get("loss_groups_zero") or ())          # groups the model declares physically zero / not applicable
+    missing: List[str] = []
     for k in LOSS_GROUPS:
         t = g["loss_W"].get(k)
         if t is None:
             out[k] = 0.0
+            if k not in zero_ok and not (k == "pwm_extra" and (drive or {}).get("pwm_extra_W") is not None):
+                missing.append(k)                       # review 2026-11-21 H10: absent from the model, counted 0 W, now said so
             continue
         v, bn, bi = grid_eval(g["rpm"], g["I_A"], t, rpm, I, kind="loss", floors=g.get("I_floor_A"))
         below_n, below_i = below_n or bn, below_i or bi
@@ -664,6 +670,7 @@ def losses(m: Mapping[str, Any], rpm: float, I: float, t_winding_c: float,
     out["below_loss_grid_current"] = below_i
     out["below_loss_grid"] = below_n or below_i
     out["unavailable"] = unavailable
+    out["missing_loss_groups"] = missing
     out["drive_unavailable"] = drive_unavailable
     return out
 
@@ -1417,7 +1424,7 @@ def solve_point(m: Mapping[str, Any], prop: pp.Propeller, rpm: float, *, ambient
         "controller_bus_limit_A": drv.get("I_bus_cont_A"),
         "demag_limit_A": None, "demag_basis": None, "voltage": None, "current_grid_A": None,
         "converged": None, "iterations": 0, "below_loss_grid": False, "below_loss_grid_speed": False,
-        "below_loss_grid_current": False, "losses_unavailable": [], "drive_losses_unavailable": [],
+        "below_loss_grid_current": False, "losses_unavailable": [], "drive_losses_unavailable": [], "losses_missing": [],
         "fw_floor": False, "ok": False, "binding": None, "violations": [],
     }
     if rpm > lims["rpm_max"] + 1e-6:
@@ -1467,6 +1474,7 @@ def solve_point(m: Mapping[str, Any], prop: pp.Propeller, rpm: float, *, ambient
                below_loss_grid_speed=bool(ls["below_loss_grid_speed"]),
                below_loss_grid_current=bool(ls["below_loss_grid_current"]),
                drive_losses_unavailable=list(ls["drive_unavailable"]),
+               losses_missing=list(ls["missing_loss_groups"]),     # review H10: groups absent from the model (counted 0 W)
                electrical_power_W=p_in, controller_loss_W=pc, battery_power_W=p_batt,
                battery_current_A=i_batt, demag_limit_A=i_dm, demag_basis=dm_basis,
                margin_winding_K=lims["winding_C"] - th["winding"],

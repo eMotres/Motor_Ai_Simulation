@@ -41,7 +41,10 @@ F_AIRFOIL_DRAG = "airfoil_drag_not_resolved_by_polar"     # camber_model: the ze
 F_POLAR_MFOIL = "polar_viscous_model_mfoil"              # mfoil_table: viscous section model (free transition), not a measurement
 POLAR_CHOICES = ("flatplate_model", "camber_model", "mfoil_table")
 _POLAR_FLAG = {"flatplate_model": F_AIRFOIL, "camber_model": F_AIRFOIL_DRAG, "mfoil_table": F_POLAR_MFOIL}
-FLIGHT_RPM_TOL = 0.05                                    # flight mode: the torque limit must be reached within +-5 % of the rated rpm
+F_MACH_BEYOND_POLAR = "tip_mach_beyond_polar_model"     # relative tip Mach above MFOIL_MACH_LIMIT with Mach-0 table polars
+F_THICKNESS_NOT_IN_POLAR = "manufactured_thickness_not_in_polar"   # moulded t/c differs > 2 % from the tabulated section
+MFOIL_MACH_LIMIT = 0.7
+FLIGHT_TORQUE_TOL = 0.02                                 # flight mode: at the rated rpm the torque must be within +-2 % of the limit (review H4)
 IN = 0.0254
 
 
@@ -314,9 +317,9 @@ def evaluate_candidate(d: Design, vec: Dict[str, Any], op_name: str, *, v_inf: f
     Torque scales with rpm squared to first order, so the search is a few secant-like steps on ``n <- n sqrt(T_lim / T)``; if the cap is
     hit the result says ``rpm_capped``.  Raises ``DesignError`` for an invalid candidate (use ``check_candidate`` first for the reasons).
 
-    ``flight=True`` (owner 2026-11-19: design for forward flight): the axial speed is the operating point's ``flight_speed_ms`` and the
-    candidate must take the motor's rated torque AT its rated rpm (constraint ``rpm_matches_rated``, +-``FLIGHT_RPM_TOL``), i.e. the
-    rated power; the objective ``flight_thrust_N`` is the thrust there.  Without it nothing changes."""
+    ``flight=True`` (owner 2026-11-19: design for forward flight): the candidate is evaluated AT the rated rpm and the operating point's
+    ``flight_speed_ms`` (no rpm search) and must take the rated torque there within +-``FLIGHT_TORQUE_TOL`` (constraint
+    ``torque_matches_rated``), i.e. the rated power; the objective ``flight_thrust_N`` is the thrust there.  Without it nothing changes."""
     if op_name not in d.operating_points:
         raise DesignError("unknown operating point %r; known: %s" % (op_name, sorted(d.operating_points)))
     op = d.operating_points[op_name]
@@ -333,7 +336,8 @@ def evaluate_candidate(d: Design, vec: Dict[str, Any], op_name: str, *, v_inf: f
     flags = set()
     rpm = op.rated_rpm_ref
     res = None
-    for _ in range(max_iter):
+    capped = False
+    for _ in range(0 if flight else max_iter):          # flight: no search, the rated rpm itself (review 2026-11-21 H4)
         res = pi.get_model("bemt-1").evaluate(pi.InflowRequest(
             propeller=prop, rpm=rpm, rho=rho, v_inf_ms=v_inf, r_min_m=0.0, r_max_m=op.motor_radius_mm / 1000.0, air_temp_c=temp))
         if res.torque_Nm <= 0:
@@ -347,13 +351,17 @@ def evaluate_candidate(d: Design, vec: Dict[str, Any], op_name: str, *, v_inf: f
         rpm = new
     res = pi.get_model("bemt-1").evaluate(pi.InflowRequest(
         propeller=prop, rpm=rpm, rho=rho, v_inf_ms=v_inf, r_min_m=0.0, r_max_m=op.motor_radius_mm / 1000.0, air_temp_c=temp))
+    if res.torque_Nm <= 0 and flight:
+        raise DesignError("the propeller absorbs no positive torque at %.0f rpm" % rpm)
     converged = abs(res.torque_Nm - op.torque_limit_Nm) <= 0.01 * op.torque_limit_Nm
     if capped and res.torque_Nm < op.torque_limit_Nm:
         flags.add("rpm_capped")                       # the torque limit is not reached below the search cap: slack, not a violation
-    elif not converged:
+    elif not converged and not flight:
         flags.add("rpm_search_not_converged")
     R_m = prop.blade.tip_radius_m
     mach = _tip_mach(R_m, rpm, temp)
+    if flight:                                           # review 2026-11-21 H7: in flight the tip sees the helical (relative) speed
+        mach = math.hypot(mach, v_inf / pb.sound_speed(temp))
     flags |= set(res.flags) | {F_ROOT, F_HUB, _POLAR_FLAG.get(polar_source(d), F_AIRFOIL_DRAG)}
     if d.inputs_unconfirmed():
         flags.add(F_UNCONFIRMED)
@@ -364,10 +372,19 @@ def evaluate_candidate(d: Design, vec: Dict[str, Any], op_name: str, *, v_inf: f
         "tip_mach_within_limit": mach <= d.tip_mach_limit,
         "bemt_converged": not any(f.startswith("unconverged_elements") for f in flags),
     }
-    rpm_error = rpm / op.rated_rpm_ref - 1.0
+    torque_error = res.torque_Nm / op.torque_limit_Nm - 1.0
     if flight:
-        constraints["rpm_matches_rated"] = abs(rpm_error) <= FLIGHT_RPM_TOL
-    ident = candidate_to_propeller2(d, vec)["id"]
+        constraints["torque_matches_rated"] = abs(torque_error) <= FLIGHT_TORQUE_TOL
+    p2 = candidate_to_propeller2(d, vec)
+    ident = p2["id"]
+    if polar_source(d) == "mfoil_table":
+        if mach > MFOIL_MACH_LIMIT:                       # review H7: the tables are Mach 0 viscous solutions (PG only scales lift)
+            flags.add(F_MACH_BEYOND_POLAR)
+        for st in p2["blade"]["stations"]:                # review H6: the table is for the nominal section, not the moulded one
+            aid = str(st["airfoil"])
+            if aid.startswith("naca4-") and abs(float(st["thickness_rel"]) / (int(aid[-2:]) / 100.0) - 1.0) > 0.02:
+                flags.add(F_THICKNESS_NOT_IN_POLAR)
+                break
     rec = {
         "model_id": pb.MODEL_BEMT, "design_family": d.id, "design_id": ident, "operating_point": op.name,
         "operating": {"rpm": rpm, "rho_kg_m3": rho, "v_inf_ms": v_inf, "air_temp_c": temp, "torque_limit_Nm": op.torque_limit_Nm,
@@ -381,7 +398,7 @@ def evaluate_candidate(d: Design, vec: Dict[str, Any], op_name: str, *, v_inf: f
     }
     if flight:                                           # flight mode only: the stored static records stay as they were
         rec["objectives"]["flight_thrust_N"] = res.thrust_N
-        rec["flight"] = {"v_ms": v_inf, "rpm_error_vs_rated": rpm_error,
+        rec["flight"] = {"v_ms": v_inf, "torque_error_vs_limit": torque_error, "rated_power_W": op.torque_limit_Nm * op.rated_rpm_ref * math.pi / 30.0,
                          "propulsive_efficiency": res.thrust_N * v_inf / res.shaft_power_W if res.shaft_power_W > 0 else None}
     return rec
 

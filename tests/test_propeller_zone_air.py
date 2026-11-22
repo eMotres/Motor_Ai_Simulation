@@ -64,3 +64,12 @@ def test_real_bemt_field_of_the_seed_design():
     # the seed's blade starts at 14 mm (root cut-out), so the rotor zone (r < 11.75 mm) has no modelled band
     assert "rotor_ends" not in z and "rotor_ends_not_modelled" in d["flags"]
     assert z["stator_ends"] > 0
+
+
+def test_a_small_modelled_sliver_is_not_exported_as_the_zone_speed():
+    # review 2026-11-21 H9: a 19-20 mm band covers ~15 % of an 11.75-20 mm stator-end annulus
+    radii = dict(RADII, rotor_outer_radius_m=0.01175, stator_outer_radius_m=0.020)
+    f = field([pi.Band(0.019, 0.020, 10.0, 1.0)])
+    d = za.zone_air_detail(f, radii)
+    assert d["coverage"]["stator_ends"] < za.MIN_ZONE_COVERAGE
+    assert "stator_ends" not in d["air_zones"]["zones"] and "stator_ends_coverage_too_small" in d["flags"]

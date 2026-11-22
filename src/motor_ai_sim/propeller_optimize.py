@@ -6,7 +6,8 @@ variables of ``propeller_design``.  The result is a PARETO FRONT of the objectiv
 * ``thrust_per_shaft_W``   — maximise (objective 1);
 * ``cooling_air_axial_ms`` — maximise (objective 2: mean axial speed at the disc in the motor band; ``None`` = the model has no value, ranked worst);
 * ``flight_thrust_N``      — maximise, only with ``flight=True`` (owner 2026-11-19: forward flight at the operating point's ``flight_speed_ms``;
-  the candidate must take the rated torque at the rated rpm, ``propeller_design.FLIGHT_RPM_TOL``, so the thrust is compared at the rated power).
+  the candidate is evaluated at the rated rpm and must take the rated torque there, ``propeller_design.FLIGHT_TORQUE_TOL``, so the thrust is
+  compared at the rated power).
   Opt-in ``chord_max_step``: the chord must rise to one maximum and fall to the tip, neighbouring control points within that step
   (``propeller_design.chord_shape_violation``) — without it a jagged chord can win on the model alone.
 
@@ -204,8 +205,10 @@ def _violation(rec: Dict[str, Any], enforce_tip_mach: bool, limit: float) -> flo
         v += 1.0
     if not c.get("bemt_converged", True):
         v += 1.0
-    if not c.get("rpm_matches_rated", True):              # flight mode: graded by how far the matched rpm is from the rated one
-        v += abs((rec.get("flight") or {}).get("rpm_error_vs_rated") or 1.0) / pd.FLIGHT_RPM_TOL
+    if not c.get("torque_matches_rated", True):           # flight mode: graded by how far the torque at the rated rpm is from the limit
+        v += abs((rec.get("flight") or {}).get("torque_error_vs_limit") or 1.0) / pd.FLIGHT_TORQUE_TOL
+    if "rpm_search_not_converged" in rec.get("flags", ()):  # review 2026-11-21 H4: an unmatched torque is not a valid design point
+        v += 1.0
     if enforce_tip_mach and rec.get("tip_mach", 0.0) > limit:
         v += (rec["tip_mach"] - limit) / limit
     return v
@@ -222,8 +225,12 @@ def _structure_violation(design: pd.Design, vec: Dict[str, Any], rec: Dict[str, 
     except Exception as exc:                                 # noqa: BLE001 - the reason goes into the record
         rec["structure"] = {"material": material, "error": "%s: %s" % (type(exc).__name__, exc), "validated": False}
         return 1.0
-    rec["structure"] = {"material": material, "safety_factor": sf, "required": sf_min, "passes": bool(sf >= sf_min),
+    ok = bool(s.get("load_valid", True))
+    rec["structure"] = {"material": material, "safety_factor": sf, "required": sf_min, "passes": bool(ok and sf >= sf_min),
+                        "load_valid": ok, "load_problems": s.get("load_problems", []), "check": "root static screening",
                         "validated": False, "overspeed_assumption": s.get("overspeed_assumption")}
+    if not ok:                                           # review 2026-11-21 H1: failed loads make the candidate infeasible
+        return 1.0
     return 0.0 if sf >= sf_min else (sf_min - sf) / sf_min
 
 

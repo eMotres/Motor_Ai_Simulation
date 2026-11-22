@@ -249,4 +249,19 @@ def root_stress(propeller2: Dict[str, Any], rpm: float, material: Any, loads: Op
     out = root_stress_from_sections(sections, rmax, material, loads, rpm_design=float(rpm), rpm_max_assumed=assumed)
     if loads.get("flags"):
         out["load_flags"] = list(loads["flags"])
+    bad = load_problems(loads)                         # review 2026-11-21 H1: a failed load is not a zero load
+    out["load_valid"] = not bad
+    if bad:
+        out["passes"] = False
+        out["load_problems"] = bad
     return out
+
+
+def load_problems(loads: Dict[str, Any]) -> List[str]:
+    """Reasons the spanwise loads cannot be used for a strength check: unconverged blade elements or non-finite values."""
+    bad = [f for f in loads.get("flags") or [] if str(f).startswith("unconverged_elements")]
+    for k in ("dT_dr_N_per_m", "dQ_dr_Nm_per_m"):
+        v = np.asarray(loads.get(k) or [], float)
+        if v.size == 0 or not np.all(np.isfinite(v)):
+            bad.append("nonfinite_or_empty:%s" % k)
+    return bad

@@ -104,9 +104,11 @@ export function toRun(id: number, label: string, vector: Vector, r: EvalRecord):
   };
 }
 
-/** Indices of the non-dominated runs when BOTH objectives are to be maximised.  A run with a missing objective is never on the front. */
-export function paretoFront(runs: ReadonlyArray<Pick<RunRecord, 'thrust_per_shaft_W' | 'air_ms'>>): number[] {
-  const ok = runs.map((r, i) => ({ r, i })).filter(({ r }) => r.thrust_per_shaft_W != null && r.air_ms != null);
+/** Indices of the non-dominated runs when BOTH objectives are to be maximised.  A run with a missing objective, or one that does not
+ *  meet its constraints (constraintsMet === false), is never on the front (review 2026-11-21 H3). */
+export function paretoFront(runs: ReadonlyArray<Pick<RunRecord, 'thrust_per_shaft_W' | 'air_ms'> & { constraintsMet?: boolean }>): number[] {
+  const ok = runs.map((r, i) => ({ r, i }))
+    .filter(({ r }) => r.thrust_per_shaft_W != null && r.air_ms != null && r.constraintsMet !== false);
   const front: number[] = [];
   for (const { r, i } of ok) {
     const dominated = ok.some(({ r: q, i: j }) => j !== i

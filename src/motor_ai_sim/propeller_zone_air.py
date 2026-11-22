@@ -24,6 +24,7 @@ from typing import Any, Dict, Mapping, Optional, Tuple
 from motor_ai_sim import propeller_inflow as _pi
 
 MODEL_ZONES = "zone-1"
+MIN_ZONE_COVERAGE = 0.5          # a zone is exported only when the model covers at least half of its area (else omitted, never 0)
 ZONE_KEYS = ("housing_outer", "stator_ends", "rotor_ends")
 
 
@@ -91,6 +92,9 @@ def zone_air_detail(field: _pi.AirField, die_radii: Mapping[str, Any]) -> Dict[s
         coverage[z] = round(cov / (hi * hi - lo * lo), 6)
         if v is None:
             flags.add("%s_not_modelled" % z)
+            continue
+        if coverage[z] < MIN_ZONE_COVERAGE:              # review 2026-11-21 H9: a small modelled sliver is not the zone's air speed
+            flags.add("%s_coverage_too_small" % z)
             continue
         if coverage[z] < 1.0 - 1e-9:
             flags.add("%s_partly_modelled" % z)

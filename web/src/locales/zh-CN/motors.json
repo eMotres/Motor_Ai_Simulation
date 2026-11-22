@@ -374,6 +374,18 @@
       "saveCurrent": "＋ 保存当前筛选…",
       "count": "{total} 台电机中的 {shown} 台",
       "clear": "清除"
-    }
+    },
+    "archiveMotor": "归档"
+  },
+  "configArchive": {
+    "title": "归档“{die} / {config}”",
+    "reason": "原因",
+    "hint": "它将从所有人的列表中移除；不会删除任何内容，“恢复”即可找回。若有项目关联或已有生产记录则无法归档。",
+    "confirm": "归档",
+    "done": "“{die} / {config}”已归档",
+    "restored": "“{die} / {config}”已恢复",
+    "show": "显示已归档（{n}）",
+    "open": "打开",
+    "restore": "恢复"
   }
 }

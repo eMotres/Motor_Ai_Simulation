@@ -498,6 +498,8 @@ def config_visible(access: dict, die: str, cfg: Optional[str], path=None, *,
         return may_see_die(access, die)
     if access.get("is_admin"):
         return True
+    if _cfg_archived(die, cfg):
+        return False                            # an archived configuration reads exactly like a missing one (owner 2026-11-22)
     lay = _die_layer_of(die, layer)
     if lay == "workspace":
         if _own_workspace_file(die, cfg, path):
@@ -518,6 +520,15 @@ def config_visible(access: dict, die: str, cfg: Optional[str], path=None, *,
             hit = _die_open_memo[str(die)] = die_open(access, die)
         return hit
     return die_open(access, die)
+
+
+def _cfg_archived(die: str, cfg: Optional[str]) -> bool:
+    """Is ``<die>/<cfg>`` in the configuration archive (``config_archive``)?  An unreadable archive archives nothing."""
+    try:
+        from motor_ai_sim import config_archive as _CA
+        return _CA.is_archived(str(die), str(cfg) if cfg else None)
+    except Exception:                           # noqa: BLE001
+        return False
 
 
 def _own_workspace_file(die: str, cfg: str, path=None) -> bool:
@@ -643,7 +654,10 @@ def drop_private_config_cards(cards: list, access: dict) -> list:
     ``"<die> <config>"`` (or carrying ``die`` + ``config``) for a configuration
     :func:`config_visible` refuses is dropped.  Admins keep everything; a card
     that names no configuration of the catalog is left to the caller's own rule."""
-    if access.get("is_admin") or not cards:
+    if not cards:
+        return cards
+    cards = _drop_archived_cards(cards)          # an archived configuration has no card, for anybody (owner 2026-11-22)
+    if access.get("is_admin"):
         return cards
     hidden = hidden_config_names(access)
     if not hidden:
@@ -658,6 +672,20 @@ def drop_private_config_cards(cards: list, access: dict) -> list:
             continue
         keep.append(m)
     return keep
+
+
+def _drop_archived_cards(cards: list) -> list:
+    try:
+        from motor_ai_sim import config_archive as _CA
+        keys = _CA.archived_keys()
+    except Exception:                           # noqa: BLE001
+        return cards
+    if not keys:
+        return cards
+    names = {k.replace("/", " ", 1).casefold() for k in keys}
+    return [m for m in cards
+            if str(m.get("name") or "").strip().casefold() not in names
+            and not (m.get("die") and m.get("config") and f"{m.get('die')}/{m.get('config')}" in keys)]
 
 
 def may_see_config(access: dict, die: str, cfg: Optional[str]) -> bool:
@@ -690,7 +718,10 @@ def config_allowed(access: dict, die: str, cfg: Optional[str]) -> bool:
 def may_see_config_file(access: dict, die: str, cfg: str, path,
                         layer: Optional[str] = None) -> bool:
     """:func:`config_visible` for a caller that already holds the file ``path``
-    (and, in a listing, the die's ``layer``)."""
+    (and, in a listing, the die's ``layer``).  Every LISTING asks this, so an archived configuration is left out of it for
+    everybody, admins too (they reach it through its direct link and the die view's Archived group)."""
+    if _cfg_archived(die, cfg):
+        return False
     return config_visible(access, die, cfg, path, layer=layer)
 
 

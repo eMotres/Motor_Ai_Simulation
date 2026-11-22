@@ -1110,7 +1110,9 @@ def _visible_context(ctx: Dict[str, Any], acc: dict) -> Dict[str, Any]:
         cfg = str(pr.get("config") or "")
         try:
             row = info.get(cfg)
-            if isinstance(row, (list, tuple)) and len(row) == 4:
+            if acc.get("is_admin"):
+                ok = True                  # an admin opens every preset, an archived configuration's too (config archive, 2026-11-22)
+            elif isinstance(row, (list, tuple)) and len(row) == 4:
                 ok = _ma.may_see_config_file(acc, str(row[0]), str(row[1]), Path(str(row[2])), layer=row[3])
             else:
                 ok = bool(cfg) and _ma.config_allowed(acc, str(pr.get("die") or ""), cfg)

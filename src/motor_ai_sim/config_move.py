@@ -1048,10 +1048,32 @@ def step_object_registry(ctx: Ctx) -> None:
                   "registry locators follow the configuration")
 
 
+# ── configuration archive (US · structure, coordinator 2026-11-22): one additive step ──
+def step_config_archive(ctx: Ctx) -> None:
+    """The configuration archive (``<shared>/object_registry/config_archive.json``): an archived configuration stays archived,
+    with its history, after a move or a rename; a copy is a new, live configuration."""
+    if ctx.copy:
+        return
+    from motor_ai_sim import config_archive as CA
+    try:
+        path = CA.store_path()
+    except Exception:                                       # noqa: BLE001
+        return
+    try:
+        _json_rewrite(ctx, "config_archive", path,
+                      lambda doc: CA.rename_in(doc, ctx.die, ctx.dst, ctx.cfg, ctx.new_cfg or ctx.cfg),
+                      "an archived configuration stays archived")
+    except ValueError as e:
+        raise MoveBlocked(str(e)) from e
+# ── end configuration archive ──
+
+
 LOCAL_STEPS = (step_files, step_fields, step_duty_results, step_context, step_workspace_memory,
                step_catalog_cards)
 GLOBAL_STEPS = (step_grants, step_projects, step_cost_estimates, step_production, step_motor_tests,
-                step_motor_revisions, step_display_state, step_production_lifecycle, step_object_registry, step_cad, step_manual)
+                step_motor_revisions, step_display_state, step_production_lifecycle, step_object_registry, step_cad,
+                step_config_archive,   # configuration archive (coordinator 2026-11-22)
+                step_manual)
 
 
 def preflight(fam: Any, die: str, cfg: str, dst: str, *, copy: bool, new_cfg: str = "",

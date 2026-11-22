@@ -641,6 +641,23 @@ def step_die_archive(ctx: Ctx) -> None:
         raise RenameBlocked(str(e)) from e
 
 
+# ── configuration archive (US · structure, coordinator 2026-11-22): one additive step ──
+def step_config_archive(ctx: Ctx) -> None:
+    """The configuration archive (``<shared>/object_registry/config_archive.json``, keyed ``<die>/<config>``): an archived
+    configuration stays archived, with its history, under the new die name."""
+    from motor_ai_sim import config_archive as CA
+    try:
+        path = CA.store_path()
+    except Exception:                                       # noqa: BLE001
+        return
+    try:
+        _json_file_rename(ctx, "config_archive", path, lambda doc: CA.rename_in(doc, ctx.old, ctx.new),
+                          "an archived configuration stays archived under the new die name")
+    except ValueError as e:
+        raise RenameBlocked(str(e)) from e
+# ── end configuration archive ──
+
+
 def step_tombstone(ctx: Ctx) -> None:
     """A RETIRED shared die (``shared_die_tombstones.json``) stays retired under its new name."""
     from motor_ai_sim import workspace as W
@@ -800,6 +817,7 @@ def step_manual(ctx: Ctx) -> None:
 LOCAL_STEPS = (step_folder, step_derived_from, step_fields, step_duty_results,
                step_context, step_workspace_memory, step_catalog_cards, step_die_archive)
 GLOBAL_STEPS = (step_grants, step_die_access, step_projects, step_production, step_motor_revisions, step_display_state, step_production_lifecycle, step_tombstone, step_object_registry, step_motor_tests, step_cad,
+                step_config_archive,   # configuration archive (coordinator 2026-11-22)
                 step_manual)
 
 

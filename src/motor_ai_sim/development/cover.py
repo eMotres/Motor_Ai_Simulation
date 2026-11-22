@@ -65,6 +65,8 @@ async def set_cover(request: Request, project_id: str):
     if not isinstance(doc_id, str) or not doc_id:
         raise HTTPException(status_code=422, detail="document_id expected")
     row = documents._find(project_id, doc_id, staff)
+    if row.get("price_restricted"):
+        raise HTTPException(status_code=422, detail="A price-restricted document cannot be the cover (the whole project sees it)")
     if row.get("internal"):
         raise HTTPException(status_code=422, detail="An internal document cannot be the cover (the whole project sees it)")
     path = store.read_document_file(project_id, str(row.get("file_id") or ""))

@@ -105,7 +105,7 @@ export interface ProjectSnapshot { id: string; kind: 'history'; die?: string; co
 export type DocumentFolder = 'kicad' | 'fabrication' | 'bom' | '3d' | 'docs';
 /** One file of a project's production package (GET /api/projects/{id}/documents). */
 export interface ProjectDocument {
-  id: string; name: string; folder: DocumentFolder; revision: string; internal: boolean; size: number; sha256: string;
+  id: string; name: string; folder: DocumentFolder; revision: string; internal: boolean; price_restricted?: boolean; size: number; sha256: string;
   uploader: string; uploaded_at: string; archived: boolean; archived_at?: string | null; is_cover?: boolean;
 }
-export interface ProjectDocumentList { documents: ProjectDocument[]; folders: DocumentFolder[]; can_edit: boolean; is_staff?: boolean; max_bytes: number; cover_version?: string | null }
+export interface ProjectDocumentList { documents: ProjectDocument[]; folders: DocumentFolder[]; can_edit: boolean; can_restrict?: boolean; is_staff?: boolean; max_bytes: number; cover_version?: string | null }

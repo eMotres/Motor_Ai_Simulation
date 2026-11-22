@@ -431,7 +431,7 @@ def _project_audit_text(ev: dict) -> Optional[tuple]:
         where = f" [{folder}]" if folder else ""
         if action == "document.upload":
             return f"document uploaded: {name}{where}" + (f" rev {det['revision']}" if det.get("revision") else "") + (
-                " (internal)" if det.get("internal") else ""), "documents"
+                " (internal)" if det.get("internal") else "") + (" (price-restricted)" if det.get("price_restricted") else ""), "documents"
         if action == "document.update":
             changes = det.get("changes") if isinstance(det.get("changes"), dict) else {}
             return f"document updated: {name} ({', '.join(str(k) for k in changes)})", "documents"

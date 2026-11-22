@@ -5,10 +5,12 @@ Gerber / drill / pick-and-place zips, BOM, 3-D STEP models, PDF drawings, images
 
 * upload      multipart, members with write rights (project owner / engineer, global engineer / admin); the file is streamed to
               ``<project>/documents/files/<file_id>``, never held in memory; up to ``models.DOCUMENT_MAX_BYTES`` (200 MB);
-* list        every project member; a document marked ``internal`` is listed for MOTRES staff only, an archived one for those who may edit;
+* list        every project member; a document marked ``internal`` is listed for MOTRES staff only, one marked ``price_restricted``
+              ("Price - restricted", owner 2026-11-22) for staff, project owners and members with ``sees_prices`` (never an MCP agent),
+              an archived one for those who may edit;
 * download    every project member (same visibility); each download - and the archive - is written to the traced download log
               (``model3d.log_download``) and to the project audit;
-* patch       ``internal`` / ``folder`` / ``revision`` (and ``archived: false`` to restore);
+* patch       ``internal`` / ``price_restricted`` / ``folder`` / ``revision`` (and ``archived: false`` to restore);
 * delete      archives the document (hidden), the file and its audit rows stay;
 * documents.zip  the files visible to the caller in one streamed ZIP.
 
@@ -31,7 +33,7 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import FileResponse
 
-from motor_ai_sim import users
+from motor_ai_sim import auth, users
 from motor_ai_sim.development import access, models, store
 
 log = logging.getLogger(__name__)
@@ -62,9 +64,17 @@ def _can_edit(user: dict, role: str | None) -> bool:
     return _staff(user, role) or role in ("owner", "engineer")
 
 
+def _prices(user: dict, project: dict, staff: bool) -> bool:
+    """May this caller read price-restricted documents: staff and whoever ``access.sees_prices`` names; an MCP agent never."""
+    if auth._AGENT_USER.get() is not None:
+        return False
+    return staff or access.sees_prices(user, project)
+
+
 def _public(row: dict, staff: bool) -> dict:
     out = {k: row.get(k) for k in ("id", "name", "folder", "revision", "internal", "size", "sha256", "uploaded_at", "archived",
                                     "archived_at")}
+    out["price_restricted"] = bool(row.get("price_restricted"))
     email = str(row.get("uploader_email") or "")
     if staff:
         out["uploader"] = email
@@ -78,15 +88,20 @@ def _public(row: dict, staff: bool) -> dict:
     return out
 
 
-def _visible(rows: list[dict], staff: bool, include_archived: bool = False) -> list[dict]:
+def _visible(rows: list[dict], staff: bool, include_archived: bool = False, prices: bool | None = None) -> list[dict]:
+    """``prices``: the caller may read price-restricted rows (default: staff only, so a reader that does not know the project
+    never shows one)."""
+    prices = staff if prices is None else prices
     if staff:
-        return [r for r in rows if include_archived or not r.get("archived")]
-    return [r for r in rows if not r.get("internal") and (include_archived or not r.get("archived"))]
+        return [r for r in rows if (include_archived or not r.get("archived")) and (prices or not r.get("price_restricted"))]
+    return [r for r in rows if not r.get("internal") and (prices or not r.get("price_restricted"))
+            and (include_archived or not r.get("archived"))]
 
 
 def _audit(project_id: str, user: dict, action: str, row: dict, extra: dict | None = None) -> None:
     details = {"name": row.get("name"), "folder": row.get("folder"), "revision": row.get("revision"),
-               "internal": bool(row.get("internal")), "size": row.get("size")}
+               "internal": bool(row.get("internal")), "price_restricted": bool(row.get("price_restricted")),
+               "size": row.get("size")}
     details.update(extra or {})
     store.append_audit(project_id, _email(user), action, "document", str(row.get("id") or ""), details)
 
@@ -98,8 +113,8 @@ def _context(request: Request, project_id: str, *, edit: bool = False):
     return user, project, role, _staff(user, role)
 
 
-def _find(project_id: str, doc_id: str, staff: bool, include_archived: bool = False) -> dict:
-    for row in _visible(store.load_documents(project_id), staff, include_archived):
+def _find(project_id: str, doc_id: str, staff: bool, include_archived: bool = False, prices: bool | None = None) -> dict:
+    for row in _visible(store.load_documents(project_id), staff, include_archived, prices):
         if row.get("id") == doc_id:
             return row
     raise HTTPException(status_code=404, detail="Document not found")
@@ -135,14 +150,20 @@ def _log_download(request: Request, user: dict, project_id: str, *, kind: str, f
 
 @router.get("/{project_id}/documents")
 def list_documents(request: Request, project_id: str, archived: bool = False):
-    user, _project, role, staff = _context(request, project_id)
+    user, project, role, staff = _context(request, project_id)
     can_edit = _can_edit(user, role)
-    rows = _visible(store.load_documents(project_id), staff, include_archived=bool(archived and can_edit))
+    rows = _visible(store.load_documents(project_id), staff, include_archived=bool(archived and can_edit),
+                    prices=_prices(user, project, staff))
     cover = (store.get_project(project_id) or {}).get("cover")
     cover = cover if isinstance(cover, dict) else {}
     return {"documents": [dict(_public(r, staff), is_cover=bool(cover) and r.get("id") == cover.get("document_id")) for r in rows],
             "folders": list(models.DOCUMENT_FOLDERS), "can_edit": can_edit, "is_staff": staff, "max_bytes": models.DOCUMENT_MAX_BYTES,
-            "cover_version": cover.get("version")}
+            "cover_version": cover.get("version"), "can_restrict": _can_restrict(user, role)}
+
+
+def _can_restrict(user: dict, role: str | None) -> bool:
+    """Who may set ``price_restricted``: global admin / engineer and the project's owner (never a project engineer)."""
+    return _staff(user, role) or role == "owner"
 
 
 def _flag(value: Any) -> bool:
@@ -153,7 +174,7 @@ def _flag(value: Any) -> bool:
 async def upload_document(request: Request, project_id: str):
     """One file per request (``file``), with optional ``folder`` (kicad | fabrication | bom | 3d | docs; guessed from the name when
     omitted), ``revision`` and ``internal``."""
-    user, _project, _role, staff_flag = _context(request, project_id, edit=True)
+    user, _project, role, staff_flag = _context(request, project_id, edit=True)
     try:
         declared = int(request.headers.get("content-length") or 0)
     except ValueError:
@@ -164,6 +185,9 @@ async def upload_document(request: Request, project_id: str):
     uploaded = form.get("file")
     if uploaded is None or isinstance(uploaded, str):
         raise HTTPException(status_code=400, detail="No file uploaded")
+    restricted = _flag(form.get("price_restricted"))
+    if restricted and not _can_restrict(user, role):
+        raise HTTPException(status_code=403, detail="Only the project owner or MOTRES staff restrict a document's price content")
     folder = form.get("folder")
     folder = str(folder).strip().lower() if folder else None
     if folder and folder not in models.DOCUMENT_FOLDERS:
@@ -194,7 +218,7 @@ async def upload_document(request: Request, project_id: str):
             raise HTTPException(status_code=400, detail="Empty file")
         raise HTTPException(status_code=400, detail="Invalid upload")
     row = models.normalize_document(file_id, _email(user), str(uploaded.filename or "unnamed"), folder=folder, revision=revision,
-                                    internal=staff_flag and _flag(form.get("internal")), size=size, sha256=sha256,
+                                    internal=staff_flag and _flag(form.get("internal")), price_restricted=restricted, size=size, sha256=sha256,
                                     content_type=str(getattr(uploaded, "content_type", "") or ""))
     try:
         store.mutate_documents(project_id, lambda rows: rows.append(row))
@@ -209,12 +233,19 @@ async def upload_document(request: Request, project_id: str):
 @router.patch("/{project_id}/documents/{doc_id}")
 async def patch_document(request: Request, project_id: str, doc_id: str):
     """``internal`` (hidden from customer-side members), ``folder``, ``revision``; ``archived: false`` restores an archived document."""
-    user, _project, _role, staff_flag = _context(request, project_id, edit=True)
+    user, project, role, staff_flag = _context(request, project_id, edit=True)
+    prices = _prices(user, project, staff_flag)
     body = await request.json()
-    allowed = ("internal", "folder", "revision", "archived")
+    allowed = ("internal", "price_restricted", "folder", "revision", "archived")
     if not isinstance(body, dict) or not any(k in body for k in allowed):
-        raise HTTPException(status_code=422, detail="internal, folder, revision or archived expected")
+        raise HTTPException(status_code=422, detail="internal, price_restricted, folder, revision or archived expected")
     changes: dict[str, Any] = {}
+    if "price_restricted" in body:
+        if not _can_restrict(user, role):
+            raise HTTPException(status_code=403, detail="Only the project owner or MOTRES staff restrict a document's price content")
+        if not isinstance(body["price_restricted"], bool):
+            raise HTTPException(status_code=422, detail="price_restricted: true | false expected")
+        changes["price_restricted"] = body["price_restricted"]
     if "internal" in body:
         if not staff_flag:
             raise HTTPException(status_code=403, detail="Only MOTRES staff mark a document internal")
@@ -238,7 +269,7 @@ async def patch_document(request: Request, project_id: str, doc_id: str):
 
     def apply(rows: list) -> None:
         for row in rows:
-            if row.get("id") == doc_id and _visible([row], staff_flag, True):      # a row this caller cannot list is "not found"
+            if row.get("id") == doc_id and _visible([row], staff_flag, True, prices):      # a row this caller cannot list is "not found"
                 before = {k: row.get(k) for k in changes}
                 found["before"] = before
                 row.update(changes)
@@ -251,24 +282,28 @@ async def patch_document(request: Request, project_id: str, doc_id: str):
     store.mutate_documents(project_id, apply)
     if "row" not in found:
         raise HTTPException(status_code=404, detail="Document not found")
-    changed = {k: {"from": found["before"][k], "to": v} for k, v in changes.items() if found["before"][k] != v}
+    changed = {k: {"from": bool(found["before"][k]) if k == "price_restricted" else found["before"][k], "to": v}
+               for k, v in changes.items() if (bool(found["before"][k]) if k == "price_restricted" else found["before"][k]) != v}
     restored = "archived" in changed
     if changed:
         _audit(project_id, user, "document.restore" if restored else "document.update", found["row"], {"changes": changed})
     if found["row"].get("internal") and store.clear_cover(project_id, doc_id):       # the cover is shown to the whole project
         store.append_audit(project_id, _email(user), "cover.clear", "project", project_id, {"reason": "document marked internal"})
+    elif found["row"].get("price_restricted") and store.clear_cover(project_id, doc_id):
+        store.append_audit(project_id, _email(user), "cover.clear", "project", project_id, {"reason": "document marked price-restricted"})
     return _public(found["row"], staff_flag)
 
 
 @router.delete("/{project_id}/documents/{doc_id}")
 def archive_document(request: Request, project_id: str, doc_id: str):
     """Archive = hide.  The file stays on disk and the audit trail keeps every row; ``PATCH {"archived": false}`` restores it."""
-    user, _project, _role, staff_flag = _context(request, project_id, edit=True)
+    user, project, _role, staff_flag = _context(request, project_id, edit=True)
+    prices = _prices(user, project, staff_flag)
     found: dict[str, Any] = {}
 
     def apply(rows: list) -> None:
         for row in rows:
-            if row.get("id") == doc_id and _visible([row], staff_flag, True):      # a row this caller cannot list is "not found"
+            if row.get("id") == doc_id and _visible([row], staff_flag, True, prices):      # a row this caller cannot list is "not found"
                 found["was"] = bool(row.get("archived"))
                 if not row.get("archived"):
                     row["archived"] = True
@@ -292,8 +327,8 @@ def archive_document(request: Request, project_id: str, doc_id: str):
 @router.get("/{project_id}/documents/{doc_id}/download")
 def download_document(request: Request, project_id: str, doc_id: str):
     """One document, streamed from disk.  Staff may also fetch an archived one."""
-    user, _project, role, staff = _context(request, project_id)
-    row = _find(project_id, doc_id, staff, include_archived=_can_edit(user, role))
+    user, project, role, staff = _context(request, project_id)
+    row = _find(project_id, doc_id, staff, include_archived=_can_edit(user, role), prices=_prices(user, project, staff))
     path = store.read_document_file(project_id, str(row.get("file_id") or ""))
     if path is None:
         raise HTTPException(status_code=404, detail="File not found")
@@ -332,7 +367,7 @@ def download_documents_zip(request: Request, project_id: str):
     """All documents visible to the caller in one ZIP (folders kicad / fabrication / bom / 3d / docs + MANIFEST.txt)."""
     from motor_ai_sim.production.routes import _TempFileStreamingResponse
     user, project, _role, staff = _context(request, project_id)
-    rows = _visible(store.load_documents(project_id), staff)
+    rows = _visible(store.load_documents(project_id), staff, prices=_prices(user, project, staff))
     present = []
     missing = []
     total = 0

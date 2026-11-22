@@ -79,15 +79,16 @@ export const developmentApi = {
   resolveMessage: (id: string, messageId: string, resolved: boolean) => call<ProjectThreadMessage>('POST', `${p(id)}/thread/${enc(messageId)}/resolve`, { resolved }),
   /** Documents of a project (production package files): KiCad, fabrication, BOM, 3-D models, drawings. */
   documents: (id: string, archived = false) => call<ProjectDocumentList>('GET', `${p(id)}/documents${archived ? '?archived=true' : ''}`),
-  uploadDocument: (id: string, file: File, o: { folder?: string; revision?: string; internal?: boolean } = {}) => {
+  uploadDocument: (id: string, file: File, o: { folder?: string; revision?: string; internal?: boolean; priceRestricted?: boolean } = {}) => {
     const form = new FormData();
     form.append('file', file, file.name);
     if (o.folder) form.append('folder', o.folder);
     if (o.revision) form.append('revision', o.revision);
     if (o.internal) form.append('internal', 'true');
+    if (o.priceRestricted) form.append('price_restricted', 'true');
     return call<ProjectDocument>('POST', `${p(id)}/documents`, form);
   },
-  patchDocument: (id: string, docId: string, v: Partial<Pick<ProjectDocument, 'internal' | 'folder' | 'revision'>> | { archived: false }) =>
+  patchDocument: (id: string, docId: string, v: Partial<Pick<ProjectDocument, 'internal' | 'price_restricted' | 'folder' | 'revision'>> | { archived: false }) =>
     call<ProjectDocument>('PATCH', `${p(id)}/documents/${enc(docId)}`, v),
   archiveDocument: (id: string, docId: string) => call<ProjectDocument>('DELETE', `${p(id)}/documents/${enc(docId)}`),
   /** Make an image of the project's documents the cover (the server makes the thumbnail) / remove the cover. */

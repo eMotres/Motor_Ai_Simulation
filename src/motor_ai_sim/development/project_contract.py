@@ -265,6 +265,11 @@ def stored_scheme(kind: str = "staff") -> Optional[dict]:
     if doc.get("audience", kind) != kind:                  # a file marked for the other audience is never served here
         log.error("contract: the stored %s scheme is marked for audience %r - not served", kind, doc.get("audience"))
         return None
+    if kind == "customer" and doc.get("audience") != "customer":
+        # strict for what customers see: an unmarked file (stored before the marker existed) is not served - the page shows
+        # its built-in customer view until a marked file is uploaded
+        log.warning("contract: the stored customer scheme has no audience marker - not served; upload a marked file")
+        return None
     return doc
 
 
@@ -295,12 +300,13 @@ def _num(v: Any, lo: float, hi: float, where: str) -> float:
     return v
 
 
-def validate_scheme(doc: Any) -> dict:
+def validate_scheme(doc: Any, strict: bool = False) -> dict:
     """The contract schemes' schema, staff and customer alike (the shape ``web/src/components/contract/contractModel.ts``
     draws): ``nodes`` (1..20: id, label, sub?, x, y, w? / h? of at least 24 on the 1000 x 420 grid), ``edges`` (0..40: from /
     to an existing node, kind money | goods | documents, label?, bend?), ``notes`` (0..20 texts), optional ``version`` and
-    ``audience`` (customer | staff; required on upload).  Raises ``ValueError`` naming what is wrong; returns only the known
-    fields."""
+    ``audience`` (customer | staff; required on upload).  ``strict`` (an upload) adds the rules a stored file is not held to
+    (boxes at least 24 px; a file stored before keeps its old minimum of 20, so it is never turned away on read).  Raises
+    ``ValueError`` naming what is wrong; returns only the known fields."""
     if not isinstance(doc, dict):
         raise ValueError("the scheme is a JSON object")
     nodes, edges, notes = doc.get("nodes"), doc.get("edges", []), doc.get("notes", [])
@@ -322,7 +328,7 @@ def validate_scheme(doc: Any) -> dict:
             node["sub"] = _scheme_text(n["sub"], where + ".sub")
         for k, hi in (("w", 1000), ("h", 420)):
             if k in n:
-                node[k] = _num(n[k], 24, hi, f"{where}.{k}")    # at least 24: an arrow end stays inside the side's corners
+                node[k] = _num(n[k], 24 if strict else 20, hi, f"{where}.{k}")   # an upload: at least 24 (arrow ends inside the corners)
         out_nodes.append(node)
     out_edges = []
     for i, e in enumerate(edges):
@@ -340,7 +346,7 @@ def validate_scheme(doc: Any) -> dict:
     if "version" in doc:
         out["version"] = _scheme_text(doc["version"], "version")
     if "audience" in doc:
-        if doc["audience"] not in SCHEME_FILES:
+        if not isinstance(doc["audience"], str) or doc["audience"] not in SCHEME_FILES:   # a list / object is refused, never a 500
             raise ValueError("audience: customer or staff")
         out["audience"] = doc["audience"]
     return out
@@ -981,7 +987,7 @@ async def put_scheme(request: Request, replace_damaged: bool = False, kind: str 
         if len(raw) > SCHEME_MAX_BYTES:
             raise HTTPException(status_code=413, detail="The scheme is larger than 256 KB")
     try:
-        scheme = validate_scheme(json.loads(bytes(raw).decode("utf-8")))
+        scheme = validate_scheme(json.loads(bytes(raw).decode("utf-8")), strict=True)
     except (UnicodeDecodeError, ValueError) as exc:
         raise HTTPException(status_code=422, detail=f"The scheme is not valid: {exc}")
     if scheme.get("audience") != kind:

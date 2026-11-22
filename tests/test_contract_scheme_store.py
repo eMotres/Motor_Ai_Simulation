@@ -208,7 +208,9 @@ def test_a_stored_file_marked_for_the_other_audience_is_never_served(client, tmp
     assert client.get("/api/projects/proj1/contract", headers=hdr("t-owner")).json()["customer_scheme"] is None
     legacy = {k: v for k, v in SCHEME.items() if k != "audience"}
     (d / "scheme_customer.json").write_text(json.dumps(legacy))                        # uploaded before the marker existed
-    assert client.get("/api/projects/proj1/contract", headers=hdr("t-owner")).json()["customer_scheme"]["version"] == "v0.2"
+    assert client.get("/api/projects/proj1/contract", headers=hdr("t-owner")).json()["customer_scheme"] is None   # customers: strict
+    (d / "supply_scheme_staff.json").write_text(json.dumps(legacy))
+    assert client.get("/api/projects/proj1/contract", headers=hdr("t-staff")).json()["staff_scheme"]["version"] == "v0.2"  # staff: lenient
 
 
 def test_boxes_are_at_least_24_px(client):
@@ -219,3 +221,26 @@ def test_boxes_are_at_least_24_px(client):
 def test_a_factory_account_does_not_read_the_customer_scheme(client, monkeypatch):
     monkeypatch.setitem(ROLES, "t-oem", ("factory@example.test", "oem"))
     assert client.get("/api/contract-scheme?kind=customer", headers=hdr("t-oem")).status_code == 403
+
+
+
+def test_a_stored_file_with_a_20_px_box_stays_served_and_is_not_damaged(client, tmp_path):
+    d = tmp_path / "shared" / "contract"
+    d.mkdir(parents=True)
+    narrow = {**SCHEME, "nodes": [{**SCHEME["nodes"][0], "w": 20}, SCHEME["nodes"][1]]}
+    (d / "supply_scheme_staff.json").write_text(json.dumps(narrow))                    # valid under #825 (minimum 20)
+    assert client.get("/api/projects/proj1/contract", headers=hdr("t-staff")).json()["staff_scheme"]["nodes"][0]["w"] == 20
+    r = client.put("/api/contract-scheme?kind=staff", headers=hdr("t-admin"), content=json.dumps(SCHEME))
+    assert r.status_code == 200                                                        # not "damaged": a normal replacement
+    assert client.put("/api/contract-scheme?kind=staff", headers=hdr("t-admin"), content=json.dumps(narrow)).status_code == 422
+
+
+@pytest.mark.parametrize("audience", [["customer"], {"a": 1}, 3, None])
+def test_an_unhashable_or_wrong_type_audience_is_refused_not_a_500(client, tmp_path, audience):
+    bad = {**SCHEME, "audience": audience}
+    assert client.put("/api/contract-scheme?kind=staff", headers=hdr("t-admin"), content=json.dumps(bad)).status_code == 422
+    d = tmp_path / "shared" / "contract"
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "scheme_customer.json").write_text(json.dumps(bad))                           # placed by hand
+    r = client.get("/api/projects/proj1/contract", headers=hdr("t-owner"))
+    assert r.status_code == 200 and r.json()["customer_scheme"] is None

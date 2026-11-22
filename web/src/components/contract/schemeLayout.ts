@@ -130,6 +130,20 @@ export function route(data: SchemeData): { placed: Placed[]; routed: Routed[] } 
   return { placed, routed };
 }
 
+/** The drawing's extent (cards plus a margin for the connectors' outer turns and the chips): the panel's aspect ratio. */
+export function extent(placed: readonly Placed[]): { w: number; h: number } {
+  if (!placed.length) return { w: CARD_W, h: CARD_H };
+  const w = Math.max(...placed.map((p) => p.x)) - Math.min(...placed.map((p) => p.x)) + CARD_W;
+  const h = Math.max(...placed.map((p) => p.y)) - Math.min(...placed.map((p) => p.y)) + CARD_H;
+  return { w: w + 40, h: h + 40 };
+}
+
+/** The panel height that shows the whole drawing at the panel's width (no tall empty area), within ``[min, max]``. */
+export function panelHeight(width: number, ext: { w: number; h: number }, min = 160, max = 560): number {
+  if (!(width > 0)) return 360;
+  return Math.round(Math.min(max, Math.max(min, (width * ext.h) / ext.w)));
+}
+
 /** The orthogonal path of a routed edge as points (what smoothstep draws, without the rounded corners). */
 export function polyline(r: Routed): Array<[number, number]> {
   const { source: s, target: t } = r;

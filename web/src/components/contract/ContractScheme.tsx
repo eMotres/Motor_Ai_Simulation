@@ -3,17 +3,17 @@
 // equal cards on a dot grid, orthogonal (smoothstep) connectors with small arrowheads, one label chip per connector, a legend
 // of chips.  Money, goods and documents keep their colour and line style.  Under it the line of project steps with the current
 // one highlighted.  The layout is automatic (schemeLayout.ts): cards on a grid, ports spread along the facing sides.
-import React, { useEffect, useMemo } from 'react';
-import { Box, Button, Chip, Paper, Typography } from '@mui/material';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { Box, Chip, Paper, Typography } from '@mui/material';
 import {
-  Background, BaseEdge, EdgeLabelRenderer, Handle, MarkerType, Panel, Position, ReactFlow, ReactFlowProvider,
+  Background, BaseEdge, EdgeLabelRenderer, Handle, MarkerType, Position, ReactFlow, ReactFlowProvider,
   getSmoothStepPath, useNodesInitialized, useReactFlow, useStore,
 } from '@xyflow/react';
 import type { Edge, EdgeProps, Node, NodeProps } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import { useTranslation } from 'react-i18next';
 import type { ContractStep, SchemeData, SchemeEdge, SchemeText } from './contractModel';
-import { CARD_H, CARD_W, CHIP_MAX_W, route, type Port } from './schemeLayout';
+import { CARD_H, CARD_W, CHIP_MAX_W, extent, panelHeight, route, type Port } from './schemeLayout';
 
 export const ARROW = { money: '#16a34a', goods: '#ea580c', documents: '#64748b' } as const;
 const LINE: Record<SchemeEdge['kind'], { width: number; dash?: string }> = {
@@ -72,23 +72,19 @@ const Link: React.FC<EdgeProps<Edge<LinkData>>> = ({ id, sourceX, sourceY, targe
 const nodeTypes = { card: Card };
 const edgeTypes = { link: Link };
 
-/** Fit by default and again whenever the pane gets a real size (the same rule as the assembly process). */
-const FitToScreen: React.FC<{ count: number; label: string }> = ({ count, label }) => {
+/** A static figure (coordinator 2026-11-22): fitted to the panel whenever the pane gets a real size or the drawing changes;
+ *  no zoom, no pan, so the page scrolls over it and a "Fit to screen" button has no purpose. */
+const FitToPanel: React.FC<{ count: number }> = ({ count }) => {
   const rf = useReactFlow();
   const w = useStore((st) => st.width);
   const h = useStore((st) => st.height);
   const measured = useNodesInitialized();
   useEffect(() => {
     if (!w || !h || !measured) return undefined;
-    const t = window.setTimeout(() => { void rf.fitView({ padding: 0.08 }); }, 30);
+    const t = window.setTimeout(() => { void rf.fitView({ padding: 0.03 }); }, 30);
     return () => window.clearTimeout(t);
   }, [count, w, h, measured, rf]);
-  return (
-    <Panel position="top-right">
-      <Button size="small" variant="outlined" onClick={() => void rf.fitView({ padding: 0.08, duration: 250 })}
-        sx={{ textTransform: 'none', bgcolor: 'var(--panel)', fontSize: 12 }}>{label}</Button>
-    </Panel>
-  );
+  return null;
 };
 
 const ContractScheme: React.FC<{ data: SchemeData; step: ContractStep | null; steps: readonly ContractStep[]; translate: boolean }> = ({ data, step, steps, translate }) => {
@@ -96,7 +92,16 @@ const ContractScheme: React.FC<{ data: SchemeData; step: ContractStep | null; st
   const zh = i18n.language.toLowerCase().startsWith('zh');
   // the built-in customer view carries translation keys, a stored scheme EN / ZH pairs
   const text = (v?: SchemeText): string => (v === undefined ? '' : typeof v === 'string' ? (translate ? t(v) : v) : (zh ? v.zh || v.en : v.en || v.zh) || '');
-  const { nodes, edges } = useMemo(() => {
+  const box = useRef<HTMLDivElement | null>(null);
+  const [width, setWidth] = useState(0);
+  useEffect(() => {
+    const el = box.current;
+    if (!el || typeof ResizeObserver === 'undefined') return undefined;
+    const ro = new ResizeObserver((es) => setWidth(es[0]?.contentRect.width ?? 0));
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+  const { nodes, edges, ext } = useMemo(() => {
     const { placed, routed } = route(data);
     const portsOf = new Map<string, CardData['ports']>();
     routed.forEach((r) => {
@@ -113,7 +118,7 @@ const ContractScheme: React.FC<{ data: SchemeData; step: ContractStep | null; st
       markerEnd: { type: MarkerType.ArrowClosed, width: 14, height: 14, color: ARROW[r.edge.kind] },
       data: { kind: r.edge.kind, label: text(r.edge.label), centerX: r.centerX, centerY: r.centerY, labelX: r.labelX, labelY: r.labelY },
     }));
-    return { nodes: ns, edges: es };
+    return { nodes: ns, edges: es, ext: extent(placed) };
   }, [data, zh, translate]); // eslint-disable-line react-hooks/exhaustive-deps
   return (
     <Box data-testid="contract-scheme" sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
@@ -124,13 +129,15 @@ const ContractScheme: React.FC<{ data: SchemeData; step: ContractStep | null; st
             sx={{ bgcolor: 'var(--panel)', border: `1px solid ${ARROW[k]}`, color: 'var(--text-1)', fontSize: 12 }} />
         ))}
       </Box>
-      <Paper role="img" aria-label={t('scheme.title')}
-        sx={{ height: { xs: 360, md: 420 }, bgcolor: 'var(--panel-2)', border: '1px solid var(--line-soft)', borderRadius: 1.5, overflow: 'hidden' }}>
+      <Paper ref={box} role="img" aria-label={t('scheme.title')}
+        sx={{ height: panelHeight(width, ext), bgcolor: 'var(--panel-2)', border: '1px solid var(--line-soft)', borderRadius: 1.5, overflow: 'hidden' }}>
         <ReactFlowProvider>
-          <ReactFlow nodes={nodes} edges={edges} nodeTypes={nodeTypes} edgeTypes={edgeTypes} fitView minZoom={0.2} maxZoom={1.6}
-            nodesDraggable={false} nodesConnectable={false} elementsSelectable={false} proOptions={{ hideAttribution: true }}>
+          <ReactFlow nodes={nodes} edges={edges} nodeTypes={nodeTypes} edgeTypes={edgeTypes} fitView fitViewOptions={{ padding: 0.03 }}
+            minZoom={0.1} maxZoom={1.6} nodesDraggable={false} nodesConnectable={false} elementsSelectable={false}
+            zoomOnScroll={false} zoomOnPinch={false} zoomOnDoubleClick={false} panOnDrag={false} panOnScroll={false}
+            preventScrolling={false} autoPanOnNodeFocus={false} proOptions={{ hideAttribution: true }}>
             <Background gap={18} size={1} />
-            <FitToScreen count={nodes.length} label={t('scheme.fit')} />
+            <FitToPanel count={nodes.length} />
           </ReactFlow>
         </ReactFlowProvider>
       </Paper>

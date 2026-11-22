@@ -54,9 +54,9 @@ def root() -> Optional[Path]:
     env = (os.environ.get("MOTRES_CONTRACT_TEMPLATES_ROOT") or "").strip()
     if env:
         return Path(env).expanduser()
-    # the shared store only when one is CONFIGURED (a server: SHARED_ROOT or the workspace layering); shared_root() alone falls
-    # back to the process config directory, which is not a store - then the private checkout (development) is used
-    if (os.environ.get("SHARED_ROOT") or "").strip() or (os.environ.get("WORKSPACES_ROOT") or "").strip():
+    # the shared store only when SHARED_ROOT names one (both production servers set it); shared_root() alone falls back to
+    # the process config directory, which is not a store - then the private checkout (development) is used
+    if (os.environ.get("SHARED_ROOT") or "").strip():      # WORKSPACES_ROOT alone does not name a shared store
         try:
             from motor_ai_sim.workspace import shared_root
             return Path(str(shared_root())) / "contract" / "templates"
@@ -103,6 +103,10 @@ def _validate(doc: Any, base: Path) -> dict:
                 raise TemplateStoreDamaged(f"index.json: {kind} {r['version']} listed twice")
             seen.add(r["version"])
             referenced.add(r["blob"])
+    reserved = doc.get("reserved", [])
+    if not isinstance(reserved, list) or any(not isinstance(r, dict) or r.get("kind") not in KINDS or not str(r.get("version") or "").strip()
+                                             for r in reserved):
+        raise TemplateStoreDamaged("index.json: malformed reserved labels")
     files = base / "files"
     on_disk = {f.name for f in files.iterdir() if _BLOB.fullmatch(f.name)} if files.is_dir() else set()
     if on_disk - referenced:
@@ -150,7 +154,17 @@ def used_labels(base: Path) -> set:
 
 
 def _append_label(base: Path, row: dict) -> None:
-    with open(_labels_path(base), "ab") as fh:
+    """Append-only, one record per line: a line an earlier append left cut is ended first, so this record never joins it."""
+    path = _labels_path(base)
+    try:
+        with open(path, "rb") as tail:
+            tail.seek(-1, 2)
+            if tail.read(1) != b"\n":
+                with open(path, "ab") as fh:
+                    fh.write(b"\n")
+    except OSError:                                         # missing or empty: nothing to end
+        pass
+    with open(path, "ab") as fh:
         fh.write((json.dumps(row, ensure_ascii=False, sort_keys=True) + "\n").encode("utf-8"))
         fh.flush()
         os.fsync(fh.fileno())
@@ -302,7 +316,8 @@ async def upload_template(request: Request):
         try:
             with lock():
                 doc = load()                                # read-latest under the lock; a damaged store raises
-                if any(r.get("version") == version for r in (doc["versions"].get(kind) or [])) or (kind, version) in used_labels(base):
+                if any(r.get("version") == version for r in (doc["versions"].get(kind) or [])) or (kind, version) in used_labels(base) \
+                        or any(r.get("kind") == kind and r.get("version") == version for r in doc.get("reserved") or []):
                     clash["hit"] = True
                 else:
                     if not _index_path(base).exists():      # first initialisation: the index exists before any blob does
@@ -380,18 +395,54 @@ def _save_tmp(base: Path, chunks: Iterator[bytes]) -> tuple[Path, int, str]:
     return tmp, size, digest.hexdigest()
 
 
+def _loose_labels(path: Path) -> set:
+    """(kind, version) pairs a possibly damaged index still names (best effort; never raises)."""
+    out: set = set()
+    try:
+        doc = json.loads(path.read_text(encoding="utf-8", errors="replace"))
+    except (OSError, ValueError):
+        return out
+    if isinstance(doc, dict):
+        for kind, rows in (doc.get("versions") or {}).items() if isinstance(doc.get("versions"), dict) else []:
+            for r in rows if isinstance(rows, list) else []:
+                if isinstance(r, dict) and kind in KINDS and str(r.get("version") or "").strip():
+                    out.add((kind, str(r["version"])))
+        for r in doc.get("reserved") or [] if isinstance(doc.get("reserved"), list) else []:
+            if isinstance(r, dict) and r.get("kind") in KINDS and str(r.get("version") or "").strip():
+                out.add((r["kind"], str(r["version"])))
+    return out
+
+
+def _loose_rows(path: Path) -> list:
+    try:
+        doc = json.loads(path.read_text(encoding="utf-8", errors="replace"))
+    except (OSError, ValueError):
+        return []
+    out = []
+    for kind, rows in (doc.get("versions") or {}).items() if isinstance(doc, dict) and isinstance(doc.get("versions"), dict) else []:
+        for r in rows if isinstance(rows, list) else []:
+            if isinstance(r, dict) and kind in KINDS and r.get("kind") == kind and str(r.get("version") or "").strip():
+                out.append(r)
+    return out
+
+
 @router.post("/repair")
 def repair_templates(request: Request):
-    """Admin repair of a damaged store: the index is rebuilt from the append-only publication log (``labels.jsonl``), keeping
-    only rows whose blob exists and matches its hash (the first row of each kind + version).  The damaged index is kept beside
-    it as ``index.damaged-<time>-<random>.json``; nothing else is changed or deleted."""
+    """Admin repair of a damaged store, without manual edits.
+
+    The index is rebuilt from the append-only publication log (``labels.jsonl``) and whatever rows the damaged index still
+    holds: a row is kept when its blob exists and matches its hash (the first of each kind + version).  No label is ever
+    forgotten: every label the log, the current or the damaged index knows and that cannot be kept as a row is RESERVED in the
+    new index (never reusable).  A stored file that fails its hash or that no kept row references is moved to
+    ``files/quarantine/`` (kept, never served).  The damaged index is kept as ``index.damaged-<time>-<random>.json``."""
     user = _admin(request)
     base = root()
     if base is None:
         raise HTTPException(status_code=503, detail="This server has no store for the standard contract documents")
-    kept, dropped = 0, 0
+    kept, reserved_n, quarantined = 0, 0, 0
     with lock():
-        rows: dict = {}
+        index = _index_path(base)
+        candidates = []
         try:
             raw = _labels_path(base).read_bytes()
         except FileNotFoundError:
@@ -401,28 +452,48 @@ def repair_templates(request: Request):
                 rec = json.loads(line)
             except ValueError:
                 continue
-            if not isinstance(rec, dict) or rec.get("kind") not in KINDS or not str(rec.get("version") or "").strip():
-                continue
-            if (rec["kind"], rec["version"]) in {(r["kind"], r["version"]) for rs in rows.values() for r in rs}:
+            if isinstance(rec, dict) and rec.get("kind") in KINDS and str(rec.get("version") or "").strip():
+                candidates.append(rec)
+        candidates += _loose_rows(index)
+        known = used_labels(base) | _loose_labels(index)
+        rows: dict = {}
+        have = set()
+        for rec in candidates:
+            label = (rec["kind"], str(rec["version"]))
+            if label in have:
                 continue
             try:
                 verified_bytes(rec)
             except LookupError:
-                dropped += 1
                 continue
             rows.setdefault(rec["kind"], []).append(rec)
+            have.add(label)
             kept += 1
-        index = _index_path(base)
+        reserved = [{"kind": k, "version": v, "reason": "no verified file at repair"} for k, v in sorted(known - have)]
+        reserved_n = len(reserved)
+        referenced = {r["blob"] for rs in rows.values() for r in rs}
+        files = base / "files"
+        if files.is_dir():
+            for f in sorted(files.iterdir()):
+                if _BLOB.fullmatch(f.name) and f.name not in referenced:
+                    q = files / "quarantine"
+                    q.mkdir(exist_ok=True)
+                    dest = q / f.name
+                    if dest.exists():
+                        dest = q / ("%s.%s" % (f.name, secrets.token_hex(4)))
+                    f.replace(dest)
+                    quarantined += 1
         if index.exists():
             stamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
             with open(base / ("index.damaged-%s-%s.json" % (stamp, secrets.token_hex(4))), "xb") as fh:
                 fh.write(index.read_bytes())
-        doc = {"versions": rows, "repaired_at": datetime.datetime.now(datetime.timezone.utc).isoformat()}
+        doc = {"versions": rows, "reserved": reserved, "repaired_at": datetime.datetime.now(datetime.timezone.utc).isoformat()}
         try:
             _validate(doc, base)
         except TemplateStoreDamaged as exc:
-            raise HTTPException(status_code=409, detail="Cannot rebuild the index from the publication log: %s" % exc)
+            raise HTTPException(status_code=409, detail="Cannot rebuild the index: %s" % exc)
         write_strict(index, (json.dumps(doc, ensure_ascii=False, indent=2) + "\n").encode("utf-8"))
     from motor_ai_sim import admin_audit as _AA
-    _AA.record(str(user.get("email") or ""), "contract.template", "repair", details={"kept": kept, "dropped": dropped})
-    return {"ok": True, "kept": kept, "dropped": dropped}
+    _AA.record(str(user.get("email") or ""), "contract.template", "repair",
+               details={"kept": kept, "reserved": reserved_n, "quarantined": quarantined})
+    return {"ok": True, "kept": kept, "reserved": reserved_n, "quarantined": quarantined}

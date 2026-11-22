@@ -320,6 +320,8 @@ def test_the_shared_store_is_used_only_when_configured(monkeypatch, tmp_path):
     private.mkdir()
     monkeypatch.setenv("MOTOR_AI_SIM_PRIVATE_DATA", str(private))
     assert CT.root() == private / "config" / "contract" / "templates"           # development: the private checkout
+    monkeypatch.setenv("WORKSPACES_ROOT", str(tmp_path / "srv" / "ws"))           # WORKSPACES_ROOT alone names no shared store
+    assert CT.root() == private / "config" / "contract" / "templates"
     monkeypatch.setenv("SHARED_ROOT", str(tmp_path / "srv" / "shared"))
     from motor_ai_sim import workspace as W
     monkeypatch.setattr(W, "shared_root", lambda: tmp_path / "srv" / "shared")
@@ -336,3 +338,46 @@ def test_a_label_recorded_by_a_failed_publication_is_never_reused(client, tmp_pa
     monkeypatch.setattr(os, "replace", real)
     assert put_template(client, version="v0.6", data=_pdf("other")).status_code == 409   # the label was used
     assert client.get("/api/contract-templates", headers=hdr("t-admin")).status_code == 200    # and the store is healthy
+
+
+
+def test_a_torn_log_append_never_lets_a_label_be_reused(client, tmp_path, monkeypatch):
+    """Astra round 3, A: publish v1/A; a cut log append + OSError; publish v2/A succeeds; repair must still know A, so v2/B fails."""
+    log = tmp_path / "private" / "templates" / "labels.jsonl"
+    assert put_template(client, version="A").status_code == 200
+    real = CT._append_label
+
+    def torn(base, row):
+        with open(CT._labels_path(base), "ab") as fh:
+            fh.write(b'{"kind": "agreement", "version": "B-cut')         # cut short, no newline
+        raise OSError("disk full")
+
+    monkeypatch.setattr(CT, "_append_label", torn)
+    assert put_template(client, version="B", data=_pdf("b")).status_code == 503
+    monkeypatch.setattr(CT, "_append_label", real)
+    assert put_template(client, version="C", data=_pdf("c")).status_code == 200
+    assert ("agreement", "C") in CT.used_labels(log.parent)                    # its own line: not joined to the cut one
+    (tmp_path / "private" / "templates" / "index.json").write_text("{ broken")
+    r = client.post("/api/contract-templates/repair", headers=hdr("t-admin"))
+    assert r.status_code == 200, r.text
+    for label in ("A", "C"):
+        assert put_template(client, version=label, data=_pdf("again " + label)).status_code == 409
+
+
+def test_repair_quarantines_a_corrupt_blob_and_unlocks_the_store(client, tmp_path):
+    """Astra round 3, B: a damaged index plus a corrupt kept blob - repair moves the blob aside, reserves its label, store works."""
+    put_template(client, version="A")
+    put_template(client, version="B", data=_pdf("b"))
+    files = _blob_dir(tmp_path)
+    bad = sorted(p for p in files.iterdir() if p.is_file())[0]
+    bad.write_bytes(b"%PDF-1.7 changed %%EOF")                               # fails its hash
+    (tmp_path / "private" / "templates" / "index.json").write_text("{ broken")
+    r = client.post("/api/contract-templates/repair", headers=hdr("t-admin"))
+    assert r.status_code == 200, r.text
+    assert r.json()["quarantined"] == 1 and r.json()["kept"] == 1 and r.json()["reserved"] == 1
+    assert (files / "quarantine" / bad.name).is_file() and not bad.exists()
+    assert client.get("/api/contract-templates", headers=hdr("t-admin")).status_code == 200
+    assert put_template(client, version="C", data=_pdf("c")).status_code == 200      # uploads work again
+    reserved = json.loads((tmp_path / "private" / "templates" / "index.json").read_text())["reserved"]
+    lost = reserved[0]["version"]
+    assert put_template(client, version=lost, data=_pdf("reuse")).status_code == 409   # the lost label stays reserved

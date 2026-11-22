@@ -249,11 +249,15 @@ def duty_terminal_budget(
         return None
     if not info["stated"]:
         return None
+    # ``I_phase_rms_A`` is the REQUESTED terminal current; an imposed-voltage / PWM / waveform run also stores the
+    # current it SOLVED (``I_phase_rms_solved_A``), and the lead loss follows that one.  A solved value that is stored
+    # but not a finite positive number is an invalid witness: no budget, never a silent fall back to the request.
+    solved = s.get("I_phase_rms_solved_A")
     try:
-        cur = float(s.get("I_phase_rms_A"))
+        cur = float(s.get("I_phase_rms_A") if solved is None else solved)
     except (TypeError, ValueError):
         return None
-    if not cur > 0.0:
+    if not (math.isfinite(cur) and cur > 0.0):
         return None
     blk = terminals_block or {}
     t_src = "terminals.lead_temp_c"

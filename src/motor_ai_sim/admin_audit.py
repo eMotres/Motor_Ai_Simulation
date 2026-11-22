@@ -73,6 +73,8 @@ ACTIONS = frozenset({
     "agent_design.read", "agent_design.delete",
     # a customer asked to order a motor of a development project (no price is involved)
     "project.order_request",
+    # the contract section's staff scheme in the shared store (development/project_contract.py, 2026-11-22)
+    "contract.scheme", "contract.scheme_read",
     # the log itself
     "audit.read", "audit.pseudonymise", "assistant_conv.read", "assistant_conv.export",
     # retention

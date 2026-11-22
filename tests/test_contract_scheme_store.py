@@ -1,0 +1,157 @@
+"""The contract section's staff scheme in the server's SHARED store (coordinator 2026-11-22: MOTOR_AI_SIM_PRIVATE_DATA is not set
+in production): resolution order, the admin upload with its schema check, the previous version kept."""
+from __future__ import annotations
+
+import json
+
+import pytest
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+
+from motor_ai_sim import auth
+from motor_ai_sim.development import project_contract as PC
+from motor_ai_sim.development import store
+
+ROLES = {"t-admin": ("admin@example.test", "admin"), "t-staff": ("engineer@example.test", "engineer"),
+         "t-owner": ("owner@example.test", "user")}
+SCHEME = {"version": "v0.2", "nodes": [{"id": "customer", "label": {"en": "Customer", "zh": "客户"}, "x": 30, "y": 150},
+                                       {"id": "motres", "label": "MOTRES d.o.o.", "sub": "Slovenia", "x": 720, "y": 20, "w": 250}],
+          "edges": [{"from": "customer", "to": "motres", "kind": "money", "label": "100 % in advance", "bend": -35}],
+          "notes": [{"en": "To be confirmed by the accountants.", "zh": "须由会计师确认。"}]}
+
+
+def hdr(who):
+    return {"Authorization": "Bearer " + who}
+
+
+@pytest.fixture
+def client(tmp_path, monkeypatch):
+    monkeypatch.setenv("MOTRES_PROJECTS_ROOT", str(tmp_path / "projects"))
+    monkeypatch.setenv("MOTRES_CONTRACT_STORE_ROOT", str(tmp_path / "shared" / "contract"))
+    monkeypatch.setenv("ADMIN_AUDIT_FILE", str(tmp_path / "admin_audit.jsonl"))
+    monkeypatch.delenv("MOTOR_AI_SIM_PRIVATE_DATA", raising=False)
+    monkeypatch.setattr(auth, "resolve_user", lambda token: None if not token else
+                        dict(zip(("email", "role"), ROLES[token.split()[-1]])))
+    store.create_project({"id": "proj1", "title": "P", "customer_org": "Org", "status": "simulation", "created_at": "t", "updated_at": "t",
+                          "owner_engineer": "owner@example.test", "linked_motors": [], "notes": "", "pending_invites": [],
+                          "members": [{"email": "owner@example.test", "role": "owner"}]})
+    app = FastAPI()
+    app.include_router(PC.router)
+    app.include_router(PC.scheme_router)
+    return TestClient(app)
+
+
+def test_an_admin_uploads_the_scheme_and_staff_see_it_the_customer_never(client, tmp_path):
+    assert client.get("/api/projects/proj1/contract", headers=hdr("t-staff")).json()["staff_scheme"] is None
+    r = client.put("/api/contract-scheme", headers=hdr("t-admin"), content=json.dumps(SCHEME))
+    assert r.status_code == 200, r.text
+    assert (tmp_path / "shared" / "contract" / "supply_scheme_staff.json").is_file()
+    seen = client.get("/api/projects/proj1/contract", headers=hdr("t-staff")).json()["staff_scheme"]
+    assert seen["nodes"][0]["label"] == {"en": "Customer", "zh": "客户"} and seen["version"] == "v0.2"
+    assert client.get("/api/projects/proj1/contract", headers=hdr("t-owner")).json()["staff_scheme"] is None
+    assert client.get("/api/contract-scheme", headers=hdr("t-admin")).json()["source"] == "shared"
+
+
+def test_staff_read_it_only_admins_upload_it(client, tmp_path):
+    for who in ("t-staff", "t-owner"):
+        assert client.put("/api/contract-scheme", headers=hdr(who), content=json.dumps(SCHEME)).status_code == 403
+    assert client.put("/api/contract-scheme", content=json.dumps(SCHEME)).status_code == 401
+    client.put("/api/contract-scheme", headers=hdr("t-admin"), content=json.dumps(SCHEME))
+    r = client.get("/api/contract-scheme", headers=hdr("t-staff"))
+    assert r.status_code == 200 and r.json()["scheme"]["version"] == "v0.2" and r.json()["can_upload"] is False
+    assert client.get("/api/contract-scheme", headers=hdr("t-admin")).json()["can_upload"] is True
+    assert client.get("/api/contract-scheme", headers=hdr("t-owner")).status_code == 403
+    reads = [json.loads(x) for x in (tmp_path / "admin_audit.jsonl").read_text().splitlines()]
+    assert [r["action"] for r in reads].count("contract.scheme_read") == 2
+    assert all("nodes" not in json.dumps(r.get("details") or {}) for r in reads if r["action"] == "contract.scheme_read")
+
+
+@pytest.mark.parametrize("bad", [
+    [], {"nodes": []}, {"nodes": [{"id": "A", "label": "x", "x": 1, "y": 1}]},
+    {"nodes": [{"id": "a", "label": "x", "x": 1, "y": 1}, {"id": "a", "label": "y", "x": 2, "y": 2}]},
+    {"nodes": [{"id": "a", "label": "x", "x": 5000, "y": 1}]},
+    {"nodes": [{"id": "a", "label": "x", "x": 1, "y": 1}], "edges": [{"from": "a", "to": "b", "kind": "money"}]},
+    {"nodes": [{"id": "a", "label": "x", "x": 1, "y": 1}], "edges": [{"from": "a", "to": "a", "kind": "profit"}]},
+    {"nodes": [{"id": "a", "label": {"de": "x"}, "x": 1, "y": 1}]},
+    {"nodes": [{"id": "a", "label": "x" * 201, "x": 1, "y": 1}]},
+    {"nodes": [{"id": "a", "label": "x", "x": 1, "y": 1}], "edges": [{"from": ["a"], "to": "a", "kind": "money"}]},
+    {"nodes": [{"id": "a", "label": "x", "x": 1, "y": 1}], "edges": [{"from": "a", "to": {"a": 1}, "kind": "money"}]},
+    {"nodes": [{"id": "a", "label": "x", "x": 1, "y": 1}], "edges": [{"from": "a", "to": "a", "kind": ["money"]}]},
+])
+def test_a_scheme_that_does_not_fit_the_schema_is_refused_and_changes_nothing(client, tmp_path, bad):
+    r = client.put("/api/contract-scheme", headers=hdr("t-admin"), content=json.dumps(bad))
+    assert r.status_code == 422, r.text
+    assert not (tmp_path / "shared" / "contract" / "supply_scheme_staff.json").exists()
+
+
+def test_the_previous_scheme_is_kept_and_unknown_fields_are_dropped(client, tmp_path):
+    client.put("/api/contract-scheme", headers=hdr("t-admin"), content=json.dumps(SCHEME))
+    newer = {**SCHEME, "version": "v0.3", "secret_note": "never stored"}
+    client.put("/api/contract-scheme", headers=hdr("t-admin"), content=json.dumps(newer))
+    kept = list((tmp_path / "shared" / "contract").glob("supply_scheme_staff.*.json"))
+    assert len(kept) == 1 and json.loads(kept[0].read_text())["version"] == "v0.2"
+    stored = json.loads((tmp_path / "shared" / "contract" / "supply_scheme_staff.json").read_text())
+    assert stored["version"] == "v0.3" and "secret_note" not in stored
+
+
+def test_the_shared_store_comes_first_then_the_private_checkout(client, tmp_path, monkeypatch):
+    private = tmp_path / "private"
+    (private / "config" / "contract").mkdir(parents=True)
+    (private / "config" / "contract" / "supply_scheme_staff.json").write_text(json.dumps({**SCHEME, "version": "private"}))
+    monkeypatch.setenv("MOTOR_AI_SIM_PRIVATE_DATA", str(private))
+    assert PC.staff_scheme()["version"] == "private"                         # no shared one yet: the development fallback
+    client.put("/api/contract-scheme", headers=hdr("t-admin"), content=json.dumps(SCHEME))
+    assert PC.staff_scheme()["version"] == "v0.2"                            # the shared store wins
+
+
+def test_a_hand_edited_scheme_that_breaks_the_schema_is_not_served(client, tmp_path):
+    (tmp_path / "shared" / "contract").mkdir(parents=True)
+    (tmp_path / "shared" / "contract" / "supply_scheme_staff.json").write_text('{"nodes": "oops"}')
+    assert client.get("/api/projects/proj1/contract", headers=hdr("t-staff")).json()["staff_scheme"] is None
+
+
+def test_without_a_shared_root_the_default_is_the_workspace_shared_root(monkeypatch, tmp_path):
+    monkeypatch.delenv("MOTRES_CONTRACT_STORE_ROOT", raising=False)
+    from motor_ai_sim import workspace as W
+    monkeypatch.setattr(W, "shared_root", lambda: tmp_path / "srv" / "shared")
+    assert PC.contract_store_root() == tmp_path / "srv" / "shared" / "contract"
+
+
+
+def test_every_previous_version_is_kept_under_its_own_name(client, tmp_path):
+    for v in ("v1", "v2", "v3"):
+        assert client.put("/api/contract-scheme", headers=hdr("t-admin"), content=json.dumps({**SCHEME, "version": v})).status_code == 200
+    kept = sorted(json.loads(p.read_text())["version"] for p in (tmp_path / "shared" / "contract").glob("supply_scheme_staff.*.json"))
+    assert kept == ["v1", "v2"]
+
+
+def test_a_damaged_stored_scheme_is_not_replaced_silently(client, tmp_path):
+    store_dir = tmp_path / "shared" / "contract"
+    store_dir.mkdir(parents=True)
+    (store_dir / "supply_scheme_staff.json").write_bytes(b'{"nodes": "damaged"}')
+    r = client.put("/api/contract-scheme", headers=hdr("t-admin"), content=json.dumps(SCHEME))
+    assert r.status_code == 409 and (store_dir / "supply_scheme_staff.json").read_bytes() == b'{"nodes": "damaged"}'
+    r = client.put("/api/contract-scheme?replace_damaged=true", headers=hdr("t-admin"), content=json.dumps(SCHEME))
+    assert r.status_code == 200
+    assert [p.read_bytes() for p in store_dir.glob("supply_scheme_staff.*.json")] == [b'{"nodes": "damaged"}']
+
+
+def test_the_body_cap_holds_while_it_arrives(client):
+    big = json.dumps({**SCHEME, "notes": ["x" * 199] * 20}).encode() + b" " * (300 * 1024)
+
+    def chunked():
+        for i in range(0, len(big), 8192):
+            yield big[i:i + 8192]
+
+    assert client.put("/api/contract-scheme", headers=hdr("t-admin"), content=chunked()).status_code == 413
+
+
+def test_a_failed_atomic_write_changes_nothing(client, tmp_path, monkeypatch):
+    client.put("/api/contract-scheme", headers=hdr("t-admin"), content=json.dumps(SCHEME))
+    path = tmp_path / "shared" / "contract" / "supply_scheme_staff.json"
+    before = path.read_bytes()
+    import os
+    monkeypatch.setattr(os, "replace", lambda a, b: (_ for _ in ()).throw(OSError("rename failed")))
+    r = client.put("/api/contract-scheme", headers=hdr("t-admin"), content=json.dumps({**SCHEME, "version": "v9"}))
+    assert r.status_code == 503 and path.read_bytes() == before
+    assert not list(path.parent.glob(".*.tmp"))

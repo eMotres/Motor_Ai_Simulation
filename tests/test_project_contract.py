@@ -87,6 +87,7 @@ def client(tmp_path, monkeypatch):
     monkeypatch.setenv("CAD_DOWNLOAD_LOG", str(tmp_path / "downloads.jsonl"))
     monkeypatch.delenv("MOTOR_AI_SIM_PRIVATE_DATA", raising=False)
     monkeypatch.delenv("MOTRES_CONTRACT_TEMPLATES_ROOT", raising=False)
+    monkeypatch.setenv("MOTRES_CONTRACT_STORE_ROOT", str(tmp_path / "shared" / "contract"))
 
     def resolve(token):
         if not token:
@@ -438,13 +439,14 @@ def test_current_step(status_, contract, step):
     assert PC.current_step({"status": status_}, contract) == step
 
 
-def test_the_staff_scheme_comes_from_the_private_checkout_only(client, tmp_path, monkeypatch):
+def test_the_staff_scheme_falls_back_to_the_private_checkout(client, tmp_path, monkeypatch):
     assert client.get(URL, headers=hdr("t-staff")).json()["staff_scheme"] is None
     private = tmp_path / "private"
     (private / "config" / "contract").mkdir(parents=True)
-    (private / "config" / "contract" / "supply_scheme_staff.json").write_text(json.dumps({"nodes": [{"id": "a"}], "edges": []}))
+    scheme = {"nodes": [{"id": "a", "label": "A", "x": 1, "y": 1}], "edges": [], "notes": []}
+    (private / "config" / "contract" / "supply_scheme_staff.json").write_text(json.dumps(scheme))
     monkeypatch.setenv("MOTOR_AI_SIM_PRIVATE_DATA", str(private))
-    assert client.get(URL, headers=hdr("t-staff")).json()["staff_scheme"] == {"nodes": [{"id": "a"}], "edges": []}
+    assert client.get(URL, headers=hdr("t-staff")).json()["staff_scheme"] == scheme
     assert client.get(URL, headers=hdr("t-owner")).json()["staff_scheme"] is None
 
 

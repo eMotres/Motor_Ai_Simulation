@@ -5386,7 +5386,7 @@ _CYCLE_BLOCK_KEYS = (
     "fits_requested", "feasible", "unlimited", "limiting_part", "limits_c",
     "magnet_limit_source", "hot_spot_offset_K", "winding_hot_peak_c",
     "magnet_peak_c", "coil_temp_c", "magnet_temp_c", "s2_time_to_limit_s",
-    "s2_limiting_part", "s2_note", "s2_from_rated_s", "s2_from_rated_part",
+    "s2_limiting_part", "s2_note", "s2_s1_established", "s2_from_rated_s1_established", "s2_from_rated_s", "s2_from_rated_part",
     "s2_from_rated_duty", "at_allowable", "at_requested", "ed_note", "note",
     "winding_peak_limit_c")
 

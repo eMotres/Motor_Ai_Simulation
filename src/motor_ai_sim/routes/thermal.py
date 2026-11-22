@@ -9294,6 +9294,8 @@ def duty_cycle(body: Dict[str, Any] = Body(default_factory=dict),
                 "s2_end_state_c": s2["end_state_c"],
                 "s2_winding_hot_end_c": s2["winding_hot_end_c"],
                 "s2_note": s2["note"],
+                # a pull that reaches nothing is "continuous" only when the equilibrium is proven below every limit (F07)
+                "s2_s1_established": s2.get("s1_established"),
             })
 
             # THE SAME PULL FROM A WARM MACHINE.  "How long may it pull" has as
@@ -9314,6 +9316,7 @@ def duty_cycle(body: Dict[str, Any] = Body(default_factory=dict),
                     "s2_from_rated_part": s2r["s2_limiting_part"],
                     "s2_from_rated_start_c": {k: round(float(v), 2)
                                               for k, v in cal_state.items()},
+                    "s2_from_rated_s1_established": s2r.get("s1_established"),
                     "s2_from_rated_note": (
                         "the same pull, started from the calibration duty %r's "
                         "own steady map (winding %.0f °C) instead of from the "
@@ -9338,6 +9341,7 @@ def duty_cycle(body: Dict[str, Any] = Body(default_factory=dict),
                 limits.update({
                     "s2_from_cycle_mean_s": s2m["s2_time_to_limit_s"],
                     "s2_from_cycle_mean_part": s2m["s2_limiting_part"],
+                    "s2_from_cycle_mean_s1_established": s2m.get("s1_established"),
                     "s2_from_cycle_mean_start_c": {
                         k: round(float(v), 2) for k, v in mean_state.items()},
                     "s2_from_cycle_mean_note": (

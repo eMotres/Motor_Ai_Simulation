@@ -2244,23 +2244,48 @@ def _runaway_stop_c(limits) -> float:
 S1_HORIZON_MAX_S = 2.0e6
 
 
+def _equilibrium_c(seg: Segment, network: Network, C: Mapping[str, Any], start: Mapping[str, float],
+                   active: Sequence[str]) -> Optional[Dict[str, float]]:
+    """The temperatures the first segment's heat would settle at for ever (dT/dt = 0 on every node), found from ``start``.
+    ``None`` when there is none to find (a runaway) or the solver did not converge to a true zero of the derivatives."""
+    from scipy.optimize import root
+
+    def f(y):
+        d, _P, _F = _derivatives(seg, {r: float(y[i]) for i, r in enumerate(active)}, network, C)
+        return [d[r] * 3600.0 for r in active]                    # K/h: a residual in the units the answer states
+
+    try:
+        sol = root(f, [float(start[r]) for r in active], method="hybr", tol=1e-12)
+    except Exception:  # noqa: BLE001 - no equilibrium found is an answer ("not established"), never a crash
+        return None
+    y = [float(v) for v in sol.x]
+    if not sol.success or not all(math.isfinite(v) for v in y):
+        return None
+    if max(abs(v) for v in f(y)) > 1e-3:                           # 0.001 K/h left: not a zero of the derivatives
+        return None
+    return {r: y[i] for i, r in enumerate(active)}
+
+
 def time_to_limit(profile: Profile, network: Network, caps: Mapping[str, Any],
                   *, limits: Optional[Mapping[str, float]] = None,
                   T0: Optional[Mapping[str, float]] = None,
                   t_max_s: Optional[float] = None,
+                  _extending: bool = False,
                   ) -> Dict[str, Any]:
     """How long the first segment may run before a part reaches its limit.
 
     The S2 question.  The winding is judged on its HOT SPOT (mean + the
     calibration map's constant offset); every other node on its own mean.
     ``None`` with ``"this point is S1"`` when nothing is reached AND the machine
-    has settled (drift under 1 K/h, no runaway) - it settles below every limit
-    and may run for ever.  Not reaching a limit inside the horizon is NOT that
-    (Astra thermal audit 2026-11-21, F07): the horizon is a heuristic
-    (sum C / sum G of the external paths) that a slow internal mode outlasts, so
-    an unsettled end state extends the horizon tenfold, up to ``S1_HORIZON_MAX_S``,
-    and if it is still moving the answer says ``s1_established: false`` and
-    never "continuous".
+    has an EQUILIBRIUM (dT/dt = 0 for the first segment's heat) that lies below every limit - it settles below
+    them and may run for ever.  Not reaching a limit inside the horizon is NOT that (Astra thermal audit
+    2026-11-21, F07), and neither is a small derivative: a slow network 10 000 J/K behind 0.01 W/K drifts under
+    1 K/h at 54 C on its way to 237 C (Astra pre-merge 2026-11-22).  So the proof is the equilibrium itself
+    (``equilibrium_c``, ``remaining_rise_k``); a machine whose equilibrium is above a limit crosses it LATER, so the
+    horizon is extended tenfold (up to ``S1_HORIZON_MAX_S``) until it does - unless the caller fixed the horizon
+    (``t_max_s``), which then answers the finite-duration question only.  If neither a crossing nor an equilibrium
+    is found the answer says ``s1_established: false`` and is never "continuous".  Every answer carries
+    ``s1_established`` (a crossing is False).
     """
     from scipy.integrate import solve_ivp
 
@@ -2274,6 +2299,7 @@ def time_to_limit(profile: Profile, network: Network, caps: Mapping[str, Any],
     for n, v in (T0 or {}).items():
         if network.rep(n) in state:
             state[network.rep(n)] = float(v)
+    fixed_horizon = t_max_s is not None and not _extending         # the caller's own horizon, never extended
     t_end = float(t_max_s if t_max_s is not None
                   else max(seg.t_s, 10.0 * _time_constant(network, C)))
 
@@ -2333,6 +2359,8 @@ def time_to_limit(profile: Profile, network: Network, caps: Mapping[str, Any],
                                    + network.hot_spot_offset_k, 2),
         "limits_c": {k: float(v) for k, v in lims.items()},
         "note": "",
+        "s1_established": False,
+        "settled": False,
     }
     if hits:
         t_hit, part = min(hits)
@@ -2348,22 +2376,37 @@ def time_to_limit(profile: Profile, network: Network, caps: Mapping[str, Any],
         d_end, _P, _F = _derivatives(seg, end_state, network, C)
         drift_k_per_h = max(abs(v) for v in d_end.values()) * 3600.0
         out["drift_K_per_h"] = round(drift_k_per_h, 4)
-        settled = bool(drift_k_per_h < 1.0 and runaway_t is None)
+        eq = None if runaway_t is not None else _equilibrium_c(seg, network, C, end_state, active)
+        below = None
+        if eq is not None:
+            judged = {n: eq[network.rep(n)] + (network.hot_spot_offset_k if n == "winding" else 0.0) for n in lims}
+            below = all(judged[n] < float(lims[n]) for n in lims)
+            out["equilibrium_c"] = {n: round(eq[network.rep(n)], 2) for n in NODES}
+            out["equilibrium_hot_spot_c"] = {n: round(v, 2) for n, v in judged.items()}
+            out["remaining_rise_k"] = round(max(eq[r] - end_state[r] for r in active), 2)
+        settled = bool(below)
         out["settled"] = settled
-        if not settled and t_max_s is None and t_end < S1_HORIZON_MAX_S:
-            # a slow internal mode outlasts the heuristic horizon: look again, ten times as far
+        if not settled and not fixed_horizon and t_end < S1_HORIZON_MAX_S:
+            # a slow internal mode outlasts the heuristic horizon (or the equilibrium is above a limit and the crossing
+            # is still ahead): look again, ten times as far, until the cap
             return time_to_limit(profile, network, caps, limits=limits, T0=T0,
-                                 t_max_s=min(10.0 * t_end, S1_HORIZON_MAX_S))
+                                 t_max_s=min(10.0 * t_end, S1_HORIZON_MAX_S), _extending=True)
         out["s1_established"] = settled
         if settled:
-            out["note"] = ("no part reaches its limit within %.0f s and the machine has "
-                           "settled (%.2g K/h) — at this operating point it settles "
+            out["note"] = ("no part reaches its limit within %.0f s and the machine has an equilibrium below every "
+                           "limit (%.2g K/h left, %.1f K still to rise) — at this operating point it settles "
                            "below every limit, i.e. this point is S1 (continuous)."
-                           % (t_end, drift_k_per_h))
+                           % (t_end, drift_k_per_h, out.get("remaining_rise_k") or 0.0))
+        elif below is False:
+            out["note"] = ("no part reaches its limit within %.0f s, but the machine's equilibrium lies ABOVE a "
+                           "limit (%s): it is still climbing at %.3g K/h and will cross it later - this point is "
+                           "NOT continuous." % (t_end, ", ".join(
+                               "%s %.0f C" % (n, v) for n, v in out["equilibrium_hot_spot_c"].items()
+                               if v >= float(lims[n])), drift_k_per_h))
         else:
-            out["note"] = ("no part reaches its limit within %.0f s, but the machine has NOT "
-                           "settled (%.3g K/h): continuous operation is not established "
-                           "at this point." % (t_end, drift_k_per_h))
+            out["note"] = ("no part reaches its limit within %.0f s, but no equilibrium could be established "
+                           "(%.3g K/h still drifting): continuous operation is not established at this point."
+                           % (t_end, drift_k_per_h))
     return out
 
 
@@ -2461,10 +2504,15 @@ def time_to_limits(segment: Segment, network: Network, caps: Mapping[str, Any],
             "the step response could not be integrated: %s" % sol.message)
 
     end_state = {r: float(sol.y[i][-1]) for i, r in enumerate(active)}
-    # SETTLED?  The last derivative, in kelvin per hour — under a kelvin an hour
-    # nothing is going to move again, and an asymptote may be quoted.
+    # SETTLED?  A small derivative proves nothing (a 10 000 J/K winding behind 0.01 W/K drifts under 1 K/h on its way to
+    # 237 C: Astra pre-merge 2026-11-22), so the asymptote is the network's own EQUILIBRIUM, and the machine counts as
+    # settled only when that equilibrium exists and every target that has not been reached stays under its limit there.
     d_end, _P, _F = _derivatives(segment, end_state, network, C)
     drift_k_per_h = max(abs(v) for v in d_end.values()) * 3600.0
+    eq = None if runaway_t is not None else _equilibrium_c(segment, network, C, end_state, active)
+    unreached = [(node, float(lim), float(off)) for i, (_l, node, lim, off) in enumerate(targets)
+                 if not len(sol.t_events[i])]
+    settled_eq = bool(eq is not None and all(eq[network.rep(n)] + o < l for n, l, o in unreached))
 
     out: Dict[str, Any] = {
         "t_horizon_s": round(t_end, 3),
@@ -2472,8 +2520,9 @@ def time_to_limits(segment: Segment, network: Network, caps: Mapping[str, Any],
         # machine is (by construction) NOT settled.
         "runaway_at_s": (None if runaway_t is None else round(runaway_t, 3)),
         "end_state_c": {n: round(end_state[network.rep(n)], 2) for n in NODES},
-        "settled": bool(drift_k_per_h < 1.0 and runaway_t is None),
+        "settled": settled_eq,
         "drift_K_per_h": round(drift_k_per_h, 4),
+        "equilibrium_c": (None if eq is None else {n: round(eq[network.rep(n)], 2) for n in NODES}),
         "start_state_c": {n: round(state[network.rep(n)], 2) for n in NODES},
         "targets": {},
     }
@@ -2501,7 +2550,7 @@ def time_to_limits(segment: Segment, network: Network, caps: Mapping[str, Any],
         else:
             blk["reaches"] = False
             blk["time_s"] = None
-            blk["asymptote_c"] = (round(end_c, 2) if out["settled"] else None)
+            blk["asymptote_c"] = (round(eq[network.rep(node)] + float(off), 2) if out["settled"] else None)
         out["targets"][str(label)] = blk
     return out
 

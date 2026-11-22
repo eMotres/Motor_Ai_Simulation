@@ -669,3 +669,25 @@ def test_the_warm_start_does_not_move_the_answer(areas):
         cold["ed_allowable_pct"], abs=0.05)
     assert warm["at_allowable"]["winding_hot_peak_c"] == pytest.approx(
         cold["at_allowable"]["winding_hot_peak_c"], abs=0.5)
+
+
+def test_a_no_hit_pull_is_unlimited_only_when_the_equilibrium_is_proven(areas, monkeypatch):
+    """Astra thermal audit F07 / pre-merge 2026-11-22: "no limit reached" without a proven S1 is not "unlimited"."""
+    m = _model(dict(S2), areas)
+    real = cdc._s2_times
+
+    def fake(established):
+        def _f(model):
+            t = dict(real(model))
+            t.update({"s2_time_to_limit_s": None, "s2_limiting_part": None, "s2_s1_established": established,
+                      "s2_note": "no part reaches its limit within 1e5 s"})
+            return t
+        return _f
+
+    monkeypatch.setattr(cdc, "_s2_times", fake(False))
+    r = cdc.solve_regime(m)
+    assert r["unlimited"] is False and r["s2_s1_established"] is False
+    assert "NOT established" in r["note"] and r["fits_requested"] is None
+    monkeypatch.setattr(cdc, "_s2_times", fake(True))
+    r = cdc.solve_regime(m)
+    assert r["unlimited"] is True and r["s2_s1_established"] is True and "S1" in r["note"]

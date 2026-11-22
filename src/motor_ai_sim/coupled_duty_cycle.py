@@ -441,6 +441,7 @@ def _s2_times(model: CycleModel) -> Dict[str, Any]:
         out.update({
             "s2_from_rated_s": warm["s2_time_to_limit_s"],
             "s2_from_rated_part": warm["s2_limiting_part"],
+            "s2_from_rated_s1_established": warm.get("s1_established"),
             "s2_from_rated_start_c": {k: round(float(v), 2)
                                       for k, v in model.rated_state_c.items()},
             "s2_from_rated_note": (
@@ -604,6 +605,7 @@ def _regime_s2(model: CycleModel, *, samples_per_segment: int,
     t_allow = times.get("s2_time_to_limit_s")
     asked = model.requested_t_on_s
     feasible = bool(t_allow) and float(t_allow) > 0.0
+    s1_ok = bool(times.get("s2_s1_established"))
     out: Dict[str, Any] = {
         "kind": "S2",
         "duty": model.duty,
@@ -617,7 +619,9 @@ def _regime_s2(model: CycleModel, *, samples_per_segment: int,
         # An S2 that never reaches a limit is not infeasible — it is a point the
         # machine may hold for ever, which the model says by finding no hit.
         "feasible": True,
-        "unlimited": not feasible,
+        # "No hit" is "for ever" ONLY when the machine's equilibrium is proven below every limit (Astra thermal audit F07 and
+        # pre-merge 2026-11-22); a point that is neither reaching a limit nor shown to settle is NOT unlimited.
+        "unlimited": bool(not feasible and s1_ok),
         **times,
     }
     # The pull the temperatures are taken at: the ALLOWABLE one when there is a
@@ -633,10 +637,14 @@ def _regime_s2(model: CycleModel, *, samples_per_segment: int,
     out["magnet_temp_c"] = (None if t_mag is None else round(float(t_mag), 2))
     out["winding_hot_peak_c"] = st.get("winding_hot_peak_c")
     out["magnet_peak_c"] = st.get("magnet_peak_c")
-    out["fits_requested"] = (None if asked is None else
+    out["fits_requested"] = (None if asked is None or (not feasible and not s1_ok) else
                              (True if not feasible
                               else bool(float(asked) <= float(t_allow) + 1e-9)))
-    if not feasible:
+    if not feasible and not s1_ok:
+        out["note"] = ("no part reaches its limit within the horizon this model integrates, but the machine is not shown "
+                       "to settle below them (%s): continuous operation is NOT established at this point."
+                       % (times.get("s2_note") or "no equilibrium found"))
+    elif not feasible:
         out["note"] = ("no part reaches its limit at this point: the machine "
                        "settles below every one of them, so the pull may last "
                        "as long as the application wants it to (this point is "

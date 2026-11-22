@@ -9,6 +9,7 @@ export const CARD_H = 96;
 export const COL_GAP = 400;            // card left edge to the next column's card left edge
 export const ROW_GAP = 180;
 export const PAIR_GAP = 26;            // the middle segments of connectors between one pair of cards
+export const MAX_PERMUTED = 6;         // the connectors of one pair tried in every order up to this many (6! = 720)
 export const LABEL_STEP = 44;          // the labels of connectors between one pair of cards, along their middle segments
 export const CHIP_MAX_W = 180;         // a label chip wraps at this width: two lines at most for every label of the schemes
 export type Side = 'left' | 'right' | 'top' | 'bottom';
@@ -17,21 +18,39 @@ export interface Placed { id: string; col: number; row: number; x: number; y: nu
 export interface Port { side: Side; frac: number; x: number; y: number; handle: string }
 export interface Routed { edge: SchemeEdge; source: Port; target: Port; centerX: number; centerY: number; labelX: number; labelY: number }
 
-/** Cluster coordinates into ranks: values closer than ``tol`` share a rank (old files carry x / y, not col / row). */
-function ranks(values: number[], tol: number): number[] {
+/** The rank of each value among the distinct values (old files carry x / y, not col / row): distinct x, distinct column. */
+function ranks(values: number[]): number[] {
   const sorted = [...new Set(values)].sort((a, b) => a - b);
-  const groups: number[] = [];
-  let last = -Infinity;
-  for (const v of sorted) { if (v - last > tol) groups.push(v); last = v; }
-  return values.map((v) => groups.filter((g) => g <= v + 1e-9).length - 1);
+  return values.map((v) => sorted.indexOf(v));
 }
 
-/** Every card's grid cell: ``col`` / ``row`` when every node has them, else derived from the old ``x`` / ``y``. */
+const hasCell = (n: SchemeNode) => Number.isInteger(n.col) && Number.isInteger(n.row);
+
+/** Every card's grid cell: its own ``col`` / ``row`` when it has them (always kept); an older node's ``x`` / ``y`` mapped by
+ *  rank per axis; a cell already taken moves the later card to the next free cell along its row (then the rows below). */
 export function placeNodes(nodes: readonly SchemeNode[]): Placed[] {
-  const grid = nodes.every((n) => Number.isInteger(n.col) && Number.isInteger(n.row));
-  const cols = grid ? nodes.map((n) => n.col as number) : ranks(nodes.map((n) => n.x ?? 0), 150);
-  const rows = grid ? nodes.map((n) => n.row as number) : ranks(nodes.map((n) => n.y ?? 0), 90);
-  return nodes.map((n, i) => ({ id: n.id, col: cols[i], row: rows[i], x: cols[i] * COL_GAP, y: rows[i] * ROW_GAP }));
+  const legacy = nodes.filter((n) => !hasCell(n));
+  const lc = ranks(legacy.map((n) => Number(n.x) || 0));
+  const lr = ranks(legacy.map((n) => Number(n.y) || 0));
+  const want = new Map<string, [number, number]>();
+  legacy.forEach((n, i) => want.set(n.id, [lc[i], lr[i]]));
+  const taken = new Set<string>();
+  const cell = new Map<string, [number, number]>();
+  const claim = (id: string, c: number, r: number) => {
+    let col = c; let row = r;
+    while (taken.has(`${col},${row}`)) {
+      col += 1;
+      if (col > c + nodes.length) { col = c; row += 1; }
+    }
+    taken.add(`${col},${row}`);
+    cell.set(id, [col, row]);
+  };
+  nodes.filter(hasCell).forEach((n) => claim(n.id, n.col as number, n.row as number));   // explicit cells first
+  legacy.forEach((n) => { const [c, r] = want.get(n.id)!; claim(n.id, c, r); });
+  return nodes.map((n) => {
+    const [col, row] = cell.get(n.id)!;
+    return { id: n.id, col, row, x: col * COL_GAP, y: row * ROW_GAP };
+  });
 }
 
 function sideOf(a: Placed, b: Placed): Side {
@@ -86,8 +105,10 @@ export function route(data: SchemeData): { placed: Placed[]; routed: Routed[] } 
   const out = new Map<number, Routed>();
   for (const group of pairIndex.values()) {
     // the order of the middle segments that keeps the pair's connectors from crossing each other (the first that works)
+    // (more connectors than MAX_PERMUTED: the order they come in, never a factorial search)
     let best: Routed[] | null = null;
-    for (const order of permutations(group.map((_, k) => k))) {
+    const identity = group.map((_, k) => k);
+    for (const order of group.length <= MAX_PERMUTED ? permutations(identity) : [identity]) {
       const rs = group.map((i, k) => make(i, order[k], group.length)).filter((r): r is Routed => !!r);
       if (!best) best = rs;
       if (!rs.some((a, x) => rs.some((b, y) => y > x && crosses(polyline(a), polyline(b))))) { best = rs; break; }
@@ -116,9 +137,12 @@ export function polyline(r: Routed): Array<[number, number]> {
   return [[s.x, s.y], [s.x, r.centerY], [t.x, r.centerY], [t.x, t.y]];
 }
 
-function permutations(xs: number[]): number[][] {
-  if (xs.length <= 1) return [xs];
-  return xs.flatMap((x, i) => permutations([...xs.slice(0, i), ...xs.slice(i + 1)]).map((p) => [x, ...p]));
+/** Every order of ``xs``, lazily (the first order that routes without crossings ends the search). */
+function* permutations(xs: number[]): Generator<number[]> {
+  if (xs.length <= 1) { yield xs; return; }
+  for (let i = 0; i < xs.length; i += 1) {
+    for (const p of permutations([...xs.slice(0, i), ...xs.slice(i + 1)])) yield [xs[i], ...p];
+  }
 }
 
 type Pt = [number, number];

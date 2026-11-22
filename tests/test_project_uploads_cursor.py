@@ -1,4 +1,5 @@
-"""The audit replay of the project stores reads only what was appended since its last read (Astra follow-up of #819)."""
+"""The audit replay of the project stores reads only what was appended since its last read, per store, streamed, and trusts its
+cursor only while the file continues what was read (Astra follow-ups of #819 / #823)."""
 from __future__ import annotations
 
 import json
@@ -22,36 +23,74 @@ def _line(eid: str, name: str = "a") -> bytes:
     return (json.dumps({"action": "x", "details": {"event_id": eid, "name": name}}, ensure_ascii=False) + "\r\n").encode("utf-8")
 
 
-def test_only_appended_bytes_are_read_and_ids_accumulate(audit):
+def ids(wanted, store_name="s.json"):
+    return PU._written_event_ids("proj1", store_name, set(wanted))
+
+
+def test_only_appended_bytes_are_read_and_only_the_wanted_ids_are_answered(audit):
     audit.write_bytes(_line("e1") + _line("e2"))
-    assert PU._written_event_ids("proj1") == {"e1", "e2"}
-    first = PU._CURSORS[str(audit)][1]
+    assert ids({"e1", "e9"}) == {"e1"}
+    first = PU._CURSORS[(str(audit), "s.json")][1]
     assert first == audit.stat().st_size
     with audit.open("ab") as fh:
         fh.write(_line("e3", "name with separator"))
-    assert PU._written_event_ids("proj1") == {"e1", "e2", "e3"}
-    assert PU._CURSORS[str(audit)][1] == audit.stat().st_size > first
+    assert ids({"e3"}) == {"e3"} and PU._CURSORS[(str(audit), "s.json")][1] == audit.stat().st_size
+    assert ids({"e1"}) == set()                                               # before the cursor: never re-read (by design)
+
+
+def test_each_store_has_its_own_cursor(audit):
+    audit.write_bytes(_line("m1"))
+    assert ids({"other"}, "contract.json") == set()                           # the contract store read past m1 ...
+    assert ids({"m1"}, "models.json") == {"m1"}                               # ... the model store still finds its own event
 
 
 def test_a_cut_last_line_is_ended_and_never_counts(audit):
     audit.write_bytes(_line("e1") + b'{"action": "x", "details": {"event_id": "e2", "na')
-    assert PU._written_event_ids("proj1") == {"e1"}
+    assert ids({"e1", "e2"}) == {"e1"}
     assert audit.read_bytes().endswith(b'"na\r\n')
     with audit.open("ab") as fh:
         fh.write(_line("e2"))
-    assert PU._written_event_ids("proj1") == {"e1", "e2"}
+    assert ids({"e2"}) == {"e2"}
+
+
+def test_a_truncated_and_regrown_file_with_the_same_inode_is_read_again(audit):
+    audit.write_bytes(_line("e1"))
+    assert ids({"e1"}) == {"e1"}
+    ino = audit.stat().st_ino
+    with audit.open("r+b") as fh:                                             # same inode, same length, other content
+        fh.truncate(0)
+        fh.write(_line("e2"))
+    assert audit.stat().st_ino == ino
+    assert ids({"e1", "e2"}) == {"e2"}                                        # the fingerprint changed: rescan from the start
+    with audit.open("r+b") as fh:                                             # regrown beyond the old offset
+        fh.truncate(0)
+        fh.write(_line("e5") + _line("e6") + _line("e7"))
+    assert ids({"e5", "e7"}) == {"e5", "e7"}
 
 
 def test_a_replaced_or_shrunk_file_is_read_again_from_the_start(audit, tmp_path):
     audit.write_bytes(_line("e1") + _line("e2"))
-    PU._written_event_ids("proj1")
+    ids({"e1"})
     new = tmp_path / "new.jsonl"
     new.write_bytes(_line("e9"))
     new.replace(audit)                                                        # another inode
-    assert PU._written_event_ids("proj1") == {"e9"}
-    audit.write_bytes(b"")                                                    # shrunk in place
-    assert PU._written_event_ids("proj1") == set()
+    assert ids({"e9"}) == {"e9"}
+    audit.write_bytes(b"")
+    assert ids({"e9"}) == set()
+
+
+def test_records_split_across_read_chunks_are_found(audit, monkeypatch):
+    monkeypatch.setattr(PU, "_CHUNK", 7)
+    audit.write_bytes(b"".join(_line(f"e{i}", "x" * i) for i in range(30)))
+    assert ids({f"e{i}" for i in range(30)}) == {f"e{i}" for i in range(30)}
+
+
+def test_the_cursor_keeps_no_ids(audit):
+    audit.write_bytes(b"".join(_line(f"e{i}") for i in range(1000)))
+    ids({"e5"})
+    dev_ino, offset, fp = PU._CURSORS[(str(audit), "s.json")]
+    assert isinstance(fp, bytes) and len(fp) <= PU._FP and offset == audit.stat().st_size
 
 
 def test_a_missing_file_has_no_ids(audit):
-    assert PU._written_event_ids("proj1") == set()
+    assert ids({"e1"}) == set()

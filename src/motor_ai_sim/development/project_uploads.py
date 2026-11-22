@@ -11,8 +11,9 @@ from __future__ import annotations
 
 import datetime
 import json
+import os
 import secrets
-from typing import Any
+from typing import Any, Optional
 
 from fastapi import HTTPException, Request
 
@@ -63,53 +64,86 @@ def _audit_path(project_id: str):
     return store.path_for(project_id) / "audit.jsonl"
 
 
-#: per audit file: (device, inode, offset read so far, event ids seen) - the replay reads only what was appended since
+#: per (audit file, store): (device, inode, offset read so far, fingerprint of the bytes just before it).  Only that - no ids
+#: are kept between calls.  Bounded: at most this many cursors per process (the oldest is dropped; it only costs a rescan).
 _CURSORS: dict = {}
 _CURSORS_MAX = 512
+_FP = 64                                    # bytes before the offset that prove the file still continues what was read
+_CHUNK = 1024 * 1024
 
 
-def _written_event_ids(project_id: str) -> set:
-    """The event ids of the complete, parsed records of ``audit.jsonl`` (call under its lock).  NON-DESTRUCTIVE (coordinator
-    2026-11-22): the file is never truncated or rewritten.  Bytes that are not UTF-8 are read as replacement characters and a line
-    that does not parse is skipped, so a torn line never counts as written and never raises.  When the file does not end with a
-    newline, one is appended (append-only), so the next record starts on its own line.
+def _written_event_ids(project_id: str, json_name: str = "", wanted: Optional[set] = None) -> set:
+    """Which of the ``wanted`` event ids already have a COMPLETE, parsed record in ``audit.jsonl`` (call under its lock).
 
-    STREAMED (Astra follow-up of #819): a cursor per file remembers how far it was read and which ids it held; a flush reads
-    only the bytes appended since, up to the last newline.  A file that shrank or was replaced (another inode) is read again
-    from the start."""
+    NON-DESTRUCTIVE (coordinator 2026-11-22): the file is never truncated or rewritten; bytes that are not UTF-8 read as
+    replacement characters and a line that does not parse is skipped (a torn line never counts and never raises; a complete
+    record that only lacks its newline counts); a file that does not end with a newline gets one appended, so the next record
+    starts on its own line.
+
+    STREAMED AND BOUNDED (Astra follow-ups of #819 / #823): each store keeps its own cursor on the file and reads only the bytes
+    appended since its last read, in chunks, looking only for its pending ids.  That is enough: a store's event is created
+    before its record can be appended, and the store's previous flush read only up to the size the file had then - so the
+    record lies after the cursor.  The cursor is trusted only while the file continues what was read: the same device / inode
+    (from the opened file), a size not below the offset, and the same bytes just before the offset; otherwise the file is read
+    again from the start."""
     path = _audit_path(project_id)
+    wanted = set(wanted or ())
+    key = (str(path), json_name)
     try:
-        st = path.stat()
+        fh = path.open("rb")
     except FileNotFoundError:
-        _CURSORS.pop(str(path), None)
+        _CURSORS.pop(key, None)
         return set()
-    key = str(path)
-    dev_ino = (st.st_dev, st.st_ino)
-    cur = _CURSORS.get(key)
-    if cur is None or cur[0] != dev_ino or cur[1] > st.st_size:
-        cur = (dev_ino, 0, set())
-    _dev, offset, ids = cur
-    with path.open("rb") as fh:
+    found: set = set()
+    with fh:
+        st = os.fstat(fh.fileno())
+        dev_ino = (st.st_dev, st.st_ino)
+        cur = _CURSORS.get(key)
+        offset = 0
+        if cur is not None and cur[0] == dev_ino and cur[1] <= st.st_size:
+            fh.seek(max(0, cur[1] - _FP))
+            if fh.read(min(_FP, cur[1])) == cur[2]:
+                offset = cur[1]                             # the file still continues what this store read
         fh.seek(offset)
-        tail = fh.read()
-    if tail and not tail.endswith(b"\n"):
-        with path.open("ab") as fh:                         # end the cut line (append-only); it stays as it is
-            fh.write(b"\r\n")
-        tail += b"\r\n"
-    end = tail.rfind(b"\n") + 1
+        pending = b""
+        pos = offset
+        while True:
+            block = fh.read(_CHUNK)
+            if not block:
+                break
+            data = pending + block
+            cut = data.rfind(b"\n") + 1
+            _scan(data[:cut], wanted, found)
+            pending = data[cut:]
+            pos += len(block)
+        end = pos - len(pending)
+    if pending:                                             # a last line without its newline: it counts if it is a complete record,
+        _scan(pending, wanted, found)                       # and is ended (append-only) either way - a torn one never parses
+        with path.open("ab") as out:
+            out.write(b"\r\n")
+        end = pos + 2
+    with path.open("rb") as again:
+        again.seek(max(0, end - _FP))
+        fp = again.read(min(_FP, end))
+    if len(_CURSORS) >= _CURSORS_MAX and key not in _CURSORS:
+        _CURSORS.pop(next(iter(_CURSORS)))
+    _CURSORS[key] = (dev_ino, end, fp)
+    return found
+
+
+def _scan(data: bytes, wanted: set, found: set) -> None:
     # split ONLY on "\n": str.splitlines() also breaks on U+0085 / U+2028 / U+2029, which a file name inside a JSON string may hold
-    for line in tail[:end].decode("utf-8", errors="replace").split("\n"):
+    for line in data.decode("utf-8", errors="replace").split("\n"):
+        if not line.strip() or (wanted and not any(w in line for w in wanted)):
+            continue
         try:
             rec = json.loads(line)
         except ValueError:
             continue
         details = rec.get("details") if isinstance(rec, dict) else None
-        if isinstance(details, dict) and details.get("event_id"):
-            ids.add(str(details["event_id"]))
-    if len(_CURSORS) >= _CURSORS_MAX and key not in _CURSORS:
-        _CURSORS.pop(next(iter(_CURSORS)))
-    _CURSORS[key] = (dev_ino, offset + end, ids)
-    return set(ids)
+        eid = str(details.get("event_id")) if isinstance(details, dict) and details.get("event_id") else ""
+        if eid and (not wanted or eid in wanted):
+            found.add(eid)
 
 
 def flush_events(project_id: str, json_name: str) -> None:
@@ -123,7 +157,7 @@ def flush_events(project_id: str, json_name: str) -> None:
     from motor_ai_sim import json_store
 
     def apply(doc: Any) -> None:
-        written = _written_event_ids(project_id)
+        written = _written_event_ids(project_id, json_name, {str(e.get("event_id")) for e in doc.get(PENDING) or []})
         for event in list(doc.get(PENDING) or []):
             eid = str(event.get("event_id"))
             if eid not in written:

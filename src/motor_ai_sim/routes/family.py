@@ -3120,6 +3120,23 @@ def retired_dies(_w: dict = Depends(require_catalog_write)):
                      for k, v in sorted(data.items())]}
 
 
+@router.get("/empty-dies")
+def empty_dies(_w: dict = Depends(require_catalog_write)):
+    """The ACTIVE shared dies with no configuration at all: hidden from the ordinary tree (an emptied die is not a catalogue
+    entry), but still present and still reserving their name, so an admin can find them to fill, rename or retire them
+    (Astra review 2026-11-21, #768).  The tree and the thumbnails keep their filtered answer for everybody."""
+    _require_verified_admin(_w)
+    out = []
+    for e in _iter_die_entries():
+        if e.get("layer") != _WS.LAYER_SHARED:
+            continue
+        dd = Path(e["dir"])
+        if any(cf.name != "die.yaml" for cf in dd.glob("*.yaml")):
+            continue
+        out.append({"die": e["name"]})
+    return {"dies": sorted(out, key=lambda r: r["die"])}
+
+
 # ── configuration ────────────────────────────────────────────────────────────
 
 def _autolink_new_config(die: str, cfg: str, w: Optional[dict] = None, copied_from: Optional[str] = None,

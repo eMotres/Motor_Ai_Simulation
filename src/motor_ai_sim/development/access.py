@@ -32,6 +32,35 @@ def sees_prices(user: dict | None, project: dict) -> bool:
     return False
 
 
+def can_see_message(user: dict | None, project: dict, message: dict) -> bool:
+    """A project message marked ``price_restricted`` (owner 2026-11-22) is seen by whoever may see the prices - admin, project
+    owners, members with ``sees_prices`` - and by its author; nobody else (not its text, not its existence).  A global engineer who
+    is no member does not see it, exactly as for the quote."""
+    if not isinstance(message, dict) or not message.get("price_restricted"):
+        return True
+    if not user:
+        return False
+    me = str(user.get("email") or "").strip().lower()
+    if me and str(message.get("author_email") or "").strip().lower() == me:
+        return True
+    return sees_prices(user, project)
+
+
+def visible_messages(user: dict | None, project: dict, messages: list) -> list:
+    return [m for m in messages if can_see_message(user, project, m)]
+
+
+def may_restrict_messages(user: dict | None, project: dict) -> bool:
+    """Who may mark a message price-restricted: admin, global engineer, project owner."""
+    if not user:
+        return False
+    if str(user.get("role") or "").lower() in ("admin", "engineer"):
+        return True
+    me = str(user.get("email") or "").strip().lower()
+    return any(isinstance(m, dict) and str(m.get("email") or "").strip().lower() == me and str(m.get("role") or "").lower() == "owner"
+               for m in project.get("members", []))
+
+
 def can_view(user: dict, project: dict) -> bool:
     return is_engineer(user) or membership(str(user.get("email") or ""), project) is not None
 

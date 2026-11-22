@@ -31,6 +31,7 @@ from motor_ai_sim.digest import store as DS
 #: Capability names (see module docstring).
 INTERNAL = "internal"
 COSTS = "costs"
+PRICES = "prices"          # a price-restricted project message: only recipients who see the prices (owner 2026-11-22)
 
 EXCERPT = 90
 
@@ -320,7 +321,8 @@ def collect_project(project: dict, start: float, end: float, *,
         text = excerpt(m.get("text"))
         mid = str(m.get("id") or "")
         items.append(Item("message", ts, f"New message from {who_en}: {text}", f"{who_zh} 的新留言：{text}",
-                          RP.project_path(pid, "messages", item=mid) or RP.project_path(pid, "messages"), frozenset(), key=f"msg:{mid}"))
+                          RP.project_path(pid, "messages", item=mid) or RP.project_path(pid, "messages"),
+                          frozenset({PRICES}) if m.get("price_restricted") else frozenset(), key=f"msg:{mid}"))
     # new computed points of the project's motors
     for link in links.values():
         die, config = str(link.get("die") or ""), str(link.get("config") or "")

@@ -53,11 +53,14 @@ class Group:
     members: list = field(default_factory=list)       # [(email, role)]
     active: bool = True
     path: Optional[str] = None      # the app path of the group's own page
+    #: project groups: the members who see the prices (owners and ``sees_prices`` members); a restricted message needs it
+    price_emails: frozenset = field(default_factory=frozenset)
 
-    def caps(self, role: str) -> frozenset:
-        """What a member of this role may see (see collect.INTERNAL / COSTS)."""
+    def caps(self, role: str, email: str = "") -> frozenset:
+        """What a member of this role may see (see collect.INTERNAL / COSTS / PRICES; the last is by member, so it needs ``email``)."""
         if self.kind == "project":
-            return frozenset({C.INTERNAL}) if role in ("owner", "engineer") else frozenset()
+            base = frozenset({C.INTERNAL}) if role in ("owner", "engineer") else frozenset()
+            return base | {C.PRICES} if str(email or "").strip().lower() in self.price_emails else base
         if role in ("owner", "engineer"):
             return frozenset({C.INTERNAL, C.COSTS})
         return frozenset({C.COSTS}) if self.record.get("share_costs_with_oem") else frozenset()
@@ -88,8 +91,10 @@ def _members(record: dict) -> list:
 def project_group(project: dict) -> Group:
     pid = str(project.get("id") or "")
     title = safe_text(project.get("title"), pid)
+    prices = frozenset(str(m.get("email") or "").strip().lower() for m in project.get("members") or []
+                       if isinstance(m, dict) and (str(m.get("role") or "") == "owner" or m.get("sees_prices") is True))
     return Group(DS.project_scope(pid), "project", project, title, title, _members(project),
-                 str(project.get("status") or "spec") != "closed", RP.project_path(pid))
+                 str(project.get("status") or "spec") != "closed", RP.project_path(pid), price_emails=prices)
 
 
 def production_group(production: dict) -> Group:
@@ -196,7 +201,7 @@ def common_caps(group: Group, recipients: list[dict]) -> frozenset:
     """The capabilities EVERY recipient has - the text may contain only what these allow."""
     caps: Optional[frozenset] = None
     for r in recipients:
-        c = group.caps(r["role"])
+        c = group.caps(r["role"], r.get("email") or "")
         caps = c if caps is None else caps & c
     return caps if caps is not None else frozenset()
 

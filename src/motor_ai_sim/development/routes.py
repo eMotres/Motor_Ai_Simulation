@@ -178,7 +178,7 @@ def _summary(project: dict, user: dict) -> dict:
 def _with_unread(summary: dict, user: dict, started) -> dict:
     """Add ``unread_messages``: the project-thread messages this user has not read yet."""
     try:
-        summary["unread_messages"] = len(unread.unread_ids(str(summary.get("id") or ""), _email(user), started=started))
+        summary["unread_messages"] = len(unread.unread_ids(str(summary.get("id") or ""), _email(user), started=started, user=user))
     except Exception:                                       # noqa: BLE001 - a badge never breaks the list
         log.warning("unread count failed for %s", summary.get("id"), exc_info=True)
         summary["unread_messages"] = 0
@@ -1048,12 +1048,20 @@ def _read_jsonl(project_id: str, name: str) -> list[dict]:
     return out
 
 
+def _visible_events(user: dict, project: dict, rows: list) -> list:
+    """The thread rows ``user`` may see: price-restricted messages only for who sees prices, and the resolution events that belong
+    to a hidden message go with it (their existence would show it)."""
+    hidden = {str(m.get("id")) for m in rows
+              if m.get("kind") != "resolution" and not access.can_see_message(user, project, m)}
+    return [m for m in rows if str(m.get("id")) not in hidden and str(m.get("resolves_id") or "") not in hidden]
+
+
 @router.get("/{project_id}/thread")
 def get_thread(request: Request, project_id: str):
-    user, _, _ = _readable_project(request, project_id)
-    messages = _read_jsonl(project_id, "thread.jsonl")
+    user, project, _ = _readable_project(request, project_id)
+    messages = _visible_events(user, project, _read_jsonl(project_id, "thread.jsonl"))
     store.append_audit(project_id, _email(user), "read", "thread", "", {})
-    unread_set = set(unread.unread_ids(project_id, _email(user), messages=unread.thread_messages(project_id)))
+    unread_set = set(unread.unread_ids(project_id, _email(user), messages=unread.thread_messages(project_id), user=user))
     resolutions = {}
     for event in messages:
         if event.get("kind") == "resolution" and event.get("resolves_id"):
@@ -1086,15 +1094,15 @@ async def mark_thread_read(request: Request, project_id: str):
     if up_to is not None and not isinstance(up_to, str):
         raise HTTPException(status_code=422, detail="up_to must be a message id")
     try:
-        last = unread.mark_read(project_id, _email(user), up_to)
+        last = unread.mark_read(project_id, _email(user), up_to, user=user)
     except KeyError:
         raise HTTPException(status_code=404, detail="Thread message not found")
-    return {"last_read_id": last, "unread": len(unread.unread_ids(project_id, _email(user)))}
+    return {"last_read_id": last, "unread": len(unread.unread_ids(project_id, _email(user), user=user))}
 
 
 @router.post("/{project_id}/thread")
 async def post_thread(request: Request, project_id: str):
-    user, _, _ = _readable_project(request, project_id)
+    user, project, _ = _readable_project(request, project_id)
     body = await request.json()
     text = str(body.get("text") or "").strip() if isinstance(body, dict) else ""
     if not text or len(text) > 10000:
@@ -1111,11 +1119,30 @@ async def post_thread(request: Request, project_id: str):
         raise HTTPException(status_code=422, detail="version must be a positive integer")
     if revision is not None and (isinstance(revision, bool) or not isinstance(revision, int) or revision < 0):
         raise HTTPException(status_code=422, detail="revision must be a non-negative integer")
+    restricted = body.get("price_restricted", False)
+    if not isinstance(restricted, bool):
+        raise HTTPException(status_code=422, detail="price_restricted must be true or false")
+    reply_to = body.get("reply_to")
+    if reply_to is not None:
+        if not isinstance(reply_to, str) or len(reply_to) > 128:
+            raise HTTPException(status_code=422, detail="reply_to must be a message id")
+        parent = next((m for m in unread.thread_messages(project_id) if m.get("id") == reply_to), None)
+        if parent is None or not access.can_see_message(user, project, parent):
+            raise HTTPException(status_code=404, detail="Thread message not found")
+        restricted = restricted or bool(parent.get("price_restricted"))      # a reply inside a restricted message stays restricted
+    if restricted and not (access.may_restrict_messages(user, project)
+                           or (reply_to is not None and parent.get("price_restricted"))):
+        raise HTTPException(status_code=403, detail="Only the project owner or MOTRES staff can mark a message price-restricted")
     message = {"id": __import__("secrets").token_urlsafe(12), "author_email": _email(user),
                "created_at": datetime.now(timezone.utc).isoformat(), "text": text, "field_ref": field_ref,
                "row_id": row_id, "version": version, "revision": revision}
+    if reply_to is not None:
+        message["reply_to"] = reply_to
+    if restricted:
+        message["price_restricted"] = True                  # absent = not restricted: stored messages and payloads stay as they were
     store.append_jsonl(project_id, "thread.jsonl", message)
-    store.append_audit(project_id, _email(user), "post", "thread_message", message["id"], {"field_ref": field_ref})
+    store.append_audit(project_id, _email(user), "post", "thread_message", message["id"],
+                       {"field_ref": field_ref, **({"price_restricted": True} if restricted else {})})
     notify_project_members(project_id, message)
     return _customer_spec(message)
 
@@ -1128,7 +1155,7 @@ async def resolve_thread_message(request: Request, project_id: str, message_id: 
     body = await request.json()
     if not isinstance(body, dict) or not isinstance(body.get("resolved"), bool):
         raise HTTPException(status_code=422, detail="resolved boolean required")
-    messages = _read_jsonl(project_id, "thread.jsonl")
+    messages = _visible_events(user, project, _read_jsonl(project_id, "thread.jsonl"))
     target = next((m for m in messages if m.get("id") == message_id and m.get("kind") != "resolution"), None)
     if target is None:
         raise HTTPException(status_code=404, detail="Thread message not found")

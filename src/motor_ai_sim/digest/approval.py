@@ -132,7 +132,7 @@ def _send(draft_id: str, who: str, content_hash: str, *, deliver: Callable, now:
         if cur is None:
             if not any(s["email"] == r["email"] for s in skipped):
                 skipped.append({"email": r["email"], "reason": "no_longer_a_recipient"})
-        elif not needed <= group.caps(cur["role"]):
+        elif not needed <= group.caps(cur["role"], cur["email"]):
             skipped.append({"email": r["email"], "reason": "access_changed"})
         else:
             to_send.append(mailing.Recipient(cur["email"], cur["name"], cur["lang"]))

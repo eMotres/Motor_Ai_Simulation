@@ -18,7 +18,7 @@ export default function CostNextUnit({ estimate, computed, t, today, who, onChan
       <Typography sx={{ fontSize: 14, fontWeight: 600, color: 'var(--text-0)' }}>{t('costEstimate.nextUnit.title')}</Typography>
       <HelpTip title={t('costEstimate.nextUnit.tip')} />
     </Stack>
-    <Box sx={{ display: 'grid', gap: 2, gridTemplateColumns: { xs: '1fr', md: '1fr 1fr 1fr 1fr' } }}>
+    <Box sx={{ display: 'grid', gap: 2, gridTemplateColumns: { xs: '1fr', md: '1fr 1fr 1fr 1fr 1fr' } }}>
       <Stack spacing={0.4}>
         <Typography sx={{ fontSize: 12, color: 'var(--text-2)' }}>{t('costEstimate.nextUnit.manufacturing')}</Typography>
         <Typography data-testid="next-unit-manufacturing" sx={{ fontSize: 13.5 }}>{eur(res?.manufacturing)}</Typography>
@@ -33,6 +33,20 @@ export default function CostNextUnit({ estimate, computed, t, today, who, onChan
         {nu.shipping.hint && <Typography sx={{ fontSize: 12, color: 'warning.main' }}>{nu.shipping.hint}</Typography>}
       </Stack>
       <Stack spacing={0.6}>
+        <Typography sx={{ fontSize: 12, color: 'var(--text-2)' }}>{t('costEstimate.nextUnit.parcels')}</Typography>
+        <TextField size="small" type="number" value={nu.parcels ?? ''} placeholder="1"
+          onChange={(e) => onChange(setNextUnit(estimate, { parcels: e.target.value === '' ? null : Math.max(1, Math.min(50, Math.round(Number(e.target.value)))) }))}
+          slotProps={{ htmlInput: { 'aria-label': t('costEstimate.nextUnit.parcels'), min: 1, max: 50 } }} />
+        <Stack direction="row" spacing={0.5} data-testid="next-unit-box">
+          {[0, 1, 2].map((i) => <TextField key={i} size="small" type="number" value={nu.box_cm?.[i] ?? ''}
+            onChange={(e) => {
+              const cur = [...(nu.box_cm ?? [0, 0, 0])]; cur[i] = Number(e.target.value);
+              onChange(setNextUnit(estimate, { box_cm: cur.every((v) => v > 0) ? cur : cur.every((v) => !v) ? null : cur }));
+            }}
+            slotProps={{ htmlInput: { 'aria-label': `${t('costEstimate.nextUnit.box')} ${i + 1}`, min: 1, max: 400 } }} />)}
+        </Stack>
+      </Stack>
+      <Stack spacing={0.6}>
         <Tooltip title={t('costEstimate.nextUnit.priceTip', { derived: eur(res?.derived) })}><Typography sx={{ fontSize: 12, color: 'var(--text-2)' }}>{t('costEstimate.nextUnit.price')}</Typography></Tooltip>
         <TextField size="small" type="number" value={nu.price ?? ''} placeholder={res?.derived != null ? String(res.derived) : 'EUR'}
           onChange={(e) => onChange(setNextUnit(estimate, { price: num(e.target.value) }))} slotProps={{ htmlInput: { 'aria-label': t('costEstimate.nextUnit.price'), min: 0 } }} />
@@ -45,6 +59,7 @@ export default function CostNextUnit({ estimate, computed, t, today, who, onChan
     </Box>
     <Typography data-testid="next-unit-total" sx={{ fontSize: 13.5, fontWeight: 600 }}>
       {res?.available ? `${t('costEstimate.nextUnit.total')}: ${eur(res.total)}` : (res?.reason || t('costEstimate.nextUnit.unavailable'))}
+      {res?.available && res.weeks == null && (res.weeks_missing?.length ?? 0) > 0 ? ` · ${t('costEstimate.nextUnit.weeksMissing', { parts: res.weeks_missing!.join(', ') })}` : ''}
     </Typography>
   </Stack>;
 }

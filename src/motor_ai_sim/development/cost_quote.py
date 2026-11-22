@@ -33,6 +33,7 @@ ITERATION_KEYS = ("index", "motors", "bench", "lines", "price", "weeks")
 LINE_KEYS = ("price", "weeks")
 RATE_KEYS = ("date", "per_eur")
 CURRENCY = "EUR"
+TERMS = 2          # snapshot version: 2 = the DAP exclusion sentence follows the shipping amounts, not the next unit
 
 
 class QuoteError(ValueError):
@@ -104,8 +105,10 @@ def exchange_rates(fx: Optional[dict], schema: dict) -> Optional[dict]:
     return {"date": str(ecb.get("date") or "") or None, "per_eur": rates}
 
 
-def build_quote(estimate: dict, schema: dict, shared_on: str) -> dict:
-    """The customer payload of a frozen ``estimate`` (see the module doc).  ``QuoteError`` when a line has no amount."""
+def build_quote(estimate: dict, schema: dict, shared_on: str, terms: int = 1) -> dict:
+    """The customer payload of a frozen ``estimate`` (see the module doc).  ``QuoteError`` when a line has no amount.  ``terms`` is the
+    snapshot's version (``TERMS`` for a snapshot written now, 1 for one frozen before it existed): from version 2 on the quote says
+    that duties and import VAT are not included whenever it carries a shipping amount, next unit or not."""
     missing = missing_lines(estimate)
     if missing:
         raise QuoteError("%d line(s) without an amount" % len(missing))
@@ -129,6 +132,8 @@ def build_quote(estimate: dict, schema: dict, shared_on: str) -> dict:
     if nu["available"] and nu["total"] is not None:
         next_unit = {"price": _whole(_dec(nu["total"]) * k), "weeks": _weeks(nu["weeks"])}
         assert tuple(next_unit) == NEXT_UNIT_KEYS
+    if (nu["available"] and nu["total"] is not None) or (terms >= 2 and any(
+            ((it.get("lines") or {}).get("shipping") or {}).get("amount") for it in iterations)):
         excluded = str(((schema.get("shipping") or {}).get("excluded") or {}).get("en") or "") or None
     quote = {"currency": CURRENCY, "iterations": out_iters, "total_price": total,
              "total_weeks": _weeks(sum(float(it["weeks"] or 0) for it in out_iters)),

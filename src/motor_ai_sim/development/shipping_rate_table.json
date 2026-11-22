@@ -19,6 +19,7 @@
   ],
   "base_cny_per_kg": 116.922551,
   "min_charge_cny": 900,
+  "calibration": {"zone": "SA", "country": "AR", "chargeable_kg": 150.0, "tolerance_pct": 25},
   "zones": {
     "SA": {"name": {"en": "South America", "zh-CN": "南美"}, "factor": 1.0, "transit_days": 16, "basis": "calibrated",
            "countries": ["AR", "BO", "BR", "CL", "CO", "EC", "GY", "PY", "PE", "SR", "UY", "VE"]},

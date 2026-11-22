@@ -140,7 +140,7 @@ export const developmentApi = {
   snapshotCostEstimate: (id: string, revision: number, note: string, display?: string) => call<{ snapshot: CostSnapshot }>('POST', `${ce(id)}/snapshot`, { revision, note, display_currency: display }),
   costEstimateSnapshots: async (id: string) => (await call<{ snapshots: CostSnapshot[] }>('GET', `${ce(id)}/snapshots`)).snapshots ?? [],
   /** ADMIN ONLY (owner 2026-11-03): freeze the current revision and share it with the project's members as their quote. */
-  shareCostEstimate: (id: string, revision: number) => call<{ shared: SharedQuoteMark | null; snapshot: CostSnapshot }>('POST', `${ce(id)}/share`, { revision }),
+  shareCostEstimate: (id: string, revision: number, ackEstimatedShipping = false) => call<{ shared: SharedQuoteMark | null; snapshot: CostSnapshot }>('POST', `${ce(id)}/share`, ackEstimatedShipping ? { revision, ack_estimated_shipping: true } : { revision }),
   unshareCostEstimate: (id: string) => call<{ shared: null }>('DELETE', `${ce(id)}/share`),
   /** The shared quote of a project: its members and admins only (404 for anybody else, and while nothing is shared). */
   projectQuote: (id: string) => call<ProjectQuote>('GET', `${p(id)}/quote`),

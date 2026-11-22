@@ -1267,6 +1267,7 @@
       "statusTip": "The project's members see this frozen copy in the Quote tab. Later edits stay hidden until you share again.",
       "shareTip": "Freeze the current revision and show it to the project's members as their quote.",
       "confirm": "The project's members will see revision {rev} as their quote: prices with the contingency folded in, weeks, delivery and payment terms. Notes and sources stay internal.",
+      "ackShipping": "I confirm the shipping amounts that rest on the estimated rate table (outside its calibration point).",
       "notShared": "Not shared with the customer"
     },
     "paymentTerms": "Payment terms",
@@ -1331,6 +1332,9 @@
       "testing": "With testing",
       "shipping": "Shipping, one motor (EUR)",
       "auto": "auto",
+      "parcels": "Parcels (empty = one)",
+      "box": "Box, cm (empty = from weight)",
+      "weeksMissing": "Duration unknown: no weeks for {parts}",
       "price": "Price (EUR)",
       "priceTip": "Derived: {derived}. Typed here, it replaces the derived price.",
       "weeks": "Weeks",

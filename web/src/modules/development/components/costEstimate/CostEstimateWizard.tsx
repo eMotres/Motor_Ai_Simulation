@@ -5,7 +5,7 @@
  *  both edit the same estimate; every line has a duration in weeks and the iteration / project durations are shown. */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  Alert, Box, Button, ButtonBase, ButtonGroup, Chip, CircularProgress, Collapse, Dialog, DialogActions, DialogContent, DialogTitle, MenuItem, Select,
+  Alert, Box, Button, ButtonBase, ButtonGroup, Chip, CircularProgress, Collapse, Dialog, DialogActions, DialogContent, DialogTitle, FormControlLabel, MenuItem, Select,
   Stack, Switch, Table, TableBody, TableCell, TableHead, TableRow, TextField, Tooltip, Typography, useMediaQuery,
 } from '@mui/material';
 import CostEstimateTable from './CostEstimateTable';
@@ -92,6 +92,8 @@ export default function CostEstimateWizard({ projectId, language, t, who, onShar
   const [snapNote, setSnapNote] = useState('');
   const [snapshots, setSnapshots] = useState<CostSnapshot[]>([]);
   const [shareOpen, setShareOpen] = useState(false);
+  const [ackShip, setAckShip] = useState(false);       // the admin's explicit word that shipping rests on the estimated rate table
+  const [needAck, setNeedAck] = useState(false);
   const edits = useRef(0);
   const timer = useRef<number | null>(null);
   const latest = useRef<CostEstimate | null>(null);
@@ -256,10 +258,14 @@ export default function CostEstimateWizard({ projectId, language, t, who, onShar
     try {
       // the revision the server holds now: the save above sets `synced` at once (the render that updates `latest` may not have run)
       const revision = Math.max(synced.current?.revision ?? 0, (latest.current ?? estimate).revision);
-      const r = await developmentApi.shareCostEstimate(projectId, revision);
-      setAnswer((a) => (a ? { ...a, shared: r.shared } : a)); setShareOpen(false); onShared?.(!!r.shared);
+      const r = await developmentApi.shareCostEstimate(projectId, revision, ackShip);
+      setAnswer((a) => (a ? { ...a, shared: r.shared } : a)); setShareOpen(false); setNeedAck(false); setAckShip(false); onShared?.(!!r.shared);
       setSnapshots(await developmentApi.costEstimateSnapshots(projectId));
-    } catch (e) { setError(e instanceof Error ? e.message : String(e)); setShareOpen(false); }
+    } catch (e) {
+      const code = (e as { body?: { detail?: { code?: string } } } | null)?.body?.detail?.code;
+      if (code === 'shipping_estimate_unacknowledged') { setNeedAck(true); return; }      // keep the dialog open: the admin confirms the estimate
+      setError(e instanceof Error ? e.message : String(e)); setShareOpen(false);
+    }
     finally { setBusy(false); }
   };
   const unshare = async () => {
@@ -454,8 +460,10 @@ export default function CostEstimateWizard({ projectId, language, t, who, onShar
     </Box>}
     <Dialog open={shareOpen} onClose={() => !busy && setShareOpen(false)} fullWidth maxWidth="sm">
       <DialogTitle>{t('costEstimate.share.share')}</DialogTitle>
-      <DialogContent><Typography sx={{ fontSize: 13.5, color: 'var(--text-1)' }}>{t('costEstimate.share.confirm', { rev: estimate.revision })}</Typography></DialogContent>
-      <DialogActions><Button disabled={busy} onClick={() => setShareOpen(false)}>{t('cancel')}</Button><Button variant="contained" color="success" disabled={busy || saving} onClick={() => void share()}>{shared ? t('costEstimate.share.again') : t('costEstimate.share.share')}</Button></DialogActions>
+      <DialogContent><Typography sx={{ fontSize: 13.5, color: 'var(--text-1)' }}>{t('costEstimate.share.confirm', { rev: estimate.revision })}</Typography>
+        {needAck && <FormControlLabel sx={{ mt: 1 }} control={<Switch checked={ackShip} onChange={(e) => setAckShip(e.target.checked)} />} label={<Typography sx={{ fontSize: 13, color: 'warning.main' }}>{t('costEstimate.share.ackShipping')}</Typography>} />}
+      </DialogContent>
+      <DialogActions><Button disabled={busy} onClick={() => setShareOpen(false)}>{t('cancel')}</Button><Button variant="contained" color="success" disabled={busy || saving || (needAck && !ackShip)} onClick={() => void share()}>{shared ? t('costEstimate.share.again') : t('costEstimate.share.share')}</Button></DialogActions>
     </Dialog>
     <Dialog open={snapOpen} onClose={() => !busy && setSnapOpen(false)} fullWidth maxWidth="sm">
       <DialogTitle>{t('costEstimate.snapshot')}</DialogTitle>

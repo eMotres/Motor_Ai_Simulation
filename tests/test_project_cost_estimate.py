@@ -1244,9 +1244,9 @@ def test_put_recomputes_the_automatic_dhl_line_when_the_motors_change(client, mo
     est = client.get(url).json()["estimate"]
     est["dhl_lanes"] = []
     kept = client.put(url, json=est).json()["estimate"]["iterations"][0]["lines"]["shipping"]
-    # no real quote any more: the rate table takes over (basis said, an estimate-free calibrated zone), still automatic
+    # no real quote any more: the rate table takes over (basis said; the zone is the calibrated one but the weight is far from the quote: extrapolated), still automatic
     assert kept["source"] == "dhl" and kept["hint"] == "" and kept["source_ref"]["dhl"]["basis"] == "rate_table"
-    assert kept["source_ref"]["dhl"]["zone"] == "SA" and kept["source_ref"]["dhl"]["zone_basis"] == "calibrated"
+    assert kept["source_ref"]["dhl"]["zone"] == "SA" and kept["source_ref"]["dhl"]["zone_basis"] == "extrapolated"
 
     # the preview (the web updates the cell before the save) gives the same numbers without saving anything
     est = client.get(url).json()["estimate"]

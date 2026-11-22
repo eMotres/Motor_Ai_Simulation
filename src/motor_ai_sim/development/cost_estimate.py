@@ -188,7 +188,8 @@ def default_next_unit(currency: str = "EUR") -> dict:
     """The price of the NEXT unit after the first (owner 2026-11-22): a repeat order of the same motor - no tooling, no development:
     one motor's manufacturing + testing when ticked + shipping of ONE motor.  ``price`` / ``weeks`` are the admin's own overrides of
     the derived total / duration; ``shipping`` is a line like the iterations' (automatic ``dhl`` or typed)."""
-    return {"include_testing": False, "price": None, "weeks": None, "shipping": blank_line(currency), "note": ""}
+    return {"include_testing": False, "price": None, "weeks": None, "shipping": blank_line(currency), "note": "",
+            "parcels": None, "box_cm": None}
 
 
 def default_estimate(schema: dict, project_id: str, *, linked_motors: Iterable[dict] = ()) -> dict:
@@ -302,7 +303,9 @@ def normalize_next_unit(raw: Any, schema: dict, legacy: bool = False) -> dict:
             "weeks": _weeks(raw.get("weeks"), "next_unit.weeks", schema, "override_max"),
             "shipping": normalize_line(raw.get("shipping") if raw.get("shipping") is not None else {}, "shipping", 1, schema,
                                        "next_unit shipping", legacy),
-            "note": _text(raw.get("note"))}
+            "note": _text(raw.get("note")),
+            "parcels": (None if raw.get("parcels") in (None, "") else _int(raw.get("parcels"), "next_unit.parcels", 1, 50)),
+            "box_cm": _box(raw.get("box_cm"))}
 
 
 _COUNTRY = re.compile(r"[A-Z]{2}")
@@ -991,16 +994,20 @@ def next_unit_of(estimate: dict, schema: dict) -> dict:
     missing: nothing is invented."""
     nu = estimate.get("next_unit") or default_next_unit(schema["line_currency"])
     cur = schema["line_currency"]
-    its = [it for it in estimate.get("iterations") or [] if (it.get("lines") or {}).get("manufacturing", {}).get("amount") is not None]
     out: Dict[str, Any] = {"available": False, "reason": "", "basis_iteration": None, "include_testing": bool(nu.get("include_testing")),
                            "manufacturing": None, "testing": None, "shipping": None, "derived": None, "total": None,
-                           "weeks": None, "weeks_parts": {}, "overridden": nu.get("price") is not None, "currency": cur}
-    if not its:
-        out["reason"] = "no iteration has a manufacturing amount"
+                           "weeks": None, "weeks_parts": {}, "weeks_missing": [], "overridden": nu.get("price") is not None,
+                           "currency": cur, "shipping_stale": False}
+    iterations = estimate.get("iterations") or []
+    if not iterations:
+        out["reason"] = "the estimate has no iteration"
         return out
-    it = its[-1]
+    it = iterations[-1]                               # the ACTUAL last iteration: an earlier one is never a silent fallback
     out["basis_iteration"] = it["index"]
     man = it["lines"]["manufacturing"]
+    if man.get("amount") is None:
+        out["reason"] = "iteration %s has no manufacturing amount" % it["index"]
+        return out
     if man.get("currency") != cur:
         out["reason"] = "the manufacturing amount is not in %s" % cur
         return out
@@ -1016,19 +1023,58 @@ def next_unit_of(estimate: dict, schema: dict) -> dict:
         parts.append(out["testing"])
         weeks_parts["testing"] = test.get("weeks")
     ship = nu.get("shipping") or {}
-    if ship.get("amount") is not None and ship.get("currency") == cur:
+    stale = next_unit_shipping_stale(estimate, ship)
+    out["shipping_stale"] = bool(stale)
+    if ship.get("amount") is not None and ship.get("currency") == cur and not stale:
         out["shipping"] = float(ship["amount"])
         parts.append(out["shipping"])
         weeks_parts["shipping"] = ship.get("weeks")
     elif nu.get("price") is None:
-        out["reason"] = ship.get("hint") or "the next unit's shipping is not filled"
+        out["reason"] = stale or ship.get("hint") or "the next unit's shipping is not filled"
         return out
+    else:
+        weeks_parts["shipping"] = None
     out["derived"] = round(sum(parts), 2) if out["shipping"] is not None else None
     out["total"] = round(float(nu["price"]), 2) if nu.get("price") is not None else out["derived"]
-    known = [float(v) for v in weeks_parts.values() if v is not None]
     out["weeks_parts"] = {k: (None if v is None else float(v)) for k, v in weeks_parts.items()}
-    out["weeks"] = float(nu["weeks"]) if nu.get("weeks") is not None else (round(sum(known), 2) if known else None)
+    out["weeks_missing"] = [k for k, v in weeks_parts.items() if v is None]
+    if nu.get("weeks") is not None:
+        out["weeks"] = float(nu["weeks"])
+    elif not out["weeks_missing"]:                    # unknown is not zero: one missing stage makes the duration unknown
+        out["weeks"] = round(sum(float(v) for v in weeks_parts.values()), 2)
     out["available"] = out["total"] is not None
+    return out
+
+
+def next_unit_shipping_stale(estimate: dict, ship: dict) -> str:
+    """Why an AUTOMATIC next-unit shipping line must not be quoted ("" = it may): its last refresh failed (it carries a ``hint``),
+    or it was computed for another destination / origin than the settings say now.  A manual line is the admin's own number."""
+    if not ship or ship.get("source") != "dhl" or ship.get("amount") is None:
+        return ""
+    if ship.get("hint"):
+        return "the next unit's shipping is out of date: %s" % ship["hint"]
+    ref = (ship.get("source_ref") or {}).get("dhl") or {}
+    settings = estimate.get("settings") or {}
+    country = str((settings.get("ship_to") or {}).get("country") or "").upper()
+    if not country or not str(ref.get("to") or "").upper().startswith(country):
+        return "the next unit's shipping was calculated for another destination: refresh it"
+    if str(ref.get("from") or "").strip().lower() != str(settings.get("ship_from") or "").strip().lower():
+        return "the next unit's shipping was calculated from another origin: refresh it"
+    return ""
+
+
+def estimated_shipping_lines(estimate: dict) -> List[dict]:
+    """The automatic shipping lines whose number rests on the rate table outside its calibration point
+    (``[{iteration, zone, basis}]``, ``iteration`` 0 = the next unit): sharing them needs the admin's explicit word."""
+    out: List[dict] = []
+    lines = [(it.get("index"), (it.get("lines") or {}).get("shipping")) for it in estimate.get("iterations") or []]
+    lines.append((0, (estimate.get("next_unit") or {}).get("shipping")))
+    for index, line in lines:
+        if not line or line.get("source") != "dhl" or line.get("amount") is None:
+            continue
+        ref = (line.get("source_ref") or {}).get("dhl") or {}
+        if ref.get("basis") == "rate_table" and ref.get("zone_basis") != "calibrated":
+            out.append({"iteration": index, "zone": ref.get("zone"), "basis": ref.get("zone_basis") or "estimate"})
     return out
 
 
@@ -1275,12 +1321,19 @@ def _table_suggestion(estimate: dict, it: dict, schema: dict, settings: dict, de
             "source_ref": {"dhl": {k: v for k, v in ref.items() if v not in (None, "")}}}, ""
 
 
+def _next_unit_view(est: dict) -> dict:
+    """The estimate as the NEXT unit's shipping sees it: its own parcel / box settings (empty = one motor, one parcel) replace
+    the batch's ``ship_parcels`` / ``ship_box_cm``."""
+    nu = est.get("next_unit") or {}
+    return {**est, "settings": {**(est.get("settings") or {}), "ship_parcels": nu.get("parcels"), "ship_box_cm": nu.get("box_cm")}}
+
+
 def _refresh_one(est: dict, it: dict, line: dict, schema: dict, motor_mass_kg: Optional[float], mass_basis: str, today: str) -> Optional[dict]:
     """Recompute ONE automatic DHL line in place (``it`` supplies the motors); ``None`` = nothing to do / unchanged, else the
     change record.  See ``refresh_dhl`` for the rules."""
     if not line or line.get("status") != "filled" or line.get("source") != "dhl":
         return None
-    sug, why = dhl_suggestion(est, it, schema, motor_mass_kg, mass_basis)
+    sug, why = dhl_suggestion(_next_unit_view(est) if it.get("index") == 0 else est, it, schema, motor_mass_kg, mass_basis)
     if sug is None:
         hint = why[:_MAX_NOTE]
         if line.get("hint") != hint:
@@ -1453,7 +1506,7 @@ def suggest(estimate: dict, schema: dict, data: dict, *, today: str, refresh: bo
     if isinstance(nu, dict) and ship_to:                          # the next unit's shipping: ONE motor, automatic like the others
         nu_it = dict(NEXT_UNIT_ITERATION)
         line = nu["shipping"]
-        dhl, dhl_why = dhl_suggestion(est, nu_it, schema, data.get("motor_mass_kg"), data.get("motor_mass_basis") or "")
+        dhl, dhl_why = dhl_suggestion(_next_unit_view(est), nu_it, schema, data.get("motor_mass_kg"), data.get("motor_mass_basis") or "")
         if dhl and dhl.get("weeks") is not None and line.get("weeks") is None:
             line["weeks"] = dhl["weeks"]
             weeks_filled.append({"iteration": 0, "line": "next_unit.shipping", "weeks": dhl["weeks"]})

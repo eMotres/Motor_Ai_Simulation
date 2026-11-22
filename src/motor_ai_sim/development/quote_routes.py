@@ -73,7 +73,7 @@ def get_quote(project_id: str, request: Request, response: Response):
     schema = CE.load_schema()
     estimate = CE.from_stored(snap["estimate"], schema, project_id)
     try:
-        return Q.build_quote(estimate, schema, mark["shared_at"])
+        return Q.build_quote(estimate, schema, mark["shared_at"], int(snap.get("terms") or 1))
     except Q.QuoteError:
         log.warning("shared quote of %s (snapshot %s) cannot be built", project_id, mark["snapshot_n"])
         raise _refuse(404, _NOT_FOUND) from None

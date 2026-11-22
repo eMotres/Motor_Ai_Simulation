@@ -67,10 +67,10 @@ export interface CostFx {
 }
 export interface FxStatus { state: 'ok' | 'stale' | 'none'; date: string | null; manual: string[]; error: string | null }
 /** The price of the NEXT unit (owner 2026-11-22): one motor's manufacturing + testing when ticked + shipping of one motor. `price` / `weeks` are the admin's overrides. */
-export interface CostNextUnit { include_testing: boolean; price: number | null; weeks: number | null; shipping: CostLine; note: string }
+export interface CostNextUnit { include_testing: boolean; price: number | null; weeks: number | null; shipping: CostLine; note: string; parcels: number | null; box_cm: number[] | null }
 export interface NextUnitResult {
   available: boolean; reason: string; basis_iteration: number | null; include_testing: boolean; manufacturing: number | null; testing: number | null;
-  shipping: number | null; derived: number | null; total: number | null; weeks: number | null; overridden: boolean; currency: string;
+  shipping: number | null; derived: number | null; total: number | null; weeks: number | null; overridden: boolean; currency: string; weeks_missing?: string[]; shipping_stale?: boolean;
 }
 export interface CostEstimate {
   version: number; schema_version: number; project_id: string; revision: number; settings: CostSettings; fx?: CostFx | null;
@@ -599,7 +599,7 @@ export function setShipPostal(e: CostEstimate, postal: string): CostEstimate {
 }
 
 export const blankNextUnit = (): CostNextUnit => ({
-  include_testing: false, price: null, weeks: null, note: '',
+  include_testing: false, price: null, weeks: null, note: '', parcels: null, box_cm: null,
   shipping: { status: 'missing', amount: null, currency: 'EUR', pct: null, source: null, source_ref: null, factor: null, date: null, by: null, note: '', hint: '', weeks: null },
 });
 

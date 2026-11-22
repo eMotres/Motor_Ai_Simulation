@@ -218,3 +218,98 @@ def test_the_mcp_guard_refuses_the_next_unit_and_the_shipping_settings():
     for leak in ({"next_unit": {"price": 1}}, {"ship_parcels": 2}, {"ship_box_cm": [1, 2, 3]}, {"ship_service": "express"}):
         with pytest.raises(AssertionError, match="commercial field leaked"):
             T.assert_no_commercial(leak)
+
+
+# ── pre-merge review fixes (Astra 2026-11-22) ─────────────────────────────────────────────────────────────────────────
+
+def _auto_ship(est, schema, country="DE"):
+    est["settings"]["ship_to"] = {"country": country, "city": "X"}
+    data = {"motor_mass_kg": 20.0, "motor_mass_basis": "complete", "target_mass_kg": None, "productions": [], "estimates": []}
+    return CE.suggest(est, schema, data, today="2026-11-22")[0]
+
+
+def test_a_stale_automatic_next_unit_shipping_is_never_quoted(schema):
+    est = _auto_ship(_priced(schema), schema)
+    assert CE.next_unit_of(est, schema)["available"] is True
+    est["settings"]["ship_to"] = {"country": "KP", "city": "X"}                     # no zone for KP
+    refreshed, _ = CE.refresh_dhl(est, schema, 20.0, "complete")
+    line = refreshed["next_unit"]["shipping"]
+    assert line["amount"] is not None and line["hint"]                                # the old amount is kept for display only
+    nu = CE.next_unit_of(refreshed, schema)
+    assert nu["available"] is False and nu["shipping"] is None and nu["shipping_stale"] is True and "out of date" in nu["reason"]
+    assert Q.build_quote(refreshed, schema, "2026-11-22")["next_unit"] is None
+    refreshed["next_unit"]["price"] = 4000.0                                          # an explicit manual price is the admin's word
+    assert CE.next_unit_of(refreshed, schema)["total"] == 4000.0
+    changed = json.loads(json.dumps(est))                                             # destination changed, refresh not run yet
+    changed["settings"]["ship_to"] = {"country": "FR", "city": "Y"}
+    assert CE.next_unit_of(changed, schema)["available"] is False
+    changed["next_unit"]["shipping"]["source"] = "manual"                             # a typed number is never stale
+    assert CE.next_unit_of(changed, schema)["available"] is True
+
+
+def test_weeks_are_unknown_unless_every_applicable_stage_has_a_duration(schema):
+    est = _priced(schema)
+    est["next_unit"]["shipping"].update({"status": "filled", "amount": 400.0, "currency": "EUR", "source": "manual", "weeks": None})
+    nu = CE.next_unit_of(est, schema)
+    assert nu["available"] and nu["weeks"] is None and nu["weeks_missing"] == ["shipping"]
+    assert Q.build_quote(est, schema, "2026-11-22")["next_unit"]["weeks"] is None   # not the six weeks of manufacturing
+    est["next_unit"]["shipping"]["weeks"] = 0.0                                       # zero is a known duration
+    assert CE.next_unit_of(est, schema)["weeks"] == 6.0
+    est["next_unit"]["include_testing"] = True
+    est["iterations"][-1]["lines"]["testing"]["weeks"] = None
+    nu = CE.next_unit_of(est, schema)
+    assert nu["weeks"] is None and nu["weeks_missing"] == ["testing"]
+    est["next_unit"]["weeks"] = 9.0                                                   # an explicit override wins
+    assert CE.next_unit_of(est, schema)["weeks"] == 9.0
+    est["next_unit"]["weeks"] = None
+    est["iterations"][-1]["bench"] = "none"                                           # no bench: testing does not apply
+    assert CE.next_unit_of(est, schema)["weeks"] == 6.0
+
+
+def test_the_basis_is_the_actual_last_iteration(schema):
+    est = _priced(schema)
+    est["next_unit"]["shipping"].update({"status": "filled", "amount": 400.0, "currency": "EUR", "source": "manual", "weeks": 2.0})
+    est["iterations"][-1]["lines"]["manufacturing"].update({"status": "missing", "amount": None})
+    nu = CE.next_unit_of(est, schema)
+    assert nu["available"] is False and nu["basis_iteration"] == 2 and "iteration 2 has no manufacturing" in nu["reason"]
+
+
+def test_the_next_unit_has_its_own_parcels_and_box_defaulting_to_one_motor(schema):
+    est = _priced(schema)
+    est["settings"].update({"ship_to": {"country": "DE", "city": "X"}, "ship_parcels": 2, "ship_box_cm": [100, 80, 60]})
+    one = _auto_ship(est, schema)
+    ref = one["next_unit"]["shipping"]["source_ref"]["dhl"]
+    assert ref["parcels"] == 1 and ref["chargeable_kg"] == 45.0                       # the batch's two big boxes are not reused
+    assert one["iterations"][0]["lines"]["shipping"]["amount"] == 1500.0
+    own = json.loads(json.dumps(one))
+    own["next_unit"].update({"parcels": 2, "box_cm": [100, 80, 60]})
+    both = CE.refresh_dhl(own, schema, 20.0, "complete")[0]["next_unit"]["shipping"]
+    assert both["source_ref"]["dhl"]["parcels"] == 2 and both["amount"] > one["next_unit"]["shipping"]["amount"]
+    again = CE.normalize_estimate(json.loads(json.dumps(own)), schema, "alpha")
+    assert again["next_unit"]["parcels"] == 2 and again["next_unit"]["box_cm"] == [100.0, 80.0, 60.0]
+    with pytest.raises(CE.EstimateError):
+        CE.normalize_estimate({**own, "next_unit": {**own["next_unit"], "box_cm": [1, 2]}}, schema, "alpha")
+
+
+def test_calibrated_only_at_the_calibration_point_otherwise_extrapolated_or_estimate(table):
+    box = SR.default_box_cm(75, table)
+    far, _ = SR.quote("BR", [{"weight_kg": 75, "box_cm": box}], table)
+    assert far["zone"] == "SA" and far["zone_basis"] == "extrapolated"                # same zone, other country and weight
+    ar_small, _ = SR.quote("AR", [{"weight_kg": 20, "box_cm": SR.default_box_cm(20, table)}], table)
+    assert ar_small["zone_basis"] == "extrapolated"
+    ar, _ = SR.quote("AR", [{"weight_kg": 75, "box_cm": (60, 60, 40)}] * 2, table)
+    assert ar["zone_basis"] == "calibrated"
+
+
+def test_estimated_shipping_lines_are_listed_for_the_acknowledgement(schema):
+    est = _auto_ship(_priced(schema), schema)
+    assert CE.estimated_shipping_lines(est) == [{"iteration": 0, "zone": "EU", "basis": "estimate"}]
+    est["next_unit"]["shipping"]["source"] = "manual"
+    assert CE.estimated_shipping_lines(est) == []
+
+
+def test_the_dap_sentence_follows_the_snapshot_version_and_the_shipping_not_the_next_unit(schema):
+    est = _priced(schema)                                                             # shipping 1500 in every iteration, no next unit
+    assert Q.build_quote(est, schema, "2026-11-22")["excluded"] is None                # a snapshot frozen before: unchanged
+    new = Q.build_quote(est, schema, "2026-11-22", Q.TERMS)
+    assert new["excluded"] == "Duties and import VAT are not included." and new["next_unit"] is None

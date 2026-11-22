@@ -302,11 +302,20 @@ async def share_quote(project_id: str, request: Request, response: Response, adm
         raise HTTPException(status_code=409, detail={
             "code": "quote_incomplete", "missing": missing,
             "message": "Fill every line before sharing: %d line(s) have no amount." % len(missing)})
+    stale = CE.next_unit_shipping_stale(estimate, (estimate.get("next_unit") or {}).get("shipping") or {})
+    if stale and (estimate.get("next_unit") or {}).get("price") is None:
+        raise HTTPException(status_code=409, detail={"code": "next_unit_shipping_stale", "message": stale[:200]})
+    estimated = CE.estimated_shipping_lines(estimate)
+    if estimated and body.get("ack_estimated_shipping") is not True:
+        raise HTTPException(status_code=409, detail={
+            "code": "shipping_estimate_unacknowledged", "lines": estimated,
+            "message": "Shipping rests on the rate table outside its calibration point: confirm it to share."})
     snap = _freeze(project, schema, estimate, "shared", None, admin_user)
     mark = {"snapshot_n": snap["n"], "revision": snap["revision"], "shared_at": CS.now(), "shared_by": _email(admin_user)}
     previous = CS.set_shared(project_id, mark)
     CS.audit(project_id, _email(admin_user), "cost_estimate.share",
-             {"snapshot": snap["id"], "revision": snap["revision"], "replaced": (previous or {}).get("snapshot_n")})
+             {"snapshot": snap["id"], "revision": snap["revision"], "replaced": (previous or {}).get("snapshot_n"),
+              **({"estimated_shipping_acknowledged": estimated} if estimated else {})})
     return {"shared": CS.load_shared(project_id), "snapshot": {k: v for k, v in snap.items() if k != "estimate"}}
 
 
@@ -338,6 +347,7 @@ def _freeze(project: dict, schema: dict, estimate: dict, note: str, display: Opt
             changes = []
         return {"id": f"{n:04d}", "n": n, "note": note, "created_at": CS.now(), "created_by": _email(admin_user),
                 "revision": estimate.get("revision"), "parent": (previous or {}).get("id"), "estimate": estimate,
+                "terms": Q.TERMS,
                 "totals": {k: computed[k] for k in ("subtotal", "contingency", "total", "currencies", "converted", "missing_count",
                                                     "weeks_total")},
                 "iterations": [{k: it[k] for k in it if k != "lines"} for it in computed["iterations"]],

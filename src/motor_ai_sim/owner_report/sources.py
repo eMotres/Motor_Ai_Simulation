@@ -389,6 +389,9 @@ def _project_audit_text(ev: dict) -> Optional[tuple]:
         return ("project created by the customer (self-service)" if det.get("self_service") else "project created"), None
     if action == "update" and entity == "project":
         return "project updated (" + ", ".join(str(f) for f in det.get("fields") or []) + ")", None
+    if entity == "company":
+        return {"company.completed": "company details completed", "company.confirm": "company details confirmed",
+                "company.update": "company details updated"}.get(action, f"{action} {entity}"), None
     if action == "motor.link":
         return f"variant linked: {eid}", "motors"
     if action == "motor.unlink":

@@ -184,6 +184,9 @@ def default_iteration(schema: dict, settings: dict, index: int) -> dict:
 
 def default_estimate(schema: dict, project_id: str, *, linked_motors: Iterable[dict] = ()) -> dict:
     settings = default_settings(schema, linked_motors=linked_motors)
+    if project_id:                                    # a NEW estimate ships to the project's delivery address (company details form)
+        from motor_ai_sim.development import company_routes
+        settings["ship_to"] = company_routes.shipping_destination(project_id)
     return {"version": VERSION, "schema_version": schema["schema_version"], "project_id": project_id, "revision": 0,
             "settings": settings, "fx": None,
             "iterations": [default_iteration(schema, settings, i) for i in range(1, settings["iterations"] + 1)],

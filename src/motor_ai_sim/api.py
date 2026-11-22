@@ -486,6 +486,8 @@ from motor_ai_sim.development.cost_estimate_routes import router as development_
 app.include_router(development_cost_estimate_router)   # admin-only project cost estimate (owner 2026-11-02)
 from motor_ai_sim.development.quote_routes import router as development_quote_router
 app.include_router(development_quote_router)   # GET /api/projects/{id}/quote: the shared quote, project members + admins only
+from motor_ai_sim.development.company_routes import router as development_company_router
+app.include_router(development_company_router)   # /api/projects/{id}/company-details: project owners + staff only, never agents
 from motor_ai_sim.development.timeline_routes import router as development_timeline_router, admin_router as development_timeline_admin_router
 app.include_router(development_timeline_router)   # GET /api/projects/{id}/timeline: plan + forecast, project members + admins only
 app.include_router(development_timeline_admin_router)   # /api/admin/projects/{id}/timeline: admin edit, seed, baseline

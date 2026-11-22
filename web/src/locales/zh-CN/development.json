@@ -372,6 +372,7 @@
     "documents": "文档",
     "production": "生产",
     "cost": "成本估算",
+    "company": "公司信息",
     "quote": "报价",
     "timeline": "时间计划"
   },
@@ -1225,6 +1226,64 @@
       "addIteration": "增加一轮",
       "removeIteration": "删除最后一轮"
     }
+  },
+  "company": {
+    "title": "公司信息",
+    "group": {
+      "legal": "法律信息",
+      "signatory": "签署人与账单",
+      "delivery": "交付"
+    },
+    "field": {
+      "legal_name": "注册全称",
+      "legal_form": "企业类型",
+      "reg_no": "注册号",
+      "vat_no": "增值税号/税号",
+      "reg_address": "注册地址",
+      "country": "国家",
+      "signatory_name": "签署人",
+      "signatory_title": "签署人职务",
+      "signatory_email": "签署人邮箱",
+      "billing_email": "账单邮箱",
+      "delivery_address": "收货地址",
+      "delivery_city": "城市",
+      "delivery_postal": "邮编",
+      "delivery_country": "收货国家",
+      "carrier_contact_name": "承运联系人",
+      "carrier_contact_phone": "承运联系电话",
+      "importer_name": "进口商",
+      "eori": "EORI / 进口编号",
+      "preferred_carrier": "首选承运商"
+    },
+    "tip": {
+      "legal_name": "公司在商业登记处登记的全称。",
+      "legal_form": "例如 GmbH、Ltd、S.A.、LLC。",
+      "reg_no": "商业登记号。",
+      "vat_no": "增值税号或税务识别号，仅做宽松的格式检查。",
+      "reg_address": "合同中使用的注册办公地址。",
+      "country": "注册地的两位 ISO 国家代码，例如 DE。",
+      "signatory_name": "代表公司签署合同的人。",
+      "signatory_title": "签署人的职位。",
+      "signatory_email": "签署人的电子邮箱。",
+      "billing_email": "发票将发送到此邮箱。",
+      "delivery_address": "货物的收货地址（与注册地址不同时填写）。",
+      "delivery_city": "收货城市，也是新成本估算的默认运输目的地。",
+      "delivery_postal": "收货地址的邮政编码。",
+      "delivery_country": "两位 ISO 代码；留空表示与注册国家相同。",
+      "carrier_contact_name": "承运商送货时联系的人。",
+      "carrier_contact_phone": "承运商联系用的电话号码。",
+      "importer_name": "报关文件中列为进口商的公司。",
+      "eori": "EORI 编号或当地进口编号，可选。",
+      "preferred_carrier": "可选。"
+    },
+    "save": "保存",
+    "confirm": "确认",
+    "confirmedBy": "{{by}} 于 {{date}} 确认",
+    "notConfirmed": "尚未确认",
+    "copyFrom": "从其他项目复制",
+    "copyTip": "将您其他项目的公司信息复制到此表单；点击保存前不会保存。",
+    "prefillTip": "已根据您之前的协议或验证信息填写；请检查后保存。",
+    "saved": "已保存"
   },
   "customerQuote": {
     "col": {

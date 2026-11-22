@@ -58,6 +58,10 @@ const ProjectContract: React.FC<{ projectId: string; isAdmin?: boolean }> = ({ p
   const uploadKind = upload?.kind ?? null;
   const [rejecting, setRejecting] = useState<{ scan: ContractFileRef; seen: Seen } | null>(null);
   const [rejectReason, setRejectReason] = useState('');
+  const [tplOpen, setTplOpen] = useState(false);
+  const [tplKind, setTplKind] = useState<'agreement' | 'annex_a' | 'annex_b'>('agreement');
+  const [tplVersion, setTplVersion] = useState('');
+  const [tplFile, setTplFile] = useState<File | null>(null);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
@@ -128,6 +132,7 @@ const ProjectContract: React.FC<{ projectId: string; isAdmin?: boolean }> = ({ p
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap', mb: 1 }}>
           <Typography sx={head}>{t('status.title')}</Typography>
           <Chip size="small" variant="outlined" label={t('revision', { n: view.revision })} data-testid="contract-revision" />
+          {view.template_only && <Tooltip title={t('template.onlyTip')}><Chip size="small" color="info" variant="outlined" label={t('template.only')} data-testid="contract-template-only" /></Tooltip>}
           <HelpTip title={t('status.tip')} />
           {STATUS_ORDER.map((s, i) => (
             <React.Fragment key={s}>
@@ -139,7 +144,7 @@ const ProjectContract: React.FC<{ projectId: string; isAdmin?: boolean }> = ({ p
           <Box sx={{ flex: 1 }} />
           {view.can_manage && view.status === 'draft' && (
             <Tooltip title={t('status.sendTip')}><span>
-              <Button size="small" variant="contained" sx={btn} disabled={busy || !view.current.agreement} data-testid="contract-send" onClick={() => void run(() => contractApi.status(projectId, { status: 'sent', revision: view.revision, terms_digest: view.terms_digest }))}>
+              <Button size="small" variant="contained" sx={btn} disabled={busy || !(view.current.agreement || view.templates?.agreement)} data-testid="contract-send" onClick={() => void run(() => contractApi.status(projectId, { status: 'sent', revision: view.revision, terms_digest: view.terms_digest }))}>
                 {t('status.set.sent')}
               </Button>
             </span></Tooltip>
@@ -186,7 +191,10 @@ const ProjectContract: React.FC<{ projectId: string; isAdmin?: boolean }> = ({ p
                   <TableCell sx={{ fontSize: 12.5 }}>{t('revisionShort', { n: h.revision ?? 1 })}</TableCell>
                   <TableCell sx={{ fontSize: 12.5 }}>{date(h.at)}</TableCell>
                   <TableCell sx={{ fontSize: 12.5 }}>{h.by}</TableCell>
-                  <TableCell sx={{ fontSize: 12.5, whiteSpace: 'normal' }}>{(h.files ?? []).map((f) => <Tooltip key={f.id} title={`sha256 ${f.sha256}`}><span>{f.name} </span></Tooltip>)}{h.reason ? ` · ${h.reason}` : ''}</TableCell>
+                  <TableCell sx={{ fontSize: 12.5, whiteSpace: 'normal' }}>{(h.files ?? []).map((f) => <Tooltip key={f.id} title={`sha256 ${f.sha256}`}>{f.template
+                    ? <Button size="small" sx={{ textTransform: 'none', fontSize: 12, p: 0, minWidth: 0 }} disabled={busy} data-testid="contract-sent-template"
+                        onClick={() => void run(() => contractApi.downloadTemplate(projectId, f.kind, f.name, f.version, f.sha256))}>{t('template.ref', { version: f.version ?? '' })}</Button>
+                    : <span>{f.name} </span>}</Tooltip>)}{h.reason ? ` · ${h.reason}` : ''}</TableCell>
                 </TableRow>
               ))}
             </TableBody>
@@ -202,6 +210,23 @@ const ProjectContract: React.FC<{ projectId: string; isAdmin?: boolean }> = ({ p
           {view.can_manage && <FormControlLabel control={<Switch size="small" checked={archived} onChange={(e) => setArchived(e.target.checked)} />} label={<Typography sx={{ fontSize: 12 }}>{t('showArchived')}</Typography>} />}
         </Box>
         <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+          {view.staff && view.templates?.unavailable && <Alert severity="error">{t('template.unavailable')}</Alert>}
+          {(['agreement', 'annex_a', 'annex_b'] as const).map((k) => {
+            const tpl = view.templates?.[k];
+            if (!tpl) return null;
+            return (
+              <Box key={`tpl-${k}`} data-testid="contract-template" sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap', bgcolor: 'var(--panel-2)', borderRadius: 1, px: 1, py: 0.5 }}>
+                <Typography sx={{ fontSize: 13, fontWeight: 700 }}>{t(`template.${k}`, { version: tpl.version })}</Typography>
+                <Tooltip title={`sha256 ${tpl.sha256}`}><Typography sx={{ fontSize: 12.5, color: 'var(--text-2)' }}>{tpl.name} · {date(tpl.uploaded_at)}</Typography></Tooltip>
+                <Tooltip title={t('download')}><IconButton size="small" aria-label={t('download')} disabled={busy} onClick={() => void run(() => contractApi.downloadTemplate(projectId, k, tpl.name, tpl.version))}><DownloadIcon sx={{ fontSize: 17 }} /></IconButton></Tooltip>
+              </Box>
+            );
+          })}
+          {isAdmin && (
+            <Box sx={{ display: 'flex', justifyContent: 'flex-end' }}>
+              <Button size="small" sx={btn} startIcon={<UploadIcon sx={{ fontSize: 16 }} />} disabled={busy} onClick={() => setTplOpen(true)} data-testid="contract-template-upload">{t('template.upload')}</Button>
+            </Box>
+          )}
           {KIND_ORDER.map((k) => {
             const rows = byKind(k);
             const cur = rows.find((f) => f.id === view.current[k]);
@@ -245,6 +270,26 @@ const ProjectContract: React.FC<{ projectId: string; isAdmin?: boolean }> = ({ p
 
       <UploadDialog kind={uploadKind} busy={busy} onClose={() => setUpload(null)}
         onSubmit={(f, note) => { const u = upload; if (u) void run(async () => { try { return await contractApi.upload(projectId, u.kind, f, note, u.seen); } finally { setUpload(null); } }); }} />
+      <Dialog open={tplOpen} onClose={busy ? undefined : () => setTplOpen(false)} maxWidth="xs" fullWidth>
+        <DialogTitle sx={{ fontSize: 16 }}>{t('template.uploadTitle')}</DialogTitle>
+        <DialogContent sx={{ display: 'flex', flexDirection: 'column', gap: 1.5, pt: '8px !important' }}>
+          <Select size="small" value={tplKind} onChange={(e) => setTplKind(e.target.value as typeof tplKind)} aria-label={t('template.kind')}>
+            {(['agreement', 'annex_a', 'annex_b'] as const).map((k) => <MenuItem key={k} value={k}>{t(`kind.${k}`)}</MenuItem>)}
+          </Select>
+          <TextField size="small" label={t('template.version')} value={tplVersion} onChange={(e) => setTplVersion(e.target.value)} inputProps={{ maxLength: 40 }} />
+          <Button variant="outlined" component="label" size="small" sx={{ textTransform: 'none', justifyContent: 'flex-start' }}>
+            {tplFile ? tplFile.name : t('template.pickFile')}
+            <input hidden type="file" accept=".pdf,.docx" onChange={(e) => setTplFile(e.target.files?.[0] ?? null)} />
+          </Button>
+        </DialogContent>
+        <DialogActions>
+          <Button size="small" onClick={() => setTplOpen(false)} disabled={busy}>{t('cancel')}</Button>
+          <Button size="small" variant="contained" disabled={busy || !tplFile || !tplVersion.trim()}
+            onClick={() => { const f = tplFile; if (f) void run(async () => { try { await contractApi.uploadTemplate(tplKind, tplVersion.trim(), f); } finally { setTplOpen(false); setTplFile(null); setTplVersion(''); } await load(); }); }}>
+            {t('upload')}
+          </Button>
+        </DialogActions>
+      </Dialog>
       <Dialog open={rejecting !== null} onClose={busy ? undefined : () => setRejecting(null)} maxWidth="xs" fullWidth>
         <DialogTitle sx={{ fontSize: 16 }}>{t('review.rejectTitle')}</DialogTitle>
         <DialogContent sx={{ pt: '8px !important' }}>

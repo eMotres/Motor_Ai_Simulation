@@ -35,6 +35,7 @@ staff view says it is not configured.  Annex A generation waits for the guarante
 """
 from __future__ import annotations
 
+import contextlib
 import datetime
 import hashlib
 import json
@@ -47,10 +48,10 @@ from typing import Any, Iterator, Optional
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.concurrency import run_in_threadpool
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 
 from motor_ai_sim import users
-from motor_ai_sim.development import access, models, store
+from motor_ai_sim.development import access, contract_templates, models, store
 from motor_ai_sim.development.file_structure import DOC_EXT, SCAN_EXT, content_matches
 from motor_ai_sim.development.project_uploads import bounded_form, flush_events, queue_event
 
@@ -341,10 +342,13 @@ def frozen_ids(doc: dict) -> set[str]:
     return ids
 
 
-def terms_digest(doc: dict) -> str:
+def terms_digest(doc: dict, snapshot: Optional[dict] = None) -> str:
     """A short digest of the terms a signature is about: the frozen files (id + sha256) of a sent revision, else the live terms a
     "sent" would freeze.  The page captures it with the revision when a dialog opens; every signing request carries both."""
-    refs = doc.get("sent_files") if doc.get("status") != "draft" else [_ref(f) for f in _live_terms(doc)]
+    return _digest(doc.get("sent_files") if doc.get("status") != "draft" else _terms_to_send(doc, snapshot))
+
+
+def _digest(refs: Optional[list]) -> str:
     text = "|".join(sorted(f"{r.get('id')}:{r.get('sha256')}" for r in refs or []))
     return hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
 
@@ -357,6 +361,19 @@ def _live_terms(doc: dict) -> list[dict]:
         if rows:
             out.append(max(rows, key=lambda f: str(f.get("uploaded_at") or "")))
     return out
+
+
+def _terms_to_send(doc: dict, snapshot: Optional[dict] = None) -> list[dict]:
+    """What "sent" freezes: the project's own live terms; with no agreement of its own, the current standard agreement (the
+    template) by its version - empty when there is neither."""
+    refs = [_ref(f) for f in _live_terms(doc)]
+    if not any(r.get("kind") == "agreement" for r in refs):
+        if snapshot is None:
+            snapshot = contract_templates.snapshot()
+        tpl = snapshot.get("agreement")                  # None also when the store is damaged: fail closed, nothing to send
+        if tpl is not None:
+            refs.insert(0, contract_templates.ref(tpl))
+    return refs
 
 
 def _public_file(row: dict, staff: bool, frozen: set[str]) -> dict:
@@ -381,14 +398,21 @@ def _view(project: dict, user: dict, contract: dict, include_archived: bool) -> 
     history = [{"status": h.get("status"), "at": h.get("at"), "by": _display(str(h.get("by") or ""), staff), "revision": h.get("revision"),
                 "files": h.get("files") or [], "reason": h.get("reason") or ""} for h in contract.get("history", []) if isinstance(h, dict)]
     pending = contract.get("pending_scan") if isinstance(contract.get("pending_scan"), dict) else None
+    snap = contract_templates.snapshot()                 # ONE catalogue read: what the page shows is what its digest is about
+    templates = contract_templates.summary(snap)
     status = contract.get("status", "draft")
     return {"status": status, "revision": int(contract.get("revision") or 1), "history": history,
             "files": [_public_file(f, staff, frozen) for f in files], "current": current,
             "sample_iteration": int(contract.get("sample_iteration") or 1),
             "step": current_step(project, contract), "steps": list(STEPS), "company": company_state(project),
             "staff": staff, "can_manage": staff, "upload_kinds": _upload_kinds(contract, staff),
-            "terms_digest": terms_digest(contract), "pending_scan": pending,
-            "staff_scheme": staff_scheme() if staff else None}
+            "terms_digest": terms_digest(contract, snap), "pending_scan": pending,
+            "staff_scheme": staff_scheme() if staff else None,
+            # the standard documents of every project (owner 2026-11-22), read-only here; what a sent revision was made from
+            "templates": templates,
+            "template_only": status == "draft" and bool(templates.get("agreement")) and not any(
+                f.get("kind") in TERMS_KINDS and not f.get("archived") for f in contract.get("files", []) if isinstance(f, dict)),
+            "sent_files": contract.get("sent_files") or []}
 
 
 def _upload_kinds(doc: dict, staff: bool) -> list[str]:
@@ -511,7 +535,11 @@ async def _upload(project_id: str, project: dict, user: dict, form) -> dict:
         if str(exc) == "empty":
             raise HTTPException(status_code=400, detail="Empty file")
         raise HTTPException(status_code=400, detail="Invalid upload")
-    if not await run_in_threadpool(content_matches, files_dir(project_id) / file_id, name):
+    try:
+        ok = await run_in_threadpool(content_matches, files_dir(project_id) / file_id, name)
+    except Exception:                                       # noqa: BLE001 - any validation failure is invalid content
+        ok = False
+    if not ok:
         (files_dir(project_id) / file_id).unlink(missing_ok=True)
         raise HTTPException(status_code=422, detail="The file is not a readable %s" % Path(name).suffix.lstrip(".").upper())
     row = {"id": file_id, "kind": kind, "name": name[:200], "note": note, "size": size, "sha256": sha256, "uploaded_at": _now(),
@@ -590,19 +618,32 @@ async def set_status(request: Request, project_id: str):
     problem: dict = {}
 
     def apply(doc: dict) -> None:
-        if seen is not None and _stale(doc, seen, seen_terms):
-            problem["detail"] = _stale(doc, seen, seen_terms)
-            return
         if body.get("status") == "sent":
             if doc["status"] != "draft":
                 problem["detail"] = "Only a draft is sent; start a new revision first"
                 return
-            terms = _live_terms(doc)
-            if not any(f.get("kind") == "agreement" for f in terms):
-                problem["detail"] = "Upload the agreement first"
+            # ONE reference set, resolved once under the template lock: the same set is checked against what the caller saw
+            # and frozen - a template published in between can never be sent unseen
+            refs = _terms_to_send(doc)
+            if int(doc["revision"]) != seen or _digest(refs) != seen_terms:
+                problem["detail"] = STALE % int(doc["revision"])
                 return
+            if not any(r.get("kind") == "agreement" for r in refs):
+                problem["detail"] = "There is no agreement: upload the project's own or the standard one first"
+                return
+            for r in refs:
+                if r.get("template"):
+                    try:
+                        contract_templates.verified_bytes(r)          # the bytes that are frozen are really there
+                    except LookupError as exc:
+                        problem["detail"] = str(exc)
+                        return
+        elif seen is not None and _stale(doc, seen, seen_terms):
+            problem["detail"] = _stale(doc, seen, seen_terms)
+            return
+        if body.get("status") == "sent":
             doc["status"] = "sent"
-            doc["sent_files"] = [_ref(f) for f in terms]
+            doc["sent_files"] = refs
             doc["signatures"] = {}
             doc["history"].append(_status_row("sent", user, int(doc["revision"]), doc["sent_files"]))
             _queue(doc, user, "contract.status", {"status": "sent", "revision": int(doc["revision"]), "files": doc["sent_files"]}, project_id)
@@ -621,7 +662,9 @@ async def set_status(request: Request, project_id: str):
             doc["sample_iteration"] = body["sample_iteration"]
             _queue(doc, user, "contract.sample_iteration", {"sample_iteration": body["sample_iteration"]}, project_id)
 
-    doc = _mutate(project_id, apply)
+    # the send resolves its one reference set under the template store's lock: no publication lands in between
+    with contract_templates.lock() if body.get("status") == "sent" else contextlib.nullcontext():
+        doc = _mutate(project_id, apply)
     if "detail" in problem:
         raise HTTPException(status_code=409, detail=problem["detail"])
     _flush_after(project_id)
@@ -756,6 +799,49 @@ async def patch_file(request: Request, project_id: str, file_id: str):
         raise HTTPException(status_code=409, detail="The signing of this revision rests on this file; start a new revision first")
     _flush_after(project_id)
     return _view(project, user, doc, include_archived=True)
+
+
+@router.get("/{project_id}/contract/template/{kind}/download")
+def download_template(request: Request, project_id: str, kind: str, version: Optional[str] = None, sha256: Optional[str] = None):
+    """A standard document of the section, for whoever reads it; traced like every contract file.
+
+    * ``?sha256=`` (with ``version``): a document THIS project's revisions were sent with, identified by its frozen blob hash -
+      served from exactly that frozen reference (the history's buttons);
+    * ``?version=`` alone: that version as the catalogue lists it now (the section's current-template button);
+    * neither: the current version.
+    The bytes are checked against the SHA-256; a missing or changed file is refused, never replaced by another one."""
+    user, _project = _context(request, project_id)
+    if kind not in contract_templates.KINDS:
+        raise HTTPException(status_code=404, detail="File not found")
+    if sha256:
+        contract = load(project_id)
+        frozen = [r for r in (contract.get("sent_files") or []) + [f for h in contract.get("history") or [] for f in h.get("files") or []]
+                  if isinstance(r, dict) and r.get("template") and r.get("kind") == kind and r.get("sha256") == sha256
+                  and (version is None or r.get("version") == version)]
+        row = frozen[0] if frozen else None
+    else:
+        try:
+            row = contract_templates.find(kind, version) if version else contract_templates.current(kind)
+        except contract_templates.TemplateStoreDamaged:
+            raise HTTPException(status_code=503, detail="The standard contract documents need repair on this server")
+    if row is None:
+        raise HTTPException(status_code=404, detail="File not found")
+    try:
+        data = contract_templates.verified_bytes(row)
+    except LookupError as exc:
+        log.error("contract templates: %s (project %s)", exc, project_id)
+        raise HTTPException(status_code=409, detail=str(exc))
+    from motor_ai_sim.development.documents import _log_download
+    _log_download(request, user, project_id, kind="project_contract_template", file=str(row.get("name") or ""),
+                  source_file=f"template:{kind}:{row.get('version')}", sha256=str(row.get("sha256") or ""), size=len(data))
+    store.append_audit(project_id, _email(user), "contract.template_download", "contract", project_id,
+                       {"kind": kind, "version": row.get("version"), "sha256": row.get("sha256")})
+    from urllib.parse import quote
+    name = str(row.get("name") or "agreement.pdf")
+    return Response(content=data, media_type="application/octet-stream", headers={
+        "Content-Disposition": "attachment; filename=\"%s\"; filename*=UTF-8''%s" % (
+            "".join(c for c in name if c.isascii() and c not in '"\\') or "template", quote(name)),
+        "Cache-Control": "no-store"})
 
 
 @router.get("/{project_id}/contract/files/{file_id}/download")

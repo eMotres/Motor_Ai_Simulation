@@ -106,5 +106,19 @@
     "reject": "退回",
     "rejectTitle": "退回扫描件",
     "reason": "原因"
+  },
+  "template": {
+    "only": "仅模板",
+    "onlyTip": "项目尚无自己的条款：发送的是标准合同。",
+    "agreement": "标准合同（模板 {version}）",
+    "annex_a": "附件 A 空白（模板 {version}）",
+    "annex_b": "附件 B 空白（模板 {version}）",
+    "upload": "新模板版本",
+    "uploadTitle": "标准文件的新版本",
+    "kind": "文件",
+    "version": "版本",
+    "pickFile": "选择文件（PDF、DOCX）",
+    "ref": "标准合同 {version}",
+    "unavailable": "本服务器上的标准合同文件需要修复：目前不显示也不发送。"
   }
 }

@@ -83,9 +83,10 @@ const ProjectModel3D: React.FC<{ projectId: string; motors: ReadonlyArray<{ die:
   // remembered across reloads (owner rule: every page remembers where the user was): per project the source chosen and the revision
   // picked, and Show archived; a picked revision that has gone (archived, not visible) falls back to the latest.  With no choice made
   // in this project the tab opens on Uploaded when an uploaded model exists (owner 2026-11-23); a controller project has no Generated.
-  const [chosen, setChosen] = useState<ModelSource | null>(() => readView(sourceScope(projectId), oneOf(['generated', 'uploaded'] as const)));
-  useEffect(() => { setChosen(readView(sourceScope(projectId), oneOf(['generated', 'uploaded'] as const))); }, [projectId]);
-  const setSource = (next: ModelSource) => { setChosen(next); writeView(sourceScope(projectId), next); };
+  const [remembered, setRemembered] = useState<ModelSource | null>(() => readView(sourceScope(projectId), oneOf(['generated', 'uploaded'] as const)));
+  const [pickedNow, setPickedNow] = useState<ModelSource | null>(null);   // a click in this visit wins (staff add the first model)
+  useEffect(() => { setRemembered(readView(sourceScope(projectId), oneOf(['generated', 'uploaded'] as const))); setPickedNow(null); }, [projectId]);
+  const setSource = (next: ModelSource) => { setPickedNow(next); setRemembered(next); writeView(sourceScope(projectId), next); };
   const [list, setList] = useState<ProjectModelList | null>(null);
   const [showArchived, setShowArchived] = useRememberedView<boolean>('project.model3d.showArchived', false, (raw) => bool(raw) ?? null);
   const pickKey = `project.model3d.pick.${projectId}`;
@@ -165,7 +166,7 @@ const ProjectModel3D: React.FC<{ projectId: string; motors: ReadonlyArray<{ die:
 
   if (!ready) return <CircularProgress size={18} />;
   const live = (list?.models ?? []).filter((m) => !m.archived);
-  const source: ModelSource = openingSource({ controller, remembered: chosen, liveUploads: live.length });
+  const source: ModelSource = openingSource({ controller, pickedNow, remembered, liveUploads: live.length });
   const btn = { textTransform: 'none', fontSize: 12.5 } as const;
   return (
     <Box data-testid="project-model3d" sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
@@ -198,7 +199,7 @@ const ProjectModel3D: React.FC<{ projectId: string; motors: ReadonlyArray<{ die:
       </Box>
       {err && <Alert severity="error" onClose={() => setErr(null)} sx={{ fontSize: 12 }}>{err}</Alert>}
 
-      {source === 'generated' && (
+      {source === 'generated' && (list || err) && (   // not before the upload list is known: it may open on Uploaded
         <Box sx={{ height: { xs: 420, md: 620 }, border: '1px solid var(--line-soft)', borderRadius: 1.5, overflow: 'hidden' }}>
           {linked.length === 0
             ? <Typography sx={{ p: 2, fontSize: 13, color: 'var(--text-3)' }}>{t('project.noLinkedMotor')}</Typography>

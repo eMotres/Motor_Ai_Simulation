@@ -547,6 +547,11 @@ def create_project_for(user: dict, body: dict, *, audit_details: dict | None = N
     """The work of ``POST /api/projects`` for a resolved caller (the web session, or an MCP agent acting for its owner -
     ``spec_order.create_order``): the stored project record.  Raises ``HTTPException`` (428 agreement, 429 limit, 422, 409)."""
     staff = access.is_engineer(user)
+    from motor_ai_sim.development import project_type as PT
+    try:  # the project type: staff choose it here (a customer's project is a motor project; controllers are internal)
+        kind = PT.parse(body.get(PT.KEY)) if staff and not auto_named else None
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
     if staff and auto_named:
         # the assistant creates the project for staff too: named like a customer's, then from its specification
         body = {"title": self_service.NEW_PROJECT_TITLE, "customer_org": body.get("customer_org")}
@@ -576,6 +581,8 @@ def create_project_for(user: dict, body: dict, *, audit_details: dict | None = N
             if not staff or auto_named:
                 project["auto_title"] = True
                 project["owner_engineer"] = ""           # nobody is in charge yet; Motres staff see every project and pick it up
+            if kind:
+                PT.apply(project, kind)                 # a motor project carries no key: byte-identical to before
             store.create_project(project)
             break
         except FileExistsError:
@@ -588,7 +595,8 @@ def create_project_for(user: dict, body: dict, *, audit_details: dict | None = N
     store.save_json(project_id, "draft.json", {"draft": {"schema_version": 2, "fields": {}, "mission_profile": [], "mission_profile_status": "missing", "production": {}, "provenance": {}}, "schema_version": 2, "revision": 0, "version": None, "updated_at": project["created_at"]})
     # the audit row is what the owner's daily report lists ("project created by the customer")
     store.append_audit(project_id, _email(user), "create", "project", project_id,
-                       ({} if staff else {"self_service": True}) | dict(audit_details or {}))
+                       ({} if staff else {"self_service": True}) | dict(audit_details or {})
+                       | ({PT.KEY: PT.CONTROLLER} if PT.of(project) == PT.CONTROLLER else {}))
     _notify_staff("New customer project", project_id, user)
     return project
 
@@ -607,9 +615,21 @@ async def update_project(request: Request, project_id: str):
     body = await request.json()
     if not isinstance(body, dict):
         raise HTTPException(status_code=400, detail="Expected JSON object")
-    allowed = {"title", "customer_org", "owner_engineer", "status", "notes"}
+    allowed = {"title", "customer_org", "owner_engineer", "status", "notes", "project_type"}
     if set(body) - allowed:
         raise HTTPException(status_code=422, detail="Unsupported project fields")
+    from motor_ai_sim.development import project_type as PT
+    type_from = PT.of(project)
+    if PT.KEY in body:
+        # the type swaps the whole specification form: a global admin only (coordinator 2026-11-23)
+        if not PT.is_admin(user):
+            raise HTTPException(status_code=403, detail="Admin access required for the project type")
+        try:
+            kind = PT.parse(body.pop(PT.KEY)) or PT.MOTOR
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc))
+    else:
+        kind = None
     from motor_ai_sim.development import status_change_allowed
     if "status" in body and (not (access.is_engineer(user) or role in ("owner", "engineer"))
                              or not status_change_allowed(access.is_engineer(user), str(project.get("status") or "spec"),
@@ -632,11 +652,15 @@ async def update_project(request: Request, project_id: str):
         d.update(body)
         if "title" in body:
             d["auto_title"] = False                     # a name staff gave stays
+        if kind is not None:
+            PT.apply(d, kind)
         d["updated_at"] = models.now()
     from motor_ai_sim.development.motors import transaction
     with transaction():
         store.mutate_project(project_id, mutate)
-    store.append_audit(project_id, _email(user), "update", "project", project_id, {"fields": sorted(body)})
+    changed = sorted(body) + ([PT.KEY] if kind is not None else [])
+    store.append_audit(project_id, _email(user), "update", "project", project_id,
+                       {"fields": sorted(changed)} | ({PT.KEY: {"from": type_from, "to": kind}} if kind is not None else {}))
     return _summary(store.get_project(project_id), user)
 
 

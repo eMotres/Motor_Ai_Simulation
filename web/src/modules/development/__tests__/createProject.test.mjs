@@ -28,3 +28,9 @@ test('the open-project limit is shown from the localised string, other refusals 
   assert.equal(createErrorText('boom', t), 'boom');
   assert.equal(createErrorText(Object.assign(new Error('rate'), { status: 429, body: null }), t), 'rate');
 });
+
+test('staff may create a controller project; a motor project posts what it posted before; a customer never sends a type', () => {
+  assert.deepEqual(createPayload(true, { title: 'A', org: 'Acme', id: '', type: 'controller' }), { title: 'A', customer_org: 'Acme', project_type: 'controller' });
+  assert.deepEqual(createPayload(true, { title: 'A', org: 'Acme', id: '', type: 'motor' }), { title: 'A', customer_org: 'Acme' });
+  assert.deepEqual(createPayload(false, { title: 'A', org: 'Acme', id: '', type: 'controller' }), { customer_org: 'Acme' });
+});

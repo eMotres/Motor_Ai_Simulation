@@ -183,7 +183,7 @@ def test_a_failed_audit_append_leaves_the_post_recorded_once_on_retry(env, monke
     assert len([x for x in _audit_rows("post") if x["entity_id"] == r.json()["id"]]) == 1
 
 
-def test_a_failed_message_write_leaves_no_audit_row(env, monkeypatch):
+def test_a_failed_message_write_leaves_no_audit_row_even_when_another_request_flushes(env, monkeypatch):
     real = dev_store.append_jsonl
 
     def broken(project_id, name, row):
@@ -193,7 +193,10 @@ def test_a_failed_message_write_leaves_no_audit_row(env, monkeypatch):
     monkeypatch.setattr(dev_store, "append_jsonl", broken)
     with pytest.raises(OSError):
         post(env, OWNER, "x")
+    from motor_ai_sim.development.project_uploads import flush_events
+    flush_events("alpha", "project.json")                                 # a concurrent flusher runs at any moment
     monkeypatch.setattr(dev_store, "append_jsonl", real)
+    assert _audit_rows("post") == []                                      # nothing was stored, nothing was audited
     post(env, OWNER, "y")
     assert len(_audit_rows("post")) == 1
 

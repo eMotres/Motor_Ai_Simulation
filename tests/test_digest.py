@@ -1219,3 +1219,17 @@ def test_a_reply_to_a_restricted_message_is_a_restricted_digest_line(d):
     items = C.collect_project(d["PS"].get_project(PID), T0 - 7200, T0, results=d["results"])
     child = next(i for i in items if i.key == "msg:rc")
     assert child.requires == frozenset({"prices"})
+
+
+def test_an_earlier_schema_draft_with_overflow_and_no_requirements_is_refused_at_send(d):
+    from motor_ai_sim.digest import approval as AP
+    _restricted_world(d)
+    run(d, scopes=[PSCOPE])
+    draft = draft_of(d, PSCOPE)
+    assert draft["more"] >= 1
+    old = dict(draft)
+    old.pop("more_requires")                                                  # what a draft stored before this change looks like
+    d["DS"].save_draft(old)
+    with pytest.raises(AP.ApprovalError) as e:
+        go(d, draft["id"])
+    assert e.value.code == "stale" and d["delivered"] == []

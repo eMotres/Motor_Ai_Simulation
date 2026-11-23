@@ -125,6 +125,9 @@ def _send(draft_id: str, who: str, content_hash: str, *, deliver: Callable, now:
     current, left = B.resolve_recipients(group, settings)
     now_by_email = {r["email"]: r for r in current}
     needed = frozenset().union(*[frozenset(i.get("requires") or []) for i in draft["items"]]) if draft["items"] else frozenset()
+    if int(draft.get("more") or 0) > 0 and "more_requires" not in draft:
+        raise ApprovalError("stale", "This draft was made by an older version and does not record what its \"and N more\" line needs - "
+                            "make new drafts (Admin, Digests, Make drafts now) and review them.")
     needed |= frozenset(draft.get("more_requires") or [])      # the "and N more" count too: a recipient who may not see them is skipped
     to_send: list[mailing.Recipient] = []
     skipped: list[dict] = [dict(s) for s in left if any(s["email"] == r["email"] for r in draft["recipients"])]

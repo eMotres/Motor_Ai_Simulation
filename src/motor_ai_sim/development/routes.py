@@ -17,7 +17,7 @@ from motor_ai_sim.development import access, models, self_service, spec_proposal
 from motor_ai_sim.development.motors import _metric_projection
 from motor_ai_sim.development.quote_routes import quote_shared
 from motor_ai_sim.development.timeline_routes import timeline_ready
-from motor_ai_sim.development.project_uploads import PENDING as _PENDING_AUDIT, flush_events, queue_event
+from motor_ai_sim.development.project_uploads import flush_events, queue_event
 
 log = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/projects", tags=["development-projects"])
@@ -1223,23 +1223,17 @@ def _visible_events(user: dict, project: dict, rows: list) -> list:
     return out
 
 
-def _queue_thread_audit(project_id: str, actor: str, action: str, entity_id: str, details: dict) -> str:
-    """Queue the audit row of a thread change on the project document (the durable outbox) BEFORE the change is written; returns the
-    event id so a failed write can take it back."""
-    holder: dict = {}
-
-    def mutate(doc: dict) -> None:
-        queue_event(doc, actor, action, "thread_message", entity_id, details)
-        holder["id"] = doc[_PENDING_AUDIT][-1]["event_id"]
-
-    store.mutate_project(project_id, mutate)
-    return holder.get("id", "")
-
-
-def _drop_thread_audit(project_id: str, event_id: str) -> None:
-    def mutate(doc: dict) -> None:
-        doc[_PENDING_AUDIT] = [e for e in doc.get(_PENDING_AUDIT) or [] if e.get("event_id") != event_id]
-    store.mutate_project(project_id, mutate)
+def _record_thread_audit(project_id: str, actor: str, action: str, entity_id: str, details: dict) -> None:
+    """Audit row of a thread change that is ALREADY stored: queued on the project document (the durable outbox, one mutation) and then
+    flushed.  The order matters (coordinator 2026-11-23): the row is queued only after the change committed, so an audit row can never
+    exist for a change that was not stored, whatever another request flushes meanwhile.  A failing flush leaves the row pending (the next
+    call writes it once); only a crash between the two commits can lose the row, never invent one."""
+    try:
+        store.mutate_project(project_id, lambda doc: queue_event(doc, actor, action, "thread_message", entity_id, details))
+    except Exception as exc:                                # noqa: BLE001
+        log.error("project %s: thread audit row for %s not queued (%s)", project_id, entity_id, exc)
+        return
+    _flush_price_audit(project_id)
 
 
 @router.get("/{project_id}/thread")
@@ -1326,14 +1320,9 @@ async def post_thread(request: Request, project_id: str):
         message["reply_to"] = reply_to
     if restricted:
         message["price_restricted"] = True                  # absent = not restricted: stored messages and payloads stay as they were
-    event = _queue_thread_audit(project_id, _email(user), "post", message["id"],
-                                {"field_ref": field_ref, **({"price_restricted": True} if restricted else {})})
-    try:
-        store.append_jsonl(project_id, "thread.jsonl", message)
-    except BaseException:
-        _drop_thread_audit(project_id, event)                 # nothing was posted: no audit row for it
-        raise
-    _flush_price_audit(project_id)                            # a failing append leaves the row pending; the message stands, once
+    store.append_jsonl(project_id, "thread.jsonl", message)
+    _record_thread_audit(project_id, _email(user), "post", message["id"],
+                         {"field_ref": field_ref, **({"price_restricted": True} if restricted else {})})
     notify_project_members(project_id, message)
     return _customer_spec(message)
 
@@ -1358,14 +1347,9 @@ async def resolve_thread_message(request: Request, project_id: str, message_id: 
     event = {"id": __import__("secrets").token_urlsafe(12), "kind": "resolution", "resolves_id": message_id,
              "resolved": body["resolved"], "resolved_by": _author(_email(user))["author_display_name"],
              "author_email": _email(user), "created_at": datetime.now(timezone.utc).isoformat()}
-    audit = _queue_thread_audit(project_id, _email(user), "project_thread_resolved" if body["resolved"] else "project_thread_reopened",
-                                message_id, {"resolved": body["resolved"]})
-    try:
-        store.append_jsonl(project_id, "thread.jsonl", event)
-    except BaseException:
-        _drop_thread_audit(project_id, audit)
-        raise
-    _flush_price_audit(project_id)
+    store.append_jsonl(project_id, "thread.jsonl", event)
+    _record_thread_audit(project_id, _email(user), "project_thread_resolved" if body["resolved"] else "project_thread_reopened",
+                         message_id, {"resolved": body["resolved"]})
     return {"id": message_id, "resolved": body["resolved"], "resolved_at": event["created_at"]}
 
 

@@ -804,6 +804,7 @@ def get_controller_spec(request: Request, project_id: str):
     user, project, _ = _readable_project(request, project_id)
     _controller_project(project)
     doc = store.load_json(project_id, CS.FILE, None) or CS.empty()
+    doc = {**doc, "fields": CS.stored(doc.get("fields"))}  # an earlier one-value answer reads into its column
     path = store.path_for(project_id) / CS.HISTORY
     history = []
     if path.is_file():
@@ -837,7 +838,7 @@ async def put_controller_spec(request: Request, project_id: str):
         if not isinstance(expected, int) or isinstance(expected, bool) or expected != int(doc.get("revision") or 0):
             raise HTTPException(status_code=409, detail={"message": "The controller specification changed; reload it",
                                                           "revision": doc.get("revision") or 0})
-        out["changes"] = CS.changes(doc.get("fields") or {}, fields)
+        out["changes"] = CS.changes(CS.stored(doc.get("fields")), fields)
         if not out["changes"]:
             return
         doc.update(fields=fields, revision=int(doc.get("revision") or 0) + 1, updated_at=models.now(), updated_by=_email(user),
@@ -848,7 +849,8 @@ async def put_controller_spec(request: Request, project_id: str):
                                                     "changes": out["changes"]})
         store.append_audit(project_id, _email(user), "update", "controller_spec", "controller_spec",
                            {"revision": doc["revision"], "fields": [c["field"] for c in out["changes"]]})
-    return _controller_authors({**doc, "changed": [c["field"] for c in out["changes"]]}, user)
+    # the normalized fields on EVERY answer, a no-op save too (its stored file may still hold an earlier shape; Astra on #834)
+    return _controller_authors({**doc, "fields": fields, "changed": [c["field"] for c in out["changes"]]}, user)
 
 
 @router.put("/{project_id}/spec")

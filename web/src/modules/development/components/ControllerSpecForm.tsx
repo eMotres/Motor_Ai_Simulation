@@ -2,14 +2,15 @@
 // its status (requirement / model / measured) and a source; per-build fields hold one answer per build.  Only the project owner
 // and admins edit (the server decides: `can_edit`); everybody else reads.  No assistant, no submit flow: internal for now.
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { Alert, Box, Button, Checkbox, CircularProgress, FormControlLabel, IconButton, MenuItem, Paper, Stack, Tab, Tabs, TextField, Tooltip, Typography } from '@mui/material';
+import { Alert, Box, Button, Checkbox, CircularProgress, Dialog, DialogActions, DialogContent, DialogTitle, FormControlLabel, IconButton, InputAdornment, MenuItem, Paper, Stack, Tab, Tabs, TextField, Tooltip, Typography } from '@mui/material';
+import { NARROW } from '../../../lib/narrowLayout';
 import AddIcon from '@mui/icons-material/Add';
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
 import HelpTip from '../../../components/common/HelpTip';
 import { readView, writeView } from '../../../lib/viewMemory';
 import {
-  afterSave, answerOf, buildsOf, controllerSpecApi, isConflict, hasStatus, localized, parseNumber, payloadFields, withAnswer,
-  type CtlAnswer, type CtlField, type CtlSchema, type CtlSpec, type CtlStored, type ValueStatus,
+  afterSave, answerOf, buildsOf, buildsWithAnswers, withBuilds, cellOf, COLUMNS, controllerSpecApi, hasColumns, isConflict, localized, parseNumber, payloadFields, withAnswer, withCell,
+  type CtlAnswer, type CtlCell, type CtlField, type CtlSchema, type CtlSpec, type CtlStored, type CtlThreshold, type ValueStatus,
 } from '../controllerSpec';
 
 type T = (key: string, args?: Record<string, unknown>) => string;
@@ -23,6 +24,7 @@ export default function ControllerSpecForm({ projectId, lang, ct, memoryScope }:
   const [error, setError] = useState('');
   const [step, setStep] = useState(0);
   const [conflict, setConflict] = useState(false);
+  const [pendingBuilds, setPendingBuilds] = useState<{ next: string[]; losing: { build: string; answers: number }[] } | null>(null);
   const edits = useRef(0);                               // counts edits, so one typed while a save is in flight is not lost
 
   useEffect(() => {
@@ -43,7 +45,19 @@ export default function ControllerSpecForm({ projectId, lang, ct, memoryScope }:
   if (!spec || !schema) return <CircularProgress size={18} />;
   const canEdit = spec.can_edit;
   const section = schema.sections[Math.min(step, schema.sections.length - 1)];
-  const set = (field: CtlField, answer: CtlAnswer, build?: string) => { edits.current += 1; setFields((f) => withAnswer(f, field, answer, build)); setDirty(true); };
+  const set = (field: CtlField, answer: CtlAnswer, build?: string) => {
+    if (field.id === 'builds') {                         // a removed build with answers: ask before its answers go (Astra on #834)
+      const next = Array.isArray(answer.value) ? (answer.value as string[]) : [];
+      const losing = buildsWithAnswers(fields, schema, next.filter((b) => b.trim()));
+      if (losing.length) { setPendingBuilds({ next, losing }); return; }
+      edits.current += 1; setFields((f) => withBuilds(f, schema, next)); setDirty(true); return;
+    }
+    edits.current += 1; setFields((f) => withAnswer(f, field, answer, build)); setDirty(true);
+  };
+  const confirmBuilds = () => {
+    if (!pendingBuilds) return;
+    edits.current += 1; setFields((f) => withBuilds(f, schema, pendingBuilds.next)); setDirty(true); setPendingBuilds(null);
+  };
   const chooseStep = (i: number) => { setStep(i); if (memoryScope) writeView(memoryScope, i); };
   const save = async () => {
     setBusy(true); setError(''); setConflict(false);
@@ -81,6 +95,9 @@ export default function ControllerSpecForm({ projectId, lang, ct, memoryScope }:
       {schema.sections.map((s, i) => <Tab key={s.id} value={i} label={localized(s.title, lang)} sx={{ minHeight: 32, py: 0.5, fontSize: 12 }} />)}
     </Tabs>
     <Paper variant="outlined" sx={{ p: 1.5 }}>
+      {section.fields.some((f) => hasColumns(f.kind) || f.kind === 'thresholds') && <Box sx={{ ...GRID, mb: 0.5, [NARROW]: { display: 'none' } }} data-testid="controller-spec-columns">
+        <Box />{COLUMNS.map((col) => <Box key={col} sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}><Typography sx={{ fontSize: 12, fontWeight: 700, color: 'var(--text-1)' }}>{columnLabel(schema, col, lang)}</Typography>{col === 'requirement' && <HelpTip title={ct('spec.statusTip')} />}</Box>)}
+      </Box>}
       <Stack spacing={1.4}>
         {section.fields.map((field) => <Box key={field.id}>
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, mb: 0.5 }}>
@@ -89,85 +106,115 @@ export default function ControllerSpecForm({ projectId, lang, ct, memoryScope }:
           </Box>
           {field.per_build
             ? (builds.length
-              ? <Stack spacing={0.8}>{builds.map((b) => <Box key={b} sx={{ display: 'flex', alignItems: 'flex-start', gap: 1, flexWrap: 'wrap' }}><Typography sx={{ fontSize: 12, minWidth: 40, pt: 1 }}>{b}</Typography><FieldInput field={field} answer={answerOf(fields, field, b)} schema={schema} lang={lang} ct={ct} disabled={!canEdit} onChange={(a) => set(field, a, b)} /></Box>)}</Stack>
+              ? <Stack spacing={0.8}>{builds.map((b) => <FieldRow key={b} build={b} field={field} answer={answerOf(fields, field, b)} schema={schema} lang={lang} ct={ct} disabled={!canEdit} onChange={(a) => set(field, a, b)} />)}</Stack>
               : <Typography sx={{ fontSize: 12, color: 'var(--text-3)' }}>{ct('spec.noBuilds')}</Typography>)
-            : <FieldInput field={field} answer={answerOf(fields, field)} schema={schema} lang={lang} ct={ct} disabled={!canEdit} onChange={(a) => set(field, a)} />}
+            : <FieldRow build="" field={field} answer={answerOf(fields, field)} schema={schema} lang={lang} ct={ct} disabled={!canEdit} onChange={(a) => set(field, a)} />}
         </Box>)}
       </Stack>
     </Paper>
+    <Dialog open={!!pendingBuilds} onClose={() => setPendingBuilds(null)} maxWidth="xs" fullWidth>
+      <DialogTitle sx={{ fontSize: 16 }}>{ct('spec.dropBuildTitle')}</DialogTitle>
+      <DialogContent>{ct('spec.dropBuildBody', { builds: (pendingBuilds?.losing ?? []).map((x) => `${x.build} (${x.answers})`).join(', ') })}</DialogContent>
+      <DialogActions><Button onClick={() => setPendingBuilds(null)}>{ct('type.cancel')}</Button><Button color="error" variant="contained" data-testid="controller-spec-drop-build" onClick={confirmBuilds}>{ct('spec.dropBuild')}</Button></DialogActions>
+    </Dialog>
     {spec.history.length > 0 && <Paper variant="outlined" sx={{ p: 1.5, mt: 1.5 }} data-testid="controller-spec-history">
       <Typography sx={{ fontSize: 13, fontWeight: 700, mb: 0.5 }}>{ct('spec.history')}</Typography>
       {spec.history.slice(0, 20).map((h) => <Box key={h.revision} sx={{ py: 0.4, borderBottom: '1px solid var(--line-soft)' }}>
         <Typography sx={{ fontSize: 12 }}>{ct('spec.revision', { n: h.revision })} · {new Date(h.at).toLocaleString()} · {h.by}</Typography>
-        <Typography sx={{ fontSize: 12, color: 'var(--text-2)' }}>{h.changes.map((c) => labelOf(c.field)).join(', ')}</Typography>
+        <Typography sx={{ fontSize: 12, color: 'var(--text-2)' }}>{h.changes.map((c) => labelOf(c.field) + (c.columns?.length ? ` (${c.columns.map((k) => changedColumn(k, schema, lang)).join(', ')})` : '')).join('; ')}</Typography>
       </Box>)}
     </Paper>}
   </Box>;
 }
 
 const numText = (v: unknown): string => (typeof v === 'number' ? String(v) : '');
+/** label | Requirement | Model | Measured; one column on a phone. */
+const GRID = { display: 'grid', gridTemplateColumns: '150px repeat(3, minmax(0, 1fr))', gap: 1, alignItems: 'start', [NARROW]: { gridTemplateColumns: 'minmax(0, 1fr)' } } as const;
+const columnLabel = (schema: CtlSchema, col: ValueStatus, lang: string) => localized(schema.statuses.find((x) => x.value === col)?.label, lang) || col;
+/** "12S.model.over_voltage" -> "12S Model": the build and the column a save changed (the field is named beside it). */
+function changedColumn(key: string, schema: CtlSchema, lang: string): string {
+  const parts = key.split('.');
+  const at = parts.findIndex((p) => (COLUMNS as readonly string[]).includes(p));
+  return at < 0 ? key : [...parts.slice(0, at), columnLabel(schema, parts[at] as ValueStatus, lang)].join(' ');
+}
 
-/** One answer of one field (one build of a per-build field). */
-function FieldInput({ field, answer, schema, lang, ct, disabled, onChange }: { field: CtlField; answer: CtlAnswer; schema: CtlSchema; lang: string; ct: T; disabled: boolean; onChange: (a: CtlAnswer) => void }) {
-  const v = answer.value;
-  const put = (value: unknown) => onChange({ ...answer, value });
+interface RowProps { build: string; field: CtlField; answer: CtlAnswer; schema: CtlSchema; lang: string; ct: T; disabled: boolean; onChange: (a: CtlAnswer) => void }
+
+/** One answer of one field (one build of a per-build field): three columns for a number / range / protection, else one input. */
+function FieldRow({ build, field, answer, schema, lang, ct, disabled, onChange }: RowProps) {
+  const head = <Typography sx={{ fontSize: 12, pt: 1, color: 'var(--text-1)' }}>{build}</Typography>;
+  if (hasColumns(field.kind)) {
+    return <Box sx={GRID}>{head}{COLUMNS.map((col) => <ColumnCell key={col} col={col} schema={schema} lang={lang} ct={ct} disabled={disabled} cell={cellOf(answer, col)}
+      onChange={(c) => onChange(withCell(answer, col, c))} input={(value, put) => <ValueInput field={field} value={value} ct={ct} disabled={disabled} onChange={put} />} />)}</Box>;
+  }
+  if (field.kind === 'thresholds') {
+    const map = (answer.value && typeof answer.value === 'object' ? answer.value : {}) as Record<string, CtlThreshold>;
+    const setItem = (opt: string, next: CtlThreshold | undefined) => { const copy = { ...map }; if (next) copy[opt] = next; else delete copy[opt]; onChange({ value: copy }); };
+    return <Stack spacing={0.8}>{(field.options ?? []).map((o) => { const item = map[o.value];
+      return <Box key={o.value} sx={GRID}>
+        <Box><FormControlLabel control={<Checkbox size="small" disabled={disabled} checked={!!item} onChange={(e) => setItem(o.value, e.target.checked ? { unit: '', values: {} } : undefined)} />} label={<Typography sx={{ fontSize: 12 }}>{[build, localized(o.label, lang)].filter(Boolean).join(' · ')}</Typography>} />
+          {item && <TextField size="small" sx={{ width: 90 }} disabled={disabled} value={item.unit ?? ''} label={ct('spec.unit')} onChange={(e) => setItem(o.value, { ...item, unit: e.target.value })} inputProps={{ maxLength: 20 }} />}</Box>
+        {item ? COLUMNS.map((col) => <ColumnCell key={col} col={col} schema={schema} lang={lang} ct={ct} disabled={disabled} cell={cellOf(item, col)}
+          onChange={(c) => setItem(o.value, withCell(item, col, c))} input={(value, put) => <NumberBox value={value} unit={item.unit} disabled={disabled} label={ct('spec.threshold')} onChange={put} />} />) : null}
+      </Box>; })}</Stack>;
+  }
+  return <Box sx={GRID}>{head}<Box sx={{ gridColumn: '2 / span 3', [NARROW]: { gridColumn: 'auto' } }}><OtherInput field={field} value={answer.value} lang={lang} ct={ct} disabled={disabled} onChange={(value) => onChange({ value })} /></Box></Box>;
+}
+
+/** One of the three columns: the value input(s) and its source. */
+function ColumnCell({ col, schema, lang, ct, disabled, cell, onChange, input }: { col: ValueStatus; schema: CtlSchema; lang: string; ct: T; disabled: boolean; cell: CtlCell; onChange: (c: CtlCell) => void; input: (value: unknown, put: (v: unknown) => void) => ReactNode }) {
+  return <Stack spacing={0.5} sx={{ minWidth: 0 }} data-column={col}>
+    <Typography sx={{ display: 'none', fontSize: 11, fontWeight: 700, [NARROW]: { display: 'block' } }}>{columnLabel(schema, col, lang)}</Typography>
+    {input(cell.value, (value) => onChange({ ...cell, value }))}
+    <TextField size="small" fullWidth disabled={disabled} value={cell.ref ?? ''} placeholder={ct('spec.source')} onChange={(e) => onChange({ ...cell, ref: e.target.value })} inputProps={{ maxLength: 200, 'aria-label': `${columnLabel(schema, col, lang)} · ${ct('spec.source')}` }} />
+  </Stack>;
+}
+
+/** The value of a number (one box) or a range (min / nom / max), with the unit in the box instead of a cut label. */
+function ValueInput({ field, value, ct, disabled, onChange }: { field: CtlField; value: unknown; ct: T; disabled: boolean; onChange: (v: unknown) => void }) {
+  if (field.kind === 'number') return <NumberBox value={value} unit={field.unit} disabled={disabled} onChange={onChange} />;
+  const r = (value && typeof value === 'object' ? value : {}) as Record<string, unknown>;
+  return <Box sx={{ display: 'flex', gap: 0.5 }}>{(['min', 'nom', 'max'] as const).map((k) => <NumberBox key={k} value={r[k]} unit={field.unit} disabled={disabled} label={ct(`spec.${k}`)} onChange={(n) => onChange({ min: null, nom: null, max: null, ...r, [k]: n })} />)}</Box>;
+}
+
+/** Every kind without columns: text, choice, multi, list, rows. */
+function OtherInput({ field, value: v, lang, ct, disabled, onChange: put }: { field: CtlField; value: unknown; lang: string; ct: T; disabled: boolean; onChange: (v: unknown) => void }) {
   const opts = field.options ?? [];
-  let input: ReactNode;
   switch (field.kind) {
     case 'text': case 'longtext':
-      input = <TextField size="small" fullWidth disabled={disabled} multiline={field.kind === 'longtext'} minRows={field.kind === 'longtext' ? 2 : undefined} value={typeof v === 'string' ? v : ''} onChange={(e) => put(e.target.value)} inputProps={{ maxLength: field.kind === 'text' ? 200 : 4000, 'aria-label': localized(field.label, lang) }} />;
-      break;
-    case 'number':
-      input = <NumberBox value={v} disabled={disabled} label={localized(field.label, lang)} onChange={put} />;
-      break;
-    case 'range': {
-      const r = (v && typeof v === 'object' ? v : {}) as Record<string, unknown>;
-      input = <Box sx={{ display: 'flex', gap: 0.8 }}>{(['min', 'nom', 'max'] as const).map((k) => <NumberBox key={k} value={r[k]} disabled={disabled} label={ct(`spec.${k}`)} onChange={(n) => put({ min: null, nom: null, max: null, ...r, [k]: n })} />)}</Box>;
-      break;
-    }
+      return <TextField size="small" fullWidth disabled={disabled} multiline={field.kind === 'longtext'} minRows={field.kind === 'longtext' ? 2 : undefined} value={typeof v === 'string' ? v : ''} onChange={(e) => put(e.target.value)} inputProps={{ maxLength: field.kind === 'text' ? 200 : 4000, 'aria-label': localized(field.label, lang) }} />;
     case 'choice':
-      input = <TextField select size="small" sx={{ minWidth: 220 }} disabled={disabled} value={typeof v === 'string' ? v : ''} onChange={(e) => put(e.target.value || null)} inputProps={{ 'aria-label': localized(field.label, lang) }}><MenuItem value="">{ct('spec.notSet')}</MenuItem>{opts.map((o) => <MenuItem key={o.value} value={o.value}>{localized(o.label, lang)}</MenuItem>)}</TextField>;
-      break;
+      return <TextField select size="small" sx={{ minWidth: 220 }} disabled={disabled} value={typeof v === 'string' ? v : ''} onChange={(e) => put(e.target.value || null)} inputProps={{ 'aria-label': localized(field.label, lang) }}><MenuItem value="">{ct('spec.notSet')}</MenuItem>{opts.map((o) => <MenuItem key={o.value} value={o.value}>{localized(o.label, lang)}</MenuItem>)}</TextField>;
     case 'multi': {
       const on = new Set(Array.isArray(v) ? v as string[] : []);
-      input = <Box sx={{ display: 'flex', flexWrap: 'wrap' }}>{opts.map((o) => <FormControlLabel key={o.value} control={<Checkbox size="small" disabled={disabled} checked={on.has(o.value)} onChange={(e) => { const next = new Set(on); if (e.target.checked) next.add(o.value); else next.delete(o.value); put(opts.map((x) => x.value).filter((x) => next.has(x))); }} />} label={<Typography sx={{ fontSize: 12 }}>{localized(o.label, lang)}</Typography>} />)}</Box>;
-      break;
+      return <Box sx={{ display: 'flex', flexWrap: 'wrap' }}>{opts.map((o) => <FormControlLabel key={o.value} control={<Checkbox size="small" disabled={disabled} checked={on.has(o.value)} onChange={(e) => { const next = new Set(on); if (e.target.checked) next.add(o.value); else next.delete(o.value); put(opts.map((x) => x.value).filter((x) => next.has(x))); }} />} label={<Typography sx={{ fontSize: 12 }}>{localized(o.label, lang)}</Typography>} />)}</Box>;
     }
     case 'list':
-      input = <TextField size="small" fullWidth disabled={disabled} value={Array.isArray(v) ? (v as string[]).join(', ') : ''} onChange={(e) => put(e.target.value.split(',').map((s) => s.trim()).filter((s, i, all) => s || i === all.length - 1))} inputProps={{ 'aria-label': localized(field.label, lang) }} />;
-      break;
-    case 'thresholds': {
-      const map = (v && typeof v === 'object' ? v : {}) as Record<string, { threshold?: number | null; unit?: string; status?: ValueStatus | null }>;
-      input = <Stack spacing={0.5}>{opts.map((o) => { const item = map[o.value]; const setItem = (next: typeof item | undefined) => { const copy = { ...map }; if (next) copy[o.value] = next; else delete copy[o.value]; put(copy); };
-        return <Box key={o.value} sx={{ display: 'flex', alignItems: 'center', gap: 0.8, flexWrap: 'wrap' }}>
-          <FormControlLabel sx={{ minWidth: 220 }} control={<Checkbox size="small" disabled={disabled} checked={!!item} onChange={(e) => setItem(e.target.checked ? { threshold: null, unit: '', status: null } : undefined)} />} label={<Typography sx={{ fontSize: 12 }}>{localized(o.label, lang)}</Typography>} />
-          {item && <><NumberBox value={item.threshold} disabled={disabled} label={ct('spec.threshold')} onChange={(n) => setItem({ ...item, threshold: n })} /><TextField size="small" sx={{ width: 80 }} disabled={disabled} value={item.unit ?? ''} onChange={(e) => setItem({ ...item, unit: e.target.value })} inputProps={{ maxLength: 20, 'aria-label': ct('spec.unit') }} placeholder={ct('spec.unit')} /><StatusSelect value={item.status ?? null} schema={schema} lang={lang} ct={ct} disabled={disabled} onChange={(s) => setItem({ ...item, status: s })} /></>}
-        </Box>; })}</Stack>;
-      break;
-    }
+      return <ListBox value={Array.isArray(v) ? (v as string[]) : []} disabled={disabled} label={localized(field.label, lang)} onChange={put} />;
     case 'rows': {
       const rows = Array.isArray(v) ? v as Record<string, string>[] : [];
       const cols = field.columns ?? [];
-      input = <Stack spacing={0.5}>{rows.map((row, i) => <Box key={i} sx={{ display: 'flex', gap: 0.8, alignItems: 'center' }}>{cols.map((c) => <TextField key={c.id} size="small" disabled={disabled} value={row[c.id] ?? ''} placeholder={localized(c.label, lang)} onChange={(e) => put(rows.map((r, j) => (j === i ? { ...r, [c.id]: e.target.value } : r)))} inputProps={{ maxLength: 200, 'aria-label': localized(c.label, lang) }} />)}{!disabled && <IconButton size="small" aria-label={ct('spec.removeRow')} onClick={() => put(rows.filter((_r, j) => j !== i))}><DeleteOutlineIcon sx={{ fontSize: 16 }} /></IconButton>}</Box>)}{!disabled && <Box><Button size="small" startIcon={<AddIcon />} onClick={() => put([...rows, Object.fromEntries(cols.map((c) => [c.id, '']))])}>{ct('spec.addRow')}</Button></Box>}</Stack>;
-      break;
+      return <Stack spacing={0.5}>{rows.map((row, i) => <Box key={i} sx={{ display: 'flex', gap: 0.8, alignItems: 'center' }}>{cols.map((c) => <TextField key={c.id} size="small" disabled={disabled} value={row[c.id] ?? ''} placeholder={localized(c.label, lang)} onChange={(e) => put(rows.map((r, j) => (j === i ? { ...r, [c.id]: e.target.value } : r)))} inputProps={{ maxLength: 200, 'aria-label': localized(c.label, lang) }} />)}{!disabled && <IconButton size="small" aria-label={ct('spec.removeRow')} onClick={() => put(rows.filter((_r, j) => j !== i))}><DeleteOutlineIcon sx={{ fontSize: 16 }} /></IconButton>}</Box>)}{!disabled && <Box><Button size="small" startIcon={<AddIcon />} onClick={() => put([...rows, Object.fromEntries(cols.map((c) => [c.id, '']))])}>{ct('spec.addRow')}</Button></Box>}</Stack>;
     }
     default:
-      input = <></>;
+      return null;
   }
-  if (!hasStatus(field.kind)) return input;
-  return <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.8, flexWrap: 'wrap' }}>{input}
-    <StatusSelect value={answer.status ?? null} schema={schema} lang={lang} ct={ct} disabled={disabled} onChange={(s) => onChange({ ...answer, status: s })} />
-    <TextField size="small" sx={{ width: 200 }} disabled={disabled} value={answer.ref ?? ''} placeholder={ct('spec.source')} onChange={(e) => onChange({ ...answer, ref: e.target.value })} inputProps={{ maxLength: 200, 'aria-label': ct('spec.source') }} />
-  </Box>;
 }
 
-function NumberBox({ value, disabled, label, onChange }: { value: unknown; disabled: boolean; label: string; onChange: (n: number | null) => void }) {
+/** A comma-separated list (the builds), taken when the box is left or Enter is pressed - not on every key, so renaming "12S" does
+ *  not remove a build half-way (and ask about its values) on each keystroke. */
+function ListBox({ value, disabled, label, onChange }: { value: string[]; disabled: boolean; label: string; onChange: (v: string[]) => void }) {
+  const [text, setText] = useState(value.join(', '));
+  useEffect(() => { setText(value.join(', ')); }, [value.join('\u0001')]); // eslint-disable-line react-hooks/exhaustive-deps
+  const commit = () => { const next = text.split(',').map((x) => x.trim()).filter((x, i, all) => x && all.indexOf(x) === i); if (next.join('\u0001') !== value.join('\u0001')) onChange(next); setText(value.join(', ')); };   // the box shows the list as held (a cancelled removal reverts it)
+  return <TextField size="small" fullWidth disabled={disabled} value={text} onChange={(e) => setText(e.target.value)} onBlur={commit}
+    onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); commit(); } }} inputProps={{ 'aria-label': label }} />;
+}
+
+function NumberBox({ value, unit, disabled, label, onChange }: { value: unknown; unit?: string; disabled: boolean; label?: string; onChange: (n: number | null) => void }) {
   const [text, setText] = useState(numText(value));
   useEffect(() => { setText((t) => (parseNumber(t) === (typeof value === 'number' ? value : null) ? t : numText(value))); }, [value]);
   const bad = parseNumber(text) === undefined;
-  return <TextField size="small" sx={{ width: 110 }} disabled={disabled} value={text} error={bad} label={label} onChange={(e) => { setText(e.target.value); const n = parseNumber(e.target.value); if (n !== undefined) onChange(n); }} inputProps={{ inputMode: 'decimal' }} />;
-}
-
-function StatusSelect({ value, schema, lang, ct, disabled, onChange }: { value: ValueStatus | null; schema: CtlSchema; lang: string; ct: T; disabled: boolean; onChange: (s: ValueStatus | null) => void }) {
-  return <Tooltip title={ct('spec.statusTip')}><TextField select size="small" sx={{ width: 140 }} disabled={disabled} value={value ?? ''} label={ct('spec.status')} onChange={(e) => onChange((e.target.value || null) as ValueStatus | null)}><MenuItem value="">{ct('spec.notSet')}</MenuItem>{schema.statuses.map((s) => <MenuItem key={s.value} value={s.value}>{localized(s.label, lang)}</MenuItem>)}</TextField></Tooltip>;
+  return <TextField size="small" fullWidth sx={{ minWidth: 64 }} disabled={disabled} value={text} error={bad} label={label} onChange={(e) => { setText(e.target.value); const n = parseNumber(e.target.value); if (n !== undefined) onChange(n); }}
+    inputProps={{ inputMode: 'decimal' }} InputProps={unit ? { endAdornment: <InputAdornment position="end"><Typography sx={{ fontSize: 11, color: 'var(--text-3)' }}>{unit}</Typography></InputAdornment> } : undefined} />;
 }

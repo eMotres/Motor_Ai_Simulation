@@ -11,9 +11,16 @@ export interface CtlField {
   options?: CtlOption[]; columns?: { id: string; label: Lang; unit?: string }[];
 }
 export interface CtlSchema { schema_version: number; title: Lang; statuses: CtlOption[]; sections: { id: string; title: Lang; fields: CtlField[] }[] }
-export interface CtlAnswer { value: unknown; status?: ValueStatus | null; ref?: string }
+/** One of the three values of a numeric answer and its source. */
+export interface CtlCell { value: unknown; ref?: string }
+export type CtlColumns = Partial<Record<ValueStatus, CtlCell>>;
+/** A numeric answer (number, range) holds `values` - requirement / model / measured side by side; every other kind `value`. */
+export interface CtlAnswer { value?: unknown; values?: CtlColumns }
+/** One protection: its unit and its threshold in each column. */
+export interface CtlThreshold { unit?: string; values?: CtlColumns }
+export const COLUMNS: readonly ValueStatus[] = ['requirement', 'model', 'measured'];
 export type CtlStored = CtlAnswer | { builds: Record<string, CtlAnswer> };
-export interface CtlChange { field: string; before: unknown; after: unknown }
+export interface CtlChange { field: string; before: unknown; after: unknown; columns?: string[] }
 export interface CtlSpec {
   schema_version: number; revision: number; updated_at: string | null; updated_by: string | null;
   fields: Record<string, CtlStored>; schema: CtlSchema; can_edit: boolean;
@@ -22,8 +29,19 @@ export interface CtlSpec {
 
 export const localized = (l: Lang | undefined, lang: string): string => (l ? (lang.startsWith('zh') && l['zh-CN']) || l.en : '');
 
-/** The kinds whose value carries a status (requirement / model / measured) and a source reference. */
-export const hasStatus = (kind: FieldKind): boolean => kind === 'number' || kind === 'range';
+/** The kinds whose answer is three columns (requirement / model / measured), each with a source. */
+export const hasColumns = (kind: FieldKind): boolean => kind === 'number' || kind === 'range';
+
+/** One column of a numeric answer (or of one protection). */
+export const cellOf = (holder: { values?: CtlColumns } | undefined, col: ValueStatus): CtlCell => holder?.values?.[col] ?? { value: null, ref: '' };
+
+/** A copy with one column replaced; an empty column (no value, no source) is dropped. */
+export function withCell<H extends { values?: CtlColumns }>(holder: H, col: ValueStatus, cell: CtlCell): H {
+  const values: CtlColumns = { ...(holder.values ?? {}) };
+  const empty = (cell.value === null || cell.value === undefined || (typeof cell.value === 'object' && Object.values(cell.value as object).every((v) => v === null || v === undefined))) && !cell.ref;
+  if (empty) delete values[col]; else values[col] = cell;
+  return { ...holder, values };
+}
 
 /** The builds named in the Supply step ("6S", "12S" ...): the per-build fields hold one answer for each. */
 export function buildsOf(fields: Record<string, CtlStored>): string[] {
@@ -34,29 +52,48 @@ export function buildsOf(fields: Record<string, CtlStored>): string[] {
 /** One answer: the field's own, or the one of `build` for a per-build field. */
 export function answerOf(fields: Record<string, CtlStored>, field: CtlField, build?: string): CtlAnswer {
   const stored = fields[field.id];
-  if (field.per_build) return (stored && 'builds' in stored ? stored.builds[build ?? ''] : undefined) ?? { value: null };
-  return (stored && !('builds' in stored) ? stored : undefined) ?? { value: null };
+  if (field.per_build) {
+    // a single answer kept from before the field became per build (or before any build existed) reads for every build
+    if (stored && !('builds' in stored)) return stored;
+    return (stored && 'builds' in stored ? stored.builds[build ?? ''] : undefined) ?? (hasColumns(field.kind) ? { values: {} } : { value: null });
+  }
+  return (stored && !('builds' in stored) ? stored : undefined) ?? (hasColumns(field.kind) ? { values: {} } : { value: null });
 }
 
 /** A copy of `fields` with one answer replaced (per build when the field is per build). */
 export function withAnswer(fields: Record<string, CtlStored>, field: CtlField, answer: CtlAnswer, build?: string): Record<string, CtlStored> {
   if (!field.per_build) return { ...fields, [field.id]: answer };
   const stored = fields[field.id];
-  const builds = stored && 'builds' in stored ? stored.builds : {};
+  // a single earlier answer becomes the answer of every build first, so editing one build keeps it for the others
+  const builds = stored && 'builds' in stored ? stored.builds
+    : stored ? Object.fromEntries(buildsOf(fields).map((b) => [b, structuredClone(stored)])) : {};
   return { ...fields, [field.id]: { builds: { ...builds, [build ?? '']: answer } } };
 }
 
-/** What is sent: per-build answers only for the builds that exist now (a removed build drops its answers). */
-export function payloadFields(fields: Record<string, CtlStored>, schema: CtlSchema): Record<string, CtlStored> {
-  const builds = new Set(buildsOf(fields));
-  const perBuild = new Set(schema.sections.flatMap((s) => s.fields).filter((f) => f.per_build).map((f) => f.id));
-  const out: Record<string, CtlStored> = {};
-  for (const [id, stored] of Object.entries(fields)) {
-    if (perBuild.has(id) && stored && 'builds' in stored) {
-      out[id] = { builds: Object.fromEntries(Object.entries(stored.builds).filter(([b]) => builds.has(b))) };
-    } else if (!perBuild.has(id)) out[id] = stored;
+/** The builds a new builds list removes that still hold answers, with how many answers each (the form asks before dropping them). */
+export function buildsWithAnswers(fields: Record<string, CtlStored>, schema: CtlSchema, nextBuilds: readonly string[]): { build: string; answers: number }[] {
+  const next = new Set(nextBuilds);
+  const perBuild = schema.sections.flatMap((s) => s.fields).filter((f) => f.per_build);
+  return buildsOf(fields).filter((b) => !next.has(b)).map((build) => ({
+    build, answers: perBuild.filter((f) => { const st = fields[f.id]; return st && 'builds' in st && build in st.builds; }).length,
+  })).filter((x) => x.answers > 0);
+}
+
+/** `fields` with the builds list replaced and the answers of the removed builds dropped (after the user said yes). */
+export function withBuilds(fields: Record<string, CtlStored>, schema: CtlSchema, nextBuilds: string[]): Record<string, CtlStored> {
+  const keep = new Set(nextBuilds);
+  const out: Record<string, CtlStored> = { ...fields, builds: { value: nextBuilds } };
+  for (const f of schema.sections.flatMap((s) => s.fields).filter((x) => x.per_build)) {
+    const st = fields[f.id];
+    if (st && 'builds' in st) out[f.id] = { builds: Object.fromEntries(Object.entries(st.builds).filter(([b]) => keep.has(b))) };
   }
   return out;
+}
+
+/** What is sent: every answer as the form holds it - nothing is dropped silently (Astra on #834).  The answers of a removed build
+ *  leave only through `withBuilds`, after the user confirmed; the server refuses an answer for a build not in the list. */
+export function payloadFields(fields: Record<string, CtlStored>, _schema: CtlSchema): Record<string, CtlStored> {
+  return { ...fields };
 }
 
 /** A number typed in a field: `null` for empty, the number, or `undefined` for text that is not a number (kept out). */

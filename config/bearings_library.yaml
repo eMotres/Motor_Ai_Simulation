@@ -399,6 +399,51 @@ bearings:
       more than the rolling term, so a speed the seal can take is the design
       question, not the load rating.
 
+  61814-2Z:
+    description: "SKF 61814-2Z — deep groove, series 618 (thin section), metal shields both sides (shielded variant of the G2 bearing; project-472c8b, owner 2026-11-20: ZZ instead of 2RS)"
+    type: deep_groove
+    d: 70
+    D: 90
+    B: 10
+    d_m: 80
+    balls: steel
+    seals: shields          # 2Z shields do not touch the inner ring: M_seal = 0
+    default_lubricant: MT47
+    n_limit_grease_rpm: 4800
+    n_limit_oil_air_rpm: null    # shielded, grease-filled
+    C_kn: 11.9
+    C0_kn: 11.4
+    stiffness_n_per_m: 1.2e+8
+    catalog:
+      manufacturer: SKF
+      part_number: 61814-2Z
+      status: active
+      sources: [skf_catalogue, skf_friction]
+      prov:
+        n_limit_grease_rpm: {type: datasheet, src: skf_catalogue, verify: true, note: "catalogue value to verify — shields lift the seal limit of the 2RS1 (3000)"}
+        C_kn: {type: datasheet, src: skf_catalogue, verify: true, note: "catalogue value to verify (same rings and balls as 61814-2RS1)"}
+        C0_kn: {type: datasheet, src: skf_catalogue, verify: true, note: "catalogue value to verify"}
+        stiffness_n_per_m: {type: estimate, note: "APPROXIMATE"}
+        friction.R1: {type: datasheet, src: skf_friction, note: "SKF table 2, series 618 (the 61814-2RS1's rolling/sliding terms)"}
+        friction.S1: {type: datasheet, src: skf_friction, note: "SKF table 2, series 618"}
+        friction.K_z: {type: datasheet, src: skf_friction, note: "3.1 deep groove"}
+        friction.mu_sl: {type: datasheet, src: skf_friction, note: "grease-lubricated ball bearing"}
+        friction.ball_density_ratio: {type: derived, note: "1.0 = steel balls"}
+      revision: {n: 1, date: "2026-11-23", by: US-cambridge, why: "new card: shielded 61814 for project-472c8b"}
+    friction:
+      # SKF table 2, series 618 - the rolling/sliding terms are the 61814-2RS1's;
+      # only the seal drag is gone (shields), as 61811-2Z is to 61811-2RS1.
+      R1: 4.7e-7
+      S1: 6.50e-3
+      K_z: 3.1
+      mu_sl: 0.05
+      ball_density_ratio: 1.0
+    note: >-
+      Same rings and balls as the 61814-2RS1 card, with non-contact shields: no
+      seal term, so at 1500 rpm the pair's loss falls from about 100 W (2RS1) to
+      about 1.6 W (coupled run, project-472c8b, 2026-11-22). Shields do not seal
+      against water or salt spray: the enclosure needs its own shaft seal.  Not
+      bench-validated.
   618/8-2Z:
     description: "SKF 618/8-2Z — miniature deep groove, series 618, metal shields both sides (the 40 mm motor)"
     type: deep_groove

@@ -260,5 +260,8 @@
   "meshPresetSector": "扇区",
   "meshPresetFullRing": "整圈",
   "meshPresetWireCell": "线单元",
-  "meshPresetOpenMesh": "请在“网格”标签页切换预设"
+  "meshPresetOpenMesh": "请在“网格”标签页切换预设",
+  "sweepPresetField": "预设",
+  "sweepPresetTip": "扫描始终使用“优化”预设：每电周期步数和气隙层数取自已存储的预设，与仿真标签页中的数值无关。最终点和对比使用“仿真”预设计算。",
+  "sweepResultSettingsTip": "该结果计算时使用的预设、每电周期步数和气隙层数。在此标签出现之前保存的扫描显示其已存储请求中的设置。"
 }

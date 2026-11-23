@@ -290,6 +290,25 @@ def delete_entry(sid: str) -> bool:
     return False
 
 
+def sweep_settings_of(result: Any, config: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """The settings a stored sweep RAN with, for its label: the preset record the run stamped (``mesh_preset``), or, for a
+    sweep stored before that stamp existed, its own stored request (``steps_per_period``, ``scan_params.gap_layers``).
+
+    ``{"preset": name | None, "version", "steps_per_period", "gap_layers", "source": "preset" | "stored_request"}``."""
+    r = result if isinstance(result, dict) else {}
+    cfg = config if isinstance(config, dict) else {}
+    mp = r.get("mesh_preset") if isinstance(r.get("mesh_preset"), dict) else None
+    sp = r.get("scan_params") if isinstance(r.get("scan_params"), dict) else {}
+    if mp and isinstance(mp.get("effective"), dict) and mp["effective"].get("steps_per_period") is not None:
+        eff = mp["effective"]
+        return {"preset": mp.get("name"), "version": mp.get("version"), "custom": bool(mp.get("custom")),
+                "steps_per_period": eff.get("steps_per_period"), "gap_layers": eff.get("gap_layers"),
+                "source": "preset"}
+    return {"preset": None, "version": None, "custom": False,
+            "steps_per_period": cfg.get("steps_per_period") or r.get("steps_per_period"),
+            "gap_layers": sp.get("gap_layers"), "source": "stored_request"}
+
+
 def meta(d: Dict[str, Any]) -> Dict[str, Any]:
     """The list row of one save (no points)."""
     r = d.get("result") or {}
@@ -307,6 +326,7 @@ def meta(d: Dict[str, Any]) -> Dict[str, Any]:
         "n_front": len(r.get("pareto_indices", [])),
         "n_operating_points": len(r.get("operating_points") or []),
         "steps_per_period": cfg.get("steps_per_period") or r.get("steps_per_period"),
+        "settings": sweep_settings_of(r, cfg),
         "variables": [v.get("name") for v in (r.get("variables") or []) if isinstance(v, dict)],
         "run_id": r.get("run_id") or "",
         "machine": machine,

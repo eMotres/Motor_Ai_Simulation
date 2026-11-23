@@ -260,5 +260,8 @@
   "meshPresetSector": "sector",
   "meshPresetFullRing": "full ring",
   "meshPresetWireCell": "wire cell",
-  "meshPresetOpenMesh": "Switch the preset on the Mesh tab"
+  "meshPresetOpenMesh": "Switch the preset on the Mesh tab",
+  "sweepPresetField": "Preset",
+  "sweepPresetTip": "A sweep always runs the Optimization preset: the steps per electrical period and the gap rows are read from the stored preset, whatever the Simulation tab holds. Final points and comparisons are computed on the Simulation preset.",
+  "sweepResultSettingsTip": "The preset, steps per electrical period and gap rows this result was computed with. A sweep saved before this label existed shows the settings of its stored request."
 }

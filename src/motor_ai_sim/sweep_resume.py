@@ -226,6 +226,7 @@ def _enqueue_resume_sweep(ws_dir: str, journal) -> None:
         "element_order": req_body.get("element_order", 2),
         "demag": req_body.get("demag", False),
         "with_baseline": req_body.get("with_baseline", False),
+        "mesh_preset": req_body.get("mesh_preset"),
     }
 
     log.info("resuming sweep %s: %d of %d points already done",

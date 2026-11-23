@@ -32,7 +32,8 @@ import { planLockedApply, refusedText, newDieNotice } from '../../lib/sweepApply
 import { releaseFamilyContext } from '../../lib/familyContext';
 import { setActiveDuty } from '../../lib/dutySettings';
 import { canWriteServer } from '../../lib/localAuth';
-import { storedGapLayers } from '../../lib/meshSettings';
+import { fetchMeshPresets } from '../../lib/meshPresets';
+import { sweepSettingsOf, sweepSettingsLabel } from '../../lib/sweepSettings';
 import { endWindingPin } from '../../lib/endWindingPin';
 import { coincidentGroups, coincidentOffsetPx } from '../../lib/coincidentPoints';
 import {
@@ -326,7 +327,17 @@ const SweepTooltip: React.FC<any> = ({ active, payload }) => {
 
 const SweepStudyPanel: React.FC = () => {
   const { sweepConfig, updateGeometryViaApi } = useMotorStore();
-  const steps = readLS('sim.stepsPP', 24);   // single source: Simulation "Steps per electrical period"
+  // A sweep runs the Optimization preset: the server reads its steps and gap rows from the stored preset and ignores any
+  // count sent here.  The panel shows what the run will use (GET /api/mesh/presets), never the Simulation tab's count.
+  const [optPreset, setOptPreset] = useState<{ label: string; steps: number; gap: number } | null>(null);
+  useEffect(() => {
+    let live = true;
+    fetchMeshPresets().then(set => {
+      const p = set.presets.find(q => q.name === 'optimization');
+      if (live && p?.values) setOptPreset({ label: p.label, steps: p.values.n_steps_per_period, gap: p.values.gap_layers });
+    }).catch(() => { /* the label stays empty; the server still applies the preset */ });
+    return () => { live = false; };
+  }, []);
   const [connectBy, setConnectBy] = useLS<'current_a' | 'gamma_deg'>('connectBy', 'current_a');
   const [withBaseline, setWithBaseline] = useLS<boolean>('withBaseline', false);
   const [selected, setSelected] = useState<any>(null);   // hand-picked best point
@@ -634,7 +645,7 @@ const SweepStudyPanel: React.FC = () => {
       const res = await fetch(`${API}/api/optimization/scan`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          variables: scanVars, operating_points: ops, steps_per_period: steps,
+          variables: scanVars, operating_points: ops, preset: 'optimization',   // steps and gap rows come from the preset (server side)
           ripple_max_pct: 100, max_geometries: Math.max(1, nGeom),
           // the un-varied current motor as an extra reference point — one more
           // full eval, off by default (user 2026-09-04: always stopped at 22/23)
@@ -643,7 +654,6 @@ const SweepStudyPanel: React.FC = () => {
           pole_copy: readBool('mesh.poleCopy', false), torque_filter: readBool('sim.torqueFilter', false),
           n_sectors: Math.max(1, Math.round(readLS('mesh.nSectors', 1))),   // single source: Mesh tab (same as Simulation)
           // single source: the Mesh tab; absent = the machine's saved setting (backend)
-          ...(storedGapLayers() !== undefined ? { gap_layers: storedGapLayers() } : {}),
           structured_gap: readBool('mesh.structuredGap', false) || readBool('mesh.ironTemplate', true),   // single source: Mesh tab "Structured" — belt gap mesh (honest ripple, ¼ == full disk)
           airgap_macro: readBool('mesh.harmonicGap', false),   // Mesh tab "Harmonic gap" — step-independent RAW ripple (full + sectors)
           // P2 — the only basis. The sweep must rank designs on the SAME basis
@@ -1186,8 +1196,11 @@ const SweepStudyPanel: React.FC = () => {
       </Box>
 
       <Box sx={{ display: 'flex', gap: 1, alignItems: 'center', mb: 1 }}>
-        <TextField label="steps/period (Simulation)" size="small" value={steps} disabled
-          inputProps={{ style: { fontSize: 12, padding: '5px 8px' } }} sx={{ width: 170 }} />
+        <MuiTooltip title={tx('sweepPresetTip')}>
+          <TextField label={tx('sweepPresetField')} size="small" disabled
+            value={optPreset ? sweepSettingsLabel({ preset: 'optimization', steps: optPreset.steps, gapLayers: optPreset.gap, source: 'preset' }, optPreset.label) : ''}
+            inputProps={{ style: { fontSize: 12, padding: '5px 8px' } }} sx={{ width: 290 }} />
+        </MuiTooltip>
         <FormControl size="small" sx={{ minWidth: 150 }}>
           <InputLabel sx={{ fontSize: 12 }}>connect along</InputLabel>
           <Select label="connect along" value={connectBy} onChange={e => setConnectBy(e.target.value as any)}
@@ -1198,15 +1211,13 @@ const SweepStudyPanel: React.FC = () => {
         </FormControl>
         <Typography sx={{ fontSize: 11, color: nPts > 40 ? '#fca5a5' : 'var(--text-3)', flex: 1 }}>
           <strong>{nPts}</strong> pt{nPts === 1 ? '' : 's'}{nPts > 40 ? ' — large, slow' : ''}
-          {/* SAY which step count the sweep will solve at.  It is read from the
-              Electromagnetic tab's key at Run time, and that key can be rewritten
-              behind the tab's back (an optimizer Apply pins the run's 48 steps into
-              it; a second window does not see it).  2026-09-07: the tab said 36,
-              the sweep ran 48 — cold, 3× longer — and nothing on screen said so. */}
-          <span title={`Steps per electrical period, taken from the Electromagnetic tab (sim.stepsPP). A sweep at a different step count than the last Electromagnetic run cannot reuse its warm state: every point solves cold (demag pre-pass + eddy warm-up, ~3x longer). Change it on the Electromagnetic tab.`}
-            style={{ marginLeft: 8, color: 'var(--text-3)', cursor: 'help' }}>
-            · {steps} steps/period
-          </span>
+          {/* The settings of the result on screen (its stamp, or its stored request for a sweep saved before the stamp). */}
+          {result && (
+            <span title={tx('sweepResultSettingsTip')}
+              style={{ marginLeft: 8, color: 'var(--text-3)', cursor: 'help' }}>
+              · {sweepSettingsLabel(sweepSettingsOf(result), optPreset?.label)}
+            </span>
+          )}
           {/* The 3-D end-effect view, same switch and factor as the Simulation
               summary ("3D" button) — so a current scaled off this chart lands on
               the same shaft power over there (2026-09-08: 500 → 487.46 kW). */}

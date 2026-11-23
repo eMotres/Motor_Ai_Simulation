@@ -9,6 +9,7 @@ import React, { useEffect, useState } from 'react';
 import { Box, Button, Typography } from '@mui/material';
 import { machineLabel } from '../../lib/sweepRestore';
 import type { MachineStamp } from '../../lib/sweepRestore';
+import { sweepSettingsOf, sweepSettingsLabel, sweepSettingsMismatch } from '../../lib/sweepSettings';
 
 const API = import.meta.env.VITE_API_URL ?? 'http://localhost:8001';
 
@@ -28,6 +29,8 @@ interface SavedRow {
   state?: string;
   n_done?: number | null;
   n_planned?: number | null;
+  /** What the sweep ran with: its preset stamp, or its stored request for a sweep saved before the stamp. */
+  settings?: { preset: string | null; steps_per_period: number | null; gap_layers: number | null; source: string };
 }
 
 /** "7/8 · stopped" - how far the run got, when the save knows. */
@@ -148,6 +151,12 @@ const SavedSweeps: React.FC<Props> = ({ canSave, running, onOpened, onError }) =
                   ? 'This is the machine loaded now.'
                   : 'Not the machine loaded now — it can be opened and viewed, but a point cannot be applied.'}>
                 {machineLabel(row.machine)}
+              </span>
+              <span style={{ color: sweepSettingsMismatch(sweepSettingsOf(row), sweepSettingsOf(rows?.[0])) ? '#fbbf24' : 'var(--text-3)', whiteSpace: 'nowrap' }}
+                title={sweepSettingsMismatch(sweepSettingsOf(row), sweepSettingsOf(rows?.[0]))
+                  ? 'Computed at other steps / gap rows than the newest saved sweep: do not compare the two.'
+                  : 'The settings this sweep was computed with.'}>
+                {sweepSettingsLabel(sweepSettingsOf(row))}
               </span>
               <span style={{ color: 'var(--text-3)', whiteSpace: 'nowrap' }}>
                 {progressLabel(row)}

@@ -1118,6 +1118,7 @@ def _applied_metrics(raw: Optional[dict]) -> dict:
         ("torque_per_mass", ("torque_per_mass", "torque_per_mass_Nm_kg", "td")),
         ("V_line_peak_V", ("V_line_peak_V", "v_line_peak_v")),
         ("P_mech_W", ("P_mech_W", "P_mech_avg_W")),
+        ("cogging_pp_Nm", ("cogging_pp_Nm",)),     # opt-in Sweep "Cogging pp"; absent otherwise
     ):
         v = _pick(*names)
         if v is not None:

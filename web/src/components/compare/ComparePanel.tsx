@@ -281,6 +281,10 @@ const THERM_COLS: ResultCol[] = [
   { key: 'loss_source_kind', label: 'Loss source', text: true, block: 'thermal', off: true },
 ];
 
+/** Opt-in: only a row that carries a no-load cogging value (a Sweep point applied with "Cogging pp") brings the column. */
+const COGGING_COLS: ResultCol[] = [
+  { key: 'cogging_pp_Nm', label: 'Cogging pp', unit: 'N·m', d: 3, better: 'lo' },
+];
 const MECH_COLS: ResultCol[] = ([
   // The two safety factors first — they are the verdict; the stresses behind
   // them are how the verdict was reached.
@@ -698,6 +702,7 @@ const ComparePanel: React.FC = () => {
   const thermAvail = [...THERM_COLS, ...dynamicThermCols(sims)]
     .filter(c => colPresent(c, sims));
   const mechAvail = MECH_COLS.filter(c => colPresent(c, sims));
+  const coggingAvail = COGGING_COLS.filter(c => colPresent(c, sims));
   const resGroups = [
     { title: 'Thermal',    cols: thermAvail },
     { title: 'Mechanical', cols: mechAvail },
@@ -707,6 +712,7 @@ const ComparePanel: React.FC = () => {
   // temperatures, then the mechanics.
   const resultCols: ResultCol[] = [
     ...RESULT_COLS,
+    ...coggingAvail,
     ...thermAvail.filter(shown),
     ...mechAvail.filter(shown),
   ];

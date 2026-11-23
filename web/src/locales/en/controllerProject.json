@@ -9,5 +9,26 @@
     "confirmBody": "The project shows the specification form and the results tab of this type. Nothing stored is deleted; switching back shows the earlier form again.",
     "confirm": "Change type",
     "cancel": "Cancel"
+  },
+  "spec": {
+    "tipEdit": "The controller specification of this project. Every number has a status: requirement, model or measured, and a source (a document, a study, a bench run). Save records what changed.",
+    "tipRead": "The controller specification of this project. Only the project owner and admins change it.",
+    "revision": "Revision {n}",
+    "revisionTip": "Last saved by {by}, {at}",
+    "save": "Save",
+    "perBuildTip": "One value per build of the Supply step.",
+    "noBuilds": "Add the builds in step 2 (Supply) first.",
+    "min": "min",
+    "nom": "nom",
+    "max": "max",
+    "notSet": "Not set",
+    "threshold": "Threshold",
+    "unit": "Unit",
+    "status": "Status",
+    "statusTip": "Requirement: what the controller must reach. Model: computed. Measured: from a test on a board.",
+    "source": "Source",
+    "addRow": "Add row",
+    "removeRow": "Remove row",
+    "history": "Changes"
   }
 }

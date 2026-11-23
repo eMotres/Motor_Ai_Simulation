@@ -474,6 +474,7 @@ app.include_router(agent_designs_router)
 from motor_ai_sim.production.routes import router as production_router
 from motor_ai_sim.production.admin_routes import router as production_admin_router
 app.include_router(production_router)
+from motor_ai_sim.production.checklist_routes import router as production_checklist_router; app.include_router(production_checklist_router)   # mass-production checklist
 app.include_router(production_admin_router)
 # Development projects share the Production module's authentication conventions.
 from motor_ai_sim.development.routes import router as development_router

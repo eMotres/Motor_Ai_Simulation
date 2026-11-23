@@ -60,12 +60,68 @@ def test_staff_enter_results_owners_enter_requirements_and_neither_crosses(env):
 
 
 def test_the_scope_of_a_change():
-    ch = CS.changes({}, {"pwm": {"values": {"model": {"value": 1}}}, "mcu": {"value": "x"},
-                         "protections": {"value": {"stall": {"unit": "s", "values": {"measured": {"value": 2}}}}}})
-    assert CS.change_scope([c for c in ch if c["field"] == "pwm"]) == {"results"}
-    assert CS.change_scope([c for c in ch if c["field"] == "mcu"]) == {"requirements"}
-    assert CS.change_scope([c for c in ch if c["field"] == "protections"]) == {"results"}
-    assert CS.change_scope(CS.changes({}, {"pwm": {"values": {"requirement": {"value": 1}}}})) == {"requirements"}
+    after = CS.normalize({"pwm": {"values": {"model": {"value": 1}}}, "mcu": {"value": "x"},
+                          "protections": {"value": {"stall": {"unit": "s", "values": {"measured": {"value": 2}}}}}})
+    pick = lambda *ids: {k: v for k, v in after.items() if k in ids}  # noqa: E731
+    assert CS.change_scope({}, pick("pwm")) == {"results"}
+    assert CS.change_scope({}, pick("mcu")) == {"requirements"}
+    assert CS.change_scope({}, pick("protections")) == {"requirements", "results"}       # ticking it is a requirement
+    assert CS.change_scope({}, CS.normalize({"pwm": {"values": {"requirement": {"value": 1}}}})) == {"requirements"}
+
+
+def test_a_build_named_like_a_column_or_with_a_dot_or_empty_is_refused(env):
+    """Astra on #836 (1): build names are user text and never decide the side of a change."""
+    for bad in (["6S", "model"], ["Requirement"], ["6S.1"], ["6S", " "], ["measured"]):
+        r = env["c"].put(URL, headers=H, json={"fields": {"builds": {"value": bad}}, "revision": 0})
+        assert r.status_code == 422, (bad, r.text)
+
+
+def test_the_side_of_a_change_comes_from_the_column_whatever_the_build_is_called(env):
+    """Both directions, clearing, and an earlier single answer of a per-build field."""
+    c = env["c"]
+    base = {"builds": {"value": ["A1", "B2"]},
+            "i_cont": {"builds": {"A1": {"values": {"requirement": {"value": 30}, "model": {"value": 29}}}, "B2": {"values": {"requirement": {"value": 20}}}}}}
+    assert c.put(URL, headers=H, json={"fields": base, "revision": 0}).status_code == 200
+    env["who"].update(email="eng@example.test", role="engineer")                       # staff: results only
+    req = _with(base, i_cont={"builds": {"A1": {"values": {"requirement": {"value": 31}, "model": {"value": 29}}}, "B2": {"values": {"requirement": {"value": 20}}}}})
+    assert c.put(URL, headers=H, json={"fields": req, "revision": 1}).status_code == 403
+    clear_req = _with(base, i_cont={"builds": {"A1": {"values": {"model": {"value": 29}}}, "B2": {"values": {"requirement": {"value": 20}}}}})
+    assert c.put(URL, headers=H, json={"fields": clear_req, "revision": 1}).status_code == 403        # clearing a requirement
+    clear_model = _with(base, i_cont={"builds": {"A1": {"values": {"requirement": {"value": 30}}}, "B2": {"values": {"requirement": {"value": 20}}}}})
+    assert c.put(URL, headers=H, json={"fields": clear_model, "revision": 1}).status_code == 200      # clearing a result
+    _owner_member(env)
+    env["who"].update(email="own@example.test", role="user")                          # the owner: requirements only
+    model = _with(clear_model, i_cont={"builds": {"A1": {"values": {"requirement": {"value": 30}, "model": {"value": 28}}}, "B2": {"values": {"requirement": {"value": 20}}}}})
+    assert c.put(URL, headers=H, json={"fields": model, "revision": 2}).status_code == 403
+    assert c.put(URL, headers=H, json={"fields": _with(clear_model, builds={"value": ["A1", "B2", "C3"]}), "revision": 2}).status_code == 200
+
+
+def test_an_earlier_single_answer_spread_over_the_builds_is_no_change_of_either_side(env):
+    store.save_json("ctl", CS.FILE, {**CS.empty(), "revision": 1, "fields": {
+        "builds": {"value": ["6S", "12S"]}, "i_cont": {"value": 33, "status": "model", "ref": "sim"}, "method": {"value": "foc_sensor"}}})
+    env["who"].update(email="eng@example.test", role="engineer")
+    got = env["c"].get(URL, headers=H).json()["fields"]
+    r = env["c"].put(URL, headers=H, json={"fields": got, "revision": 1})
+    assert r.status_code == 200 and r.json()["changed"] == []
+    more = _with(got, i_cont={"builds": {b: {"values": {"model": {"value": 33, "ref": "sim"}, "measured": {"value": 32}}} for b in ("6S", "12S")}})
+    assert env["c"].put(URL, headers=H, json={"fields": more, "revision": 1}).status_code == 200
+
+
+def test_ticking_a_protection_or_changing_its_unit_is_a_requirement(env):
+    """Astra on #836 (2): a protection with no value in any column is still the requirement side."""
+    c = env["c"]
+    base = {"protections": {"value": {"stall": {"unit": "s", "values": {"requirement": {"value": 2}}}}}}
+    assert c.put(URL, headers=H, json={"fields": base, "revision": 0}).status_code == 200
+    env["who"].update(email="eng@example.test", role="engineer")
+    for bad in ({"protections": {"value": {"stall": {"unit": "s", "values": {"requirement": {"value": 2}}}, "over_current": {"unit": "", "values": {}}}}},
+                {"protections": {"value": {"stall": {"unit": "ms", "values": {"requirement": {"value": 2}}}}}},
+                {"protections": {"value": {}}}):
+        r = c.put(URL, headers=H, json={"fields": bad, "revision": 1})
+        assert r.status_code == 403, (bad, r.text)                              # refused whole: nothing of it is saved
+    ok = {"protections": {"value": {"stall": {"unit": "s", "values": {"requirement": {"value": 2}, "model": {"value": 1.8}}}}}}
+    assert c.put(URL, headers=H, json={"fields": ok, "revision": 1}).status_code == 200
+    saved = json.loads((env["root"] / "ctl" / CS.FILE).read_text())
+    assert list(saved["fields"]["protections"]["value"]) == ["stall"] and saved["fields"]["protections"]["value"]["stall"]["unit"] == "s"
 
 
 def test_the_limits_are_on_plain_numbers_only():

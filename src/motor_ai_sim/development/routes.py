@@ -844,8 +844,9 @@ async def put_controller_spec(request: Request, project_id: str):
         if not isinstance(expected, int) or isinstance(expected, bool) or expected != int(doc.get("revision") or 0):
             raise HTTPException(status_code=409, detail={"message": "The controller specification changed; reload it",
                                                           "revision": doc.get("revision") or 0})
-        out["changes"] = CS.changes(CS.stored(doc.get("fields")), fields)
-        refused = sorted(side for side in CS.change_scope(out["changes"]) if not may[side])
+        before = CS.stored(doc.get("fields"))
+        out["changes"] = CS.changes(before, fields)
+        refused = sorted(side for side in CS.change_scope(before, fields) if not may[side])
         if refused:
             raise HTTPException(status_code=403, detail=("Only the project owner or an admin can change the requirements"
                                                          if "requirements" in refused else

@@ -753,3 +753,75 @@ def test_the_contract_answers_a_hidden_and_an_unknown_project_alike(client):
     hidden = client.get("/api/projects/alpha/contract", headers=_h("viewer"))
     unknown = client.get("/api/projects/nope/contract", headers=_h("viewer"))
     assert hidden.status_code == unknown.status_code == 404 and hidden.json() == unknown.json()
+
+
+# ── Astra round 3 (2026-11-23) ────────────────────────────────────────────────────────────────────────────────────────────────
+
+def _accounts(monkeypatch):
+    from motor_ai_sim import users as U
+    from motor_ai_sim.development import motors as MO
+    monkeypatch.setattr(MO, "_sync_grants", lambda *a, **k: None)
+    return U
+
+
+def test_a_revoked_owner_invite_is_not_claimed_from_a_stale_copy(client, monkeypatch):
+    from motor_ai_sim.development import routes as RT
+    U = _accounts(monkeypatch)
+    assert _invite(client, "late@example.test", "owner").status_code == 200
+    assert [p["role"] for p in store.get_project("alpha")["pending_invites"] if p["email"] == "late@example.test"] == ["owner"]
+
+    def revoke_then_account(email):                       # the invite is withdrawn after claim_pending_invites read it
+        store.mutate_project("alpha", lambda p: p.update(pending_invites=[i for i in p["pending_invites"] if i["email"] != "late@example.test"]))
+        return {"role": "user"}
+
+    monkeypatch.setattr(U, "get_user", revoke_then_account)
+    assert RT.claim_pending_invites("late@example.test") == []
+    project = store.get_project("alpha")
+    assert "late@example.test" not in {m["email"] for m in project["members"] + project["pending_invites"]}
+
+
+def test_a_claim_takes_the_current_role_and_flag_of_the_invite(client, monkeypatch):
+    from motor_ai_sim.development import routes as RT
+    U = _accounts(monkeypatch)
+    assert _invite(client, "late@example.test", "owner").status_code == 200
+
+    def downgrade_then_account(email):                    # an owner demoted the invite to a flagged-off customer meanwhile
+        def demote(p):
+            for i in p["pending_invites"]:
+                if i["email"] == "late@example.test":
+                    i["role"] = "customer"
+        store.mutate_project("alpha", demote)
+        return {"role": "user"}
+
+    monkeypatch.setattr(U, "get_user", downgrade_then_account)
+    assert RT.claim_pending_invites("late@example.test") == ["alpha"]
+    project = store.get_project("alpha")
+    assert [m["role"] for m in project["members"] if m["email"] == "late@example.test"] == ["customer"]
+    assert "late@example.test" not in {i["email"] for i in project["pending_invites"]}
+
+
+def test_a_failed_index_write_undoes_only_its_own_change(client, monkeypatch):
+    """The rollback used to restore the old WHOLE document, erasing a concurrent PATCH's grant and audit intent."""
+    U = _accounts(monkeypatch)
+    monkeypatch.setattr(U, "get_user", lambda email: {"role": "user"})
+    real = store.sync_membership_index
+    calls = {"n": 0}
+
+    def failing(project_id, old, new):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            assert _switch(client, "viewer@example.test", True).status_code == 200      # a PATCH lands before the rollback
+            raise OSError("index write failed")
+        return real(project_id, old, new)
+
+    monkeypatch.setattr(store, "sync_membership_index", failing)
+    with pytest.raises(OSError):
+        _invite(client, "late@example.test", "customer", sees_prices=True)
+    monkeypatch.setattr(store, "sync_membership_index", real)
+    project = store.get_project("alpha")
+    assert {m["email"]: m.get("sees_prices") for m in project["members"]}["viewer@example.test"] is True       # the PATCH grant survives
+    assert "late@example.test" not in {m["email"] for m in [*project["members"], *project.get("pending_invites", [])]}     # the POST is undone
+    _flush = __import__("motor_ai_sim.development.routes", fromlist=["x"])._flush_price_audit
+    _flush("alpha")
+    assert "viewer@example.test" in [r["entity_id"] for r in _events()]            # the PATCH's audit intent survives
+    assert [r["entity_id"] for r in _events(action="sees_prices_undone")] == ["late@example.test"]   # a flushed row of the undone POST is answered

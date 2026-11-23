@@ -70,3 +70,29 @@ test('three columns per value: requirement, model, measured; an empty column is 
   assert.deepEqual(r.values, {});                                  // an all-empty range is no value
   assert.deepEqual(withCell({ values: {} }, 'measured', { value: null, ref: 'bench plan' }).values, { measured: { value: null, ref: 'bench plan' } });
 });
+
+test('a model or measured value is marked only where the comparison is plain: a number with a max / min limit', async () => {
+  const { breachOf } = await import('../controllerSpec.ts');
+  const iCont = { id: 'i_cont', label: { en: 'I' }, kind: 'number', unit: 'A rms', limit: 'min' };
+  const ripple = { id: 'ripple', label: { en: 'R' }, kind: 'number', unit: '%', limit: 'max' };
+  const free = { id: 'pwm', label: { en: 'P' }, kind: 'number' };
+  const a = (req, model, measured) => ({ values: { requirement: { value: req }, model: { value: model }, measured: { value: measured } } });
+  assert.deepEqual(breachOf(iCont, a(33, 31.5, 34), 'model'), { limit: 'min', requirement: 33, value: 31.5 });
+  assert.equal(breachOf(iCont, a(33, 31.5, 34), 'measured'), null);
+  assert.deepEqual(breachOf(ripple, a(5, 6, 4), 'model'), { limit: 'max', requirement: 5, value: 6 });
+  assert.equal(breachOf(ripple, a(5, 5, 5), 'model'), null);                     // equal to the limit is no breach
+  assert.equal(breachOf(free, a(48, 40, 40), 'model'), null);                    // no limit in the schema: never marked
+  assert.equal(breachOf(iCont, a(null, 10, 10), 'model'), null);                 // no requirement: nothing to compare
+  assert.equal(breachOf(iCont, a(33, 31.5, 34), 'requirement'), null);
+  assert.equal(breachOf({ ...iCont, kind: 'range' }, { values: { requirement: { value: { min: 1, nom: null, max: 2 } }, model: { value: { min: 0, nom: null, max: 3 } } } }, 'model'), null);
+});
+
+test('the Controller sim tab shows only the steps and fields that carry results', async () => {
+  const { sectionsFor } = await import('../controllerSpec.ts');
+  const s = { schema_version: 2, title: { en: 'C' }, statuses: [], sections: [
+    { id: 'identity', title: { en: '1' }, fields: [{ id: 'name', label: { en: 'n' }, kind: 'text' }] },
+    { id: 'output', title: { en: '3' }, fields: [{ id: 'pwm', label: { en: 'p' }, kind: 'number' }, { id: 'notes_output', label: { en: 'x' }, kind: 'longtext' }] },
+    { id: 'interfaces', title: { en: '5' }, fields: [{ id: 'protections', label: { en: 'p' }, kind: 'thresholds' }] }] };
+  assert.deepEqual(sectionsFor(s, 'results').map((x) => [x.id, x.fields.map((f) => f.id)]), [['output', ['pwm']], ['interfaces', ['protections']]]);
+  assert.equal(sectionsFor(s, 'requirements').length, 3);
+});

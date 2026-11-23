@@ -8,6 +8,8 @@ export type FieldKind = 'text' | 'longtext' | 'number' | 'range' | 'choice' | 'm
 export interface CtlOption { value: string; label: Lang }
 export interface CtlField {
   id: string; label: Lang; kind: FieldKind; unit?: string; per_build?: boolean; tip?: Lang;
+  /** which side of the requirement is the limit (a plain number only): a model / measured value beyond it is marked */
+  limit?: 'max' | 'min';
   options?: CtlOption[]; columns?: { id: string; label: Lang; unit?: string }[];
 }
 export interface CtlSchema { schema_version: number; title: Lang; statuses: CtlOption[]; sections: { id: string; title: Lang; fields: CtlField[] }[] }
@@ -24,6 +26,8 @@ export interface CtlChange { field: string; before: unknown; after: unknown; col
 export interface CtlSpec {
   schema_version: number; revision: number; updated_at: string | null; updated_by: string | null;
   fields: Record<string, CtlStored>; schema: CtlSchema; can_edit: boolean;
+  /** MOTRES staff: the model / measured results of the Controller sim tab */
+  can_edit_results?: boolean;
   history: { revision: number; at: string; by: string; changes: CtlChange[] }[]; changed?: string[];
 }
 
@@ -131,3 +135,31 @@ export function afterSave(local: Record<string, CtlStored>, saved: Pick<CtlSpec,
 
 /** Is this error the server's "somebody saved in between" (409)? */
 export const isConflict = (e: unknown): boolean => (e as { status?: unknown } | null)?.status === 409;
+
+
+/** A model / measured value that breaks its requirement - only where the comparison is plain: a number against a number, on a field
+ *  whose schema names the limit side (max: the value must not be above the requirement; min: not below). */
+export function breachOf(field: CtlField, answer: CtlAnswer, col: ValueStatus): { limit: 'max' | 'min'; requirement: number; value: number } | null {
+  if (field.kind !== 'number' || (field.limit !== 'max' && field.limit !== 'min') || col === 'requirement') return null;
+  const req = cellOf(answer, 'requirement').value;
+  const v = cellOf(answer, col).value;
+  if (typeof req !== 'number' || typeof v !== 'number') return null;
+  return (field.limit === 'max' ? v > req : v < req) ? { limit: field.limit, requirement: req, value: v } : null;
+}
+
+/** The steps of a tab: the Specification shows every field; Controller sim only the ones with results (numbers, ranges, protections). */
+export function sectionsFor(schema: CtlSchema, mode: 'requirements' | 'results'): CtlSchema['sections'] {
+  if (mode === 'requirements') return schema.sections;
+  return schema.sections.map((s) => ({ ...s, fields: s.fields.filter((f) => hasColumns(f.kind) || f.kind === 'thresholds') }))
+    .filter((s) => s.fields.length > 0);
+}
+
+// ── the records of the Controller sim tab: board revisions and test results (staff enter them, members read) ──────────────────
+export interface SimRevision { rev: string; status: '' | 'draft' | 'frozen' | 'released'; date: string; documents: string; note: string }
+export interface SimTest { date: string; revision: string; name: string; value: string; result: '' | 'pass' | 'fail'; ref: string }
+export interface SimRecords { revision: number; updated_at: string | null; updated_by: string | null; revisions: SimRevision[]; tests: SimTest[]; can_edit: boolean; changed?: string[] }
+const simAt = (id: string) => `/api/projects/${encodeURIComponent(id)}/controller-sim`;
+export const controllerSimApi = {
+  get: (projectId: string) => call<SimRecords>('GET', simAt(projectId)),
+  save: (projectId: string, r: Pick<SimRecords, 'revisions' | 'tests'>, revision: number) => call<SimRecords>('PUT', simAt(projectId), { revisions: r.revisions, tests: r.tests, revision }),
+};

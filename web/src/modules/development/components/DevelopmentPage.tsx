@@ -782,7 +782,7 @@ export default function DevelopmentPage() {
       <Box sx={{ minWidth: 0, flex: 1 }}>
       <SubTabs value={view} onChange={(v) => void openTab(v)} ariaLabel={selected.title} items={[
         { id: 'specification', label: tr('tabs.specification') },
-        { id: 'motors', label: tr('tabs.motors') },
+        { id: 'motors', label: isController ? ct('tabs.controllerSim') : tr('tabs.motors') },   // owner 2026-11-23: "Controller sim"
         { id: 'messages', label: projectUnread(selected) > 0 ? <Tooltip title={tr('unread.tip', { count: projectUnread(selected) })}><span>{tr('tabs.messages')} <Chip size="small" color="primary" label={unreadLabel(projectUnread(selected))} sx={{ height: 16, fontSize: 10, ml: 0.5 }} /></span></Tooltip> : tr('tabs.messages') },
         { id: 'documents' as const, label: tr('tabs.documents') },
         { id: 'model3d' as const, label: <ProjectModel3DTabLabel /> },   // the SAME viewer as Configure (owner 2026-11-22)
@@ -813,7 +813,9 @@ export default function DevelopmentPage() {
         banner={canEditSpec && (spec.schema_version ?? 1) < 2 ? <Alert severity="warning" action={<Button color="inherit" size="small" disabled={migrationBusy || saving} onClick={() => void requestMigrationPreview()}>{tr('migration.action')}</Button>}>{tr('migration.body')}</Alert> : null}
         assistant={() => null} />}
     </Box>}
-    {view === 'motors' && <Box>
+    {view === 'motors' && isController && <ControllerSpecForm key={`sim-${selected.id}`} mode="results" projectId={selected.id} lang={lang} ct={ct}
+      linkedMotors={motors.filter((m) => m.kind !== 'history')} memoryScope={user?.email ? `${developmentViewScope(user.email)}.controllerSimStep.${selected.id}` : null} />}
+    {view === 'motors' && !isController && <Box>
       <Box sx={{ display: 'flex', alignItems: 'center', mb: 1 }}><Box sx={{ flex: 1 }}><HelpTip title={tr('motorsTip')} /></Box>{canManageGlobally && <Button size="small" startIcon={<AddIcon />} onClick={async () => { if (selected) { try { setPicker(await developmentApi.motorPicker(selected.id)); setLinkOpen(true); } catch (e) { setError(e instanceof Error ? e.message : String(e)); } } }}>{tr('linkMotor')}</Button>}</Box>
       {canEditProject && !!selected.grant_removal_candidates?.length && <Tooltip title={<Stack spacing={0.4}><Typography sx={{ fontSize: 11 }}>{tr('grantReviewTip')}</Typography>{selected.grant_removal_candidates.map((candidate) => <Typography key={`${candidate.email}/${candidate.die}/${candidate.config}`} sx={{ fontSize: 11 }}>{candidate.email} · {candidate.die}/{candidate.config} · {tr(`grantReason.${candidate.reason}`)}</Typography>)}</Stack>}><Alert severity="info" sx={{ mb: 1, py: 0 }}>{tr('grantReviewCount', { count: selected.grant_removal_candidates.length })}</Alert></Tooltip>}
       {(() => {

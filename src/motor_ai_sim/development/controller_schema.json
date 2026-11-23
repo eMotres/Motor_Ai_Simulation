@@ -179,7 +179,8 @@
       "zh-CN": "所需输入电容"
      },
      "kind": "number",
-     "unit": "µF"
+     "unit": "µF",
+     "limit": "min"
     },
     {
      "id": "input_cap_esr",
@@ -188,7 +189,8 @@
       "zh-CN": "输入电容 ESR"
      },
      "kind": "number",
-     "unit": "mΩ"
+     "unit": "mΩ",
+     "limit": "max"
     },
     {
      "id": "input_cap_ripple",
@@ -197,7 +199,8 @@
       "zh-CN": "输入电容纹波电流"
      },
      "kind": "number",
-     "unit": "A rms"
+     "unit": "A rms",
+     "limit": "min"
     },
     {
      "id": "notes_supply",
@@ -237,7 +240,8 @@
      },
      "kind": "number",
      "unit": "A rms",
-     "per_build": true
+     "per_build": true,
+     "limit": "min"
     },
     {
      "id": "i_peak",
@@ -247,7 +251,8 @@
      },
      "kind": "number",
      "unit": "A rms",
-     "per_build": true
+     "per_build": true,
+     "limit": "min"
     },
     {
      "id": "t_peak",
@@ -256,7 +261,8 @@
       "zh-CN": "峰值电流持续时间"
      },
      "kind": "number",
-     "unit": "s"
+     "unit": "s",
+     "limit": "min"
     },
     {
      "id": "pwm",
@@ -274,7 +280,8 @@
       "zh-CN": "最大电频率"
      },
      "kind": "number",
-     "unit": "Hz"
+     "unit": "Hz",
+     "limit": "min"
     },
     {
      "id": "rpm_max",
@@ -283,7 +290,8 @@
       "zh-CN": "配套电机最高转速"
      },
      "kind": "number",
-     "unit": "rpm"
+     "unit": "rpm",
+     "limit": "min"
     },
     {
      "id": "eff_target",
@@ -292,7 +300,8 @@
       "zh-CN": "额定点目标效率"
      },
      "kind": "number",
-     "unit": "%"
+     "unit": "%",
+     "limit": "min"
     },
     {
      "id": "notes_output",
@@ -424,7 +433,8 @@
       "zh-CN": "持续工作点转矩脉动"
      },
      "kind": "number",
-     "unit": "%"
+     "unit": "%",
+     "limit": "max"
     },
     {
      "id": "notes_control",
@@ -789,7 +799,8 @@
       "zh-CN": "总高度"
      },
      "kind": "number",
-     "unit": "mm"
+     "unit": "mm",
+     "limit": "max"
     },
     {
      "id": "mass",
@@ -798,7 +809,8 @@
       "zh-CN": "质量"
      },
      "kind": "number",
-     "unit": "g"
+     "unit": "g",
+     "limit": "max"
     },
     {
      "id": "mounting",
@@ -920,7 +932,8 @@
       "zh-CN": "电路板温度限值"
      },
      "kind": "number",
-     "unit": "°C"
+     "unit": "°C",
+     "limit": "max"
     },
     {
      "id": "coating",

@@ -215,6 +215,12 @@ def normalize(raw: Any) -> dict:
     out: dict = {}
     if "builds" in raw:
         out["builds"] = _answer(known["builds"], raw["builds"], "builds")
+        raw_list = (raw["builds"] or {}).get("value") if isinstance(raw["builds"], dict) else None
+        if isinstance(raw_list, list) and any(isinstance(x, str) and not x.strip() for x in raw_list):
+            raise ValueError("builds: a build name cannot be empty")
+        for b in out["builds"]["value"]:
+            if "." in b or b.casefold() in COLUMNS:          # a build name is never read as a column or a path (Astra on #836)
+                raise ValueError(f"builds: '{b}' cannot be a build name (no dot, not requirement / model / measured)")
     builds = list((out.get("builds") or {}).get("value") or [])
     for fid, a in raw.items():
         if fid == "builds":
@@ -289,4 +295,48 @@ def changes(before: dict, after: dict) -> list[dict]:
                 b, a = _cells(known[fid], before.get(fid)), _cells(known[fid], after.get(fid))
                 row["columns"] = sorted(k for k in set(b) | set(a) if b.get(k) != a.get(k))
             out.append(row)
+    return out
+
+
+def _parts(field: dict, a: Any) -> tuple[dict, dict]:
+    """A numeric answer as structured parts, never a joined string (Astra on #836): ``cells[(build, option, column)] = cell`` and,
+    for protections, ``meta[(build, option)] = unit`` - a protection that is ticked counts even with no value in any column."""
+    cells: dict = {}
+    meta: dict = {}
+    if not isinstance(a, dict):
+        return cells, meta
+    parts = list(a["builds"].items()) if isinstance(a.get("builds"), dict) and set(a) == {"builds"} else [(None, a)]
+    for build, ans in parts:
+        if not isinstance(ans, dict):
+            continue
+        if field["kind"] == "thresholds":
+            for opt, item in (ans.get("value") or {}).items():
+                item = item if isinstance(item, dict) else {}
+                meta[(build, opt)] = item.get("unit")
+                for col, cell in (item.get("values") or {}).items():
+                    cells[(build, opt, col)] = cell
+        else:
+            for col, cell in (ans.get("values") or {}).items():
+                cells[(build, None, col)] = cell
+    return cells, meta
+
+
+def change_scope(before: dict, after: dict) -> set:
+    """Which side a save touches, from the two normalized ``fields`` maps: ``requirements`` (the requirement column, a protection
+    ticked or not and its unit, every field without columns - the Specification tab: project owner and admins) and / or
+    ``results`` (the model and measured columns - the Controller sim tab: MOTRES staff; owner 2026-11-23)."""
+    out: set = set()
+    for fid, field in fields().items():
+        b, a = before.get(fid), after.get(fid)
+        if b == a:
+            continue
+        if field["kind"] not in NUMERIC:
+            out.add("requirements")
+            continue
+        (bc, bm), (ac, am) = _parts(field, b), _parts(field, a)
+        if bm != am:
+            out.add("requirements")
+        for key in set(bc) | set(ac):
+            if bc.get(key) != ac.get(key):
+                out.add("requirements" if key[2] == "requirement" else "results")
     return out

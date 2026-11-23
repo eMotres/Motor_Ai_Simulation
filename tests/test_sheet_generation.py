@@ -182,3 +182,17 @@ def test_the_coupled_warm_start_skips_a_state_of_an_earlier_sheet(gen):
     assert SG.row_allowed(d, {"sheet_hash": SG.sheet_hash(SHEET_B)})
     assert not SG.row_allowed(d, {"sheet_hash": SG.sheet_hash(SHEET_A)}) and not SG.row_allowed(d, {})
     assert SG.row_allowed(_set_die(gen, SHEET_A, die=OTHER), {})               # generation 1: any row
+
+
+def test_a_block_signed_by_another_host_is_no_block_and_the_save_is_a_clear_409(gen, monkeypatch):
+    """EU and US have different auth secrets: a block is verified only by the host that issued it (the saving host issues it)."""
+    from motor_ai_sim import users as U
+    _set_die(gen, SHEET_B, generation=2)
+    real = U._secret
+    monkeypatch.setattr(U, "_secret", lambda: "the-other-host-secret")
+    foreign = SG.issue(SHEET_B)
+    monkeypatch.setattr(U, "_secret", real)
+    assert SG.verified_hash(foreign) is None
+    r = _result(gen, foreign)
+    assert r.status_code == 409 and "earlier sheet" in r.text
+    assert _result(gen, SG.issue(SHEET_B)).status_code == 200

@@ -292,6 +292,9 @@ def _devices() -> List[dict]:
     return out
 
 
+from motor_ai_sim import sheet_replace as _DS
+
+
 def _visible_tree() -> List[dict]:
     """The caller's catalog tree - the SAME function the web's Motors tab calls,
     minus every configuration without a catalogue card (``card_date``) and every
@@ -308,6 +311,8 @@ def _visible_tree() -> List[dict]:
         cfgs = [({**c, "bearings": public_bearings(c["bearings"])}
                  if isinstance(c.get("bearings"), dict) else c)
                 for c in d.get("configs") or [] if c.get("card_date")]
+        # sheet_replace (owner 2026-11-23): a result computed on a replaced sheet is never served to an outside agent as current
+        cfgs = [{**c, "duties": _DS.current_duties(c.get("duties"))} if "duties" in c else c for c in cfgs]
         if cfgs:
             out.append({**d, "configs": cfgs, "config_count": len(cfgs)})
     return out
@@ -453,7 +458,7 @@ def _performance(die_name: str, cfg_name: str, duty_name: str) -> Dict[str, Any]
     r = duty.get("result") if isinstance(duty.get("result"), dict) else {}
     from motor_ai_sim import duty_results as _dr
     stored = ((_dr.index(die_name).get(cfg_name) or {}).get(duty_name) or {})
-    coupled = stored.get("coupled") if isinstance(stored.get("coupled"), dict) else {}
+    coupled = stored.get("coupled") if isinstance(stored.get("coupled"), dict) and _DS.is_current(stored.get("coupled")) else {}
     head = _duty_headline(duty)
     losses = {"total_electromagnetic_w": _f(r.get("loss_w"), 1),
               "core_w": _f(r.get("p_core_w"), 1),

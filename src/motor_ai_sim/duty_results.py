@@ -605,6 +605,11 @@ def record(die: str, cfg: str, duty: str, kind: str,
             if "designation" not in e:
                 e["designation"] = designation_stamp(die)
             e = _carry_excitation_blocks(kind, e, node.get(kind))
+            # sheet_replace (owner 2026-11-23): a row marked "computed on the previous sheet" keeps its mark unless THIS result was
+            # computed on the die's current sheet (the live machine is on it); a new row never gains a mark here
+            _prev = node.get(kind)
+            if isinstance(_prev, dict) and _prev.get("sheet_stale") and not _live_on_sheet(str(die)):
+                e["sheet_stale"] = _prev["sheet_stale"]
             _keep_previous(doc, str(die), str(cfg), str(duty), kind, node.get(kind), e)
             node[kind] = e
             return _write_all(doc)
@@ -612,6 +617,35 @@ def record(die: str, cfg: str, duty: str, kind: str,
         log.warning("duty_results: could not record %s for %s/%s/%s (%s)",
                     kind, die, cfg, duty, exc)
         return False
+
+
+def _live_on_sheet(die: str) -> bool:
+    from motor_ai_sim import sheet_replace as _ds
+    return _ds.live_on_sheet(die)
+
+
+def mark_sheet_stale(die: str, mark: Dict[str, Any]) -> int:
+    """sheet_replace: mark every stored row of every configuration of ``die`` (the current rows, not the history) as computed on the
+    previous sheet.  Additive: nothing is removed or rewritten but the mark.  Returns how many rows were marked; raises when the
+    store cannot be written (the sheet replacement then stops before the die is written)."""
+    with _store_write_lock():
+        doc = read_all()
+        n = 0
+        for _cfg, duties in (((doc.get("results") or {}).get(str(die))) or {}).items():
+            for _duty, kinds in (duties or {}).items():
+                for _kind, row in (kinds or {}).items():
+                    if isinstance(row, dict):
+                        row["sheet_stale"] = dict(mark)
+                        n += 1
+        if n and not _write_all(doc):
+            raise OSError("duty_results: the store could not be written")
+        return n
+
+
+def is_current_row(row: Any) -> bool:
+    """THE rule of ``sheet_replace.is_current`` for a stored row (readers of this store ask this)."""
+    from motor_ai_sim import sheet_replace as _ds
+    return _ds.is_current(row)
 
 
 def record_alt_carrier(die: str, cfg: str, duty: str, kind: str,

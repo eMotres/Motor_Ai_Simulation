@@ -47,6 +47,7 @@ import time
 from typing import Any, Callable, Dict, List, Optional
 
 from motor_ai_sim.duty_kind import is_test_duty
+from motor_ai_sim import sheet_replace as _DS
 
 logger = logging.getLogger(__name__)
 
@@ -138,7 +139,8 @@ def _is_peak(name: Any) -> bool:
 
 def _pick_rated(c: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     # a bench-test / validation point (``duty_kind``) is never the rating
-    duties = [d for d in (c.get("duties") or []) if isinstance(d, dict) and not is_test_duty(d)]
+    # nor a duty computed on a replaced sheet (sheet_replace, owner 2026-11-23): the public card and the assistant quote current ones
+    duties = [d for d in (c.get("duties") or []) if isinstance(d, dict) and not is_test_duty(d) and _DS.is_current(d)]
     if not duties:
         return None
     want = c.get("default_duty")
@@ -190,7 +192,7 @@ def _other_duties(c: Dict[str, Any], rated: Dict[str, Any]) -> List[str]:
     """Peak first, then the other short-time duties, each with its time."""
     others = [d for d in (c.get("duties") or [])
               if isinstance(d, dict) and d is not rated and d.get("name") != rated.get("name")
-              and not is_test_duty(d)]
+              and not is_test_duty(d) and _DS.is_current(d)]
     others.sort(key=lambda d: (0 if _is_peak(d.get("name")) else 1))
     out = []
     for d in others[:_MAX_EXTRA_DUTIES]:

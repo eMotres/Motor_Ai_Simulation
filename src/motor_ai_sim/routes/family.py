@@ -2495,6 +2495,8 @@ def _build_config_row(die: dict, c: dict, name: str, _dr_cfg: dict) -> dict:
                             or (d.get("summary") or {}).get("star_delta")),
              "torque_nm": d.get("torque_nm"), "power_kw": d.get("power_kw"),
              "note": d.get("note", ""), "result": _with_mech_loss(d),
+             # sheet_replace (owner 2026-11-23): computed on a replaced sheet - only on a marked duty, absent otherwise
+             **({"sheet_stale": d["sheet_stale"]} if d.get("sheet_stale") else {}),
              # The lead / phase-board loss as its own term and the efficiency AT THE TERMINALS, derived at serve time from
              # the configuration's `terminals:` block (owner 2026-11-18); absent when none is stated.  The duty's own
              # `result` / `summary` above are never changed.
@@ -4107,6 +4109,7 @@ def record_duty_result(req: DutyResult, _w: dict = Depends(require_catalog_write
     _store_run(die, cfg, c, found, _drive, result=res,
                assignment_sig=req.assignment_sig)
     _save_yaml(p, c)
+    __import__("motor_ai_sim.sheet_replace", fromlist=["refresh_mark"]).refresh_mark(die, cfg, req.duty)  # sheet_replace: a save on the current sheet clears the mark
     # The per-duty store keeps a POINTER at the electromagnetic column, never a
     # copy of it (2026-09-09): the numbers above live in the configuration yaml,
     # which is the one place a catalogue answer may live, and a second copy able

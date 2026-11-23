@@ -401,6 +401,8 @@ app.include_router(production_lifecycle_router)   # /api/production-lifecycle: p
 app.include_router(die_archive_router)   # /api/die-archive: archive a workspace / published die (admins)
 from motor_ai_sim.routes.config_archive import router as config_archive_router
 app.include_router(config_archive_router)   # /api/config-archive: archive / restore ONE configuration (admins, owner 2026-11-22)
+from motor_ai_sim.routes.sheet_replace import router as sheet_replace_router
+app.include_router(sheet_replace_router)        # /api/die-sheet: replace the sheet of ONE die, dry run first (admins, owner 2026-11-23)
 app.include_router(designation_router)   # /api/designation: the standard motor name, from the parameters
 app.include_router(presets_router)
 app.include_router(catalog_cards_router)   # before the motor catalog: /api/catalog/cards/*

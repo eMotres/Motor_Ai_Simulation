@@ -18,6 +18,7 @@ USERS = {
     "owner": ("owner@example.test", "user"), "owner2": ("owner2@example.test", "user"),
     "eng": ("eng@example.test", "user"), "cust": ("cust@example.test", "user"), "price": ("price@example.test", "user"),
     "geng": ("geng@example.test", "engineer"), "admin": ("admin@example.test", "admin"), "out": ("out@example.test", "user"),
+    "oem": ("oem@example.test", "oem"), "oemflag": ("oemflag@example.test", "oem"),
 }
 SECRET = "contract-with-prices.pdf"
 
@@ -36,7 +37,9 @@ def client(tmp_path, monkeypatch):
                           "owner_engineer": "owner@example.test", "linked_motors": [], "notes": "", "pending_invites": [],
                           "members": [{"email": USERS["owner"][0], "role": "owner"}, {"email": USERS["owner2"][0], "role": "owner"},
                                       {"email": USERS["eng"][0], "role": "engineer"}, {"email": USERS["cust"][0], "role": "customer"},
-                                      {"email": USERS["price"][0], "role": "customer", "sees_prices": True}]})
+                                      {"email": USERS["price"][0], "role": "customer", "sees_prices": True},
+                                      {"email": USERS["oem"][0], "role": "owner"},
+                                      {"email": USERS["oemflag"][0], "role": "customer", "sees_prices": True}]})
     app = FastAPI()
     app.include_router(router)
     return TestClient(app)
@@ -148,3 +151,133 @@ def test_an_mcp_agent_never_sees_a_restricted_row(client, docs):
 
 def test_a_non_member_gets_nothing(client, docs):
     assert client.get("/api/projects/p1/documents", headers=hdr("out")).status_code in (403, 404)
+
+
+# ── #804 review fixes (Astra 2026-11-23, coordinator decisions 2026-11-23) ────────────────────────────────────────────────────────
+
+def _png(path_bytes=None):
+    from PIL import Image
+    buf = io.BytesIO()
+    Image.new("RGB", (40, 30), (200, 10, 10)).save(buf, "PNG")
+    return buf.getvalue()
+
+
+def _upload_png(client, who="owner", name="top.png", **fields):
+    return client.post("/api/projects/p1/documents", headers=hdr(who), files={"file": (name, _png())}, data=fields).json()
+
+
+def _events(tmp_path):
+    p = tmp_path / "projects" / "p1" / "audit.jsonl"
+    return [json.loads(x) for x in p.read_text().splitlines() if x.strip()] if p.exists() else []
+
+
+def test_identity_comes_first_oem_agent_engineer(client, docs):
+    _open, secret = docs
+    for who in ("oem", "oemflag"):              # a factory account never sees prices: not as owner, not with the flag
+        assert ids(client, who) == {"open.pdf"}
+        assert client.get("/api/projects/p1/documents/%s/download" % secret["id"], headers=hdr(who)).status_code == 404
+        assert client.get("/api/projects/p1/documents", headers=hdr(who)).json()["can_restrict"] is False
+        assert up(client, who=who, name="o.pdf", price_restricted="true").status_code == 403
+    assert ids(client, "geng") == {"open.pdf", SECRET}            # MOTRES staff always do
+    assert client.get("/api/projects/p1/documents", headers=hdr("geng")).json()["can_restrict"] is True
+    project = store.get_project("p1")
+    agent = {"email": USERS["owner"][0], "role": "user"}
+    with auth.use_agent_user(agent):
+        assert documents._prices(agent, project) is False
+        assert documents._can_restrict(agent, project) is False
+    assert documents._prices(agent, project) is True
+
+
+def test_a_restricted_upload_is_one_write_never_public(client, tmp_path, monkeypatch):
+    seen = []
+    real = store.mutate_json
+
+    def spy(project_id, name, mutator, default=None):
+        out = real(project_id, name, mutator, default)
+        if name == store.DOCUMENTS_JSON:
+            seen.append([dict(r) for r in store.load_documents(project_id)])
+        return out
+
+    monkeypatch.setattr(store, "mutate_json", spy)
+    r = up(client, name="priced.pdf", price_restricted="true")
+    assert r.status_code == 200 and r.json()["price_restricted"] is True
+    first = [rows for rows in seen if any(x["name"] == "priced.pdf" for x in rows)][0]
+    assert [x["price_restricted"] for x in first if x["name"] == "priced.pdf"] == [True]      # the row's very first state is restricted
+    assert "priced.pdf" not in ids(client, "cust")
+    assert [e for e in _events(tmp_path) if e["action"] == "document.upload"][0]["details"]["price_restricted"] is True
+
+
+def test_cover_race_document_restricted_while_the_thumbnail_is_made(client, tmp_path, monkeypatch):
+    doc = _upload_png(client)
+    from motor_ai_sim.development import cover as cover_mod
+    real = cover_mod.make_thumbnail
+
+    def racing(path):
+        out = real(path)
+        store.mutate_documents("p1", lambda rows: [r.update(price_restricted=True) for r in rows if r["id"] == doc["id"]])
+        return out
+
+    monkeypatch.setattr(cover_mod, "make_thumbnail", racing)
+    r = client.put("/api/projects/p1/cover", headers=hdr("owner"), json={"document_id": doc["id"]})
+    assert r.status_code == 409
+    assert store.read_cover("p1") is None and "cover" not in store.get_project("p1")
+    assert client.get("/api/projects/p1/cover", headers=hdr("cust")).status_code == 404
+
+
+def test_cover_is_cleared_and_get_cover_enforces_the_source_document(client, tmp_path):
+    doc = _upload_png(client)
+    assert client.put("/api/projects/p1/cover", headers=hdr("owner"), json={"document_id": doc["id"]}).status_code == 200
+    assert client.get("/api/projects/p1/cover", headers=hdr("cust")).status_code == 200
+    # the clearing never happened (a failure): the stored cover still points at the document, which is now restricted
+    store.mutate_documents("p1", lambda rows: [r.update(price_restricted=True) for r in rows if r["id"] == doc["id"]])
+    assert "cover" in store.get_project("p1")
+    for who in ("cust", "owner", "admin", "price"):
+        assert client.get("/api/projects/p1/cover", headers=hdr(who)).status_code == 404
+    # the normal path: PATCH restricts and the cover goes
+    doc2 = _upload_png(client, name="two.png")
+    assert client.put("/api/projects/p1/cover", headers=hdr("owner"), json={"document_id": doc2["id"]}).status_code == 200
+    assert client.patch("/api/projects/p1/documents/%s" % doc2["id"], headers=hdr("owner"), json={"price_restricted": True}).status_code == 200
+    assert "cover" not in store.get_project("p1") and store.read_cover("p1") is None
+    assert [e["details"]["reason"] for e in _events(tmp_path) if e["action"] == "cover.clear"] == ["document marked price-restricted"]
+
+
+def test_an_audit_failure_neither_blocks_the_cover_clearing_nor_loses_the_event(client, tmp_path, monkeypatch):
+    doc = _upload_png(client)
+    assert client.put("/api/projects/p1/cover", headers=hdr("owner"), json={"document_id": doc["id"]}).status_code == 200
+    real = store.append_jsonl
+
+    def broken(project_id, name, entry):
+        if name == "audit.jsonl":
+            raise OSError("disk full")
+        return real(project_id, name, entry)
+
+    monkeypatch.setattr(store, "append_jsonl", broken)
+    r = client.patch("/api/projects/p1/documents/%s" % doc["id"], headers=hdr("owner"), json={"price_restricted": True})
+    assert r.status_code == 200 and r.json()["price_restricted"] is True
+    assert "cover" not in store.get_project("p1") and store.read_cover("p1") is None       # cleared although the audit failed
+    pending = store.load_json("p1", store.DOCUMENTS_JSON, {}).get("pending_audit") or []
+    assert [e["action"] for e in pending] == ["document.update"]                      # the change's own event stays pending
+    assert pending[0]["details"]["changes"] == {"price_restricted": {"from": False, "to": True}}
+    monkeypatch.setattr(store, "append_jsonl", real)
+    client.get("/api/projects/p1/documents", headers=hdr("owner"))
+    documents._flush("p1")
+    documents._flush("p1")                                                            # idempotent: written once
+    store.flush_project_audit("p1")
+    acts = [e["action"] for e in _events(tmp_path)]
+    assert acts.count("document.update") == 1 and acts.count("cover.clear") == 1
+    assert not store.load_json("p1", store.DOCUMENTS_JSON, {}).get("pending_audit")
+
+
+def test_hidden_document_answers_404_like_an_unknown_id_for_a_non_editor(client, docs):
+    _open, secret = docs
+    unknown = "no-such-id"
+    for method, body in (("patch", {"json": {"revision": "X"}}), ("delete", {})):
+        call = getattr(client, method)
+        hidden = call("/api/projects/p1/documents/%s" % secret["id"], headers=hdr("cust"), **body)
+        gone = call("/api/projects/p1/documents/%s" % unknown, headers=hdr("cust"), **body)
+        assert hidden.status_code == gone.status_code == 404 and hidden.json() == gone.json()
+        engineer = call("/api/projects/p1/documents/%s" % secret["id"], headers=hdr("eng"), **body)      # an editor who may not see it
+        assert engineer.status_code == 404 and engineer.json() == gone.json()
+    visible = client.patch("/api/projects/p1/documents/%s" % _open["id"], headers=hdr("cust"), json={"revision": "X"})
+    assert visible.status_code == 403                                                  # a document the caller sees: the usual 403
+    assert store.load_documents("p1")[1]["price_restricted"] is True and not store.load_documents("p1")[1]["archived"]

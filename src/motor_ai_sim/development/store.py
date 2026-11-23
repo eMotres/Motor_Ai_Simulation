@@ -370,7 +370,18 @@ def read_cover(project_id: str) -> Path | None:
     return path if path.is_file() else None
 
 
-def set_cover(project_id: str, thumbnail: bytes, document_id: str, actor: str) -> dict:
+def flush_project_audit(project_id: str) -> None:
+    """Write the audit events committed WITH a project.json change (cover set / clear); best effort: a failing append leaves them
+    pending for the next flush and never blocks or undoes the change."""
+    from motor_ai_sim.development.project_uploads import flush_events
+    try:
+        flush_events(project_id, "project.json")
+    except Exception as exc:                                # noqa: BLE001
+        import logging
+        logging.getLogger(__name__).error("project %s: audit rows left pending (%s)", project_id, exc)
+
+
+def set_cover(project_id: str, thumbnail: bytes, document_id: str, actor: str, audit: dict | None = None) -> dict:
     """Write the thumbnail and point the project at it; the returned ``version`` changes with every cover (cache key)."""
     import secrets
     from datetime import datetime, timezone
@@ -382,12 +393,19 @@ def set_cover(project_id: str, thumbnail: bytes, document_id: str, actor: str) -
     os.replace(tmp, path)
     cover = {"document_id": document_id, "version": secrets.token_hex(4), "set_by": actor.lower(),
              "set_at": datetime.now(timezone.utc).isoformat()}
-    mutate_project(project_id, lambda project: project.__setitem__("cover", cover))
+    def apply(project: dict) -> None:
+        project["cover"] = cover
+        if audit is not None:
+            from motor_ai_sim.development.project_uploads import queue_event
+            queue_event(project, actor.lower(), "cover.set", "project", project_id, audit)
+
+    mutate_project(project_id, apply)
     return cover
 
 
-def clear_cover(project_id: str, only_document_id: str | None = None) -> bool:
-    """Remove the cover (when ``only_document_id`` is given: only if that document is the cover).  True when one was removed."""
+def clear_cover(project_id: str, only_document_id: str | None = None, audit: tuple[str, str] | None = None) -> bool:
+    """Remove the cover (when ``only_document_id`` is given: only if that document is the cover).  True when one was removed.
+    ``audit`` = (actor email, reason): the ``cover.clear`` event is committed with the removal (``flush_project_audit`` writes it)."""
     removed: dict = {}
 
     def apply(project: dict) -> None:
@@ -395,6 +413,9 @@ def clear_cover(project_id: str, only_document_id: str | None = None) -> bool:
         if isinstance(cover, dict) and (only_document_id is None or cover.get("document_id") == only_document_id):
             project.pop("cover", None)
             removed["yes"] = True
+            if audit is not None:
+                from motor_ai_sim.development.project_uploads import queue_event
+                queue_event(project, audit[0].lower(), "cover.clear", "project", project_id, {"reason": audit[1]})
 
     mutate_project(project_id, apply)
     if removed:

@@ -35,6 +35,7 @@ from fastapi.responses import FileResponse
 
 from motor_ai_sim import auth, users
 from motor_ai_sim.development import access, models, store
+from motor_ai_sim.development.project_uploads import flush_events, queue_event
 
 log = logging.getLogger(__name__)
 router = APIRouter(tags=["development-documents"])     # included by routes.router, which carries the /api/projects prefix
@@ -64,11 +65,10 @@ def _can_edit(user: dict, role: str | None) -> bool:
     return _staff(user, role) or role in ("owner", "engineer")
 
 
-def _prices(user: dict, project: dict, staff: bool) -> bool:
-    """May this caller read price-restricted documents: staff and whoever ``access.sees_prices`` names; an MCP agent never."""
-    if auth._AGENT_USER.get() is not None:
-        return False
-    return staff or access.sees_prices(user, project)
+def _prices(user: dict, project: dict, staff: bool | None = None) -> bool:
+    """May this caller read price-restricted documents: the ONE central rule ``access.sees_prices`` (identity first: never an MCP agent
+    or a factory account, always MOTRES staff).  ``staff`` is accepted for old callers and is not consulted."""
+    return access.sees_prices(user, project)
 
 
 def _public(row: dict, staff: bool) -> dict:
@@ -98,12 +98,37 @@ def _visible(rows: list[dict], staff: bool, include_archived: bool = False, pric
             and (include_archived or not r.get("archived"))]
 
 
-def _audit(project_id: str, user: dict, action: str, row: dict, extra: dict | None = None) -> None:
+def _details(row: dict, extra: dict | None = None) -> dict:
     details = {"name": row.get("name"), "folder": row.get("folder"), "revision": row.get("revision"),
                "internal": bool(row.get("internal")), "price_restricted": bool(row.get("price_restricted")),
                "size": row.get("size")}
     details.update(extra or {})
-    store.append_audit(project_id, _email(user), action, "document", str(row.get("id") or ""), details)
+    return details
+
+
+def _audit(project_id: str, user: dict, action: str, row: dict, extra: dict | None = None) -> None:
+    store.append_audit(project_id, _email(user), action, "document", str(row.get("id") or ""), _details(row, extra))
+
+
+def _queue(doc: dict, user: dict, action: str, row: dict, extra: dict | None = None) -> None:
+    """Record the audit row of a document change INSIDE the documents mutation: the change and its event are written together."""
+    queue_event(doc, _email(user), action, "document", str(row.get("id") or ""), _details(row, extra))
+
+
+def _flush(project_id: str) -> None:
+    """Write the events committed with a change.  A failing append leaves them pending (the change stands, the next call writes
+    them); it never undoes, blocks or fails the change - in particular it never stops the cover from being cleared."""
+    try:
+        flush_events(project_id, store.DOCUMENTS_JSON)
+    except Exception as exc:                                # noqa: BLE001
+        log.error("project %s: document audit rows left pending (%s); written by the next call", project_id, exc)
+
+
+def clear_cover(project_id: str, user: dict, doc_id: str, reason: str) -> bool:
+    """Take a document off the project cover (its audit row is committed with the change, written best-effort afterwards)."""
+    removed = store.clear_cover(project_id, doc_id, audit=(_email(user), reason))
+    store.flush_project_audit(project_id)
+    return removed
 
 
 def _context(request: Request, project_id: str, *, edit: bool = False):
@@ -158,12 +183,13 @@ def list_documents(request: Request, project_id: str, archived: bool = False):
     cover = cover if isinstance(cover, dict) else {}
     return {"documents": [dict(_public(r, staff), is_cover=bool(cover) and r.get("id") == cover.get("document_id")) for r in rows],
             "folders": list(models.DOCUMENT_FOLDERS), "can_edit": can_edit, "is_staff": staff, "max_bytes": models.DOCUMENT_MAX_BYTES,
-            "cover_version": cover.get("version"), "can_restrict": _can_restrict(user, role)}
+            "cover_version": cover.get("version"), "can_restrict": _can_restrict(user, project)}
 
 
-def _can_restrict(user: dict, role: str | None) -> bool:
-    """Who may set ``price_restricted``: global admin / engineer and the project's owner (never a project engineer)."""
-    return _staff(user, role) or role == "owner"
+def _can_restrict(user: dict, project: dict) -> bool:
+    """Who may set ``price_restricted``: ``access.can_manage_prices`` (global admin / engineer and the project's owner; never a project
+    engineer, an MCP agent or a factory account)."""
+    return access.can_manage_prices(user, project)
 
 
 def _flag(value: Any) -> bool:
@@ -174,7 +200,7 @@ def _flag(value: Any) -> bool:
 async def upload_document(request: Request, project_id: str):
     """One file per request (``file``), with optional ``folder`` (kicad | fabrication | bom | 3d | docs; guessed from the name when
     omitted), ``revision`` and ``internal``."""
-    user, _project, role, staff_flag = _context(request, project_id, edit=True)
+    user, project, role, staff_flag = _context(request, project_id, edit=True)
     try:
         declared = int(request.headers.get("content-length") or 0)
     except ValueError:
@@ -186,7 +212,7 @@ async def upload_document(request: Request, project_id: str):
     if uploaded is None or isinstance(uploaded, str):
         raise HTTPException(status_code=400, detail="No file uploaded")
     restricted = _flag(form.get("price_restricted"))
-    if restricted and not _can_restrict(user, role):
+    if restricted and not _can_restrict(user, project):
         raise HTTPException(status_code=403, detail="Only the project owner or MOTRES staff restrict a document's price content")
     folder = form.get("folder")
     folder = str(folder).strip().lower() if folder else None
@@ -220,28 +246,33 @@ async def upload_document(request: Request, project_id: str):
     row = models.normalize_document(file_id, _email(user), str(uploaded.filename or "unnamed"), folder=folder, revision=revision,
                                     internal=staff_flag and _flag(form.get("internal")), price_restricted=restricted, size=size, sha256=sha256,
                                     content_type=str(getattr(uploaded, "content_type", "") or ""))
+    def add(doc: dict) -> None:
+        doc.setdefault("documents", []).append(row)         # the row carries the restriction chosen with the upload: one write
+        _queue(doc, user, "document.upload", row)
+
     try:
-        store.mutate_documents(project_id, lambda rows: rows.append(row))
+        store.mutate_json(project_id, store.DOCUMENTS_JSON, add, default={"documents": []})
     except BaseException:
         # the row is the index of the file: without it the bytes are unreachable, so do not keep them
         (store.documents_file_dir(project_id) / file_id).unlink(missing_ok=True)
         raise
-    _audit(project_id, user, "document.upload", row)
+    _flush(project_id)
     return _public(row, True)
 
 
 @router.patch("/{project_id}/documents/{doc_id}")
 async def patch_document(request: Request, project_id: str, doc_id: str):
     """``internal`` (hidden from customer-side members), ``folder``, ``revision``; ``archived: false`` restores an archived document."""
-    user, project, role, staff_flag = _context(request, project_id, edit=True)
+    user, project, role, staff_flag = _context(request, project_id)
     prices = _prices(user, project, staff_flag)
+    _require_row_then_editor(user, project_id, doc_id, role, staff_flag, prices)
     body = await request.json()
     allowed = ("internal", "price_restricted", "folder", "revision", "archived")
     if not isinstance(body, dict) or not any(k in body for k in allowed):
         raise HTTPException(status_code=422, detail="internal, price_restricted, folder, revision or archived expected")
     changes: dict[str, Any] = {}
     if "price_restricted" in body:
-        if not _can_restrict(user, role):
+        if not _can_restrict(user, project):
             raise HTTPException(status_code=403, detail="Only the project owner or MOTRES staff restrict a document's price content")
         if not isinstance(body["price_restricted"], bool):
             raise HTTPException(status_code=422, detail="price_restricted: true | false expected")
@@ -267,58 +298,72 @@ async def patch_document(request: Request, project_id: str, doc_id: str):
         changes["archived"] = False
     found: dict[str, Any] = {}
 
-    def apply(rows: list) -> None:
-        for row in rows:
+    def apply(doc: dict) -> None:
+        for row in doc.setdefault("documents", []):
             if row.get("id") == doc_id and _visible([row], staff_flag, True, prices):      # a row this caller cannot list is "not found"
                 before = {k: row.get(k) for k in changes}
-                found["before"] = before
                 row.update(changes)
                 if changes.get("archived") is False:
                     row["archived_at"] = None
                     row["archived_by"] = None
-                found["row"] = dict(row)
+                changed = {k: {"from": bool(before[k]) if k == "price_restricted" else before[k], "to": v}
+                           for k, v in changes.items() if (bool(before[k]) if k == "price_restricted" else before[k]) != v}
+                found["row"], found["changed"] = dict(row), changed
+                if changed:                                 # old and new captured under the lock, the event written WITH the change
+                    _queue(doc, user, "document.restore" if "archived" in changed else "document.update", row, {"changes": changed})
                 return
 
-    store.mutate_documents(project_id, apply)
+    store.mutate_json(project_id, store.DOCUMENTS_JSON, apply, default={"documents": []})
     if "row" not in found:
         raise HTTPException(status_code=404, detail="Document not found")
-    changed = {k: {"from": bool(found["before"][k]) if k == "price_restricted" else found["before"][k], "to": v}
-               for k, v in changes.items() if (bool(found["before"][k]) if k == "price_restricted" else found["before"][k]) != v}
-    restored = "archived" in changed
-    if changed:
-        _audit(project_id, user, "document.restore" if restored else "document.update", found["row"], {"changes": changed})
-    if found["row"].get("internal") and store.clear_cover(project_id, doc_id):       # the cover is shown to the whole project
-        store.append_audit(project_id, _email(user), "cover.clear", "project", project_id, {"reason": "document marked internal"})
-    elif found["row"].get("price_restricted") and store.clear_cover(project_id, doc_id):
-        store.append_audit(project_id, _email(user), "cover.clear", "project", project_id, {"reason": "document marked price-restricted"})
+    # the cover is shown to the whole project: clear it BEFORE the audit is written, so an audit failure never leaves it in place
+    try:
+        if found["row"].get("internal"):
+            clear_cover(project_id, user, doc_id, "document marked internal")
+        elif found["row"].get("price_restricted"):
+            clear_cover(project_id, user, doc_id, "document marked price-restricted")
+    finally:
+        _flush(project_id)
     return _public(found["row"], staff_flag)
+
+
+def _require_row_then_editor(user: dict, project_id: str, doc_id: str, role: str | None, staff: bool, prices: bool) -> None:
+    """404 for a document this caller cannot list - exactly the answer for an unknown id (no existence oracle) - and only then 403
+    for a member who sees it but may not edit."""
+    can_edit = _can_edit(user, role)
+    _find(project_id, doc_id, staff, include_archived=can_edit, prices=prices)
+    if not can_edit:
+        raise HTTPException(status_code=403, detail="Project engineer access required")
 
 
 @router.delete("/{project_id}/documents/{doc_id}")
 def archive_document(request: Request, project_id: str, doc_id: str):
     """Archive = hide.  The file stays on disk and the audit trail keeps every row; ``PATCH {"archived": false}`` restores it."""
-    user, project, _role, staff_flag = _context(request, project_id, edit=True)
+    user, project, role, staff_flag = _context(request, project_id)
     prices = _prices(user, project, staff_flag)
+    _require_row_then_editor(user, project_id, doc_id, role, staff_flag, prices)
     found: dict[str, Any] = {}
 
-    def apply(rows: list) -> None:
-        for row in rows:
+    def apply(doc: dict) -> None:
+        for row in doc.setdefault("documents", []):
             if row.get("id") == doc_id and _visible([row], staff_flag, True, prices):      # a row this caller cannot list is "not found"
                 found["was"] = bool(row.get("archived"))
                 if not row.get("archived"):
                     row["archived"] = True
                     row["archived_at"] = models.now()
                     row["archived_by"] = _email(user)
+                    _queue(doc, user, "document.archive", row)
                 found["row"] = dict(row)
                 return
 
-    store.mutate_documents(project_id, apply)
+    store.mutate_json(project_id, store.DOCUMENTS_JSON, apply, default={"documents": []})
     if "row" not in found:
         raise HTTPException(status_code=404, detail="Document not found")
     if not found["was"]:
-        _audit(project_id, user, "document.archive", found["row"])
-        if store.clear_cover(project_id, doc_id):
-            store.append_audit(project_id, _email(user), "cover.clear", "project", project_id, {"reason": "document archived"})
+        try:
+            clear_cover(project_id, user, doc_id, "document archived")
+        finally:
+            _flush(project_id)
     return _public(found["row"], staff_flag)
 
 

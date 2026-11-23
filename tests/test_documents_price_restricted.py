@@ -281,3 +281,37 @@ def test_hidden_document_answers_404_like_an_unknown_id_for_a_non_editor(client,
     visible = client.patch("/api/projects/p1/documents/%s" % _open["id"], headers=hdr("cust"), json={"revision": "X"})
     assert visible.status_code == 403                                                  # a document the caller sees: the usual 403
     assert store.load_documents("p1")[1]["price_restricted"] is True and not store.load_documents("p1")[1]["archived"]
+
+
+def test_failed_cover_commit_leaves_the_previous_cover_and_no_restricted_bytes_reachable(client, tmp_path, monkeypatch):
+    a = _upload_png(client, name="a.png")
+    assert client.put("/api/projects/p1/cover", headers=hdr("owner"), json={"document_id": a["id"]}).status_code == 200
+    before = client.get("/api/projects/p1/cover", headers=hdr("cust"))
+    assert before.status_code == 200
+    from PIL import Image
+    buf = io.BytesIO()
+    Image.new("RGB", (40, 30), (0, 0, 255)).save(buf, "PNG")
+    b = client.post("/api/projects/p1/documents", headers=hdr("owner"), files={"file": ("b.png", buf.getvalue())}).json()
+    real = store.mutate_project
+
+    def failing(project_id, mutator):
+        probe = {"cover": None}
+        mutator(probe)                                   # the pointer write is what fails, after the bytes were stored
+        if probe.get("cover") and probe["cover"]["document_id"] == b["id"]:
+            raise OSError("project.json not writable")
+        return real(project_id, mutator)
+
+    monkeypatch.setattr(store, "mutate_project", failing)
+    with pytest.raises(OSError):
+        client.put("/api/projects/p1/cover", headers=hdr("owner"), json={"document_id": b["id"]})
+    monkeypatch.setattr(store, "mutate_project", real)
+    # B becomes restricted afterwards; the pointer still names A, and GET serves A's own bytes
+    store.mutate_documents("p1", lambda rows: [x.update(price_restricted=True) for x in rows if x["id"] == b["id"]])
+    after = client.get("/api/projects/p1/cover", headers=hdr("cust"))
+    assert after.status_code == 200 and after.content == before.content
+    covers = list((tmp_path / "projects" / "p1" / "covers").glob("*.webp"))
+    assert len(covers) == 1 and covers[0].read_bytes() == before.content          # the failed version's file is gone
+    # a successful replacement removes the superseded version only after the commit
+    c = _upload_png(client, name="c.png")
+    assert client.put("/api/projects/p1/cover", headers=hdr("owner"), json={"document_id": c["id"]}).status_code == 200
+    assert len(list((tmp_path / "projects" / "p1" / "covers").glob("*.webp"))) == 1

@@ -362,12 +362,37 @@ def save_document_stream(project_id: str, file_id: str, chunks, limit: int) -> t
 # ── project cover image: cover.webp (small thumbnail) + project.json "cover" {document_id, version, set_by, set_at} ──
 
 def cover_file(project_id: str) -> Path:
+    """The LEGACY single cover file (before per-version storage); only read as a fallback for a cover stored that way."""
     return _file(project_id, "cover.webp")
 
 
+def cover_version_file(project_id: str, version: str) -> Path:
+    return _file(project_id, "covers/%s.webp" % version)
+
+
+def _remove_cover_files(project_id: str, keep_version: str | None = None) -> None:
+    """Delete every stored thumbnail except ``keep_version`` (call only AFTER the pointer change committed)."""
+    directory = _file(project_id, "covers")
+    if directory.is_dir():
+        for child in directory.iterdir():
+            if child.suffix == ".webp" and child.stem != keep_version:
+                child.unlink(missing_ok=True)
+    if keep_version is not None:
+        cover_file(project_id).unlink(missing_ok=True)
+
+
 def read_cover(project_id: str) -> Path | None:
-    path = cover_file(project_id)
-    return path if path.is_file() else None
+    """The bytes of the version the project's cover pointer names - never another file."""
+    project = get_project(project_id)
+    cover = project.get("cover") if isinstance(project, dict) else None
+    version = str(cover.get("version") or "") if isinstance(cover, dict) else ""
+    if not re.fullmatch(r"[0-9a-f]{4,64}", version):
+        return None
+    path = cover_version_file(project_id, version)
+    if path.is_file():
+        return path
+    legacy = cover_file(project_id)
+    return legacy if legacy.is_file() else None          # a cover stored before per-version files; never rewritten any more
 
 
 def flush_project_audit(project_id: str) -> None:
@@ -382,24 +407,33 @@ def flush_project_audit(project_id: str) -> None:
 
 
 def set_cover(project_id: str, thumbnail: bytes, document_id: str, actor: str, audit: dict | None = None) -> dict:
-    """Write the thumbnail and point the project at it; the returned ``version`` changes with every cover (cache key)."""
+    """Store the thumbnail as its OWN immutable file (``covers/<version>.webp``), then switch the project's pointer (and queue the audit
+    event) in one committed mutation.  A failing commit leaves the previous pointer and its bytes untouched and removes the new file;
+    superseded files are removed only after the commit."""
     import secrets
     from datetime import datetime, timezone
     ensure_writable()
-    path = cover_file(project_id)
+    version = secrets.token_hex(8)
+    path = cover_version_file(project_id, version)
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_name("cover.webp.tmp")
+    tmp = path.with_name(version + ".tmp")
     tmp.write_bytes(thumbnail)
     os.replace(tmp, path)
-    cover = {"document_id": document_id, "version": secrets.token_hex(4), "set_by": actor.lower(),
+    cover = {"document_id": document_id, "version": version, "set_by": actor.lower(),
              "set_at": datetime.now(timezone.utc).isoformat()}
+
     def apply(project: dict) -> None:
         project["cover"] = cover
         if audit is not None:
             from motor_ai_sim.development.project_uploads import queue_event
             queue_event(project, actor.lower(), "cover.set", "project", project_id, audit)
 
-    mutate_project(project_id, apply)
+    try:
+        mutate_project(project_id, apply)
+    except BaseException:
+        path.unlink(missing_ok=True)
+        raise
+    _remove_cover_files(project_id, keep_version=version)
     return cover
 
 
@@ -419,6 +453,7 @@ def clear_cover(project_id: str, only_document_id: str | None = None, audit: tup
 
     mutate_project(project_id, apply)
     if removed:
+        _remove_cover_files(project_id)
         cover_file(project_id).unlink(missing_ok=True)
     return bool(removed)
 

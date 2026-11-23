@@ -82,3 +82,15 @@ export const controllerSpecApi = {
   get: (projectId: string) => call<CtlSpec>('GET', at(projectId)),
   save: (projectId: string, fields: Record<string, CtlStored>, revision: number) => call<CtlSpec>('PUT', at(projectId), { fields, revision }),
 };
+
+/** The form after a successful save (Astra round 1 of #832): fields AND revision from the SAME answer, so the next save is
+ *  checked against what this form really holds.  An edit typed while the save was in flight is kept on top (still unsaved). */
+export function afterSave(local: Record<string, CtlStored>, saved: Pick<CtlSpec, 'fields' | 'revision'>, editedWhileSaving: boolean):
+  { fields: Record<string, CtlStored>; revision: number; dirty: boolean } {
+  return editedWhileSaving
+    ? { fields: local, revision: saved.revision, dirty: true }
+    : { fields: saved.fields ?? {}, revision: saved.revision, dirty: false };
+}
+
+/** Is this error the server's "somebody saved in between" (409)? */
+export const isConflict = (e: unknown): boolean => (e as { status?: unknown } | null)?.status === 409;

@@ -29,6 +29,8 @@
     "source": "Source",
     "addRow": "Add row",
     "removeRow": "Remove row",
-    "history": "Changes"
+    "history": "Changes",
+    "conflict": "Somebody saved the controller specification in the meantime. Your values are still in the form; reload to see the saved ones (your unsaved values are then discarded).",
+    "reload": "Reload"
   }
 }

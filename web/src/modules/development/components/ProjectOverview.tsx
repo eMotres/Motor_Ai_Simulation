@@ -10,6 +10,7 @@ import type { ProjectSummary } from '../types';
 import { shownStatus } from '../projectStage';
 import ProjectCover from './ProjectCover';
 import type { ViewMode } from '../../../lib/viewMode';
+import { groupByType, projectTypeOf, type ProjectType } from '../projectType';
 
 export interface ProjectOverviewProps {
   projects: ProjectSummary[];
@@ -51,7 +52,18 @@ const Bar: React.FC<{ filled: number; total: number }> = ({ filled, total }) => 
   </Box>
 );
 
-const ProjectOverview: React.FC<ProjectOverviewProps> = ({ projects, mode, unread, email, language, onOpen, t, rowExtra }) => {
+/** Two groups, Motors and Controllers (owner 2026-11-23: "split the projects into two categories ... and align everything, even
+ *  tables"): a heading each, an empty group shows nothing; in the list every group is the same fixed-column table, so the state
+ *  switch and every other column sit at the same x in all rows of both groups. */
+const ProjectOverview: React.FC<ProjectOverviewProps> = (props) => {
+  const groups = groupByType(props.projects);
+  return <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>{groups.map((g) => <Box key={g.type} data-testid={`project-group-${g.type}`}>
+    <Typography component="h2" sx={{ fontSize: 13, fontWeight: 800, color: 'var(--text-1)', mb: 0.75 }}>{props.t(`group.${g.type}`, { ns: 'controllerProject' })}</Typography>
+    <ProjectGroup {...props} projects={g.projects} type={g.type} />
+  </Box>)}</Box>;
+};
+
+const ProjectGroup: React.FC<ProjectOverviewProps & { type: ProjectType }> = ({ projects, mode, unread, email, language, onOpen, t, rowExtra, type }) => {
   const dieIndex = useDieIndex(mode === 'cards');   // the catalog's dies, for the motor picture of each card
   const { isAdmin, role } = useAuth();
   // a customer never reads the name of the commercial stage (no price talk while designing)
@@ -60,14 +72,19 @@ const ProjectOverview: React.FC<ProjectOverviewProps> = ({ projects, mode, unrea
     return (
       <Paper sx={{ bgcolor: 'var(--panel-2)', border: '1px solid var(--line-soft)', borderRadius: 1.5, overflow: 'auto' }}>
         <Table size="small" sx={{
+          tableLayout: 'fixed',                         /* the same column widths in every group, whatever the titles */
           /* Phone: keep the columns readable and scroll the table sideways (the Paper scrolls). */
           [NARROW]: { minWidth: 720 },
           '& td, & th': { borderColor: 'var(--panel)', fontSize: 12.5 },
           '& th': { color: 'var(--text-3)', fontWeight: 700, textTransform: 'uppercase', fontSize: 10, letterSpacing: '0.04em' },
         }}>
+          <colgroup>
+            <col style={{ width: '24%' }} />{rowExtra && <col style={{ width: 230 }} />}<col style={{ width: '16%' }} />
+            <col style={{ width: 120 }} /><col style={{ width: 170 }} /><col style={{ width: 100 }} /><col style={{ width: 100 }} />
+          </colgroup>
           <TableHead>
             <TableRow>
-              <TableCell>{t('col.project')}</TableCell><TableCell>{t('col.customer')}</TableCell>
+              <TableCell>{t('col.project')}</TableCell>{rowExtra && <TableCell>{t('col.state', { ns: 'controllerProject' })}</TableCell>}<TableCell>{t('col.customer')}</TableCell>
               <TableCell align="center">{t('col.stage')}</TableCell><TableCell sx={{ minWidth: 150 }}>{t('col.required')}</TableCell>
               <TableCell align="center">{t('col.role')}</TableCell><TableCell align="right">{t('col.updated')}</TableCell>
             </TableRow>
@@ -77,15 +94,16 @@ const ProjectOverview: React.FC<ProjectOverviewProps> = ({ projects, mode, unrea
               const c = numbers(p), n = unread(p), role = memberRoleOf(p, email);
               return (
                 <TableRow key={p.id} hover tabIndex={0} sx={{ cursor: 'pointer' }} onClick={() => onOpen(p)} onKeyDown={keyOpen(() => onOpen(p))}>
-                  <TableCell sx={{ color: 'var(--text-0)', fontWeight: 600 }}>{p.title}<UnreadBadge count={n} />{rowExtra && <Box component="span" sx={{ ml: 1 }}>{rowExtra(p)}</Box>}</TableCell>
+                  <TableCell sx={{ color: 'var(--text-0)', fontWeight: 600, overflowWrap: 'anywhere' }}>{p.title}<UnreadBadge count={n} /></TableCell>
+                  {rowExtra && <TableCell onClick={(e) => e.stopPropagation()}>{rowExtra(p)}</TableCell>}
                   <TableCell sx={{ color: 'var(--text-2)' }}>{p.customer_org}</TableCell>
                   <TableCell align="center"><Chip size="small" label={statusLabel(p.status, p.spec_submitted)} sx={{ height: 18, fontSize: 10.5, fontWeight: 700, bgcolor: 'var(--panel)', color: 'var(--text-2)' }} /></TableCell>
                   <TableCell>
-                    <Tooltip title={t('completeness', { filled: c.filled, total: c.total })}>
+                    {type === 'motor' && <Tooltip title={t('completeness', { filled: c.filled, total: c.total })}>
                       <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
                         <Typography sx={{ fontSize: 12, color: 'var(--text-2)' }}>{c.filled}/{c.total}</Typography><Bar filled={c.filled} total={c.total} />
                       </Box>
-                    </Tooltip>
+                    </Tooltip>}
                   </TableCell>
                   <TableCell align="center" sx={{ color: 'var(--text-2)' }}>{role ? t(`memberRole.${role}`) : ''}</TableCell>
                   <TableCell align="right" sx={{ color: 'var(--text-3)', whiteSpace: 'nowrap' }}>{dateOf(p.updated_at, language)}</TableCell>
@@ -115,10 +133,10 @@ const ProjectOverview: React.FC<ProjectOverviewProps> = ({ projects, mode, unrea
               <Typography sx={{ color: 'var(--text-3)', fontSize: 12, mt: 0.5 }}>{p.customer_org}</Typography>
               {rowExtra && <Box sx={{ mt: 0.75 }}>{rowExtra(p)}</Box>}
               {/* with a picture in the corner the label and the bar stack (owner 2026-10-28: side by side the bar shrank to a stub) */}
-              <Box sx={{ mt: 1.2, display: 'flex', flexDirection: corner ? 'column' : 'row', alignItems: corner ? 'stretch' : 'center', gap: corner ? 0.5 : 1 }}>
+              {projectTypeOf(p) === 'motor' && <Box sx={{ mt: 1.2, display: 'flex', flexDirection: corner ? 'column' : 'row', alignItems: corner ? 'stretch' : 'center', gap: corner ? 0.5 : 1 }}>
                 <Typography sx={{ fontSize: 11, color: 'var(--text-2)', whiteSpace: 'nowrap' }}>{t('completeness', { filled: c.filled, total: c.total })}</Typography>
                 <Bar filled={c.filled} total={c.total} />
-              </Box>
+              </Box>}
             </Box>
             {p.cover_version && <ProjectCover projectId={p.id} version={p.cover_version} height={CARD_THUMB_SIZE} alt={p.title}
               sx={{ position: 'absolute', right: 10, bottom: 8, width: CARD_THUMB_SIZE, bgcolor: 'transparent', borderRadius: 0 }} />}

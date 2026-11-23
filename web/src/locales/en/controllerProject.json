@@ -34,5 +34,12 @@
     "dropBuildTitle": "Remove the build and its values?",
     "dropBuildBody": "These builds still hold values (number of fields): {builds}. Removing them deletes those values when you save.",
     "dropBuild": "Remove"
+  },
+  "group": {
+    "motor": "Motors",
+    "controller": "Controllers"
+  },
+  "col": {
+    "state": "State"
   }
 }

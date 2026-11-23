@@ -201,6 +201,47 @@ def test_a_failed_message_write_leaves_no_audit_row_even_when_another_request_fl
     assert len(_audit_rows("post")) == 1
 
 
+def _fail_queue(monkeypatch, state):
+    real = dev_store.mutate_project
+
+    def flaky(project_id, mutator):
+        if state["fail"]:
+            raise OSError("queue failed")
+        return real(project_id, mutator)
+    monkeypatch.setattr(dev_store, "mutate_project", flaky)
+
+
+def test_a_failed_queue_keeps_the_intent_in_the_thread_record_and_a_later_call_writes_it_once(env, monkeypatch):
+    from motor_ai_sim.development import thread_audit
+    state = {"fail": True}
+    _fail_queue(monkeypatch, state)
+    r = post(env, OWNER, SECRET, price_restricted=True)
+    mid = r.json()["id"]
+    assert r.status_code == 200 and "audit_intent" not in r.json() and not _audit_rows("post")
+    stored = [json.loads(x) for x in dev_store._file("alpha", "thread.jsonl").read_text().splitlines()]
+    assert stored[0]["audit_intent"]["entity_id"] == mid                       # committed WITH the message
+    assert "audit_intent" not in json.dumps(env(OWNER).get("/api/projects/alpha/thread").json())
+    state["fail"] = False
+    thread_audit.flush("alpha")
+    thread_audit.flush("alpha")                                                # duplicate flush: still one row
+    env(OWNER).get("/api/projects/alpha/thread")
+    rows = [x for x in _audit_rows("post") if x["entity_id"] == mid]
+    assert len(rows) == 1 and rows[0]["details"]["price_restricted"] is True
+
+
+def test_the_resolve_path_keeps_its_intent_too(env, monkeypatch):
+    mid = post(env, OWNER, "plain").json()["id"]
+    state = {"fail": True}
+    _fail_queue(monkeypatch, state)
+    r = env(OWNER).post(f"/api/projects/alpha/thread/{mid}/resolve", json={"resolved": True})
+    assert r.status_code == 200 and not _audit_rows("project_thread_resolved")
+    state["fail"] = False
+    env(OWNER).post("/api/projects/alpha/thread/read", json={})               # a read flushes
+    assert len([x for x in _audit_rows("project_thread_resolved") if x["entity_id"] == mid]) == 1
+    env(OWNER).get("/api/projects/alpha/thread")
+    assert len([x for x in _audit_rows("project_thread_resolved") if x["entity_id"] == mid]) == 1
+
+
 def test_a_reply_inside_a_restricted_message_is_restricted_too(env):
     parent = post(env, OWNER, SECRET, price_restricted=True).json()["id"]
     reply = post(env, SEES, "agreed", reply_to=parent)                  # no flag needed: it inherits

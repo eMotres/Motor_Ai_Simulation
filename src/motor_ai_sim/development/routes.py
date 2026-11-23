@@ -17,6 +17,7 @@ from motor_ai_sim.development import access, models, self_service, spec_proposal
 from motor_ai_sim.development.motors import _metric_projection
 from motor_ai_sim.development.quote_routes import quote_shared
 from motor_ai_sim.development.timeline_routes import timeline_ready
+from motor_ai_sim.development import thread_audit
 from motor_ai_sim.development.project_uploads import flush_events, queue_event
 
 log = logging.getLogger(__name__)
@@ -1214,6 +1215,7 @@ def _visible_events(user: dict, project: dict, rows: list) -> list:
     ids = {str(m.get("id")) for m in shown}
     out = []
     for m in rows:
+        m = thread_audit.strip(m)
         if m.get("kind") == "resolution":
             if str(m.get("resolves_id") or "") in ids:
                 out.append(m)
@@ -1224,22 +1226,10 @@ def _visible_events(user: dict, project: dict, rows: list) -> list:
     return out
 
 
-def _record_thread_audit(project_id: str, actor: str, action: str, entity_id: str, details: dict) -> None:
-    """Audit row of a thread change that is ALREADY stored: queued on the project document (the durable outbox, one mutation) and then
-    flushed.  The order matters (coordinator 2026-11-23): the row is queued only after the change committed, so an audit row can never
-    exist for a change that was not stored, whatever another request flushes meanwhile.  A failing flush leaves the row pending (the next
-    call writes it once); only a crash between the two commits can lose the row, never invent one."""
-    try:
-        store.mutate_project(project_id, lambda doc: queue_event(doc, actor, action, "thread_message", entity_id, details))
-    except Exception as exc:                                # noqa: BLE001
-        log.error("project %s: thread audit row for %s not queued (%s)", project_id, entity_id, exc)
-        return
-    _flush_price_audit(project_id)
-
-
 @router.get("/{project_id}/thread")
 def get_thread(request: Request, project_id: str):
     user, project, _ = _readable_project(request, project_id)
+    thread_audit.flush(project_id)                            # pending audit intents of earlier changes
     messages = _visible_events(user, project, _read_jsonl(project_id, "thread.jsonl"))
     store.append_audit(project_id, _email(user), "read", "thread", "", {})
     unread_set = set(unread.unread_ids(project_id, _email(user), messages=unread.thread_messages(project_id), user=user))
@@ -1267,6 +1257,7 @@ async def mark_thread_read(request: Request, project_id: str):
     """The user has seen the thread up to message ``up_to`` (the newest when omitted).  Called by the page when the thread is
     shown - never by the list or the counts endpoints."""
     user, _, _ = _readable_project(request, project_id)
+    thread_audit.flush(project_id)
     try:
         body = await request.json()
     except ValueError:
@@ -1321,9 +1312,11 @@ async def post_thread(request: Request, project_id: str):
         message["reply_to"] = reply_to
     if restricted:
         message["price_restricted"] = True                  # absent = not restricted: stored messages and payloads stay as they were
-    store.append_jsonl(project_id, "thread.jsonl", message)
-    _record_thread_audit(project_id, _email(user), "post", message["id"],
-                         {"field_ref": field_ref, **({"price_restricted": True} if restricted else {})})
+    message["audit_intent"] = thread_audit.make_intent(_email(user), "post", message["id"],
+                                                       {"field_ref": field_ref, **({"price_restricted": True} if restricted else {})})
+    store.append_jsonl(project_id, "thread.jsonl", message)    # the change and its audit intent commit in this one append
+    thread_audit.flush(project_id)
+    message = thread_audit.strip(message)
     notify_project_members(project_id, message)
     return _customer_spec(message)
 
@@ -1348,9 +1341,10 @@ async def resolve_thread_message(request: Request, project_id: str, message_id: 
     event = {"id": __import__("secrets").token_urlsafe(12), "kind": "resolution", "resolves_id": message_id,
              "resolved": body["resolved"], "resolved_by": _author(_email(user))["author_display_name"],
              "author_email": _email(user), "created_at": datetime.now(timezone.utc).isoformat()}
+    event["audit_intent"] = thread_audit.make_intent(_email(user), "project_thread_resolved" if body["resolved"] else "project_thread_reopened",
+                                                     message_id, {"resolved": body["resolved"]})
     store.append_jsonl(project_id, "thread.jsonl", event)
-    _record_thread_audit(project_id, _email(user), "project_thread_resolved" if body["resolved"] else "project_thread_reopened",
-                         message_id, {"resolved": body["resolved"]})
+    thread_audit.flush(project_id)
     return {"id": message_id, "resolved": body["resolved"], "resolved_at": event["created_at"]}
 
 

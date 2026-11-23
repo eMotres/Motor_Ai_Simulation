@@ -15,8 +15,11 @@ Colours (owner 2026-11-23: "upload the coloured STEP" - a KiCad board export car
 each face is its own surface colour, else its solid's, else the one inherited from the assembly (OCCT's own style resolution,
 ``XCAFPrs``), surface colour before the generic one.  One glTF material per distinct colour; the faces of one solid with different
 colours are separate primitives of that solid's ONE mesh, so a part stays one node (picking, exploded view, outlines per part).  A
-face without a colour keeps the steel grey.  A STEP without colours - and any failure of the colour reader - takes the earlier
-path unchanged, so its GLB is byte-identical to before.
+face without a colour keeps the steel grey.  A STEP without colour entities takes the earlier path unchanged, so its GLB is
+byte-identical to before; so does a coloured STEP whose colour reader raises an ordinary exception (logged).  Not covered by that
+fallback, on purpose: a ``StepConversionError`` (the file has no geometry - the plain path would say the same), a crash or the
+timeout of the child process.  A STEP that names an EXTERNAL document reference never reaches the XCAF reader (it could load other
+files from the disk; the bound OCCT has no switch to turn that off): it keeps the plain view, which does not follow references.
 
   python -m motor_ai_sim.production.step_glb in.step out.glb      (what the child process runs)
 """
@@ -25,6 +28,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import struct
 import subprocess
 import sys
@@ -213,20 +217,33 @@ def build_coloured_glb(parts: list[tuple[str, list]], palette: list) -> bytes:
 
 # ── the conversion itself (needs cadquery / OCP; runs in the child process) ──────────────────────────────────────────
 
-_COLOUR_TOKENS = (b"COLOUR_RGB", b"DRAUGHTING_PRE_DEFINED_COLOUR")
+COLOUR_ENTITIES = frozenset({b"COLOUR_RGB", b"DRAUGHTING_PRE_DEFINED_COLOUR"})
+#: the entities through which a STEP points at ANOTHER file (what OCCT's STEPConstruct_ExternRefs follows)
+EXTERNAL_ENTITIES = frozenset({b"DOCUMENT_FILE", b"PRODUCT_DEFINITION_WITH_ASSOCIATED_DOCUMENTS", b"APPLIED_DOCUMENT_REFERENCE",
+                               b"DOCUMENT_PRODUCT_EQUIVALENCE", b"DOCUMENT_PRODUCT_ASSOCIATION", b"EXTERNALLY_DEFINED_ITEM"})
+# a comment, a quoted string ('' is a quote inside it), or an entity keyword (a name directly followed by its parenthesis).  Linear
+# time on any input: a keyword starts only where no name character precedes it, and the possessive quantifiers never re-scan a long
+# name or a long run of spaces (a 1 MB name must not cost the converter's time budget)
+_LEXEME = re.compile(rb"/\*.*?\*/|'(?:[^']++|'')*+'|(?<![A-Za-z0-9_])([A-Za-z][A-Za-z0-9_]*+)\s*+\(", re.S)
+
+
+def step_entities(step_path: str, wanted: frozenset) -> set:
+    """The entity types among ``wanted`` that the STEP really instantiates - never a word inside a comment or a quoted name.  The
+    whole file is read at once (the viewer refuses a STEP over ``MAX_STEP_BYTES``), so no token is split at a read boundary."""
+    data = Path(step_path).read_bytes()
+    found = set()
+    for m in _LEXEME.finditer(data):
+        word = m.group(1)
+        if word is not None and word.upper() in wanted:
+            found.add(word.upper())
+            if found == wanted:
+                break
+    return found
 
 
 def names_colours(step_path: str) -> bool:
-    """Does the STEP name any colour at all?  (A text scan: a file without one never reaches the colour reader.)"""
-    tail = b""
-    with open(step_path, "rb") as fh:
-        while True:
-            chunk = fh.read(1 << 20)
-            if not chunk:
-                return False
-            if any(t in tail + chunk for t in _COLOUR_TOKENS):
-                return True
-            tail = chunk[-40:]
+    """Does the STEP instantiate any colour entity?  (A file without one never reaches the colour reader.)"""
+    return bool(step_entities(step_path, COLOUR_ENTITIES))
 
 
 def _rgb(style):
@@ -355,7 +372,11 @@ def _convert_coloured(step_path: str):
 
 def convert_in_process(step_path: str, glb_path: str) -> dict:
     """Read the STEP, tessellate every solid, write the GLB; returns ``{solids, triangles, bbox_mm}`` (+ ``colours``)."""
-    if names_colours(step_path):
+    kinds = step_entities(step_path, COLOUR_ENTITIES | EXTERNAL_ENTITIES)
+    if kinds & EXTERNAL_ENTITIES:
+        log.warning("production: STEP names external document references (%s); colours not read, converting without them",
+                    ", ".join(sorted(k.decode() for k in kinds & EXTERNAL_ENTITIES)))
+    elif kinds & COLOUR_ENTITIES:
         try:
             coloured = _convert_coloured(step_path)
         except StepConversionError:

@@ -87,7 +87,7 @@ def test_a_failing_colour_reader_falls_back_to_the_view_without_colours(tmp_path
 
 def test_colour_names_are_found_across_read_chunks(tmp_path):
     p = tmp_path / "x.step"
-    p.write_bytes(b"ISO-10303-21;\n" + b"x" * ((1 << 20) - 20) + b"COLOUR_RGB('',1.,0.,0.);\n")
+    p.write_bytes(b"ISO-10303-21;\n" + b"x" * ((1 << 20) - 20) + b"\n#5=COLOUR_RGB('',1.,0.,0.);\n")
     assert step_glb.names_colours(str(p))
     p.write_bytes(b"ISO-10303-21;\nDATA;\nENDSEC;\n")
     assert not step_glb.names_colours(str(p))
@@ -163,3 +163,92 @@ def test_a_file_that_names_a_colour_no_face_uses_gives_the_plain_bytes(tmp_path)
     step_glb.convert_in_process(str(named), str(tmp_path / "named.glb"))
     step_glb.convert_in_process(str(src), str(tmp_path / "plain.glb"))
     assert (tmp_path / "named.glb").read_bytes() == (tmp_path / "plain.glb").read_bytes()
+
+
+@pytest.mark.parametrize("body, coloured", [
+    (b"/* COLOUR_RGB('',1.,0.,0.); */\n#1=PRODUCT('x','y','',(#2));\n", False),                       # in a comment
+    (b"#1=PRODUCT('COLOUR_RGB(1,0,0)','it''s a COLOUR_RGB(','',(#2));\n", False),                      # in quoted names
+    (b"#1=PRODUCT('a /* b','c',' */ COLOUR_RGB(',(#2));\n", False),                                    # comment marks inside strings
+    (b"#7 = ( COLOUR_RGB ( '', 1., 0., 0. ) );\n", True),                                              # a real (complex) instance
+    (b"#7=DRAUGHTING_PRE_DEFINED_COLOUR('red');\n", True),
+])
+def test_only_real_colour_entities_count_not_words_in_comments_or_names(tmp_path, body, coloured):
+    """Astra on #837 (P2): a comment or a quoted name that contains COLOUR_RGB must not send the file to the colour reader."""
+    p = tmp_path / "x.step"
+    p.write_bytes(b"ISO-10303-21;\nDATA;\n" + body + b"ENDSEC;\nEND-ISO-10303-21;\n")
+    assert step_glb.names_colours(str(p)) is coloured
+
+
+def test_an_entity_after_a_long_comment_and_past_a_megabyte_is_found(tmp_path):
+    p = tmp_path / "x.step"
+    pad = b"/*" + b"COLOUR_RGB(" * 120000 + b"*/\n"                                                    # > 1 MB of a comment
+    p.write_bytes(b"ISO-10303-21;\nDATA;\n" + pad + b"#9=COLOUR_RGB('',0.,1.,0.);\nENDSEC;\n")
+    assert len(pad) > (1 << 20) and step_glb.names_colours(str(p))
+    p.write_bytes(b"ISO-10303-21;\nDATA;\n" + pad + b"ENDSEC;\n")
+    assert not step_glb.names_colours(str(p))
+
+
+def _with_external_part(tmp_path):
+    """An assembly written by OCCT's multi-file writer: the coloured part lives in a SECOND STEP file next to the main one."""
+    from OCP.BRepPrimAPI import BRepPrimAPI_MakeBox
+    from OCP.Quantity import Quantity_Color, Quantity_TOC_RGB
+    from OCP.STEPCAFControl import STEPCAFControl_Writer
+    from OCP.STEPControl import STEPControl_AsIs
+    from OCP.TCollection import TCollection_ExtendedString
+    from OCP.TDocStd import TDocStd_Document
+    from OCP.XCAFApp import XCAFApp_Application
+    from OCP.XCAFDoc import XCAFDoc_ColorType, XCAFDoc_DocumentTool
+    doc = TDocStd_Document(TCollection_ExtendedString("MDTV-XCAF"))
+    XCAFApp_Application.GetApplication_s().InitDocument(doc)
+    st, ct = XCAFDoc_DocumentTool.ShapeTool_s(doc.Main()), XCAFDoc_DocumentTool.ColorTool_s(doc.Main())
+    far = st.AddShape(BRepPrimAPI_MakeBox(50, 50, 50).Shape(), False)
+    ct.SetColor(far, Quantity_Color(0.9, 0.1, 0.1, Quantity_TOC_RGB), XCAFDoc_ColorType.XCAFDoc_ColorSurf)
+    asm = st.NewShape()
+    st.AddComponent(asm, far, __import__("OCP.TopLoc", fromlist=["TopLoc_Location"]).TopLoc_Location())
+    st.UpdateAssemblies()
+    w = STEPCAFControl_Writer()
+    w.SetColorMode(True)
+    assert w.Transfer(doc, STEPControl_AsIs, "ext")                       # multi-file: components into their own files
+    main = tmp_path / "main.step"
+    w.Write(str(main))
+    return main
+
+
+def test_a_step_that_references_another_file_never_reaches_the_colour_reader(tmp_path, monkeypatch):
+    """Astra on #837 (P1): STEPCAFControl_Reader would load the referenced file (the bound OCCT has no switch for that); such a
+    file keeps the plain view, which does not follow references - the referenced geometry never enters the GLB."""
+    main = _with_external_part(tmp_path)
+    others = [p for p in tmp_path.iterdir() if p.suffix.lower() in (".step", ".stp") and p != main]
+    assert others, "the writer did not produce the referenced file"
+    assert b"DOCUMENT_FILE" in main.read_bytes()
+    called = []
+    monkeypatch.setattr(step_glb, "coloured_solids", lambda p: called.append(p) or None)
+    try:
+        info = step_glb.convert_in_process(str(main), str(tmp_path / "out.glb"))
+    except Exception:                                                    # noqa: BLE001 - the main file alone has no geometry: the plain
+        info = None                                                      # path fails as v1 did (in the child: "could not be turned ..."), never loads it
+    assert called == []
+    if info is not None:
+        assert max(info["bbox_mm"]) < 50                                 # the 50 mm box of the other file is not in the view
+
+
+def test_a_document_reference_alone_keeps_the_plain_bytes(tmp_path):
+    src = _plain(tmp_path / "p.step")
+    text = src.read_text()
+    at = text.rindex("ENDSEC;", 0, text.rindex("END-ISO-10303-21;"))
+    ref = tmp_path / "ref.step"
+    ref.write_text(text[:at] + "#999998 = DOCUMENT_FILE('other.stp','','',#999997,'','');\n#999999 = COLOUR_RGB('',1.,0.,0.);\n" + text[at:])
+    step_glb.convert_in_process(str(ref), str(tmp_path / "ref.glb"))
+    step_glb.convert_in_process(str(src), str(tmp_path / "plain.glb"))
+    assert (tmp_path / "ref.glb").read_bytes() == (tmp_path / "plain.glb").read_bytes()
+
+
+def test_the_entity_scan_is_linear_on_long_names_spaces_and_open_strings(tmp_path):
+    """A 1 MB name, a 1 MB run of spaces or an unclosed 1 MB string must not cost the converter's time budget (no backtracking)."""
+    import time
+    p = tmp_path / "x.step"
+    for body in (b"x" * (2 << 20), b"A" + b" " * (2 << 20) + b"B", b"'" + b"a" * (2 << 20)):
+        p.write_bytes(body)
+        t = time.monotonic()
+        assert step_glb.step_entities(str(p), step_glb.COLOUR_ENTITIES | step_glb.EXTERNAL_ENTITIES) == set()
+        assert time.monotonic() - t < 2.0

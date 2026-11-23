@@ -91,8 +91,9 @@ def _members(record: dict) -> list:
 def project_group(project: dict) -> Group:
     pid = str(project.get("id") or "")
     title = safe_text(project.get("title"), pid)
-    prices = frozenset(str(m.get("email") or "").strip().lower() for m in project.get("members") or []
-                       if isinstance(m, dict) and (str(m.get("role") or "") == "owner" or m.get("sees_prices") is True))
+    # by ACCOUNT identity, the one central rule (a factory account never, staff always; owner 2026-11-23), resolved at build AND at send
+    from motor_ai_sim.development import access as _access
+    prices = frozenset(e for e, _role in _members(project) if _access.sees_prices_email(e, project))
     return Group(DS.project_scope(pid), "project", project, title, title, _members(project),
                  str(project.get("status") or "spec") != "closed", RP.project_path(pid), price_emails=prices)
 
@@ -467,7 +468,8 @@ def build_draft(group: Group, settings: dict, items: list, recipients: list[dict
                      key=lambda i: i.ts, reverse=True)
     if not visible:
         return None
-    shown, more = visible[:MAX_ITEMS], max(0, len(visible) - MAX_ITEMS)
+    shown, hidden_more = visible[:MAX_ITEMS], visible[MAX_ITEMS:]
+    more = len(hidden_more)
     bilingual = any(r["lang"] == "zh-CN" for r in recipients)
     text, body_html = compose(group, shown, more, start, end, bilingual)
     now = DS.iso()
@@ -485,7 +487,8 @@ def build_draft(group: Group, settings: dict, items: list, recipients: list[dict
                    **({"key": i.key} if i.kind == "revision" and i.key else {}),
                    "requires": sorted(i.requires), **({"motor": list(i.motor)} if i.motor else {}),
                    **({"group_en": i.group[0], "group_zh": i.group[1]} if i.group else {})} for i in shown],
-        "more": more, "recipients": recipients, "skipped": skipped,
+        "more": more, "more_requires": sorted(frozenset().union(*[i.requires for i in hidden_more])) if hidden_more else [],
+        "recipients": recipients, "skipped": skipped,
     }
     draft["content_hash"] = content_hash(draft)
     return draft

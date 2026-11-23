@@ -51,7 +51,47 @@
     "assembly": "装配流程",
     "tooling": "工装",
     "tests": "测试",
-    "certification": "认证"
+    "certification": "认证",
+    "checklist": "检查清单"
+  },
+  "checklist": {
+    "tip": "量产检查清单由本生产模块自动生成：装配工序、工艺要求与测试限值、零件、未决讨论和缺失的认证证据。此处只保存各项的状态和证据；要求变更的条目会回到“待确认”。",
+    "revision": "版本 {rev}",
+    "openCount": "未决 {open} / 共 {total}",
+    "openOnly": "仅显示未决项",
+    "download": "Excel（EN + 中文）",
+    "downloadTip": "下载 Excel：主清单、未决项跟踪和统计。仅为导出文件：状态和要求请在系统中修改。",
+    "none": "没有条目。",
+    "status": "状态",
+    "evidence": "证据",
+    "noEvidence": "无证据",
+    "changed": "已变更",
+    "changedTip": "状态设定后要求发生了变更，请重新确认。",
+    "uploadTip": "上传新文件作为此项的证据",
+    "byTip": "由 {by} 于 {at} 设定",
+    "statuses": {
+      "to_do": "待办",
+      "to_confirm": "待确认",
+      "missing_info": "信息缺失",
+      "optional": "可选",
+      "done": "已完成"
+    },
+    "responsible": {
+      "factory": "工厂",
+      "supplier": "供应商",
+      "MOTRES": "MOTRES"
+    },
+    "categories": {
+      "assembly": "装配工序",
+      "checks": "过程检验",
+      "process": "工艺要求",
+      "tests": "测试限值",
+      "parts": "零件、材料与表面处理",
+      "fasteners": "紧固件",
+      "packaging": "包装",
+      "discussion": "未决讨论事项",
+      "certification": "认证证据"
+    }
   },
   "bilingual": {
     "machine": "机器翻译，未经核实",

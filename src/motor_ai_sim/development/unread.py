@@ -40,8 +40,12 @@ def visible_thread(project_id: str, user: Optional[dict]) -> list[dict]:
 
 
 def unread_ids(project_id: str, email: str, *, messages: Optional[list[dict]] = None,
-               started: Optional[datetime] = None, user: Optional[dict] = None) -> list[str]:
-    """Unread message ids of ``email``; a price-restricted message counts only when ``user`` may see it (never without ``user``)."""
+               started: Optional[datetime] = None, user: Optional[dict] = None, agent: bool = False) -> list[str]:
+    """Unread message ids of ``email``; a price-restricted message counts only when ``user`` may see it (never without ``user``).
+    ``agent=True`` is the explicit agent-safe context of an MCP call: it counts as no user, whatever account the credential belongs to,
+    so no restricted message is counted."""
+    if agent:
+        user = None
     if messages is None:
         messages = visible_thread(project_id, user)
     else:

@@ -17,48 +17,95 @@ def membership(email: str, project: dict) -> str | None:
     return None
 
 
-def sees_prices(user: dict | None, project: dict) -> bool:
-    """Who may read the project's prices (owner 2026-11-22: "the owner must be able to regulate who sees the price"): a global
-    admin, every project OWNER (always, not switchable) and a member whose entry carries ``sees_prices: true``.  The quote, the
-    documents and the messages marked price-restricted all ask this one question.  Never a global engineer who is no member."""
-    if not user:
+def holds_price_grant(entry: dict | None) -> bool:
+    """The PROJECT-level grant of one member or pending-invite entry: an owner always, anybody else only with ``sees_prices: true``.
+    A grant is not yet access: ``sees_prices`` below puts the account's identity first."""
+    if not isinstance(entry, dict):
         return False
-    if str(user.get("role") or "").lower() == "admin":
+    return str(entry.get("role") or "").lower() == "owner" or entry.get("sees_prices") is True
+
+
+def sees_prices(user: dict | None, project: dict) -> bool:
+    """THE central price rule (owner 2026-11-22 / coordinator 2026-11-23); the quote, the documents and messages marked
+    price-restricted, the Contract section and the digest all ask this one function.  The IDENTITY comes first and no project role
+    or flag overrides it:
+
+    1. no account, an MCP agent (``auth._AGENT_USER`` set) or a factory account (global role ``oem``): NEVER;
+    2. MOTRES staff (global role admin or engineer): ALWAYS, member or not;
+    3. anybody else: a project OWNER, or a member whose entry carries ``sees_prices: true`` (a project owner or staff grants it).
+    """
+    if not user or auth._AGENT_USER.get() is not None:
+        return False
+    role = str(user.get("role") or "").lower()
+    if role == "oem":
+        return False
+    if role in ("admin", "engineer"):
         return True
     email = str(user.get("email") or "").strip().lower()
     for member in project.get("members", []):
         if isinstance(member, dict) and str(member.get("email") or "").strip().lower() == email:
-            return str(member.get("role") or "").lower() == "owner" or member.get("sees_prices") is True
+            return holds_price_grant(member)
     return False
 
 
 def can_see_message(user: dict | None, project: dict, message: dict) -> bool:
-    """A project message marked ``price_restricted`` (owner 2026-11-22) is seen by whoever may see the prices - admin, project
-    owners, members with ``sees_prices`` - and by its author; nobody else (not its text, not its existence).  A global engineer who
-    is no member does not see it, exactly as for the quote."""
+    """A project message marked ``price_restricted`` (owner 2026-11-22) is seen by whoever ``sees_prices`` lets through now: the one
+    central rule, no exception for the author (a revoked or demoted author loses it too).  Nobody else sees its text or its existence.
+    This judges the message itself; ``visible_messages`` also hides the replies of a hidden message."""
     if not isinstance(message, dict) or not message.get("price_restricted"):
-        return True
-    if not user:
-        return False
-    me = str(user.get("email") or "").strip().lower()
-    if me and str(message.get("author_email") or "").strip().lower() == me:
         return True
     return sees_prices(user, project)
 
 
 def visible_messages(user: dict | None, project: dict, messages: list) -> list:
-    return [m for m in messages if can_see_message(user, project, m)]
+    """The messages ``user`` may see.  A reply (any depth) to a hidden message is hidden with it, whatever its own flag says."""
+    shown: list = []
+    hidden: set = set()
+    parent_of = {str(m.get("id")): str(m.get("reply_to") or "") for m in messages if isinstance(m, dict) and m.get("id")}
+    for m in messages:
+        if isinstance(m, dict) and m.get("id") and not can_see_message(user, project, m):
+            hidden.add(str(m["id"]))
+    changed = True
+    while changed:                                         # descendants of a hidden message are hidden
+        changed = False
+        for mid, parent in parent_of.items():
+            if parent and parent in hidden and mid not in hidden:
+                hidden.add(mid)
+                changed = True
+    for m in messages:
+        if not isinstance(m, dict) or str(m.get("id")) in hidden:
+            continue
+        shown.append(m)
+    return shown
 
 
 def may_restrict_messages(user: dict | None, project: dict) -> bool:
-    """Who may mark a message price-restricted: admin, global engineer, project owner."""
-    if not user:
+    """Who may mark a message price-restricted: MOTRES staff and the project owner (``can_manage_prices``)."""
+    return can_manage_prices(user, project)
+
+
+def sees_prices_email(email: str, project: dict) -> bool:
+    """``sees_prices`` for a RECIPIENT known only by address (digest, notifications): the account's global role is resolved from the
+    user store, never derived from the project role.  An address with no (enabled) account is a pending invite or a stranger: False."""
+    from motor_ai_sim import users
+    key = str(email or "").strip().lower()
+    account = users.get_user(key) if key else None
+    if not account or account.get("disabled"):
         return False
-    if str(user.get("role") or "").lower() in ("admin", "engineer"):
+    return sees_prices({"email": key, "role": account.get("role", "user")}, project)
+
+
+def can_manage_prices(user: dict | None, project: dict) -> bool:
+    """Who may change who sees the prices: MOTRES staff (admin / global engineer) and the project OWNER.  Never an agent, a factory
+    account or a project engineer / customer member."""
+    if not user or auth._AGENT_USER.get() is not None:
+        return False
+    role = str(user.get("role") or "").lower()
+    if role == "oem":
+        return False
+    if role in ("admin", "engineer"):
         return True
-    me = str(user.get("email") or "").strip().lower()
-    return any(isinstance(m, dict) and str(m.get("email") or "").strip().lower() == me and str(m.get("role") or "").lower() == "owner"
-               for m in project.get("members", []))
+    return membership(str(user.get("email") or ""), project) == "owner"
 
 
 def can_view(user: dict, project: dict) -> bool:

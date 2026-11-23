@@ -13,6 +13,7 @@ import BomTable from './BomTable';
 import ChangesPanel from './ChangesPanel';
 import DiscussionPanel from './DiscussionPanel';
 import CertificationPanel from './CertificationPanel';
+import ChecklistPanel from './ChecklistPanel';
 import DocumentsPanel from './DocumentsPanel';
 import ProductionListPage from './ProductionListPage';
 import LegacyProposals from './LegacyProposals';
@@ -43,7 +44,7 @@ import type {
 // 'process' merged into the Assembly tab (owner 2026-10-18): the graph on top, the process document below it
 // 'tests' (owner 2026-10-26): bench tests of this configuration against the simulation (modules/tests)
 // 'proposals' (owner 2026-11-15) is gone: Discussion and Changes stay.  An old link or remembered tab 'proposals' opens Discussion (see legacyTab).
-const TABS = ['bom', 'tooling', 'assembly', 'timeline', 'documents', 'certification', 'tests', 'discussion', 'changes'] as const;
+const TABS = ['bom', 'tooling', 'assembly', 'timeline', 'documents', 'certification', 'checklist', 'tests', 'discussion', 'changes'] as const;
 type TabId = typeof TABS[number];
 
 // Where the user stopped (owner 2026-10-18): the open production and its sub-tab survive a page reload.  Browser
@@ -265,6 +266,7 @@ const ProductionPage: React.FC<{ die: string; config: string; onBack: () => void
           {tab === 'timeline' && <TimelineView ctx={ctx} prod={prod} />}
           {tab === 'documents' && <DocumentsPanel documents={plainDocuments(data.documents)} parts={data.parts} ctx={ctx} sections={data.process} link={link} onLinkChange={setLink} unackedFiles={unackedFiles(data.revisions, ctx.email)} />}
           {tab === 'certification' && <CertificationPanel documents={data.documents} ctx={ctx} />}
+          {tab === 'checklist' && <ChecklistPanel ctx={ctx} documents={data.documents} />}
           {tab === 'tests' && <TestsPanel die={die} config={config} source={{ kind: 'production' }}
             onOpenDocument={(fileId, name) => { void downloadFile(die, config, fileId, name).catch((e) => setErr(String(e))); }}
             onLoadDocument={(fileId, onProgress) => fetchFileBlob(die, config, fileId, onProgress)} />}

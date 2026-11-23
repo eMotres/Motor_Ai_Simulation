@@ -125,6 +125,7 @@ def _send(draft_id: str, who: str, content_hash: str, *, deliver: Callable, now:
     current, left = B.resolve_recipients(group, settings)
     now_by_email = {r["email"]: r for r in current}
     needed = frozenset().union(*[frozenset(i.get("requires") or []) for i in draft["items"]]) if draft["items"] else frozenset()
+    needed |= frozenset(draft.get("more_requires") or [])      # the "and N more" count too: a recipient who may not see them is skipped
     to_send: list[mailing.Recipient] = []
     skipped: list[dict] = [dict(s) for s in left if any(s["email"] == r["email"] for r in draft["recipients"])]
     for r in draft["recipients"]:

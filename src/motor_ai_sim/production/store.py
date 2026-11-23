@@ -75,6 +75,7 @@ _DEFAULTS: dict[str, Any] = {
     "threads.json": {"threads": []},
     "proposals.json": {"proposals": []},
     "revisions.json": {"revisions": []},
+    "checklist_status.json": {"items": {}},   # checklist.py: item key -> status record
 }
 
 

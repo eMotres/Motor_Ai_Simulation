@@ -1123,6 +1123,7 @@ def _applied_metrics(raw: Optional[dict]) -> dict:
         ("cogging_steps", ("cogging_steps",)), ("cogging_temp_c", ("cogging_temp_c",)),
         ("cogging_mesh_mm", ("cogging_mesh_mm",)), ("cogging_gap_layers", ("cogging_gap_layers",)),
         ("cogging_sectors", ("cogging_sectors",)), ("cogging_basis_code", ("cogging_basis_code",)),
+        ("cogging_demag_at_load", ("cogging_demag_at_load",)), ("cogging_sig", ("cogging_sig",)),
     ):
         v = _pick(*names)
         if v is not None:

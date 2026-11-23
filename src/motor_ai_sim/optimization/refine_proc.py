@@ -127,6 +127,25 @@ def _coil_fit(geo: Dict[str, float]) -> tuple:
     return n_fit, nw
 
 
+def _eff_mesh_mm(geo, mesh_size_mm, min_size_mm, hi_fidelity):
+    """The iron mesh size the solver refines a request to (its own ``mesh_feature_floor_mm`` rule)."""
+    try:
+        from motor_ai_sim.simulation.fem_solver_2d import mesh_feature_floor_mm
+        floor = mesh_feature_floor_mm(geo, min_size_mm, hi_fidelity)
+        return float(min(float(mesh_size_mm), floor)) if floor is not None else float(mesh_size_mm)
+    except Exception:                                   # noqa: BLE001
+        return None
+
+
+def _eff_magnet_temp_c(magnet_temp_c):
+    """The magnet temperature a run solves at (the request's, else the assigned card's own)."""
+    try:
+        from motor_ai_sim.simulation.fem_solver_2d import _run_magnet_temp_c
+        return _run_magnet_temp_c(magnet_temp_c)
+    except Exception:                                   # noqa: BLE001
+        return None
+
+
 def run_one(overrides: Dict[str, float], current_a: float, steps: int,
             coil_temp_c: float, n_periods: float = 1.0,
             gamma_deg: float = 0.0, mesh_size_mm: float = 4.0,
@@ -733,7 +752,11 @@ def run_one(overrides: Dict[str, float], current_a: float, steps: int,
             "rotor_eddy": bool(rotor_eddy), "demag": bool(_demag),
             "eddy": bool(_sim.get("eddy", False)),
             "gap_layers_effective": d.get("gap_layers_effective"),
-            "n_sectors": int(_ns), "mesh_size_mm": float(mesh_size_mm)}} if no_load else {}),
+            "n_sectors": int(_ns), "mesh_size_mm": float(mesh_size_mm),
+            # The mesh and magnet temperature the solve USED, from the solver's own helpers (the
+            # solve does not return them): the iron mesh it refines to, the resolved temperature.
+            "mesh_size_effective_mm": _eff_mesh_mm(geo, mesh_size_mm, min_size_mm, hi_fidelity),
+            "magnet_temp_c_effective": _eff_magnet_temp_c(magnet_temp_c)}} if no_load else {}),
     }
 
 

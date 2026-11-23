@@ -34,6 +34,7 @@ import { SharedComparisonTable, type SharedComparisonColumn } from './SharedComp
 import { bestValueColor, buildComparisonModel, shouldSuppressMixedBasisColor } from './comparisonModel';
 import { ktFromKv } from '../../lib/kvKt';
 import { nsT } from '../../i18n/nsT';
+import { coggingComparable, storedNumber } from '../../lib/coggingPp';
 
 const API = import.meta.env.VITE_API_URL ?? 'http://localhost:8001';
 
@@ -287,13 +288,6 @@ const txSim = nsT('simulation');
 const coggingCols = (): ResultCol[] => [
   { key: 'cogging_pp_Nm', label: txSim('coggingPpCol'), unit: 'N·m', d: 3, better: 'lo' },
 ];
-/** The settings two Cogging pp values must share to be compared (steps really used, temperature, mesh / gap / sectors). */
-const coggingSig = (s: SavedSim): string => {
-  const r = (s.results ?? {}) as Record<string, unknown>;
-  return ['cogging_steps', 'cogging_temp_c', 'cogging_mesh_mm', 'cogging_gap_layers', 'cogging_sectors',
-    'cogging_basis_code', 'cogging_demag_at_load']
-    .map(k => (r[k] === undefined || r[k] === null ? '?' : String(r[k]))).join('|');
-};
 const MECH_COLS: ResultCol[] = ([
   // The two safety factors first — they are the verdict; the stresses behind
   // them are how the verdict was reached.
@@ -783,26 +777,28 @@ const ComparePanel: React.FC = () => {
     title: (_v, s) => { if (r.text) { const text = resultText(r, s); return text === '—' ? undefined : text; } return Number.isFinite(resultVal(r, s)) && r.activeBasis?.(resultSrc(r, s)) ? ACTIVE_BASIS_TIP : undefined; },
     format: (_v, s) => { if (r.text) return resultText(r, s); const raw = resultVal(r, s); return Number.isFinite(raw) ? `${fmtNum(raw, r.d ?? 2, r.scale ?? 1)}${r.activeBasis?.(resultSrc(r, s)) ? '*' : ''}` : '—'; },
   }));
-  // Cogging pp is compared only between values measured with the same settings; a value that is not final is
-  // labelled "ranking only" wherever it is shown.
-  const coggingHave = sims.filter(s => Number.isFinite(Number((s.results as any)?.cogging_pp_Nm)));
-  const coggingMixed = new Set(coggingHave.map(coggingSig)).size > 1;
+  // Cogging pp is compared only between values measured with KNOWN, equal settings (one signature: steps,
+  // temperature, mesh, gap, sectors, basis, eddy, build, materials); a value that is not final is labelled
+  // "ranking only" wherever it is shown, and the full-strength basis is stated whenever demag was on at load.
+  const cgNum = (s: SavedSim, k: string) => storedNumber((s.results as any)?.[k]);
+  const coggingHave = sims.filter(s => Number.isFinite(cgNum(s, 'cogging_pp_Nm')));
+  const coggingMixed = !coggingComparable(coggingHave.map(s => cgNum(s, 'cogging_sig')));
   resultModelColumns.forEach((c, i) => {
-    if (c.key !== 'r:cogging_pp_Nm' && !c.key.endsWith(':cogging_pp_Nm')) return;
+    if (!c.key.endsWith(':cogging_pp_Nm')) return;
     const base = c;
     resultModelColumns[i] = { ...base,
       rankValues: rows => (coggingMixed ? [] : (base.rankValues ? base.rankValues(rows) : [])),
       noColor: (s, rows) => coggingMixed || (base.noColor ? base.noColor(s, rows) : false),
       format: (v, s) => {
-        const raw = Number((s.results as any)?.cogging_pp_Nm);
+        const raw = cgNum(s, 'cogging_pp_Nm');
         if (!Number.isFinite(raw)) return '—';
-        const fin = Number((s.results as any)?.cogging_final) === 1;
+        const fin = cgNum(s, 'cogging_final') === 1;
         return `${fmtNum(raw, 3, 1)}${fin ? '' : ` (${txSim('coggingPpRanking')})`}`;
       },
-      title: (v, s) => (coggingMixed ? txSim('coggingPpMixed')
-        : [Number((s.results as any)?.cogging_final) === 1 ? '' : txSim('coggingPpRankingTip'),
-           Number((s.results as any)?.cogging_demag_at_load) === 1 ? txSim('coggingPpBasis') : '']
-            .filter(Boolean).join(' ') || undefined),
+      title: (v, s) => [coggingMixed ? txSim('coggingPpMixed') : '',
+          cgNum(s, 'cogging_final') === 1 ? '' : txSim('coggingPpRankingTip'),
+          cgNum(s, 'cogging_demag_at_load') === 1 ? txSim('coggingPpBasis') : '']
+        .filter(Boolean).join(' ') || undefined,
     };
   });
   const selectedComparisonModel = buildComparisonModel(selected, paramModelColumns, valEq);

@@ -43,3 +43,14 @@ test('the applied metrics carry the basis', () => {
   assert.equal(m.cogging_basis_code, 1);
   assert.equal(m.cogging_demag_at_load, 1);
 });
+
+test('two UNKNOWN signatures never match, and null is not a number', async () => {
+  const { coggingComparable, storedNumber } = await import('../coggingPp.ts');
+  assert.equal(coggingComparable([5, 5]), true);
+  assert.equal(coggingComparable([5, 6]), false);
+  assert.equal(coggingComparable([null, null]), false);
+  assert.equal(coggingComparable([undefined, 5]), false);
+  assert.equal(coggingComparable([5]), true);
+  assert.ok(Number.isNaN(storedNumber(null)) && Number.isNaN(storedNumber('')) && Number.isNaN(storedNumber(undefined)));
+  assert.equal(storedNumber('0.25'), 0.25);
+});

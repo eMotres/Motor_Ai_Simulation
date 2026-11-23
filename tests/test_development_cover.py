@@ -68,7 +68,7 @@ def test_set_cover_makes_a_small_webp_thumbnail(client):
     r = set_cover(client, doc["id"])
     assert r.status_code == 200 and r.json()["document_id"] == doc["id"]
     got = client.get("/api/projects/ciano/cover", headers=hdr("t-customer"))
-    assert got.status_code == 200 and got.headers["content-type"] == "image/webp" and "private" in got.headers["cache-control"]
+    assert got.status_code == 200 and got.headers["content-type"] == "image/webp" and got.headers["cache-control"] == "no-store"
     thumb = Image.open(io.BytesIO(got.content))
     assert thumb.format == "WEBP" and max(thumb.size) == cover_module.COVER_WIDTH and thumb.size == (480, 300)
     assert len(got.content) < 20_000

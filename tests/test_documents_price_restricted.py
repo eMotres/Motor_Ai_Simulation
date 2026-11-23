@@ -315,3 +315,58 @@ def test_failed_cover_commit_leaves_the_previous_cover_and_no_restricted_bytes_r
     c = _upload_png(client, name="c.png")
     assert client.put("/api/projects/p1/cover", headers=hdr("owner"), json={"document_id": c["id"]}).status_code == 200
     assert len(list((tmp_path / "projects" / "p1" / "covers").glob("*.webp"))) == 1
+
+
+def test_a_poisoned_legacy_cover_file_is_never_served(client, tmp_path):
+    doc = _upload_png(client)
+    assert client.put("/api/projects/p1/cover", headers=hdr("owner"), json={"document_id": doc["id"]}).status_code == 200
+    good = client.get("/api/projects/p1/cover", headers=hdr("cust"))
+    root = tmp_path / "projects" / "p1"
+    (root / "cover.webp").write_bytes(b"RESTRICTED-BYTES")
+    assert client.get("/api/projects/p1/cover", headers=hdr("cust")).content == good.content
+    for f in (root / "covers").glob("*.webp"):
+        f.unlink()                                       # the named version is gone: nothing else stands in for it
+    assert client.get("/api/projects/p1/cover", headers=hdr("cust")).status_code == 404
+
+
+def test_cover_get_is_no_store(client):
+    doc = _upload_png(client)
+    client.put("/api/projects/p1/cover", headers=hdr("owner"), json={"document_id": doc["id"]})
+    assert client.get("/api/projects/p1/cover", headers=hdr("cust")).headers["cache-control"] == "no-store"
+
+
+def test_a_pointer_switch_between_validation_and_read_never_serves_the_other_bytes(client, monkeypatch):
+    a = _upload_png(client, name="a.png")
+    assert client.put("/api/projects/p1/cover", headers=hdr("owner"), json={"document_id": a["id"]}).status_code == 200
+    real = store.load_documents
+    switched = {}
+
+    def switching(project_id):
+        rows = real(project_id)
+        if not switched:
+            switched["yes"] = True
+            store.set_cover(project_id, b"B-RESTRICTED-THUMBNAIL", "other-doc", "owner@example.test")
+        return rows
+
+    monkeypatch.setattr(store, "load_documents", switching)
+    r = client.get("/api/projects/p1/cover", headers=hdr("cust"))
+    assert b"B-RESTRICTED" not in r.content and r.status_code in (200, 404)
+
+
+def test_clearing_the_cover_does_not_delete_a_version_a_concurrent_put_just_committed(client, tmp_path, monkeypatch):
+    a = _upload_png(client, name="a.png")
+    assert client.put("/api/projects/p1/cover", headers=hdr("owner"), json={"document_id": a["id"]}).status_code == 200
+    real = store._remove_cover_version
+    made = {}
+
+    def racing(project_id, version):
+        if not made:                                     # a PUT commits between the clearing's commit and its file removal
+            made["cover"] = None
+            made["cover"] = store.set_cover(project_id, b"NEW-VERSION", a["id"], "owner@example.test")
+        real(project_id, version)
+
+    monkeypatch.setattr(store, "_remove_cover_version", racing)
+    assert client.delete("/api/projects/p1/cover", headers=hdr("owner")).status_code == 200
+    monkeypatch.setattr(store, "_remove_cover_version", real)
+    assert store.get_project("p1")["cover"]["version"] == made["cover"]["version"]
+    assert store.read_cover("p1") is not None and store.read_cover("p1").read_bytes() == b"NEW-VERSION"

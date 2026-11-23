@@ -370,29 +370,26 @@ def cover_version_file(project_id: str, version: str) -> Path:
     return _file(project_id, "covers/%s.webp" % version)
 
 
-def _remove_cover_files(project_id: str, keep_version: str | None = None) -> None:
-    """Delete every stored thumbnail except ``keep_version`` (call only AFTER the pointer change committed)."""
-    directory = _file(project_id, "covers")
-    if directory.is_dir():
-        for child in directory.iterdir():
-            if child.suffix == ".webp" and child.stem != keep_version:
-                child.unlink(missing_ok=True)
-    if keep_version is not None:
-        cover_file(project_id).unlink(missing_ok=True)
+def _remove_cover_version(project_id: str, version: str | None) -> None:
+    """Delete ONE retired thumbnail version (and the unused legacy single file); call only AFTER the pointer change committed."""
+    if version and re.fullmatch(r"[0-9a-f]{4,64}", version):
+        cover_version_file(project_id, version).unlink(missing_ok=True)
+    cover_file(project_id).unlink(missing_ok=True)
 
 
-def read_cover(project_id: str) -> Path | None:
-    """The bytes of the version the project's cover pointer names - never another file."""
-    project = get_project(project_id)
-    cover = project.get("cover") if isinstance(project, dict) else None
+def cover_path(project_id: str, cover: dict | None) -> Path | None:
+    """The file of the version the GIVEN pointer names (the caller validated that same pointer): never another file, and no
+    fallback to the legacy ``cover.webp`` (a file nobody can vouch for is not served)."""
     version = str(cover.get("version") or "") if isinstance(cover, dict) else ""
     if not re.fullmatch(r"[0-9a-f]{4,64}", version):
         return None
     path = cover_version_file(project_id, version)
-    if path.is_file():
-        return path
-    legacy = cover_file(project_id)
-    return legacy if legacy.is_file() else None          # a cover stored before per-version files; never rewritten any more
+    return path if path.is_file() else None
+
+
+def read_cover(project_id: str) -> Path | None:
+    project = get_project(project_id)
+    return cover_path(project_id, project.get("cover") if isinstance(project, dict) else None)
 
 
 def flush_project_audit(project_id: str) -> None:
@@ -422,7 +419,11 @@ def set_cover(project_id: str, thumbnail: bytes, document_id: str, actor: str, a
     cover = {"document_id": document_id, "version": version, "set_by": actor.lower(),
              "set_at": datetime.now(timezone.utc).isoformat()}
 
+    retired: dict = {}
+
     def apply(project: dict) -> None:
+        old = project.get("cover")
+        retired["version"] = str(old.get("version") or "") if isinstance(old, dict) else None
         project["cover"] = cover
         if audit is not None:
             from motor_ai_sim.development.project_uploads import queue_event
@@ -433,7 +434,7 @@ def set_cover(project_id: str, thumbnail: bytes, document_id: str, actor: str, a
     except BaseException:
         path.unlink(missing_ok=True)
         raise
-    _remove_cover_files(project_id, keep_version=version)
+    _remove_cover_version(project_id, retired.get("version"))      # only the version this switch retired
     return cover
 
 
@@ -445,6 +446,7 @@ def clear_cover(project_id: str, only_document_id: str | None = None, audit: tup
     def apply(project: dict) -> None:
         cover = project.get("cover")
         if isinstance(cover, dict) and (only_document_id is None or cover.get("document_id") == only_document_id):
+            removed["version"] = str(cover.get("version") or "")
             project.pop("cover", None)
             removed["yes"] = True
             if audit is not None:
@@ -453,8 +455,7 @@ def clear_cover(project_id: str, only_document_id: str | None = None, audit: tup
 
     mutate_project(project_id, apply)
     if removed:
-        _remove_cover_files(project_id)
-        cover_file(project_id).unlink(missing_ok=True)
+        _remove_cover_version(project_id, removed.get("version"))      # only what this clearing retired: a concurrent PUT keeps its file
     return bool(removed)
 
 

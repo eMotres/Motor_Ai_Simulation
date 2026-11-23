@@ -60,10 +60,10 @@ def get_cover(request: Request, project_id: str):
     # enforced on every read, whatever happened to the stored cover (a failed clearing, a race): the source document decides
     if not _cover_allowed(row):
         raise HTTPException(status_code=404, detail="No cover image")
-    path = store.read_cover(project_id)
+    path = store.cover_path(project_id, cover)          # the SAME pointer that was validated above, never a second read
     if path is None:
         raise HTTPException(status_code=404, detail="No cover image")
-    return FileResponse(path, media_type="image/webp", headers={"Cache-Control": "private, max-age=86400",
+    return FileResponse(path, media_type="image/webp", headers={"Cache-Control": "no-store",
                                                                 "X-Content-Type-Options": "nosniff"})
 
 

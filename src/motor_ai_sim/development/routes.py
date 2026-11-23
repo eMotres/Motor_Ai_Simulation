@@ -17,6 +17,7 @@ from motor_ai_sim.development import access, models, self_service, spec_proposal
 from motor_ai_sim.development.motors import _metric_projection
 from motor_ai_sim.development.quote_routes import quote_shared
 from motor_ai_sim.development.timeline_routes import timeline_ready
+from motor_ai_sim.development.project_uploads import flush_events, queue_event
 
 log = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/projects", tags=["development-projects"])
@@ -137,7 +138,7 @@ def _summary(project: dict, user: dict) -> dict:
     role = access.membership(_email(user), project)
     engineer = access.is_engineer(user) or role in ("owner", "engineer")
     draft = store.load_json(project["id"], "draft.json", {"draft": {"fields": {}, "mission_profile": [], "mission_profile_status": "missing", "production": {}, "provenance": {}}, "revision": 0})
-    projection = {k: copy.deepcopy(v) for k, v in project.items() if k not in ("notes", "pending_invites", "cover")}
+    projection = {k: copy.deepcopy(v) for k, v in project.items() if k not in ("notes", "pending_invites", "cover", "pending_audit")}
     cover = project.get("cover")
     projection["cover_version"] = cover.get("version") if isinstance(cover, dict) else None     # the image: GET /{id}/cover
     if not engineer:
@@ -166,7 +167,7 @@ def _summary(project: dict, user: dict) -> dict:
         projection["members"] = [m for m in project.get("members", []) if m.get("email", "").lower() == _email(user)]
     # the price switches (owner 2026-11-22): a project owner or an admin manages them, so they get the minimal list the Members dialog
     # needs - address, role, pending, flag - for the members AND the pending invites; never the notes or the grant ledgers
-    if str(user.get("role") or "").lower() == "admin" or role == "owner":
+    if access.can_manage_prices(user, project):
         projection["member_switches"] = [
             {"email": str(m.get("email") or "").lower(), "role": m.get("role"), "pending": pending,
              "sees_prices": m.get("role") == "owner" or m.get("sees_prices") is True}
@@ -1315,12 +1316,25 @@ def _release_member_grants(project: dict, project_id: str, email: str, reason: s
         log.warning("project %s: motor grants of %s not released", project_id, email, exc_info=True)
 
 
-def _apply_member(project_id: str, email: str, role: str, sees_prices: bool | None = None) -> tuple[dict, bool]:
+def _flush_price_audit(project_id: str) -> None:
+    """Write the price-grant audit events that were committed WITH the membership change.  A failing append leaves them pending in
+    the project (the change stands, the row is written by the next call), it never undoes or blocks the change."""
+    try:
+        flush_events(project_id, "project.json")
+    except Exception as exc:                                # noqa: BLE001
+        log.error("project %s: price audit row left pending (%s); written by the next call", project_id, exc)
+
+
+def _apply_member(project_id: str, email: str, role: str, sees_prices: bool | None = None, *, actor: dict | None = None) -> tuple[dict, bool]:
     """Add or re-role `email` on a project: a member when the account exists, else a pending invite.
     Returns (entry, account_found). Shared by POST /members and by the sign-in invite claim.
 
     ``sees_prices`` (owner 2026-11-22): None keeps what the member (or the pending invite) already carries, True / False sets it;
-    an owner never carries the flag (owners always see prices) and it is stored only when true."""
+    an owner never carries the flag (owners always see prices) and it is stored only when true.
+
+    ``actor`` (the caller of POST /members, None for the sign-in invite claim): the price grant of the address is compared BEFORE and
+    AFTER under the lock; a change of it (a flag switched, an owner made or demoted, an owner re-posted as customer) needs
+    ``access.can_manage_prices`` (403 otherwise), and the change is queued as an audit event written with the membership change."""
     entry = {"email": email, "role": role}
     from motor_ai_sim.development.motors import transaction, _sync_grants, _mark_removal_candidates, _key, MOTOR_GRANT_ROLES
     with transaction(), users._LOCK:
@@ -1338,7 +1352,15 @@ def _apply_member(project_id: str, email: str, role: str, sees_prices: bool | No
                               if str(m.get("email") or "").lower() == email)
         if sees_prices and role != "owner":
             entry["sees_prices"] = True
+        old_entry = next((m for m in [*project.get("members", []), *project.get("pending_invites", [])]
+                          if str(m.get("email") or "").lower() == email), None)
+        old_grant, new_grant = access.holds_price_grant(old_entry), access.holds_price_grant(entry)
+        if actor is not None and old_grant != new_grant and not access.can_manage_prices(actor, project):
+            raise HTTPException(status_code=403, detail="Only a project owner or MOTRES staff sets who sees the prices")
         updated = copy.deepcopy(project)
+        if old_grant != new_grant:
+            queue_event(updated, str((actor or {}).get("email") or email).strip().lower(), "sees_prices", "member", email,
+                        {"from": old_grant, "to": new_grant, "role": role})
         updated["members"] = [m for m in updated.get("members", []) if m.get("email", "").lower() != email]
         if account:
             updated["pending_invites"] = [m for m in updated.get("pending_invites", []) if m.get("email", "").lower() != email]
@@ -1379,6 +1401,7 @@ def _apply_member(project_id: str, email: str, role: str, sees_prices: bool | No
             # the member no longer gets the project's motors: the grants the project made for them go too (owner
             # 2026-10-27) - after the membership is committed, so a failed change never costs anyone access
             _release_member_grants(updated, project_id, email, "customer_membership_changed", "member change")
+    _flush_price_audit(project_id)
     return entry, bool(account)
 
 
@@ -1455,13 +1478,9 @@ async def add_member(request: Request, project_id: str):
     want_prices = body.get("sees_prices") if isinstance(body, dict) else None
     if want_prices is not None and not isinstance(want_prices, bool):
         raise HTTPException(status_code=422, detail="sees_prices must be true or false")
-    # only an owner of the project or an admin decides who sees the prices: an engineer member can neither switch the flag nor make
-    # somebody (himself included) an owner, which would be the same thing (owner 2026-11-22)
-    if (want_prices is not None or role == "owner") and not (access.sees_prices(user, before) and (
-            str(user.get("role") or "").lower() == "admin" or access.membership(_email(user), before) == "owner")):
-        raise HTTPException(status_code=403, detail="Only a project owner or an admin sets who sees the prices")
     known = any(str(m.get("email") or "").lower() == email for m in [*before.get("members", []), *before.get("pending_invites", [])])
-    entry, found = _apply_member(project_id, email, role, sees_prices=want_prices)
+    _flush_price_audit(project_id)
+    entry, found = _apply_member(project_id, email, role, sees_prices=want_prices, actor=user)
     account = found
     store.append_audit(project_id, _email(user), "invite", "member", email,
                        {"role": role, "pending": not bool(account), **({"sees_prices": want_prices} if want_prices is not None else {})})
@@ -1477,38 +1496,49 @@ async def add_member(request: Request, project_id: str):
 
 @router.patch("/{project_id}/members/sees_prices")
 async def set_member_sees_prices(request: Request, project_id: str):
-    """The project owner (or an admin) switches ONE member's ``sees_prices`` (owner 2026-11-22).  Owners always see prices and are
-    not switchable; a pending invite carries the flag until it is claimed.  Audited: who, when, for whom."""
+    """A project owner or MOTRES staff (admin / global engineer) switches ONE member's ``sees_prices`` (owner 2026-11-22).  Owners always
+    see prices and are not switchable; a pending invite carries the flag until it is claimed.  The audit row (who, for whom, old, new)
+    is committed WITH the change, the old value read under the lock."""
     user, _, _ = access.require_project(request, project_id, edit=True)
     body = await request.json()
     email = str(body.get("email") or "").strip().lower() if isinstance(body, dict) else ""
     value = body.get("sees_prices") if isinstance(body, dict) else None
     if not email or not isinstance(value, bool):
         raise HTTPException(status_code=422, detail="email and sees_prices (true / false) required")
-    project = store.get_project(project_id) or {}
-    if not (str(user.get("role") or "").lower() == "admin" or access.membership(_email(user), project) == "owner"):
-        raise HTTPException(status_code=403, detail="Only a project owner or an admin sets who sees the prices")
-    holder = next((m for m in [*project.get("members", []), *project.get("pending_invites", [])]
-                   if str(m.get("email") or "").lower() == email), None)
-    if holder is None:
-        raise HTTPException(status_code=404, detail="Member not found")
-    if holder.get("role") == "owner":
-        raise HTTPException(status_code=422, detail="A project owner always sees the prices")
-    before = holder.get("sees_prices") is True
+    _flush_price_audit(project_id)
+    outcome: dict = {}
 
     def mutate(doc: dict) -> None:
-        for key in ("members", "pending_invites"):
-            for m in doc.get(key, []):
-                if isinstance(m, dict) and str(m.get("email") or "").lower() == email:
-                    if value:
-                        m["sees_prices"] = True
-                    else:
-                        m.pop("sees_prices", None)
+        if not access.can_manage_prices(user, doc):
+            outcome["status"] = 403
+            return
+        holders = [m for key in ("members", "pending_invites") for m in doc.get(key, [])
+                   if isinstance(m, dict) and str(m.get("email") or "").lower() == email]
+        if not holders:
+            outcome["status"] = 404
+            return
+        if any(m.get("role") == "owner" for m in holders):
+            outcome["status"] = 422
+            return
+        before = any(m.get("sees_prices") is True for m in holders)
+        for m in holders:
+            if value:
+                m["sees_prices"] = True
+            else:
+                m.pop("sees_prices", None)
+        if before != value:
+            queue_event(doc, _email(user), "sees_prices", "member", email, {"from": before, "to": value})
         doc["updated_at"] = models.now()
 
     store.mutate_project(project_id, mutate)
-    if before != value:
-        store.append_audit(project_id, _email(user), "sees_prices", "member", email, {"from": before, "to": value})
+    status = outcome.get("status")
+    if status == 403:
+        raise HTTPException(status_code=403, detail="Only a project owner or MOTRES staff sets who sees the prices")
+    if status == 404:
+        raise HTTPException(status_code=404, detail="Member not found")
+    if status == 422:
+        raise HTTPException(status_code=422, detail="A project owner always sees the prices")
+    _flush_price_audit(project_id)
     return {"email": email, "sees_prices": value}
 
 
@@ -1526,6 +1556,14 @@ async def remove_member(request: Request, project_id: str, email: str):
         project_before = copy.deepcopy(project)
         membership_before = store.load_membership_index()
         updated = copy.deepcopy(project)
+        # removing somebody who holds the price grant (an owner, a flagged member or invite) is a permission change too (old
+        # membership against new, under the lock)
+        holders = [m for key in ("members", "pending_invites") for m in project.get(key, [])
+                   if isinstance(m, dict) and str(m.get("email") or "").lower() == email]
+        if any(access.holds_price_grant(m) for m in holders):
+            if not access.can_manage_prices(user, project):
+                raise HTTPException(status_code=403, detail="Only a project owner or MOTRES staff sets who sees the prices")
+            queue_event(updated, _email(user), "sees_prices", "member", email, {"from": True, "to": False, "removed": True})
         previous_members = updated.get("members", [])
         updated["members"] = [m for m in previous_members if str(m.get("email") or "").lower() != email]
         updated["pending_invites"] = [m for m in updated.get("pending_invites", []) if str(m.get("email") or "").lower() != email]
@@ -1542,6 +1580,7 @@ async def remove_member(request: Request, project_id: str, email: str):
         # the grants the project made for this member leave with them (owner 2026-10-27), after the commit
         _release_member_grants(updated, project_id, email, "customer_membership_removed", _email(user))
     store.append_audit(project_id, _email(user), "remove", "member", email, {})
+    _flush_price_audit(project_id)
     return {"ok": True}
 
 

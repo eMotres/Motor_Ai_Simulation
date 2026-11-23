@@ -152,8 +152,7 @@ def doc(tmp_path):
 
 # ── who reads it ─────────────────────────────────────────────────────────────────────────────────────────────────────
 
-def test_owner_and_staff_read_it_other_members_and_outsiders_get_404(client, monkeypatch):
-    monkeypatch.delattr(access, "sees_prices", raising=False)          # before PR #800: owner and staff only
+def test_owner_and_staff_read_it_other_members_and_outsiders_get_404(client):
     assert client.get(URL, headers=hdr("t-owner")).status_code == 200
     assert client.get(URL, headers=hdr("t-staff")).status_code == 200
     assert client.get(URL, headers=hdr("t-member")).status_code == 404
@@ -161,21 +160,35 @@ def test_owner_and_staff_read_it_other_members_and_outsiders_get_404(client, mon
     assert client.get(URL).status_code == 401
 
 
-def test_the_sees_prices_switch_decides_for_members_once_it_exists(client, monkeypatch):
-    monkeypatch.setattr(access, "sees_prices", lambda user, project: user.get("email") in (OWNER, MEMBER), raising=False)
+def test_the_sees_prices_switch_decides_for_members(client):
+    """The member flag is the central rule's grant (PR #800): on, the member reads; off again, 404; staff always."""
+    def flag(p):
+        for m in p["members"]:
+            if m["email"] == MEMBER:
+                m["sees_prices"] = True
+    store.mutate_project("proj1", flag)
     assert client.get(URL, headers=hdr("t-member")).status_code == 200
-    monkeypatch.setattr(access, "sees_prices", lambda user, project: False, raising=False)
-    assert client.get(URL, headers=hdr("t-owner")).status_code == 404
+    def unflag(p):
+        for m in p["members"]:
+            m.pop("sees_prices", None)
+    store.mutate_project("proj1", unflag)
+    assert client.get(URL, headers=hdr("t-member")).status_code == 404
     assert client.get(URL, headers=hdr("t-staff")).status_code == 200            # staff always
 
 
+def test_may_read_is_the_central_rule(client):
+    project = store.get_project("proj1")
+    for who in ("t-owner", "t-member", "t-outsider", "t-staff", "t-oem"):
+        user = {"email": ROLES[who][0], "role": ROLES[who][1]}
+        assert PC.may_read(user, project) == access.sees_prices(user, project), who
+
+
 @pytest.mark.parametrize("membership", [None, "customer", "owner"])
-def test_a_factory_account_never_sees_the_contract(client, monkeypatch, membership):
-    monkeypatch.setattr(access, "sees_prices", lambda user, project: True, raising=False)      # even with prices switched on
+def test_a_factory_account_never_sees_the_contract(client, membership):
     fid = up(client, "agreement").json()["current"]["agreement"]
     if membership:
-        store.mutate_project("proj1", lambda p: p["members"].append({"email": FACTORY, "role": membership}))
-    assert client.get(URL, headers=hdr("t-oem")).status_code == 404
+        store.mutate_project("proj1", lambda p: p["members"].append({"email": FACTORY, "role": membership, "sees_prices": True}))
+    assert client.get(URL, headers=hdr("t-oem")).status_code == 404         # flag or owner role or not: identity first
     assert client.get(f"{URL}/files/{fid}/download", headers=hdr("t-oem")).status_code == 404
     assert up(client, "signed_customer", who="t-oem").status_code == 404
 

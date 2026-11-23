@@ -94,16 +94,9 @@ def _staff(user: dict) -> bool:
 
 
 def may_read(user: dict, project: dict) -> bool:
-    """Staff, or whoever reads the project's prices; never a factory account.  ``access.sees_prices`` (PR #800) is the one answer
-    when it exists; before it the project owner alone stands in for it."""
-    if str(user.get("role") or "").lower() == "oem":
-        return False
-    if _staff(user):
-        return True
-    sees = getattr(access, "sees_prices", None)
-    if callable(sees):
-        return bool(sees(user, project))
-    return access.membership(_email(user), project) == "owner"
+    """The Contract section's price rule is the ONE central rule, ``access.sees_prices`` (identity first: never a factory account or
+    an agent, always MOTRES staff, else a project owner or a member with the flag)."""
+    return access.sees_prices(user, project)
 
 
 # ── storage ───────────────────────────────────────────────────────────────────

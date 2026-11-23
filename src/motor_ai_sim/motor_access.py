@@ -499,6 +499,8 @@ def config_visible(access: dict, die: str, cfg: Optional[str], path=None, *,
     if access.get("is_admin"):
         return True
     lay = _die_layer_of(die, layer)
+    if lay == "shared" and _cfg_archived(die, cfg):
+        return False                            # an archived (or unknown) SHARED configuration reads exactly like a missing one
     if lay == "workspace":
         if _own_workspace_file(die, cfg, path):
             return True                         # the caller's own copy is theirs
@@ -518,6 +520,15 @@ def config_visible(access: dict, die: str, cfg: Optional[str], path=None, *,
             hit = _die_open_memo[str(die)] = die_open(access, die)
         return hit
     return die_open(access, die)
+
+
+def _cfg_archived(die: str, cfg: Optional[str], *, admin: bool = False) -> bool:
+    """Is the SHARED configuration ``<die>/<cfg>`` archived (``config_archive``)?  Callers ask only for the shared layer: the
+    archive never touches a workspace or published copy.  FAIL CLOSED for readers: an unknown state (a damaged store) counts as
+    archived - except for an ``admin`` listing, which keeps showing everything so the admin can see and restore it."""
+    from motor_ai_sim import config_archive as _CA
+    st = _CA.state(str(die), str(cfg) if cfg else None)
+    return st == _CA.ARCHIVED or (st == _CA.UNKNOWN and not admin)
 
 
 def _own_workspace_file(die: str, cfg: str, path=None) -> bool:
@@ -644,7 +655,8 @@ def drop_private_config_cards(cards: list, access: dict) -> list:
     :func:`config_visible` refuses is dropped.  Admins keep everything; a card
     that names no configuration of the catalog is left to the caller's own rule."""
     if access.get("is_admin") or not cards:
-        return cards
+        return cards                             # an admin reads every card, an archived configuration's too (direct links)
+    cards = _drop_archived_cards(cards)          # an archived configuration has no card (owner 2026-11-22)
     hidden = hidden_config_names(access)
     if not hidden:
         return cards
@@ -655,6 +667,50 @@ def drop_private_config_cards(cards: list, access: dict) -> list:
             continue
         if m.get("die") and m.get("config") and \
                 f"{m.get('die')} {m.get('config')}".casefold() in hidden:
+            continue
+        keep.append(m)
+    return keep
+
+
+def _drop_archived_cards(cards: list, *, admin: bool = False) -> list:
+    """The cards whose configuration is not archived.  The archive is of the SHARED catalog only (round 3 of #820): a card is
+    dropped only when its die resolves, for this caller, to the shared layer - a workspace or published namesake keeps its
+    card.  A damaged archive store: no card of a shared die for a non-admin (fail closed), every card for an admin."""
+    from motor_ai_sim import config_archive as _CA
+    try:
+        keys = _CA.archived_keys()
+        damaged = False
+    except _CA.ArchiveUnavailable:
+        if admin:
+            return cards
+        keys, damaged = frozenset(), True
+    if not keys and not damaged:
+        return cards
+    layer: dict = {}
+
+    def shared(die: Optional[str]) -> bool:
+        if not die:
+            return False
+        if die not in layer:
+            layer[die] = _die_layer_of(str(die)) == "shared"
+        return layer[die]
+    index: dict = {}
+    if damaged:
+        try:
+            from motor_ai_sim.routes import catalog as _cat
+            index = _cat._machine_die_index()
+        except Exception:                       # noqa: BLE001 - cannot tie a card to a die: it names no shared die
+            index = {}
+    by_name = {k.replace("/", " ", 1).casefold(): k.partition("/")[0] for k in keys}
+    keep = []
+    for m in cards:
+        name = str(m.get("name") or "").strip().casefold()
+        if damaged:
+            if shared(m.get("die") or index.get(name)):
+                continue
+        elif name in by_name and shared(by_name[name]):
+            continue
+        elif m.get("die") and m.get("config") and f"{m.get('die')}/{m.get('config')}" in keys and shared(m.get("die")):
             continue
         keep.append(m)
     return keep
@@ -690,7 +746,11 @@ def config_allowed(access: dict, die: str, cfg: Optional[str]) -> bool:
 def may_see_config_file(access: dict, die: str, cfg: str, path,
                         layer: Optional[str] = None) -> bool:
     """:func:`config_visible` for a caller that already holds the file ``path``
-    (and, in a listing, the die's ``layer``)."""
+    (and, in a listing, the die's ``layer``).  Every LISTING asks this, so an archived configuration is left out of it for
+    everybody, admins too (they reach it through its direct link and the die view's Archived group).  Only a SHARED-layer
+    configuration is ever archived; while the store is damaged an admin's listing keeps everything (recovery)."""
+    if cfg and _die_layer_of(die, layer) == "shared" and _cfg_archived(die, cfg, admin=bool(access.get("is_admin"))):
+        return False
     return config_visible(access, die, cfg, path, layer=layer)
 
 
@@ -809,6 +869,8 @@ def hidden_for_request(die: str, cfg: Optional[str]) -> bool:
     """
     if not cfg or not request_is_bound() or _PROCESS_VIEW.get():
         return False
+    if _die_layer_of(str(die)) == "shared" and _cfg_archived(die, cfg):   # BEFORE the public shortcut
+        return not catalog_access(None).get("is_admin")
     if config_visibility(str(die), str(cfg)) == CFG_PUBLIC:
         return False
     return not config_visible(catalog_access(None), str(die), str(cfg))

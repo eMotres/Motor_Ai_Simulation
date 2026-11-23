@@ -46,6 +46,8 @@ import {
 import { fetchDieThumbs, fetchFamilyTree, peekFamilyTree, SIGN_IN_NOTE } from '../../lib/familyTree';
 import { pageVisible } from '../../lib/pageVisible';
 import { useTranslation } from 'react-i18next';
+import ArchivedConfigs from './ArchivedConfigs';
+import { configArchiveApi, type ArchivedConfig } from '../../lib/configArchiveApi';
 import { nsT } from '../../i18n/nsT';
 import { coggingDigits, coggingTipText, coggingValue, type CoggingView } from '../../lib/coggingTile';
 import { useAuth } from '../../contexts/AuthContext';
@@ -737,6 +739,18 @@ const FamilyCatalog: React.FC<{
     onSubmit: (name) => mutate(`'${name}' saved to your motors`,
       () => post('/api/my_motors/duplicate', { die, config: cfg, name })),
   });
+  // "Archive" one configuration (owner 2026-11-22: one motor per project, the rest are archived; never deleted) - admins.
+  // The server refuses one a project links or that has a production, and says so.
+  const archiveCfg = (die: string, cfg: string) => setAskText({
+    title: tx('configArchive.title', { die, config: cfg }),
+    label: tx('configArchive.reason'), initial: '',
+    hint: tx('configArchive.hint'),
+    okLabel: tx('configArchive.confirm'),
+    onSubmit: (reason) => { if (!reason.trim()) { setMsg(`✗ ${tx('configArchive.reasonRequired')}`); return; }
+      void mutate(tx('configArchive.done', { die, config: cfg }), () => post(configArchiveApi.archivePath(die, cfg), { reason: reason.trim() })); },
+  });
+  const restoreCfg = (c: ArchivedConfig) => mutate(tx('configArchive.restored', { die: c.die, config: c.config }),
+    () => post(configArchiveApi.restorePath(c.die, c.config), {}));
   const deleteCfg = (die: string, cfg: string) => setAskConfirm({
     title: `Delete configuration '${die} / ${cfg}'?`,
     body: 'All its duties and recorded results go with it. This cannot be undone.',
@@ -896,6 +910,7 @@ const FamilyCatalog: React.FC<{
     cfgHistory: (d, c) => setHistOf({ die: d, config: c }), duplicateCfg, moveCfg,
     datasheet: (d, c) => void runExport('datasheet', d, c), report: (d, c, pdf) => void runExport('report', d, c, pdf),
     toMyMotors: duplicateToMySpace, battery: (d, c) => { const x = cfgOf(d, c); if (x) editBattery(d, x); }, deleteCfg,
+    archiveCfg, archivable: (d) => dieOf(d)?.layer === 'shared',
   };
 
   const body = (
@@ -931,6 +946,7 @@ const FamilyCatalog: React.FC<{
         cells={rowCells}
         highlighted={(d, c) => isConfigHighlighted(projectIndex, d, c)}
         nameTip={(n, cn) => { const d = dieOf(n); return d ? configCardTip(d, cn).trim() : ''; }} />
+      {isAdmin && <ArchivedConfigs busy={!!busy} onRestore={(c) => void restoreCfg(c)} onOpen={(c) => { if (c.duty) void applyDuty(c.die, c.config, c.duty); }} />}
     </>
   );
 

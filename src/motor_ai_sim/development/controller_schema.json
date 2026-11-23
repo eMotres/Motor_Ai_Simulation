@@ -1,0 +1,1084 @@
+{
+ "schema_version": 2,
+ "kind": "controller",
+ "title": {
+  "en": "Controller specification",
+  "zh-CN": "控制器规格书"
+ },
+ "statuses": [
+  {
+   "value": "requirement",
+   "label": {
+    "en": "Requirement",
+    "zh-CN": "要求"
+   }
+  },
+  {
+   "value": "model",
+   "label": {
+    "en": "Model",
+    "zh-CN": "模型"
+   }
+  },
+  {
+   "value": "measured",
+   "label": {
+    "en": "Measured",
+    "zh-CN": "实测"
+   }
+  }
+ ],
+ "sections": [
+  {
+   "id": "identity",
+   "title": {
+    "en": "1. Identity",
+    "zh-CN": "1. 标识"
+   },
+   "fields": [
+    {
+     "id": "name",
+     "label": {
+      "en": "Controller name",
+      "zh-CN": "控制器名称"
+     },
+     "kind": "text"
+    },
+    {
+     "id": "revision",
+     "label": {
+      "en": "Revision",
+      "zh-CN": "版本"
+     },
+     "kind": "text"
+    },
+    {
+     "id": "paired_motor",
+     "label": {
+      "en": "Paired motor",
+      "zh-CN": "配套电机"
+     },
+     "kind": "text",
+     "tip": {
+      "en": "A catalogue motor (die / configuration) or 'stand-alone'.",
+      "zh-CN": "目录中的电机（冲片 / 配置）或“独立”。"
+     }
+    },
+    {
+     "id": "purpose",
+     "label": {
+      "en": "Purpose",
+      "zh-CN": "用途"
+     },
+     "kind": "longtext"
+    },
+    {
+     "id": "notes_identity",
+     "label": {
+      "en": "Notes",
+      "zh-CN": "备注"
+     },
+     "kind": "longtext",
+     "tip": {
+      "en": "Values and remarks of this step that have no field of their own.",
+      "zh-CN": "本步骤中没有单独字段的数值和说明。"
+     }
+    }
+   ]
+  },
+  {
+   "id": "supply",
+   "title": {
+    "en": "2. Supply",
+    "zh-CN": "2. 供电"
+   },
+   "fields": [
+    {
+     "id": "builds",
+     "label": {
+      "en": "Builds (battery cells)",
+      "zh-CN": "版本（电池串数）"
+     },
+     "kind": "list",
+     "tip": {
+      "en": "One entry per build, e.g. 6S, 12S. Values marked 'per build' are entered for each.",
+      "zh-CN": "每个版本一项，例如 6S、12S。标为“按版本”的数值分别填写。"
+     }
+    },
+    {
+     "id": "bus_voltage",
+     "label": {
+      "en": "Bus voltage",
+      "zh-CN": "母线电压"
+     },
+     "kind": "range",
+     "unit": "V",
+     "per_build": true
+    },
+    {
+     "id": "abs_max_voltage",
+     "label": {
+      "en": "Absolute maximum bus voltage",
+      "zh-CN": "母线电压绝对最大值"
+     },
+     "kind": "number",
+     "unit": "V"
+    },
+    {
+     "id": "ov_trip",
+     "label": {
+      "en": "Over-voltage trip",
+      "zh-CN": "过压保护阈值"
+     },
+     "kind": "number",
+     "unit": "V",
+     "per_build": true
+    },
+    {
+     "id": "input_protection",
+     "label": {
+      "en": "Input protection",
+      "zh-CN": "输入保护"
+     },
+     "kind": "multi",
+     "options": [
+      {
+       "value": "anti_spark",
+       "label": {
+        "en": "Anti-spark connector",
+        "zh-CN": "防打火连接器"
+       }
+      },
+      {
+       "value": "precharge",
+       "label": {
+        "en": "Pre-charge on board",
+        "zh-CN": "板载预充电"
+       }
+      },
+      {
+       "value": "reverse_polarity",
+       "label": {
+        "en": "Reverse polarity",
+        "zh-CN": "防反接"
+       }
+      },
+      {
+       "value": "fuse",
+       "label": {
+        "en": "Fuse",
+        "zh-CN": "保险丝"
+       }
+      }
+     ]
+    },
+    {
+     "id": "input_cap",
+     "label": {
+      "en": "Input capacitor required",
+      "zh-CN": "所需输入电容"
+     },
+     "kind": "number",
+     "unit": "µF",
+     "limit": "min"
+    },
+    {
+     "id": "input_cap_esr",
+     "label": {
+      "en": "Input capacitor ESR",
+      "zh-CN": "输入电容 ESR"
+     },
+     "kind": "number",
+     "unit": "mΩ",
+     "limit": "max"
+    },
+    {
+     "id": "input_cap_ripple",
+     "label": {
+      "en": "Input capacitor ripple current",
+      "zh-CN": "输入电容纹波电流"
+     },
+     "kind": "number",
+     "unit": "A rms",
+     "limit": "min"
+    },
+    {
+     "id": "notes_supply",
+     "label": {
+      "en": "Notes",
+      "zh-CN": "备注"
+     },
+     "kind": "longtext",
+     "tip": {
+      "en": "Values and remarks of this step that have no field of their own.",
+      "zh-CN": "本步骤中没有单独字段的数值和说明。"
+     }
+    }
+   ]
+  },
+  {
+   "id": "output",
+   "title": {
+    "en": "3. Output",
+    "zh-CN": "3. 输出"
+   },
+   "fields": [
+    {
+     "id": "phases",
+     "label": {
+      "en": "Phases",
+      "zh-CN": "相数"
+     },
+     "kind": "number",
+     "unit": ""
+    },
+    {
+     "id": "i_cont",
+     "label": {
+      "en": "Continuous phase current",
+      "zh-CN": "持续相电流"
+     },
+     "kind": "number",
+     "unit": "A rms",
+     "per_build": true,
+     "limit": "min"
+    },
+    {
+     "id": "i_peak",
+     "label": {
+      "en": "Peak phase current",
+      "zh-CN": "峰值相电流"
+     },
+     "kind": "number",
+     "unit": "A rms",
+     "per_build": true,
+     "limit": "min"
+    },
+    {
+     "id": "t_peak",
+     "label": {
+      "en": "Peak current duration",
+      "zh-CN": "峰值电流持续时间"
+     },
+     "kind": "number",
+     "unit": "s",
+     "limit": "min"
+    },
+    {
+     "id": "pwm",
+     "label": {
+      "en": "PWM frequency",
+      "zh-CN": "PWM 频率"
+     },
+     "kind": "number",
+     "unit": "kHz"
+    },
+    {
+     "id": "f_el_max",
+     "label": {
+      "en": "Maximum electrical frequency",
+      "zh-CN": "最大电频率"
+     },
+     "kind": "number",
+     "unit": "Hz",
+     "limit": "min"
+    },
+    {
+     "id": "rpm_max",
+     "label": {
+      "en": "Maximum speed with the paired motor",
+      "zh-CN": "配套电机最高转速"
+     },
+     "kind": "number",
+     "unit": "rpm",
+     "limit": "min"
+    },
+    {
+     "id": "eff_target",
+     "label": {
+      "en": "Target efficiency at the rated point",
+      "zh-CN": "额定点目标效率"
+     },
+     "kind": "number",
+     "unit": "%",
+     "limit": "min"
+    },
+    {
+     "id": "notes_output",
+     "label": {
+      "en": "Notes",
+      "zh-CN": "备注"
+     },
+     "kind": "longtext",
+     "tip": {
+      "en": "Values and remarks of this step that have no field of their own.",
+      "zh-CN": "本步骤中没有单独字段的数值和说明。"
+     }
+    }
+   ]
+  },
+  {
+   "id": "control",
+   "title": {
+    "en": "4. Control",
+    "zh-CN": "4. 控制"
+   },
+   "fields": [
+    {
+     "id": "method",
+     "label": {
+      "en": "Control method",
+      "zh-CN": "控制方式"
+     },
+     "kind": "choice",
+     "options": [
+      {
+       "value": "foc_sensorless",
+       "label": {
+        "en": "FOC sensorless",
+        "zh-CN": "无传感器 FOC"
+       }
+      },
+      {
+       "value": "foc_sensor",
+       "label": {
+        "en": "FOC with angle sensor",
+        "zh-CN": "带角度传感器 FOC"
+       }
+      },
+      {
+       "value": "six_step",
+       "label": {
+        "en": "Six-step",
+        "zh-CN": "六步换相"
+       }
+      }
+     ],
+     "per_build": true
+    },
+    {
+     "id": "position_sensor",
+     "label": {
+      "en": "Position sensor",
+      "zh-CN": "位置传感器"
+     },
+     "kind": "choice",
+     "options": [
+      {
+       "value": "none",
+       "label": {
+        "en": "None",
+        "zh-CN": "无"
+       }
+      },
+      {
+       "value": "onboard_magnetic",
+       "label": {
+        "en": "On-board magnetic",
+        "zh-CN": "板载磁编码器"
+       }
+      },
+      {
+       "value": "external",
+       "label": {
+        "en": "External",
+        "zh-CN": "外置"
+       }
+      }
+     ],
+     "per_build": true
+    },
+    {
+     "id": "modes",
+     "label": {
+      "en": "Modes",
+      "zh-CN": "工作模式"
+     },
+     "kind": "multi",
+     "options": [
+      {
+       "value": "current",
+       "label": {
+        "en": "Current (torque)",
+        "zh-CN": "电流（转矩）"
+       }
+      },
+      {
+       "value": "speed",
+       "label": {
+        "en": "Speed",
+        "zh-CN": "转速"
+       }
+      },
+      {
+       "value": "regen",
+       "label": {
+        "en": "Regenerative braking",
+        "zh-CN": "再生制动"
+       }
+      },
+      {
+       "value": "active_brake",
+       "label": {
+        "en": "Active brake",
+        "zh-CN": "主动制动"
+       }
+      }
+     ]
+    },
+    {
+     "id": "ripple",
+     "label": {
+      "en": "Torque ripple at the continuous points",
+      "zh-CN": "持续工作点转矩脉动"
+     },
+     "kind": "number",
+     "unit": "%",
+     "limit": "max"
+    },
+    {
+     "id": "notes_control",
+     "label": {
+      "en": "Notes",
+      "zh-CN": "备注"
+     },
+     "kind": "longtext",
+     "tip": {
+      "en": "Values and remarks of this step that have no field of their own.",
+      "zh-CN": "本步骤中没有单独字段的数值和说明。"
+     }
+    }
+   ]
+  },
+  {
+   "id": "interfaces",
+   "title": {
+    "en": "5. Interfaces and protections",
+    "zh-CN": "5. 接口和保护"
+   },
+   "fields": [
+    {
+     "id": "can",
+     "label": {
+      "en": "CAN",
+      "zh-CN": "CAN"
+     },
+     "kind": "choice",
+     "options": [
+      {
+       "value": "none",
+       "label": {
+        "en": "None",
+        "zh-CN": "无"
+       }
+      },
+      {
+       "value": "classic",
+       "label": {
+        "en": "Classic",
+        "zh-CN": "经典 CAN"
+       }
+      },
+      {
+       "value": "fd",
+       "label": {
+        "en": "CAN FD",
+        "zh-CN": "CAN FD"
+       }
+      }
+     ]
+    },
+    {
+     "id": "can_protocol",
+     "label": {
+      "en": "CAN protocol",
+      "zh-CN": "CAN 协议"
+     },
+     "kind": "choice",
+     "options": [
+      {
+       "value": "dronecan",
+       "label": {
+        "en": "DroneCAN",
+        "zh-CN": "DroneCAN"
+       }
+      },
+      {
+       "value": "canopen",
+       "label": {
+        "en": "CANopen",
+        "zh-CN": "CANopen"
+       }
+      },
+      {
+       "value": "custom",
+       "label": {
+        "en": "Custom",
+        "zh-CN": "自定义"
+       }
+      }
+     ]
+    },
+    {
+     "id": "can_bitrate",
+     "label": {
+      "en": "CAN bit rate",
+      "zh-CN": "CAN 波特率"
+     },
+     "kind": "number",
+     "unit": "kbit/s"
+    },
+    {
+     "id": "can_termination",
+     "label": {
+      "en": "CAN termination",
+      "zh-CN": "CAN 终端电阻"
+     },
+     "kind": "choice",
+     "options": [
+      {
+       "value": "on_board",
+       "label": {
+        "en": "On board",
+        "zh-CN": "板载"
+       }
+      },
+      {
+       "value": "switchable",
+       "label": {
+        "en": "Switchable",
+        "zh-CN": "可切换"
+       }
+      },
+      {
+       "value": "none",
+       "label": {
+        "en": "None",
+        "zh-CN": "无"
+       }
+      }
+     ]
+    },
+    {
+     "id": "inputs",
+     "label": {
+      "en": "Other interfaces",
+      "zh-CN": "其他接口"
+     },
+     "kind": "multi",
+     "options": [
+      {
+       "value": "pwm_in",
+       "label": {
+        "en": "PWM input",
+        "zh-CN": "PWM 输入"
+       }
+      },
+      {
+       "value": "sync_in",
+       "label": {
+        "en": "Synchronisation input",
+        "zh-CN": "同步输入"
+       }
+      },
+      {
+       "value": "uart",
+       "label": {
+        "en": "UART telemetry",
+        "zh-CN": "UART 遥测"
+       }
+      },
+      {
+       "value": "inhibit",
+       "label": {
+        "en": "External inhibit",
+        "zh-CN": "外部禁止"
+       }
+      }
+     ]
+    },
+    {
+     "id": "programming",
+     "label": {
+      "en": "Programming",
+      "zh-CN": "编程方式"
+     },
+     "kind": "multi",
+     "options": [
+      {
+       "value": "swd",
+       "label": {
+        "en": "SWD",
+        "zh-CN": "SWD"
+       }
+      },
+      {
+       "value": "can_boot",
+       "label": {
+        "en": "CAN bootloader",
+        "zh-CN": "CAN 引导程序"
+       }
+      }
+     ]
+    },
+    {
+     "id": "protections",
+     "label": {
+      "en": "Protections",
+      "zh-CN": "保护功能"
+     },
+     "kind": "thresholds",
+     "options": [
+      {
+       "value": "over_current",
+       "label": {
+        "en": "Over-current",
+        "zh-CN": "过流"
+       }
+      },
+      {
+       "value": "short_circuit",
+       "label": {
+        "en": "Short-circuit",
+        "zh-CN": "短路"
+       }
+      },
+      {
+       "value": "over_voltage",
+       "label": {
+        "en": "Over-voltage",
+        "zh-CN": "过压"
+       }
+      },
+      {
+       "value": "under_voltage",
+       "label": {
+        "en": "Under-voltage",
+        "zh-CN": "欠压"
+       }
+      },
+      {
+       "value": "ot_board",
+       "label": {
+        "en": "Over-temperature, board",
+        "zh-CN": "板过温"
+       }
+      },
+      {
+       "value": "ot_motor",
+       "label": {
+        "en": "Over-temperature, motor",
+        "zh-CN": "电机过温"
+       }
+      },
+      {
+       "value": "stall",
+       "label": {
+        "en": "Stall",
+        "zh-CN": "堵转"
+       }
+      },
+      {
+       "value": "loss_of_signal",
+       "label": {
+        "en": "Loss of signal",
+        "zh-CN": "信号丢失"
+       }
+      }
+     ],
+     "tip": {
+      "en": "Tick a protection and give its threshold with the unit.",
+      "zh-CN": "勾选保护功能并填写阈值及单位。"
+     }
+    },
+    {
+     "id": "sensors",
+     "label": {
+      "en": "Sensors",
+      "zh-CN": "传感器"
+     },
+     "kind": "multi",
+     "options": [
+      {
+       "value": "t_board",
+       "label": {
+        "en": "Board temperature",
+        "zh-CN": "板温度"
+       }
+      },
+      {
+       "value": "t_winding",
+       "label": {
+        "en": "Phase pin / winding temperature",
+        "zh-CN": "相引脚 / 绕组温度"
+       }
+      },
+      {
+       "value": "v_bus",
+       "label": {
+        "en": "Bus voltage",
+        "zh-CN": "母线电压"
+       }
+      },
+      {
+       "value": "i_phase",
+       "label": {
+        "en": "Phase currents",
+        "zh-CN": "相电流"
+       }
+      }
+     ]
+    },
+    {
+     "id": "shunts",
+     "label": {
+      "en": "Number of current shunts",
+      "zh-CN": "电流采样电阻数量"
+     },
+     "kind": "number",
+     "unit": ""
+    },
+    {
+     "id": "notes_interfaces",
+     "label": {
+      "en": "Notes",
+      "zh-CN": "备注"
+     },
+     "kind": "longtext",
+     "tip": {
+      "en": "Values and remarks of this step that have no field of their own.",
+      "zh-CN": "本步骤中没有单独字段的数值和说明。"
+     }
+    }
+   ]
+  },
+  {
+   "id": "hardware",
+   "title": {
+    "en": "6. Hardware",
+    "zh-CN": "6. 硬件"
+   },
+   "fields": [
+    {
+     "id": "mcu",
+     "label": {
+      "en": "MCU",
+      "zh-CN": "MCU"
+     },
+     "kind": "text"
+    },
+    {
+     "id": "gate_driver",
+     "label": {
+      "en": "Gate driver",
+      "zh-CN": "栅极驱动器"
+     },
+     "kind": "text"
+    },
+    {
+     "id": "mosfet",
+     "label": {
+      "en": "MOSFET",
+      "zh-CN": "MOSFET"
+     },
+     "kind": "text",
+     "per_build": true
+    },
+    {
+     "id": "board_size",
+     "label": {
+      "en": "Board diameter / shape",
+      "zh-CN": "电路板直径 / 形状"
+     },
+     "kind": "text"
+    },
+    {
+     "id": "height",
+     "label": {
+      "en": "Total height",
+      "zh-CN": "总高度"
+     },
+     "kind": "number",
+     "unit": "mm",
+     "limit": "max"
+    },
+    {
+     "id": "mass",
+     "label": {
+      "en": "Mass",
+      "zh-CN": "质量"
+     },
+     "kind": "number",
+     "unit": "g",
+     "limit": "max"
+    },
+    {
+     "id": "mounting",
+     "label": {
+      "en": "Mounting",
+      "zh-CN": "安装方式"
+     },
+     "kind": "choice",
+     "options": [
+      {
+       "value": "integrated",
+       "label": {
+        "en": "Integrated on the motor",
+        "zh-CN": "集成于电机"
+       }
+      },
+      {
+       "value": "separate",
+       "label": {
+        "en": "Separate",
+        "zh-CN": "分体"
+       }
+      }
+     ]
+    },
+    {
+     "id": "mount_gap",
+     "label": {
+      "en": "Gap to the motor",
+      "zh-CN": "与电机间隙"
+     },
+     "kind": "number",
+     "unit": "mm"
+    },
+    {
+     "id": "cooling",
+     "label": {
+      "en": "Cooling (heatsink drawing, air flow, pads)",
+      "zh-CN": "散热（散热器图纸、风量、导热垫）"
+     },
+     "kind": "longtext"
+    },
+    {
+     "id": "fasteners",
+     "label": {
+      "en": "Fasteners",
+      "zh-CN": "紧固件"
+     },
+     "kind": "text"
+    },
+    {
+     "id": "tightening",
+     "label": {
+      "en": "Tightening torque",
+      "zh-CN": "拧紧力矩"
+     },
+     "kind": "number",
+     "unit": "N·m"
+    },
+    {
+     "id": "pcb",
+     "label": {
+      "en": "PCB technology (layers, HDI, copper)",
+      "zh-CN": "PCB 工艺（层数、HDI、铜厚）"
+     },
+     "kind": "text"
+    },
+    {
+     "id": "assembler",
+     "label": {
+      "en": "Assembler",
+      "zh-CN": "贴装厂"
+     },
+     "kind": "text"
+    },
+    {
+     "id": "quantity",
+     "label": {
+      "en": "Quantity",
+      "zh-CN": "数量"
+     },
+     "kind": "number",
+     "unit": ""
+    },
+    {
+     "id": "notes_hardware",
+     "label": {
+      "en": "Notes",
+      "zh-CN": "备注"
+     },
+     "kind": "longtext",
+     "tip": {
+      "en": "Values and remarks of this step that have no field of their own.",
+      "zh-CN": "本步骤中没有单独字段的数值和说明。"
+     }
+    }
+   ]
+  },
+  {
+   "id": "verification",
+   "title": {
+    "en": "7. Environment, firmware, verification",
+    "zh-CN": "7. 环境、固件、验证"
+   },
+   "fields": [
+    {
+     "id": "ambient",
+     "label": {
+      "en": "Ambient temperature",
+      "zh-CN": "环境温度"
+     },
+     "kind": "range",
+     "unit": "°C"
+    },
+    {
+     "id": "t_board_max",
+     "label": {
+      "en": "Board temperature limit",
+      "zh-CN": "电路板温度限值"
+     },
+     "kind": "number",
+     "unit": "°C",
+     "limit": "max"
+    },
+    {
+     "id": "coating",
+     "label": {
+      "en": "Conformal coating",
+      "zh-CN": "三防漆"
+     },
+     "kind": "choice",
+     "options": [
+      {
+       "value": "yes",
+       "label": {
+        "en": "Yes",
+        "zh-CN": "是"
+       }
+      },
+      {
+       "value": "no",
+       "label": {
+        "en": "No",
+        "zh-CN": "否"
+       }
+      },
+      {
+       "value": "service_only",
+       "label": {
+        "en": "Boards in service only",
+        "zh-CN": "仅交付使用的板"
+       }
+      }
+     ]
+    },
+    {
+     "id": "ip",
+     "label": {
+      "en": "Ingress protection",
+      "zh-CN": "防护等级"
+     },
+     "kind": "text"
+    },
+    {
+     "id": "altitude",
+     "label": {
+      "en": "Altitude",
+      "zh-CN": "海拔"
+     },
+     "kind": "number",
+     "unit": "m"
+    },
+    {
+     "id": "fw_owner",
+     "label": {
+      "en": "Firmware owner",
+      "zh-CN": "固件负责方"
+     },
+     "kind": "text"
+    },
+    {
+     "id": "toolchain",
+     "label": {
+      "en": "Tool chain",
+      "zh-CN": "工具链"
+     },
+     "kind": "text"
+    },
+    {
+     "id": "fw_deliverables",
+     "label": {
+      "en": "Firmware deliverables",
+      "zh-CN": "固件交付物"
+     },
+     "kind": "multi",
+     "options": [
+      {
+       "value": "source",
+       "label": {
+        "en": "Source",
+        "zh-CN": "源代码"
+       }
+      },
+      {
+       "value": "binary",
+       "label": {
+        "en": "Binary",
+        "zh-CN": "二进制"
+       }
+      },
+      {
+       "value": "registers",
+       "label": {
+        "en": "Register table",
+        "zh-CN": "寄存器表"
+       }
+      }
+     ]
+    },
+    {
+     "id": "tests",
+     "label": {
+      "en": "Tests required",
+      "zh-CN": "所需测试"
+     },
+     "kind": "rows",
+     "columns": [
+      {
+       "id": "name",
+       "label": {
+        "en": "Test",
+        "zh-CN": "测试"
+       }
+      },
+      {
+       "id": "pass",
+       "label": {
+        "en": "Pass value",
+        "zh-CN": "合格值"
+       }
+      }
+     ],
+     "tip": {
+      "en": "Double-pulse, thermal, bus ripple, plug-in, protection checks; each with its pass value.",
+      "zh-CN": "双脉冲、热、母线纹波、上电冲击、保护检查；各附合格值。"
+     }
+    },
+    {
+     "id": "compliance",
+     "label": {
+      "en": "EMC, safety and RoHS targets",
+      "zh-CN": "EMC、安全和 RoHS 目标"
+     },
+     "kind": "longtext"
+    },
+    {
+     "id": "notes_verification",
+     "label": {
+      "en": "Notes",
+      "zh-CN": "备注"
+     },
+     "kind": "longtext",
+     "tip": {
+      "en": "Values and remarks of this step that have no field of their own.",
+      "zh-CN": "本步骤中没有单独字段的数值和说明。"
+     }
+    }
+   ]
+  }
+ ]
+}

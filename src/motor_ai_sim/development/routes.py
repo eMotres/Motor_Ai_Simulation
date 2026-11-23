@@ -17,6 +17,7 @@ from motor_ai_sim.development import access, models, self_service, spec_proposal
 from motor_ai_sim.development.motors import _metric_projection
 from motor_ai_sim.development.quote_routes import quote_shared
 from motor_ai_sim.development.timeline_routes import timeline_ready
+from motor_ai_sim.development.project_uploads import flush_events, queue_event
 
 log = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/projects", tags=["development-projects"])
@@ -137,7 +138,7 @@ def _summary(project: dict, user: dict) -> dict:
     role = access.membership(_email(user), project)
     engineer = access.is_engineer(user) or role in ("owner", "engineer")
     draft = store.load_json(project["id"], "draft.json", {"draft": {"fields": {}, "mission_profile": [], "mission_profile_status": "missing", "production": {}, "provenance": {}}, "revision": 0})
-    projection = {k: copy.deepcopy(v) for k, v in project.items() if k not in ("notes", "pending_invites", "cover")}
+    projection = {k: copy.deepcopy(v) for k, v in project.items() if k not in ("notes", "pending_invites", "cover", "pending_audit")}
     cover = project.get("cover")
     projection["cover_version"] = cover.get("version") if isinstance(cover, dict) else None     # the image: GET /{id}/cover
     if not engineer:
@@ -166,7 +167,7 @@ def _summary(project: dict, user: dict) -> dict:
         projection["members"] = [m for m in project.get("members", []) if m.get("email", "").lower() == _email(user)]
     # the price switches (owner 2026-11-22): a project owner or an admin manages them, so they get the minimal list the Members dialog
     # needs - address, role, pending, flag - for the members AND the pending invites; never the notes or the grant ledgers
-    if str(user.get("role") or "").lower() == "admin" or role == "owner":
+    if access.can_manage_prices(user, project):
         projection["member_switches"] = [
             {"email": str(m.get("email") or "").lower(), "role": m.get("role"), "pending": pending,
              "sees_prices": m.get("role") == "owner" or m.get("sees_prices") is True}
@@ -555,6 +556,11 @@ def create_project_for(user: dict, body: dict, *, audit_details: dict | None = N
     """The work of ``POST /api/projects`` for a resolved caller (the web session, or an MCP agent acting for its owner -
     ``spec_order.create_order``): the stored project record.  Raises ``HTTPException`` (428 agreement, 429 limit, 422, 409)."""
     staff = access.is_engineer(user)
+    from motor_ai_sim.development import project_type as PT
+    try:  # the project type: staff choose it here (a customer's project is a motor project; controllers are internal)
+        kind = PT.parse(body.get(PT.KEY)) if staff and not auto_named else None
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
     if staff and auto_named:
         # the assistant creates the project for staff too: named like a customer's, then from its specification
         body = {"title": self_service.NEW_PROJECT_TITLE, "customer_org": body.get("customer_org")}
@@ -584,6 +590,8 @@ def create_project_for(user: dict, body: dict, *, audit_details: dict | None = N
             if not staff or auto_named:
                 project["auto_title"] = True
                 project["owner_engineer"] = ""           # nobody is in charge yet; Motres staff see every project and pick it up
+            if kind:
+                PT.apply(project, kind)                 # a motor project carries no key: byte-identical to before
             store.create_project(project)
             break
         except FileExistsError:
@@ -596,7 +604,8 @@ def create_project_for(user: dict, body: dict, *, audit_details: dict | None = N
     store.save_json(project_id, "draft.json", {"draft": {"schema_version": 2, "fields": {}, "mission_profile": [], "mission_profile_status": "missing", "production": {}, "provenance": {}}, "schema_version": 2, "revision": 0, "version": None, "updated_at": project["created_at"]})
     # the audit row is what the owner's daily report lists ("project created by the customer")
     store.append_audit(project_id, _email(user), "create", "project", project_id,
-                       ({} if staff else {"self_service": True}) | dict(audit_details or {}))
+                       ({} if staff else {"self_service": True}) | dict(audit_details or {})
+                       | ({PT.KEY: PT.CONTROLLER} if PT.of(project) == PT.CONTROLLER else {}))
     _notify_staff("New customer project", project_id, user)
     return project
 
@@ -615,9 +624,21 @@ async def update_project(request: Request, project_id: str):
     body = await request.json()
     if not isinstance(body, dict):
         raise HTTPException(status_code=400, detail="Expected JSON object")
-    allowed = {"title", "customer_org", "owner_engineer", "status", "notes"}
+    allowed = {"title", "customer_org", "owner_engineer", "status", "notes", "project_type"}
     if set(body) - allowed:
         raise HTTPException(status_code=422, detail="Unsupported project fields")
+    from motor_ai_sim.development import project_type as PT
+    type_from = PT.of(project)
+    if PT.KEY in body:
+        # the type swaps the whole specification form: a global admin only (coordinator 2026-11-23)
+        if not PT.is_admin(user):
+            raise HTTPException(status_code=403, detail="Admin access required for the project type")
+        try:
+            kind = PT.parse(body.pop(PT.KEY)) or PT.MOTOR
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc))
+    else:
+        kind = None
     from motor_ai_sim.development import status_change_allowed
     if "status" in body and (not (access.is_engineer(user) or role in ("owner", "engineer"))
                              or not status_change_allowed(access.is_engineer(user), str(project.get("status") or "spec"),
@@ -640,11 +661,15 @@ async def update_project(request: Request, project_id: str):
         d.update(body)
         if "title" in body:
             d["auto_title"] = False                     # a name staff gave stays
+        if kind is not None:
+            PT.apply(d, kind)
         d["updated_at"] = models.now()
     from motor_ai_sim.development.motors import transaction
     with transaction():
         store.mutate_project(project_id, mutate)
-    store.append_audit(project_id, _email(user), "update", "project", project_id, {"fields": sorted(body)})
+    changed = sorted(body) + ([PT.KEY] if kind is not None else [])
+    store.append_audit(project_id, _email(user), "update", "project", project_id,
+                       {"fields": sorted(changed)} | ({PT.KEY: {"from": type_from, "to": kind}} if kind is not None else {}))
     return _summary(store.get_project(project_id), user)
 
 
@@ -759,6 +784,137 @@ async def apply_spec_migration(request: Request, project_id: str):
         store.append_audit(project_id, _email(user), "migrate", "spec_draft", "draft", {"from_schema_version": 1, "to_schema_version": 2, "revision": result["revision"]})
     response_draft = result["draft"] if access.is_engineer(user) else _customer_spec({"draft": result["draft"]})["draft"]
     return {"draft": response_draft, "revision": result["revision"], "schema_version": 2, "completeness": models.completeness(result["draft"])}
+
+
+def _controller_authors(doc: dict, user: dict) -> dict:
+    """Staff see who saved by address; every other member a display name only, as for the motor specification (``_author``).
+    The stored files keep the full attribution."""
+    if access.is_engineer(user):
+        return doc
+    out = copy.deepcopy(doc)
+    if out.get("updated_by"):
+        out["updated_by"] = _author(out["updated_by"])["author_display_name"]
+    for row in out.get("history") or []:
+        if isinstance(row, dict) and row.get("by"):
+            row["by"] = _author(row["by"])["author_display_name"]
+    return out
+
+
+def _controller_project(project: dict) -> None:
+    from motor_ai_sim.development import project_type as PT
+    if PT.of(project) != PT.CONTROLLER:
+        raise HTTPException(status_code=404, detail="This is not a controller project")
+
+
+@router.get("/{project_id}/controller-spec")
+def get_controller_spec(request: Request, project_id: str):
+    """The controller specification of a controller project, its schema and the last changes (newest first)."""
+    from motor_ai_sim.development import controller_spec as CS
+    user, project, _ = _readable_project(request, project_id)
+    _controller_project(project)
+    doc = store.load_json(project_id, CS.FILE, None) or CS.empty()
+    doc = {**doc, "fields": CS.stored(doc.get("fields"))}  # an earlier one-value answer reads into its column
+    path = store.path_for(project_id) / CS.HISTORY
+    history = []
+    if path.is_file():
+        for line in path.read_text(encoding="utf-8").splitlines()[-50:]:
+            try:
+                history.append(json.loads(line))
+            except ValueError:
+                continue
+    return _controller_authors({**doc, "schema": CS.schema(), "history": history[::-1], "can_edit": access.can_edit_spec(user, project),
+                                "can_edit_results": access.is_engineer(user)}, user)
+
+
+@router.put("/{project_id}/controller-spec")
+async def put_controller_spec(request: Request, project_id: str):
+    """Save the whole ``fields`` map at ``revision`` (409 when somebody saved in between); the change is recorded field by field.
+    The requirements (Specification tab) are changed by the project owner and admins, the model / measured results (Controller sim
+    tab) by MOTRES staff (owner 2026-11-23); a save that touches a side the caller may not change is refused whole (403)."""
+    from motor_ai_sim.development import controller_spec as CS
+    user, project, _ = _readable_project(request, project_id)
+    _controller_project(project)
+    may = {"requirements": access.can_edit_spec(user, project), "results": access.is_engineer(user)}
+    if not any(may.values()):
+        raise HTTPException(status_code=403, detail="Only the project owner or an admin can edit the specification")
+    body = await request.json()
+    if not isinstance(body, dict) or set(body) - {"fields", "revision"}:
+        raise HTTPException(status_code=400, detail="Expected {fields, revision}")
+    try:
+        fields = CS.normalize(body.get("fields"))
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    expected = body.get("revision")
+    out: dict = {}
+
+    def edit(doc):
+        if not doc:
+            doc.update(CS.empty())
+        if not isinstance(expected, int) or isinstance(expected, bool) or expected != int(doc.get("revision") or 0):
+            raise HTTPException(status_code=409, detail={"message": "The controller specification changed; reload it",
+                                                          "revision": doc.get("revision") or 0})
+        before = CS.stored(doc.get("fields"))
+        out["changes"] = CS.changes(before, fields)
+        refused = sorted(side for side in CS.change_scope(before, fields) if not may[side])
+        if refused:
+            raise HTTPException(status_code=403, detail=("Only the project owner or an admin can change the requirements"
+                                                         if "requirements" in refused else
+                                                         "Only MOTRES engineers and admins enter model and measured results"))
+        if not out["changes"]:
+            return
+        doc.update(fields=fields, revision=int(doc.get("revision") or 0) + 1, updated_at=models.now(), updated_by=_email(user),
+                   schema_version=CS.schema()["schema_version"])
+    doc = store.mutate_json(project_id, CS.FILE, edit, default={})
+    if out["changes"]:
+        store.append_jsonl(project_id, CS.HISTORY, {"revision": doc["revision"], "at": doc["updated_at"], "by": _email(user),
+                                                    "changes": out["changes"]})
+        store.append_audit(project_id, _email(user), "update", "controller_spec", "controller_spec",
+                           {"revision": doc["revision"], "fields": [c["field"] for c in out["changes"]]})
+    # the normalized fields on EVERY answer, a no-op save too (its stored file may still hold an earlier shape; Astra on #834)
+    return _controller_authors({**doc, "fields": fields, "changed": [c["field"] for c in out["changes"]]}, user)
+
+
+@router.get("/{project_id}/controller-sim")
+def get_controller_sim(request: Request, project_id: str):
+    """The board revisions and test results of a controller project (Controller sim tab); every project member reads them."""
+    from motor_ai_sim.development import controller_sim as SIM
+    user, project, _ = _readable_project(request, project_id)
+    _controller_project(project)
+    doc = store.load_json(project_id, SIM.FILE, None) or SIM.empty()
+    return _controller_authors({**doc, "can_edit": access.is_engineer(user)}, user)
+
+
+@router.put("/{project_id}/controller-sim")
+async def put_controller_sim(request: Request, project_id: str):
+    """Save ``{revisions, tests, revision}`` (409 when stale); MOTRES staff only (global engineer / admin)."""
+    from motor_ai_sim.development import controller_sim as SIM
+    user, project, _ = _readable_project(request, project_id)
+    _controller_project(project)
+    if not access.is_engineer(user):
+        raise HTTPException(status_code=403, detail="Only MOTRES engineers and admins enter revisions and test results")
+    body = await request.json()
+    if not isinstance(body, dict) or "revision" not in body:
+        raise HTTPException(status_code=400, detail="Expected {revisions, tests, revision}")
+    expected = body.pop("revision")
+    try:
+        records = SIM.normalize(body)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    out: dict = {}
+
+    def edit(doc):
+        if not doc:
+            doc.update(SIM.empty())
+        if not isinstance(expected, int) or isinstance(expected, bool) or expected != int(doc.get("revision") or 0):
+            raise HTTPException(status_code=409, detail={"message": "The records changed; reload them", "revision": doc.get("revision") or 0})
+        out["changed"] = [k for k in ("revisions", "tests") if (doc.get(k) or []) != records[k]]
+        if out["changed"]:
+            doc.update(records, revision=int(doc.get("revision") or 0) + 1, updated_at=models.now(), updated_by=_email(user))
+    doc = store.mutate_json(project_id, SIM.FILE, edit, default={})
+    if out["changed"]:
+        store.append_audit(project_id, _email(user), "update", "controller_sim", "controller_sim",
+                           {"revision": doc["revision"], "parts": out["changed"]})
+    return _controller_authors({**doc, "can_edit": True, "changed": out["changed"]}, user)
 
 
 @router.put("/{project_id}/spec")
@@ -1160,12 +1316,25 @@ def _release_member_grants(project: dict, project_id: str, email: str, reason: s
         log.warning("project %s: motor grants of %s not released", project_id, email, exc_info=True)
 
 
-def _apply_member(project_id: str, email: str, role: str, sees_prices: bool | None = None) -> tuple[dict, bool]:
+def _flush_price_audit(project_id: str) -> None:
+    """Write the price-grant audit events that were committed WITH the membership change.  A failing append leaves them pending in
+    the project (the change stands, the row is written by the next call), it never undoes or blocks the change."""
+    try:
+        flush_events(project_id, "project.json")
+    except Exception as exc:                                # noqa: BLE001
+        log.error("project %s: price audit row left pending (%s); written by the next call", project_id, exc)
+
+
+def _apply_member(project_id: str, email: str, role: str, sees_prices: bool | None = None, *, actor: dict | None = None) -> tuple[dict, bool]:
     """Add or re-role `email` on a project: a member when the account exists, else a pending invite.
     Returns (entry, account_found). Shared by POST /members and by the sign-in invite claim.
 
     ``sees_prices`` (owner 2026-11-22): None keeps what the member (or the pending invite) already carries, True / False sets it;
-    an owner never carries the flag (owners always see prices) and it is stored only when true."""
+    an owner never carries the flag (owners always see prices) and it is stored only when true.
+
+    ``actor`` (the caller of POST /members, None for the sign-in invite claim): the price grant of the address is compared BEFORE and
+    AFTER under the lock; a change of it (a flag switched, an owner made or demoted, an owner re-posted as customer) needs
+    ``access.can_manage_prices`` (403 otherwise), and the change is queued as an audit event written with the membership change."""
     entry = {"email": email, "role": role}
     from motor_ai_sim.development.motors import transaction, _sync_grants, _mark_removal_candidates, _key, MOTOR_GRANT_ROLES
     with transaction(), users._LOCK:
@@ -1183,7 +1352,15 @@ def _apply_member(project_id: str, email: str, role: str, sees_prices: bool | No
                               if str(m.get("email") or "").lower() == email)
         if sees_prices and role != "owner":
             entry["sees_prices"] = True
+        old_entry = next((m for m in [*project.get("members", []), *project.get("pending_invites", [])]
+                          if str(m.get("email") or "").lower() == email), None)
+        old_grant, new_grant = access.holds_price_grant(old_entry), access.holds_price_grant(entry)
+        if actor is not None and old_grant != new_grant and not access.can_manage_prices(actor, project):
+            raise HTTPException(status_code=403, detail="Only a project owner or MOTRES staff sets who sees the prices")
         updated = copy.deepcopy(project)
+        if old_grant != new_grant:
+            queue_event(updated, str((actor or {}).get("email") or email).strip().lower(), "sees_prices", "member", email,
+                        {"from": old_grant, "to": new_grant, "role": role})
         updated["members"] = [m for m in updated.get("members", []) if m.get("email", "").lower() != email]
         if account:
             updated["pending_invites"] = [m for m in updated.get("pending_invites", []) if m.get("email", "").lower() != email]
@@ -1224,6 +1401,7 @@ def _apply_member(project_id: str, email: str, role: str, sees_prices: bool | No
             # the member no longer gets the project's motors: the grants the project made for them go too (owner
             # 2026-10-27) - after the membership is committed, so a failed change never costs anyone access
             _release_member_grants(updated, project_id, email, "customer_membership_changed", "member change")
+    _flush_price_audit(project_id)
     return entry, bool(account)
 
 
@@ -1300,13 +1478,9 @@ async def add_member(request: Request, project_id: str):
     want_prices = body.get("sees_prices") if isinstance(body, dict) else None
     if want_prices is not None and not isinstance(want_prices, bool):
         raise HTTPException(status_code=422, detail="sees_prices must be true or false")
-    # only an owner of the project or an admin decides who sees the prices: an engineer member can neither switch the flag nor make
-    # somebody (himself included) an owner, which would be the same thing (owner 2026-11-22)
-    if (want_prices is not None or role == "owner") and not (access.sees_prices(user, before) and (
-            str(user.get("role") or "").lower() == "admin" or access.membership(_email(user), before) == "owner")):
-        raise HTTPException(status_code=403, detail="Only a project owner or an admin sets who sees the prices")
     known = any(str(m.get("email") or "").lower() == email for m in [*before.get("members", []), *before.get("pending_invites", [])])
-    entry, found = _apply_member(project_id, email, role, sees_prices=want_prices)
+    _flush_price_audit(project_id)
+    entry, found = _apply_member(project_id, email, role, sees_prices=want_prices, actor=user)
     account = found
     store.append_audit(project_id, _email(user), "invite", "member", email,
                        {"role": role, "pending": not bool(account), **({"sees_prices": want_prices} if want_prices is not None else {})})
@@ -1322,38 +1496,49 @@ async def add_member(request: Request, project_id: str):
 
 @router.patch("/{project_id}/members/sees_prices")
 async def set_member_sees_prices(request: Request, project_id: str):
-    """The project owner (or an admin) switches ONE member's ``sees_prices`` (owner 2026-11-22).  Owners always see prices and are
-    not switchable; a pending invite carries the flag until it is claimed.  Audited: who, when, for whom."""
+    """A project owner or MOTRES staff (admin / global engineer) switches ONE member's ``sees_prices`` (owner 2026-11-22).  Owners always
+    see prices and are not switchable; a pending invite carries the flag until it is claimed.  The audit row (who, for whom, old, new)
+    is committed WITH the change, the old value read under the lock."""
     user, _, _ = access.require_project(request, project_id, edit=True)
     body = await request.json()
     email = str(body.get("email") or "").strip().lower() if isinstance(body, dict) else ""
     value = body.get("sees_prices") if isinstance(body, dict) else None
     if not email or not isinstance(value, bool):
         raise HTTPException(status_code=422, detail="email and sees_prices (true / false) required")
-    project = store.get_project(project_id) or {}
-    if not (str(user.get("role") or "").lower() == "admin" or access.membership(_email(user), project) == "owner"):
-        raise HTTPException(status_code=403, detail="Only a project owner or an admin sets who sees the prices")
-    holder = next((m for m in [*project.get("members", []), *project.get("pending_invites", [])]
-                   if str(m.get("email") or "").lower() == email), None)
-    if holder is None:
-        raise HTTPException(status_code=404, detail="Member not found")
-    if holder.get("role") == "owner":
-        raise HTTPException(status_code=422, detail="A project owner always sees the prices")
-    before = holder.get("sees_prices") is True
+    _flush_price_audit(project_id)
+    outcome: dict = {}
 
     def mutate(doc: dict) -> None:
-        for key in ("members", "pending_invites"):
-            for m in doc.get(key, []):
-                if isinstance(m, dict) and str(m.get("email") or "").lower() == email:
-                    if value:
-                        m["sees_prices"] = True
-                    else:
-                        m.pop("sees_prices", None)
+        if not access.can_manage_prices(user, doc):
+            outcome["status"] = 403
+            return
+        holders = [m for key in ("members", "pending_invites") for m in doc.get(key, [])
+                   if isinstance(m, dict) and str(m.get("email") or "").lower() == email]
+        if not holders:
+            outcome["status"] = 404
+            return
+        if any(m.get("role") == "owner" for m in holders):
+            outcome["status"] = 422
+            return
+        before = any(m.get("sees_prices") is True for m in holders)
+        for m in holders:
+            if value:
+                m["sees_prices"] = True
+            else:
+                m.pop("sees_prices", None)
+        if before != value:
+            queue_event(doc, _email(user), "sees_prices", "member", email, {"from": before, "to": value})
         doc["updated_at"] = models.now()
 
     store.mutate_project(project_id, mutate)
-    if before != value:
-        store.append_audit(project_id, _email(user), "sees_prices", "member", email, {"from": before, "to": value})
+    status = outcome.get("status")
+    if status == 403:
+        raise HTTPException(status_code=403, detail="Only a project owner or MOTRES staff sets who sees the prices")
+    if status == 404:
+        raise HTTPException(status_code=404, detail="Member not found")
+    if status == 422:
+        raise HTTPException(status_code=422, detail="A project owner always sees the prices")
+    _flush_price_audit(project_id)
     return {"email": email, "sees_prices": value}
 
 
@@ -1371,6 +1556,14 @@ async def remove_member(request: Request, project_id: str, email: str):
         project_before = copy.deepcopy(project)
         membership_before = store.load_membership_index()
         updated = copy.deepcopy(project)
+        # removing somebody who holds the price grant (an owner, a flagged member or invite) is a permission change too (old
+        # membership against new, under the lock)
+        holders = [m for key in ("members", "pending_invites") for m in project.get(key, [])
+                   if isinstance(m, dict) and str(m.get("email") or "").lower() == email]
+        if any(access.holds_price_grant(m) for m in holders):
+            if not access.can_manage_prices(user, project):
+                raise HTTPException(status_code=403, detail="Only a project owner or MOTRES staff sets who sees the prices")
+            queue_event(updated, _email(user), "sees_prices", "member", email, {"from": True, "to": False, "removed": True})
         previous_members = updated.get("members", [])
         updated["members"] = [m for m in previous_members if str(m.get("email") or "").lower() != email]
         updated["pending_invites"] = [m for m in updated.get("pending_invites", []) if str(m.get("email") or "").lower() != email]
@@ -1387,6 +1580,7 @@ async def remove_member(request: Request, project_id: str, email: str):
         # the grants the project made for this member leave with them (owner 2026-10-27), after the commit
         _release_member_grants(updated, project_id, email, "customer_membership_removed", _email(user))
     store.append_audit(project_id, _email(user), "remove", "member", email, {})
+    _flush_price_audit(project_id)
     return {"ok": True}
 
 

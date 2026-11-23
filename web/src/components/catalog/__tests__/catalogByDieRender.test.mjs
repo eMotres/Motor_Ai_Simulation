@@ -132,10 +132,10 @@ test('the row menus carry every action of the list view, each calling the right 
   const t = (k, o) => i18n.t(`motors:${k}`, o);
   const admin = { canWrite: true, isAdmin: true, standardUser: false };
   const motor = m.motorMenuItems({ die: 'D', config: 'C' }, admin, actions, t);
-  assert.deepEqual(motor.map((x) => x.key), ['ren', 'lock', 'his', 'dup', 'bat', 'mov', 'cpy', 'ds', 'rep', 'pdf', 'del']);
+  assert.deepEqual(motor.map((x) => x.key), ['ren', 'lock', 'his', 'dup', 'bat', 'mov', 'cpy', 'arch', 'ds', 'rep', 'pdf', 'del']);
   motor.forEach((x) => x.run());
-  assert.deepEqual(calls, [['renameCfg', 'D', 'C'], ['toggleCfgLock', 'D', 'C'], ['cfgHistory', 'D', 'C'], ['duplicateCfg', 'D', 'C'],
-    ['battery', 'D', 'C'], ['moveCfg', 'D', 'C', 'move'], ['moveCfg', 'D', 'C', 'copy'], ['datasheet', 'D', 'C'],
+  assert.deepEqual(calls, [['archivable', 'D'], ['renameCfg', 'D', 'C'], ['toggleCfgLock', 'D', 'C'], ['cfgHistory', 'D', 'C'], ['duplicateCfg', 'D', 'C'],
+    ['battery', 'D', 'C'], ['moveCfg', 'D', 'C', 'move'], ['moveCfg', 'D', 'C', 'copy'], ['archiveCfg', 'D', 'C'], ['datasheet', 'D', 'C'],
     ['report', 'D', 'C', false], ['report', 'D', 'C', true], ['deleteCfg', 'D', 'C']]);
   assert.ok(motor.every((x) => x.label && !x.label.includes('byDie.')));
   calls.length = 0;

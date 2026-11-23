@@ -1,0 +1,13 @@
+{
+  "type": {
+    "label": "Project type",
+    "motor": "Motor",
+    "controller": "Controller",
+    "createTip": "Motor: the motor specification and Motors & results. Controller: the controller specification, for internal controller work. Only an admin changes the type later.",
+    "switchTip": "Switches the specification form and the results tab of this project. The data of the other form is kept.",
+    "confirmTitle": "Make this a {type} project?",
+    "confirmBody": "The project shows the specification form and the results tab of this type. Nothing stored is deleted; switching back shows the earlier form again.",
+    "confirm": "Change type",
+    "cancel": "Cancel"
+  }
+}

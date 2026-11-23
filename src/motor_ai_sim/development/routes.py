@@ -777,6 +777,66 @@ async def apply_spec_migration(request: Request, project_id: str):
     return {"draft": response_draft, "revision": result["revision"], "schema_version": 2, "completeness": models.completeness(result["draft"])}
 
 
+def _controller_project(project: dict) -> None:
+    from motor_ai_sim.development import project_type as PT
+    if PT.of(project) != PT.CONTROLLER:
+        raise HTTPException(status_code=404, detail="This is not a controller project")
+
+
+@router.get("/{project_id}/controller-spec")
+def get_controller_spec(request: Request, project_id: str):
+    """The controller specification of a controller project, its schema and the last changes (newest first)."""
+    from motor_ai_sim.development import controller_spec as CS
+    user, project, _ = _readable_project(request, project_id)
+    _controller_project(project)
+    doc = store.load_json(project_id, CS.FILE, None) or CS.empty()
+    path = store.path_for(project_id) / CS.HISTORY
+    history = []
+    if path.is_file():
+        for line in path.read_text(encoding="utf-8").splitlines()[-50:]:
+            try:
+                history.append(json.loads(line))
+            except ValueError:
+                continue
+    return {**doc, "schema": CS.schema(), "history": history[::-1], "can_edit": access.can_edit_spec(user, project)}
+
+
+@router.put("/{project_id}/controller-spec")
+async def put_controller_spec(request: Request, project_id: str):
+    """Save the whole ``fields`` map at ``revision`` (409 when somebody saved in between); the change is recorded field by field."""
+    from motor_ai_sim.development import controller_spec as CS
+    user, project, _ = access.require_spec_editor(request, project_id)
+    _controller_project(project)
+    body = await request.json()
+    if not isinstance(body, dict) or set(body) - {"fields", "revision"}:
+        raise HTTPException(status_code=400, detail="Expected {fields, revision}")
+    try:
+        fields = CS.normalize(body.get("fields"))
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    expected = body.get("revision")
+    out: dict = {}
+
+    def edit(doc):
+        if not doc:
+            doc.update(CS.empty())
+        if not isinstance(expected, int) or isinstance(expected, bool) or expected != int(doc.get("revision") or 0):
+            raise HTTPException(status_code=409, detail={"message": "The controller specification changed; reload it",
+                                                          "revision": doc.get("revision") or 0})
+        out["changes"] = CS.changes(doc.get("fields") or {}, fields)
+        if not out["changes"]:
+            return
+        doc.update(fields=fields, revision=int(doc.get("revision") or 0) + 1, updated_at=models.now(), updated_by=_email(user),
+                   schema_version=CS.schema()["schema_version"])
+    doc = store.mutate_json(project_id, CS.FILE, edit, default={})
+    if out["changes"]:
+        store.append_jsonl(project_id, CS.HISTORY, {"revision": doc["revision"], "at": doc["updated_at"], "by": _email(user),
+                                                    "changes": out["changes"]})
+        store.append_audit(project_id, _email(user), "update", "controller_spec", "controller_spec",
+                           {"revision": doc["revision"], "fields": [c["field"] for c in out["changes"]]})
+    return {**doc, "changed": [c["field"] for c in out["changes"]]}
+
+
 @router.put("/{project_id}/spec")
 async def put_spec(request: Request, project_id: str):
     user, _, _ = access.require_spec_editor(request, project_id)

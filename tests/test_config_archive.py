@@ -406,7 +406,7 @@ def test_saved_snapshots_carry_their_source_and_follow_the_archive(env, monkeypa
     r = client.post("/api/sims/saved", headers=env["a"], json={"name": "run", "params": {"rpm": 1000}, "results": {}})
     if r.status_code == 404:
         pytest.skip("saved simulations router not mounted here")
-    assert r.json()["source"] == {"die": DIE, "config": OLDCFG}
+    assert r.json()["source"] == {"die": DIE, "config": OLDCFG, "layer": "shared"}
     assert [x["name"] for x in client.get("/api/sims/saved", headers=env["a"]).json()["sims"]] == ["run"]
     _archive(env)
     assert client.get("/api/sims/saved", headers=env["a"]).json()["sims"] == []
@@ -507,34 +507,75 @@ def test_a_link_spelled_in_another_case_refuses_where_the_file_system_ignores_ca
     assert CA.refusals("D", "C", projects=[proj], **clear) == []
 
 
-def test_an_older_snapshot_without_a_source_is_identified_by_its_machine(env, monkeypatch):
+def test_only_a_snapshot_that_names_an_archived_shared_source_is_hidden(env, monkeypatch):
+    """Round 4 of #820: no guessing by geometry.  A row without a source stays listed, with a healthy and with a damaged
+    archive - also one whose machine equals the archived one but for wire_parallel 2 (the archived one has the default 1).  A
+    named shared source is hidden; a source stamped in a workspace layer is not the shared configuration."""
+    from motor_ai_sim import motor_access as MA
     from motor_ai_sim.routes import family as fam
-    monkeypatch.setattr(fam, "_read_ctx", lambda: {})                     # nothing open: the row carries no source
-    same = {"num_slots": 12, "num_poles": 10, "stator_diameter": 12.0, "magnet_height": 1.0, "motor_length": 10.0,
-            "mat_magnet": "N42SH", "rpm": 1000}
-    other = {**same, "stator_diameter": 30.0}
-    for name, params in (("archived machine", same), ("another machine", other)):
+    resolves = {"layer": "shared"}                                          # what the saver's catalog resolves the die to
+    monkeypatch.setattr(MA, "_die_layer_of", lambda die, layer=None: layer or resolves["layer"])
+    geo = {"num_slots": 12, "num_poles": 10, "stator_diameter": 12.0, "magnet_height": 1.0, "motor_length": 10.0,
+           "mat_magnet": "N42SH"}
+    rows = (("same machine", None, geo), ("wire_parallel 2", None, {**geo, "wire_parallel": 2}),
+            ("named in params", None, {**geo, "die": DIE, "config": OLDCFG}),
+            ("stamped", {"die": DIE, "config": OLDCFG}, geo), ("workspace copy", {"die": DIE, "config": OLDCFG}, geo))
+    for name, ctx, params in rows:
+        monkeypatch.setattr(fam, "_read_ctx", lambda ctx=ctx: ctx)
+        resolves["layer"] = "workspace" if name == "workspace copy" else "shared"   # saved from her workspace namesake
         r = client.post("/api/sims/saved", headers=env["a"], json={"name": name, "params": params, "results": {}})
         if r.status_code == 404:
             pytest.skip("saved simulations router not mounted here")
-        assert "source" not in r.json() or not r.json()["source"]
+    resolves["layer"] = "shared"
     names = lambda who: sorted(x["name"] for x in client.get("/api/sims/saved", headers=env[who]).json()["sims"])  # noqa: E731
-    assert names("a") == ["another machine", "archived machine"]
+    everything = sorted(n for n, _c, _p in rows)
+    assert names("a") == everything
     _archive(env, cfg=OLDCFG)
-    assert names("a") == ["another machine"]                             # the same slots, poles, diameter, inputs, magnet
+    kept = ["same machine", "wire_parallel 2", "workspace copy"]
+    assert names("a") == kept
     CA.store_path().write_text("{ broken", encoding="utf-8")
-    assert names("a") == []                                              # damaged archive: unidentified older rows hidden
+    assert names("a") == kept                                               # damaged: unnamed rows stay, named shared hidden
 
 
-def test_a_snapshot_of_another_magnet_is_not_the_archived_machine():
-    from motor_ai_sim.routes import saved_sims as SS
-    m = {"geometry": {"num_slots": 12, "num_poles": 10, "stator_diameter": 12.0, "motor_length": 10.0},
-         "materials": {"magnet": "N42SH"}}
-    base = {"num_slots": 12, "num_poles": 10, "stator_diameter": 12.0, "motor_length": 10.0}
-    assert SS._same_machine({**base, "mat_magnet": "N42SH"}, m)
-    assert not SS._same_machine({**base, "mat_magnet": "N48H"}, m)
-    assert not SS._same_machine({**base, "motor_length": 20.0}, m)
-    assert not SS._same_machine({"num_slots": 12, "num_poles": 10}, m)          # no diameter: not identified
+def test_a_new_revision_takes_the_lifecycle_lock_before_the_revision_records(env, monkeypatch, tmp_path):
+    """Round 4 of #820 (P1 deadlock): a shared configuration rename holds lifecycle, then the revision records; a new revision
+    must take them in the same order, because its copy admits through auto-link (lifecycle)."""
+    import threading
+    import time
+    from fastapi import HTTPException
+    from motor_ai_sim import motor_revisions as MR
+    from motor_ai_sim.routes import family as fam
+    monkeypatch.setenv("MOTRES_MOTOR_REVISIONS_ROOT", str(tmp_path / "revisions"))
+    lin = MR.assign(DIE, OLDCFG, actor="t")
+
+    def copy_that_admits(*_a, **_k):                                        # duplicate_config -> auto-link -> admission
+        with CA.lifecycle_lock():
+            raise HTTPException(418, detail="stop after the admission")
+    monkeypatch.setattr(fam, "duplicate_config", copy_that_admits)
+    holding, out = threading.Event(), {}
+
+    def rename():                                                           # lifecycle first, then revisions.json
+        with CA.lifecycle_lock():
+            holding.set()
+            time.sleep(0.3)
+            lk = MR._lock()
+            out["rename"] = lk.acquire(timeout=5)
+            if out["rename"]:
+                lk.release()
+
+    def revision():
+        try:
+            MR.new_revision(lin["id"], reason="r", who={"authorization": None}, actor="t")
+        except HTTPException as exc:
+            out["revision"] = exc.status_code
+    t2 = threading.Thread(target=rename)
+    t2.start()
+    holding.wait(5)
+    t1 = threading.Thread(target=revision)
+    t1.start()
+    t2.join(10)
+    t1.join(10)
+    assert out == {"rename": True, "revision": 418}
 
 
 def test_the_archive_touches_only_shared_cards_and_admissions(env, monkeypatch):

@@ -13,6 +13,7 @@ export interface CoggingPp {
   gapLayers?: number;
   sectors?: number;
   meshMm?: number;
+  sig?: number;            // numeric digest of every setting a comparison needs (steps, temperature, mesh, basis, eddy, build, materials)
   demagAtLoad: boolean;    // the loaded points run with demagnetisation ON (the value is still demag-off, full strength)
   basis?: string;          // always the explicit no-load / full-strength basis when measured
 }
@@ -24,7 +25,7 @@ export function coggingOf(p: any): CoggingPp {
   if (!asked) return { asked: false, final: false, demagAtLoad: false };
   const value = fin(p.cogging_pp_Nm);
   return {
-    asked, demagAtLoad: p.cogging_demag_at_load === true, basis: typeof p.cogging_basis === 'string' ? p.cogging_basis : undefined, value, final: value !== undefined && p.cogging_final === true,
+    asked, sig: fin(p.cogging_sig), demagAtLoad: p.cogging_demag_at_load === true, basis: typeof p.cogging_basis === 'string' ? p.cogging_basis : undefined, value, final: value !== undefined && p.cogging_final === true,
     error: typeof p.cogging_error === 'string' ? p.cogging_error : undefined,
     steps: fin(p.cogging_steps_per_period), tempC: fin(p.cogging_magnet_temp_c),
     gapLayers: fin(p.cogging_gap_layers), sectors: fin(p.cogging_n_sectors), meshMm: fin(p.cogging_mesh_mm),
@@ -40,6 +41,7 @@ export function coggingText(c: CoggingPp, rankingLabel: string): string {
 
 /** The settings two values must share to be compared (steps actually used, temperature, mesh / gap / sectors). */
 export function coggingSettingsKey(c: CoggingPp): string {
+  if (c.sig !== undefined) return String(c.sig);
   return [c.steps, c.tempC, c.meshMm, c.gapLayers, c.sectors, c.basis, c.demagAtLoad ? 'd' : 'n'].map(x => (x === undefined ? '?' : String(x))).join('|');
 }
 
@@ -49,6 +51,7 @@ export function coggingMetrics(c: CoggingPp): Record<string, number> {
   const m: Record<string, number> = { cogging_pp_Nm: c.value, cogging_final: c.final ? 1 : 0,
     cogging_basis_code: 1,                          // 1 = no-load, full-strength magnets (demag at load not applied)
     cogging_demag_at_load: c.demagAtLoad ? 1 : 0 };
+  if (c.sig !== undefined) m.cogging_sig = c.sig;
   if (c.steps !== undefined) m.cogging_steps = c.steps;
   if (c.tempC !== undefined) m.cogging_temp_c = c.tempC;
   if (c.meshMm !== undefined) m.cogging_mesh_mm = c.meshMm;
@@ -66,3 +69,15 @@ export function coggingTip(c: CoggingPp, tr: (key: string) => string): string | 
   if (c.demagAtLoad) parts.push(tr('coggingPpBasis'));
   return parts.length ? parts.join(' ') : undefined;
 }
+
+/** Two Cogging pp values compare only when BOTH signatures are known and equal; an unknown signature
+ *  (null / absent) matches nothing, not even another unknown one. */
+export function coggingComparable(sigs: Array<number | null | undefined>): boolean {
+  if (sigs.length < 2) return true;
+  if (sigs.some(x => x === null || x === undefined || !Number.isFinite(Number(x)))) return false;
+  return new Set(sigs.map(Number)).size === 1;
+}
+
+/** A stored number, or NaN: null / undefined / '' are rejected BEFORE any numeric conversion (Number(null) is 0). */
+export const storedNumber = (v: unknown): number =>
+  (v === null || v === undefined || v === '' || typeof v === 'boolean') ? NaN : Number(v);

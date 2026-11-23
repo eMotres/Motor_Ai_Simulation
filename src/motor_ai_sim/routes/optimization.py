@@ -2266,10 +2266,57 @@ COGGING_BASIS = "no_load_full_strength"
 COGGING_BASIS_TEXT = "no-load, full-strength magnets (demagnetisation at load not applied)"
 
 
+def _cogging_identity() -> Dict[str, Any]:
+    """The build and material identity a stored Cogging pp value stands on; RAISES when either is not
+    really known (fail closed: no cache, no value).  Build = a real code version (not "unknown",
+    not the release label alone); materials = the content of every assigned card of the parts the
+    no-load field sees (a card that cannot be resolved, or resolves to nothing, raises)."""
+    from motor_ai_sim import duty_results as _dr
+    stamp = dict(_dr.solver_stamp() or {})
+    cv = str(stamp.get("code_version") or "")
+    if not cv or cv == "unknown":
+        raise RuntimeError("the solver build is not identified (no code version)")
+    from motor_ai_sim.config import get_material_assignments
+    from motor_ai_sim import materials as _ml
+    from motor_ai_sim.material_context import get_request_materials
+    import dataclasses as _dc
+    import hashlib as _hl
+    asg = dict(get_material_assignments() or {})
+    ov = get_request_materials() or {}
+    asg.update({k: v for k, v in (ov.get("assignment") or {}).items() if v})
+    ov_props = ov.get("materials") or {}
+    cards: Dict[str, Any] = {}
+    for part in ("stator_core", "rotor_core", "magnet", "shaft", "sleeve"):
+        name = asg.get(part)
+        if not name:
+            if part in ("stator_core", "magnet"):
+                raise RuntimeError("no %s material is assigned" % part)
+            continue
+        name = str(name)
+        if name in ov_props and isinstance(ov_props[name], dict) and ov_props[name]:
+            props = ov_props[name]
+        else:
+            obj = _ml.resolve_assigned(part, name)        # raises when the library / overlay lacks it
+            props = _dc.asdict(obj) if _dc.is_dataclass(obj) else dict(vars(obj))
+        if not props:
+            raise RuntimeError("the %s card %r resolved to no content" % (part, name))
+        cards[part] = [name, props]
+    digest = _hl.md5(json.dumps(cards, sort_keys=True, default=str).encode()).hexdigest()[:16]
+    return {"build": cv, "image": stamp.get("image"), "materials": digest}
+
+
+def _cogging_sig(parts: List[Any]) -> int:
+    """A numeric digest of every setting two Cogging pp values must share to be compared (it rides in
+    the numbers-only applied metrics; two values compare only when both sigs are KNOWN and equal)."""
+    import hashlib as _hl
+    return int(_hl.md5(json.dumps(parts, sort_keys=True, default=str).encode()).hexdigest()[:12], 16)
+
+
 def _cogging_pp_fields(out: Optional[Dict[str, Any]], steps_requested: int,
                        magnet_temp_c_resolved: Optional[float],
                        missing: Optional[str] = None,
-                       demag_at_load: bool = False) -> Dict[str, Any]:
+                       demag_at_load: bool = False,
+                       identity: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """The fields a loaded sweep point carries from its geometry's no-load solve ``out``.
 
     Provenance is the EFFECTIVE one: the steps the solver really reported (it may snap them), the
@@ -2295,20 +2342,31 @@ def _cogging_pp_fields(out: Optional[Dict[str, Any]], steps_requested: int,
         else:
             err = "no-load solve failed: %s" % ((out or {}).get("error") or "no result")
     eff_steps = prov.get("steps_per_period_effective") if prov else None
+    # the temperature the SOLVE used (from its result), never the request or a pre-solve guess
+    eff_temp = prov.get("magnet_temp_c_effective") if prov else None
     final = bool(pp is not None and isinstance(eff_steps, int) and eff_steps >= _COG_PP_FINAL_STEPS
-                 and enough and magnet_temp_c_resolved is not None
-                 and abs(float(magnet_temp_c_resolved) - _COG_PP_FINAL_TEMP_C) < 1e-9)
+                 and enough and isinstance(eff_temp, (int, float))
+                 and abs(float(eff_temp) - _COG_PP_FINAL_TEMP_C) < 1e-9)
     f: Dict[str, Any] = {
         "cogging_pp_Nm": pp,
         "cogging_steps_per_period": eff_steps if pp is not None else None,
         "cogging_steps_requested": int(steps_requested),
         # the basis is explicit and never silent: the solve is demag OFF whatever the loaded points do
         "cogging_basis": COGGING_BASIS, "cogging_demag_at_load": bool(demag_at_load),
-        "cogging_magnet_temp_c": (None if magnet_temp_c_resolved is None else float(magnet_temp_c_resolved)),
+        "cogging_magnet_temp_c": (float(eff_temp) if isinstance(eff_temp, (int, float)) else None),
         "cogging_final": final}
     if pp is not None:
         f.update(cogging_gap_layers=prov.get("gap_layers_effective"),
-                 cogging_n_sectors=prov.get("n_sectors"), cogging_mesh_mm=prov.get("mesh_size_mm"))
+                 cogging_n_sectors=prov.get("n_sectors"),
+                 cogging_mesh_mm=prov.get("mesh_size_effective_mm"),
+                 cogging_rotor_eddy=bool(prov.get("rotor_eddy")), cogging_eddy=bool(prov.get("eddy")))
+        ident = identity or {}
+        if ident.get("build") and ident.get("materials"):
+            f["cogging_build"], f["cogging_materials"] = ident["build"], ident["materials"]
+            f["cogging_sig"] = _cogging_sig([
+                eff_steps, eff_temp, prov.get("mesh_size_effective_mm"), prov.get("gap_layers_effective"),
+                prov.get("n_sectors"), COGGING_BASIS, bool(demag_at_load), bool(prov.get("rotor_eddy")),
+                bool(prov.get("eddy")), ident["build"], ident["materials"]])
     if err:
         f["cogging_error"] = err
     return f
@@ -2326,8 +2384,10 @@ class _SweepCogging:
     ``solves`` counts the real solves of this run."""
 
     def __init__(self, key_of, solve, steps: int, magnet_temp_c_resolved: Optional[float],
-                 refuse: Optional[str] = None, demag_at_load: bool = False):
+                 refuse: Optional[str] = None, demag_at_load: bool = False,
+                 identity: Optional[Dict[str, Any]] = None):
         self._key_of, self._solve = key_of, solve
+        self.identity = identity
         self.demag_at_load = bool(demag_at_load)
         self.steps, self.temp = int(steps), magnet_temp_c_resolved
         self.refuse = refuse
@@ -2338,7 +2398,7 @@ class _SweepCogging:
 
     def _missing(self, why: str) -> Dict[str, Any]:
         return _cogging_pp_fields(None, self.steps, self.temp, missing=why,
-                                  demag_at_load=self.demag_at_load)
+                                  demag_at_load=self.demag_at_load, identity=self.identity)
 
     def cached(self, geo_ov: Dict[str, float]) -> Optional[Dict[str, Any]]:
         if self.refuse:
@@ -2351,7 +2411,7 @@ class _SweepCogging:
             return self._memo[key]
         out = _EVAL_CACHE.get(key)
         return None if out is None else _cogging_pp_fields(
-            out, self.steps, self.temp, demag_at_load=self.demag_at_load)
+            out, self.steps, self.temp, demag_at_load=self.demag_at_load, identity=self.identity)
 
     def fields(self, geo_ov: Dict[str, float]) -> Dict[str, Any]:
         if self.refuse:
@@ -2375,7 +2435,7 @@ class _SweepCogging:
                 if out and out.get("ok"):
                     _store_eval(key, out)
             f = self._memo[key] = _cogging_pp_fields(
-                out, self.steps, self.temp, demag_at_load=self.demag_at_load)
+                out, self.steps, self.temp, demag_at_load=self.demag_at_load, identity=self.identity)
         return f
 
 
@@ -2398,12 +2458,23 @@ def _cogging_no_load_refusal() -> Optional[str]:
     return None
 
 
+def _geo_identity(p: Dict[str, Any]) -> tuple:
+    """The PHYSICAL geometry of a point: its overrides without gamma - the identity the no-load memo
+    uses, so the gamma rows of one geometry are one geometry here too."""
+    try:
+        return tuple(sorted((str(k), round(float(v), 6)) for k, v in (p.get("overrides") or {}).items()
+                            if k != "gamma_deg"))
+    except (TypeError, ValueError):
+        return ("?", id(p))
+
+
 def _cogging_refuse_demagged(points: List[Dict[str, Any]], cogging_max_nm: float = 0.0) -> int:
-    """Per GEOMETRY: when any loaded point reports an irreversible magnet loss above
-    COGGING_DEMAG_REFUSE_FRACTION of Br (`demag_loss_pct`, % of the Br volume), the full-strength
-    no-load value does not describe that geometry under load: its value goes missing with the
-    reason.  A point that reports no loss (an older cached eval) is NOT refused: its basis is
-    recorded and `cogging_demag_loss_pct` stays None.  Returns the number of geometries refused."""
+    """Per PHYSICAL geometry (gamma rows together): when any loaded point reports an irreversible
+    magnet loss above COGGING_DEMAG_REFUSE_FRACTION of Br (`demag_loss_pct`, % of the Br volume), the
+    full-strength no-load value does not describe that geometry under load: its value goes missing
+    with the reason, on every point of it.  A point that reports no loss (an older cached eval) is NOT
+    refused: its basis is recorded and `cogging_demag_loss_pct` stays None.  Idempotent; returns the
+    number of geometries refused."""
     limit_pct = 100.0 * COGGING_DEMAG_REFUSE_FRACTION
     worst: Dict[Any, float] = {}
     for p in points:
@@ -2412,12 +2483,13 @@ def _cogging_refuse_demagged(points: List[Dict[str, Any]], cogging_max_nm: float
         except (TypeError, ValueError):
             continue
         if math.isfinite(v):
-            worst[p.get("geom_id")] = max(worst.get(p.get("geom_id"), 0.0), v)
+            g = _geo_identity(p)
+            worst[g] = max(worst.get(g, 0.0), v)
     bad = {g for g, v in worst.items() if v > limit_pct}
     for p in points:
         if "cogging_pp_Nm" not in p:
             continue
-        g = p.get("geom_id")
+        g = _geo_identity(p)
         p["cogging_demag_loss_pct"] = worst.get(g)
         if g in bad:
             p["cogging_pp_Nm"] = None
@@ -2426,7 +2498,7 @@ def _cogging_refuse_demagged(points: List[Dict[str, Any]], cogging_max_nm: float
                                   "the full-strength no-load value does not describe this geometry "
                                   "under load" % (worst[g], limit_pct))
             for k in ("cogging_steps_per_period", "cogging_gap_layers", "cogging_n_sectors",
-                      "cogging_mesh_mm"):
+                      "cogging_mesh_mm", "cogging_sig"):
                 p[k] = None
             if cogging_max_nm > 0.0:
                 p["eligible"] = False
@@ -2632,6 +2704,10 @@ def _scan_worker(variables, operating_points, steps, coil_temp_c, ripple_max,
 
         def _mk_point(out, ov, I, gi, oi, g, rpm=None, source_fp=None):
             pt = _point_from_eval(out, ov, I, gi, oi, ripple_max)
+            if not (cogging_pp and demag):
+                # a shared-cache entry stored by an opt-in run carries the loaded Br loss; an option-OFF
+                # sweep returns exactly the payload it always did
+                pt.pop("demag_loss_pct", None)
             pt["gamma_deg"] = g    # stamp γ so the chart can group/connect without the request
             pt["source_cfg_fp"] = source_fp or _config_fingerprint(
                 tuple(k for k in ov if k != "gamma_deg"))
@@ -2659,19 +2735,21 @@ def _scan_worker(variables, operating_points, steps, coil_temp_c, ripple_max,
         # both currents of a geometry (and a later sweep) share one solve.
         _cog = None
         if cogging_pp:
-            from motor_ai_sim.simulation.fem_solver_2d import (
-                _run_magnet_temp_c as _mt_res, _noload_material_fingerprint as _mat_fp)
+            from motor_ai_sim.simulation.fem_solver_2d import _run_magnet_temp_c as _mt_res
             _mt_resolved = _mt_res(magnet_temp_c)
+            try:
+                _cog_ident = _cogging_identity()      # fail closed: no identity = no cache, no value
+                _cog_ident_err = None
+            except Exception as _e_id:                # noqa: BLE001
+                _cog_ident, _cog_ident_err = None, "build / material identity unavailable: %s" % _e_id
 
             def _cog_key(geo_ov):
                 _excl = tuple(geo_ov.keys())
                 _fp = _config_fingerprint(_excl)
                 if _fp == "nofp":
                     raise RuntimeError("the config fingerprint is unavailable")
-                from motor_ai_sim import duty_results as _dr
-                _stamp = dict(_dr.solver_stamp() or {})
-                if not _stamp:
-                    raise RuntimeError("the solver build is unknown")
+                if _cog_ident is None:
+                    raise RuntimeError("the build / material identity is unavailable")
                 _sim = dict(get_config().get("simulation") or {})
                 return _eval_cache_key(geo_ov, 0.0, steps, coil_temp_c, _NPER, 0.0,
                                        mesh_size_mm, min_size_mm, n_sectors, pole_copy,
@@ -2686,9 +2764,9 @@ def _scan_worker(variables, operating_points, steps, coil_temp_c, ripple_max,
                                              "drive": "current",
                                              "eddy": bool(_sim.get("eddy", False)),
                                              "magnet_temp_resolved": _mt_resolved,
-                                             "materials": _mat_fp(),
-                                             "solver": json.dumps(_stamp, sort_keys=True,
-                                                                  default=str)},
+                                             "materials": _cog_ident["materials"],
+                                             "solver": _cog_ident["build"],
+                                             "image": _cog_ident.get("image")},
                                        sampling_purpose="optimization",
                                        fp_excludes=_excl)
 
@@ -2710,7 +2788,8 @@ def _scan_worker(variables, operating_points, steps, coil_temp_c, ripple_max,
                                         ripple_pct_gate=False, sampling_purpose="optimization",
                                         no_load=True)
             _cog = _SweepCogging(_cog_key, _cog_solve, steps, _mt_resolved,
-                                 refuse=_cogging_no_load_refusal(), demag_at_load=bool(demag))
+                                 refuse=(_cog_ident_err or _cogging_no_load_refusal()),
+                                 demag_at_load=bool(demag), identity=_cog_ident)
 
         def _with_cogging(pt, geo_ov, cached_only=False):
             """Add the geometry's Cogging pp to a loaded point and apply the opt-in limits.
@@ -2725,6 +2804,15 @@ def _scan_worker(variables, operating_points, steps, coil_temp_c, ripple_max,
                     pt, float(cogging_max_nm), float(efficiency_min_pct), float(torque_min_nm)):
                 pt["eligible"] = False
             return pt
+
+        def _pub():
+            """The live list of finished points; the 0.5 % Br-loss rule (per PHYSICAL geometry, gamma rows
+            together) is applied to it BEFORE it is published, so neither the chart nor a live Apply ever
+            sees a value the rule would refuse."""
+            lst = [p for p in points if p is not None]
+            if _cog is not None:
+                _cogging_refuse_demagged(lst, float(cogging_max_nm))
+            return lst
 
         # a cache-hit point that still lacks its Cogging pp: its loaded eval is
         # reused, only the (shared) no-load solve is missing
@@ -2839,7 +2927,7 @@ def _scan_worker(variables, operating_points, steps, coil_temp_c, ripple_max,
                 # it — so it counts towards progress, or the bar stalls short of
                 # total for the whole run.
                 _scan_state["done"] = n_cached + n_rejected
-                _scan_state["points"] = [p for p in points if p is not None]   # instant plot
+                _scan_state["points"] = _pub()   # instant plot
         # SWEEP JOURNAL: mark all prefilled/rejected points as done — by their
         # ACTUAL task index (wherever `points[i]` got filled above), not by
         # `range(n_cached + n_rejected)`: a cache hit is rarely the first N
@@ -2904,7 +2992,7 @@ def _scan_worker(variables, operating_points, steps, coil_temp_c, ripple_max,
             with _scan_lock:
                 if _scan_owns(run_id):
                     _scan_state["done"] = done
-                    _scan_state["points"] = [p for p in points if p is not None]
+                    _scan_state["points"] = _pub()
 
         ex = ThreadPoolExecutor(max_workers=_job_workers())
         futs = [ex.submit(_do, it) for it in misses]
@@ -2944,7 +3032,7 @@ def _scan_worker(variables, operating_points, steps, coil_temp_c, ripple_max,
                     # live-stream the points computed so far so the chart fills in
                     # as the sweep runs (not only at the end).
                     if _scan_owns(run_id):
-                        _scan_state["points"] = [p for p in points if p is not None]
+                        _scan_state["points"] = _pub()
         finally:
             ex.shutdown(wait=False, cancel_futures=True)
         _src_changed = (_bind.tripped if _bind is not None else None)
@@ -3015,12 +3103,16 @@ def _scan_worker(variables, operating_points, steps, coil_temp_c, ripple_max,
                                        element_order=element_order, demag=demag,
                                        magnet_temp_c=magnet_temp_c,
                                        **({"ripple_pct_gate": False} if cogging_screen else {}),
+                                       **({"report_demag_loss": True} if cogging_pp and demag else {}),
                                        sampling_purpose="optimization")
                 if base_out and base_out.get("ok"):
                     _store_eval(_bck, base_out)
             baseline = _point_from_eval(base_out, {}, _bI, -1, 0, ripple_max)
+            if not (cogging_pp and demag):
+                baseline.pop("demag_loss_pct", None)
             if _cog is not None and baseline.get("feasible"):
                 _with_cogging(baseline, {})
+                _cogging_refuse_demagged([baseline], float(cogging_max_nm))
         with _scan_lock:
             if _scan_owns(run_id):
                 _scan_state["done"] = len(tasks) + (1 if with_baseline else 0)
@@ -3079,7 +3171,8 @@ def _scan_worker(variables, operating_points, steps, coil_temp_c, ripple_max,
                              "sampling_purpose": "optimization"},
         }
         if _cog is not None:        # absent unless asked: the saved sweep keeps what was measured
-            _cp = [p for p in points if "cogging_pp_Nm" in p]
+            _feas = [p for p in points if p.get("feasible")]
+            _cp = [p for p in _feas if "cogging_pp_Nm" in p]
             _meas = [p for p in _cp if p.get("cogging_pp_Nm") is not None]
             result["cogging_pp"] = {
                 "steps_requested": int(steps),
@@ -3092,7 +3185,9 @@ def _scan_worker(variables, operating_points, steps, coil_temp_c, ripple_max,
                 "no_load_solves": int(_cog.solves), "n_geometries": len(geos),
                 "n_measured": len(_meas), "n_missing": len(_cp) - len(_meas),
                 # final only when EVERY point carries a successful final measurement
-                "final": bool(_cp and len(_meas) == len(_cp) and all(p.get("cogging_final") for p in _meas)),
+                # final only when EVERY feasible point carries a successful final measurement
+                "final": bool(_feas and len(_cp) == len(_feas) and len(_meas) == len(_cp)
+                              and all(p.get("cogging_final") for p in _meas)),
                 "limit_nm": float(cogging_max_nm), "efficiency_min_pct": float(efficiency_min_pct),
                 "torque_min_nm": float(torque_min_nm)}
         if _src_changed:
@@ -4379,6 +4474,13 @@ class DescentRequest(BaseModel):
         # that ranking; min_cogging keeps the product ranking in its cost (_descent_cost);
         # min_ripple is a ripple-only objective: no ranking there, so no cogging beside it.
         # An efficiency floor is a limit, not a ranking, and does not make cogging allowed.
+        if str(self.objective or "") == "min_cogging":
+            # the product ranking is what keeps cogging from being the only objective: both weights
+            # must be finite and positive (zero would erase the ranking, negative would invert it)
+            for w in (self.w_eff, self.w_td):
+                if not (math.isfinite(float(w)) and float(w) > 0.0):
+                    raise ValueError("min_cogging keeps the torque / efficiency ranking: w_eff and w_td "
+                                     "must be finite and positive")
         if str(self.objective or "") == "min_ripple" and float(self.cogging_max_nm) > 0.0:
             raise ValueError("cogging is used only beside the torque / efficiency ranking "
                              "(baseline_line, product or min_cogging), never with min_ripple")

@@ -756,8 +756,8 @@ bearings:
     default_lubricant: MT47
     n_limit_grease_rpm: 7500
     n_limit_oil_air_rpm: null    # sealed for life
-    C_kn: 11.9
-    C0_kn: 11.4
+    C_kn: 12.1
+    C0_kn: 10.0
     stiffness_n_per_m: 1.2e+8
     catalog:
       manufacturer: SKF
@@ -765,14 +765,14 @@ bearings:
       status: active
       sources: [skf_catalogue, skf_friction]
       prov:
-        n_limit_grease_rpm: {type: datasheet, src: distributor, verify: true, note: "limiting speed 7500 rpm (reference 15000) as listed by RS Components 2076983 and Rubix G1321001180 for SKF 61814-2RZ — to verify against the SKF catalogue table"}
-        C_kn: {type: datasheet, src: skf_catalogue, verify: true, note: "same rings and balls as the 61814-2RS1 card"}
-        C0_kn: {type: datasheet, src: skf_catalogue, verify: true, note: "same rings and balls as the 61814-2RS1 card"}
+        n_limit_grease_rpm: {type: datasheet, src: skf_catalogue, note: "limiting speed 7500 r/min, reference speed 15000 r/min: skf.com product page 61814-2RZ, read 2026-11-23"}
+        C_kn: {type: datasheet, src: skf_catalogue, note: "basic dynamic load rating 12.1 kN: skf.com product page 61814-2RZ, read 2026-11-23"}
+        C0_kn: {type: datasheet, src: skf_catalogue, note: "basic static load rating 10 kN: skf.com product page 61814-2RZ, read 2026-11-23"}
         stiffness_n_per_m: {type: estimate, note: "APPROXIMATE"}
         friction.R1: {type: datasheet, src: skf_friction, note: "SKF table 2, series 618"}
         friction.S1: {type: datasheet, src: skf_friction, note: "SKF table 2, series 618"}
         friction.ball_density_ratio: {type: derived, note: "1.0 = steel balls"}
-      revision: {n: 1, date: "2026-10-28", by: orchestrator, why: "the bearing of the built CIANO20 200_50 (production BOM part pt_bearing)"}
+      revision: {n: 2, date: "2026-11-23", by: US-cambridge, why: "C, C0 and limiting speed read on the SKF product page (n 1: 2026-10-28, orchestrator, the bearing of the built CIANO20 200_50)"}
     friction:
       R1: 4.7e-7
       S1: 6.50e-3
@@ -781,7 +781,10 @@ bearings:
       ball_density_ratio: 1.0
     note: >-
       The 61814-2RS1's rings and balls with non-contact RZ seals: the seal drag of
-      the 2RS1 is gone and the limiting speed is the shielded value.  Not bench-validated.
+      the 2RS1 is gone and the limiting speed is the shielded value.  RZ seals are
+      non-contact: the loss model takes no seal drag (seals: shields), the property
+      that matters for the losses.  SKF lists no metal-shielded 61814 (no -2Z), so
+      this is the card for a "ZZ" 61814 too.  Not bench-validated.
   61810-2Z:
     description: "SKF 61810-2Z (6810ZZ) — deep groove, series 618, metal shields both sides (CIANO42 150_30, production BOM '6810 ZZ' 2026-10-28)"
     type: deep_groove

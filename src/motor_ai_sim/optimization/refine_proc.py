@@ -127,10 +127,15 @@ def _coil_fit(geo: Dict[str, float]) -> tuple:
     return n_fit, nw
 
 
-def _eff_mesh_mm(geo, mesh_size_mm, min_size_mm, hi_fidelity):
-    """The iron mesh size the solver refines a request to (its own ``mesh_feature_floor_mm`` rule)."""
+def _eff_mesh_mm(base_geo, overrides, mesh_size_mm, min_size_mm, hi_fidelity):
+    """The iron mesh size the solver refines a request to.  The solver first merges the request's
+    override into the config geometry with ITS OWN ``merge_geo_override`` (which recomputes the derived
+    fields - slot_width, radii, angles - from the primaries) and only then applies
+    ``mesh_feature_floor_mm``; the same two steps here, so the recorded value is the solver's."""
     try:
         from motor_ai_sim.simulation.fem_solver_2d import mesh_feature_floor_mm
+        from motor_ai_sim.simulation.geometry_2d import merge_geo_override
+        geo = merge_geo_override(dict(base_geo or {}), dict(overrides or {}))
         floor = mesh_feature_floor_mm(geo, min_size_mm, hi_fidelity)
         return float(min(float(mesh_size_mm), floor)) if floor is not None else float(mesh_size_mm)
     except Exception:                                   # noqa: BLE001
@@ -755,7 +760,7 @@ def run_one(overrides: Dict[str, float], current_a: float, steps: int,
             "n_sectors": int(_ns), "mesh_size_mm": float(mesh_size_mm),
             # The mesh and magnet temperature the solve USED, from the solver's own helpers (the
             # solve does not return them): the iron mesh it refines to, the resolved temperature.
-            "mesh_size_effective_mm": _eff_mesh_mm(geo, mesh_size_mm, min_size_mm, hi_fidelity),
+            "mesh_size_effective_mm": _eff_mesh_mm(cfg.get("geometry"), overrides, mesh_size_mm, min_size_mm, hi_fidelity),
             "magnet_temp_c_effective": _eff_magnet_temp_c(magnet_temp_c)}} if no_load else {}),
     }
 

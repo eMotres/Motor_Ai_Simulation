@@ -459,3 +459,26 @@ def test_min_cogging_needs_finite_positive_ranking_weights():
         with pytest.raises(ValidationError):
             _descent(objective="min_cogging", **bad)
     assert _descent(objective="min_cogging", w_eff=1.0, w_td=2.0).w_td == 2.0
+
+
+def test_the_identity_includes_the_implicit_default_sleeve_card_and_a_new_sleeve_changes_it(monkeypatch):
+    import motor_ai_sim.duty_results as dr
+    import motor_ai_sim.config as cfgm
+    import motor_ai_sim.materials as ml
+    monkeypatch.setattr(dr, "solver_stamp", lambda: {"code_version": "abc"})
+    asg = {"magnet": "N45SH", "stator_core": "STEEL"}
+    monkeypatch.setattr(cfgm, "get_material_assignments", lambda: dict(asg))
+    monkeypatch.setattr(ml, "DEFAULT_PART_MATERIAL", {"sleeve": "T800"})
+    cards = {"N45SH": {"br": 1.2}, "STEEL": {"mu": 5}, "T800": {"e": 100}, "CF2": {"e": 200}}
+
+    class _C:
+        def __init__(self, d):
+            self.__dict__.update(d)
+    monkeypatch.setattr(ml, "resolve_assigned", lambda part, name: _C(cards[name]))
+    base = O._cogging_identity()["materials"]
+    cards["T800"] = {"e": 101}                       # the IMPLICIT default sleeve card is edited
+    assert O._cogging_identity()["materials"] != base
+    cards["T800"] = {"e": 100}
+    assert O._cogging_identity()["materials"] == base
+    asg["sleeve"] = "CF2"                            # a sweep that introduces a sleeve
+    assert O._cogging_identity()["materials"] != base

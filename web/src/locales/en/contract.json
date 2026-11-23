@@ -30,8 +30,7 @@
     "confirmCustomer": "{name} becomes the scheme EVERY reader of the Contract section sees, customers included.",
     "confirmStaff": "{name} becomes the staff scheme: MOTRES staff only.",
     "audienceMismatch": "The file says it is for \"{marked}\", not \"{kind}\": it is not published. Set \"audience\" in the file.",
-    "confirmPublish": "Publish",
-    "fit": "Fit to screen"
+    "confirmPublish": "Publish"
   },
   "steps": {
     "title": "Project steps",

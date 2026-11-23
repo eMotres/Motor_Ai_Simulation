@@ -2,7 +2,8 @@
 // do not cross each other or run through a card, the labels of a pair apart.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { CARD_H, CARD_W, LABEL_STEP, crosses, placeNodes, polyline, route } from '../schemeLayout.ts';
+import { readFileSync } from 'node:fs';
+import { CARD_H, CARD_W, LABEL_STEP, crosses, extent, panelHeight, placeNodes, polyline, route } from '../schemeLayout.ts';
 
 const node = (id, col, row) => ({ id, label: id, col, row });
 const edge = (from, to, kind) => ({ from, to, kind, label: `${from}-${to}` });
@@ -85,4 +86,22 @@ test('many connectors between one pair (40, the validator maximum) route at once
   const { routed } = route({ nodes: [node('a', 0, 0), node('b', 1, 0)], edges });
   assert.equal(routed.length, 40);
   assert.ok(Date.now() - t0 < 2000, `took ${Date.now() - t0} ms`);
+});
+
+test('the panel is as tall as the drawing at its width: no tall empty area, still fits a phone', () => {
+  const { placed } = route(CHAIN);
+  const ext = extent(placed);
+  assert.ok(Math.abs(panelHeight(900, ext) - 900 * ext.h / ext.w) <= 1);   // the drawing's own aspect ratio
+  assert.equal(panelHeight(1300, ext), 560);                   // a wide page: capped, the drawing fills the height
+  assert.equal(panelHeight(340, ext), 160);                    // a phone: the minimum, the whole drawing scaled to fit
+  assert.equal(panelHeight(0, ext), 360);                      // not measured yet
+  assert.equal(panelHeight(5000, ext), 560);                   // capped
+});
+
+test('the scheme is a static figure: the wheel and drags never zoom or pan it', () => {
+  const src = readFileSync(new URL('../ContractScheme.tsx', import.meta.url), 'utf-8');
+  for (const prop of ['zoomOnScroll={false}', 'zoomOnPinch={false}', 'zoomOnDoubleClick={false}', 'panOnDrag={false}',
+                      'panOnScroll={false}', 'preventScrolling={false}', 'nodesDraggable={false}', 'elementsSelectable={false}']) {
+    assert.ok(src.includes(prop), prop);
+  }
 });

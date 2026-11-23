@@ -187,6 +187,13 @@ def get_catalog(authorization: Optional[str] = Header(default=None)):
         cat["by_diameter"] = {d: [i for i in ids
                                   if any(m["id"] == i for m in cat["motors"])]
                               for d, ids in cat["by_diameter"].items()}
+    else:
+        # the LISTING leaves an archived configuration's card out for admins too (configuration archive, 2026-11-22); an
+        # admin's direct card reads (load, passport) still find it
+        from motor_ai_sim import motor_access as _ma
+        cat["motors"] = _ma._drop_archived_cards(cat.get("motors", []), admin=True)
+        cat["by_diameter"] = {d: [i for i in ids if any(m["id"] == i for m in cat["motors"])]
+                              for d, ids in cat["by_diameter"].items()}
     return cat
 
 
@@ -1110,7 +1117,9 @@ def _visible_context(ctx: Dict[str, Any], acc: dict) -> Dict[str, Any]:
         cfg = str(pr.get("config") or "")
         try:
             row = info.get(cfg)
-            if isinstance(row, (list, tuple)) and len(row) == 4:
+            if acc.get("is_admin"):
+                ok = True                  # an admin opens every preset, an archived configuration's too (config archive, 2026-11-22)
+            elif isinstance(row, (list, tuple)) and len(row) == 4:
                 ok = _ma.may_see_config_file(acc, str(row[0]), str(row[1]), Path(str(row[2])), layer=row[3])
             else:
                 ok = bool(cfg) and _ma.config_allowed(acc, str(pr.get("die") or ""), cfg)

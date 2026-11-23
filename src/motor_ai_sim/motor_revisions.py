@@ -447,7 +447,10 @@ def new_revision(lineage_id: str, *, reason: str, who: dict, actor: str, new_die
     if not reason:
         raise HTTPException(422, detail="say what changed and why - the reason is required for a new revision")
     from motor_ai_sim.routes import family
-    with _lock():
+    from motor_ai_sim import config_archive as CA
+    # lifecycle BEFORE revisions, the one order (round 4 of #820): the copy below admits through auto-link, which takes the
+    # lifecycle lock, and a shared configuration rename holds lifecycle while it rewrites revisions.json
+    with CA.lifecycle_lock(), _lock():
         lin = get_lineage(lineage_id)
         if lin is None:
             raise HTTPException(404, detail="motor lineage not found")

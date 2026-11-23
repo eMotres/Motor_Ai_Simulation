@@ -555,6 +555,11 @@ def create_project_for(user: dict, body: dict, *, audit_details: dict | None = N
     """The work of ``POST /api/projects`` for a resolved caller (the web session, or an MCP agent acting for its owner -
     ``spec_order.create_order``): the stored project record.  Raises ``HTTPException`` (428 agreement, 429 limit, 422, 409)."""
     staff = access.is_engineer(user)
+    from motor_ai_sim.development import project_type as PT
+    try:  # the project type: staff choose it here (a customer's project is a motor project; controllers are internal)
+        kind = PT.parse(body.get(PT.KEY)) if staff and not auto_named else None
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
     if staff and auto_named:
         # the assistant creates the project for staff too: named like a customer's, then from its specification
         body = {"title": self_service.NEW_PROJECT_TITLE, "customer_org": body.get("customer_org")}
@@ -584,6 +589,8 @@ def create_project_for(user: dict, body: dict, *, audit_details: dict | None = N
             if not staff or auto_named:
                 project["auto_title"] = True
                 project["owner_engineer"] = ""           # nobody is in charge yet; Motres staff see every project and pick it up
+            if kind:
+                PT.apply(project, kind)                 # a motor project carries no key: byte-identical to before
             store.create_project(project)
             break
         except FileExistsError:
@@ -596,7 +603,8 @@ def create_project_for(user: dict, body: dict, *, audit_details: dict | None = N
     store.save_json(project_id, "draft.json", {"draft": {"schema_version": 2, "fields": {}, "mission_profile": [], "mission_profile_status": "missing", "production": {}, "provenance": {}}, "schema_version": 2, "revision": 0, "version": None, "updated_at": project["created_at"]})
     # the audit row is what the owner's daily report lists ("project created by the customer")
     store.append_audit(project_id, _email(user), "create", "project", project_id,
-                       ({} if staff else {"self_service": True}) | dict(audit_details or {}))
+                       ({} if staff else {"self_service": True}) | dict(audit_details or {})
+                       | ({PT.KEY: PT.CONTROLLER} if PT.of(project) == PT.CONTROLLER else {}))
     _notify_staff("New customer project", project_id, user)
     return project
 
@@ -615,9 +623,21 @@ async def update_project(request: Request, project_id: str):
     body = await request.json()
     if not isinstance(body, dict):
         raise HTTPException(status_code=400, detail="Expected JSON object")
-    allowed = {"title", "customer_org", "owner_engineer", "status", "notes"}
+    allowed = {"title", "customer_org", "owner_engineer", "status", "notes", "project_type"}
     if set(body) - allowed:
         raise HTTPException(status_code=422, detail="Unsupported project fields")
+    from motor_ai_sim.development import project_type as PT
+    type_from = PT.of(project)
+    if PT.KEY in body:
+        # the type swaps the whole specification form: a global admin only (coordinator 2026-11-23)
+        if not PT.is_admin(user):
+            raise HTTPException(status_code=403, detail="Admin access required for the project type")
+        try:
+            kind = PT.parse(body.pop(PT.KEY)) or PT.MOTOR
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc))
+    else:
+        kind = None
     from motor_ai_sim.development import status_change_allowed
     if "status" in body and (not (access.is_engineer(user) or role in ("owner", "engineer"))
                              or not status_change_allowed(access.is_engineer(user), str(project.get("status") or "spec"),
@@ -640,11 +660,15 @@ async def update_project(request: Request, project_id: str):
         d.update(body)
         if "title" in body:
             d["auto_title"] = False                     # a name staff gave stays
+        if kind is not None:
+            PT.apply(d, kind)
         d["updated_at"] = models.now()
     from motor_ai_sim.development.motors import transaction
     with transaction():
         store.mutate_project(project_id, mutate)
-    store.append_audit(project_id, _email(user), "update", "project", project_id, {"fields": sorted(body)})
+    changed = sorted(body) + ([PT.KEY] if kind is not None else [])
+    store.append_audit(project_id, _email(user), "update", "project", project_id,
+                       {"fields": sorted(changed)} | ({PT.KEY: {"from": type_from, "to": kind}} if kind is not None else {}))
     return _summary(store.get_project(project_id), user)
 
 
@@ -759,6 +783,137 @@ async def apply_spec_migration(request: Request, project_id: str):
         store.append_audit(project_id, _email(user), "migrate", "spec_draft", "draft", {"from_schema_version": 1, "to_schema_version": 2, "revision": result["revision"]})
     response_draft = result["draft"] if access.is_engineer(user) else _customer_spec({"draft": result["draft"]})["draft"]
     return {"draft": response_draft, "revision": result["revision"], "schema_version": 2, "completeness": models.completeness(result["draft"])}
+
+
+def _controller_authors(doc: dict, user: dict) -> dict:
+    """Staff see who saved by address; every other member a display name only, as for the motor specification (``_author``).
+    The stored files keep the full attribution."""
+    if access.is_engineer(user):
+        return doc
+    out = copy.deepcopy(doc)
+    if out.get("updated_by"):
+        out["updated_by"] = _author(out["updated_by"])["author_display_name"]
+    for row in out.get("history") or []:
+        if isinstance(row, dict) and row.get("by"):
+            row["by"] = _author(row["by"])["author_display_name"]
+    return out
+
+
+def _controller_project(project: dict) -> None:
+    from motor_ai_sim.development import project_type as PT
+    if PT.of(project) != PT.CONTROLLER:
+        raise HTTPException(status_code=404, detail="This is not a controller project")
+
+
+@router.get("/{project_id}/controller-spec")
+def get_controller_spec(request: Request, project_id: str):
+    """The controller specification of a controller project, its schema and the last changes (newest first)."""
+    from motor_ai_sim.development import controller_spec as CS
+    user, project, _ = _readable_project(request, project_id)
+    _controller_project(project)
+    doc = store.load_json(project_id, CS.FILE, None) or CS.empty()
+    doc = {**doc, "fields": CS.stored(doc.get("fields"))}  # an earlier one-value answer reads into its column
+    path = store.path_for(project_id) / CS.HISTORY
+    history = []
+    if path.is_file():
+        for line in path.read_text(encoding="utf-8").splitlines()[-50:]:
+            try:
+                history.append(json.loads(line))
+            except ValueError:
+                continue
+    return _controller_authors({**doc, "schema": CS.schema(), "history": history[::-1], "can_edit": access.can_edit_spec(user, project),
+                                "can_edit_results": access.is_engineer(user)}, user)
+
+
+@router.put("/{project_id}/controller-spec")
+async def put_controller_spec(request: Request, project_id: str):
+    """Save the whole ``fields`` map at ``revision`` (409 when somebody saved in between); the change is recorded field by field.
+    The requirements (Specification tab) are changed by the project owner and admins, the model / measured results (Controller sim
+    tab) by MOTRES staff (owner 2026-11-23); a save that touches a side the caller may not change is refused whole (403)."""
+    from motor_ai_sim.development import controller_spec as CS
+    user, project, _ = _readable_project(request, project_id)
+    _controller_project(project)
+    may = {"requirements": access.can_edit_spec(user, project), "results": access.is_engineer(user)}
+    if not any(may.values()):
+        raise HTTPException(status_code=403, detail="Only the project owner or an admin can edit the specification")
+    body = await request.json()
+    if not isinstance(body, dict) or set(body) - {"fields", "revision"}:
+        raise HTTPException(status_code=400, detail="Expected {fields, revision}")
+    try:
+        fields = CS.normalize(body.get("fields"))
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    expected = body.get("revision")
+    out: dict = {}
+
+    def edit(doc):
+        if not doc:
+            doc.update(CS.empty())
+        if not isinstance(expected, int) or isinstance(expected, bool) or expected != int(doc.get("revision") or 0):
+            raise HTTPException(status_code=409, detail={"message": "The controller specification changed; reload it",
+                                                          "revision": doc.get("revision") or 0})
+        before = CS.stored(doc.get("fields"))
+        out["changes"] = CS.changes(before, fields)
+        refused = sorted(side for side in CS.change_scope(before, fields) if not may[side])
+        if refused:
+            raise HTTPException(status_code=403, detail=("Only the project owner or an admin can change the requirements"
+                                                         if "requirements" in refused else
+                                                         "Only MOTRES engineers and admins enter model and measured results"))
+        if not out["changes"]:
+            return
+        doc.update(fields=fields, revision=int(doc.get("revision") or 0) + 1, updated_at=models.now(), updated_by=_email(user),
+                   schema_version=CS.schema()["schema_version"])
+    doc = store.mutate_json(project_id, CS.FILE, edit, default={})
+    if out["changes"]:
+        store.append_jsonl(project_id, CS.HISTORY, {"revision": doc["revision"], "at": doc["updated_at"], "by": _email(user),
+                                                    "changes": out["changes"]})
+        store.append_audit(project_id, _email(user), "update", "controller_spec", "controller_spec",
+                           {"revision": doc["revision"], "fields": [c["field"] for c in out["changes"]]})
+    # the normalized fields on EVERY answer, a no-op save too (its stored file may still hold an earlier shape; Astra on #834)
+    return _controller_authors({**doc, "fields": fields, "changed": [c["field"] for c in out["changes"]]}, user)
+
+
+@router.get("/{project_id}/controller-sim")
+def get_controller_sim(request: Request, project_id: str):
+    """The board revisions and test results of a controller project (Controller sim tab); every project member reads them."""
+    from motor_ai_sim.development import controller_sim as SIM
+    user, project, _ = _readable_project(request, project_id)
+    _controller_project(project)
+    doc = store.load_json(project_id, SIM.FILE, None) or SIM.empty()
+    return _controller_authors({**doc, "can_edit": access.is_engineer(user)}, user)
+
+
+@router.put("/{project_id}/controller-sim")
+async def put_controller_sim(request: Request, project_id: str):
+    """Save ``{revisions, tests, revision}`` (409 when stale); MOTRES staff only (global engineer / admin)."""
+    from motor_ai_sim.development import controller_sim as SIM
+    user, project, _ = _readable_project(request, project_id)
+    _controller_project(project)
+    if not access.is_engineer(user):
+        raise HTTPException(status_code=403, detail="Only MOTRES engineers and admins enter revisions and test results")
+    body = await request.json()
+    if not isinstance(body, dict) or "revision" not in body:
+        raise HTTPException(status_code=400, detail="Expected {revisions, tests, revision}")
+    expected = body.pop("revision")
+    try:
+        records = SIM.normalize(body)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    out: dict = {}
+
+    def edit(doc):
+        if not doc:
+            doc.update(SIM.empty())
+        if not isinstance(expected, int) or isinstance(expected, bool) or expected != int(doc.get("revision") or 0):
+            raise HTTPException(status_code=409, detail={"message": "The records changed; reload them", "revision": doc.get("revision") or 0})
+        out["changed"] = [k for k in ("revisions", "tests") if (doc.get(k) or []) != records[k]]
+        if out["changed"]:
+            doc.update(records, revision=int(doc.get("revision") or 0) + 1, updated_at=models.now(), updated_by=_email(user))
+    doc = store.mutate_json(project_id, SIM.FILE, edit, default={})
+    if out["changed"]:
+        store.append_audit(project_id, _email(user), "update", "controller_sim", "controller_sim",
+                           {"revision": doc["revision"], "parts": out["changed"]})
+    return _controller_authors({**doc, "can_edit": True, "changed": out["changed"]}, user)
 
 
 @router.put("/{project_id}/spec")

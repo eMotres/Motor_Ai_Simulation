@@ -37,22 +37,25 @@ export interface ContractView {
 /** One scheme: boxes on a 1000 x 420 grid and arrows between them.  Labels are either translation keys (the customer view, in the
  *  repository) or EN / ZH text pairs (the staff view, served from the private data checkout). */
 export type SchemeText = string | { en?: string; zh?: string };
-export interface SchemeNode { id: string; label: SchemeText; sub?: SchemeText; x: number; y: number; w?: number; h?: number }
+/** A box: on the grid by ``col`` / ``row`` (0-based); older files carry ``x`` / ``y`` instead, mapped to the grid.  ``w`` / ``h``
+ *  are kept for old files and ignored: every card has the same size. */
+export interface SchemeNode { id: string; label: SchemeText; sub?: SchemeText; col?: number; row?: number; x?: number; y?: number; w?: number; h?: number }
+/** A relation; the connector is routed automatically (``bend`` of old files is ignored). */
 export interface SchemeEdge { from: string; to: string; kind: 'money' | 'goods' | 'documents'; label?: SchemeText; bend?: number }
 export interface SchemeData { nodes: SchemeNode[]; edges: SchemeEdge[]; notes?: SchemeText[]; /** whom the file is for */ audience?: 'customer' | 'staff' }
 
 /** The customer view (task 2026-11-22): no factory name, no internal prices, no transfer price; the customer is the importer. */
 export const CUSTOMER_SCHEME: SchemeData = {
   nodes: [
-    { id: 'customer', label: 'scheme.customer', sub: 'scheme.customerSub', x: 30, y: 150, w: 250, h: 110 },
-    { id: 'motres', label: 'scheme.motres', sub: 'scheme.motresSub', x: 720, y: 20, w: 250, h: 110 },
-    { id: 'china', label: 'scheme.china', sub: 'scheme.chinaSub', x: 720, y: 280, w: 250, h: 110 },
+    { id: 'customer', label: 'scheme.customer', sub: 'scheme.customerSub', col: 0, row: 1 },
+    { id: 'motres', label: 'scheme.motres', sub: 'scheme.motresSub', col: 1, row: 0 },
+    { id: 'china', label: 'scheme.china', sub: 'scheme.chinaSub', col: 1, row: 2 },
   ],
   edges: [
-    { from: 'customer', to: 'motres', kind: 'money', label: 'scheme.money', bend: -40 },
-    { from: 'motres', to: 'customer', kind: 'documents', label: 'scheme.docsMotres', bend: -40 },
-    { from: 'china', to: 'customer', kind: 'goods', label: 'scheme.goods', bend: 40 },
-    { from: 'china', to: 'customer', kind: 'documents', label: 'scheme.docsChina', bend: 95 },
+    { from: 'customer', to: 'motres', kind: 'money', label: 'scheme.money' },
+    { from: 'motres', to: 'customer', kind: 'documents', label: 'scheme.docsMotres' },
+    { from: 'china', to: 'customer', kind: 'goods', label: 'scheme.goods' },
+    { from: 'china', to: 'customer', kind: 'documents', label: 'scheme.docsChina' },
   ],
   notes: ['scheme.noteImporter', 'scheme.noteSupport'],
 };

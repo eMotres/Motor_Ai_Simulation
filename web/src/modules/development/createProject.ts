@@ -1,12 +1,15 @@
+import { projectTypePayload, type ProjectType } from './projectType.ts';
+
 // Pure helpers of the "New project" dialog (owner 2026-10-30: any signed-in account may open its own project).
 
 /** What the create dialog posts: staff name the project and the customer organisation; a customer gives only (optionally) its
  *  company.  The id is never typed (owner 2026-11-11): the server generates it (from the title for staff), makes a customer the
  *  owner and ignores everything else. */
-export function createPayload(staff: boolean, v: { title: string; org: string; id: string }):
-  { id?: string; title?: string; customer_org: string } {
+export function createPayload(staff: boolean, v: { title: string; org: string; id: string; type?: ProjectType }):
+  { id?: string; title?: string; customer_org: string; project_type?: 'controller' } {
   const title = v.title.trim(); const customer_org = v.org.trim();
-  return staff ? { title, customer_org } : { customer_org };
+  // the project type (staff only): a motor project posts exactly what it posted before
+  return staff ? { title, customer_org, ...projectTypePayload(staff, v.type ?? 'motor') } : { customer_org };
 }
 
 /** May the dialog's Create button be pressed? */

@@ -409,6 +409,27 @@ def _foreign_dies(root: Path, manifest: Dict[str, Any], keep: set, names: set, *
     return closed | {d for d in names if d not in keep and d not in local}
 
 
+def _current_sheet_rows(root: Path, die: str, results: Dict[str, Any]) -> Dict[str, Any]:
+    """sheet_generation (owner 2026-11-23): for a die whose sheet was replaced on THIS host (its die.yaml is at generation > 1) the
+    merge keeps only the rows stamped with that die's current sheet - a row of an earlier sheet, or one without a stamp, never
+    becomes current here.  Generation 1: the rows as they come (unchanged)."""
+    from motor_ai_sim import sheet_generation as SG
+    try:
+        import yaml
+        doc = yaml.safe_load((root / "dies" / die / "die.yaml").read_text(encoding="utf-8")) or {}
+    except Exception:                                       # noqa: BLE001 - no local die record: nothing to compare with
+        return results
+    if SG.generation(doc) <= 1:
+        return results
+    out: Dict[str, Any] = {}
+    for cfg, duties in (results or {}).items():
+        for duty, kinds in (duties or {}).items():
+            for kind, row in (kinds or {}).items():
+                if SG.row_allowed(doc, row):
+                    out.setdefault(cfg, {}).setdefault(duty, {})[kind] = row
+    return out
+
+
 def merge_extracts(extracts: Dict[str, Any], previous: Dict[str, Any], root: Path, *, duty_store: Optional[Path] = None,
                    passport_store: Optional[Path] = None, mirrored: Any = (),
                    manifest: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
@@ -443,7 +464,7 @@ def merge_extracts(extracts: Dict[str, Any], previous: Dict[str, Any], root: Pat
                     CM._collect_fps(block.pop(die), orphan_fps)
         for die in duty_dies:
             d = dies[die]["duty"]
-            res[die] = d.get("results") or {}
+            res[die] = _current_sheet_rows(root, die, d.get("results") or {})
             hist[die] = d.get("history") or {}
         doc["results"], doc["history"] = res, hist
         doc.setdefault("version", 1)

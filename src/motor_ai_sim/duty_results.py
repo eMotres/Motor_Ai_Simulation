@@ -572,8 +572,29 @@ def designation_stamp(die: str) -> Optional[str]:
         return None
 
 
+def _sheet_gate(die: str, e: Dict[str, Any], sheet_ok: Optional[bool]) -> bool:
+    """sheet_generation (owner 2026-11-23): for a die whose sheet was replaced (generation > 1) a row is written only when it was
+    computed on the die's CURRENT sheet - the machine this solve request solved (``sheet_ok`` None), or a client save whose signed
+    block the caller verified (``sheet_ok`` True) - and is stamped with that sheet's hash.  A refusal is noted for the response
+    ("not saved"), never only logged.  Generation 1: nothing is asked and nothing is added (the row is as before)."""
+    from motor_ai_sim import sheet_generation as SG
+    try:
+        d = SG._die_doc(die)
+    except Exception:                                       # noqa: BLE001 - an unreadable die record: the earlier behaviour
+        return True
+    if SG.generation(d) <= 1:
+        return True
+    ok = bool(sheet_ok) if sheet_ok is not None else SG.live_on_current(die)
+    if not ok:
+        SG.note_refusal(SG.REFUSED_TEXT)
+        log.warning("duty_results: %s/%s refused - computed on an earlier sheet of the die", die, e.get("kind"))
+        return False
+    e["sheet_hash"] = SG.current_hash(d)
+    return True
+
+
 def record(die: str, cfg: str, duty: str, kind: str,
-           entry: Dict[str, Any]) -> bool:
+           entry: Dict[str, Any], *, sheet_ok: Optional[bool] = None) -> bool:
     """Park one compact result under (die, configuration, duty).
 
     Returns True when it landed on disk.  NEVER raises: the caller is the tail
@@ -598,6 +619,8 @@ def record(die: str, cfg: str, duty: str, kind: str,
                        .setdefault(str(duty), {}))
             e = dict(entry or {})
             e["kind"] = kind
+            if not _sheet_gate(str(die), e, sheet_ok):
+                return False
             e.setdefault("recorded_at", _now())
             _stamp = solver_stamp()
             if _stamp:
@@ -646,6 +669,8 @@ def record_alt_carrier(die: str, cfg: str, duty: str, kind: str,
                 return False
             e = _flat(dict(entry or {}))
             e["kind"] = kind
+            if not _sheet_gate(str(die), e, None):
+                return False
             e.setdefault("recorded_at", _now())
             if "designation" not in e:
                 e["designation"] = designation_stamp(die)
@@ -2242,7 +2267,7 @@ def note_em_run(sbres: Dict[str, Any]) -> bool:
 
 def note_em_pointer(die: str, cfg: str, duty: str,
                     saved_at: Optional[str] = None,
-                    build_sig: Optional[str] = None) -> bool:
+                    build_sig: Optional[str] = None, *, sheet_ok: Optional[bool] = None) -> bool:
     """Record WHERE the electromagnetic column comes from — never a copy of it.
 
     The duty's own ``result``/``summary`` in ``config/dies/<die>/<cfg>.yaml`` is
@@ -2252,7 +2277,7 @@ def note_em_pointer(die: str, cfg: str, duty: str,
     """
     return record(die, cfg, duty, "em",
                   {"source": "duty.result/summary in the configuration yaml",
-                   "saved_at": saved_at, "build_sig": build_sig})
+                   "saved_at": saved_at, "build_sig": build_sig}, sheet_ok=sheet_ok)
 
 
 def kinds_present(entry: Dict[str, Any]) -> List[str]:

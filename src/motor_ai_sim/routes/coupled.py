@@ -592,6 +592,12 @@ def _stored_warm_start(body: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         if not duty and ctx and (str(ctx[0]), str(ctx[1])) == (die, cfg):
             duty = str(ctx[2])
         rows = _dr.get(die, cfg) or {}
+        # sheet_generation (owner 2026-11-23): a stored state of an earlier sheet never seeds a run on the current one
+        from motor_ai_sim import sheet_generation as _sg
+        try:
+            _die_doc = _sg._die_doc(str(die))
+        except Exception:  # noqa: BLE001 - no die record to read: generation 1, every state as before
+            _die_doc = None
     except Exception:  # noqa: BLE001
         log.debug("coupled: stored warm start lookup failed", exc_info=True)
         return None
@@ -605,7 +611,8 @@ def _stored_warm_start(body: Dict[str, Any]) -> Optional[Dict[str, Any]]:
 
     def _usable(e: Any) -> bool:
         return (isinstance(e, dict) and e.get("converged") is True
-                and not e.get("runaway") and _num(e.get("coil_temp_c")) is not None)
+                and not e.get("runaway") and _num(e.get("coil_temp_c")) is not None
+                and _sg.row_allowed(_die_doc, e))
 
     cands = [(str(d), kinds["coupled"]) for d, kinds in rows.items()
              if isinstance(kinds, dict) and _usable(kinds.get("coupled"))]

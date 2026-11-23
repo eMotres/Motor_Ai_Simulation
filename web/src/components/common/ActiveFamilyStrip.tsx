@@ -516,6 +516,8 @@ const ActiveFamilyStrip: React.FC = () => {
           dutyBody.mesh = settings;
         } catch { /* settings block optional — the save itself must not fail */ }
         dutyBody.summary = s;
+        // the signed sheet of this run (sheet_generation): a die whose sheet was replaced saves only a run of its current sheet
+        if (s?.result_sheet) dutyBody.result_sheet = s.result_sheet;
       }
       // ── the duty's MATERIALS ────────────────────────────────────────────────
       // A separate dict on the duty entry, NOT part of the mesh/settings block:
@@ -690,6 +692,7 @@ const ActiveFamilyStrip: React.FC = () => {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ die: tDie, config: cfgName, duty: tDuty,
             drive, assignment_sig: dutyBody.assignment_sig,
+            ...(s?.result_sheet ? { result_sheet: s.result_sheet } : {}),
             result: { efficiency_pct: dutyEfficiencyPct(s, rotorW),
                       // the refined ripple when there is one (lib/rippleAccuracy)
                       ripple_pct: quotedRipple(s).value ?? s.T_ripple_pct,
@@ -711,9 +714,13 @@ const ActiveFamilyStrip: React.FC = () => {
                             kv_is_noload: vw.view_flags?.kv === 'no-load' ? 1 : 0 }
                         : {}) } }),
         });
+        let rrWhy = '';
+        if (!rr.ok) {           // say why (a 409 "computed on an earlier sheet ... reload and run again" names what to do)
+          try { const dj = (await rr.json()).detail; rrWhy = typeof dj === 'string' ? `: ${dj}` : ''; } catch { /* no body */ }
+        }
         extra += rr.ok
           ? (k3d ? ` + run results (3D ×${k3d.toFixed(3)})` : ' + run results')
-          : ' (result recording failed)';
+          : ` (result recording failed${rrWhy})`;
         // ── the WAVEFORMS ────────────────────────────────────────────────────
         // Stored so this run can be LOADED again instead of re-solved — twelve
         // minutes for a PWM point.  The per-element arrays no chart reads
@@ -731,7 +738,8 @@ const ActiveFamilyStrip: React.FC = () => {
               method: 'POST', headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({ die: tDie, config: cfgName, duty: tDuty,
                 drive, settings: dutyBody.mesh, summary: s,
-                assignment_sig: dutyBody.assignment_sig, payload }),
+                assignment_sig: dutyBody.assignment_sig, payload,
+                ...(s?.result_sheet ? { result_sheet: s.result_sheet } : {}) }),
             });
             if (!pr.ok) {
               let why = `HTTP ${pr.status}`;

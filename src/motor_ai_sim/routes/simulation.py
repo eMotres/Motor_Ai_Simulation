@@ -4845,6 +4845,29 @@ def typed_magnet_temp_refusal(magnet_temp_c: Any,
     return f"Magnet temperature {t} °C: {why}"
 
 
+def _with_result_sheet(fn):
+    """sheet_generation (owner 2026-11-23): every answer of the EM transient that carries a summary gets ``summary.result_sheet``
+    - the signed block of the sheet this answer was solved on (the live geometry with the request's own override; on a cache hit
+    the same, since the cache key holds the geometry).  A save of the result echoes it back; a die whose sheet was replaced takes
+    only a block of its current sheet.  Additive: the summary is otherwise untouched."""
+    import functools
+
+    @functools.wraps(fn)
+    def run(*args, **kwargs):
+        res = fn(*args, **kwargs)
+        try:
+            if isinstance(res, dict) and isinstance(res.get("summary"), dict):
+                from motor_ai_sim import sheet_generation as _SG
+                from motor_ai_sim.config import get_config as _gc
+                geo = dict((_gc() or {}).get("geometry") or {})
+                geo.update(_parse_geo_override(kwargs.get("geo")) or {})
+                res["summary"]["result_sheet"] = _SG.issue(geo, res.get("geo_fingerprint") or "")
+        except Exception:                       # noqa: BLE001 - no block is "no block" (refused only where it is asked)
+            log.debug("transient: no result_sheet block", exc_info=True)
+        return res
+    return run
+
+
 @router.get("/physics/fem_transient",
             dependencies=[Depends(_typed_magnet_temp_guard)])
 # Migration Stage 4: the ADMISSION point for the heaviest thing this server
@@ -4860,6 +4883,7 @@ def typed_magnet_temp_refusal(magnet_temp_c: Any,
               skip=lambda kw: bool(kw.get("ledger_probe") or kw.get("restore")),
               body_keys=("current_a", "rpm", "steps", "n_periods", "gamma_deg",
                          "drive", "n_sectors", "demag", "rotor_eddy"))
+@_with_result_sheet
 def get_fem_transient(
     n_steps_per_period: Optional[int] = None,  # FEM solves per electrical period;
                                           #   omitted = 72 with eddy on, 60 without

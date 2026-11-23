@@ -464,7 +464,7 @@ ROW_TEXT_KEYS = frozenset({
     "cooling_air_source", "torque_path", "inner_mode", "gap_side", "solve_to", "from_state", "stopped_by", "limiting_part",
     "part", "sf_min_part", "air_speed_source", "b_source", "bearing_temp_source", "coil_source", "magnet_source",
     "t_sink_source", "holder_open_fraction_source", "geometry_fingerprint", "geometry_fingerprint_v2", "geo_fingerprint",
-    "code_version", "build_sig", "warning_code", "cap_reason", "excited_by", "propeller_position", "slipstream_position",
+    "code_version", "build_sig", "sheet_hash", "warning_code", "cap_reason", "excited_by", "propeller_position", "slipstream_position",
     "commit", "version", "device", "package", "material", "unit", "units"})
 #: Objects whose children are all text-valued data (the em_run ``text`` block): their strings pass the same safe-token test.
 ROW_TEXT_PARENTS = frozenset({"text"})

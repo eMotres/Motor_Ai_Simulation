@@ -2097,6 +2097,9 @@ class DutySpec(BaseModel):
     # (lib/dutyMaterials.assignmentSignature), recorded so a stored run can be
     # flagged when the machine is re-assigned under it.
     assignment_sig: Optional[str] = None
+    # sheet_generation: the signed sheet block of the run being saved (the solve's summary issues it); asked only for a die whose
+    # sheet was replaced (generation > 1)
+    result_sheet: Optional[dict] = None
 
 
 def _validate_duty_cycle(block, duties, *, duty_name: Optional[str] = None) -> None:
@@ -2242,6 +2245,7 @@ class DutyResult(BaseModel):
     # excitation is recorded under `runs[<drive>]` and leaves them alone.
     drive: Optional[str] = None
     assignment_sig: Optional[str] = None
+    result_sheet: Optional[dict] = None   # sheet_generation: the signed sheet block of the run (die generation > 1 only)
 
 
 class DutyRunSave(BaseModel):
@@ -2257,12 +2261,23 @@ class DutyRunSave(BaseModel):
     payload: Optional[dict] = None       # the transient, heavy arrays stripped
     # A run whose own ring checks fail grossly is refused (409) unless the caller asks for it explicitly.
     allow_unverified: bool = False
+    result_sheet: Optional[dict] = None   # sheet_generation: the signed sheet block of the run (die generation > 1 only)
 
 
 class ConfigCreate(BaseModel):
     die: str
     name: str
     role: str = "motor"                  # informative: "motor" | "generator"
+
+
+def _sheet_check(die: str, block: Optional[dict]) -> None:
+    """sheet_generation: a result save for a die whose sheet was replaced must carry the signed block of a run on the CURRENT
+    sheet (409 otherwise, with the text the user reads).  A die at generation 1 asks nothing."""
+    from motor_ai_sim import sheet_generation as _SG
+    try:
+        _SG.check_save(die, block)
+    except _SG.EarlierSheet as exc:
+        raise HTTPException(409, detail=str(exc))
 
 
 class DutyCreate(BaseModel):
@@ -3658,6 +3673,8 @@ def _upsert_duty(req: DutyCreate, _w: dict, *, may_move: bool = True) -> dict:
     cfg = _check_name(req.config, "configuration")
     dname = _check_name(req.duty.name, "duty")
     _require_die_write(die, _w, cfg)
+    if req.duty.summary is not None:            # a computed state is being saved: it must be of the current sheet
+        _sheet_check(die, req.duty.result_sheet)
     p = _cfg_file(die, cfg)
     c = _load_yaml(p, "configuration")
     d = req.duty
@@ -4071,6 +4088,7 @@ def record_duty_result(req: DutyResult, _w: dict = Depends(require_catalog_write
     die = _check_name(req.die, "die")
     cfg = _check_name(req.config, "configuration")
     _require_die_write(die, _w, cfg)
+    _sheet_check(die, req.result_sheet)
     p = _cfg_file(die, cfg)
     c = _load_yaml(p, "configuration")
     found = next((x for x in (c.get("duties") or [])
@@ -4118,7 +4136,7 @@ def record_duty_result(req: DutyResult, _w: dict = Depends(require_catalog_write
         try:
             from motor_ai_sim import duty_results as _dr
             _dr.note_em_pointer(die, cfg, req.duty, res.get("recorded_at"),
-                                res.get("build_sig"))
+                                res.get("build_sig"), sheet_ok=True)   # the save's block was checked above
         except Exception:  # noqa: BLE001 — bookkeeping never fails a save
             log.debug("family: EM pointer not recorded for %s/%s/%s",
                       die, cfg, req.duty, exc_info=True)
@@ -4139,6 +4157,7 @@ def record_duty_run(req: DutyRunSave, _w: dict = Depends(require_catalog_write))
     die = _check_name(req.die, "die")
     cfg = _check_name(req.config, "configuration")
     _require_die_write(die, _w, cfg)
+    _sheet_check(die, req.result_sheet)
     drive = _run_drive(req.drive)
     p = _cfg_file(die, cfg)
     c = _load_yaml(p, "configuration")
@@ -8043,6 +8062,23 @@ class HistoryRestore(BaseModel):
     stamp: str                       # YYYYMMDD-HHMMSS of the snapshot
 
 
+def _history_sheet_check(die: str, config: Optional[str], snapshot: Path) -> None:
+    """sheet_generation: on a die whose sheet was replaced, a die snapshot would bring the earlier sheet back (that is the sheet
+    restore's own, locked route) and a configuration snapshot from before the replacement would bring its results back - both 409."""
+    from motor_ai_sim import sheet_generation as _SG
+    d = _load_yaml(_die_file(die), "die")
+    if _SG.generation(d) <= 1:
+        return
+    if config is None:
+        raise HTTPException(409, detail="the sheet of this die was replaced: an earlier die record is restored only through the "
+                                        "sheet restore, not from the history")
+    since = str(d.get("sheet_since") or "")
+    taken = datetime.fromtimestamp(snapshot.stat().st_mtime).isoformat(timespec="seconds")
+    if not since or taken < since[:19]:
+        raise HTTPException(409, detail="this snapshot is from before the sheet of the die was replaced (its results are of the "
+                                        "earlier sheet): restore a newer one, or run the points again")
+
+
 @router.post("/history/restore")
 def configuration_history_restore(req: HistoryRestore,
                                   authorization: Optional[str] = Header(None)):
@@ -8061,6 +8097,7 @@ def configuration_history_restore(req: HistoryRestore,
                             % (stem, req.stamp, len(cand)))
     d = _load_yaml(cand[0], "snapshot")
     dst = _die_file(req.die) if req.config is None else _cfg_file(req.die, req.config)
+    _history_sheet_check(req.die, req.config, cand[0])
     _save_yaml(dst, d)
     try:
         from motor_ai_sim.config import clear_config_cache

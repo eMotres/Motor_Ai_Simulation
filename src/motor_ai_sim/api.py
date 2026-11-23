@@ -540,6 +540,9 @@ app.add_middleware(_InflightMiddleware)
 # Idle-session context (owner 2026-10-20): which request is user activity, and X-Auth-Reason on an idle-closed token.
 from motor_ai_sim.session_activity import SessionContextMiddleware as _SessionContextMiddleware
 app.add_middleware(_SessionContextMiddleware)
+# sheet_generation (owner 2026-11-23): a result refused as "computed on an earlier sheet" is named in the answer (not_saved)
+from motor_ai_sim import sheet_generation as _sheet_generation
+_sheet_generation.install(app)
 
 
 # (There is no FEM worker pool to warm any more.  It existed to hide the

@@ -382,6 +382,7 @@ export interface TransientSummary {
   // another machine instead of being read as the current one.  Absent = a run
   // from before the stamp existed: unknown, and reported as unknown.
   _geoSig?:              string;
+  result_sheet?:         Record<string, unknown>;   // the signed sheet block of the run (sheet_generation)
   // WHICH RUN produced them — the payload's `computed_at` (user 2026-09-13).
   // `sim.lastSummary` and `sim.lastTransient` are written by two different
   // components, so "Save to duty" needs an identity, not a same-point guess,

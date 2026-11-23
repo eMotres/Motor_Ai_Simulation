@@ -11,7 +11,7 @@
     "cancel": "Cancel"
   },
   "spec": {
-    "tipEdit": "The controller specification of this project. Every number has three columns - requirement, model, measured - each with a source (a document, a study, a bench run). Save records what changed.",
+    "tipEdit": "The requirements to this controller. Every number has its requirement and its source; the model and measured results are entered in the Controller sim tab. Save records what changed.",
     "tipRead": "The controller specification of this project. Only the project owner and admins change it.",
     "revision": "Revision {n}",
     "revisionTip": "Last saved by {by}, {at}",
@@ -41,5 +41,46 @@
   },
   "col": {
     "state": "State"
+  },
+  "tabs": {
+    "controllerSim": "Controller sim"
+  },
+  "sim": {
+    "title": "Controller sim",
+    "tipEdit": "The results against the requirements: for every number and protection the requirement from the specification (read-only here), the model result and the measured value, each with its source. MOTRES engineers enter the results; a value that breaks its requirement is marked red.",
+    "tipRead": "The results against the requirements: the requirement from the specification, the model result and the measured value of every number and protection. MOTRES engineers enter the results.",
+    "requirementTip": "From the Specification tab, where the project owner and admins change it.",
+    "aboveMax": "Above the requirement: the requirement is a maximum of {requirement} {unit}.",
+    "belowMin": "Below the requirement: the requirement is a minimum of {requirement} {unit}.",
+    "noProtections": "No protection is named in the specification yet.",
+    "conflict": "Somebody saved the records in the meantime. Your rows are still here; reload to see the saved ones (your unsaved rows are then discarded).",
+    "revisions": "Board revisions",
+    "revisionsTip": "One row per board revision: its status (draft, frozen, released), its date and the document group in the Documents tab.",
+    "tests": "Test results",
+    "testsTip": "Each test as it arrives: date, board revision, the measured value, pass or fail against the specification, and where the record is.",
+    "pairedMotor": "Paired motor",
+    "pairedMotorTip": "The motor linked to this project in the catalog, else what the specification names.",
+    "standAlone": "Stand-alone",
+    "col": {
+      "rev": "Revision",
+      "status": "Status",
+      "date": "Date",
+      "documents": "Documents",
+      "note": "What changed",
+      "revision": "Board revision",
+      "name": "Test",
+      "value": "Measured",
+      "result": "Result",
+      "ref": "Record"
+    },
+    "status": {
+      "draft": "Draft",
+      "frozen": "Frozen",
+      "released": "Released"
+    },
+    "result": {
+      "pass": "Pass",
+      "fail": "Fail"
+    }
   }
 }

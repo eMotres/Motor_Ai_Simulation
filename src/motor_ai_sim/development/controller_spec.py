@@ -290,3 +290,20 @@ def changes(before: dict, after: dict) -> list[dict]:
                 row["columns"] = sorted(k for k in set(b) | set(a) if b.get(k) != a.get(k))
             out.append(row)
     return out
+
+
+def change_scope(change_list: list[dict]) -> set:
+    """Which side a save touches: ``requirements`` (the requirement column and every field without columns - the Specification
+    tab, edited by the project owner and admins) and / or ``results`` (the model and measured columns - the Controller sim tab,
+    edited by MOTRES staff; owner 2026-11-23)."""
+    known = fields()
+    out: set = set()
+    for ch in change_list:
+        if known[ch["field"]]["kind"] not in NUMERIC:
+            out.add("requirements")
+            continue
+        for key in ch.get("columns") or []:
+            parts = key.split(".")
+            col = next((p for p in parts if p in COLUMNS), None)
+            out.add("requirements" if col in (None, "requirement") else "results")
+    return out

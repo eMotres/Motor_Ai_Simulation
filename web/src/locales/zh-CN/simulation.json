@@ -267,5 +267,17 @@
   "coggingPpRankingTip": "仅用于排序，不是最终齿槽转矩值。最终值需要每个电周期不少于 120 步，且磁钢温度为 20 °C。",
   "coggingPpMissing": "该几何没有齿槽转矩峰峰值：其空载计算被拒绝或失败。负载数值不变。",
   "coggingPpMixed": "齿槽转矩峰峰值的测量设置不同（步数、磁钢温度、网格），不在彼此之间排序。",
-  "coggingPpBasis": "空载，磁钢满强度（未计入负载时的退磁）。"
+  "coggingPpBasis": "空载，磁钢满强度（未计入负载时的退磁）。",
+  "sweepFailGeometry": "几何被拒绝：{what}",
+  "sweepFailBound": "某个尺寸超出其界限",
+  "sweepFailOverlap": "{a}与{b}重叠",
+  "sweepFailOverlapSelf": "{a}相互重叠",
+  "sweepFailPart_magnet": "磁钢",
+  "sweepFailPart_coil": "线圈",
+  "sweepFailPart_rotor": "转子",
+  "sweepFailPart_shaft": "轴",
+  "sweepFailPart_stator": "定子",
+  "sweepFailPart_liner": "槽绝缘",
+  "sweepFailPart_sleeve": "护套",
+  "sweepFailSkipped": "已跳过，未求解"
 }

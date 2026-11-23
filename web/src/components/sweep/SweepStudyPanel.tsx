@@ -41,6 +41,7 @@ import {
 } from '../../lib/sweepRestore';
 import type { RestoreVerdict } from '../../lib/sweepRestore';
 import SavedSweeps from './SavedSweeps';
+import { groupFailures, geometryGroupText } from '../../lib/sweepFailures';
 import { coggingOf, coggingText, coggingMetrics, coggingTip } from '../../lib/coggingPp';
 
 const tx = nsT('simulation');
@@ -855,7 +856,7 @@ const SweepStudyPanel: React.FC = () => {
     const hint = reason === 'tdm_mesh_not_periodic'
       ? ' The magnet eddy-current method needs identical poles: Mesh tab -> Pole/slot mesh = Periodic, or turn Template iron on.'
       : '';
-    return { n: failed.length, total: pts.length, culprits, reason, full, hint };
+    return { n: failed.length, total: pts.length, culprits, reason, full, hint, groups: groupFailures(pts, tx) };
   }, [result]);
 
   // ── UNSETTLED EDDY TRANSIENT (user's 90-point sweep, 2026-09-07) ─────────
@@ -1420,30 +1421,34 @@ const SweepStudyPanel: React.FC = () => {
                       border: '1px solid var(--panel)', bgcolor: 'transparent' }} />
             )}
           </Box>
-          {buildFails && (
-            <Typography sx={{ fontSize: 11, color: '#fbbf24', mb: 0.5, lineHeight: 1.4 }}>
-              ⚠ {buildFails.n} of {buildFails.total} design{buildFails.n === 1 ? '' : 's'}{' '}
-              {/^timeout/i.test(buildFails.reason)
+          {buildFails && buildFails.groups.map(g => (
+            <Typography key={`${g.cls}|${g.key}`} sx={{ fontSize: 11, color: '#fbbf24', mb: 0.5, lineHeight: 1.4 }}>
+              ⚠ {g.n} of {buildFails.total} design{g.n === 1 ? '' : 's'}{' '}
+              {g.cls === 'geometry'
+                // The cause is NAMED, grouped by its class; the raw first reason (with the overlap pairs)
+                // stays in the tooltip.
+                ? <span title={g.full}>{`— ${geometryGroupText(g, tx)} — ${tx('sweepFailSkipped')}.`}</span>
+                : g.cls === 'timeout'
                 ? 'ran out of time — the eval budget was reached before the solve finished. '
                   + 'These settings (steps/period, demag, coupled eddy, mesh size) cost far more '
                   + 'per point than a plain sweep; lower them or expect long runs.'
-                : /non-physical/i.test(buildFails.reason)
+                : g.cls === 'nonphysical'
                   // The geometry built and solved fine — the RESULT was rejected
                   // (η = 0, absurd Nm/kg …). Blaming the build sent the user
                   // hunting a geometry problem when the operating point was the
                   // culprit (seen live: a generator sweep at γ≈0, i.e. the
                   // zero-torque angle — every point honestly measured η = 0).
-                  ? `solved but the result was rejected (${buildFails.reason}) — `
+                  ? `solved but the result was rejected (${g.reason}) — `
                     + 'skipped. The geometry is fine; check the operating point '
                     + '(γ near the zero-torque angle, current far off the machine) '
                     + 'or the mode (γ counts from the q-axis in BOTH modes — '
                     + 'generator adds its 180° internally).'
-                  : <span title={buildFails.full}>{`couldn’t be built${buildFails.reason ? ` (${buildFails.reason})` : ' (invalid geometry)'} — skipped.${buildFails.hint}`}</span>}
-              {buildFails.culprits.length
-                ? ` Always fails at: ${buildFails.culprits.join('; ')} — narrow that range.`
+                  : <span title={g.full}>{`couldn’t be built${g.reason ? ` (${g.reason})` : ' (invalid geometry)'} — skipped.${g.hint}`}</span>}
+              {g.cls !== 'geometry' && g.culprits
+                ? ` Always fails at: ${g.culprits} — narrow that range.`
                 : ''}
             </Typography>
-          )}
+          ))}
           {/* ONE LINE + tooltip (project rule: no text walls).  Hollow markers
               on the chart, ✗ in the table's `eddy` column, the number here. */}
           {unsettled && (

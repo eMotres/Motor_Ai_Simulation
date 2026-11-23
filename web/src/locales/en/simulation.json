@@ -267,5 +267,17 @@
   "coggingPpRankingTip": "Ranking only: not a final cogging value. A final value needs 120 or more steps per period at 20 C.",
   "coggingPpMissing": "No Cogging pp for this geometry: its no-load solve was refused or failed. The loaded values are unchanged.",
   "coggingPpMixed": "Cogging pp values were measured with different settings (steps, magnet temperature, mesh); they are not ranked against each other.",
-  "coggingPpBasis": "No-load, full-strength magnets (demagnetisation at load not applied)."
+  "coggingPpBasis": "No-load, full-strength magnets (demagnetisation at load not applied).",
+  "sweepFailGeometry": "geometry rejected: {what}",
+  "sweepFailBound": "a size does not fit its bound",
+  "sweepFailOverlap": "{a} overlap {b}",
+  "sweepFailOverlapSelf": "{a} overlap each other",
+  "sweepFailPart_magnet": "magnets",
+  "sweepFailPart_coil": "coils",
+  "sweepFailPart_rotor": "the rotor",
+  "sweepFailPart_shaft": "the shaft",
+  "sweepFailPart_stator": "the stator",
+  "sweepFailPart_liner": "the slot liner",
+  "sweepFailPart_sleeve": "the sleeve",
+  "sweepFailSkipped": "skipped, never solved"
 }

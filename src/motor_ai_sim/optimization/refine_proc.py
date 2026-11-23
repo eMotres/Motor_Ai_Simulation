@@ -143,7 +143,8 @@ def run_one(overrides: Dict[str, float], current_a: float, steps: int,
             magnet_temp_c: float | None = None,
             sampling_purpose: Literal["standard", "optimization", "cogging_quality"] =
             "optimization",
-            optimizer_candidate: bool = False) -> Dict[str, Any]:
+            optimizer_candidate: bool = False,
+            no_load: bool = False) -> Dict[str, Any]:
     """Run the sliding-band transient for one candidate and return mean
     performance metrics (torque, efficiency, ripple, losses, mass).
 
@@ -233,6 +234,8 @@ def run_one(overrides: Dict[str, float], current_a: float, steps: int,
     # window holds exactly ``steps`` frames.
     nper = max(1e-3, float(n_periods))
     nspp = max(4, int(round(int(steps) / nper)))
+    if no_load and abs(float(current_a)) > 0.0:
+        raise ValueError("no_load needs a zero current")
     # P2 "high-fidelity ripple" self-consistency — MIRRORS the Simulation route
     # (routes/simulation.py get_fem_transient): element_order=2 needs the merged
     # structured belt and current-drive magnetostatics, so coerce the incompatible
@@ -356,9 +359,11 @@ def run_one(overrides: Dict[str, float], current_a: float, steps: int,
         # (see routes/simulation.SimConfigPatch) — so a candidate falls back to
         # the sinusoidal current drive and SAYS SO in the log, rather than
         # inventing a waveform or failing the whole study.
-        **_excitation_args(_sim),
-        "v_phase_peak": float(_sim.get("v_phase_peak", 0.0) or 0.0),
-        "v_delta_deg": float(_sim.get("v_delta_deg", 0.0) or 0.0),
+        # NO-LOAD (opt-in, the sweep's "Cogging pp"): an UNEXCITED sinusoidal CURRENT
+        # drive whatever the config says - no block current, no applied voltage, no PWM.
+        **({"drive": "current"} if no_load else _excitation_args(_sim)),
+        "v_phase_peak": (0.0 if no_load else float(_sim.get("v_phase_peak", 0.0) or 0.0)),
+        "v_delta_deg": (0.0 if no_load else float(_sim.get("v_delta_deg", 0.0) or 0.0)),
         "demag": bool(_demag),   # per-element irreversible demag (doubles the frames)
         "component_mesh": json.dumps(cfg.get("mesh", {}).get("component_mesh") or {}),
         "sliding_band": True, "fresh": True, "geo": json.dumps(overrides),
@@ -712,6 +717,18 @@ def run_one(overrides: Dict[str, float], current_a: float, steps: int,
         "daxis_policy": d.get("daxis_policy"),
         "psi_pm_probe_skipped": bool((d.get("summary") or {})
                                      .get("psi_pm_probe_skipped", False)),
+        # What a no-load run REALLY solved (the solver may snap the steps); absent otherwise,
+        # so every loaded point's payload is what it always was.
+        **({"no_load_provenance": {
+            "drive": "current", "current_a": 0.0,
+            "n_steps_reported": int(d.get("n_steps") or 0),
+            "n_periods": float(nper),
+            "steps_per_period_effective": (int(round(int(d.get("n_steps") or 0) / nper))
+                                           if int(d.get("n_steps") or 0) > 0 else None),
+            "rotor_eddy": bool(rotor_eddy), "demag": bool(_demag),
+            "eddy": bool(_sim.get("eddy", False)),
+            "gap_layers_effective": d.get("gap_layers_effective"),
+            "n_sectors": int(_ns), "mesh_size_mm": float(mesh_size_mm)}} if no_load else {}),
     }
 
 
@@ -744,7 +761,8 @@ if __name__ == "__main__":
                       magnet_temp_c=spec.get("magnet_temp_c"),
                       sampling_purpose=spec.get("sampling_purpose", "optimization"),
                       optimizer_candidate=bool(spec.get("optimizer_candidate",
-                                                        False)))
+                                                        False)),
+                      no_load=bool(spec.get("no_load", False)))
         sys.stdout.write("@@RESULT@@" + json.dumps({"ok": True, "res": res}))
     except Exception as e:  # noqa: BLE001
         sys.stdout.write("@@RESULT@@" + json.dumps(

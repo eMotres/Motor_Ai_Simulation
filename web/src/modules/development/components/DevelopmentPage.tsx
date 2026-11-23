@@ -718,8 +718,8 @@ export default function DevelopmentPage() {
     } catch (e) { if (isCurrentProject(id, token)) setError(e instanceof Error ? e.message : String(e)); }
     finally { if (isCurrentProject(id, token)) setBusy(false); }
   };
-  // who decides about the prices: the project owner and a global admin (the server enforces it; an engineer member sees no switch)
-  const canSetPrices = !!selected && (isAdmin || (selected.members ?? []).some((m) => m.email.toLowerCase() === (user?.email ?? '').toLowerCase() && m.role === 'owner'));
+  // who decides about the prices: the server says (MOTRES staff and the project owner), the page does not derive it
+  const canSetPrices = !!selected && selected.can_manage_prices === true;
   const switchPrices = async (member: string, value: boolean) => {
     if (!selected) return;
     setBusy(true); setError('');

@@ -79,6 +79,8 @@ def client(tmp_path, monkeypatch):
     app.include_router(R.router)
     app.include_router(QR.router)
     app.include_router(project_router)
+    from motor_ai_sim.development import project_contract as _PC
+    app.include_router(_PC.router)
     return TestClient(app)
 
 
@@ -656,3 +658,98 @@ def test_the_dry_list_reports_unreadable_inputs_instead_of_skipping(client, tmp_
     users_file.write_text("[1", encoding="utf-8")
     assert "users file" in dry.load_accounts(users_file)[1]
     assert dry.main(["--root", str(root), "--users", str(users_file)]) == 1
+
+
+# ── Astra round 2 (2026-11-23) ────────────────────────────────────────────────────────────────────────────────────────────────
+
+def test_a_flagged_project_engineer_cannot_make_himself_an_owner(client, monkeypatch):
+    """Old and new price grants are both true, yet entering owner authority needs can_manage_prices."""
+    from motor_ai_sim import users as U
+    from motor_ai_sim.development import motors as MO
+    monkeypatch.setattr(U, "get_user", lambda email: {"role": "user"})
+    monkeypatch.setattr(MO, "_sync_grants", lambda *a, **k: None)
+    assert _switch(client, "eng@example.test", True).status_code == 200
+    add = lambda body, who: client.post("/api/projects/alpha/members", json=body, headers=_h(who))        # noqa: E731
+    assert add({"email": "eng@example.test", "role": "owner"}, "member-eng").status_code == 403
+    assert add({"email": "new@example.test", "role": "owner"}, "member-eng").status_code == 403
+    role = {m["email"]: m["role"] for m in store.get_project("alpha")["members"]}
+    assert role["eng@example.test"] == "engineer" and "new@example.test" not in role
+    assert add({"email": "eng@example.test", "role": "owner"}, "owner").status_code == 200             # an owner may
+    assert add({"email": "owner2@example.test", "role": "engineer"}, "viewer").status_code in (403, 404)   # leaving owner is gated too
+
+
+def test_concurrent_member_changes_and_the_flag_switch_both_survive(client, monkeypatch):
+    """POST /members used to write a snapshot over a PATCH that ran meanwhile (grant and audit intent lost)."""
+    import threading
+    import time
+    from motor_ai_sim import users as U
+    from motor_ai_sim.development import motors as MO
+    monkeypatch.setattr(U, "get_user", lambda email: {"role": "user"})
+    inside, release = threading.Event(), threading.Event()
+
+    def slow_sync(*a, **k):                         # runs inside the membership change, before its write
+        inside.set()
+        time.sleep(0.4)
+
+    monkeypatch.setattr(MO, "_sync_grants", slow_sync)
+    out = {}
+    t1 = threading.Thread(target=lambda: out.update(post=_invite(client, "late@example.test", "customer", sees_prices=True)))
+    t1.start()
+    assert inside.wait(5)
+    out["patch"] = _switch(client, "viewer@example.test", True)                  # starts while the POST is mid-change
+    t1.join(10)
+    assert out["post"].status_code == 200 and out["patch"].status_code == 200
+    project = store.get_project("alpha")
+    flags = {m["email"]: m.get("sees_prices") for m in [*project["members"], *project.get("pending_invites", [])]}
+    assert flags.get("viewer@example.test") is True and flags.get("late@example.test") is True
+    pending = project.get("pending_audit", [])
+    done = {r["entity_id"] for r in _events()} | {e["entity_id"] for e in pending}
+    assert {"viewer@example.test", "late@example.test"} <= done
+
+
+def test_the_project_payload_names_who_manages_prices(client):
+    got = {who: client.get("/api/projects/alpha", headers=_h(who)).json().get("can_manage_prices") for who in
+           ("owner", "owner2", "admin", "staff", "member-eng", "viewer")}
+    assert got == {"owner": True, "owner2": True, "admin": True, "staff": True, "member-eng": False, "viewer": False}
+    assert [r["email"] for r in _switches(client, "staff")]                      # staff get the member list for the switches
+
+
+def _dry():
+    import importlib.util
+    import pathlib
+    spec = importlib.util.spec_from_file_location("dry_list3", pathlib.Path(__file__).resolve().parents[1] / "scripts" / "quote_price_visibility_dry_list.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def test_the_dry_list_does_not_count_accountless_members_as_previous_readers(client, tmp_path):
+    dry = _dry()
+    _complete(client)
+    _share(client)
+    accounts = {"admin@example.test": "admin", "customer@example.test": "user", "owner2@example.test": "user"}     # viewer / eng: no account
+    rows, problems = dry.scan(tmp_path / "projects", accounts)
+    row = [r for r in rows if r["project"] == "alpha"][0]
+    assert problems == []
+    assert row["lose_the_view"] == [] and set(row["members_without_account"]) == {"viewer@example.test", "eng@example.test"}
+
+
+def test_the_dry_list_gives_no_lists_for_an_unreadable_snapshot_and_reports_corrupt_projects(client, tmp_path):
+    dry = _dry()
+    _complete(client)
+    _share(client)
+    root = tmp_path / "projects"
+    sorted((root / "alpha" / "cost_estimate" / "snapshots").glob("*.json"))[-1].write_text("{x", encoding="utf-8")
+    (root / "gamma").mkdir()
+    (root / "gamma" / "project.json").write_text("{corrupt", encoding="utf-8")        # no share at all
+    rows, problems = dry.scan(root, {"admin@example.test": "admin"})
+    row = [r for r in rows if r["project"] == "alpha"][0]
+    assert row["snapshot_readable"] is False and row["lose_the_view"] is None and row["gain_the_view"] is None
+    assert {(p["project"], p["input"]) for p in problems} == {("alpha", "shared snapshot"), ("gamma", "project.json")}
+
+
+def test_the_contract_answers_a_hidden_and_an_unknown_project_alike(client):
+    store.mutate_project("alpha", lambda p: None)
+    hidden = client.get("/api/projects/alpha/contract", headers=_h("viewer"))
+    unknown = client.get("/api/projects/nope/contract", headers=_h("viewer"))
+    assert hidden.status_code == unknown.status_code == 404 and hidden.json() == unknown.json()

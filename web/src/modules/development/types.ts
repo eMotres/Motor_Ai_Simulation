@@ -3,7 +3,7 @@ export interface ProjectMember { email: string; role: 'customer' | 'engineer' | 
 export interface Completeness { filled?: number; required?: number; filled_required?: number; total_required?: number; answered?: number; unknown?: number; missing?: number; invalid?: number; /** the minimum needed to simulate the machine is given (server rule); Submit stays off while false */ simulation_ready?: boolean; simulation_missing?: Array<{ field: string; field_id: string; section: string; label: string; message: string }>; sections?: Record<string, { filled: number; required: number; total?: number; complete?: boolean }> }
 export interface ProjectSummary {
   id: string; title: string; customer_org: string; status: ProjectStatus; owner_engineer?: string;
-  members: ProjectMember[]; /** owner / admin only: members and pending invites with their price switch */ member_switches?: ProjectMember[]; linked_motors: Array<{ die: string; config: string }>;
+  members: ProjectMember[]; /** owner / admin only: members and pending invites with their price switch */ member_switches?: ProjectMember[]; /** server capability: staff or a project owner may change who sees the prices */ can_manage_prices?: boolean; linked_motors: Array<{ die: string; config: string }>;
   grant_removal_candidates?: Array<{ email: string; die: string; config: string; reason: string }>;
   can_edit?: boolean; can_edit_spec?: boolean; completeness?: Completeness; notes?: string;
   /** newest submitted specification version (derived by the server; `at` is an ISO UTC stamp); null = none submitted */

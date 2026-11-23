@@ -11,7 +11,7 @@
     "cancel": "Cancel"
   },
   "spec": {
-    "tipEdit": "The controller specification of this project. Every number has a status: requirement, model or measured, and a source (a document, a study, a bench run). Save records what changed.",
+    "tipEdit": "The controller specification of this project. Every number has three columns - requirement, model, measured - each with a source (a document, a study, a bench run). Save records what changed.",
     "tipRead": "The controller specification of this project. Only the project owner and admins change it.",
     "revision": "Revision {n}",
     "revisionTip": "Last saved by {by}, {at}",
@@ -24,8 +24,7 @@
     "notSet": "Not set",
     "threshold": "Threshold",
     "unit": "Unit",
-    "status": "Status",
-    "statusTip": "Requirement: what the controller must reach. Model: computed. Measured: from a test on a board.",
+    "statusTip": "Requirement: what the controller must reach. Model: the computed result. Measured: from a test on a board (later). Each column has its own source.",
     "source": "Source",
     "addRow": "Add row",
     "removeRow": "Remove row",

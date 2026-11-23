@@ -1,8 +1,9 @@
 """The specification of a CONTROLLER project (``project_type`` = controller; owner 2026-11-22, coordinator 2026-11-23).
 
 The fields are a data file, ``controller_schema.json`` (7 steps, EN + zh-CN), so the owner can change the list without code.
-Every numeric value carries its status: ``requirement`` / ``model`` / ``measured`` (on a controller most numbers start as model
-values and become measured ones) and an optional source reference.  A field marked ``per_build`` holds one answer per build
+Every numeric value (number, range, each protection threshold) holds up to THREE values side by side - ``requirement``,
+``model`` and ``measured`` - each with its own source (owner 2026-11-23: the requirements first, then the simulation results,
+measured later).  An answer stored with the earlier one-value-one-status shape is read into the column its status named.  A field marked ``per_build`` holds one answer per build
 (6S, 12S ...).
 
 Stored beside the project as ``controller_spec.json`` (``{schema_version, revision, updated_at, updated_by, fields}``); every
@@ -21,6 +22,7 @@ SCHEMA_PATH = Path(__file__).with_name("controller_schema.json")
 FILE = "controller_spec.json"
 HISTORY = "controller_spec_history.jsonl"
 STATUSES = ("requirement", "model", "measured")
+COLUMNS = STATUSES                                       # the three values of a numeric answer, in this order
 NUMERIC = ("number", "range", "thresholds")
 _TEXT_MAX = {"text": 200, "longtext": 4000}
 _REF_MAX = 200
@@ -110,10 +112,16 @@ def _value(field: dict, v: Any, path: str) -> Any:
             if opt not in v:
                 continue
             item = v[opt] if isinstance(v[opt], dict) else {}
-            if set(item) - {"threshold", "unit", "status"}:
-                raise ValueError(f"{path}.{opt}: threshold / unit / status expected")
-            out[opt] = {"threshold": _number(item.get("threshold"), f"{path}.{opt}.threshold"),
-                        "unit": _text(item.get("unit"), f"{path}.{opt}.unit", 20), "status": _status(item.get("status"), f"{path}.{opt}")}
+            p = f"{path}.{opt}"
+            if "values" in item:
+                if set(item) - {"unit", "values"}:
+                    raise ValueError(f"{p}: unit / values expected")
+                cols = item["values"]
+            else:                                        # the earlier shape: one threshold with its status
+                if set(item) - {"threshold", "unit", "status"}:
+                    raise ValueError(f"{p}: unit / values expected")
+                cols = {_status(item.get("status"), p) or "requirement": {"value": item.get("threshold")}}
+            out[opt] = {"unit": _text(item.get("unit"), f"{p}.unit", 20), "values": _columns(cols, p, lambda x, q: _number(x, q))}
         return out
     if kind == "rows":
         v = v or []
@@ -139,14 +147,41 @@ def _status(v: Any, path: str) -> str | None:
     return v
 
 
-def _answer(field: dict, a: Any, path: str) -> dict:
-    if not isinstance(a, dict) or set(a) - {"value", "status", "ref"}:
-        raise ValueError(f"{path}: value / status / ref expected")
-    out = {"value": _value(field, a.get("value"), path)}
-    if field["kind"] in ("number", "range"):           # the status of the value and where it comes from
-        out["status"] = _status(a.get("status"), path)
-        out["ref"] = _text(a.get("ref"), f"{path}.ref", _REF_MAX)
+def _columns(raw: Any, path: str, check) -> dict:
+    """``{column: {"value", "ref"}}`` for the columns that hold a value or a source; ``check`` validates one value."""
+    if not isinstance(raw, dict) or set(raw) - set(COLUMNS):
+        raise ValueError(f"{path}: columns {', '.join(COLUMNS)} expected")
+    out = {}
+    for col in COLUMNS:
+        cell = raw.get(col)
+        if cell is None:
+            continue
+        if not isinstance(cell, dict) or set(cell) - {"value", "ref"}:
+            raise ValueError(f"{path}.{col}: value / ref expected")
+        value = check(cell.get("value"), f"{path}.{col}")
+        ref = _text(cell.get("ref"), f"{path}.{col}.ref", _REF_MAX)
+        empty = value is None or (isinstance(value, dict) and all(x is None for x in value.values()))
+        if not empty or ref:
+            out[col] = {"value": None if empty else value, "ref": ref}
     return out
+
+
+def _answer(field: dict, a: Any, path: str) -> dict:
+    if field["kind"] in ("number", "range"):           # three values side by side, each with its source
+        if not isinstance(a, dict):
+            raise ValueError(f"{path}: values expected")
+        if "values" in a:
+            if set(a) - {"values"}:
+                raise ValueError(f"{path}: values expected")
+            cols = a["values"]
+        else:                                          # the earlier shape: one value, its status names the column
+            if set(a) - {"value", "status", "ref"}:
+                raise ValueError(f"{path}: values expected")
+            cols = {_status(a.get("status"), path) or "requirement": {"value": a.get("value"), "ref": a.get("ref")}}
+        return {"values": _columns(cols, path, lambda x, q: _value(field, x, q))}
+    if not isinstance(a, dict) or set(a) - {"value"}:
+        raise ValueError(f"{path}: value expected")
+    return {"value": _value(field, a.get("value"), path)}
 
 
 def normalize(raw: Any) -> dict:
@@ -170,10 +205,48 @@ def normalize(raw: Any) -> dict:
     return out
 
 
+def stored(raw: Any) -> dict:
+    """A stored ``fields`` map in today's shape (an earlier answer is read into its column); a value that no longer fits the
+    schema is left out of the answer rather than failing the read (the file itself is never rewritten by a read)."""
+    out = {}
+    for fid, a in (raw or {}).items() if isinstance(raw, dict) else ():
+        try:
+            out.update(normalize({fid: a}))
+        except ValueError:
+            continue
+    return out
+
+
+def _cells(field: dict, a: Any) -> dict:
+    """``{"<build.>column[.option]": cell}`` of a numeric answer, for naming the columns a save changed."""
+    out: dict = {}
+    if not isinstance(a, dict):
+        return out
+    parts = a["builds"].items() if "builds" in a and isinstance(a.get("builds"), dict) else [("", a)]
+    for build, ans in parts:
+        pre = f"{build}." if build else ""
+        if not isinstance(ans, dict):
+            continue
+        if field["kind"] == "thresholds":
+            for opt, item in (ans.get("value") or {}).items():
+                for col, cell in (item.get("values") or {}).items():
+                    out[f"{pre}{col}.{opt}"] = (cell, item.get("unit"))
+        else:
+            for col, cell in (ans.get("values") or {}).items():
+                out[f"{pre}{col}"] = cell
+    return out
+
+
 def changes(before: dict, after: dict) -> list[dict]:
-    """Field by field what a save changed (``before`` / ``after`` as stored; a removed field is ``None``)."""
+    """Field by field what a save changed (``before`` / ``after`` as stored; a removed field is ``None``).  A numeric field also
+    names the columns that changed (``columns``: ``requirement`` / ``model`` / ``measured``, with the build and the protection)."""
     out = []
-    for fid in [f for f in fields() if f in before or f in after]:
+    known = fields()
+    for fid in [f for f in known if f in before or f in after]:
         if before.get(fid) != after.get(fid):
-            out.append({"field": fid, "before": before.get(fid), "after": after.get(fid)})
+            row = {"field": fid, "before": before.get(fid), "after": after.get(fid)}
+            if known[fid]["kind"] in NUMERIC:
+                b, a = _cells(known[fid], before.get(fid)), _cells(known[fid], after.get(fid))
+                row["columns"] = sorted(k for k in set(b) | set(a) if b.get(k) != a.get(k))
+            out.append(row)
     return out

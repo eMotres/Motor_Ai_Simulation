@@ -1,5 +1,5 @@
 {
- "schema_version": 1,
+ "schema_version": 2,
  "kind": "controller",
  "title": {
   "en": "Controller specification",
@@ -71,6 +71,18 @@
       "zh-CN": "用途"
      },
      "kind": "longtext"
+    },
+    {
+     "id": "notes_identity",
+     "label": {
+      "en": "Notes",
+      "zh-CN": "备注"
+     },
+     "kind": "longtext",
+     "tip": {
+      "en": "Values and remarks of this step that have no field of their own.",
+      "zh-CN": "本步骤中没有单独字段的数值和说明。"
+     }
     }
    ]
   },
@@ -186,6 +198,18 @@
      },
      "kind": "number",
      "unit": "A rms"
+    },
+    {
+     "id": "notes_supply",
+     "label": {
+      "en": "Notes",
+      "zh-CN": "备注"
+     },
+     "kind": "longtext",
+     "tip": {
+      "en": "Values and remarks of this step that have no field of their own.",
+      "zh-CN": "本步骤中没有单独字段的数值和说明。"
+     }
     }
    ]
   },
@@ -269,6 +293,18 @@
      },
      "kind": "number",
      "unit": "%"
+    },
+    {
+     "id": "notes_output",
+     "label": {
+      "en": "Notes",
+      "zh-CN": "备注"
+     },
+     "kind": "longtext",
+     "tip": {
+      "en": "Values and remarks of this step that have no field of their own.",
+      "zh-CN": "本步骤中没有单独字段的数值和说明。"
+     }
     }
    ]
   },
@@ -308,7 +344,8 @@
         "zh-CN": "六步换相"
        }
       }
-     ]
+     ],
+     "per_build": true
     },
     {
      "id": "position_sensor",
@@ -339,7 +376,8 @@
         "zh-CN": "外置"
        }
       }
-     ]
+     ],
+     "per_build": true
     },
     {
      "id": "modes",
@@ -387,6 +425,18 @@
      },
      "kind": "number",
      "unit": "%"
+    },
+    {
+     "id": "notes_control",
+     "label": {
+      "en": "Notes",
+      "zh-CN": "备注"
+     },
+     "kind": "longtext",
+     "tip": {
+      "en": "Values and remarks of this step that have no field of their own.",
+      "zh-CN": "本步骤中没有单独字段的数值和说明。"
+     }
     }
    ]
   },
@@ -677,6 +727,18 @@
      },
      "kind": "number",
      "unit": ""
+    },
+    {
+     "id": "notes_interfaces",
+     "label": {
+      "en": "Notes",
+      "zh-CN": "备注"
+     },
+     "kind": "longtext",
+     "tip": {
+      "en": "Values and remarks of this step that have no field of their own.",
+      "zh-CN": "本步骤中没有单独字段的数值和说明。"
+     }
     }
    ]
   },
@@ -820,6 +882,18 @@
      },
      "kind": "number",
      "unit": ""
+    },
+    {
+     "id": "notes_hardware",
+     "label": {
+      "en": "Notes",
+      "zh-CN": "备注"
+     },
+     "kind": "longtext",
+     "tip": {
+      "en": "Values and remarks of this step that have no field of their own.",
+      "zh-CN": "本步骤中没有单独字段的数值和说明。"
+     }
     }
    ]
   },
@@ -978,6 +1052,18 @@
       "zh-CN": "EMC、安全和 RoHS 目标"
      },
      "kind": "longtext"
+    },
+    {
+     "id": "notes_verification",
+     "label": {
+      "en": "Notes",
+      "zh-CN": "备注"
+     },
+     "kind": "longtext",
+     "tip": {
+      "en": "Values and remarks of this step that have no field of their own.",
+      "zh-CN": "本步骤中没有单独字段的数值和说明。"
+     }
     }
    ]
   }

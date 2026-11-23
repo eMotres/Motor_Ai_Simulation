@@ -30,6 +30,9 @@
     "removeRow": "Remove row",
     "history": "Changes",
     "conflict": "Somebody saved the controller specification in the meantime. Your values are still in the form; reload to see the saved ones (your unsaved values are then discarded).",
-    "reload": "Reload"
+    "reload": "Reload",
+    "dropBuildTitle": "Remove the build and its values?",
+    "dropBuildBody": "These builds still hold values (number of fields): {builds}. Removing them deletes those values when you save.",
+    "dropBuild": "Remove"
   }
 }

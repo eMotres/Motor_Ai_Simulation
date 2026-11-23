@@ -2,14 +2,14 @@
 // its status (requirement / model / measured) and a source; per-build fields hold one answer per build.  Only the project owner
 // and admins edit (the server decides: `can_edit`); everybody else reads.  No assistant, no submit flow: internal for now.
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { Alert, Box, Button, Checkbox, CircularProgress, FormControlLabel, IconButton, InputAdornment, MenuItem, Paper, Stack, Tab, Tabs, TextField, Tooltip, Typography } from '@mui/material';
+import { Alert, Box, Button, Checkbox, CircularProgress, Dialog, DialogActions, DialogContent, DialogTitle, FormControlLabel, IconButton, InputAdornment, MenuItem, Paper, Stack, Tab, Tabs, TextField, Tooltip, Typography } from '@mui/material';
 import { NARROW } from '../../../lib/narrowLayout';
 import AddIcon from '@mui/icons-material/Add';
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
 import HelpTip from '../../../components/common/HelpTip';
 import { readView, writeView } from '../../../lib/viewMemory';
 import {
-  afterSave, answerOf, buildsOf, cellOf, COLUMNS, controllerSpecApi, hasColumns, isConflict, localized, parseNumber, payloadFields, withAnswer, withCell,
+  afterSave, answerOf, buildsOf, buildsWithAnswers, withBuilds, cellOf, COLUMNS, controllerSpecApi, hasColumns, isConflict, localized, parseNumber, payloadFields, withAnswer, withCell,
   type CtlAnswer, type CtlCell, type CtlField, type CtlSchema, type CtlSpec, type CtlStored, type CtlThreshold, type ValueStatus,
 } from '../controllerSpec';
 
@@ -24,6 +24,7 @@ export default function ControllerSpecForm({ projectId, lang, ct, memoryScope }:
   const [error, setError] = useState('');
   const [step, setStep] = useState(0);
   const [conflict, setConflict] = useState(false);
+  const [pendingBuilds, setPendingBuilds] = useState<{ next: string[]; losing: { build: string; answers: number }[] } | null>(null);
   const edits = useRef(0);                               // counts edits, so one typed while a save is in flight is not lost
 
   useEffect(() => {
@@ -44,7 +45,19 @@ export default function ControllerSpecForm({ projectId, lang, ct, memoryScope }:
   if (!spec || !schema) return <CircularProgress size={18} />;
   const canEdit = spec.can_edit;
   const section = schema.sections[Math.min(step, schema.sections.length - 1)];
-  const set = (field: CtlField, answer: CtlAnswer, build?: string) => { edits.current += 1; setFields((f) => withAnswer(f, field, answer, build)); setDirty(true); };
+  const set = (field: CtlField, answer: CtlAnswer, build?: string) => {
+    if (field.id === 'builds') {                         // a removed build with answers: ask before its answers go (Astra on #834)
+      const next = Array.isArray(answer.value) ? (answer.value as string[]) : [];
+      const losing = buildsWithAnswers(fields, schema, next.filter((b) => b.trim()));
+      if (losing.length) { setPendingBuilds({ next, losing }); return; }
+      edits.current += 1; setFields((f) => withBuilds(f, schema, next)); setDirty(true); return;
+    }
+    edits.current += 1; setFields((f) => withAnswer(f, field, answer, build)); setDirty(true);
+  };
+  const confirmBuilds = () => {
+    if (!pendingBuilds) return;
+    edits.current += 1; setFields((f) => withBuilds(f, schema, pendingBuilds.next)); setDirty(true); setPendingBuilds(null);
+  };
   const chooseStep = (i: number) => { setStep(i); if (memoryScope) writeView(memoryScope, i); };
   const save = async () => {
     setBusy(true); setError(''); setConflict(false);
@@ -99,6 +112,11 @@ export default function ControllerSpecForm({ projectId, lang, ct, memoryScope }:
         </Box>)}
       </Stack>
     </Paper>
+    <Dialog open={!!pendingBuilds} onClose={() => setPendingBuilds(null)} maxWidth="xs" fullWidth>
+      <DialogTitle sx={{ fontSize: 16 }}>{ct('spec.dropBuildTitle')}</DialogTitle>
+      <DialogContent>{ct('spec.dropBuildBody', { builds: (pendingBuilds?.losing ?? []).map((x) => `${x.build} (${x.answers})`).join(', ') })}</DialogContent>
+      <DialogActions><Button onClick={() => setPendingBuilds(null)}>{ct('type.cancel')}</Button><Button color="error" variant="contained" data-testid="controller-spec-drop-build" onClick={confirmBuilds}>{ct('spec.dropBuild')}</Button></DialogActions>
+    </Dialog>
     {spec.history.length > 0 && <Paper variant="outlined" sx={{ p: 1.5, mt: 1.5 }} data-testid="controller-spec-history">
       <Typography sx={{ fontSize: 13, fontWeight: 700, mb: 0.5 }}>{ct('spec.history')}</Typography>
       {spec.history.slice(0, 20).map((h) => <Box key={h.revision} sx={{ py: 0.4, borderBottom: '1px solid var(--line-soft)' }}>
@@ -172,7 +190,7 @@ function OtherInput({ field, value: v, lang, ct, disabled, onChange: put }: { fi
       return <Box sx={{ display: 'flex', flexWrap: 'wrap' }}>{opts.map((o) => <FormControlLabel key={o.value} control={<Checkbox size="small" disabled={disabled} checked={on.has(o.value)} onChange={(e) => { const next = new Set(on); if (e.target.checked) next.add(o.value); else next.delete(o.value); put(opts.map((x) => x.value).filter((x) => next.has(x))); }} />} label={<Typography sx={{ fontSize: 12 }}>{localized(o.label, lang)}</Typography>} />)}</Box>;
     }
     case 'list':
-      return <TextField size="small" fullWidth disabled={disabled} value={Array.isArray(v) ? (v as string[]).join(', ') : ''} onChange={(e) => put(e.target.value.split(',').map((s) => s.trim()).filter((s, i, all) => s || i === all.length - 1))} inputProps={{ 'aria-label': localized(field.label, lang) }} />;
+      return <ListBox value={Array.isArray(v) ? (v as string[]) : []} disabled={disabled} label={localized(field.label, lang)} onChange={put} />;
     case 'rows': {
       const rows = Array.isArray(v) ? v as Record<string, string>[] : [];
       const cols = field.columns ?? [];
@@ -181,6 +199,16 @@ function OtherInput({ field, value: v, lang, ct, disabled, onChange: put }: { fi
     default:
       return null;
   }
+}
+
+/** A comma-separated list (the builds), taken when the box is left or Enter is pressed - not on every key, so renaming "12S" does
+ *  not remove a build half-way (and ask about its values) on each keystroke. */
+function ListBox({ value, disabled, label, onChange }: { value: string[]; disabled: boolean; label: string; onChange: (v: string[]) => void }) {
+  const [text, setText] = useState(value.join(', '));
+  useEffect(() => { setText(value.join(', ')); }, [value.join('\u0001')]); // eslint-disable-line react-hooks/exhaustive-deps
+  const commit = () => { const next = text.split(',').map((x) => x.trim()).filter((x, i, all) => x && all.indexOf(x) === i); if (next.join('\u0001') !== value.join('\u0001')) onChange(next); setText(value.join(', ')); };   // the box shows the list as held (a cancelled removal reverts it)
+  return <TextField size="small" fullWidth disabled={disabled} value={text} onChange={(e) => setText(e.target.value)} onBlur={commit}
+    onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); commit(); } }} inputProps={{ 'aria-label': label }} />;
 }
 
 function NumberBox({ value, unit, disabled, label, onChange }: { value: unknown; unit?: string; disabled: boolean; label?: string; onChange: (n: number | null) => void }) {

@@ -52,7 +52,11 @@ export function buildsOf(fields: Record<string, CtlStored>): string[] {
 /** One answer: the field's own, or the one of `build` for a per-build field. */
 export function answerOf(fields: Record<string, CtlStored>, field: CtlField, build?: string): CtlAnswer {
   const stored = fields[field.id];
-  if (field.per_build) return (stored && 'builds' in stored ? stored.builds[build ?? ''] : undefined) ?? (hasColumns(field.kind) ? { values: {} } : { value: null });
+  if (field.per_build) {
+    // a single answer kept from before the field became per build (or before any build existed) reads for every build
+    if (stored && !('builds' in stored)) return stored;
+    return (stored && 'builds' in stored ? stored.builds[build ?? ''] : undefined) ?? (hasColumns(field.kind) ? { values: {} } : { value: null });
+  }
   return (stored && !('builds' in stored) ? stored : undefined) ?? (hasColumns(field.kind) ? { values: {} } : { value: null });
 }
 
@@ -60,21 +64,36 @@ export function answerOf(fields: Record<string, CtlStored>, field: CtlField, bui
 export function withAnswer(fields: Record<string, CtlStored>, field: CtlField, answer: CtlAnswer, build?: string): Record<string, CtlStored> {
   if (!field.per_build) return { ...fields, [field.id]: answer };
   const stored = fields[field.id];
-  const builds = stored && 'builds' in stored ? stored.builds : {};
+  // a single earlier answer becomes the answer of every build first, so editing one build keeps it for the others
+  const builds = stored && 'builds' in stored ? stored.builds
+    : stored ? Object.fromEntries(buildsOf(fields).map((b) => [b, structuredClone(stored)])) : {};
   return { ...fields, [field.id]: { builds: { ...builds, [build ?? '']: answer } } };
 }
 
-/** What is sent: per-build answers only for the builds that exist now (a removed build drops its answers). */
-export function payloadFields(fields: Record<string, CtlStored>, schema: CtlSchema): Record<string, CtlStored> {
-  const builds = new Set(buildsOf(fields));
-  const perBuild = new Set(schema.sections.flatMap((s) => s.fields).filter((f) => f.per_build).map((f) => f.id));
-  const out: Record<string, CtlStored> = {};
-  for (const [id, stored] of Object.entries(fields)) {
-    if (perBuild.has(id) && stored && 'builds' in stored) {
-      out[id] = { builds: Object.fromEntries(Object.entries(stored.builds).filter(([b]) => builds.has(b))) };
-    } else if (!perBuild.has(id)) out[id] = stored;
+/** The builds a new builds list removes that still hold answers, with how many answers each (the form asks before dropping them). */
+export function buildsWithAnswers(fields: Record<string, CtlStored>, schema: CtlSchema, nextBuilds: readonly string[]): { build: string; answers: number }[] {
+  const next = new Set(nextBuilds);
+  const perBuild = schema.sections.flatMap((s) => s.fields).filter((f) => f.per_build);
+  return buildsOf(fields).filter((b) => !next.has(b)).map((build) => ({
+    build, answers: perBuild.filter((f) => { const st = fields[f.id]; return st && 'builds' in st && build in st.builds; }).length,
+  })).filter((x) => x.answers > 0);
+}
+
+/** `fields` with the builds list replaced and the answers of the removed builds dropped (after the user said yes). */
+export function withBuilds(fields: Record<string, CtlStored>, schema: CtlSchema, nextBuilds: string[]): Record<string, CtlStored> {
+  const keep = new Set(nextBuilds);
+  const out: Record<string, CtlStored> = { ...fields, builds: { value: nextBuilds } };
+  for (const f of schema.sections.flatMap((s) => s.fields).filter((x) => x.per_build)) {
+    const st = fields[f.id];
+    if (st && 'builds' in st) out[f.id] = { builds: Object.fromEntries(Object.entries(st.builds).filter(([b]) => keep.has(b))) };
   }
   return out;
+}
+
+/** What is sent: every answer as the form holds it - nothing is dropped silently (Astra on #834).  The answers of a removed build
+ *  leave only through `withBuilds`, after the user confirmed; the server refuses an answer for a build not in the list. */
+export function payloadFields(fields: Record<string, CtlStored>, _schema: CtlSchema): Record<string, CtlStored> {
+  return { ...fields };
 }
 
 /** A number typed in a field: `null` for empty, the number, or `undefined` for text that is not a number (kept out). */

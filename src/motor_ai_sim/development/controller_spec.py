@@ -12,6 +12,7 @@ owner and global admins change it (``access.require_spec_editor``).  A motor pro
 no order flow, no prices, no MCP tool and no specification assistant read it."""
 from __future__ import annotations
 
+import copy
 import json
 import math
 from functools import lru_cache
@@ -83,14 +84,14 @@ def _value(field: dict, v: Any, path: str) -> Any:
             raise ValueError(f"{path}: min is above max")
         return out
     if kind == "choice":
-        if v in (None, ""):
+        if v is None or v == "":
             return None
-        if v not in _options(field):
+        if not isinstance(v, str) or v not in _options(field):
             raise ValueError(f"{path}: not one of the choices")
         return v
     if kind == "multi":
-        v = v or []
-        if not isinstance(v, list) or set(v) - _options(field):
+        v = [] if v is None else v
+        if not isinstance(v, list) or not all(isinstance(x, str) for x in v) or set(v) - _options(field):
             raise ValueError(f"{path}: not among the choices")
         return [o["value"] for o in field["options"] if o["value"] in v]          # schema order, no duplicates
     if kind == "list":
@@ -104,14 +105,16 @@ def _value(field: dict, v: Any, path: str) -> Any:
                 out.append(t)
         return out
     if kind == "thresholds":
-        v = v or {}
+        v = {} if v is None else v
         if not isinstance(v, dict) or set(v) - _options(field):
             raise ValueError(f"{path}: not among the choices")
         out = {}
         for opt in (o["value"] for o in field["options"]):
             if opt not in v:
                 continue
-            item = v[opt] if isinstance(v[opt], dict) else {}
+            item = v[opt]
+            if not isinstance(item, dict):                # a bare number is not silently emptied (Astra on #834)
+                raise ValueError(f"{path}.{opt}: unit / values expected")
             p = f"{path}.{opt}"
             if "values" in item:
                 if set(item) - {"unit", "values"}:
@@ -184,8 +187,25 @@ def _answer(field: dict, a: Any, path: str) -> dict:
     return {"value": _value(field, a.get("value"), path)}
 
 
+def _per_build(field: dict, a: Any, builds: list, fid: str) -> dict:
+    """A per-build answer.  ``{"builds": {...}}`` names only builds of the builds list (a 422 names any other).  A single answer
+    (stored before the field became per build, e.g. Control method) is the same answer for every build; with no builds yet it is
+    kept as it is and spread when builds appear - a valid earlier answer is never dropped (Astra on #834)."""
+    if isinstance(a, dict) and set(a) == {"builds"}:
+        answers = a["builds"]
+        if not isinstance(answers, dict) or len(answers) > _LIST_MAX:
+            raise ValueError(f"{fid}: one answer per build expected")
+        stray = [str(b) for b in answers if b not in builds]
+        if stray:
+            raise ValueError(f"{fid}: answer for build {', '.join(stray)}, which is not in the builds list")
+        return {"builds": {b: _answer(field, answers[b], f"{fid}.{b}") for b in builds if b in answers}}
+    single = _answer(field, a, fid)
+    return {"builds": {b: copy.deepcopy(single) for b in builds}} if builds else single
+
+
 def normalize(raw: Any) -> dict:
-    """The submitted ``fields`` map checked against the schema; ``ValueError`` names the first wrong value."""
+    """The submitted ``fields`` map checked against the schema; ``ValueError`` names the first wrong value.  The per-build
+    answers are checked against the builds list of the SAME map."""
     if not isinstance(raw, dict):
         raise ValueError("fields must be an object")
     known = fields()
@@ -193,25 +213,45 @@ def normalize(raw: Any) -> dict:
     if unknown:
         raise ValueError(f"unknown fields: {', '.join(unknown)}")
     out: dict = {}
+    if "builds" in raw:
+        out["builds"] = _answer(known["builds"], raw["builds"], "builds")
+    builds = list((out.get("builds") or {}).get("value") or [])
     for fid, a in raw.items():
+        if fid == "builds":
+            continue
         field = known[fid]
-        if field.get("per_build"):
-            builds = a.get("builds") if isinstance(a, dict) and set(a) == {"builds"} else None
-            if not isinstance(builds, dict) or len(builds) > _LIST_MAX:
-                raise ValueError(f"{fid}: one answer per build expected ({{\"builds\": {{...}}}})")
-            out[fid] = {"builds": {str(b)[:40]: _answer(field, x, f"{fid}.{b}") for b, x in builds.items()}}
-        else:
-            out[fid] = _answer(field, a, fid)
+        out[fid] = _per_build(field, a, builds, fid) if field.get("per_build") else _answer(field, a, fid)
     return out
 
 
 def stored(raw: Any) -> dict:
-    """A stored ``fields`` map in today's shape (an earlier answer is read into its column); a value that no longer fits the
-    schema is left out of the answer rather than failing the read (the file itself is never rewritten by a read)."""
-    out = {}
-    for fid, a in (raw or {}).items() if isinstance(raw, dict) else ():
+    """A stored ``fields`` map in today's shape: an earlier answer is read into its column, a single answer of a field that is per
+    build now is spread over the builds (``_per_build``).  Only a value that fits no shape at all is left out rather than failing
+    the read; the file itself is never rewritten by a read."""
+    if not isinstance(raw, dict):
+        return {}
+    try:
+        return normalize(raw)
+    except ValueError:
+        pass
+    known = fields()
+    builds_raw = raw.get("builds")
+    try:
+        builds = list((_answer(known["builds"], builds_raw, "builds") if builds_raw is not None else {}).get("value") or [])
+    except ValueError:
+        builds = []
+    out = {"builds": {"value": builds}} if builds_raw is not None and builds else {}
+    for fid, a in raw.items():
+        if fid == "builds" or fid not in known:
+            continue
+        field = known[fid]
         try:
-            out.update(normalize({fid: a}))
+            if field.get("per_build") and isinstance(a, dict) and set(a) == {"builds"} and isinstance(a["builds"], dict):
+                # answers of a build no longer in the list are kept for that build (the form asks before it drops them)
+                keep = [b for b in builds if b in a["builds"]] + [b for b in a["builds"] if b not in builds]
+                out[fid] = {"builds": {b: _answer(field, a["builds"][b], f"{fid}.{b}") for b in keep}}
+            else:
+                out[fid] = _per_build(field, a, builds, fid) if field.get("per_build") else _answer(field, a, fid)
         except ValueError:
             continue
     return out

@@ -849,7 +849,8 @@ async def put_controller_spec(request: Request, project_id: str):
                                                     "changes": out["changes"]})
         store.append_audit(project_id, _email(user), "update", "controller_spec", "controller_spec",
                            {"revision": doc["revision"], "fields": [c["field"] for c in out["changes"]]})
-    return _controller_authors({**doc, "changed": [c["field"] for c in out["changes"]]}, user)
+    # the normalized fields on EVERY answer, a no-op save too (its stored file may still hold an earlier shape; Astra on #834)
+    return _controller_authors({**doc, "fields": fields, "changed": [c["field"] for c in out["changes"]]}, user)
 
 
 @router.put("/{project_id}/spec")

@@ -105,10 +105,10 @@ def test_a_stale_revision_and_wrong_values_are_refused_and_nothing_is_written(en
     before = (env["root"] / "ctl" / CS.FILE).read_bytes()
     assert c.put("/api/projects/ctl/controller-spec", headers=H, json={"fields": {}, "revision": 0}).status_code == 409
     for bad in ({"nope": {"value": 1}}, {"pwm": {"value": "fast"}}, {"pwm": {"value": 1, "status": "guess"}},
-                {"method": {"value": "magic"}}, {"bus_voltage": {"value": {"min": 1}}},
+                {"method": {"value": "magic"}}, {"bus_voltage": {"value": {"min": 2, "max": 1}}},
                 {"ambient": {"value": {"min": 50, "max": -20}}}, {"modes": {"value": ["fly"]}},
                 {"pwm": {"values": {"guess": {"value": 1}}}}, {"pwm": {"values": {"model": {"value": 1, "unit": "x"}}}},
-                {"method": {"value": "foc_sensor"}}, {"name": {"value": "x", "status": "model"}}):
+                {"method": {"builds": {"6S": {"value": "foc_sensor"}}}}, {"name": {"value": "x", "status": "model"}}):
         r = c.put("/api/projects/ctl/controller-spec", headers=H, json={"fields": bad, "revision": 1})
         assert r.status_code == 422, (bad, r.text)
     assert (env["root"] / "ctl" / CS.FILE).read_bytes() == before
@@ -134,7 +134,7 @@ def test_a_motor_project_has_no_controller_specification(env):
 
 def test_an_answer_stored_with_one_value_and_a_status_reads_into_its_column(env):
     """Nothing is stored in production with the earlier shape (revision 0), but a file or a client that has it still works."""
-    old = {"pwm": {"value": 48, "status": "measured", "ref": "bench"}, "eff_target": {"value": 95},
+    old = {"builds": {"value": ["6S"]}, "pwm": {"value": 48, "status": "measured", "ref": "bench"}, "eff_target": {"value": 95},
            "bus_voltage": {"builds": {"6S": {"value": {"min": 18, "nom": None, "max": 25.2}, "status": "model", "ref": ""}}},
            "protections": {"value": {"stall": {"threshold": 2, "unit": "s", "status": "model"}}}}
     store.save_json("ctl", CS.FILE, {**CS.empty(), "revision": 1, "fields": old})
@@ -194,3 +194,123 @@ def test_the_mcp_order_tools_never_reach_a_controller_project(env):
         SO.order_status(member, "ctl")
     listed = [r.get("id") or r.get("project_id") for r in SO.order_status(member)["projects"]]
     assert "ctl" not in listed and "mot" in listed
+
+
+def test_an_earlier_single_control_method_is_kept_for_every_build_and_survives_an_unrelated_save(env):
+    """Astra on #834 (1): Control method / Position sensor were single answers before they became per build."""
+    c = env["c"]
+    store.save_json("ctl", CS.FILE, {**CS.empty(), "revision": 1, "fields": {
+        "builds": {"value": ["6S", "12S"]}, "method": {"value": "foc_sensor"}, "position_sensor": {"value": "onboard_magnetic"}}})
+    got = c.get("/api/projects/ctl/controller-spec", headers=H).json()
+    assert got["fields"]["method"] == {"builds": {"6S": {"value": "foc_sensor"}, "12S": {"value": "foc_sensor"}}}
+    f = dict(got["fields"], notes_control={"value": "12S without sensor later"})
+    r = c.put("/api/projects/ctl/controller-spec", headers=H, json={"fields": f, "revision": 1})
+    assert r.status_code == 200 and r.json()["changed"] == ["notes_control"]           # the spread alone is no change
+    saved = json.loads((env["root"] / "ctl" / CS.FILE).read_text())["fields"]
+    assert saved["position_sensor"] == {"builds": {"6S": {"value": "onboard_magnetic"}, "12S": {"value": "onboard_magnetic"}}}
+
+
+def test_an_earlier_single_answer_waits_for_the_builds_and_is_spread_when_they_appear(env):
+    c = env["c"]
+    store.save_json("ctl", CS.FILE, {**CS.empty(), "revision": 1, "fields": {"method": {"value": "six_step"}}})
+    got = c.get("/api/projects/ctl/controller-spec", headers=H).json()
+    assert got["fields"]["method"] == {"value": "six_step"}                                # no builds yet: kept as it is
+    f = dict(got["fields"], builds={"value": ["6S"]})
+    r = c.put("/api/projects/ctl/controller-spec", headers=H, json={"fields": f, "revision": 1})
+    assert r.status_code == 200 and r.json()["fields"]["method"] == {"builds": {"6S": {"value": "six_step"}}}
+
+
+def test_a_no_change_save_answers_the_normalized_fields_without_a_new_revision(env):
+    """Astra on #834 (2): a migration-only PUT returned the earlier shape and the form showed blanks."""
+    c = env["c"]
+    old = {"pwm": {"value": 48, "status": "model", "ref": "sim"},
+           "protections": {"value": {"stall": {"threshold": 2, "unit": "s", "status": "measured"}}}}
+    store.save_json("ctl", CS.FILE, {**CS.empty(), "revision": 3, "fields": old})
+    before = (env["root"] / "ctl" / CS.FILE).read_bytes()
+    r = c.put("/api/projects/ctl/controller-spec", headers=H, json={"fields": old, "revision": 3})
+    assert r.status_code == 200 and r.json()["revision"] == 3 and r.json()["changed"] == []
+    assert r.json()["fields"]["pwm"] == {"values": {"model": {"value": 48.0, "ref": "sim"}}}
+    assert r.json()["fields"]["protections"]["value"]["stall"] == {"unit": "s", "values": {"measured": {"value": 2.0, "ref": ""}}}
+    assert (env["root"] / "ctl" / CS.FILE).read_bytes() == before
+
+
+def test_an_answer_for_a_build_that_is_not_in_the_list_is_refused_by_name(env):
+    """Astra on #834 (3)."""
+    r = env["c"].put("/api/projects/ctl/controller-spec", headers=H, json={"fields": {
+        "builds": {"value": ["6S"]}, "bus_voltage": {"builds": {"6S": {"values": {}}, "12S": {"values": {"requirement": {"value": {"min": 36, "max": 50}}}}}}},
+        "revision": 0})
+    assert r.status_code == 422 and "12S" in r.json()["detail"]
+    assert not (env["root"] / "ctl" / CS.FILE).exists()
+
+
+@pytest.mark.parametrize("bad", [
+    {"builds": {"value": ["6S"]}, "method": {"builds": {"6S": {"value": []}}}},
+    {"builds": {"value": ["6S"]}, "position_sensor": {"builds": {"6S": {"value": {}}}}},
+    {"modes": {"value": [{}]}}, {"modes": {"value": [["current"]]}},
+    {"protections": {"value": {"stall": 12}}}, {"method": {"value": ["six_step"]}},
+])
+def test_malformed_values_are_refused_with_422_not_500_or_emptied(env, bad):
+    """Astra on #834 (4)."""
+    r = env["c"].put("/api/projects/ctl/controller-spec", headers=H, json={"fields": bad, "revision": 0})
+    assert r.status_code == 422, r.text
+
+
+
+def _saved_in_the_old_shape() -> dict:
+    """The shape of the specification saved in production on 2026-11-23 (revision 1, form of #833): every number / range with a
+    status and a source, per-build bus voltage, trip, currents and MOSFET, thresholds with a status, Control method and Position
+    sensor as single answers, builds 6S + 12S.  Values are synthetic."""
+    req = lambda v, ref="spec": {"value": v, "status": "requirement", "ref": ref}  # noqa: E731
+    f = {"name": {"value": "Board"}, "revision": {"value": "R08"}, "builds": {"value": ["6S", "12S"]},
+         "bus_voltage": {"builds": {"6S": req({"min": 18, "nom": 22.2, "max": 25.2}), "12S": req({"min": 36, "nom": 44.4, "max": 50.4})}},
+         "ov_trip": {"builds": {"6S": req(29), "12S": req(58)}},
+         "i_cont": {"builds": {"6S": req(33), "12S": req(21)}}, "i_peak": {"builds": {"6S": req(60), "12S": req(40)}},
+         "mosfet": {"builds": {"6S": {"value": "M-A"}, "12S": {"value": "M-B"}}},
+         "method": {"value": "foc_sensor"}, "position_sensor": {"value": "onboard_magnetic"},
+         "protections": {"value": {"over_voltage": {"threshold": 58, "unit": "V", "status": "requirement"},
+                                   "ot_board": {"threshold": 110, "unit": "C", "status": "requirement"}}},
+         "modes": {"value": ["current", "regen"]}, "input_protection": {"value": ["anti_spark"]},
+         "ambient": req({"min": -20, "nom": None, "max": 50})}
+    for fid in ("abs_max_voltage", "input_cap", "input_cap_esr", "input_cap_ripple", "phases", "t_peak", "pwm", "f_el_max",
+                "rpm_max", "eff_target", "ripple", "can_bitrate", "shunts", "height", "mass", "mount_gap", "tightening",
+                "quantity", "t_board_max", "altitude"):
+        f[fid] = req(7, f"doc {fid}")
+    for fid in ("purpose", "paired_motor", "mcu", "gate_driver", "board_size", "cooling", "fasteners", "pcb", "assembler", "ip",
+                "fw_owner", "toolchain", "compliance"):
+        f[fid] = {"value": f"text {fid}"}
+    for fid, v in (("can", "fd"), ("can_protocol", "dronecan"), ("can_termination", "on_board"), ("mounting", "integrated"),
+                   ("coating", "service_only")):
+        f[fid] = {"value": v}
+    f["tests"] = {"value": [{"name": "double-pulse", "pass": "<= 70 V"}]}
+    f["fw_deliverables"] = {"value": ["source", "binary"]}
+    return f
+
+
+def test_the_specification_saved_in_the_old_shape_carries_over_without_loss(env):
+    old = _saved_in_the_old_shape()
+    assert len(old) == 54
+    store.save_json("ctl", CS.FILE, {**CS.empty(), "schema_version": 1, "revision": 1, "fields": old})
+    c = env["c"]
+    f = c.get("/api/projects/ctl/controller-spec", headers=H).json()["fields"]
+    assert set(f) == set(old)                                                       # nothing dropped
+    assert f["method"]["builds"] == {"6S": {"value": "foc_sensor"}, "12S": {"value": "foc_sensor"}}
+    assert f["position_sensor"]["builds"] == {"6S": {"value": "onboard_magnetic"}, "12S": {"value": "onboard_magnetic"}}
+    assert f["bus_voltage"]["builds"]["12S"] == {"values": {"requirement": {"value": {"min": 36.0, "nom": 44.4, "max": 50.4}, "ref": "spec"}}}
+    assert f["i_cont"]["builds"]["6S"] == {"values": {"requirement": {"value": 33.0, "ref": "spec"}}}
+    assert f["mosfet"]["builds"] == {"6S": {"value": "M-A"}, "12S": {"value": "M-B"}}
+    assert f["pwm"] == {"values": {"requirement": {"value": 7.0, "ref": "doc pwm"}}}
+    assert f["protections"]["value"]["ot_board"] == {"unit": "C", "values": {"requirement": {"value": 110.0, "ref": ""}}}
+    assert f["ambient"] == {"values": {"requirement": {"value": {"min": -20.0, "nom": None, "max": 50.0}, "ref": "spec"}}}
+    assert f["tests"]["value"] == [{"name": "double-pulse", "pass": "<= 70 V"}]
+    # saving the form unchanged is no change; an unrelated edit keeps every migrated answer
+    same = c.put("/api/projects/ctl/controller-spec", headers=H, json={"fields": f, "revision": 1})
+    assert same.status_code == 200 and same.json()["revision"] == 1 and same.json()["changed"] == []
+    assert same.json()["fields"] == f
+    nxt = dict(f, notes_output={"value": "model results follow"})
+    r = c.put("/api/projects/ctl/controller-spec", headers=H, json={"fields": nxt, "revision": 1})
+    assert r.status_code == 200 and r.json()["changed"] == ["notes_output"]
+    assert {k: v for k, v in r.json()["fields"].items() if k != "notes_output"} == f
+    # and an old client that still sends the single shape gets the same spread answer
+    old_client = dict(old, notes_output={"value": "x"})
+    r = c.put("/api/projects/ctl/controller-spec", headers=H, json={"fields": old_client, "revision": 2})
+    assert r.status_code == 200 and r.json()["fields"]["method"] == f["method"]

@@ -18,12 +18,25 @@ test('answers per build and not, read and written without touching the others', 
   assert.deepEqual(answerOf(f, bus, '8S'), { values: {} });
 });
 
-test('a build removed from the list drops its answers from the save', () => {
+test('removing a build asks first: its answers are counted, and dropped only through withBuilds; the save sends everything', async () => {
+  const { buildsWithAnswers, withBuilds } = await import('../controllerSpec.ts');
   let f = { builds: { value: ['6S', '12S'] } };
-  f = withAnswer(f, bus, { value: { min: 1, nom: null, max: 2 } }, '6S');
-  f = withAnswer(f, bus, { value: { min: 3, nom: null, max: 4 } }, '12S');
-  f = { ...f, builds: { value: ['12S'] } };
-  assert.deepEqual(Object.keys(payloadFields(f, schema).bus_voltage.builds), ['12S']);
+  f = withAnswer(f, bus, { values: { requirement: { value: { min: 1, nom: null, max: 2 }, ref: '' } } }, '6S');
+  f = withAnswer(f, bus, { values: { requirement: { value: { min: 3, nom: null, max: 4 }, ref: '' } } }, '12S');
+  assert.deepEqual(buildsWithAnswers(f, schema, ['12S']), [{ build: '6S', answers: 1 }]);
+  assert.deepEqual(buildsWithAnswers(f, schema, ['6S', '12S', '24S']), []);
+  assert.deepEqual(Object.keys(payloadFields(f, schema).bus_voltage.builds), ['6S', '12S']);     // nothing dropped silently
+  const g = withBuilds(f, schema, ['12S']);
+  assert.deepEqual(g.builds.value, ['12S']);
+  assert.deepEqual(Object.keys(g.bus_voltage.builds), ['12S']);
+});
+
+test('a single earlier answer of a field that is per build now reads for every build and survives editing one build', () => {
+  const f = { builds: { value: ['6S', '12S'] }, bus_voltage: { values: { model: { value: { min: 1, nom: null, max: 2 }, ref: '' } } } };
+  assert.equal(answerOf(f, bus, '12S').values.model.value.max, 2);
+  const g = withAnswer(f, bus, { values: {} }, '6S');
+  assert.deepEqual(Object.keys(g.bus_voltage.builds), ['6S', '12S']);
+  assert.equal(g.bus_voltage.builds['12S'].values.model.value.max, 2);
 });
 
 test('numbers, labels and the kinds with a status', () => {

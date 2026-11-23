@@ -168,12 +168,18 @@ def clear_cache() -> None:
         _cache["at"], _cache["rows"] = None, None
 
 
+def _not_archived(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """A cache hit is re-filtered: a configuration archived after the cache was built leaves at once (owner 2026-11-22)."""
+    from motor_ai_sim import config_archive as CA
+    return [r for r in rows if not CA.is_archived(str(r.get("die") or ""), str(r.get("configuration") or ""))]
+
+
 def public_motors(now: Optional[float] = None) -> List[Dict[str, Any]]:
     """The public motors, cached for ``CACHE_TTL_S``.  A copy: the cache is never handed out."""
     t = time.monotonic() if now is None else now
     with _lock:
         if _cache["rows"] is not None and _cache["at"] is not None and t - _cache["at"] < CACHE_TTL_S:
-            return [{**r, "rated": dict(r["rated"])} for r in _cache["rows"]]
+            return [{**r, "rated": dict(r["rated"])} for r in _not_archived(_cache["rows"])]
     from contextlib import nullcontext
     from fastapi import Response
     from motor_ai_sim import support_catalog as SC

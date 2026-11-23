@@ -84,7 +84,11 @@ def access_mode() -> str:
 
 def may_use(user: dict, project: dict) -> bool:
     """Staff, and every member of the project: since the help chat and the specification assistant are ONE assistant (owner
-    2026-11-11) a customer in their own project gets the spec mode; ``DESIGN_AGENT_SPEC_ACCESS`` is kept only as the reported mode."""
+    2026-11-11) a customer in their own project gets the spec mode; ``DESIGN_AGENT_SPEC_ACCESS`` is kept only as the reported mode.
+    Never for a controller project: its specification is internal and not the motor form this assistant fills (coordinator 2026-11-23)."""
+    from motor_ai_sim.development import project_type as PT
+    if PT.of(project) == PT.CONTROLLER:
+        return False
     if access.is_engineer(user):
         return True
     return access.membership(str(user.get("email") or ""), project) is not None

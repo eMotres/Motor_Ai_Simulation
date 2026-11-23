@@ -27,3 +27,9 @@ export async function setProjectType<T>(projectId: string, type: ProjectType): P
   }
   return data as T;
 }
+
+/** The project list in two groups, Motors then Controllers (owner 2026-11-23), each keeping the order it was given in; an empty
+ *  group is left out. */
+export function groupByType<P extends object>(projects: readonly P[]): { type: ProjectType; projects: P[] }[] {
+  return PROJECT_TYPES.map((type) => ({ type, projects: projects.filter((p) => projectTypeOf(p) === type) })).filter((g) => g.projects.length > 0);
+}

@@ -21,6 +21,7 @@ import { filenameFromDisposition, formatBytes } from '../../lib/model3d';
 import Model3DPanel from './Model3DPanel';
 import { useRememberedView } from '../../lib/useRememberedView';
 import { bool, oneOf, readView, writeView } from '../../lib/viewMemory';
+import { openingSource, sourceScope, type ModelSource } from './projectModelSource';
 
 const API = ((import.meta.env.VITE_API_URL ?? 'http://localhost:8001') as string).replace(/\/$/, '');
 const enc = encodeURIComponent;
@@ -77,11 +78,14 @@ const UploadDialog: React.FC<{ open: boolean; busy: boolean; onClose: () => void
     );
   };
 
-const ProjectModel3D: React.FC<{ projectId: string; motors: ReadonlyArray<{ die: string; config: string }>; language?: string }> = ({ projectId, motors, language }) => {
+const ProjectModel3D: React.FC<{ projectId: string; motors: ReadonlyArray<{ die: string; config: string }>; language?: string; controller?: boolean }> = ({ projectId, motors, language, controller = false }) => {
   const { t, ready } = useTranslation('model3d');
-  // remembered across reloads (owner rule: every page remembers where the user was): the source, Show archived, and per project
-  // the revision picked; a picked revision that has gone (archived, not visible) falls back to the latest
-  const [source, setSource] = useRememberedView<'generated' | 'uploaded'>('project.model3d.source', 'generated', oneOf(['generated', 'uploaded'] as const));
+  // remembered across reloads (owner rule: every page remembers where the user was): per project the source chosen and the revision
+  // picked, and Show archived; a picked revision that has gone (archived, not visible) falls back to the latest.  With no choice made
+  // in this project the tab opens on Uploaded when an uploaded model exists (owner 2026-11-23); a controller project has no Generated.
+  const [chosen, setChosen] = useState<ModelSource | null>(() => readView(sourceScope(projectId), oneOf(['generated', 'uploaded'] as const)));
+  useEffect(() => { setChosen(readView(sourceScope(projectId), oneOf(['generated', 'uploaded'] as const))); }, [projectId]);
+  const setSource = (next: ModelSource) => { setChosen(next); writeView(sourceScope(projectId), next); };
   const [list, setList] = useState<ProjectModelList | null>(null);
   const [showArchived, setShowArchived] = useRememberedView<boolean>('project.model3d.showArchived', false, (raw) => bool(raw) ?? null);
   const pickKey = `project.model3d.pick.${projectId}`;
@@ -161,14 +165,17 @@ const ProjectModel3D: React.FC<{ projectId: string; motors: ReadonlyArray<{ die:
 
   if (!ready) return <CircularProgress size={18} />;
   const live = (list?.models ?? []).filter((m) => !m.archived);
+  const source: ModelSource = openingSource({ controller, remembered: chosen, liveUploads: live.length });
   const btn = { textTransform: 'none', fontSize: 12.5 } as const;
   return (
     <Box data-testid="project-model3d" sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.25, flexWrap: 'wrap' }}>
-        <ToggleButtonGroup size="small" exclusive value={source} onChange={(_e, v) => v && setSource(v)} aria-label={t('project.source')}>
-          <ToggleButton value="generated" sx={btn} data-testid="project-model-generated">{t('project.generated')}</ToggleButton>
-          <ToggleButton value="uploaded" sx={btn} data-testid="project-model-uploaded">{t('project.uploaded')}{live.length ? ` (${live.length})` : ''}</ToggleButton>
-        </ToggleButtonGroup>
+        {controller
+          ? <Typography sx={{ fontSize: 13, fontWeight: 700 }}>{t('project.uploaded')}{live.length ? ` (${live.length})` : ''}</Typography>
+          : <ToggleButtonGroup size="small" exclusive value={source} onChange={(_e, v) => v && setSource(v)} aria-label={t('project.source')}>
+              <ToggleButton value="uploaded" sx={btn} data-testid="project-model-uploaded">{t('project.uploaded')}{live.length ? ` (${live.length})` : ''}</ToggleButton>
+              <ToggleButton value="generated" sx={btn} data-testid="project-model-generated">{t('project.generated')}</ToggleButton>
+            </ToggleButtonGroup>}
         <HelpTip title={t(source === 'generated' ? 'project.generatedTip' : 'project.uploadedTip')} />
         {source === 'uploaded' && live.length > 1 && (
           <Select size="small" value={picked} onChange={(e) => setPicked(String(e.target.value))} sx={{ fontSize: 13, minWidth: 200 }} aria-label={t('project.revision')}>

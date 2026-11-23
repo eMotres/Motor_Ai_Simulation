@@ -1134,6 +1134,30 @@ def _refuse_revision_rename(die: str, cfg: str, glob_scope: bool) -> None:
                           "an admin renames it in the shared catalog")
 
 
+#: successor_die (owner 2026-11-23): the LINKS of a configuration - accounts, projects, their cost estimates, display state - move
+#: to the successor die's copy; its files, fields, results, cards, CAD, bench tests, production and revisions stay where they are
+LINK_ONLY_STEPS = (step_grants, step_projects, step_cost_estimates, step_display_state)
+
+
+def move_links(fam: Any, die: str, cfg: str, dst: str, *, src_dir: Path, dst_dir: Path, dry_run: bool = False,
+               actor: str = "") -> Dict[str, Any]:
+    """Move ONLY the links of ``die/cfg`` to ``dst/cfg`` (the successor's definition copy, which must exist), all or nothing.
+    Used by :mod:`motor_ai_sim.successor_die`; never moves a file or a result."""
+    ctx = Ctx(fam=fam, die=die, cfg=cfg, dst=dst, src_dir=src_dir, dst_dir=dst_dir, dry_run=dry_run, copy=False,
+              glob_scope=True, ws_roots=workspace_roots(fam, True), actor=actor)
+    try:
+        for step in LINK_ONLY_STEPS:
+            step(ctx)
+    except BaseException:
+        for undo in reversed(ctx.undo):
+            try:
+                undo()
+            except Exception:                               # noqa: BLE001
+                log.error("config links of '%s/%s': an undo step failed", die, cfg, exc_info=True)
+        raise
+    return {"changes": ctx.changes}
+
+
 def run(fam: Any, die: str, cfg: str, dst: str, *, src_dir: Path, dst_dir: Path, dry_run: bool,
         copy: bool, glob_scope: bool, actor: str = "", new_cfg: str = "",
         runs_fallback: Optional[Path] = None) -> Dict[str, Any]:

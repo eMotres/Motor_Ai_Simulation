@@ -590,6 +590,11 @@ def record(die: str, cfg: str, duty: str, kind: str,
             return False
         if not (die and cfg and duty) or kind not in KINDS:
             return False
+        from motor_ai_sim import successor_die as _sd
+        if _sd.frozen(str(die)):                            # a successor switch of this die is in progress: said in the answer
+            _sd.note_refusal(_sd.FROZEN_TEXT)
+            log.warning("duty_results: %s/%s/%s %s not recorded - successor switch in progress", die, cfg, duty, kind)
+            return False
         with _store_write_lock():
             doc = read_all()
             res = doc.setdefault("results", {})

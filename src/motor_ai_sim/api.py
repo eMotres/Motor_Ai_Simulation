@@ -540,6 +540,11 @@ app.add_middleware(_InflightMiddleware)
 # Idle-session context (owner 2026-10-20): which request is user activity, and X-Auth-Reason on an idle-closed token.
 from motor_ai_sim.session_activity import SessionContextMiddleware as _SessionContextMiddleware
 app.add_middleware(_SessionContextMiddleware)
+# successor_die (owner 2026-11-23): a result not recorded during a successor switch is named in the answer (not_saved)
+from motor_ai_sim import successor_die as _successor_die
+_successor_die.install(app)
+from motor_ai_sim.routes.die_successor import router as die_successor_router
+app.include_router(die_successor_router)    # /api/die-successor: a new sheet = a successor die, dry run first (admins)
 
 
 # (There is no FEM worker pool to warm any more.  It existed to hide the

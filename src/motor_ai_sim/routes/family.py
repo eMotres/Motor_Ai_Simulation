@@ -2097,6 +2097,9 @@ class DutySpec(BaseModel):
     # (lib/dutyMaterials.assignmentSignature), recorded so a stored run can be
     # flagged when the machine is re-assigned under it.
     assignment_sig: Optional[str] = None
+    # successor_die: the object-registry id of the die record the run was computed for (optional; 409 when the name now means
+    # another record).  Defence against accidents.
+    die_id: Optional[str] = None
 
 
 def _validate_duty_cycle(block, duties, *, duty_name: Optional[str] = None) -> None:
@@ -2242,6 +2245,7 @@ class DutyResult(BaseModel):
     # excitation is recorded under `runs[<drive>]` and leaves them alone.
     drive: Optional[str] = None
     assignment_sig: Optional[str] = None
+    die_id: Optional[str] = None          # successor_die: the registry id of the die record it was computed for (optional)
 
 
 class DutyRunSave(BaseModel):
@@ -2257,12 +2261,23 @@ class DutyRunSave(BaseModel):
     payload: Optional[dict] = None       # the transient, heavy arrays stripped
     # A run whose own ring checks fail grossly is refused (409) unless the caller asks for it explicitly.
     allow_unverified: bool = False
+    die_id: Optional[str] = None          # successor_die: the registry id of the die record it was computed for (optional)
 
 
 class ConfigCreate(BaseModel):
     die: str
     name: str
     role: str = "motor"                  # informative: "motor" | "generator"
+
+
+def _successor_check(die: str, die_id: Optional[str]) -> None:
+    """successor_die: a result save is refused while the die is being switched to its successor, and when the caller names the
+    die record it computed for (``die_id``) and the name now means another one (409, the text says what to do)."""
+    from motor_ai_sim import successor_die as _SD
+    try:
+        _SD.check_save(die, die_id)
+    except _SD.SaveRefused as exc:
+        raise HTTPException(409, detail=str(exc))
 
 
 class DutyCreate(BaseModel):
@@ -3658,6 +3673,8 @@ def _upsert_duty(req: DutyCreate, _w: dict, *, may_move: bool = True) -> dict:
     cfg = _check_name(req.config, "configuration")
     dname = _check_name(req.duty.name, "duty")
     _require_die_write(die, _w, cfg)
+    if req.duty.summary is not None:            # a computed state: not during a successor switch, not for another record
+        _successor_check(die, req.duty.die_id)
     p = _cfg_file(die, cfg)
     c = _load_yaml(p, "configuration")
     d = req.duty
@@ -4071,6 +4088,7 @@ def record_duty_result(req: DutyResult, _w: dict = Depends(require_catalog_write
     die = _check_name(req.die, "die")
     cfg = _check_name(req.config, "configuration")
     _require_die_write(die, _w, cfg)
+    _successor_check(die, req.die_id)
     p = _cfg_file(die, cfg)
     c = _load_yaml(p, "configuration")
     found = next((x for x in (c.get("duties") or [])
@@ -4139,6 +4157,7 @@ def record_duty_run(req: DutyRunSave, _w: dict = Depends(require_catalog_write))
     die = _check_name(req.die, "die")
     cfg = _check_name(req.config, "configuration")
     _require_die_write(die, _w, cfg)
+    _successor_check(die, req.die_id)
     drive = _run_drive(req.drive)
     p = _cfg_file(die, cfg)
     c = _load_yaml(p, "configuration")

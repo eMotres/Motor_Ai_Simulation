@@ -673,19 +673,47 @@ def drop_private_config_cards(cards: list, access: dict) -> list:
 
 
 def _drop_archived_cards(cards: list, *, admin: bool = False) -> list:
-    """The cards whose configuration is not archived.  A damaged archive store: no catalog card for a non-admin (fail closed),
-    every card for an admin (recovery)."""
+    """The cards whose configuration is not archived.  The archive is of the SHARED catalog only (round 3 of #820): a card is
+    dropped only when its die resolves, for this caller, to the shared layer - a workspace or published namesake keeps its
+    card.  A damaged archive store: no card of a shared die for a non-admin (fail closed), every card for an admin."""
     from motor_ai_sim import config_archive as _CA
     try:
         keys = _CA.archived_keys()
+        damaged = False
     except _CA.ArchiveUnavailable:
-        return cards if admin else [m for m in cards if not (m.get("die") or m.get("name"))]
-    if not keys:
+        if admin:
+            return cards
+        keys, damaged = frozenset(), True
+    if not keys and not damaged:
         return cards
-    names = {k.replace("/", " ", 1).casefold() for k in keys}
-    return [m for m in cards
-            if str(m.get("name") or "").strip().casefold() not in names
-            and not (m.get("die") and m.get("config") and f"{m.get('die')}/{m.get('config')}" in keys)]
+    layer: dict = {}
+
+    def shared(die: Optional[str]) -> bool:
+        if not die:
+            return False
+        if die not in layer:
+            layer[die] = _die_layer_of(str(die)) == "shared"
+        return layer[die]
+    index: dict = {}
+    if damaged:
+        try:
+            from motor_ai_sim.routes import catalog as _cat
+            index = _cat._machine_die_index()
+        except Exception:                       # noqa: BLE001 - cannot tie a card to a die: it names no shared die
+            index = {}
+    by_name = {k.replace("/", " ", 1).casefold(): k.partition("/")[0] for k in keys}
+    keep = []
+    for m in cards:
+        name = str(m.get("name") or "").strip().casefold()
+        if damaged:
+            if shared(m.get("die") or index.get(name)):
+                continue
+        elif name in by_name and shared(by_name[name]):
+            continue
+        elif m.get("die") and m.get("config") and f"{m.get('die')}/{m.get('config')}" in keys and shared(m.get("die")):
+            continue
+        keep.append(m)
+    return keep
 
 
 def may_see_config(access: dict, die: str, cfg: Optional[str]) -> bool:

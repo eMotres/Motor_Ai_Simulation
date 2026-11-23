@@ -642,6 +642,12 @@ def step_die_archive(ctx: Ctx) -> None:
 
 
 # ── configuration archive (US · structure, coordinator 2026-11-22): one additive step ──
+def step_config_archive_publish(ctx: Ctx) -> None:
+    """FIRST step: the archived configurations are archived under the new die name before its folder exists (#820 round 3)."""
+    from motor_ai_sim import config_archive as CA
+    CA.publish_step(ctx, ctx.old, ctx.new, blocked=RenameBlocked)
+
+
 def step_config_archive(ctx: Ctx) -> None:
     """The configuration archive (``<shared>/object_registry/config_archive.json``, keyed ``<die>/<config>``): an archived
     configuration stays archived, with its history, under the new die name."""
@@ -809,8 +815,9 @@ def step_manual(ctx: Ctx) -> None:
 LOCAL_STEPS = (step_folder, step_derived_from, step_fields, step_duty_results,
                step_context, step_workspace_memory, step_catalog_cards, step_die_archive)
 GLOBAL_STEPS = (step_grants, step_die_access, step_projects, step_production, step_motor_revisions, step_display_state, step_production_lifecycle, step_tombstone, step_object_registry, step_motor_tests, step_cad,
-                step_config_archive,   # configuration archive (coordinator 2026-11-22)
                 step_manual)
+#: configuration archive (coordinator 2026-11-22; round 3 of #820): the new name archived first, the old name dropped last
+ARCHIVE_STEPS = (step_config_archive_publish, step_config_archive)
 
 
 #: the shared-catalog stores that name a die: a WORKSPACE rename does not rewrite them, so it is refused while any names the die
@@ -860,9 +867,19 @@ def run(fam: Any, old: str, new: str, *, src_dir: Path, dst_dir: Path, dry_run: 
     if mv:
         raise RenameBlocked(f"'{old}' is being moved between the open and private data sets "
                             f"(move {mv.get('id') or '?'}); finish or cancel the move first")
+    from motor_ai_sim import config_archive as CA
+    with CA.transaction_lock(glob_scope):                    # identity checks, every step and the rollback (round 3 of #820)
+        return _run_locked(fam, old, new, src_dir=src_dir, dst_dir=dst_dir, dry_run=dry_run, glob_scope=glob_scope,
+                           actor=actor, refuse_links=refuse_links)
+
+
+def _run_locked(fam: Any, old: str, new: str, *, src_dir: Path, dst_dir: Path, dry_run: bool,
+                glob_scope: bool, actor: str, refuse_links: bool) -> Dict[str, Any]:
     ctx = Ctx(fam=fam, old=old, new=new, src_dir=src_dir, dst_dir=dst_dir, dry_run=dry_run,
               glob_scope=glob_scope, actor=actor)
     steps = LOCAL_STEPS + (GLOBAL_STEPS if glob_scope else ())
+    if glob_scope:
+        steps = (ARCHIVE_STEPS[0],) + steps + (ARCHIVE_STEPS[1],)
     if refuse_links and not glob_scope:
         steps = steps + (step_object_registry,)                  # the ids are kept: the locator follows (review of #728)
         _refuse_while_linked(fam, old, new, src_dir, dst_dir, actor)    # a workspace rename does not carry the shared stores

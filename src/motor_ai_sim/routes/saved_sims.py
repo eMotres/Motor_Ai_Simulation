@@ -17,8 +17,10 @@ from __future__ import annotations
 import json
 import threading
 import time
+
+import yaml
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
@@ -141,8 +143,86 @@ def list_saved(request: Request):
     from motor_ai_sim import config_archive as CA
     from motor_ai_sim import motor_access as MA
     if not MA.catalog_access(request.headers.get("authorization")).get("is_admin"):
-        sims = [s for s in sims if not CA.is_archived(*_source_of(s))]
+        sims = [s for s in sims if not _hidden_for_archive(s)]
     return {"sims": sims}
+
+
+def _hidden_for_archive(entry: dict) -> bool:
+    """A non-admin does not see a snapshot of an archived shared configuration.  A stamped snapshot names its source; an
+    older one (saved before 2026-11-22: neither ``source`` nor die / config in its params) is identified BY ITS MACHINE - its
+    geometry and materials against every archived configuration (round 3 of #820).  A damaged archive hides every
+    unidentified older snapshot (fail closed, like the shared catalog itself)."""
+    from motor_ai_sim import config_archive as CA
+    die, cfg = _source_of(entry)
+    if die and cfg:
+        return CA.is_archived(die, cfg)
+    try:
+        machines = _archived_machines()
+    except CA.ArchiveUnavailable:
+        return True
+    params = entry.get("params") if isinstance(entry.get("params"), dict) else {}
+    return any(_same_machine(params, m) for m in machines)
+
+
+_MACHINES: Dict[str, Any] = {"sig": None, "rows": []}
+_IDENTITY_KEYS = ("num_slots", "num_poles", "stator_diameter")
+
+
+def _archived_machines() -> List[Dict[str, Any]]:
+    """``[{"geometry", "materials"}]`` of every archived configuration of the SHARED catalog (die geometry + configuration
+    overrides), read once per change of the archive file.  Raises ``ArchiveUnavailable`` for a damaged archive."""
+    from motor_ai_sim import config_archive as CA
+    from motor_ai_sim import workspace as W
+    keys = CA.archived_keys()
+    try:
+        st = CA.store_path().stat()
+        sig = (st.st_mtime_ns, st.st_size)
+    except OSError:
+        sig = None
+    if sig is not None and _MACHINES["sig"] == sig:
+        return _MACHINES["rows"]
+    rows: List[Dict[str, Any]] = []
+    root = Path(str(W.shared_root())) / "dies"
+    for k in keys:
+        die, _, cfg = k.partition("/")
+        try:
+            die_doc = yaml.safe_load((root / die / "die.yaml").read_text(encoding="utf-8")) or {}
+            cfg_doc = yaml.safe_load((root / die / f"{cfg}.yaml").read_text(encoding="utf-8")) or {}
+        except (OSError, ValueError):
+            continue
+        if isinstance(cfg_doc.get("config"), dict):
+            cfg_doc = cfg_doc["config"]
+        geo = dict(die_doc.get("geometry") or {})
+        geo.update({g: v for g, v in (cfg_doc.get("geometry_overrides") or {}).items() if v is not None})
+        rows.append({"geometry": geo, "materials": dict(cfg_doc.get("materials") or {})})
+    _MACHINES.update(sig=sig, rows=rows)
+    return rows
+
+
+def _num(v: Any) -> Optional[float]:
+    return float(v) if isinstance(v, (int, float)) and not isinstance(v, bool) else None
+
+
+def _same_machine(params: Dict[str, Any], machine: Dict[str, Any]) -> bool:
+    """Is the snapshot's machine this archived configuration?  The identity keys (slots, poles, lamination diameter) must be
+    in both and equal, and so must every other geometry input both carry and every material both name."""
+    from motor_ai_sim.geometry.motor_geometry import is_compared_geometry_input
+    geo = machine["geometry"]
+    for k in _IDENTITY_KEYS:
+        a, b = _num(params.get(k)), _num(geo.get(k))
+        if a is None or b is None or abs(a - b) > 1e-6 * max(1.0, abs(b)):
+            return False
+    for k in set(params) & set(geo):
+        a, b = _num(params.get(k)), _num(geo.get(k))
+        if a is None or b is None or not is_compared_geometry_input(k, params, geo):
+            continue
+        if abs(a - b) > 1e-6 * max(1.0, abs(b)):
+            return False
+    for part, name in (machine.get("materials") or {}).items():
+        mine = params.get(f"mat_{part}")
+        if isinstance(mine, str) and mine and isinstance(name, str) and name and mine != name:
+            return False
+    return True
 
 
 def _source_of(entry: dict) -> tuple:

@@ -1049,6 +1049,14 @@ def step_object_registry(ctx: Ctx) -> None:
 
 
 # ── configuration archive (US · structure, coordinator 2026-11-22): one additive step ──
+def step_config_archive_publish(ctx: Ctx) -> None:
+    """FIRST step: an archived configuration is archived under its new name before the new file exists (round 3 of #820)."""
+    if ctx.copy:
+        return
+    from motor_ai_sim import config_archive as CA
+    CA.publish_step(ctx, ctx.die, ctx.dst, ctx.cfg, ctx.new_cfg or ctx.cfg, blocked=MoveBlocked)
+
+
 def step_config_archive(ctx: Ctx) -> None:
     """The configuration archive (``<shared>/object_registry/config_archive.json``): an archived configuration stays archived,
     with its history, after a move or a rename; a copy is a new, live configuration."""
@@ -1063,8 +1071,10 @@ LOCAL_STEPS = (step_files, step_fields, step_duty_results, step_context, step_wo
                step_catalog_cards)
 GLOBAL_STEPS = (step_grants, step_projects, step_cost_estimates, step_production, step_motor_tests,
                 step_motor_revisions, step_display_state, step_production_lifecycle, step_object_registry, step_cad,
-                step_config_archive,   # configuration archive (coordinator 2026-11-22)
                 step_manual)
+#: configuration archive (coordinator 2026-11-22; round 3 of #820): the new name archived first, the old name dropped LAST,
+#: after the source file is gone - a reader never sees either name active while the files move
+ARCHIVE_STEPS = (step_config_archive_publish, step_config_archive)
 
 
 def preflight(fam: Any, die: str, cfg: str, dst: str, *, copy: bool, new_cfg: str = "",
@@ -1131,6 +1141,14 @@ def run(fam: Any, die: str, cfg: str, dst: str, *, src_dir: Path, dst_dir: Path,
     ``die/new_cfg`` - everywhere, or (``dry_run``) list where.  All or nothing."""
     if new_cfg and new_cfg != cfg and copy:
         raise ValueError("a copy keeps the configuration name")
+    from motor_ai_sim import config_archive as CA
+    with CA.transaction_lock(glob_scope):                    # identity checks, every step and the rollback (round 3 of #820)
+        return _run_locked(fam, die, cfg, dst, src_dir=src_dir, dst_dir=dst_dir, dry_run=dry_run, copy=copy,
+                           glob_scope=glob_scope, actor=actor, new_cfg=new_cfg, runs_fallback=runs_fallback)
+
+
+def _run_locked(fam: Any, die: str, cfg: str, dst: str, *, src_dir: Path, dst_dir: Path, dry_run: bool,
+                copy: bool, glob_scope: bool, actor: str, new_cfg: str, runs_fallback: Optional[Path]) -> Dict[str, Any]:
     preflight(fam, die, cfg, dst, copy=copy, new_cfg=new_cfg, glob_scope=glob_scope)
     ctx = Ctx(fam=fam, die=die, cfg=cfg, dst=dst, src_dir=src_dir, dst_dir=dst_dir, dry_run=dry_run,
               copy=copy, glob_scope=glob_scope, ws_roots=workspace_roots(fam, glob_scope), actor=actor,
@@ -1139,7 +1157,8 @@ def run(fam: Any, die: str, cfg: str, dst: str, *, src_dir: Path, dst_dir: Path,
         stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
         ctx.backup_dir = src_dir.parent.parent / ".config_moves" / f"{stamp} {die}~{cfg}"
         ctx.backup_dir.mkdir(parents=True, exist_ok=True)
-    steps = LOCAL_STEPS + (GLOBAL_STEPS if glob_scope else ()) + (step_remove_source,)
+    arch = ARCHIVE_STEPS if glob_scope else ()
+    steps = arch[:1] + LOCAL_STEPS + (GLOBAL_STEPS if glob_scope else ()) + (step_remove_source,) + arch[1:]
     done = 0
     try:
         for step in steps:

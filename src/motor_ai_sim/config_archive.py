@@ -21,6 +21,7 @@ The same idea as ``die_archive`` one level down:
 """
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 from datetime import datetime, timezone
@@ -149,6 +150,14 @@ def _case_insensitive_fs() -> bool:
     return bool(_CACHE["ci"])
 
 
+def same_name(a: Any, b: Any) -> bool:
+    """Do two stored names point at the SAME catalog file?  Exactly equal, or - on a file system that ignores letter case -
+    equal without case (a project link stored as ``D/c`` refers to ``C.yaml`` there; round 3 of #820).  On a case-sensitive
+    file system ``C`` and ``c`` stay distinct configurations."""
+    a, b = str(a or ""), str(b or "")
+    return a == b or (_case_insensitive_fs() and a.casefold() == b.casefold())
+
+
 def state(die: str, cfg: Optional[str]) -> str:
     """``archived`` | ``active`` | ``unknown`` (the store is damaged: the state of this configuration cannot be known)."""
     if not die or not cfg:
@@ -268,14 +277,14 @@ def _live_jobs_strict(die: str) -> List[Dict[str, str]]:
     recs = q.live_records() if hasattr(q, "live_records") else q.list_for_owner("", limit=500, is_admin=True)
     for r in recs:
         t = r.target or {}
-        if r.state in (_J.JobState.QUEUED, _J.JobState.RUNNING) and str(t.get("die") or "") == die:
+        if r.state in (_J.JobState.QUEUED, _J.JobState.RUNNING) and same_name(t.get("die"), die):
             out.append({"die": die, "config": str(t.get("config") or t.get("cfg") or ""), "where": f"{r.kind} {r.run_id}"})
     from motor_ai_sim import die_archive as _DA
     status = Path(os.environ.get("MOTRES_JOBS_STATUS") or _DA.JOBS_STATUS)
     if status.exists():
         doc = json.loads(status.read_text(encoding="utf-8"))
         for j in doc.get("jobs") or []:
-            if isinstance(j, dict) and j.get("state") in ("queued", "running") and str(j.get("die") or "") == die:
+            if isinstance(j, dict) and j.get("state") in ("queued", "running") and same_name(j.get("die"), die):
                 out.append({"die": die, "config": str(j.get("configuration") or j.get("config") or ""),
                             "where": f"job {j.get('tag') or ''}".strip()})
     return out
@@ -315,12 +324,15 @@ from contextlib import contextmanager  # noqa: E402
 
 
 @contextmanager
-def admission(die: str, cfg: str):
+def admission(die: str, cfg: str, layer: Optional[str] = None):
     """THE way to make a configuration in use (a project link - manual or automatic - or a Production record): under the
     lifecycle lock, re-checking its state; raises :class:`Archived` when it is archived or unknown.  The caller writes its link
-    / record inside the ``with`` block, so an archive can never interleave."""
+    / record inside the ``with`` block, so an archive can never interleave.  The archive is of the SHARED catalog: the layer
+    is resolved FIRST (``layer``, else what the caller's catalog resolves the die to), and a workspace or published
+    configuration is admitted whatever the archive holds - also while it is damaged (round 3 of #820)."""
+    from motor_ai_sim import motor_access as _MA
     with lifecycle_lock():
-        if state(str(die), str(cfg)) != ACTIVE:
+        if _MA._die_layer_of(str(die), layer) == "shared" and state(str(die), str(cfg)) != ACTIVE:
             raise Archived(f"'{die}/{cfg}' is archived; restore it in the catalog first")
         yield
 
@@ -340,16 +352,16 @@ def refusals(die: str, cfg: str, *, projects: Optional[List[dict]] = None, produ
     out: List[Dict[str, Any]] = []
     linked = sorted({str(p.get("title") or p.get("id") or "") for p in projects
                      if str(p.get("status") or "") != "closed"
-                     and any(isinstance(m, dict) and str(m.get("die") or "") == die and str(m.get("config") or "") == cfg
+                     and any(isinstance(m, dict) and same_name(m.get("die"), die) and same_name(m.get("config"), cfg)
                              for m in p.get("linked_motors") or [])})
     if linked:
         out.append({"code": "project_link", "names": linked})
     prod = sorted(f"{r.get('die')}/{r.get('config')}" for r in productions
-                  if str(r.get("die") or "") == die and str(r.get("config") or "") == cfg)
+                  if same_name(r.get("die"), die) and same_name(r.get("config"), cfg))
     if prod:
         out.append({"code": "production", "names": prod})
     # a job of another configuration of the die does not hold this one; a job that names no configuration holds the die
-    running = sorted({j["where"] for j in jobs if j.get("die") == die and (not j.get("config") or j.get("config") == cfg)})
+    running = sorted({j["where"] for j in jobs if same_name(j.get("die"), die) and (not j.get("config") or same_name(j.get("config"), cfg))})
     if running:
         out.append({"code": "running_job", "names": running})
     return out
@@ -362,25 +374,51 @@ def refusal_text(die: str, cfg: str, refusals_: List[Dict[str, Any]]) -> str:
 
 # ── renames: the keys follow (die_rename.py, the configuration rename and move) ───────────────────────────────────────
 
-def rename_in(doc: Any, old_die: str, new_die: str, old_cfg: Optional[str] = None, new_cfg: Optional[str] = None) -> int:
-    """Rewrite every key of ``doc`` naming ``old_die`` (and, when given, ``old_cfg``) to the new names."""
-    if not isinstance(doc, dict):
-        return 0
-    n = 0
-
+def _renamer(old_die: str, new_die: str, old_cfg: Optional[str], new_cfg: Optional[str]):
     def nk(k: str) -> Optional[str]:
         d, sep, c = str(k).partition("/")
         if not sep or d != old_die or (old_cfg is not None and c != old_cfg):
             return None
         return f"{new_die}/{new_cfg if old_cfg is not None and new_cfg is not None else c}"
+    return nk
 
+
+def publish_in(doc: Any, old_die: str, new_die: str, old_cfg: Optional[str] = None, new_cfg: Optional[str] = None) -> List[str]:
+    """Archive the NEW names too (a copy of each entry), before a rename / move publishes them: while the files move, both
+    names read as archived.  Returns the keys added."""
+    if not isinstance(doc, dict):
+        return []
+    nk = _renamer(old_die, new_die, old_cfg, new_cfg)
     configs = doc.get("configs") if isinstance(doc.get("configs"), dict) else {}
+    added = []
     for k in list(configs):
         new_k = nk(k)
         if new_k and new_k != k:
             if new_k in configs:
                 raise ValueError(f"configuration archive already has {new_k!r}")
-            configs[new_k] = configs.pop(k)
+            configs[new_k] = json.loads(json.dumps(configs[k]))
+            added.append(new_k)
+    return added
+
+
+def rename_in(doc: Any, old_die: str, new_die: str, old_cfg: Optional[str] = None, new_cfg: Optional[str] = None,
+              *, published: bool = False) -> int:
+    """Rewrite every key of ``doc`` naming ``old_die`` (and, when given, ``old_cfg``) to the new names.  ``published``: the new
+    names were added by :func:`publish_in`, so an equal entry under the new name is expected and the old one is dropped."""
+    if not isinstance(doc, dict):
+        return 0
+    n = 0
+    nk = _renamer(old_die, new_die, old_cfg, new_cfg)
+    configs = doc.get("configs") if isinstance(doc.get("configs"), dict) else {}
+    for k in list(configs):
+        new_k = nk(k)
+        if new_k and new_k != k:
+            if new_k in configs:
+                if not (published and configs[new_k] == configs[k]):
+                    raise ValueError(f"configuration archive already has {new_k!r}")
+                configs.pop(k)
+            else:
+                configs[new_k] = configs.pop(k)
             n += 1
     for row in doc.get("history") or []:
         if isinstance(row, dict) and nk(row.get("key", "")) and nk(row["key"]) != row["key"]:
@@ -389,33 +427,67 @@ def rename_in(doc: Any, old_die: str, new_die: str, old_cfg: Optional[str] = Non
     return n
 
 
-def rename(old_die: str, new_die: str, old_cfg: Optional[str] = None, new_cfg: Optional[str] = None) -> int:
+def rename(old_die: str, new_die: str, old_cfg: Optional[str] = None, new_cfg: Optional[str] = None, *,
+           published: bool = False) -> int:
     """:func:`rename_in` on the store, under the lifecycle lock (read-latest, so a concurrent archive is never lost)."""
     if not store_path().is_file():
         return 0
-    return int(_mutate(lambda data, out: out.update(n=rename_in(data, old_die, new_die, old_cfg, new_cfg))).get("n") or 0)
+    return int(_mutate(lambda data, out: out.update(n=rename_in(data, old_die, new_die, old_cfg, new_cfg, published=published))).get("n") or 0)
 
 
-def rename_step(ctx: Any, old_die: str, new_die: str, old_cfg: Optional[str] = None, new_cfg: Optional[str] = None,
-                blocked: type = ValueError) -> None:
-    """The rename / move hook of ``die_rename`` and ``config_move``: a dry run lists what would move; a real run moves the keys
-    under the lifecycle lock and registers an undo that moves them back the same way (never a byte restore that could erase a
-    later write).  A damaged store refuses the rename (``blocked``)."""
-    with lifecycle_lock():                                  # the decision AND the move under the same lock as an archive
+def transaction_lock(glob_scope: bool):
+    """The lock a die rename / configuration move or rename holds from its identity checks to the end of its rollback: an
+    archive, a restore or an admission can never run between its steps (round 3 of #820).  Taken FIRST, before any store lock
+    of the steps (the same order as every admission).  A workspace-scope rename does not touch the shared archive."""
+    return lifecycle_lock() if glob_scope else contextlib.nullcontext()
+
+
+def publish_step(ctx: Any, old_die: str, new_die: str, old_cfg: Optional[str] = None, new_cfg: Optional[str] = None,
+                 blocked: type = ValueError) -> None:
+    """The FIRST step of a rename / move: an archived configuration is archived under its new name too before any file of the
+    new name exists, so a reader never sees the new name active.  Undo removes the added names."""
+    with lifecycle_lock():
         try:
             doc = load()
         except ArchiveUnavailable as exc:
             raise blocked(str(exc)) from exc
-        probe = json.loads(json.dumps(doc))
         try:
-            n = rename_in(probe, old_die, new_die, old_cfg, new_cfg)
+            added = publish_in(json.loads(json.dumps(doc)), old_die, new_die, old_cfg, new_cfg)
+        except ValueError as exc:
+            raise blocked(str(exc)) from exc
+        if not added:
+            return
+        ctx.add("config_archive", store_path(), f"an archived configuration stays archived under its new name ({len(added)})")
+        ctx.archive_published = True
+        if getattr(ctx, "dry_run", False):
+            return
+        _mutate(lambda data, out: publish_in(data, old_die, new_die, old_cfg, new_cfg))
+
+    def undo() -> None:
+        _mutate(lambda data, out: [data["configs"].pop(k, None) for k in added])
+    ctx.undo.append(undo)
+
+
+def rename_step(ctx: Any, old_die: str, new_die: str, old_cfg: Optional[str] = None, new_cfg: Optional[str] = None,
+                blocked: type = ValueError) -> None:
+    """The LAST step of a rename / move (after :func:`publish_step`): the old names are dropped and the history follows.  A dry
+    run lists nothing more (the publish step did).  Undo moves the keys back (never a byte restore that could erase a later
+    write); the publish step's undo then has nothing left to remove."""
+    with lifecycle_lock():
+        try:
+            doc = load()
+        except ArchiveUnavailable as exc:
+            raise blocked(str(exc)) from exc
+        try:
+            n = rename_in(json.loads(json.dumps(doc)), old_die, new_die, old_cfg, new_cfg, published=True)
         except ValueError as exc:
             raise blocked(str(exc)) from exc
         if not n:
             return
-        ctx.add("config_archive", store_path(), f"an archived configuration stays archived under its new name ({n})")
+        if not getattr(ctx, "archive_published", False):        # called alone (no publish step): list it here
+            ctx.add("config_archive", store_path(), f"an archived configuration stays archived under its new name ({n})")
         if getattr(ctx, "dry_run", False):
             return
-        rename(old_die, new_die, old_cfg, new_cfg)
+        rename(old_die, new_die, old_cfg, new_cfg, published=True)
     back_cfg = (new_cfg, old_cfg) if old_cfg is not None else (None, None)
     ctx.undo.append(lambda: rename(new_die, old_die, back_cfg[0], back_cfg[1]))

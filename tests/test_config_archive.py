@@ -224,12 +224,12 @@ def test_a_configuration_rename_and_move_keep_the_archive_and_its_history(env):
     assert CA.rename_in(doc, "D", "E", "C", "C") == 2                         # a move to another die
     assert sorted(doc["configs"]) == ["D/K", "E/C"] and doc["history"][0]["key"] == "E/C"
     from motor_ai_sim import config_move as CM
-    assert CM.step_config_archive in CM.GLOBAL_STEPS
+    assert CM.ARCHIVE_STEPS == (CM.step_config_archive_publish, CM.step_config_archive)
 
 
 def test_a_die_rename_keeps_the_archive(env):
     from motor_ai_sim import die_rename as DRN
-    assert DRN.step_config_archive in DRN.GLOBAL_STEPS
+    assert DRN.ARCHIVE_STEPS == (DRN.step_config_archive_publish, DRN.step_config_archive)
     doc = {"configs": {"OLD/C": {"by": "a"}, "OTHER/C": {}}, "history": [{"key": "OLD/C"}, {"key": "OTHER/C"}]}
     assert CA.rename_in(doc, "OLD", "NEW") == 2
     assert sorted(doc["configs"]) == ["NEW/C", "OTHER/C"] and doc["history"][0]["key"] == "NEW/C"
@@ -428,3 +428,137 @@ def test_admin_card_listing_drops_archived_cards_but_keeps_them_while_damaged(en
     assert MA._drop_archived_cards(cards, admin=True) == [cards[1]]
     CA.store_path().write_text("{ broken", encoding="utf-8")
     assert MA._drop_archived_cards(cards, admin=True) == cards and MA._drop_archived_cards(cards) == []
+
+
+# ── round 3 of #820: the rename / move is one transaction under the lifecycle lock ──
+def _pause_after_files(monkeypatch, reached, release):
+    import threading  # noqa: F401
+    from motor_ai_sim import config_move as CM
+    real = CM.step_files
+
+    def paused(ctx):
+        real(ctx)
+        reached.set()
+        assert release.wait(20)
+    monkeypatch.setattr(CM, "LOCAL_STEPS", tuple(paused if s is real else s for s in CM.LOCAL_STEPS))
+
+
+def test_an_archive_cannot_land_between_the_steps_of_a_rename(env, monkeypatch):
+    import threading
+    reached, release, out = threading.Event(), threading.Event(), {}
+    _pause_after_files(monkeypatch, reached, release)
+    mover = threading.Thread(target=lambda: out.update(rename=client.post(
+        f"/api/family/config/{DIE}/{OLDCFG}/rename", headers=env["admin"], json={"name": "L60-15t-new"})))
+    mover.start()
+    assert reached.wait(20)                                   # the new file exists, the old one is not removed yet
+    archiver = threading.Thread(target=lambda: out.update(archive=_archive(env)))
+    archiver.start()
+    archiver.join(1.0)
+    assert archiver.is_alive()                                # the archive waits for the whole rename
+    release.set()
+    mover.join(20)
+    archiver.join(20)
+    assert out["rename"].status_code == 200, out["rename"].text
+    assert out["archive"].status_code == 404, out["archive"].text   # the old name is gone; nothing archived by mistake
+    assert not CA.is_archived(DIE, OLDCFG) and not CA.is_archived(DIE, "L60-15t-new")
+    assert "L60-15t-new" in _tree(env["a"])[DIE]
+
+
+def test_while_an_archived_configuration_is_renamed_both_names_read_archived(env, monkeypatch):
+    import threading
+    _archive(env)
+    reached, release, out = threading.Event(), threading.Event(), {}
+    _pause_after_files(monkeypatch, reached, release)
+    mover = threading.Thread(target=lambda: out.update(rename=client.post(
+        f"/api/family/config/{DIE}/{OLDCFG}/rename", headers=env["admin"], json={"name": "L60-15t-new"})))
+    mover.start()
+    assert reached.wait(20)
+    try:
+        assert CA.is_archived(DIE, OLDCFG) and CA.is_archived(DIE, "L60-15t-new")   # a reader never sees either name active
+    finally:
+        release.set()
+        mover.join(20)
+    assert out["rename"].status_code == 200, out["rename"].text
+    assert CA.is_archived(DIE, "L60-15t-new") and not CA.is_archived(DIE, OLDCFG)
+    assert [h["to"] for h in CA.history(DIE, "L60-15t-new")] == ["archived"]
+
+
+def test_a_failed_rename_of_an_archived_configuration_leaves_the_archive_as_it_was(env, monkeypatch):
+    from motor_ai_sim import config_move as CM
+    _archive(env)
+    before = CA.load()["configs"]
+
+    def boom(ctx):
+        raise RuntimeError("disk full")
+    monkeypatch.setattr(CM, "GLOBAL_STEPS", CM.GLOBAL_STEPS + (boom,))
+    r = client.post(f"/api/family/config/{DIE}/{OLDCFG}/rename", headers=env["admin"], json={"name": "L60-15t-new"})
+    assert r.status_code == 500
+    assert CA.load()["configs"] == before and not CA.is_archived(DIE, "L60-15t-new")
+
+
+def test_a_link_spelled_in_another_case_refuses_where_the_file_system_ignores_case(monkeypatch):
+    clear = {"productions": [], "jobs": []}
+    proj = {"title": "P", "status": "design", "linked_motors": [{"die": "d", "config": "c"}]}
+    monkeypatch.setitem(CA._CACHE, "ci", True)                      # Windows / macOS: D/c is the file C.yaml of D
+    assert CA.refusals("D", "C", projects=[proj], **clear) == [{"code": "project_link", "names": ["P"]}]
+    assert CA.refusals("D", "C", projects=[], productions=[{"die": "D", "config": "c"}], jobs=[]) == [
+        {"code": "production", "names": ["D/c"]}]
+    monkeypatch.setitem(CA._CACHE, "ci", False)                     # case-sensitive: c.yaml is another configuration
+    assert CA.refusals("D", "C", projects=[proj], **clear) == []
+
+
+def test_an_older_snapshot_without_a_source_is_identified_by_its_machine(env, monkeypatch):
+    from motor_ai_sim.routes import family as fam
+    monkeypatch.setattr(fam, "_read_ctx", lambda: {})                     # nothing open: the row carries no source
+    same = {"num_slots": 12, "num_poles": 10, "stator_diameter": 12.0, "magnet_height": 1.0, "motor_length": 10.0,
+            "mat_magnet": "N42SH", "rpm": 1000}
+    other = {**same, "stator_diameter": 30.0}
+    for name, params in (("archived machine", same), ("another machine", other)):
+        r = client.post("/api/sims/saved", headers=env["a"], json={"name": name, "params": params, "results": {}})
+        if r.status_code == 404:
+            pytest.skip("saved simulations router not mounted here")
+        assert "source" not in r.json() or not r.json()["source"]
+    names = lambda who: sorted(x["name"] for x in client.get("/api/sims/saved", headers=env[who]).json()["sims"])  # noqa: E731
+    assert names("a") == ["another machine", "archived machine"]
+    _archive(env, cfg=OLDCFG)
+    assert names("a") == ["another machine"]                             # the same slots, poles, diameter, inputs, magnet
+    CA.store_path().write_text("{ broken", encoding="utf-8")
+    assert names("a") == []                                              # damaged archive: unidentified older rows hidden
+
+
+def test_a_snapshot_of_another_magnet_is_not_the_archived_machine():
+    from motor_ai_sim.routes import saved_sims as SS
+    m = {"geometry": {"num_slots": 12, "num_poles": 10, "stator_diameter": 12.0, "motor_length": 10.0},
+         "materials": {"magnet": "N42SH"}}
+    base = {"num_slots": 12, "num_poles": 10, "stator_diameter": 12.0, "motor_length": 10.0}
+    assert SS._same_machine({**base, "mat_magnet": "N42SH"}, m)
+    assert not SS._same_machine({**base, "mat_magnet": "N48H"}, m)
+    assert not SS._same_machine({**base, "motor_length": 20.0}, m)
+    assert not SS._same_machine({"num_slots": 12, "num_poles": 10}, m)          # no diameter: not identified
+
+
+def test_the_archive_touches_only_shared_cards_and_admissions(env, monkeypatch):
+    from motor_ai_sim import motor_access as MA
+    _archive(env)
+    layers = {DIE: "shared", "WSONLY 12_40": "workspace"}
+    monkeypatch.setattr(MA, "_die_layer_of", lambda die, layer=None: layer or layers.get(str(die), "shared"))
+    shared_card = {"name": f"{DIE} {OLDCFG}"}
+    cards = [shared_card, {"name": f"{DIE} {NEWCFG}"}, {"die": "WSONLY 12_40", "config": OLDCFG, "name": "mine"}]
+    assert MA._drop_archived_cards(cards) == cards[1:]
+    layers[DIE] = "workspace"                                    # the caller's own namesake of the archived die
+    assert MA._drop_archived_cards(cards) == cards
+    with CA.admission(DIE, OLDCFG):                              # a workspace configuration of that name is admitted
+        pass
+    with CA.admission(DIE, OLDCFG, layer="published"):
+        pass
+    with pytest.raises(CA.Archived):
+        with CA.admission(DIE, OLDCFG, layer="shared"):
+            pass
+    CA.store_path().write_text("{ broken", encoding="utf-8")     # damaged: only shared dies lose their cards / admissions
+    layers[DIE] = "shared"
+    assert MA._drop_archived_cards(cards) == [cards[2]]
+    with CA.admission("WSONLY 12_40", OLDCFG):
+        pass
+    with pytest.raises(CA.Archived):
+        with CA.admission(DIE, NEWCFG):
+            pass

@@ -154,6 +154,7 @@ def _summary(project: dict, user: dict) -> dict:
         projection.pop("grant_removal_candidates", None)
     projection["can_edit"] = bool(engineer)
     projection["can_edit_spec"] = access.can_edit_spec(user, project)
+    projection["can_manage_prices"] = access.can_manage_prices(user, project)        # the capability the price switches follow
     # the shared quote (owner 2026-11-03): only a flag here, never its numbers; it lives in GET /{id}/quote
     projection["quote_shared"] = quote_shared(user, project)
     # the project timeline (owner 2026-11-03): only a flag here; plan and forecast live in GET /{id}/timeline
@@ -1311,7 +1312,13 @@ def _release_member_grants(project: dict, project_id: str, email: str, reason: s
             if isinstance(motor, dict):
                 grant_cleanup.release_motor_grants(project, _key(motor.get("die", ""), motor.get("config", "")),
                                                    reason=reason, emails={email}, actor=actor)
-        store.mutate_project(project_id, lambda doc: doc.update(project))
+        def ledger(doc: dict) -> None:                      # only the ledgers, never the whole document (a concurrent change survives)
+            for key in ("project_motor_grants", "grant_removal_candidates", "motor_history"):
+                if key in project:
+                    doc[key] = project[key]
+                else:
+                    doc.pop(key, None)
+        store.mutate_project(project_id, ledger)
     except Exception:                                       # noqa: BLE001
         log.warning("project %s: motor grants of %s not released", project_id, email, exc_info=True)
 
@@ -1341,47 +1348,66 @@ def _apply_member(project_id: str, email: str, role: str, sees_prices: bool | No
         account = users.get_user(email)
         if account and account.get("disabled"):
             account = None
-        project = store.get_project(project_id)
-        if project is None:
-            raise HTTPException(status_code=404, detail="Project not found")
-        project_before = copy.deepcopy(project)
         membership_before = store.load_membership_index()
-        old_role = next((m.get("role") for m in project.get("members", []) if m.get("email", "").lower() == email), None)
-        if sees_prices is None:
-            sees_prices = any(m.get("sees_prices") is True for m in [*project.get("members", []), *project.get("pending_invites", [])]
-                              if str(m.get("email") or "").lower() == email)
-        if sees_prices and role != "owner":
-            entry["sees_prices"] = True
-        old_entry = next((m for m in [*project.get("members", []), *project.get("pending_invites", [])]
-                          if str(m.get("email") or "").lower() == email), None)
-        old_grant, new_grant = access.holds_price_grant(old_entry), access.holds_price_grant(entry)
-        if actor is not None and old_grant != new_grant and not access.can_manage_prices(actor, project):
-            raise HTTPException(status_code=403, detail="Only a project owner or MOTRES staff sets who sees the prices")
-        updated = copy.deepcopy(project)
-        if old_grant != new_grant:
-            queue_event(updated, str((actor or {}).get("email") or email).strip().lower(), "sees_prices", "member", email,
-                        {"from": old_grant, "to": new_grant, "role": role})
-        updated["members"] = [m for m in updated.get("members", []) if m.get("email", "").lower() != email]
-        if account:
-            updated["pending_invites"] = [m for m in updated.get("pending_invites", []) if m.get("email", "").lower() != email]
-            updated["members"].append(entry)
-        else:
-            updated.setdefault("pending_invites", [])
-            updated["pending_invites"] = [m for m in updated["pending_invites"] if m.get("email") != email]
-            updated["pending_invites"].append({**entry, "created_at": models.now()})
-        updated["updated_at"] = models.now()
-        try:
+        seen: dict = {}
+
+        def commit(doc: dict) -> None:
+            # EVERYTHING is decided against the CURRENT document, under the project file's own lock (the one PATCH sees_prices
+            # mutates under): authorization, old / new comparison, membership edits and the audit outbox
+            if not doc.get("id"):
+                raise HTTPException(status_code=404, detail="Project not found")
+            project = copy.deepcopy(doc)
+            seen["before"] = copy.deepcopy(doc)
+            seen["project"] = project
+            old_entry = next((m for m in [*project.get("members", []), *project.get("pending_invites", [])]
+                              if str(m.get("email") or "").lower() == email), None)
+            old_role = str((old_entry or {}).get("role") or "").lower() or None
+            want_prices = sees_prices
+            if want_prices is None:
+                want_prices = any(m.get("sees_prices") is True for m in [*project.get("members", []), *project.get("pending_invites", [])]
+                                  if str(m.get("email") or "").lower() == email)
+            entry.clear()
+            entry.update({"email": email, "role": role})
+            if want_prices and role != "owner":
+                entry["sees_prices"] = True
+            old_grant, new_grant = access.holds_price_grant(old_entry), access.holds_price_grant(entry)
+            # entering OR leaving the owner role changes who may grant prices, whatever the price Boolean says (Astra round 2)
+            owner_change = (old_role == "owner") != (role == "owner")
+            if actor is not None and (old_grant != new_grant or owner_change) and not access.can_manage_prices(actor, project):
+                raise HTTPException(status_code=403, detail="Only a project owner or MOTRES staff sets who sees the prices")
+            seen["old_role"] = old_role
+            updated = copy.deepcopy(project)
+            if old_grant != new_grant or owner_change:
+                queue_event(updated, str((actor or {}).get("email") or email).strip().lower(), "sees_prices", "member", email,
+                            {"from": old_grant, "to": new_grant, "role": role, "old_role": old_role})
+            updated["members"] = [m for m in updated.get("members", []) if m.get("email", "").lower() != email]
+            if account:
+                updated["pending_invites"] = [m for m in updated.get("pending_invites", []) if m.get("email", "").lower() != email]
+                updated["members"].append(entry)
+            else:
+                updated.setdefault("pending_invites", [])
+                updated["pending_invites"] = [m for m in updated["pending_invites"] if m.get("email") != email]
+                updated["pending_invites"].append({**entry, "created_at": models.now()})
+            updated["updated_at"] = models.now()
+            seen["updated"] = updated
             if account and role in MOTOR_GRANT_ROLES:
                 for motor in updated.get("linked_motors", []):
                     if isinstance(motor, dict):
                         _sync_grants(updated, _key(motor.get("die", ""), motor.get("config", "")),
                                      f"{motor.get('die', '')}/{motor.get('config', '')}", {email})
-            store.mutate_project(project_id, lambda doc: doc.update(updated))
+            doc.update(updated)
+
+        try:
+            store.mutate_project(project_id, commit)
+            project, updated = seen["project"], seen["updated"]
             store.sync_membership_index(project_id, project.get("members", []), updated.get("members", []))
         except Exception:
             # Membership metadata rolls back, while grants already added remain
             # and are reported for manual cleanup.
-            restored = project_before
+            if "updated" not in seen:                       # refused or failed before anything was decided: nothing to undo
+                raise
+            restored = seen["before"]
+            updated = seen["updated"]
             for motor_key, entry in (updated.get("project_motor_grants") or {}).items():
                 prior = (restored.get("project_motor_grants") or {}).get(motor_key, {})
                 old_emails = set(prior.get("emails", [])) if isinstance(prior, dict) else set(prior)
@@ -1397,6 +1423,7 @@ def _apply_member(project_id: str, email: str, role: str, sees_prices: bool | No
             store.save_json(project_id, "project.json", restored)
             store.save_membership_index(membership_before)
             raise
+        old_role = seen.get("old_role")
         if not (account and role in MOTOR_GRANT_ROLES) and old_role in MOTOR_GRANT_ROLES:
             # the member no longer gets the project's motors: the grants the project made for them go too (owner
             # 2026-10-27) - after the membership is committed, so a failed change never costs anyone access
@@ -1550,32 +1577,41 @@ async def remove_member(request: Request, project_id: str, email: str):
         raise HTTPException(status_code=422, detail="Valid email required")
     from motor_ai_sim.development.motors import transaction, _mark_removal_candidates, _key
     with transaction(), users._LOCK:
-        project = store.get_project(project_id)
-        if project is None:
-            raise HTTPException(status_code=404, detail="Project not found")
-        project_before = copy.deepcopy(project)
         membership_before = store.load_membership_index()
-        updated = copy.deepcopy(project)
-        # removing somebody who holds the price grant (an owner, a flagged member or invite) is a permission change too (old
-        # membership against new, under the lock)
-        holders = [m for key in ("members", "pending_invites") for m in project.get(key, [])
-                   if isinstance(m, dict) and str(m.get("email") or "").lower() == email]
-        if any(access.holds_price_grant(m) for m in holders):
-            if not access.can_manage_prices(user, project):
-                raise HTTPException(status_code=403, detail="Only a project owner or MOTRES staff sets who sees the prices")
-            queue_event(updated, _email(user), "sees_prices", "member", email, {"from": True, "to": False, "removed": True})
-        previous_members = updated.get("members", [])
-        updated["members"] = [m for m in previous_members if str(m.get("email") or "").lower() != email]
-        updated["pending_invites"] = [m for m in updated.get("pending_invites", []) if str(m.get("email") or "").lower() != email]
-        if len(updated["members"]) == len(previous_members) and len(updated["pending_invites"]) == len(project.get("pending_invites", [])):
-            raise HTTPException(status_code=404, detail="Project member not found")
-        updated["updated_at"] = models.now()
+        seen: dict = {}
+
+        def commit(doc: dict) -> None:
+            # decided against the CURRENT document under the project file's lock (the one PATCH sees_prices uses)
+            if not doc.get("id"):
+                raise HTTPException(status_code=404, detail="Project not found")
+            project = copy.deepcopy(doc)
+            seen["before"] = copy.deepcopy(doc)
+            seen["project"] = project
+            updated = copy.deepcopy(project)
+            # removing somebody who holds the price grant (an owner, a flagged member or invite) is a permission change too
+            holders = [m for key in ("members", "pending_invites") for m in project.get(key, [])
+                       if isinstance(m, dict) and str(m.get("email") or "").lower() == email]
+            if any(access.holds_price_grant(m) for m in holders):
+                if not access.can_manage_prices(user, project):
+                    raise HTTPException(status_code=403, detail="Only a project owner or MOTRES staff sets who sees the prices")
+                queue_event(updated, _email(user), "sees_prices", "member", email, {"from": True, "to": False, "removed": True})
+            previous_members = updated.get("members", [])
+            updated["members"] = [m for m in previous_members if str(m.get("email") or "").lower() != email]
+            updated["pending_invites"] = [m for m in updated.get("pending_invites", []) if str(m.get("email") or "").lower() != email]
+            if len(updated["members"]) == len(previous_members) and len(updated["pending_invites"]) == len(project.get("pending_invites", [])):
+                raise HTTPException(status_code=404, detail="Project member not found")
+            updated["updated_at"] = models.now()
+            seen["updated"] = updated
+            doc.update(updated)
+
         try:
-            store.mutate_project(project_id, lambda doc: doc.update(updated))
+            store.mutate_project(project_id, commit)
+            previous_members, updated = seen["project"].get("members", []), seen["updated"]
             store.sync_membership_index(project_id, previous_members, updated["members"])
         except Exception:
-            store.save_json(project_id, "project.json", project_before)
-            store.save_membership_index(membership_before)
+            if "updated" in seen:
+                store.save_json(project_id, "project.json", seen["before"])
+                store.save_membership_index(membership_before)
             raise
         # the grants the project made for this member leave with them (owner 2026-10-27), after the commit
         _release_member_grants(updated, project_id, email, "customer_membership_removed", _email(user))

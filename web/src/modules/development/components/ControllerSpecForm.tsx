@@ -1,14 +1,14 @@
 // The specification of a CONTROLLER project (controller PR2): 7 steps from the server's data-file schema; every number carries
 // its status (requirement / model / measured) and a source; per-build fields hold one answer per build.  Only the project owner
 // and admins edit (the server decides: `can_edit`); everybody else reads.  No assistant, no submit flow: internal for now.
-import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Alert, Box, Button, Checkbox, CircularProgress, FormControlLabel, IconButton, MenuItem, Paper, Stack, Tab, Tabs, TextField, Tooltip, Typography } from '@mui/material';
 import AddIcon from '@mui/icons-material/Add';
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
 import HelpTip from '../../../components/common/HelpTip';
 import { readView, writeView } from '../../../lib/viewMemory';
 import {
-  answerOf, buildsOf, controllerSpecApi, hasStatus, localized, parseNumber, payloadFields, withAnswer,
+  afterSave, answerOf, buildsOf, controllerSpecApi, isConflict, hasStatus, localized, parseNumber, payloadFields, withAnswer,
   type CtlAnswer, type CtlField, type CtlSchema, type CtlSpec, type CtlStored, type ValueStatus,
 } from '../controllerSpec';
 
@@ -22,10 +22,12 @@ export default function ControllerSpecForm({ projectId, lang, ct, memoryScope }:
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [step, setStep] = useState(0);
+  const [conflict, setConflict] = useState(false);
+  const edits = useRef(0);                               // counts edits, so one typed while a save is in flight is not lost
 
   useEffect(() => {
     let live = true;
-    setSpec(null); setError(''); setDirty(false);
+    setSpec(null); setError(''); setDirty(false); setConflict(false);
     controllerSpecApi.get(projectId).then((s) => {
       if (!live) return;
       setSpec(s); setFields(s.fields ?? {});
@@ -41,15 +43,28 @@ export default function ControllerSpecForm({ projectId, lang, ct, memoryScope }:
   if (!spec || !schema) return <CircularProgress size={18} />;
   const canEdit = spec.can_edit;
   const section = schema.sections[Math.min(step, schema.sections.length - 1)];
-  const set = (field: CtlField, answer: CtlAnswer, build?: string) => { setFields((f) => withAnswer(f, field, answer, build)); setDirty(true); };
+  const set = (field: CtlField, answer: CtlAnswer, build?: string) => { edits.current += 1; setFields((f) => withAnswer(f, field, answer, build)); setDirty(true); };
   const chooseStep = (i: number) => { setStep(i); if (memoryScope) writeView(memoryScope, i); };
   const save = async () => {
-    setBusy(true); setError('');
+    setBusy(true); setError(''); setConflict(false);
+    const startedAt = edits.current;
     try {
+      // fields AND revision from this one answer (Astra round 1 of #832): never a revision read later than the fields
       const saved = await controllerSpecApi.save(projectId, payloadFields(fields, schema), spec.revision);
-      const fresh = await controllerSpecApi.get(projectId);
-      setSpec(fresh); setFields(saved.fields ?? {}); setDirty(false);
-    } catch (e) { setError(e instanceof Error ? e.message : String(e)); } finally { setBusy(false); }
+      const next = afterSave(fields, saved, edits.current !== startedAt);
+      setSpec((s) => (s ? { ...s, revision: next.revision, updated_at: saved.updated_at, updated_by: saved.updated_by } : s));
+      if (!next.dirty) setFields(next.fields);
+      setDirty(next.dirty);
+      controllerSpecApi.get(projectId).then((fresh) => setSpec((s) => (s ? { ...s, history: fresh.history } : s))).catch(() => { /* the list waits for the next open */ });
+    } catch (e) {
+      setConflict(isConflict(e));                       // somebody saved in between: the typed values stay, reload is the user's choice
+      setError(e instanceof Error ? e.message : String(e));
+    } finally { setBusy(false); }
+  };
+  const reload = async () => {
+    setBusy(true);
+    try { const fresh = await controllerSpecApi.get(projectId); setSpec(fresh); setFields(fresh.fields ?? {}); setDirty(false); setConflict(false); setError(''); }
+    catch (e) { setError(e instanceof Error ? e.message : String(e)); } finally { setBusy(false); }
   };
   const labelOf = (id: string) => { const f = schema.sections.flatMap((s) => s.fields).find((x) => x.id === id); return f ? localized(f.label, lang) : id; };
 
@@ -61,7 +76,7 @@ export default function ControllerSpecForm({ projectId, lang, ct, memoryScope }:
       {spec.revision > 0 && <Tooltip title={ct('spec.revisionTip', { by: spec.updated_by ?? '', at: spec.updated_at ? new Date(spec.updated_at).toLocaleString() : '' })}><Typography sx={{ fontSize: 12, color: 'var(--text-2)' }}>{ct('spec.revision', { n: spec.revision })}</Typography></Tooltip>}
       {canEdit && <Button size="small" variant="contained" disabled={busy || !dirty} data-testid="controller-spec-save" onClick={() => void save()}>{busy ? <CircularProgress size={14} /> : ct('spec.save')}</Button>}
     </Box>
-    {error && <Alert severity="error" sx={{ mb: 1 }}>{error}</Alert>}
+    {error && <Alert severity="error" sx={{ mb: 1 }} action={conflict ? <Button color="inherit" size="small" disabled={busy} data-testid="controller-spec-reload" onClick={() => void reload()}>{ct('spec.reload')}</Button> : undefined}>{conflict ? ct('spec.conflict') : error}</Alert>}
     <Tabs value={step} onChange={(_e, v: number) => chooseStep(v)} variant="scrollable" scrollButtons="auto" sx={{ mb: 1, minHeight: 32 }}>
       {schema.sections.map((s, i) => <Tab key={s.id} value={i} label={localized(s.title, lang)} sx={{ minHeight: 32, py: 0.5, fontSize: 12 }} />)}
     </Tabs>

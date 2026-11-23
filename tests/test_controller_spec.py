@@ -29,8 +29,10 @@ def env(tmp_path, monkeypatch):
         assert c.post("/api/projects", headers=H, json={"id": pid, "title": "T", "customer_org": "O", **extra}).status_code == 200
     for pid in ("ctl", "mot"):
         p = store.get_project(pid)
-        p["members"] += [{"email": "eng@example.test", "role": "engineer"}, {"email": "cust@example.test", "role": "customer"}]
+        old = list(p["members"])
+        p["members"] = old + [{"email": "eng@example.test", "role": "engineer"}, {"email": "cust@example.test", "role": "customer"}]
         store.save_json(pid, "project.json", p)
+        store.sync_membership_index(pid, old, p["members"])
     return {"c": c, "who": who, "root": tmp_path / "projects"}
 
 
@@ -112,3 +114,52 @@ def test_a_motor_project_has_no_controller_specification(env):
     assert not (env["root"] / "mot" / CS.FILE).exists() and not (env["root"] / "mot" / CS.HISTORY).exists()
     audit = [json.loads(l)["entity"] for l in (env["root"] / "mot" / "audit.jsonl").read_text().splitlines()]
     assert "controller_spec" not in audit
+
+
+def test_a_save_on_a_revision_somebody_else_saved_over_is_refused(env):
+    """Astra round 1 of #832: A saves, B saves, A saves again with the revision of A's own answer -> 409, B's value stays."""
+    c = env["c"]
+    a1 = c.put("/api/projects/ctl/controller-spec", headers=H, json={"fields": {"pwm": {"value": 48}}, "revision": 0}).json()
+    b = c.put("/api/projects/ctl/controller-spec", headers=H, json={"fields": {"pwm": {"value": 60}}, "revision": a1["revision"]})
+    assert b.status_code == 200 and b.json()["revision"] == 2
+    a2 = c.put("/api/projects/ctl/controller-spec", headers=H,
+               json={"fields": {"pwm": {"value": 48}, "mcu": {"value": "X"}}, "revision": a1["revision"]})
+    assert a2.status_code == 409 and a2.json()["detail"]["revision"] == 2
+    assert c.get("/api/projects/ctl/controller-spec", headers=H).json()["fields"]["pwm"]["value"] == 60.0
+
+
+def test_members_who_are_not_staff_never_see_an_authors_address(env):
+    c = env["c"]
+    p = store.get_project("ctl")
+    p["members"].append({"email": "oem@example.test", "role": "customer"})
+    store.save_json("ctl", "project.json", p)
+    assert c.put("/api/projects/ctl/controller-spec", headers=H, json={"fields": GOOD, "revision": 0}).status_code == 200
+    for email, role in (("cust@example.test", "user"), ("oem@example.test", "oem")):
+        env["who"].update(email=email, role=role)
+        r = c.get("/api/projects/ctl/controller-spec", headers=H)
+        assert r.status_code == 200 and "admin@example.test" not in r.text
+        assert r.json()["history"][0]["changes"]                       # what changed is still shown
+    env["who"].update(email="eng@example.test", role="engineer")    # staff keep the address
+    assert c.get("/api/projects/ctl/controller-spec", headers=H).json()["updated_by"] == "admin@example.test"
+    assert "admin@example.test" in (env["root"] / "ctl" / CS.FILE).read_text()          # storage keeps the attribution
+    assert "admin@example.test" in (env["root"] / "ctl" / CS.HISTORY).read_text()
+
+
+def test_the_spec_assistant_never_serves_a_controller_project(env):
+    from motor_ai_sim.development import spec_assistant as A
+    member = {"email": "cust@example.test", "role": "user"}
+    staff = {"email": "admin@example.test", "role": "admin"}
+    assert A.may_use(member, store.get_project("mot")) and A.may_use(staff, store.get_project("mot"))
+    assert not A.may_use(member, store.get_project("ctl")) and not A.may_use(staff, store.get_project("ctl"))
+
+
+def test_the_mcp_order_tools_never_reach_a_controller_project(env):
+    from motor_ai_sim.development import spec_order as SO
+    member = {"email": "cust@example.test", "role": "user"}
+    assert SO._own_project(member, "mot")["id"] == "mot"
+    with pytest.raises(SO.OrderError):
+        SO._own_project(member, "ctl")
+    with pytest.raises(SO.OrderError):
+        SO.order_status(member, "ctl")
+    listed = [r.get("id") or r.get("project_id") for r in SO.order_status(member)["projects"]]
+    assert "ctl" not in listed and "mot" in listed

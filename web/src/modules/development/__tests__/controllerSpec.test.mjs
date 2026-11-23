@@ -34,3 +34,12 @@ test('numbers, labels and the kinds with a status', () => {
   assert.equal(localized(pwm.label, 'zh-CN'), 'PWM');
   assert.ok(hasStatus('number') && hasStatus('range') && !hasStatus('text'));
 });
+
+test('after a save the form holds the answer\'s fields and revision; an edit typed meanwhile stays unsaved on top', async () => {
+  const { afterSave, isConflict } = await import('../controllerSpec.ts');
+  const saved = { fields: { pwm: { value: 48 } }, revision: 2 };
+  assert.deepEqual(afterSave({ pwm: { value: 48 } }, saved, false), { fields: saved.fields, revision: 2, dirty: false });
+  const typed = { pwm: { value: 50 } };
+  assert.deepEqual(afterSave(typed, saved, true), { fields: typed, revision: 2, dirty: true });
+  assert.ok(isConflict(Object.assign(new Error('x'), { status: 409 })) && !isConflict(new Error('y')));
+});

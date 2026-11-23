@@ -777,6 +777,20 @@ async def apply_spec_migration(request: Request, project_id: str):
     return {"draft": response_draft, "revision": result["revision"], "schema_version": 2, "completeness": models.completeness(result["draft"])}
 
 
+def _controller_authors(doc: dict, user: dict) -> dict:
+    """Staff see who saved by address; every other member a display name only, as for the motor specification (``_author``).
+    The stored files keep the full attribution."""
+    if access.is_engineer(user):
+        return doc
+    out = copy.deepcopy(doc)
+    if out.get("updated_by"):
+        out["updated_by"] = _author(out["updated_by"])["author_display_name"]
+    for row in out.get("history") or []:
+        if isinstance(row, dict) and row.get("by"):
+            row["by"] = _author(row["by"])["author_display_name"]
+    return out
+
+
 def _controller_project(project: dict) -> None:
     from motor_ai_sim.development import project_type as PT
     if PT.of(project) != PT.CONTROLLER:
@@ -798,7 +812,7 @@ def get_controller_spec(request: Request, project_id: str):
                 history.append(json.loads(line))
             except ValueError:
                 continue
-    return {**doc, "schema": CS.schema(), "history": history[::-1], "can_edit": access.can_edit_spec(user, project)}
+    return _controller_authors({**doc, "schema": CS.schema(), "history": history[::-1], "can_edit": access.can_edit_spec(user, project)}, user)
 
 
 @router.put("/{project_id}/controller-spec")
@@ -834,7 +848,7 @@ async def put_controller_spec(request: Request, project_id: str):
                                                     "changes": out["changes"]})
         store.append_audit(project_id, _email(user), "update", "controller_spec", "controller_spec",
                            {"revision": doc["revision"], "fields": [c["field"] for c in out["changes"]]})
-    return {**doc, "changed": [c["field"] for c in out["changes"]]}
+    return _controller_authors({**doc, "changed": [c["field"] for c in out["changes"]]}, user)
 
 
 @router.put("/{project_id}/spec")

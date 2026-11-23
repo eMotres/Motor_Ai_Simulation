@@ -10,6 +10,14 @@ the layout the viewer reads (cad/fc_scripts/glb_writer.py): millimetres, the CAD
 children are the parts, each carrying ``extras`` ``{family, explode}``.  A face is tessellated on its own, so normals are smooth
 inside a face and hard across faces.
 
+Colours (owner 2026-11-23: "upload the coloured STEP" - a KiCad board export carries a colour per part): a STEP that names colours
+(``COLOUR_RGB`` / ``DRAUGHTING_PRE_DEFINED_COLOUR``) is read through the XCAF document (``STEPCAFControl_Reader``): the colour of
+each face is its own surface colour, else its solid's, else the one inherited from the assembly (OCCT's own style resolution,
+``XCAFPrs``), surface colour before the generic one.  One glTF material per distinct colour; the faces of one solid with different
+colours are separate primitives of that solid's ONE mesh, so a part stays one node (picking, exploded view, outlines per part).  A
+face without a colour keeps the steel grey.  A STEP without colours - and any failure of the colour reader - takes the earlier
+path unchanged, so its GLB is byte-identical to before.
+
   python -m motor_ai_sim.production.step_glb in.step out.glb      (what the child process runs)
 """
 from __future__ import annotations
@@ -28,7 +36,9 @@ from typing import Optional
 log = logging.getLogger(__name__)
 
 #: bump when the writer or the tessellation changes: cached views of an older version are not read
-VERSION = "v1"
+VERSION = "v2"                              # v2: STEP colours (a file without colours converts exactly as v1)
+#: what the GLB of a STEP without colours names as its converter: that path IS the v1 conversion, byte for byte
+PLAIN_VERSION = "v1"
 #: a STEP over this size is refused for the viewer (the download stays available)
 MAX_STEP_BYTES = 30 * 1024 * 1024
 #: seconds the child may run
@@ -96,7 +106,7 @@ def build_glb(solids: list[tuple[str, "object", "object", "object"]]) -> bytes:
     blob = b"".join(bin_parts)
     blob += b"\0" * ((-len(blob)) % 4)
     doc = {
-        "asset": {"version": "2.0", "generator": "motor_ai_sim.production.step_glb", "extras": {"units": "mm", "converter": VERSION}},
+        "asset": {"version": "2.0", "generator": "motor_ai_sim.production.step_glb", "extras": {"units": "mm", "converter": PLAIN_VERSION}},
         "scene": 0, "scenes": [{"nodes": [0]}], "nodes": nodes, "meshes": meshes,
         "materials": [{"name": "steel", "pbrMetallicRoughness": {"baseColorFactor": [*COLOUR, 1.0], "metallicFactor": 0.1, "roughnessFactor": 0.55},
                        "doubleSided": True}],
@@ -140,10 +150,225 @@ def merge_faces(patches: list[tuple["object", "object"]]):
     return np.concatenate(pos_l), np.concatenate(nrm_l), np.concatenate(idx_l)
 
 
+def _material(name: str, rgb) -> dict:
+    return {"name": name, "pbrMetallicRoughness": {"baseColorFactor": [float(c) for c in rgb] + [1.0], "metallicFactor": 0.1,
+                                                   "roughnessFactor": 0.55}, "doubleSided": True}
+
+
+def build_coloured_glb(parts: list[tuple[str, list]], palette: list) -> bytes:
+    """``parts`` = ``[(name, [(positions, normals, indices, material), ...]), ...]``: one node and ONE mesh per part, one primitive
+    per colour of its faces; ``palette[material]`` = linear RGB, ``palette[0]`` the steel grey of a face without a colour."""
+    import numpy as np
+
+    bin_parts: list[bytes] = []
+    views: list[dict] = []
+    accessors: list[dict] = []
+    nodes: list[dict] = [{"name": "Model", "children": list(range(1, len(parts) + 1))}]
+    meshes: list[dict] = []
+    offset = 0
+
+    def add_view(data: bytes, target: int) -> int:
+        nonlocal offset
+        pad = (-offset) % 4
+        if pad:
+            bin_parts.append(b"\0" * pad)
+            offset += pad
+        views.append({"buffer": 0, "byteOffset": offset, "byteLength": len(data), "target": target})
+        bin_parts.append(data)
+        offset += len(data)
+        return len(views) - 1
+
+    for i, (name, prims) in enumerate(parts):
+        primitives = []
+        for pos, nrm, idx, mat in prims:
+            pos = np.ascontiguousarray(pos, dtype="<f4")
+            nrm = np.ascontiguousarray(nrm, dtype="<f4")
+            idx = np.ascontiguousarray(idx, dtype="<u4")
+            a_pos = len(accessors)
+            accessors.append({"bufferView": add_view(pos.tobytes(), 34962), "componentType": 5126, "count": int(len(pos)), "type": "VEC3",
+                              "min": [float(x) for x in pos.min(axis=0)], "max": [float(x) for x in pos.max(axis=0)]})
+            a_nrm = len(accessors)
+            accessors.append({"bufferView": add_view(nrm.tobytes(), 34962), "componentType": 5126, "count": int(len(nrm)), "type": "VEC3"})
+            a_idx = len(accessors)
+            accessors.append({"bufferView": add_view(idx.tobytes(), 34963), "componentType": 5125, "count": int(len(idx)), "type": "SCALAR"})
+            primitives.append({"attributes": {"POSITION": a_pos, "NORMAL": a_nrm}, "indices": a_idx, "material": int(mat), "mode": 4})
+        meshes.append({"name": name, "primitives": primitives})
+        nodes.append({"name": name, "mesh": i, "extras": {"family": name, "explode": 0}})
+
+    blob = b"".join(bin_parts)
+    blob += b"\0" * ((-len(blob)) % 4)
+    materials = [_material("steel", COLOUR)] + [_material("colour_%02x%02x%02x" % tuple(int(round(c * 255)) for c in rgb), rgb)
+                                                for rgb in palette[1:]]
+    doc = {
+        "asset": {"version": "2.0", "generator": "motor_ai_sim.production.step_glb", "extras": {"units": "mm", "converter": VERSION}},
+        "scene": 0, "scenes": [{"nodes": [0]}], "nodes": nodes, "meshes": meshes, "materials": materials,
+        "accessors": accessors, "bufferViews": views, "buffers": [{"byteLength": len(blob)}],
+    }
+    js = json.dumps(doc, separators=(",", ":")).encode("utf-8")
+    js += b" " * ((-len(js)) % 4)
+    total = 12 + 8 + len(js) + 8 + len(blob)
+    return (struct.pack("<III", GLB_MAGIC, 2, total) + struct.pack("<II", len(js), CHUNK_JSON) + js
+            + struct.pack("<II", len(blob), CHUNK_BIN) + blob)
+
+
 # ── the conversion itself (needs cadquery / OCP; runs in the child process) ──────────────────────────────────────────
 
+_COLOUR_TOKENS = (b"COLOUR_RGB", b"DRAUGHTING_PRE_DEFINED_COLOUR")
+
+
+def names_colours(step_path: str) -> bool:
+    """Does the STEP name any colour at all?  (A text scan: a file without one never reaches the colour reader.)"""
+    tail = b""
+    with open(step_path, "rb") as fh:
+        while True:
+            chunk = fh.read(1 << 20)
+            if not chunk:
+                return False
+            if any(t in tail + chunk for t in _COLOUR_TOKENS):
+                return True
+            tail = chunk[-40:]
+
+
+def _rgb(style):
+    """The linear RGB of an XCAF style: the surface colour first, then the generic one (``XCAFPrs_Style`` keeps both); else None."""
+    if style.IsSetColorSurf():
+        c = style.GetColorSurf()
+        return (round(c.Red(), 6), round(c.Green(), 6), round(c.Blue(), 6))
+    if hasattr(style, "IsSetColorCurv") and style.IsSetColorCurv():
+        c = style.GetColorCurv()
+        return (round(c.Red(), 6), round(c.Green(), 6), round(c.Blue(), 6))
+    return None
+
+
+def coloured_solids(step_path: str):
+    """``[(solid, [(face, rgb), ...]), ...]`` in the document's order, solids and faces already placed, ``rgb`` = linear RGB or None
+    per face; None when the document holds no colour at all.  Raises on a reader failure (the caller falls back)."""
+    import cadquery as cq
+    from OCP.IFSelect import IFSelect_RetDone
+    from OCP.STEPCAFControl import STEPCAFControl_Reader
+    from OCP.TCollection import TCollection_ExtendedString
+    from OCP.TDocStd import TDocStd_Document
+    from OCP.TopAbs import TopAbs_FACE, TopAbs_SOLID
+    from OCP.TopExp import TopExp_Explorer
+    from OCP.TopLoc import TopLoc_Location
+    from OCP.XCAFApp import XCAFApp_Application
+    from OCP.XCAFDoc import XCAFDoc_DocumentTool
+    from OCP.XCAFPrs import XCAFPrs, XCAFPrs_DocumentExplorer, XCAFPrs_DocumentExplorerFlags_OnlyLeafNodes, XCAFPrs_IndexedDataMapOfShapeStyle
+
+    app = XCAFApp_Application.GetApplication_s()
+    doc = TDocStd_Document(TCollection_ExtendedString("MDTV-XCAF"))
+    app.InitDocument(doc)
+    reader = STEPCAFControl_Reader()
+    reader.SetColorMode(True)
+    reader.SetNameMode(True)
+    if reader.ReadFile(str(step_path)) != IFSelect_RetDone or not reader.Transfer(doc):
+        raise RuntimeError("STEPCAFControl_Reader could not read the file")
+    shape_tool = XCAFDoc_DocumentTool.ShapeTool_s(doc.Main())
+    out, any_colour = [], False
+    explorer = XCAFPrs_DocumentExplorer(doc, XCAFPrs_DocumentExplorerFlags_OnlyLeafNodes)
+    while explorer.More():
+        node = explorer.Current()
+        shape = shape_tool.GetShape_s(node.RefLabel)              # in the part's own frame; node.Location places it
+        own = _rgb(node.Style)                                    # the leaf's colour, the assembly's inherited when it has none
+        styles = XCAFPrs_IndexedDataMapOfShapeStyle()
+        XCAFPrs.CollectStyleSettings_s(node.RefLabel, TopLoc_Location(), styles)
+
+        def colour_of(sub, fallback):
+            # the part's own shape: its colour is already resolved in the node's style (a placement's own colour before the
+            # part's, the assembly's when neither has one); the style map decides only true sub-shapes (faces, solids of a compound)
+            if sub.IsSame(shape):
+                return fallback
+            if styles.Contains(sub):
+                c = _rgb(styles.FindFromKey(sub))
+                if c is not None:
+                    return c
+            return fallback
+
+        solids = TopExp_Explorer(shape, TopAbs_SOLID)
+        found = False
+        while solids.More():
+            found = True
+            solid = solids.Current()
+            base = colour_of(solid, own)
+            faces, coloured = TopExp_Explorer(solid, TopAbs_FACE), []
+            while faces.More():                                   # the colour looked up on the face itself, then placed
+                coloured.append((cq.Face(faces.Current().Moved(node.Location)), colour_of(faces.Current(), base)))
+                faces.Next()
+            any_colour = any_colour or any(c is not None for _f, c in coloured)
+            out.append((cq.Solid(solid.Moved(node.Location)), coloured))
+            solids.Next()
+        if not found and not shape.IsNull():                      # a surface-only part: its faces as one body, as the plain path does
+            faces, coloured = TopExp_Explorer(shape, TopAbs_FACE), []
+            while faces.More():
+                coloured.append((cq.Face(faces.Current().Moved(node.Location)), colour_of(faces.Current(), own)))
+                faces.Next()
+            if coloured:
+                any_colour = any_colour or any(c is not None for _f, c in coloured)
+                out.append((cq.Shape.cast(shape.Moved(node.Location)), coloured))
+        explorer.Next()
+    return out if any_colour else None
+
+
+def _convert_coloured(step_path: str):
+    """``(glb bytes, info)`` for a STEP with colours, or None when it holds none (the plain path then runs)."""
+    import cadquery as cq
+    import numpy as np
+
+    found = coloured_solids(step_path)
+    if not found:
+        return None
+    bb = cq.Compound.makeCompound([s for s, _ in found]).BoundingBox()
+    diag = max(bb.DiagonalLength, 1e-3)
+    tol = min(0.2, max(0.002, diag * 0.0005))                    # the same tessellation as the plain path
+    palette: list = [None]
+    index: dict = {}
+    parts, triangles = [], 0
+    for i, (_solid, faces) in enumerate(found, 1):
+        groups: dict = {}
+        for face, rgb in faces:
+            verts, tris = face.tessellate(tol, 0.1)
+            if not verts or not tris:
+                continue
+            if rgb is None:
+                mat = 0
+            else:
+                mat = index.get(rgb)
+                if mat is None:
+                    mat = index[rgb] = len(palette)
+                    palette.append(rgb)
+            groups.setdefault(mat, []).append((np.array([(v.x, v.y, v.z) for v in verts], dtype="float32"), np.array(tris, dtype="int64")))
+        prims = []
+        for mat in sorted(groups):
+            pos, nrm, idx = merge_faces(groups[mat])
+            triangles += len(idx) // 3
+            prims.append((pos, nrm, idx, mat))
+        if prims:
+            parts.append(("Part_%d" % i if len(found) > 1 else "Part", prims))
+    if not parts:
+        raise StepConversionError("The STEP file has no solid geometry.")
+    info = {"solids": len(parts), "triangles": triangles, "colours": len(palette) - 1,
+            "bbox_mm": [round(bb.xlen, 3), round(bb.ylen, 3), round(bb.zlen, 3)]}
+    return build_coloured_glb(parts, palette), info
+
+
 def convert_in_process(step_path: str, glb_path: str) -> dict:
-    """Read the STEP, tessellate every solid, write the GLB; returns ``{solids, triangles, bbox_mm}``."""
+    """Read the STEP, tessellate every solid, write the GLB; returns ``{solids, triangles, bbox_mm}`` (+ ``colours``)."""
+    if names_colours(step_path):
+        try:
+            coloured = _convert_coloured(step_path)
+        except StepConversionError:
+            raise
+        except Exception as ex:                                  # noqa: BLE001 - the colour reader never costs the view
+            log.warning("production: STEP colours not read (%s); converting without colours", ex)
+            coloured = None
+        if coloured is not None:
+            Path(glb_path).write_bytes(coloured[0])
+            return coloured[1]
+    return _convert_plain(step_path, glb_path)
+
+
+def _convert_plain(step_path: str, glb_path: str) -> dict:
+    """The conversion without colours (v1, unchanged): every solid in the steel grey."""
     import cadquery as cq
     import numpy as np
 

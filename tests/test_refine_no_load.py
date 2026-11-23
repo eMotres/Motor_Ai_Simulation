@@ -95,3 +95,17 @@ def test_the_no_load_solve_equals_a_plain_no_load_run_of_the_same_geometry(monke
     p0, p1 = float(plain["T_ripple_pp_Nm"]), float(nl["T_ripple_pp_Nm"])
     assert p0 > 0.0 and p1 == pytest.approx(p0, rel=1e-6)
     assert float(nl["T_em_Nm"]) == pytest.approx(float(plain["T_em_Nm"]), abs=1e-6)
+
+
+def test_the_effective_mesh_uses_the_solvers_own_geometry_merge_not_a_shallow_one():
+    """Astra's reproducer: slot_width stored 2.5 mm but wire_width 2.1 -> 0.7 mm; the solver derives the
+    slot width from the primaries (smaller) before refining, so the recorded mesh must be ITS value, not
+    the 1.25 mm a shallow merge gives."""
+    base = {**GEO, "slot_width": 2.5, "wire_width": 2.1}
+    got = refine_proc._eff_mesh_mm(base, {"wire_width": 0.7}, 4.0, 0.3, False)
+    from motor_ai_sim.simulation.fem_solver_2d import mesh_feature_floor_mm
+    from motor_ai_sim.simulation.geometry_2d import merge_geo_override
+    solver = min(4.0, mesh_feature_floor_mm(merge_geo_override(dict(base), {"wire_width": 0.7}), 0.3, False))
+    shallow = min(4.0, mesh_feature_floor_mm({**base, "wire_width": 0.7}, 0.3, False))
+    assert shallow == pytest.approx(1.25)
+    assert got == pytest.approx(solver) and got < shallow - 0.1

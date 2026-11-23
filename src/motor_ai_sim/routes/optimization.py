@@ -2281,13 +2281,16 @@ def _cogging_identity() -> Dict[str, Any]:
     from motor_ai_sim.material_context import get_request_materials
     import dataclasses as _dc
     import hashlib as _hl
+    _ml_default = dict(getattr(_ml, "DEFAULT_PART_MATERIAL", {}) or {})
     asg = dict(get_material_assignments() or {})
     ov = get_request_materials() or {}
     asg.update({k: v for k, v in (ov.get("assignment") or {}).items() if v})
     ov_props = ov.get("materials") or {}
     cards: Dict[str, Any] = {}
     for part in ("stator_core", "rotor_core", "magnet", "shaft", "sleeve"):
-        name = asg.get(part)
+        # the SAME default-material rule the solver uses: an unassigned part with a default card
+        # (the sleeve: DEFAULT_PART_MATERIAL) is solved with that card, so it is part of the identity
+        name = asg.get(part) or _ml_default.get(part)
         if not name:
             if part in ("stator_core", "magnet"):
                 raise RuntimeError("no %s material is assigned" % part)

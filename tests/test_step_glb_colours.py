@@ -149,3 +149,17 @@ def test_a_placement_inherits_its_parts_colour_and_its_own_colour_wins(tmp_path)
     assert sorted(by_x) == [0.0, 10.0] and len(found) == 3                                                  # placements kept
     assert {(0.6, 0.4, 0.2)} in by_x[0.0] and {None} in by_x[0.0]           # placement 1: the part's colour; the loose box: steel
     assert by_x[10.0] == [{(0.2, 0.3, 0.7)}]                                # placement 2: its own colour wins
+
+
+def test_a_file_that_names_a_colour_no_face_uses_gives_the_plain_bytes(tmp_path):
+    """Review note on #837: many exports name a COLOUR_RGB that no part uses; the colour reader then finds none and the plain path
+    runs - the GLB is byte-identical to the file without that entity."""
+    src = _plain(tmp_path / "p.step")
+    text = src.read_text()
+    at = text.rindex("ENDSEC;", 0, text.rindex("END-ISO-10303-21;"))
+    named = tmp_path / "named.step"
+    named.write_text(text[:at] + "#999999 = COLOUR_RGB('',1.,0.,0.);\n" + text[at:])
+    assert step_glb.names_colours(str(named)) and step_glb.coloured_solids(str(named)) is None
+    step_glb.convert_in_process(str(named), str(tmp_path / "named.glb"))
+    step_glb.convert_in_process(str(src), str(tmp_path / "plain.glb"))
+    assert (tmp_path / "named.glb").read_bytes() == (tmp_path / "plain.glb").read_bytes()

@@ -230,7 +230,9 @@ def names_colours(step_path: str) -> bool:
 
 
 def _rgb(style):
-    """The linear RGB of an XCAF style: the surface colour first, then the generic one (``XCAFPrs_Style`` keeps both); else None."""
+    """The RGB of an XCAF style: the surface colour first, then the generic one (``XCAFPrs_Style`` keeps both); else None.
+    LINEAR RGB: OCCT's ``Quantity_Color.Red()`` / ``Green()`` / ``Blue()`` are linear (the STEP's sRGB values are converted on read),
+    and glTF's ``baseColorFactor`` is linear too - so it is written as it is; never gamma-convert it again."""
     if style.IsSetColorSurf():
         c = style.GetColorSurf()
         return (round(c.Red(), 6), round(c.Green(), 6), round(c.Blue(), 6))

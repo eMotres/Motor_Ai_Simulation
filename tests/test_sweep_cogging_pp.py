@@ -153,12 +153,11 @@ def test_a_refused_sweep_solves_nothing_and_every_value_is_missing(plain_cache):
 def test_the_no_load_refusals(monkeypatch):
     cfg = {"simulation": {"drive": "current"}}
     monkeypatch.setattr(O, "get_config", lambda *a, **k: cfg)
-    assert O._cogging_no_load_refusal(False) is None
-    assert "demag" in O._cogging_no_load_refusal(True)
+    assert O._cogging_no_load_refusal() is None          # demag does not refuse here (basis + per-geometry loss)
     cfg["simulation"]["drive"] = "bldc_current"
-    assert "bldc_current" in O._cogging_no_load_refusal(False)
+    assert "bldc_current" in O._cogging_no_load_refusal()
     cfg["simulation"]["drive"] = "custom_current"        # falls back to the sinusoidal current drive
-    assert O._cogging_no_load_refusal(False) is None
+    assert O._cogging_no_load_refusal() is None
 
 
 # ── the whole sweep, solver faked ────────────────────────────────────────────────────────────
@@ -182,8 +181,7 @@ def sweep(monkeypatch, plain_cache):
     monkeypatch.setattr(O, "_save_last_scan", lambda r: None)
     monkeypatch.setattr(O._sweep_saves, "autosave", lambda r, **k: saved.setdefault("result", r))
     monkeypatch.setattr(O, "_job_workers", lambda: 2)
-    monkeypatch.setattr(O, "_cogging_no_load_refusal",
-                        lambda demag: ("demagnetisation is on" if demag else None))
+    monkeypatch.setattr(O, "_cogging_no_load_refusal", lambda: None)
     import motor_ai_sim.duty_results as _dr
     monkeypatch.setattr(_dr, "solver_stamp", lambda: {"code_version": "test"})
     import motor_ai_sim.simulation.fem_solver_2d as _fs
@@ -255,14 +253,43 @@ def test_a_cogging_limit_marks_the_points_above_it_not_eligible(sweep):
     assert {p["eligible"] for p in result["points"]} == {True, False}
 
 
-def test_a_refused_sweep_keeps_the_loaded_points_and_marks_the_value_missing(sweep):
+def test_demag_on_still_computes_one_demag_off_full_strength_solve_with_the_basis_recorded(sweep):
     result, calls = sweep(cogging_pp=True, demag=True, magnet_temp_c=20.0)
-    assert all(c["I"] != 0.0 for c in calls)                       # no no-load solve was run
-    assert len(result["points"]) == 6
+    nl = [c for c in calls if c["I"] == 0.0]
+    assert len(nl) == 3 and all(c["demag"] is False for c in nl)          # demag OFF, one per geometry
+    assert all(c.get("report_demag_loss") for c in calls if c["I"] != 0.0)  # the loaded loss is asked for
     for p in result["points"]:
-        assert p["feasible"] and p["T_em_Nm"] > 0
-        assert p["cogging_pp_Nm"] is None and "demagnetisation" in p["cogging_error"]
-    assert result["cogging_pp"]["n_missing"] == 6 and result["cogging_pp"]["final"] is False
+        assert p["cogging_pp_Nm"] is not None
+        assert p["cogging_basis"] == "no_load_full_strength" and p["cogging_demag_at_load"] is True
+    assert result["cogging_pp"]["basis"] == "no_load_full_strength"
+    assert result["cogging_pp"]["demag_at_load"] is True and "full-strength" in result["cogging_pp"]["basis_text"]
+
+
+def test_the_basis_is_recorded_when_demag_is_off_too(sweep):
+    result, _ = sweep(cogging_pp=True, magnet_temp_c=20.0)
+    assert all(p["cogging_demag_at_load"] is False and p["cogging_basis"] == "no_load_full_strength"
+               for p in result["points"])
+
+
+def _pts(losses):
+    return [{"geom_id": g, "cogging_pp_Nm": 0.3, "cogging_final": True, "eligible": True,
+             "cogging_steps_per_period": 144, "demag_loss_pct": loss} for g, loss in losses]
+
+
+def test_a_geometry_whose_loaded_points_lose_more_than_the_threshold_is_refused():
+    assert O.COGGING_DEMAG_REFUSE_FRACTION == 0.005
+    pts = _pts([(0, 0.2), (0, 0.4), (1, 0.2), (1, 0.9)])           # % of Br volume; limit 0.5 %
+    assert O._cogging_refuse_demagged(pts, cogging_max_nm=1.0) == 1
+    assert [p["cogging_pp_Nm"] for p in pts] == [0.3, 0.3, None, None]   # BOTH currents of geometry 1
+    assert all("irreversibly" in p["cogging_error"] and p["cogging_final"] is False for p in pts[2:])
+    assert [p["eligible"] for p in pts] == [True, True, False, False]
+    assert pts[0]["cogging_demag_loss_pct"] == 0.4 and pts[2]["cogging_demag_loss_pct"] == 0.9
+
+
+def test_a_point_that_reports_no_demag_loss_is_not_refused_and_says_so():
+    pts = [{"geom_id": 0, "cogging_pp_Nm": 0.3, "cogging_final": False}]
+    assert O._cogging_refuse_demagged(pts) == 0
+    assert pts[0]["cogging_pp_Nm"] == 0.3 and pts[0]["cogging_demag_loss_pct"] is None
 
 
 def test_the_sweep_level_final_flag_needs_every_point_measured_and_final(sweep):

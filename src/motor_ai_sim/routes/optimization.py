@@ -1513,7 +1513,8 @@ def _subprocess_eval(overrides: Dict[str, float], current_a: float, steps: int,
                      sampling_purpose: Literal["standard", "optimization", "cogging_quality"] =
                      "optimization",
                      optimizer_candidate: bool = True,
-                     no_load: bool = False) -> Dict[str, Any]:
+                     no_load: bool = False,
+                     report_demag_loss: bool = False) -> Dict[str, Any]:
     """Evaluate ONE (geometry, current, γ) with the real sliding-band transient
     in an isolated subprocess (FEM/LLVM crash → failed design, not a dead API).
     Rebuilds the CadQuery geometry + gmsh mesh for the candidate in-memory.
@@ -1581,7 +1582,8 @@ def _subprocess_eval(overrides: Dict[str, float], current_a: float, steps: int,
                        **({} if connection is None
                           else {"connection": str(connection)}),
                        # opt-in unexcited no-load eval (Sweep "Cogging pp"); absent otherwise
-                       **({"no_load": True} if no_load else {})})
+                       **({"no_load": True} if no_load else {}),
+                       **({"report_demag_loss": True} if report_demag_loss else {})})
     import time as _t_eval
     # What this eval was solved WITH -- provenance for the eval log (schema 2).
     _solve_meta = {
@@ -2236,9 +2238,18 @@ _COG_PP_FINAL_STEPS = 120      # owner rule: cogging is final from 120 steps per
 _COG_PP_FINAL_TEMP_C = 20.0    # ... at 20 C magnets
 
 
+#: A sweep whose loaded points lose more than this share of Br irreversibly (demag on) cannot be
+#: described by the full-strength no-load value: the value of that geometry is refused (missing).
+COGGING_DEMAG_REFUSE_FRACTION = 0.005
+#: The basis every Cogging pp value is stated on.
+COGGING_BASIS = "no_load_full_strength"
+COGGING_BASIS_TEXT = "no-load, full-strength magnets (demagnetisation at load not applied)"
+
+
 def _cogging_pp_fields(out: Optional[Dict[str, Any]], steps_requested: int,
                        magnet_temp_c_resolved: Optional[float],
-                       missing: Optional[str] = None) -> Dict[str, Any]:
+                       missing: Optional[str] = None,
+                       demag_at_load: bool = False) -> Dict[str, Any]:
     """The fields a loaded sweep point carries from its geometry's no-load solve ``out``.
 
     Provenance is the EFFECTIVE one: the steps the solver really reported (it may snap them), the
@@ -2271,6 +2282,8 @@ def _cogging_pp_fields(out: Optional[Dict[str, Any]], steps_requested: int,
         "cogging_pp_Nm": pp,
         "cogging_steps_per_period": eff_steps if pp is not None else None,
         "cogging_steps_requested": int(steps_requested),
+        # the basis is explicit and never silent: the solve is demag OFF whatever the loaded points do
+        "cogging_basis": COGGING_BASIS, "cogging_demag_at_load": bool(demag_at_load),
         "cogging_magnet_temp_c": (None if magnet_temp_c_resolved is None else float(magnet_temp_c_resolved)),
         "cogging_final": final}
     if pp is not None:
@@ -2293,8 +2306,9 @@ class _SweepCogging:
     ``solves`` counts the real solves of this run."""
 
     def __init__(self, key_of, solve, steps: int, magnet_temp_c_resolved: Optional[float],
-                 refuse: Optional[str] = None):
+                 refuse: Optional[str] = None, demag_at_load: bool = False):
         self._key_of, self._solve = key_of, solve
+        self.demag_at_load = bool(demag_at_load)
         self.steps, self.temp = int(steps), magnet_temp_c_resolved
         self.refuse = refuse
         self.solves = 0
@@ -2303,7 +2317,8 @@ class _SweepCogging:
         self._guard = threading.Lock()
 
     def _missing(self, why: str) -> Dict[str, Any]:
-        return _cogging_pp_fields(None, self.steps, self.temp, missing=why)
+        return _cogging_pp_fields(None, self.steps, self.temp, missing=why,
+                                  demag_at_load=self.demag_at_load)
 
     def cached(self, geo_ov: Dict[str, float]) -> Optional[Dict[str, Any]]:
         if self.refuse:
@@ -2315,7 +2330,8 @@ class _SweepCogging:
         if key in self._memo:
             return self._memo[key]
         out = _EVAL_CACHE.get(key)
-        return None if out is None else _cogging_pp_fields(out, self.steps, self.temp)
+        return None if out is None else _cogging_pp_fields(
+            out, self.steps, self.temp, demag_at_load=self.demag_at_load)
 
     def fields(self, geo_ov: Dict[str, float]) -> Dict[str, Any]:
         if self.refuse:
@@ -2338,18 +2354,19 @@ class _SweepCogging:
                 self.solves += 1
                 if out and out.get("ok"):
                     _store_eval(key, out)
-            f = self._memo[key] = _cogging_pp_fields(out, self.steps, self.temp)
+            f = self._memo[key] = _cogging_pp_fields(
+                out, self.steps, self.temp, demag_at_load=self.demag_at_load)
         return f
 
 
-def _cogging_no_load_refusal(demag: bool) -> Optional[str]:
+def _cogging_no_load_refusal() -> Optional[str]:
     """Why ONE no-load solve cannot stand for the loaded points of this sweep (None = it can).
 
-    * the loaded points run on an excitation that is not the sinusoidal current drive (block
-      current, applied voltage, PWM): the no-load eval is forced unexcited, but it would then not
-      be the same machine state;
-    * demag on: the magnets are de-rated by each point's own current, so one full-strength solve
-      cannot match both currents - never substituted."""
+    Only an excitation that is not the sinusoidal current drive (block current, applied voltage,
+    PWM allowed): the no-load eval is forced unexcited, but it would then not be the same machine
+    state.  Demag does NOT refuse here: the no-load solve is always demag OFF, full-strength
+    magnets, and says so (`cogging_basis`); a geometry whose loaded points lose Br irreversibly
+    above COGGING_DEMAG_REFUSE_FRACTION is refused later, per geometry (`_cogging_refuse_demagged`)."""
     try:
         from motor_ai_sim.optimization.refine_proc import _excitation_args
         drive = _excitation_args(dict(get_config().get("simulation") or {})).get("drive")
@@ -2358,10 +2375,42 @@ def _cogging_no_load_refusal(demag: bool) -> Optional[str]:
     if drive != "current":
         return ("the loaded points run on the %s drive: one unexcited no-load solve cannot be "
                 "guaranteed to be the same machine state" % drive)
-    if demag:
-        return ("demagnetisation is on: the magnet state under load differs per current, so one "
-                "no-load solve cannot stand for both")
     return None
+
+
+def _cogging_refuse_demagged(points: List[Dict[str, Any]], cogging_max_nm: float = 0.0) -> int:
+    """Per GEOMETRY: when any loaded point reports an irreversible magnet loss above
+    COGGING_DEMAG_REFUSE_FRACTION of Br (`demag_loss_pct`, % of the Br volume), the full-strength
+    no-load value does not describe that geometry under load: its value goes missing with the
+    reason.  A point that reports no loss (an older cached eval) is NOT refused: its basis is
+    recorded and `cogging_demag_loss_pct` stays None.  Returns the number of geometries refused."""
+    limit_pct = 100.0 * COGGING_DEMAG_REFUSE_FRACTION
+    worst: Dict[Any, float] = {}
+    for p in points:
+        try:
+            v = float(p.get("demag_loss_pct"))
+        except (TypeError, ValueError):
+            continue
+        if math.isfinite(v):
+            worst[p.get("geom_id")] = max(worst.get(p.get("geom_id"), 0.0), v)
+    bad = {g for g, v in worst.items() if v > limit_pct}
+    for p in points:
+        if "cogging_pp_Nm" not in p:
+            continue
+        g = p.get("geom_id")
+        p["cogging_demag_loss_pct"] = worst.get(g)
+        if g in bad:
+            p["cogging_pp_Nm"] = None
+            p["cogging_final"] = False
+            p["cogging_error"] = ("the loaded points lose %.2f %% of Br irreversibly (limit %.2f %%): "
+                                  "the full-strength no-load value does not describe this geometry "
+                                  "under load" % (worst[g], limit_pct))
+            for k in ("cogging_steps_per_period", "cogging_gap_layers", "cogging_n_sectors",
+                      "cogging_mesh_mm"):
+                p[k] = None
+            if cogging_max_nm > 0.0:
+                p["eligible"] = False
+    return len(bad)
 
 
 def _cogging_limits_ok(pt: Dict[str, Any], cogging_max_nm: float, eff_min_pct: float,
@@ -2610,9 +2659,10 @@ def _scan_worker(variables, operating_points, steps, coil_temp_c, ripple_max,
                                        gap_layers, end_winding, rotor_eddy, hi_fidelity,
                                        structured_gap, airgap_macro,
                                        iron_template=iron_template, geo_mesh=geo_mesh,
-                                       element_order=element_order, demag=bool(demag),
+                                       element_order=element_order, demag=False,
                                        pins={**(_scan_pins(None, magnet_temp_c) or {}),
                                              "cogging_pp": True, "no_load": True,
+                                             "basis": COGGING_BASIS,
                                              "drive": "current",
                                              "eddy": bool(_sim.get("eddy", False)),
                                              "magnet_temp_resolved": _mt_resolved,
@@ -2624,8 +2674,9 @@ def _scan_worker(variables, operating_points, steps, coil_temp_c, ripple_max,
 
             def _cog_solve(geo_ov):
                 # Unexcited (no_load: current drive, zero current and voltage, no PWM / block
-                # current) and the SAME physics as the loaded points: rotor eddy as they have it
-                # (demag on is refused up front).  rpm = the config speed (time axis only).
+                # current), rotor eddy as the loaded points have it, demag OFF with the magnets at
+                # the loaded points' temperature: the stated basis is "no-load, full-strength
+                # magnets".  rpm = the config speed (time axis only).
                 return _subprocess_eval(geo_ov, 0.0, steps, coil_temp_c, n_periods=_NPER,
                                         gamma_deg=0.0, mesh_size_mm=mesh_size_mm,
                                         min_size_mm=min_size_mm, pole_copy=pole_copy,
@@ -2634,12 +2685,12 @@ def _scan_worker(variables, operating_points, steps, coil_temp_c, ripple_max,
                                         rotor_eddy=rotor_eddy, hi_fidelity=hi_fidelity,
                                         structured_gap=structured_gap, airgap_macro=airgap_macro,
                                         iron_template=iron_template, geo_mesh=geo_mesh,
-                                        element_order=element_order, demag=bool(demag),
+                                        element_order=element_order, demag=False,
                                         owner="scan", magnet_temp_c=magnet_temp_c,
                                         ripple_pct_gate=False, sampling_purpose="optimization",
                                         no_load=True)
             _cog = _SweepCogging(_cog_key, _cog_solve, steps, _mt_resolved,
-                                 refuse=_cogging_no_load_refusal(demag))
+                                 refuse=_cogging_no_load_refusal(), demag_at_load=bool(demag))
 
         def _with_cogging(pt, geo_ov, cached_only=False):
             """Add the geometry's Cogging pp to a loaded point and apply the opt-in limits.
@@ -2689,6 +2740,7 @@ def _scan_worker(variables, operating_points, steps, coil_temp_c, ripple_max,
                                     threads=_solo_ctx["threads"],
                                     magnet_temp_c=magnet_temp_c,
                                     **({"ripple_pct_gate": False} if cogging_screen else {}),
+                                    **({"report_demag_loss": True} if cogging_pp and demag else {}),
                                     sampling_purpose="optimization")
             if _config_fingerprint(tuple(geo_ov)) != fp_before:
                 out = {"ok": False, "error": "source config changed during FEM scan",
@@ -2892,6 +2944,8 @@ def _scan_worker(variables, operating_points, steps, coil_temp_c, ripple_max,
                                   "error": _src_changed}
             log.warning("sweep %s stopped: %s", run_id, _src_changed)
         points = [p for p in points if p is not None]
+        _n_demag_refused = (_cogging_refuse_demagged(points, float(cogging_max_nm))
+                            if _cog is not None else 0)
 
         # segments: the two operating points of one geometry
         by_geom: Dict[int, List[int]] = {}
@@ -3010,6 +3064,9 @@ def _scan_worker(variables, operating_points, steps, coil_temp_c, ripple_max,
                 "steps_effective": sorted({p["cogging_steps_per_period"] for p in _meas
                                            if p.get("cogging_steps_per_period") is not None}),
                 "magnet_temp_c": _cog.temp, "refused": _cog.refuse,
+                "basis": COGGING_BASIS, "basis_text": COGGING_BASIS_TEXT,
+                "demag_at_load": bool(demag), "demag_refuse_fraction": COGGING_DEMAG_REFUSE_FRACTION,
+                "n_geometries_refused_by_demag": int(_n_demag_refused),
                 "no_load_solves": int(_cog.solves), "n_geometries": len(geos),
                 "n_measured": len(_meas), "n_missing": len(_cp) - len(_meas),
                 # final only when EVERY point carries a successful final measurement

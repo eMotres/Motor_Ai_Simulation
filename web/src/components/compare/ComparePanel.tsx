@@ -290,7 +290,8 @@ const coggingCols = (): ResultCol[] => [
 /** The settings two Cogging pp values must share to be compared (steps really used, temperature, mesh / gap / sectors). */
 const coggingSig = (s: SavedSim): string => {
   const r = (s.results ?? {}) as Record<string, unknown>;
-  return ['cogging_steps', 'cogging_temp_c', 'cogging_mesh_mm', 'cogging_gap_layers', 'cogging_sectors']
+  return ['cogging_steps', 'cogging_temp_c', 'cogging_mesh_mm', 'cogging_gap_layers', 'cogging_sectors',
+    'cogging_basis_code', 'cogging_demag_at_load']
     .map(k => (r[k] === undefined || r[k] === null ? '?' : String(r[k]))).join('|');
 };
 const MECH_COLS: ResultCol[] = ([
@@ -799,7 +800,9 @@ const ComparePanel: React.FC = () => {
         return `${fmtNum(raw, 3, 1)}${fin ? '' : ` (${txSim('coggingPpRanking')})`}`;
       },
       title: (v, s) => (coggingMixed ? txSim('coggingPpMixed')
-        : Number((s.results as any)?.cogging_final) === 1 ? undefined : txSim('coggingPpRankingTip')),
+        : [Number((s.results as any)?.cogging_final) === 1 ? '' : txSim('coggingPpRankingTip'),
+           Number((s.results as any)?.cogging_demag_at_load) === 1 ? txSim('coggingPpBasis') : '']
+            .filter(Boolean).join(' ') || undefined),
     };
   });
   const selectedComparisonModel = buildComparisonModel(selected, paramModelColumns, valEq);

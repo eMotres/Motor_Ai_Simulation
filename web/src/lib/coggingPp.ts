@@ -13,16 +13,18 @@ export interface CoggingPp {
   gapLayers?: number;
   sectors?: number;
   meshMm?: number;
+  demagAtLoad: boolean;    // the loaded points run with demagnetisation ON (the value is still demag-off, full strength)
+  basis?: string;          // always the explicit no-load / full-strength basis when measured
 }
 
 const fin = (v: unknown): number | undefined => (typeof v === 'number' && Number.isFinite(v) ? v : undefined);
 
 export function coggingOf(p: any): CoggingPp {
   const asked = !!p && Object.prototype.hasOwnProperty.call(p, 'cogging_pp_Nm');
-  if (!asked) return { asked: false, final: false };
+  if (!asked) return { asked: false, final: false, demagAtLoad: false };
   const value = fin(p.cogging_pp_Nm);
   return {
-    asked, value, final: value !== undefined && p.cogging_final === true,
+    asked, demagAtLoad: p.cogging_demag_at_load === true, basis: typeof p.cogging_basis === 'string' ? p.cogging_basis : undefined, value, final: value !== undefined && p.cogging_final === true,
     error: typeof p.cogging_error === 'string' ? p.cogging_error : undefined,
     steps: fin(p.cogging_steps_per_period), tempC: fin(p.cogging_magnet_temp_c),
     gapLayers: fin(p.cogging_gap_layers), sectors: fin(p.cogging_n_sectors), meshMm: fin(p.cogging_mesh_mm),
@@ -38,17 +40,29 @@ export function coggingText(c: CoggingPp, rankingLabel: string): string {
 
 /** The settings two values must share to be compared (steps actually used, temperature, mesh / gap / sectors). */
 export function coggingSettingsKey(c: CoggingPp): string {
-  return [c.steps, c.tempC, c.meshMm, c.gapLayers, c.sectors].map(x => (x === undefined ? '?' : String(x))).join('|');
+  return [c.steps, c.tempC, c.meshMm, c.gapLayers, c.sectors, c.basis, c.demagAtLoad ? 'd' : 'n'].map(x => (x === undefined ? '?' : String(x))).join('|');
 }
 
 /** Numbers-only provenance that rides with the value into the applied-design metrics (and so into Compare). */
 export function coggingMetrics(c: CoggingPp): Record<string, number> {
   if (c.value === undefined) return {};
-  const m: Record<string, number> = { cogging_pp_Nm: c.value, cogging_final: c.final ? 1 : 0 };
+  const m: Record<string, number> = { cogging_pp_Nm: c.value, cogging_final: c.final ? 1 : 0,
+    cogging_basis_code: 1,                          // 1 = no-load, full-strength magnets (demag at load not applied)
+    cogging_demag_at_load: c.demagAtLoad ? 1 : 0 };
   if (c.steps !== undefined) m.cogging_steps = c.steps;
   if (c.tempC !== undefined) m.cogging_temp_c = c.tempC;
   if (c.meshMm !== undefined) m.cogging_mesh_mm = c.meshMm;
   if (c.gapLayers !== undefined) m.cogging_gap_layers = c.gapLayers;
   if (c.sectors !== undefined) m.cogging_sectors = c.sectors;
   return m;
+}
+
+/** The hover text of a Cogging pp value: why it is missing, or its ranking-only status, and ALWAYS the basis when the
+ *  loaded points have demagnetisation on.  `tr` is the translator of the simulation namespace. */
+export function coggingTip(c: CoggingPp, tr: (key: string) => string): string | undefined {
+  if (c.value === undefined) return c.error || tr('coggingPpMissing');
+  const parts: string[] = [];
+  if (!c.final) parts.push(tr('coggingPpRankingTip'));
+  if (c.demagAtLoad) parts.push(tr('coggingPpBasis'));
+  return parts.length ? parts.join(' ') : undefined;
 }

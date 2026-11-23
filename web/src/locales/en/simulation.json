@@ -266,5 +266,6 @@
   "coggingPpRanking": "ranking only",
   "coggingPpRankingTip": "Ranking only: not a final cogging value. A final value needs 120 or more steps per period at 20 C.",
   "coggingPpMissing": "No Cogging pp for this geometry: its no-load solve was refused or failed. The loaded values are unchanged.",
-  "coggingPpMixed": "Cogging pp values were measured with different settings (steps, magnet temperature, mesh); they are not ranked against each other."
+  "coggingPpMixed": "Cogging pp values were measured with different settings (steps, magnet temperature, mesh); they are not ranked against each other.",
+  "coggingPpBasis": "No-load, full-strength magnets (demagnetisation at load not applied)."
 }

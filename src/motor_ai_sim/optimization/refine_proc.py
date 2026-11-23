@@ -144,7 +144,8 @@ def run_one(overrides: Dict[str, float], current_a: float, steps: int,
             sampling_purpose: Literal["standard", "optimization", "cogging_quality"] =
             "optimization",
             optimizer_candidate: bool = False,
-            no_load: bool = False) -> Dict[str, Any]:
+            no_load: bool = False,
+            report_demag_loss: bool = False) -> Dict[str, Any]:
     """Run the sliding-band transient for one candidate and return mean
     performance metrics (torque, efficiency, ripple, losses, mass).
 
@@ -717,6 +718,10 @@ def run_one(overrides: Dict[str, float], current_a: float, steps: int,
         "daxis_policy": d.get("daxis_policy"),
         "psi_pm_probe_skipped": bool((d.get("summary") or {})
                                      .get("psi_pm_probe_skipped", False)),
+        # Opt-in (the Sweep's "Cogging pp" on a demag-on sweep): the irreversible magnet loss of THIS
+        # loaded point, % of the Br volume (solver `demag_summary.loss_pct`).  Absent otherwise.
+        **({"demag_loss_pct": (d.get("demag_summary") or {}).get("loss_pct")}
+           if report_demag_loss else {}),
         # What a no-load run REALLY solved (the solver may snap the steps); absent otherwise,
         # so every loaded point's payload is what it always was.
         **({"no_load_provenance": {
@@ -762,7 +767,8 @@ if __name__ == "__main__":
                       sampling_purpose=spec.get("sampling_purpose", "optimization"),
                       optimizer_candidate=bool(spec.get("optimizer_candidate",
                                                         False)),
-                      no_load=bool(spec.get("no_load", False)))
+                      no_load=bool(spec.get("no_load", False)),
+                      report_demag_loss=bool(spec.get("report_demag_loss", False)))
         sys.stdout.write("@@RESULT@@" + json.dumps({"ok": True, "res": res}))
     except Exception as e:  # noqa: BLE001
         sys.stdout.write("@@RESULT@@" + json.dumps(

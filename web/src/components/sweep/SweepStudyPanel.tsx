@@ -41,7 +41,7 @@ import {
 } from '../../lib/sweepRestore';
 import type { RestoreVerdict } from '../../lib/sweepRestore';
 import SavedSweeps from './SavedSweeps';
-import { coggingOf, coggingText, coggingMetrics } from '../../lib/coggingPp';
+import { coggingOf, coggingText, coggingMetrics, coggingTip } from '../../lib/coggingPp';
 
 const tx = nsT('simulation');
 const API = import.meta.env.VITE_API_URL ?? 'http://localhost:8001';
@@ -192,8 +192,7 @@ const SweepTable: React.FC<{ points: any[]; rpm: number; vdcFactor?: number; sel
         get: (r: any) => (r.cp.value === undefined ? 1e9 : r.cp.value),
         fmt: (v: number) => (v >= 1e9 ? '-' : String(v)),
         fmtRow: (r: any) => coggingText(r.cp, tx('coggingPpRanking')),
-        titleRow: (r: any) => (r.cp.value === undefined ? (r.cp.error || tx('coggingPpMissing'))
-          : r.cp.final ? undefined : tx('coggingPpRankingTip')) }] : []),
+        titleRow: (r: any) => coggingTip(r.cp, tx) }] : []),
       { id: 'mass', label: 'active mass (kg)', get: r => r.mass, fmt: v => v.toFixed(3) },
       { id: 'td', label: 'N·m/kg (active)', get: r => r.td, fmt: v => v.toFixed(2) },
       { id: 'pd', label: 'kW/kg', get: r => r.pd, fmt: v => v.toFixed(3) },
@@ -312,7 +311,7 @@ const SweepTooltip: React.FC<any> = ({ active, payload }) => {
       <div style={{ color: 'var(--text-2)' }}>T = {d.T?.toFixed?.(1)} N·m · ripple {d.ripple?.toFixed?.(1)} %</div>
       {d.cp?.asked && (
         <div style={{ color: 'var(--text-2)' }}
-             title={d.cp.value === undefined ? (d.cp.error || tx('coggingPpMissing')) : d.cp.final ? undefined : tx('coggingPpRankingTip')}>
+             title={coggingTip(d.cp, tx)}>
           {tx('coggingPpCol')} {coggingText(d.cp, tx('coggingPpRanking'))}{d.cp.value === undefined ? '' : ' N·m'}
         </div>
       )}
@@ -1537,7 +1536,7 @@ const SweepStudyPanel: React.FC = () => {
                     "70 A peak" for the SAME point (2026-09-19). */}
                 Picked: <strong>I = {formatCurrent(Number(selected.I) || 0, readCurrentUnit())} · γ = {selected.g}°</strong> → η {selected.y?.toFixed?.(2)} % · {selected.x?.toFixed?.(2)} N·m/kg · T {selected.T?.toFixed?.(2)} N·m · ripple {selected.ripple?.toFixed?.(1)} %
                 {selected.cp?.asked && (
-                  <span title={selected.cp.value === undefined ? (selected.cp.error || tx('coggingPpMissing')) : selected.cp.final ? undefined : tx('coggingPpRankingTip')}>
+                  <span title={coggingTip(selected.cp, tx)}>
                     {' '}· {tx('coggingPpCol')} {coggingText(selected.cp, tx('coggingPpRanking'))}{selected.cp.value === undefined ? '' : ' N·m'}
                   </span>
                 )}

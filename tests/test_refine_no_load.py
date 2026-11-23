@@ -71,6 +71,15 @@ def test_a_no_load_eval_names_what_it_solved_and_refuses_a_current(captured):
         _one(current_a=5.0, no_load=True)
 
 
+def test_the_loaded_demag_loss_is_reported_only_when_asked(captured, monkeypatch):
+    raw = dict(_raw(converged=True))
+    raw["demag_summary"] = {"loss_pct": 0.7}
+    monkeypatch.setattr(refine_proc, "_kernel", lambda: types.SimpleNamespace(
+        run=lambda cap, args: {"ok": True, "result": types.SimpleNamespace(raw=raw)}))
+    assert "demag_loss_pct" not in _one(current_a=20.0)                      # payload as before
+    assert _one(current_a=20.0, report_demag_loss=True)["demag_loss_pct"] == 0.7
+
+
 @pytest.mark.slow
 def test_the_no_load_solve_equals_a_plain_no_load_run_of_the_same_geometry(monkeypatch):
     """REAL FEM on the 30 mm 12s14p fixture: same steps, mesh, sectors, rotor positions -> the same

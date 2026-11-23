@@ -141,7 +141,7 @@ for (const [who, isAdmin] of [['admin', true], ['member', false]]) {
   test(`${who}: two stored records of one stamped sheet are ONE header with one icon and both motors under it`, async () => {
     const i18n = m.makeI18n(); await i18nReady(i18n);
     const html = m.renderTab(i18n, isAdmin, who);
-    const fam = html.slice(html.indexOf('>CILN28 200<'));
+    const fam = html.slice(html.lastIndexOf('data-testid="by-die-family"', html.indexOf('>CILN28 200<')));   // the name is in the block's line now
     const blocks = [...fam.matchAll(/data-testid="by-die-block" data-members="(\d+)"/g)].map((x) => Number(x[1]));
     assert.equal(blocks[0], 2, String(blocks));                                         // one header, two member records
     const block = fam.slice(fam.indexOf('data-testid="by-die-block"'));

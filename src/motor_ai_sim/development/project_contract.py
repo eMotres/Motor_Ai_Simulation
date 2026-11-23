@@ -469,7 +469,7 @@ def _context(request: Request, project_id: str):
         raise HTTPException(status_code=404, detail="Project not found")
     user, project, _role = access.require_project(request, project_id)
     if not may_read(user, project):
-        raise HTTPException(status_code=404, detail="Not found")
+        raise HTTPException(status_code=404, detail="Project not found")       # the body of an unknown project: no oracle
     return user, project
 
 

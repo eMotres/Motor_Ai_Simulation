@@ -37,6 +37,7 @@ from motor_ai_sim.auth import caller_identity, require_admin
 from motor_ai_sim.config import get_config
 from motor_ai_sim.duty_kind import TEST_KIND as TEST_DUTY_KIND, is_test_duty
 from motor_ai_sim import workspace as _WS
+from motor_ai_sim import sheet_replace as _sheet_replace   # the sheet-replacement marks (only stdlib at import: no cycle)
 from motor_ai_sim.workspace import layering as _ws_layering
 from motor_ai_sim.workspace import resolve_die_dir as _ws_resolve_die_dir
 from motor_ai_sim.workspace import root as _ws_root_f
@@ -4109,7 +4110,7 @@ def record_duty_result(req: DutyResult, _w: dict = Depends(require_catalog_write
     _store_run(die, cfg, c, found, _drive, result=res,
                assignment_sig=req.assignment_sig)
     _save_yaml(p, c)
-    __import__("motor_ai_sim.sheet_replace", fromlist=["refresh_mark"]).refresh_mark(die, cfg, req.duty)  # sheet_replace: a save on the current sheet clears the mark
+    _sheet_replace.refresh_mark(die, cfg, req.duty)  # sheet_replace: a save on the current sheet clears the mark
     # The per-duty store keeps a POINTER at the electromagnetic column, never a
     # copy of it (2026-09-09): the numbers above live in the configuration yaml,
     # which is the one place a catalogue answer may live, and a second copy able

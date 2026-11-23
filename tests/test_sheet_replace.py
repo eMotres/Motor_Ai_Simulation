@@ -228,3 +228,45 @@ def test_an_unmarked_store_row_is_written_exactly_as_before(die, monkeypatch):
     assert DR.record(DIE, NEWCFG, "rated", "thermal", {"computed_at": "t9", "coil_c": 70.0})
     row = json.loads((die["tmp"] / "duty_results.json").read_text())["results"][DIE][NEWCFG]["rated"]["thermal"]
     assert "sheet_stale" not in row and row["coil_c"] == 70.0
+
+
+def _state(env) -> dict:
+    files = {p.name: p.read_bytes() for p in (_dies(env) / DIE).glob("*.yaml")}
+    return {"files": files, "store": (env["tmp"] / "duty_results.json").read_bytes()}
+
+
+def test_a_failing_store_mark_leaves_the_die_and_every_configuration_as_they_were(die, monkeypatch):
+    """Review of #839 (1): the store rows are marked FIRST; when that fails nothing else is written."""
+    before = _state(die)
+    monkeypatch.setattr(DR, "mark_sheet_stale", lambda d, m: (_ for _ in ()).throw(OSError("store read-only")))
+    r = client.post(f"{URL}/apply", headers=die["admin"], json={"sheet": NEW, "confirm": DIE})
+    assert r.status_code == 500 and "was not replaced" in r.text and "restored from the backup" in r.text
+    assert _state(die) == before
+
+
+def test_a_failing_die_write_after_the_marks_restores_everything_from_the_backup(die, monkeypatch):
+    from motor_ai_sim.routes import family as F
+    before = _state(die)
+    real, calls = F._save_yaml, []
+
+    def flaky(p, d):
+        if Path(p).name == "die.yaml" and not calls:                # the die write fails once; the restore then succeeds
+            calls.append(p)
+            raise OSError("disk full")
+        return real(p, d)
+    monkeypatch.setattr(F, "_save_yaml", flaky)
+    r = client.post(f"{URL}/apply", headers=die["admin"], json={"sheet": NEW, "confirm": DIE})
+    assert r.status_code == 500 and "restored from the backup" in r.text
+    after = _state(die)
+    assert after["files"] == before["files"]                                                    # byte-identical
+    assert json.loads(after["store"])["results"] == json.loads(before["store"])["results"]   # no mark left on the old sheet
+    audit = [json.loads(line) for line in (die["tmp"] / "audit.jsonl").read_text().splitlines()]
+    assert any(a["action"] == "die.sheet_replace" and a["details"].get("restored") is True for a in audit)
+
+
+def test_a_restore_that_fails_tells_the_admin_where_the_backup_is(die, monkeypatch):
+    from motor_ai_sim.routes import family as F
+    monkeypatch.setattr(F, "_save_yaml", lambda p, d: (_ for _ in ()).throw(OSError("disk gone")))
+    monkeypatch.setattr(DR, "restore_die_rows", lambda d, rows: (_ for _ in ()).throw(OSError("store gone")))
+    r = client.post(f"{URL}/apply", headers=die["admin"], json={"sheet": NEW, "confirm": DIE})
+    assert r.status_code == 500 and "NOT fully restored" in r.text and "sheet_replace_backups" in r.text

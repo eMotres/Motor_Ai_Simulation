@@ -36,6 +36,10 @@ class SheetRefused(ValueError):
     """The replacement cannot be done as asked (the text names why and is safe to show)."""
 
 
+class SheetWriteFailed(RuntimeError):
+    """A step of the write failed; the text says whether the backup was restored (and where it is)."""
+
+
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
@@ -201,28 +205,63 @@ def apply(die: str, sheet: Any, actor: str) -> Dict[str, Any]:
                 d["thumb_svg"] = thumb
         except Exception:                                   # noqa: BLE001 - the thumbnail is cosmetic
             pass
+        # FAIL CLOSED (review of #839): the marks first - the store rows, then every configuration - and the die's sheet LAST, so no
+        # step can leave the new sheet live beside an unmarked old-sheet result.  Any failure restores every file and the die's
+        # store rows from the backup just taken (a mark left on a still-old sheet would be wrong too), and says so.
         marked = {}
-        for c in p["configurations"]:
-            path = ddir / f"{c['config']}.yaml"
-            doc = F._load_yaml(path, "configuration")
-            body = _cfg_doc(doc)
-            for duty in body.get("duties") or []:
-                if isinstance(duty, dict):
-                    duty[MARK] = dict(mark)
-            F._save_yaml(path, doc)
-            marked[c["config"]] = len(body.get("duties") or [])
-        F._save_yaml(ddir / "die.yaml", d)
-        rows = DR.mark_sheet_stale(die, mark)
+        rows = 0
+        store_marked = False
         try:
-            from motor_ai_sim import admin_audit as AA
-            AA.record(actor, "die.sheet_replace", die, details={"changes": p["changes"], "backup": str(backup),
-                                                               "marked_duties": marked, "marked_rows": rows})
-        except Exception:                                   # noqa: BLE001 - the write is done; the audit line is logged
-            import logging
-            logging.getLogger(__name__).warning("sheet_replace: audit row for %s not written", die, exc_info=True)
+            rows = DR.mark_sheet_stale(die, mark)
+            store_marked = True
+            for c in p["configurations"]:
+                path = ddir / f"{c['config']}.yaml"
+                doc = F._load_yaml(path, "configuration")
+                body = _cfg_doc(doc)
+                for duty in body.get("duties") or []:
+                    if isinstance(duty, dict):
+                        duty[MARK] = dict(mark)
+                F._save_yaml(path, doc)
+                marked[c["config"]] = len(body.get("duties") or [])
+            F._save_yaml(ddir / "die.yaml", d)
+        except Exception as exc:                            # noqa: BLE001 - every failure ends in the restore below
+            restored = _restore(die, ddir, backup, store=store_marked)
+            words = (f"restored from the backup {backup}" if restored
+                     else f"NOT fully restored - restore the die, its configurations and its stored rows by hand from {backup}")
+            _audit(actor, die, {"failed": str(exc)[:300], "restored": restored, "backup": str(backup), "changes": p["changes"]})
+            raise SheetWriteFailed(f"the sheet of '{die}' was not replaced ({exc}); {words}") from exc
+        _audit(actor, die, {"changes": p["changes"], "backup": str(backup), "marked_duties": marked, "marked_rows": rows})
         if hasattr(F, "_TREE_CACHE"):
             F._TREE_CACHE.clear()                           # the catalog tree shows the new sheet and the marks at once
         return {**p, "refusals": [], "backup": str(backup), "marked_duties": marked, "marked_rows": rows}
+
+
+def _audit(actor: str, die: str, details: Dict[str, Any]) -> None:
+    try:
+        from motor_ai_sim import admin_audit as AA
+        AA.record(actor, "die.sheet_replace", die, details=details)
+    except Exception:                                       # noqa: BLE001 - admin_audit logs its own failures
+        import logging
+        logging.getLogger(__name__).warning("sheet_replace: audit row for %s not written", die, exc_info=True)
+
+
+def _restore(die: str, ddir: Path, backup: Path, store: bool = True) -> bool:
+    """Put back every configuration file, the die record and - when they were marked (``store``) - the die's stored rows as the
+    backup holds them.  True when all of it was put back."""
+    from motor_ai_sim import duty_results as DR
+    ok = True
+    for f in sorted(backup.glob("*.yaml")):                 # byte copies: the files are exactly as they were
+        try:
+            shutil.copy2(f, ddir / f.name)
+        except Exception:                                   # noqa: BLE001
+            ok = False
+    if store:
+        try:
+            saved = json.loads((backup / "duty_results.json").read_text(encoding="utf-8"))
+            DR.restore_die_rows(die, saved.get("results") or {})
+        except Exception:                                   # noqa: BLE001
+            ok = False
+    return ok
 
 
 def _backup(die: str, ddir: Path, stamp: str) -> Path:

@@ -50,6 +50,9 @@ def sheet_apply(die: str, req: SheetRequest, w: dict = Depends(F.require_catalog
         out = DS.apply(die, req.sheet, by)
     except DS.SheetRefused as exc:
         raise HTTPException(409, detail=str(exc))
+    except DS.SheetWriteFailed as exc:
+        log.error("sheet_replace: %s", exc)
+        raise HTTPException(500, detail=str(exc))
     log.warning("sheet_replace: sheet of '%s' replaced by %s (%s -> %s); backup %s", die, by, out["previous_hash"], out["new_hash"],
                 out["backup"])
     return {**out, "text": DS.text(out)}

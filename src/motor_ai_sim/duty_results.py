@@ -642,6 +642,20 @@ def mark_sheet_stale(die: str, mark: Dict[str, Any]) -> int:
         return n
 
 
+def restore_die_rows(die: str, rows: Dict[str, Any]) -> None:
+    """sheet_replace: put the die's current rows back as a backup holds them (a failed sheet replacement); raises when the store
+    cannot be written."""
+    with _store_write_lock():
+        doc = read_all()
+        res = doc.setdefault("results", {})
+        if rows:
+            res[str(die)] = rows
+        else:
+            res.pop(str(die), None)
+        if not _write_all(doc):
+            raise OSError("duty_results: the store could not be written")
+
+
 def is_current_row(row: Any) -> bool:
     """THE rule of ``sheet_replace.is_current`` for a stored row (readers of this store ask this)."""
     from motor_ai_sim import sheet_replace as _ds

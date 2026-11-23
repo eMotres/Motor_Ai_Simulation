@@ -34,6 +34,10 @@ export interface ByDieActions {
   datasheet: (die: string, cfg: string) => void; report: (die: string, cfg: string, pdf: boolean) => void;
   toMyMotors: (die: string, cfg: string) => void; battery: (die: string, cfg: string) => void;
   deleteCfg: (die: string, cfg: string) => void;
+  /** admins: archive ONE configuration (owner 2026-11-22) */
+  archiveCfg?: (die: string, cfg: string) => void;
+  /** only a configuration of a SHARED-catalog die is archived */
+  archivable?: (die: string) => boolean;
 }
 
 interface Props {
@@ -65,6 +69,9 @@ const charsGrid = { display: 'grid', gridTemplateColumns: `${NAME_COL_W}px ${COL
   alignItems: 'center', flexShrink: 0 } as const;
 /** the row actions (▶ load, ⋮ menu), right after the characteristics; the header keeps the same gap */
 const ACTIONS_W = 48;
+// the die header: ONE line per stamped sheet (owner 2026-11-23: "merge these two lines into one") in fixed columns, so the
+// thumbnail, the name, the size, the motor count and the markers of every die line up
+const HEAD_W = { name: 190, size: 110, count: 84 } as const;
 /** what inside a motor row has its own click (not a load) */
 const ROW_CONTROLS = 'button, a, input, textarea, select, label, [role="button"], [role="combobox"], .MuiChip-root, [data-row-click="own"]';
 type ClickNode = { closest(sel: string): ClickNode | null; contains(n: unknown): boolean };
@@ -112,6 +119,7 @@ export function motorMenuItems(m: Pick<MotorRow, 'die' | 'config'>, who: Who, a:
       { key: 'bat', label: t('byDie.battery'), run: () => a.battery(die, config) });
     if (who.isAdmin) out.push({ key: 'mov', label: t('byDie.move'), run: () => a.moveCfg(die, config, 'move') },
       { key: 'cpy', label: t('byDie.copy'), run: () => a.moveCfg(die, config, 'copy') });
+    if (who.isAdmin && a.archiveCfg && (a.archivable?.(die) ?? true)) out.push({ key: 'arch', label: t('byDie.archiveMotor'), run: () => a.archiveCfg?.(die, config) });
   }
   out.push({ key: 'ds', label: t('byDie.datasheet'), run: () => a.datasheet(die, config) },
     { key: 'rep', label: t('byDie.report'), run: () => a.report(die, config, false) },
@@ -377,19 +385,24 @@ const CatalogByDie: React.FC<Props> = ({ dies, thumbs, rated, active, isAdmin, c
       {header}
       {groups.map((g) => (
         <Box key={g.family || '-'} data-testid="by-die-family" sx={{ border: '1px solid var(--line-soft)', borderRadius: 1, overflow: 'hidden', ...(g.named ? {} : { opacity: 0.6 }) }}>
-          <Box sx={{ px: 1, py: 0.4, bgcolor: 'var(--panel)', display: 'flex', alignItems: 'center', gap: 1 }}>
-            <Typography sx={{ fontSize: 13, fontWeight: 800, color: g.named ? 'var(--text-0)' : 'var(--text-3)' }}>{g.named ? g.family : isAdmin ? t('byDie.noName') : t('byDie.otherMotors')}</Typography>
-            <Typography sx={small}>{t('byDie.motors', { n: g.blocks.reduce((n, b) => n + b.motors.length, 0) })}</Typography>
-          </Box>
-          {g.blocks.map((b) => (
+          {g.blocks.map((b, bi) => (
             <Box key={b.sheet} data-testid="by-die-block" data-members={b.members.length}
-              sx={{ px: 1, py: 0.4, borderTop: '1px solid var(--line-soft)' }}>
-              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap', [NARROW]: { gap: 0.5 } }}>
+              sx={{ px: 1, py: 0.4, ...(bi ? { borderTop: '1px solid var(--line-soft)' } : {}) }}>
+              <Box data-testid="by-die-head" sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap', bgcolor: 'var(--panel)', mx: -1, my: -0.4, px: 1, py: 0.4, [NARROW]: { gap: 0.5 } }}>
                 <Box sx={{ lineHeight: 0, flexShrink: 0 }}>
                   <MotorThumbnail slots={b.die.slots ?? 0} poles={b.die.poles ?? 0} size={28} thumbSvg={thumbs(b.die) ?? undefined} />
                 </Box>
-                <Typography sx={{ ...small, color: 'var(--text-2)' }}>
+                <Tooltip title={g.named ? g.family : ''}>
+                  <Typography noWrap sx={{ width: HEAD_W.name, flexShrink: 0, fontSize: 13, fontWeight: 800, color: g.named ? 'var(--text-0)' : 'var(--text-3)' }}>
+                    {g.named ? g.family : isAdmin ? t('byDie.noName') : t('byDie.otherMotors')}
+                  </Typography>
+                </Tooltip>
+                <Typography noWrap sx={{ ...small, width: HEAD_W.size, flexShrink: 0, color: 'var(--text-2)' }}>
                   Ø{fmt(b.die.stator_diameter, 0)} · {b.die.slots}s{b.die.poles}p
+                </Typography>
+                {/* the motor count wraps LAST on a narrow screen (after the markers), never the name */}
+                <Typography noWrap data-testid="by-die-count" sx={{ ...small, width: HEAD_W.count, flexShrink: 0, [NARROW]: { order: 9, width: 'auto' } }}>
+                  {t('byDie.motors', { n: b.motors.length })}
                 </Typography>
                 {/* one header per stamped sheet (owner 2026-11-17); every stored record of it keeps its own lock, extras,
                     running work and menu as one compact mark, never as a header of its own */}

@@ -18,6 +18,7 @@ import {
   buildThreadNormalMap, normalScaleFor, parseThread, resolveAxis, threadLabel, threadUVs, type ThreadInfo,
 } from './threadTexture';
 import { FreeOrbitControls } from './freeOrbit';
+import { runSliced } from './slicedWork';
 
 const THREAD_MAP_SIZE = 128;
 
@@ -38,6 +39,7 @@ export interface ViewerState {
 
 /** Faces meeting at more than this angle draw an outline; tessellated cylinders (a few degrees per facet) stay smooth. */
 const EDGE_ANGLE_DEG = 25;
+const EDGE_SLICE_MS = 12;                              // outline work per slice; the rest waits for the next tick
 
 export interface CameraPose {
   projection: 'perspective' | 'orthographic'; position: Vec3; up: Vec3; target: Vec3; zoom: number; halfH: number | null; near: number; far: number;
@@ -54,6 +56,7 @@ export class ModelViewer {
   private plane = new Plane(new Vector3(0, 0, -1), 0);
   private edgesOn = true;
   private edgeLines: LineSegments[] = [];
+  private edgeJob: (() => void) | null = null;      // cancels the outline build still running in slices
   private edgeMat: LineBasicMaterial | null = null;
   private edgeMatDim: LineBasicMaterial | null = null;
   private ray = new Raycaster();
@@ -191,6 +194,8 @@ export class ModelViewer {
         }
       });
     }
+    this.edgeJob?.();
+    this.edgeJob = null;
     for (const l of this.edgeLines ?? []) l.geometry.dispose();
     this.edgeLines = [];
     this.root = null;
@@ -334,22 +339,31 @@ export class ModelViewer {
     return [this.edgeMat, this.edgeMatDim];
   }
 
-  /** One LineSegments child per mesh, built once per loaded model (on first use, so a viewer with outlines off pays nothing). */
+  /** One LineSegments child per mesh, built once per loaded model (on first use, so a viewer with outlines off pays nothing).
+   *  In slices of a few ms AFTER the model is shown: a STEP assembly of hundreds of bodies and millions of triangles held the first
+   *  frame behind the spinner for many seconds (owner 2026-11-23, an uploaded board).  A new model stops the old job. */
   private buildEdges(): void {
-    if (!this.root || this.edgeLines?.length) return;
+    if (!this.root || this.edgeLines?.length || this.edgeJob) return;
     this.edgeLines ??= [];
     const [mat] = this.edgeMaterials();
     const meshes: Mesh[] = [];
     this.root.traverse((o) => { if ((o as Mesh).isMesh) meshes.push(o as Mesh); });
-    for (const m of meshes) {
-      const line = new LineSegments(new EdgesGeometry(m.geometry, EDGE_ANGLE_DEG), mat);
+    const root = this.root;
+    this.edgeJob = runSliced(meshes, (m) => {
+      const line = new LineSegments(new EdgesGeometry(m.geometry, EDGE_ANGLE_DEG), this.edgeMatFor(m, mat));
       line.name = '';
       line.userData.edge = true;
       line.raycast = () => {};            // picking and measuring hit the faces, never the outlines
       line.visible = this.edgesOn;
       m.add(line);
       this.edgeLines.push(line);
-    }
+    }, { sliceMs: EDGE_SLICE_MS, alive: () => !this.disposed && this.root === root, afterSlice: () => this.invalidate() });
+  }
+
+  /** The outline material of a mesh built while a highlight is on: dimmed when its part is not highlighted (as applyHighlight sets). */
+  private edgeMatFor(m: Mesh, mat: LineBasicMaterial): LineBasicMaterial {
+    const lit = m.material && !Array.isArray(m.material) ? (m.material as Material).opacity : 1;
+    return lit < 0.5 && this.edgeMatDim ? this.edgeMatDim : mat;
   }
 
   private setEdges(on: boolean): void {

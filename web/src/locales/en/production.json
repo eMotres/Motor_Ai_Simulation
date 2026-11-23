@@ -51,7 +51,47 @@
     "assembly": "Assembly process",
     "tooling": "Tooling",
     "tests": "Tests",
-    "certification": "Certification"
+    "certification": "Certification",
+    "checklist": "Checklist"
+  },
+  "checklist": {
+    "tip": "The mass-production checklist is generated from this production: assembly steps, process requirements and test limits, parts, open discussion and missing certification evidence. Only the status and the evidence of an item are kept here; an item whose requirement changed returns to To confirm.",
+    "revision": "Revision {rev}",
+    "openCount": "{open} open of {total}",
+    "openOnly": "Open items only",
+    "download": "Excel (EN + 中文)",
+    "downloadTip": "Download the checklist as Excel with the main list, the open-items tracker and the statistics. It is an export only: change statuses and requirements in the system.",
+    "none": "No items.",
+    "status": "Status",
+    "evidence": "Evidence",
+    "noEvidence": "No evidence",
+    "changed": "Changed",
+    "changedTip": "The requirement changed after the status was set. Confirm it again.",
+    "uploadTip": "Upload a new document as the evidence of this item",
+    "byTip": "Set by {by} at {at}",
+    "statuses": {
+      "to_do": "To do",
+      "to_confirm": "To confirm",
+      "missing_info": "Missing info",
+      "optional": "Optional",
+      "done": "Done"
+    },
+    "responsible": {
+      "factory": "Factory",
+      "supplier": "Supplier",
+      "MOTRES": "MOTRES"
+    },
+    "categories": {
+      "assembly": "Assembly steps",
+      "checks": "Checks in the process",
+      "process": "Process requirements",
+      "tests": "Test limits",
+      "parts": "Parts, materials and finish",
+      "fasteners": "Fasteners",
+      "packaging": "Packaging",
+      "discussion": "Open discussion items",
+      "certification": "Certification evidence"
+    }
   },
   "bilingual": {
     "machine": "Machine translation, not verified",

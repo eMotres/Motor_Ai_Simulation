@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { readView, writeView } from './viewMemory';
 import { readLocalContext } from './machineBattery';
 import {
-  DEFAULT_RECORD, answerKey, choosePreset, recordScope, validRecord, withOverride, withoutOverride,
+  DEFAULT_RECORD, answerKey, forMode, choosePreset, recordScope, validRecord, withOverride, withoutOverride,
   type RunMode, type RunPresetName, type RunRecord, type RunResolved,
 } from './runSettings';
 
@@ -36,7 +36,7 @@ export interface RunSettingsState {
 export function useRunSettings(mode: RunMode): RunSettingsState {
   const [tick, setTick] = useState(0);
   const ctx = useMemo(() => contextKey(), [tick]);   // eslint-disable-line react-hooks/exhaustive-deps
-  const [record, setRecord] = useState<RunRecord>(() => readView(recordScope(contextKey()), r => validRecord(r, mode)) ?? DEFAULT_RECORD);
+  const [record, setRecord] = useState<RunRecord>(() => readView(recordScope(contextKey()), validRecord) ?? DEFAULT_RECORD);
   const [held, setHeld] = useState<{ key: string; data: RunResolved } | null>(null);
   const [error, setError] = useState<string | null>(null);
   useEffect(() => {
@@ -45,15 +45,17 @@ export function useRunSettings(mode: RunMode): RunSettingsState {
     return () => { for (const e of EVENTS) window.removeEventListener(e, bump); };
   }, []);
   // another machine or duty: its own record (default Optimization); nothing is written
-  useEffect(() => { setRecord(readView(recordScope(ctx), r => validRecord(r, mode)) ?? DEFAULT_RECORD); }, [ctx]);   // eslint-disable-line react-hooks/exhaustive-deps
-  const key = answerKey(ctx, mode, record);
+  useEffect(() => { setRecord(readView(recordScope(ctx), validRecord) ?? DEFAULT_RECORD); }, [ctx]);
+  // the stored record keeps every override; this mode asks, resolves and runs with the ones its resolver accepts
+  const req = useMemo(() => forMode(record, mode), [record, mode]);
+  const key = answerKey(ctx, mode, req);
   useEffect(() => {
     let live = true;
     setError(null);
     setHeld(null);          // a refresh starts: the held answer is not valid until the new one arrives (Run and Draw baseline wait)
     fetch(`${API}/api/optimization/run-settings/resolve?mode=${mode}`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ preset: record.preset, overrides: record.overrides }), cache: 'no-store',
+      body: JSON.stringify({ preset: req.preset, overrides: req.overrides }), cache: 'no-store',
     }).then(async r => {
       if (!r.ok) {
         let d = `HTTP ${r.status}`;
@@ -68,7 +70,7 @@ export function useRunSettings(mode: RunMode): RunSettingsState {
   const save = useCallback((r: RunRecord) => { setRecord(r); writeView(recordScope(ctx), r); }, [ctx]);
   const resolved = held && held.key === key ? held.data : null;
   return {
-    record, resolved, error, ready: !!resolved && !error,
+    record: req, resolved, error, ready: !!resolved && !error,
     choose: n => save(choosePreset(n)),
     setOverride: (k, v) => save(withOverride(record, k, v)),
     clearOverride: k => save(withoutOverride(record, k)),

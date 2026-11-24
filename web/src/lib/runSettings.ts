@@ -35,18 +35,25 @@ export const MODE_REFUSES: Record<string, string[]> = { descent: ['demag'] };
 
 /** Validator of a stored record: a known preset and the overrides the resolver accepts (finite number / boolean by key); an
  *  obsolete or unknown key (e.g. `hi_fidelity` of an older record) is dropped silently, so the panel never answers 422 for it. */
-export function validRecord(raw: unknown, mode?: RunMode): RunRecord | null {
+export function validRecord(raw: unknown): RunRecord | null {
   if (!raw || typeof raw !== 'object') return null;
   const r = raw as any;
   if (r.preset !== 'optimization' && r.preset !== 'simulation') return null;
   const o: Record<string, number | boolean> = {};
   for (const [k, v] of Object.entries(r.overrides ?? {})) {
-    if (mode && (MODE_REFUSES[mode] ?? []).includes(k)) continue;   // the record is shared by the modes; this one's resolver would answer 422
     if ((OVERRIDE_KEYS_BOOLEAN as readonly string[]).includes(k)) { if (typeof v === 'boolean') o[k] = v; }
     else if ((OVERRIDE_KEYS_NUMBER as readonly string[]).includes(k)) { if (typeof v === 'number' && Number.isFinite(v)) o[k] = v; }
   }
   return { preset: r.preset, overrides: o };
 }
+
+/** The record of ONE mode's REQUEST: the stored record keeps every override (it is shared by the modes), the request of a mode omits
+ *  the ones its resolver refuses (a Descent run carries no demag; the Sweep override stays stored for the Sweep panel). */
+export const forMode = (r: RunRecord, mode: RunMode): RunRecord => {
+  const o = { ...r.overrides };
+  for (const k of MODE_REFUSES[mode] ?? []) delete o[k];
+  return { preset: r.preset, overrides: o };
+};
 
 /** A preset button: sets the preset and clears every override. */
 export const choosePreset = (name: RunPresetName): RunRecord => ({ preset: name, overrides: {} });

@@ -2,7 +2,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { DEFAULT_RECORD, validRecord, choosePreset, withOverride, withoutOverride, answerKey, runSettingsBody, baselineBody } from '../runSettings.ts';
+import { DEFAULT_RECORD, validRecord, choosePreset, withOverride, withoutOverride, answerKey, runSettingsBody, baselineBody, forMode } from '../runSettings.ts';
 
 test('the default record is the Optimization preset with no overrides', () => {
   assert.deepEqual(DEFAULT_RECORD, { preset: 'optimization', overrides: {} });
@@ -124,9 +124,21 @@ test('a refresh invalidates the held answer (a geometry change cannot leave the 
   assert.ok(/'family-changed'/.test(hook) && /'sim-design-applied'/.test(hook));
 });
 
-test('the cleanup is mode-aware: a Descent panel drops demag, a Sweep panel keeps it', () => {
-  const rec = { preset: 'optimization', overrides: { demag: true, steps_per_period: 48 } };
-  assert.deepEqual(validRecord(rec, 'descent'), { preset: 'optimization', overrides: { steps_per_period: 48 } });
-  assert.deepEqual(validRecord(rec, 'sweep').overrides, { demag: true, steps_per_period: 48 });
-  assert.deepEqual(validRecord(rec).overrides, { demag: true, steps_per_period: 48 });
+test('the request of a mode omits what its resolver refuses; the stored record keeps it (Sweep demag false, edit Descent steps, reopen Sweep)', () => {
+  const stored = { preset: 'optimization', overrides: { demag: false, steps_per_period: 48 } };
+  assert.deepEqual(validRecord(stored), stored);                                            // the stored record is not mode-filtered
+  assert.deepEqual(forMode(stored, 'descent').overrides, { steps_per_period: 48 });         // a Descent request carries no demag
+  const edited = withOverride(validRecord(stored), 'steps_per_period', 96);                 // an edit in the Descent panel saves the FULL record
+  const reopened = validRecord(JSON.parse(JSON.stringify(edited)));                         // reopen Sweep
+  assert.deepEqual(forMode(reopened, 'sweep').overrides, { demag: false, steps_per_period: 96 });
+  const hook = readFileSync(new URL('../useRunSettings.ts', import.meta.url), 'utf8');
+  assert.ok(hook.includes('forMode(record, mode)') && hook.includes('record: req') && !/validRecord\(r, mode\)/.test(hook));
+});
+
+test('a refused baseline (409) refreshes the held answer', () => {
+  const store = readFileSync(new URL('../../stores/motorStore.ts', import.meta.url), 'utf8');
+  const fn = store.slice(store.indexOf('computeBaselineLine: async'), store.indexOf('cancelDescent: async'));
+  assert.ok(fn.includes('res.status === 409') && fn.includes('return { stale }'));
+  const panel = readFileSync(new URL('../../components/sweep/DescentPanel.tsx', import.meta.url), 'utf8');
+  assert.ok(/computeBaselineLine\([^]*?\)\.then\(r => \{ if \(r\.stale\) rs\.refresh\(\); \}\)/.test(panel));
 });

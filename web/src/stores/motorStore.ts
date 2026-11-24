@@ -273,7 +273,7 @@ interface MotorState {
    *  must never look like an apply that was archived. */
   appliedSave: (AppliedSaveResult & { busy?: boolean }) | null;
   loadLastDescent: () => Promise<void>;   // re-hydrate the last run's charts from the backend
-  computeBaselineLine: (opts: { currentBumpPct: number; record: RunRecord; resolved: RunResolved }) => Promise<void>;
+  computeBaselineLine: (opts: { currentBumpPct: number; record: RunRecord; resolved: RunResolved }) => Promise<{ stale: boolean }>;
 
   /** Hydrate sweepConfig from the backend so the selected variables follow the
    *  user across browsers; seeds the server if it has none yet but this browser does. */
@@ -1144,7 +1144,8 @@ export const useMotorStore = create<MotorState>()(
         // Geometry-driven CDT mesh — SINGLE SOURCE: Mesh tab (same build as Simulation).
         let geo_mesh = true;
         try { geo_mesh = JSON.parse(localStorage.getItem('mesh.geoMesh') ?? 'true') !== false; } catch { /* default */ }
-                set({ baselineBusy: true, baselineError: null });
+                let stale = false;     // the server refused the held answer (409): the caller refreshes it
+        set({ baselineBusy: true, baselineError: null });
         try {
           const res = await fetch(`${API_BASE_URL}/api/optimization/descent/baseline`, {
             method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -1156,6 +1157,7 @@ export const useMotorStore = create<MotorState>()(
               pole_copy, torque_filter, end_winding_factor, coil_temp_c, structured_gap, airgap_macro, iron_template, geo_mesh,
             }),
           });
+          if (res.status === 409) stale = true;
           if (!res.ok) throw new Error(`HTTP ${res.status}: ${(await res.text()).slice(0, 200)}`);
           const j = await res.json();
           set({ baselineLine: j.baseline_line ?? null });
@@ -1164,6 +1166,7 @@ export const useMotorStore = create<MotorState>()(
         } finally {
           set({ baselineBusy: false });
         }
+        return { stale };
       },
       cancelDescent: async () => {
         try { await fetch(`${API_BASE_URL}/api/optimization/descent/cancel`, { method: 'POST' }); }

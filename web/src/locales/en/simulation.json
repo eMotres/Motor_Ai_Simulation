@@ -365,5 +365,6 @@
   "propConstraint_rpm_search_converged": "Speed search converged",
   "propConstraint_torque_reached_at_cap": "Torque reached at the speed cap",
   "propConstraint_tip_mach_within_polar_model": "Mach within the polar",
-  "propConstraint_polar_data_supported": "Covered by the polar tables"
+  "propConstraint_polar_data_supported": "Covered by the polar tables",
+  "propConstraint_w_re_converged": "W and Re settled"
 }

@@ -434,6 +434,8 @@ def evaluate_candidate(d: Design, vec: Dict[str, Any], op_name: str, *, v_inf: f
         "torque_within_limit": res.torque_Nm <= op.torque_limit_Nm * (1.0 + TORQUE_TOL),
         "tip_mach_within_limit": mach <= d.tip_mach_limit,
         "bemt_converged": not any(f.startswith("unconverged_elements") for f in flags),
+        # follow-up 3 of #865: W, Re and the polar not settled together within the passes is no design point (was a flag only)
+        "w_re_converged": "w_re_not_converged" not in flags,
     }
     torque_error = res.torque_Nm / op.torque_limit_Nm - 1.0
     if flight:

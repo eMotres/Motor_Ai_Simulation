@@ -3242,6 +3242,26 @@ def _live_winding_healed(live: dict) -> tuple:
     return fixed, {"from": old, "to": fixed["n_coils_per_phase"]}
 
 
+def _heal_stored_coil_count(die: str, c: dict, live_geo: Optional[dict]) -> tuple:
+    """``(fix, old)``: correct a stale ``n_coils_per_phase`` of the STORED configuration ``c`` in place (derived from the slots of the live
+    geometry when the save came from the live machine, else of the die geometry with the configuration's overrides).  ``fix`` is
+    ``{"from", "to"}`` or None; nothing else of the winding changes and an absent key stays absent."""
+    from motor_ai_sim.winding import slot_pole_counts, with_derived_coil_count
+    w = c.get("winding")
+    if not isinstance(w, dict) or w.get("n_coils_per_phase") is None:
+        return None, None
+    geo = dict(live_geo or {})
+    if not geo:
+        geo = {**dict((_die_doc_for_sig(die) or {}).get("geometry") or {}), **dict(c.get("geometry_overrides") or {})}
+    fixed, old = with_derived_coil_count(w, slot_pole_counts(geo)[0])
+    if old is None:
+        return None, None
+    c["winding"] = {**w, "n_coils_per_phase": fixed["n_coils_per_phase"]}
+    log.warning("family: configuration '%s/%s': stored n_coils_per_phase %s corrected to the derived %s on a duty save",
+                die, c.get("name"), old, fixed["n_coils_per_phase"])
+    return {"from": old, "to": fixed["n_coils_per_phase"]}, old
+
+
 def _alias_count_only(die_doc: dict, c: dict, old_count) -> None:
     """After a save healed ``c['winding']['n_coils_per_phase']`` (stale ``old_count`` -> derived): record in
     ``c['build_sig_count_aliases']`` (keyed by the current signature) the build signatures the configuration had with the OLD count and everything else as
@@ -4067,6 +4087,12 @@ def _upsert_duty(req: DutyCreate, _w: dict, *, may_move: bool = True) -> dict:
                    assignment_sig=d.assignment_sig)
     duties.append(entry)
     c["duties"] = duties
+    if not _cc_fix:
+        # A configuration whose ONLY deviation is a stale stored n_coils_per_phase never reaches the heals above (they fire for a fresh
+        # configuration or one that adopts the live winding).  Correct that ONE key here, also in a locked configuration: the count
+        # reaches no solved number (the FEM reads n_parallel / n_series), so no result changes; the alias below keeps the stamps
+        # current.  A block without the key stays without it; nothing else of the winding is touched.
+        _cc_fix, _cc_old = _heal_stored_coil_count(die, c, _plain(_live_cfg().get("geometry")) if d.from_current else None)
     # A configuration written before `star_delta` existed names no terminal
     # connection; the live winding this duty was just solved with does.  Fill
     # it ONCE (never overwrite a stated one) so the next ▶ restores the same

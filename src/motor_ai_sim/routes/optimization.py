@@ -578,6 +578,7 @@ _RES_KEYS = ("T_em_Nm", "efficiency", "torque_per_mass_Nm_kg", "T_ripple_pct",
              # experimental result must not re-seed the cache as a steady one
              "steady_state", "steady_state_note", "demag_settled", "demag_warning",
              "eddy_method", "eddy_method_requested", "eddy_method_note",
+             "eddy_method_fallback_reason",
              "tdm_experimental", "qualified",
              "cogging_sampling_purpose", "cogging_target_raw_samples_per_cycle",
              "cogging_cycles_per_electrical_period",
@@ -1080,6 +1081,11 @@ _EVAL_THREAD_KEYS = ("MKL_NUM_THREADS", "OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS
                      "NUMEXPR_NUM_THREADS", "VECLIB_MAXIMUM_THREADS")
 
 
+# Evals the sweep fan-out runs at the same time (set around its submits; the
+# workspace pool copies the context into its workers).  None = a single eval.
+_EVAL_SIBLINGS = _ctxv_o.ContextVar("eval_siblings", default=None)
+
+
 def _base_eval_env() -> Dict[str, str]:
     """The eval subprocess's environment, fresh, with the caller's WORKSPACE in it.
 
@@ -1107,6 +1113,14 @@ def _base_eval_env() -> Dict[str, str]:
                 "subprocess (%s) — refusing to evaluate on the process "
                 "machine" % _exc) from _exc
     env["SB_SEED_FROM_PREVIOUS"] = "1"
+    # How many evals of this pool run together: the TDM memory guard divides
+    # the container limit by it.  Unset outside a fan-out, so a single eval
+    # reads the guard exactly as before.
+    _sibs = _EVAL_SIBLINGS.get()
+    if _sibs and int(_sibs) > 1:
+        env["SB_TDM_SIBLINGS"] = str(int(_sibs))
+    else:
+        env.pop("SB_TDM_SIBLINGS", None)
     from motor_ai_sim.simulation.pardiso_runtime import pardiso_subprocess_env
     return pardiso_subprocess_env(env)
 
@@ -3067,8 +3081,13 @@ def _scan_worker(variables, operating_points, steps, coil_temp_c, ripple_max,
                     _scan_state["done"] = done
                     _scan_state["points"] = _pub()
 
-        ex = ThreadPoolExecutor(max_workers=_job_workers())
-        futs = [ex.submit(_do, it) for it in misses]
+        _n_pool = _job_workers()
+        ex = ThreadPoolExecutor(max_workers=_n_pool)
+        _sib_tok = _EVAL_SIBLINGS.set(min(len(misses), _n_pool))
+        try:
+            futs = [ex.submit(_do, it) for it in misses]
+        finally:
+            _EVAL_SIBLINGS.reset(_sib_tok)
         try:
             # Poll with a 1 s timeout instead of blocking on as_completed(): a Stop
             # must take effect within ~1 s EVEN IF the in-flight subprocess evals

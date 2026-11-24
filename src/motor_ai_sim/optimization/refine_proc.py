@@ -717,6 +717,8 @@ def run_one(overrides: Dict[str, float], current_a: float, steps: int,
         "eddy_method": d.get("eddy_method"),
         "eddy_method_requested": d.get("eddy_method_requested"),
         "eddy_method_note": d.get("eddy_method_note"),
+        **({"eddy_method_fallback_reason": str(d["eddy_method_fallback_reason"])}
+           if d.get("eddy_method_fallback_reason") else {}),
         "tdm_experimental": bool(d.get("tdm_experimental", False)),
         "qualified": (None if d.get("qualified") is None else bool(d["qualified"])),
         "eddy_settle_residual": d.get("eddy_settle_residual"),

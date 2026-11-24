@@ -355,18 +355,34 @@ class TdmMemoryExceeded(RuntimeError):
     (transactional), so the container is not killed by the memory limit."""
 
 
+def sibling_evals() -> int:
+    """How many eval processes the pool runs AT THE SAME TIME as this one
+    (itself included): ``SB_TDM_SIBLINGS`` set by the sweep pool.  Unset,
+    unreadable or below 2 is 1, i.e. the guard behaves as it always did."""
+    try:
+        return max(1, int(os.environ.get("SB_TDM_SIBLINGS", "1")))
+    except (TypeError, ValueError):
+        return 1
+
+
 def memory_budget_bytes() -> Optional[int]:
     """Bytes this process may still grow by: the smaller of the cgroup limit and
     the free system memory, 85 %, minus what it already holds. ``None`` when
-    neither is readable (the guard then stays off)."""
+    neither is readable (the guard then stays off).
+
+    With ``SB_TDM_SIBLINGS`` = n > 1 the CONTAINER limit is shared by n evals
+    that start together and all keep their orbit factors alive: this process
+    may use 1/n of it (the free-memory reading is left as it is: it already
+    shrinks as the siblings grow)."""
     try:
         lim = []
+        sibs = sibling_evals()
         for f in ("/sys/fs/cgroup/memory.max",
                   "/sys/fs/cgroup/memory/memory.limit_in_bytes"):
             try:
                 v = open(f).read().strip()
                 if v.isdigit() and int(v) < (1 << 50):
-                    lim.append(int(v))
+                    lim.append(int(v) // sibs)
             except OSError:
                 pass
         try:

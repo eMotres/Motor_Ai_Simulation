@@ -290,6 +290,39 @@ def delete_entry(sid: str) -> bool:
     return False
 
 
+#: bumped whenever the rule behind the list label changes: a sidecar written under an older rule is rebuilt (the save is not touched)
+SETTINGS_VERSION = 4
+
+
+def sweep_settings_of(result: Any, config: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """The settings a stored sweep RAN with, for its label.  ONE helper for the result, the saved list, Apply and Compare.
+
+    A stamped sweep (``mesh_preset``) reads its label from the stamp: the preset's name only when nothing differs, ``custom``
+    when anything does (or when the solve disagreed with the request, or the points disagree: ``mixed``).  ``sig`` is the
+    digest of the (steps, gap rows) pair ONLY, None when unknown, unverified by a solve, mixed or legacy: two sweeps rank together only when both digests are
+    known and equal.  A sweep stored before the stamp is labelled from its stored request and has no digest."""
+    r = result if isinstance(result, dict) else {}
+    cfg = config if isinstance(config, dict) else {}
+    mp = r.get("mesh_preset") if isinstance(r.get("mesh_preset"), dict) else None
+    sp = r.get("scan_params") if isinstance(r.get("scan_params"), dict) else {}
+    if mp and isinstance(mp.get("effective"), dict) and "steps_per_period" in mp["effective"]:
+        eff = mp["effective"]
+        mixed = bool(mp.get("mixed")) or any(v == "mixed" for v in (mp.get("effective_source") or {}).values()
+                                              if isinstance(mp.get("effective_source"), dict))
+        custom = bool(mp.get("custom")) or mixed or bool(mp.get("solved_differs"))
+        srcs = mp.get("effective_source") if isinstance(mp.get("effective_source"), dict) else {}
+        verified = srcs.get("steps_per_period") == "solved" and srcs.get("gap_layers") == "solved"
+        known = eff.get("steps_per_period") is not None and eff.get("gap_layers") is not None
+        sig = None if (mixed or mp.get("solved_differs") or not verified or not known) else mp.get("sig")
+        return {"preset": ("custom" if custom else mp.get("name")), "version": mp.get("version"), "custom": custom,
+                "mixed": mixed, "effective_source": mp.get("effective_source"),
+                "steps_per_period": eff.get("steps_per_period"), "gap_layers": eff.get("gap_layers"),
+                "sig": sig, "differs": mp.get("differs") or {}, "source": "preset", "v": SETTINGS_VERSION}
+    return {"preset": None, "version": None, "custom": False, "mixed": False, "sig": None,
+            "steps_per_period": cfg.get("steps_per_period") or r.get("steps_per_period"),
+            "gap_layers": sp.get("gap_layers"), "source": "stored_request", "v": SETTINGS_VERSION}
+
+
 def meta(d: Dict[str, Any]) -> Dict[str, Any]:
     """The list row of one save (no points)."""
     r = d.get("result") or {}
@@ -307,6 +340,7 @@ def meta(d: Dict[str, Any]) -> Dict[str, Any]:
         "n_front": len(r.get("pareto_indices", [])),
         "n_operating_points": len(r.get("operating_points") or []),
         "steps_per_period": cfg.get("steps_per_period") or r.get("steps_per_period"),
+        "settings": sweep_settings_of(r, cfg),
         "variables": [v.get("name") for v in (r.get("variables") or []) if isinstance(v, dict)],
         "run_id": r.get("run_id") or "",
         "machine": machine,
@@ -349,12 +383,14 @@ def _when_key(row: Dict[str, Any]) -> float:
 def _read_meta_row(f: Path) -> Optional[Dict[str, Any]]:
     """The list row of one save: its sidecar when that is current, else parsed
     from the save (and the sidecar written) - a save is never edited in place,
-    so a sidecar newer than its save is right."""
+    so a sidecar newer than its save is right.  A sidecar written before the
+    settings label existed is rebuilt (the sidecar only; the save is not touched)."""
     mp = _meta_path(f)
     try:
         if mp.exists() and mp.stat().st_mtime >= f.stat().st_mtime:
             row = json.loads(mp.read_text(encoding="utf-8"))
-            if isinstance(row, dict) and row.get("id") == f.stem and "auto" in row:
+            if isinstance(row, dict) and row.get("id") == f.stem and "auto" in row \
+                    and (row.get("settings") or {}).get("v") == SETTINGS_VERSION:
                 return row
     except Exception:                                    # noqa: BLE001
         pass

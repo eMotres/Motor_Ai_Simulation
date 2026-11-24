@@ -12,7 +12,7 @@ import { nsT } from '../../i18n/nsT';
 import { invertedRangeNames } from '../../lib/optVarRanges';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
-  Box, Typography, Button, LinearProgress, Divider, TextField,
+  Box, Typography, Button, LinearProgress, Divider,
   FormControl, InputLabel, Select, MenuItem, Chip, Tooltip as MuiTooltip,
 } from '@mui/material';
 import {
@@ -32,7 +32,10 @@ import { planLockedApply, refusedText, newDieNotice } from '../../lib/sweepApply
 import { releaseFamilyContext } from '../../lib/familyContext';
 import { setActiveDuty } from '../../lib/dutySettings';
 import { canWriteServer } from '../../lib/localAuth';
-import { storedGapLayers } from '../../lib/meshSettings';
+import { useRunSettings } from '../../lib/useRunSettings';
+import { runSettingsBody } from '../../lib/runSettings';
+import RunSettingsBar from './RunSettingsBar';
+import { sweepSettingsOf, sweepSettingsLabel, sweepSettingsMetrics } from '../../lib/sweepSettings';
 import { endWindingPin } from '../../lib/endWindingPin';
 import { coincidentGroups, coincidentOffsetPx } from '../../lib/coincidentPoints';
 import {
@@ -343,7 +346,9 @@ const SweepTooltip: React.FC<any> = ({ active, payload }) => {
 
 const SweepStudyPanel: React.FC = () => {
   const { sweepConfig, updateGeometryViaApi } = useMotorStore();
-  const steps = readLS('sim.stepsPP', 24);   // single source: Simulation "Steps per electrical period"
+  // The run settings of THIS panel: a preset button plus overrides, resolved by the server; the panel shows that answer and
+  // the run request carries the same record.  Nothing here reads or writes the Simulation / Mesh tabs' ordinary-run settings.
+  const rs = useRunSettings('sweep');
   const [connectBy, setConnectBy] = useLS<'current_a' | 'gamma_deg'>('connectBy', 'current_a');
   const [withBaseline, setWithBaseline] = useLS<boolean>('withBaseline', false);
   const [coggingPp, setCoggingPp] = useLS<boolean>('coggingPp', false);   // opt-in: one no-load solve per geometry
@@ -628,7 +633,7 @@ const SweepStudyPanel: React.FC = () => {
     return true;
   };
   const run = async () => {
-    if (startingRef.current || running) return;
+    if (startingRef.current || running || !rs.ready || !rs.resolved) return;
     const inv = invertedRangeNames(sweepConfig.variations as never);
     if (inv.length) { setErr(tx('optRunBlockedInverted', { names: inv.join(', ') })); return; }
     startingRef.current = true; setAttachNote(null);
@@ -652,17 +657,15 @@ const SweepStudyPanel: React.FC = () => {
       const res = await fetch(`${API}/api/optimization/scan`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          variables: scanVars, operating_points: ops, steps_per_period: steps,
+          variables: scanVars, operating_points: ops,
+          run_settings: runSettingsBody(rs.record, rs.resolved!),
           ripple_max_pct: 100, max_geometries: Math.max(1, nGeom),
           // the un-varied current motor as an extra reference point — one more
           // full eval, off by default (user 2026-09-04: always stopped at 22/23)
           with_baseline: withBaseline,
           ...(coggingPp ? { cogging_pp: true } : {}),   // absent = the request it always was
-          mesh_size_mm: readLS('mesh.meshSize', 4), min_size_mm: readLS('mesh.minSize', 0.3),
           pole_copy: readBool('mesh.poleCopy', false), torque_filter: readBool('sim.torqueFilter', false),
-          n_sectors: Math.max(1, Math.round(readLS('mesh.nSectors', 1))),   // single source: Mesh tab (same as Simulation)
           // single source: the Mesh tab; absent = the machine's saved setting (backend)
-          ...(storedGapLayers() !== undefined ? { gap_layers: storedGapLayers() } : {}),
           structured_gap: readBool('mesh.structuredGap', false) || readBool('mesh.ironTemplate', true),   // single source: Mesh tab "Structured" — belt gap mesh (honest ripple, ¼ == full disk)
           airgap_macro: readBool('mesh.harmonicGap', false),   // Mesh tab "Harmonic gap" — step-independent RAW ripple (full + sectors)
           // P2 — the only basis. The sweep must rank designs on the SAME basis
@@ -675,11 +678,9 @@ const SweepStudyPanel: React.FC = () => {
           // each point's own built coil (owner 2026-10-30: the panel's coil number for
           // the current stack, pinned, gave 90 mm and 95 mm the same η and N·m/kg).
           end_winding_factor: endWindingPin(useMotorStore.getState().geometry).k,
-          rotor_eddy: readBool('sim.fieldLosses', true),   // single source: Simulation — field vs slab magnet eddy (drives eff)
           // Irreversible demagnetisation — single source: Simulation. It de-rates
           // Br, so a sweep without it ranks machines the Simulation tab is not
           // showing. Costs a whole extra period of frames per point.
-          demag: readBool('sim.demag', false),
           run_id: myRunId,
           // Consent to vary a DIE-DEFINING key under an active die (the
           // Optimize header's checkbox); without it the backend answers 422
@@ -690,6 +691,7 @@ const SweepStudyPanel: React.FC = () => {
       });
       if (!res.ok) {
         const body = (await res.text()).slice(0, 400);
+        if (res.status === 409 && body.includes('run settings changed')) { rs.refresh(); throw new Error(tx('runSettingsStale')); }
         if (isScanAlreadyRunning(res.status, body) && await attachToRunning()) return;
         throw new Error(`HTTP ${res.status}: ${body}`);
       }
@@ -1162,6 +1164,7 @@ const SweepStudyPanel: React.FC = () => {
                           rpm: Number(p.rpm) },
         metrics: { T_avg_Nm: p.T, T_ripple_pct: p.ripple, efficiency: p.eff,
                    ...(p.cp ? coggingMetrics(p.cp) : {}),
+                   ...sweepSettingsMetrics(sweepSettingsOf(result)),
                    torque_per_mass: p.td, mass_total_kg: p.mass,
                    raw_samples_per_cogging_cycle: p.rawSamplesPerCycle },
         overrides: p.overrides || {},
@@ -1208,8 +1211,7 @@ const SweepStudyPanel: React.FC = () => {
       </Box>
 
       <Box sx={{ display: 'flex', gap: 1, alignItems: 'center', mb: 1 }}>
-        <TextField label="steps/period (Simulation)" size="small" value={steps} disabled
-          inputProps={{ style: { fontSize: 12, padding: '5px 8px' } }} sx={{ width: 170 }} />
+        <RunSettingsBar rs={rs} />
         <FormControl size="small" sx={{ minWidth: 150 }}>
           <InputLabel sx={{ fontSize: 12 }}>connect along</InputLabel>
           <Select label="connect along" value={connectBy} onChange={e => setConnectBy(e.target.value as any)}
@@ -1220,15 +1222,13 @@ const SweepStudyPanel: React.FC = () => {
         </FormControl>
         <Typography sx={{ fontSize: 11, color: nPts > 40 ? '#fca5a5' : 'var(--text-3)', flex: 1 }}>
           <strong>{nPts}</strong> pt{nPts === 1 ? '' : 's'}{nPts > 40 ? ' — large, slow' : ''}
-          {/* SAY which step count the sweep will solve at.  It is read from the
-              Electromagnetic tab's key at Run time, and that key can be rewritten
-              behind the tab's back (an optimizer Apply pins the run's 48 steps into
-              it; a second window does not see it).  2026-09-07: the tab said 36,
-              the sweep ran 48 — cold, 3× longer — and nothing on screen said so. */}
-          <span title={`Steps per electrical period, taken from the Electromagnetic tab (sim.stepsPP). A sweep at a different step count than the last Electromagnetic run cannot reuse its warm state: every point solves cold (demag pre-pass + eddy warm-up, ~3x longer). Change it on the Electromagnetic tab.`}
-            style={{ marginLeft: 8, color: 'var(--text-3)', cursor: 'help' }}>
-            · {steps} steps/period
-          </span>
+          {/* The settings of the result on screen (its stamp, or its stored request for a sweep saved before the stamp). */}
+          {result && (
+            <span title={tx('sweepResultSettingsTip')}
+              style={{ marginLeft: 8, color: 'var(--text-3)', cursor: 'help' }}>
+              · {sweepSettingsLabel(sweepSettingsOf(result))}
+            </span>
+          )}
           {/* The 3-D end-effect view, same switch and factor as the Simulation
               summary ("3D" button) — so a current scaled off this chart lands on
               the same shaft power over there (2026-09-08: 500 → 487.46 kW). */}
@@ -1254,7 +1254,7 @@ const SweepStudyPanel: React.FC = () => {
 
       <Box sx={{ display: 'flex', gap: 1, alignItems: 'center', mb: 1 }}>
         {!running ? (
-          <Button size="small" variant="contained" onClick={run} disabled={nPts < 1}
+          <Button size="small" variant="contained" onClick={run} disabled={nPts < 1 || !rs.ready}
             sx={{ textTransform: 'none', fontWeight: 700 }}>
             Run sweep ({nPts})
           </Button>

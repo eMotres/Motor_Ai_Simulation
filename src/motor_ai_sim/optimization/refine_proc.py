@@ -678,6 +678,10 @@ def run_one(overrides: Dict[str, float], current_a: float, steps: int,
         # ripple, and the winner's final re-solve applies the gap rule).
         "torque_method": d.get("torque_method"),
         "gap_layers_per_side": d.get("gap_layers_effective"),
+        # what the solver REALLY used (it snaps the step count to whole mesh nodes and raises the gap rows for some
+        # options): the provenance a sweep stamps comes from these, not from the request
+        "n_steps_per_period_solved": d.get("n_steps_per_period"),
+        "steps_snapped": bool(d.get("steps_snapped", False)),
         "ripple_self_check_rel": (((d.get("coulomb_torque") or {})
                                    .get("layer_self_check") or {})
                                   .get("rel_to_ripple_scale")),

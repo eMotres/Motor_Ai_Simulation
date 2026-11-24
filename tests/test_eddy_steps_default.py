@@ -136,7 +136,10 @@ class TestOptimizerScreening:
         from motor_ai_sim.routes import optimization as O
         ev = self._plan_with(monkeypatch, steps_per_period=72,
                              steps_per_period_source="eddy_default")
-        assert ev["steps_per_period"] == O.OPT_SCREEN_STEPS_PER_PERIOD == 40
+        # the count is the Optimization preset's own (config/mesh_presets.yaml), not a constant
+        from motor_ai_sim import mesh_presets as MP
+        assert ev["steps_per_period"] == O._optimization_preset_steps() == MP.steps_for(
+            "optimization", dict(O.get_config().get("geometry") or {}))
         assert ev["steps_per_period_source"] == "optimizer"
         assert ev["steps_per_period_tab"] == 72
 

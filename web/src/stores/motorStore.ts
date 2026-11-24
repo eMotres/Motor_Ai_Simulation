@@ -47,8 +47,10 @@ function restoreDescentEvalParams(st: any): void {
   const ep = st?.eval_params;
   if (!ep || typeof ep !== 'object') return;
   const put = (k: string, v: unknown) => { if (v != null) { try { localStorage.setItem(k, JSON.stringify(v)); } catch { /* quota */ } } };
-  put('sim.stepsPP', ep.steps_per_period);  put('mesh.nSectors', ep.n_sectors);
-  put('mesh.gapLayers', ep.gap_layers);     put('sim.coilTemp', ep.coil_temp_c);
+  // NOT written any more (owner 2026-11-24): the run's steps per period, gap rows, sector count and mesh sizes. Applying a
+  // geometry or a result must not change the fidelity of the user's ordinary runs (108 steps / 2 gap rows stayed 48 / 1 after
+  // an Apply).  The other fields below were restored before and still are.
+  put('sim.coilTemp', ep.coil_temp_c);
   put('mesh.poleCopy', ep.pole_copy);       put('sim.torqueFilter', ep.torque_filter);
   put('sim.fieldLosses', ep.rotor_eddy);
   // k_end: 0 in a descent means "auto" — the solver recomputes it from each
@@ -56,8 +58,10 @@ function restoreDescentEvalParams(st: any): void {
   // every consumer reading `sim.endWinding`.  The applied design's geometry re-seeds
   // the real factor, so only carry an EXPLICIT override across.
   if (Number(ep.end_winding_factor) > 0) put('sim.endWinding', ep.end_winding_factor);
-  put('mesh.meshSize', ep.mesh_size_mm);    put('mesh.minSize', ep.min_size_mm);
-  try { window.dispatchEvent(new CustomEvent('descent-eval-params', { detail: ep })); } catch { /* SSR */ }
+  // the live event carries the same restore, without the fidelity keys, so no panel adopts them from it either
+  const { steps_per_period: _s, gap_layers: _g, n_sectors: _n, mesh_size_mm: _m, min_size_mm: _mm, ...rest } = ep;
+  void _s; void _g; void _n; void _m; void _mm;
+  try { window.dispatchEvent(new CustomEvent('descent-eval-params', { detail: rest })); } catch { /* SSR */ }
 }
 
 // k_end follows the geometry (masses.end_winding_factor is the SINGLE SOURCE) and the
@@ -251,7 +255,8 @@ interface MotorState {
                        maxRounds?: number; surrogateSeed?: boolean;
                        objective?: string; currentBumpPct?: number;
                        ripplePenaltyLambda?: number;
-                       thdPenaltyLambda?: number; thdMaxPct?: number }) => Promise<void>;
+                       thdPenaltyLambda?: number; thdMaxPct?: number;
+                       runSettings?: { preset: string; overrides: Record<string, unknown>; expect_sig?: number } }) => Promise<void>;
   cancelDescent: () => Promise<void>;
   applyDescentBest: () => Promise<void>;
   applyDescentPoint: (pt: any) => Promise<void>;   // apply a USER-PICKED scatter point
@@ -1002,7 +1007,7 @@ export const useMotorStore = create<MotorState>()(
       lastOptSnapshot: null,
       appliedSave: null,
       setLastOptSnapshot: (s) => set({ lastOptSnapshot: s }),
-      runDescent: async ({ rippleMax, maxIters, wEff, wTd, steps, algorithm, nSectors, targetTorque, vPeakLimit, optimizeGamma, autoExpand, maxRounds, surrogateSeed, objective, currentBumpPct, ripplePenaltyLambda, thdPenaltyLambda, thdMaxPct }) => {
+      runDescent: async ({ rippleMax, maxIters, wEff, wTd, steps, algorithm, nSectors, targetTorque, vPeakLimit, optimizeGamma, autoExpand, maxRounds, surrogateSeed, objective, currentBumpPct, ripplePenaltyLambda, thdPenaltyLambda, thdMaxPct, runSettings }) => {
         const { sweepConfig } = get();
         const _inv = invertedRangeNames(sweepConfig.variations as never);
         if (_inv.length) {
@@ -1070,6 +1075,9 @@ export const useMotorStore = create<MotorState>()(
               mesh_size_mm, min_size_mm, pole_copy, torque_filter,
               rotor_eddy, end_winding_factor, gap_layers, coil_temp_c, structured_gap, airgap_macro, iron_template, geo_mesh, element_order,
               algorithm, n_sectors: nSectors,
+              // the panel's resolved run settings: when present the server takes the count, gap rows, mesh, sectors and
+              // rotor eddy from them alone (the fields above are then ignored)
+              ...(runSettings ? { run_settings: runSettings } : {}),
               target_torque_nm: targetTorque ?? 0,
               v_peak_limit: vPeakLimit ?? 1e9,
               optimize_gamma: optimizeGamma ?? true,

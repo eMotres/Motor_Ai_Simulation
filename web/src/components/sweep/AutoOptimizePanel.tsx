@@ -16,7 +16,8 @@ import {
   ResponsiveContainer, ReferenceLine, ScatterChart, Scatter,
 } from 'recharts';
 import { useMotorStore } from '../../stores/motorStore';
-import MeshPresetSelect from '../mesh/MeshPresetSelect';
+import { useRunSettings } from '../../lib/useRunSettings';
+import RunSettingsBar from './RunSettingsBar';
 import { appliedSaveLine } from '../../lib/appliedAutoSave';
 
 /**
@@ -88,6 +89,9 @@ type Plan = {
 };
 
 const AutoOptimizePanel: React.FC = () => {
+  // the run settings of THIS panel (preset button + overrides, resolved by the server); the ordinary-run settings are never touched
+  const rs = useRunSettings('auto');
+  const rsKey = JSON.stringify([rs.record.preset, rs.record.overrides]);
   const { connectedToApi, descentState, loadLastDescent, applyDescentBest, cancelDescent,
           appliedSave, verifyAndApplyDescentPoint } = useMotorStore();
   const [verifying, setVerifying] = useState(false);
@@ -151,13 +155,13 @@ const AutoOptimizePanel: React.FC = () => {
   // Project rule: a run says what it costs before it starts.  So the card fetches
   // the plan as soon as the number changes and shows it next to the Run button —
   // the estimate is not an afterthought printed once the FEM is already burning.
-  const fetchPlan = useCallback(async (ripple: number, m: string) => {
+  const fetchPlan = useCallback(async (ripple: number, m: string, rec: { preset: string; overrides: Record<string, unknown> }) => {
     if (!connectedToApi) return;
     setPlanBusy(true); setPlanError(null);
     try {
       const r = await fetch(`${API}/api/optimization/auto/plan`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ max_ripple_pct: ripple, mode: m }),
+        body: JSON.stringify({ max_ripple_pct: ripple, mode: m, run_settings: { preset: rec.preset, overrides: rec.overrides } }),
       });
       const j = await r.json().catch(() => null);
       if (!r.ok) throw new Error(j?.detail ?? `HTTP ${r.status}`);
@@ -170,9 +174,10 @@ const AutoOptimizePanel: React.FC = () => {
   }, [connectedToApi]);
 
   useEffect(() => {
-    const t = setTimeout(() => { void fetchPlan(maxRipple, mode); }, 350);
+    setPlan(null);   // a plan belongs to the settings it was built with
+    const t = setTimeout(() => { void fetchPlan(maxRipple, mode, rs.record); }, 350);
     return () => clearTimeout(t);
-  }, [maxRipple, mode, fetchPlan]);
+  }, [maxRipple, mode, fetchPlan, rsKey, rs.resolved?.sig]);   // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Live progress ─────────────────────────────────────────────────────────
   // Poll here rather than leaning on the Advanced panel's mirror: this card is
@@ -197,15 +202,17 @@ const AutoOptimizePanel: React.FC = () => {
   }, [connectedToApi]);
 
   const launch = async () => {
+    if (!rs.ready || !rs.resolved) return;
     setLaunchError(null); setApplied(false); setSavedPoint(null);
     startedAt.current = Date.now();
     try {
       const r = await fetch(`${API}/api/optimization/auto`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ max_ripple_pct: maxRipple, mode }),
+        body: JSON.stringify({ max_ripple_pct: maxRipple, mode,
+                               run_settings: { preset: rs.record.preset, overrides: rs.record.overrides, expect_sig: rs.resolved!.sig } }),
       });
       const j = await r.json().catch(() => null);
-      if (!r.ok) throw new Error(j?.detail ?? `HTTP ${r.status}`);
+      if (!r.ok) { if (r.status === 409) rs.refresh(); throw new Error(j?.detail ?? `HTTP ${r.status}`); }
       await loadLastDescent();
     } catch (e: any) {
       setLaunchError(String(e?.message ?? e));
@@ -291,7 +298,7 @@ const AutoOptimizePanel: React.FC = () => {
             </Button>
           ) : (
             <Button variant="contained" color="success" size="small" startIcon={<PlayArrowIcon />}
-              disabled={!connectedToApi || !plan} onClick={launch}>
+              disabled={!connectedToApi || !plan || !rs.ready || (plan as any).run_settings?.sig !== rs.resolved?.sig} onClick={launch}>
               Run
             </Button>
           )}
@@ -323,7 +330,7 @@ const AutoOptimizePanel: React.FC = () => {
           </Typography>
         )}
 
-        <Box sx={{ mt: 1.25 }}><MeshPresetSelect dense readOnly /></Box>
+        <Box sx={{ mt: 1.25 }}><RunSettingsBar rs={rs} /></Box>
         {plan && !running && (
           <Box sx={{ mt: 1.25, display: 'flex', gap: 0.75, flexWrap: 'wrap', alignItems: 'center' }}>
             <Chip size="small" variant="outlined" sx={{ height: 22, fontSize: 10.5 }}
@@ -336,15 +343,6 @@ const AutoOptimizePanel: React.FC = () => {
               label={`obj: above baseline · ripple ≤ ${fmt(plan.ripple_max_pct, 1)}% (λ ${plan.ripple_penalty_lambda})`} />
             <Chip size="small" variant="outlined" sx={{ height: 22, fontSize: 10.5 }}
               label={`P2 · ${plan.eval.steps_per_period} steps/T · ${plan.eval.n_sectors <= 0 ? 'full ring' : `1/${plan.eval.n_sectors}`}`} />
-            {plan.eval.steps_per_period_source === 'optimizer' && (
-              <Tooltip placement="top" title={
-                `The Simulation tab holds its eddy-run default (${plan.eval.steps_per_period_tab} steps/period), `
-                + `not a count you picked, so screening keeps its own ${plan.eval.steps_per_period}. `
-                + 'Pick a count on the Simulation tab to screen at that count instead.'}>
-                <Chip size="small" variant="outlined" sx={{ height: 22, fontSize: 10.5 }}
-                  label={`screening ${plan.eval.steps_per_period} (tab default ${plan.eval.steps_per_period_tab} not used)`} />
-              </Tooltip>
-            )}
             {plan.eval.steps_per_period_requested
               && plan.eval.steps_per_period_requested < plan.eval.steps_per_period && (
               <Tooltip placement="top" title={

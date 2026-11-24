@@ -35,6 +35,7 @@ import { bestValueColor, buildComparisonModel, shouldSuppressMixedBasisColor } f
 import { ktFromKv } from '../../lib/kvKt';
 import { nsT } from '../../i18n/nsT';
 import { coggingComparable, storedNumber } from '../../lib/coggingPp';
+import { isSweepRow, sweepMetricsComparable } from '../../lib/sweepSettings';
 
 const API = import.meta.env.VITE_API_URL ?? 'http://localhost:8001';
 
@@ -748,8 +749,12 @@ const ComparePanel: React.FC = () => {
   const selectedHasFullBasis = new Map(resultCols.map(r => [
     colId(r), !r.activeBasis || selected.some(s => !r.activeBasis!(resultSrc(r, s))),
   ]));
+  // The Δ% row and its column maxima follow the same rule as the ranking: a sweep point whose steps-and-gap identity is unknown /
+  // mixed / different (or that sits beside an ordinary run) gets no delta and does not set a maximum.
+  const selSweepMixed = !sweepMetricsComparable(selected.map(s => s.results as any));
   const comparisonPercentValue = (r: ResultCol, s: SavedSim): number => {
     if (r.text) return NaN;
+    if (selSweepMixed && isSweepRow(s.results as any)) return NaN;
     const raw = resultVal(r, s);
     if (!Number.isFinite(raw)) return NaN;
     return r.activeBasis?.(resultSrc(r, s)) && selectedHasFullBasis.get(colId(r)) === true ? NaN : raw;
@@ -801,6 +806,21 @@ const ComparePanel: React.FC = () => {
         .filter(Boolean).join(' ') || undefined,
     };
   });
+  // A sweep point (screening resolution) is ranked only against sweep points whose steps-and-gap identity is KNOWN and equal:
+  // a 108-step and a 48-step sweep, an unknown / mixed / legacy sweep, or a sweep point beside an ordinary run are never ranked
+  // together.  Those rows lose colour and ranking (with the reason in the hover text); ordinary rows still rank each other.
+  const sweepMixed = !sweepMetricsComparable(sims.map(s => s.results as any));
+  if (sweepMixed) {
+    resultModelColumns.forEach((c, i) => {
+      if (c.key.endsWith(':cogging_pp_Nm')) return;
+      const base = c;
+      resultModelColumns[i] = { ...base,
+        rankValues: rows => (base.rankValues ? base.rankValues(rows.filter(r => !isSweepRow(r.results as any))) : []),
+        noColor: (s, rows) => isSweepRow(s.results as any) || (base.noColor ? base.noColor(s, rows) : false),
+        title: (v, s) => [isSweepRow(s.results as any) ? txSim('sweepMixedSettings') : '', base.title ? base.title(v, s) : ''].filter(Boolean).join(' ') || undefined,
+      };
+    });
+  }
   const selectedComparisonModel = buildComparisonModel(selected, paramModelColumns, valEq);
   const libraryComparisonModel = buildComparisonModel(sims, resultModelColumns, valEq);
   const diffKeys = selectedComparisonModel.differingInputKeys.map(k => k.slice(2)).sort((a, b) => {
@@ -826,7 +846,7 @@ const ComparePanel: React.FC = () => {
   // name can't collide).
   const colMax: Record<string, number> = {};
   resultCols.forEach(r => {
-    const ns = extentVals(r, selected);
+    const ns = extentVals(r, selSweepMixed ? selected.filter(s => !isSweepRow(s.results as any)) : selected);
     if (ns.length) colMax[`r:${colId(r)}`] = Math.max(...ns);
   });
   /** Deviation from the column maximum, in %. 0 % = the leader. */

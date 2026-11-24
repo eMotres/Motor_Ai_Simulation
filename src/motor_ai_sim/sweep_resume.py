@@ -226,6 +226,7 @@ def _enqueue_resume_sweep(ws_dir: str, journal) -> None:
         "element_order": req_body.get("element_order", 2),
         "demag": req_body.get("demag", False),
         "with_baseline": req_body.get("with_baseline", False),
+        "mesh_preset": req_body.get("mesh_preset"),
     }
     if req_body.get("cogging_pp"):       # opt-in Cogging pp: a resume keeps it (absent otherwise)
         worker_kwargs.update(

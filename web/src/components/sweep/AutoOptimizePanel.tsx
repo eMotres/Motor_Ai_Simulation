@@ -336,13 +336,12 @@ const AutoOptimizePanel: React.FC = () => {
               label={`obj: above baseline · ripple ≤ ${fmt(plan.ripple_max_pct, 1)}% (λ ${plan.ripple_penalty_lambda})`} />
             <Chip size="small" variant="outlined" sx={{ height: 22, fontSize: 10.5 }}
               label={`P2 · ${plan.eval.steps_per_period} steps/T · ${plan.eval.n_sectors <= 0 ? 'full ring' : `1/${plan.eval.n_sectors}`}`} />
-            {plan.eval.steps_per_period_source === 'optimizer' && (
+            {plan.eval.steps_per_period_source === 'optimization_preset' && (
               <Tooltip placement="top" title={
-                `The Simulation tab holds its eddy-run default (${plan.eval.steps_per_period_tab} steps/period), `
-                + `not a count you picked, so screening keeps its own ${plan.eval.steps_per_period}. `
-                + 'Pick a count on the Simulation tab to screen at that count instead.'}>
+                `An optimisation runs on the Optimization preset: ${plan.eval.steps_per_period} steps per electrical period `
+                + `and ${plan.eval.gap_layers} gap row(s), whatever the Simulation tab holds (${plan.eval.steps_per_period_tab ?? 'none'}).`}>
                 <Chip size="small" variant="outlined" sx={{ height: 22, fontSize: 10.5 }}
-                  label={`screening ${plan.eval.steps_per_period} (tab default ${plan.eval.steps_per_period_tab} not used)`} />
+                  label={`Optimization preset (tab: ${plan.eval.steps_per_period_tab ?? '-'})`} />
               </Tooltip>
             )}
             {plan.eval.steps_per_period_requested

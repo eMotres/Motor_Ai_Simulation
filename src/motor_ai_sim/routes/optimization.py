@@ -587,7 +587,8 @@ _RES_KEYS = ("T_em_Nm", "efficiency", "torque_per_mass_Nm_kg", "T_ripple_pct",
              "cogging_sampling_final_quality_sufficient",
              "cogging_sampling_auto_raised", "cogging_sampling_reason",
              # The candidate's Coulomb gap self-check (never refined; flagged).
-             "torque_method", "gap_layers_per_side", "ripple_self_check_rel",
+             "torque_method", "gap_layers_per_side", "n_steps_per_period_solved", "steps_snapped",
+             "demag_prepass_frames", "ripple_self_check_rel",
              "ripple_mesh_limited", "gap_layers_persist", "gap_layers_note",
              # The end-winding factor the point was billed at and whose it was
              # (typed pin / the point's own coil), owner 2026-10-30.
@@ -3152,7 +3153,7 @@ def _scan_worker(variables, operating_points, steps, coil_temp_c, ripple_max,
             "steps_per_period": int(steps), "fem": True,
             # the preset the sweep ran at and the EFFECTIVE steps / gap rows (a sweep stored before this key is labelled
             # from its stored request by sweep_settings_of)
-            **({"mesh_preset": mesh_preset} if mesh_preset else {}),
+            **({"mesh_preset": _stamp_solved(mesh_preset, points)} if mesh_preset else {}),
             "final_validation_status": "preliminary",
             # WHICH RUN THIS IS.  The panel polls one endpoint for "is my run
             # done" and "here is the result", and those were only ever the same
@@ -3294,20 +3295,98 @@ def _with_preset(req, *, force=None, ignore=()):
     return new, rec
 
 
-def _optimization_preset_steps(geometry=None) -> int:
-    """Steps per electrical period of the Optimization preset for the loaded machine (read from the stored preset)."""
+def _optimization_preset_values(geometry=None) -> Dict[str, Any]:
+    """Every setting of the Optimization preset resolved for the loaded machine (read from the stored preset)."""
     from motor_ai_sim import mesh_presets as _MP
     g = dict(geometry if geometry is not None else (get_config().get("geometry") or {}))
     try:
-        return int(_MP.steps_for("optimization", g))
+        return dict(_MP.resolve("optimization", g)["values"])
     except _MP.PresetError as exc:
         raise HTTPException(status_code=422, detail="the Optimization preset cannot be resolved: %s" % exc)
 
 
+def _optimization_preset_steps(geometry=None) -> int:
+    """Steps per electrical period of the Optimization preset for the loaded machine (read from the stored preset)."""
+    return int(_optimization_preset_values(geometry)["n_steps_per_period"])
+
+
+#: request keys an optimisation run never reads from the client: the preset resolves them for the loaded machine
+_PRESET_FORCED_KEYS = ("steps_per_period", "gap_layers", "mesh_size_mm", "min_size_mm", "n_sectors")
+
+
+def _force_optimization_preset(req):
+    """``(request, record)`` of an optimisation run (Sweep, Descent): EVERY setting the Optimization preset controls comes
+    from the preset: steps, gap rows, mesh sizes, sectors, rotor eddy and demag.  What the client sent differently is
+    ignored and listed in ``record["ignored"]``.  ``hi_fidelity`` is not part of the preset and raises the gap rows to 4 or
+    more, so it is switched off.  The record is therefore never a mixture: ``custom`` is false."""
+    req2, rec = _with_preset(req, force="optimization", ignore=_PRESET_FORCED_KEYS)
+    vals = rec["resolved"]
+    ignored = dict(rec.get("ignored") or {})
+    fields = type(req2).model_fields
+    upd: Dict[str, Any] = {}
+    for k in ("rotor_eddy", "demag"):
+        if k in fields:
+            if k in req.model_fields_set and bool(getattr(req, k)) != bool(vals[k]):
+                ignored[k] = {"sent": bool(getattr(req, k)), "used": bool(vals[k])}
+            upd[k] = bool(vals[k])
+    if "hi_fidelity" in fields:
+        if bool(getattr(req2, "hi_fidelity")):
+            ignored["hi_fidelity"] = {"sent": True, "used": False}
+        upd["hi_fidelity"] = False
+    if ignored:
+        rec["ignored"] = ignored
+    return req2.model_copy(update=upd), rec
+
+
 def _sweep_settings_record(preset_rec, steps, gap_layers):
-    """What a Sweep stores about its own settings: the preset and the EFFECTIVE steps and gap rows it ran with."""
+    """What a Sweep stores about its own settings: the preset and the steps and gap rows it ASKED for (``requested``);
+    ``effective`` starts equal and is replaced by what the solver reports once points are solved (``_stamp_solved``)."""
     rec = dict(preset_rec or {})
-    rec["effective"] = {"steps_per_period": int(steps), "gap_layers": float(gap_layers)}
+    rec["requested"] = {"steps_per_period": int(steps), "gap_layers": float(gap_layers)}
+    rec["effective"] = dict(rec["requested"])
+    rec["effective_source"] = "requested"
+    return rec
+
+
+def _stamp_solved(rec, points):
+    """The sweep's preset record with ``effective`` taken from the SOLVED points (``n_steps_per_period_solved`` as snapped,
+    ``gap_layers_per_side`` as used).  A point that carries neither (a point served from an older cache entry) is not
+    counted; with none reporting, the record says ``effective_source: requested`` (the solve returned nothing).  A solve
+    that differs from the request makes the record ``custom``: it is never called Optimization then."""
+    if not rec:
+        return rec
+    rec = dict(rec)
+    req_eff = dict(rec.get("requested") or rec.get("effective") or {})
+    steps, gaps, n_rep = set(), set(), 0
+    for p in points:
+        if not isinstance(p, dict) or p.get("fem") is False or not p.get("feasible", True):
+            continue
+        st, gl = p.get("n_steps_per_period_solved"), p.get("gap_layers_per_side")
+        if st is None and gl is None:
+            continue
+        n_rep += 1
+        if st is not None:
+            steps.add(int(st))
+        if gl is not None:
+            gaps.add(round(float(gl), 4))
+    rec["n_points_reporting"] = n_rep
+    if not n_rep:
+        rec["effective_source"] = "requested"
+        return rec
+    eff = dict(req_eff)
+    if len(steps) == 1:
+        eff["steps_per_period"] = next(iter(steps))
+    if len(gaps) == 1:
+        eff["gap_layers"] = next(iter(gaps))
+    rec["effective"] = eff
+    rec["effective_source"] = "solved"
+    rec["solved"] = {"steps_per_period": sorted(steps), "gap_layers": sorted(gaps)}
+    differs = (len(steps) > 1 or len(gaps) > 1
+               or any(int(x) != int(req_eff.get("steps_per_period", x)) for x in steps)
+               or any(abs(float(x) - float(req_eff.get("gap_layers", x))) > 1e-9 for x in gaps))
+    if differs:
+        rec["custom"] = True
+        rec["solved_differs"] = True
     return rec
 
 
@@ -3337,7 +3416,7 @@ def prepare_scan(req: ScanRequest) -> Dict[str, Any]:
     always did, and answers 400 only when none is left; the runner refuses)."""
     # A SWEEP IS AN OPTIMISATION RUN: it always runs the Optimization preset (owner 2026-11-17 / 2026-11-23).  The step count
     # and the gap rows come from the stored preset; a count the client sent (the Simulation tab's 108) is ignored and listed.
-    req, _preset_rec = _with_preset(req, force="optimization", ignore=("steps_per_period", "gap_layers"))
+    req, _preset_rec = _force_optimization_preset(req)
     wl = get_config().get("sweep_whitelist", None)
     allowed = set(wl or [])
     variables = [{"name": v.name, "min": float(v.min), "max": float(v.max),
@@ -6156,7 +6235,15 @@ def prepare_descent(req: DescentRequest) -> Dict[str, Any]:
     ``dropped`` lists the requested variables that did not make it into
     ``var_specs`` and why (the route ignores it, as it always did; the runner
     refuses).  An empty ``var_specs`` is the caller's to refuse."""
-    req, _preset_rec = _with_preset(req)
+    # A descent is an optimisation run: every preset-controlled setting comes from the Optimization preset, whatever
+    # the client sent (steps, gap rows, mesh sizes, sectors, rotor eddy).  Demag is read from the config by the evals,
+    # so a config that differs from the preset is listed (and the record is then "custom", never "Optimization").
+    req, _preset_rec = _force_optimization_preset(req)
+    _cfg_demag = bool(_effective_demag(None))
+    if _cfg_demag != bool(_preset_rec["resolved"]["demag"]):
+        _preset_rec["custom"] = True
+        _preset_rec["overridden"] = {**_preset_rec.get("overridden", {}),
+                                     "demag": {"preset": bool(_preset_rec["resolved"]["demag"]), "requested": _cfg_demag}}
     cfg = get_config()
     schema = cfg.get("geometry_schema", {})
     wl = cfg.get("sweep_whitelist", None)
@@ -7565,9 +7652,10 @@ def _auto_assemble(max_ripple_pct: float, budget_evals: int = 0,
     # they always screened at.  A count the user picked on the tab is obeyed.
     steps_src = str(sim.get("steps_per_period_source") or "").strip().lower()
     steps_tab = steps
-    if steps_src == "eddy_default":
-        # the Optimization preset's own count for this machine (stored preset, not a constant)
-        steps = float(_optimization_preset_steps(cfg.get("geometry") if isinstance(cfg, dict) else None))
+    # OWNER 2026-11-23: optimisation runs on the Optimization preset, whatever the tab holds (default, user or preset):
+    # the count and the gap rows are the stored preset's for this machine.
+    _opt_vals = _optimization_preset_values(cfg.get("geometry") if isinstance(cfg, dict) else None)
+    steps = float(_opt_vals["n_steps_per_period"])
     steps_pp = int(steps) if (steps and steps >= 8) else 36
     steps_pp = max(8, min(180, steps_pp))
     # Candidate evals carry sampling_purpose="optimization". Their
@@ -7588,15 +7676,14 @@ def _auto_assemble(max_ripple_pct: float, budget_evals: int = 0,
         # Where the screening count came from: "optimizer" = its own screening
         # count because the tab held only the eddy-run default; "simulation_tab"
         # = the count the user set there.  `steps_per_period_tab` is that tab's value.
-        "steps_per_period_source": ("optimizer" if steps_src == "eddy_default"
-                                    else "simulation_tab"),
+        "steps_per_period_source": "optimization_preset",
         "steps_per_period_tab": (None if steps_tab is None else int(steps_tab)),
         "coil_temp_c": float(coil_temp),
         # The machine's saved Mesh settings (mesh_settings: labelled fallback
         # only when the machine has none).
         "mesh_size_mm": max(1.0, min(_machine_mesh(cfg)["mesh_size_mm"], 12.0)),
         "min_size_mm": max(0.1, min(_machine_mesh(cfg)["min_size_mm"], 3.0)),
-        "gap_layers": max(1.0, min(_machine_mesh(cfg)["gap_layers"], 8.0)),
+        "gap_layers": max(1.0, min(float(_opt_vals["gap_layers"]), 8.0)),
         "n_sectors": n_sectors,
         # P2 is the only basis; refine_proc coerces the belt gap + natural
         # symmetry sector per eval, exactly as the Simulation route does.

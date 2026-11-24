@@ -33,7 +33,7 @@ import { releaseFamilyContext } from '../../lib/familyContext';
 import { setActiveDuty } from '../../lib/dutySettings';
 import { canWriteServer } from '../../lib/localAuth';
 import { fetchMeshPresets } from '../../lib/meshPresets';
-import { sweepSettingsOf, sweepSettingsLabel } from '../../lib/sweepSettings';
+import { sweepSettingsOf, sweepSettingsLabel, sweepSettingsMetrics } from '../../lib/sweepSettings';
 import { endWindingPin } from '../../lib/endWindingPin';
 import { coincidentGroups, coincidentOffsetPx } from '../../lib/coincidentPoints';
 import {
@@ -346,14 +346,27 @@ const SweepStudyPanel: React.FC = () => {
   const { sweepConfig, updateGeometryViaApi } = useMotorStore();
   // A sweep runs the Optimization preset: the server reads its steps and gap rows from the stored preset and ignores any
   // count sent here.  The panel shows what the run will use (GET /api/mesh/presets), never the Simulation tab's count.
+  // Run is enabled only once these are resolved for the loaded machine; a failed fetch shows its error with a retry, and the
+  // settings are fetched again when another machine is loaded.
   const [optPreset, setOptPreset] = useState<{ label: string; steps: number; gap: number } | null>(null);
+  const [presetErr, setPresetErr] = useState<string | null>(null);
+  const [presetTry, setPresetTry] = useState(0);
   useEffect(() => {
     let live = true;
+    setOptPreset(null); setPresetErr(null);
     fetchMeshPresets().then(set => {
       const p = set.presets.find(q => q.name === 'optimization');
-      if (live && p?.values) setOptPreset({ label: p.label, steps: p.values.n_steps_per_period, gap: p.values.gap_layers });
-    }).catch(() => { /* the label stays empty; the server still applies the preset */ });
+      if (!live) return;
+      if (p?.values) setOptPreset({ label: p.label, steps: p.values.n_steps_per_period, gap: p.values.gap_layers });
+      else setPresetErr(p?.error || 'no values');
+    }).catch(e => { if (live) setPresetErr(String(e?.message ?? e)); });
     return () => { live = false; };
+  }, [presetTry]);
+  useEffect(() => {
+    const again = () => setPresetTry(n => n + 1);
+    window.addEventListener('family-changed', again);
+    window.addEventListener('sim-design-applied', again);
+    return () => { window.removeEventListener('family-changed', again); window.removeEventListener('sim-design-applied', again); };
   }, []);
   const [connectBy, setConnectBy] = useLS<'current_a' | 'gamma_deg'>('connectBy', 'current_a');
   const [withBaseline, setWithBaseline] = useLS<boolean>('withBaseline', false);
@@ -1172,6 +1185,7 @@ const SweepStudyPanel: React.FC = () => {
                           rpm: Number(p.rpm) },
         metrics: { T_avg_Nm: p.T, T_ripple_pct: p.ripple, efficiency: p.eff,
                    ...(p.cp ? coggingMetrics(p.cp) : {}),
+                   ...sweepSettingsMetrics(sweepSettingsOf(result)),
                    torque_per_mass: p.td, mass_total_kg: p.mass,
                    raw_samples_per_cogging_cycle: p.rawSamplesPerCycle },
         overrides: p.overrides || {},
@@ -1221,8 +1235,15 @@ const SweepStudyPanel: React.FC = () => {
         <MuiTooltip title={tx('sweepPresetTip')}>
           <TextField label={tx('sweepPresetField')} size="small" disabled
             value={optPreset ? sweepSettingsLabel({ preset: 'optimization', steps: optPreset.steps, gapLayers: optPreset.gap, source: 'preset' }, optPreset.label) : ''}
+            error={!!presetErr}
             inputProps={{ style: { fontSize: 12, padding: '5px 8px' } }} sx={{ width: 290 }} />
         </MuiTooltip>
+        {presetErr && (
+          <Typography sx={{ fontSize: 11, color: '#fca5a5' }} role="alert">
+            {tx('sweepPresetError')} <Button size="small" onClick={() => setPresetTry(n => n + 1)}
+              sx={{ textTransform: 'none', fontSize: 11, minWidth: 0 }}>{tx('sweepPresetRetry')}</Button>
+          </Typography>
+        )}
         <FormControl size="small" sx={{ minWidth: 150 }}>
           <InputLabel sx={{ fontSize: 12 }}>connect along</InputLabel>
           <Select label="connect along" value={connectBy} onChange={e => setConnectBy(e.target.value as any)}
@@ -1265,7 +1286,7 @@ const SweepStudyPanel: React.FC = () => {
 
       <Box sx={{ display: 'flex', gap: 1, alignItems: 'center', mb: 1 }}>
         {!running ? (
-          <Button size="small" variant="contained" onClick={run} disabled={nPts < 1}
+          <Button size="small" variant="contained" onClick={run} disabled={nPts < 1 || !optPreset}
             sx={{ textTransform: 'none', fontWeight: 700 }}>
             Run sweep ({nPts})
           </Button>

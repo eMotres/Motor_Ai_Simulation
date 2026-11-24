@@ -301,7 +301,9 @@ def sweep_settings_of(result: Any, config: Optional[Dict[str, Any]] = None) -> D
     sp = r.get("scan_params") if isinstance(r.get("scan_params"), dict) else {}
     if mp and isinstance(mp.get("effective"), dict) and mp["effective"].get("steps_per_period") is not None:
         eff = mp["effective"]
-        return {"preset": mp.get("name"), "version": mp.get("version"), "custom": bool(mp.get("custom")),
+        custom = bool(mp.get("custom"))
+        return {"preset": ("custom" if custom else mp.get("name")), "version": mp.get("version"), "custom": custom,
+                "effective_source": mp.get("effective_source"),
                 "steps_per_period": eff.get("steps_per_period"), "gap_layers": eff.get("gap_layers"),
                 "source": "preset"}
     return {"preset": None, "version": None, "custom": False,

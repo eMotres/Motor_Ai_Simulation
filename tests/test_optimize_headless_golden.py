@@ -39,6 +39,17 @@ BODY = {
     "objective": "baseline_line", "steps_per_period": 24, "run_id": "golden",
     "gap_layers": 1,
 }
+
+
+def _preset_kw():
+    """Every setting an optimisation run takes from the Optimization preset (a request that states others is refused by the
+    runner and ignored by the route), read from the stored preset for the loaded machine."""
+    v = O._optimization_preset_values()
+    return {"steps_per_period": v["n_steps_per_period"], "gap_layers": v["gap_layers"], "mesh_size_mm": v["mesh_size_mm"],
+            "min_size_mm": v["min_size_mm"], "n_sectors": v["n_sectors"], "rotor_eddy": v["rotor_eddy"]}
+
+
+BODY.update(_preset_kw())
 KEYS = ("n_evals", "best", "history", "baseline", "baseline_line", "result",
         "final_validation_status", "error")
 
@@ -244,8 +255,7 @@ def _sweep_body(**kw):
                        "mode": "sweep", "step": 0.2}],
         "operating_points": [{"gamma_deg": 0.0, "current_a": 0.0, "rpm": 630.9}],
         # a Sweep runs the Optimization preset: the count the run is asked for IS the preset's (read, not hard-coded)
-        "steps_per_period": _MP.steps_for("optimization", g), "gap_layers": 1, "max_geometries": 20, "mesh_size_mm": 1.0,
-        "min_size_mm": 0.3, "run_id": "golden-sweep",
+        "max_geometries": 20, "run_id": "golden-sweep", **_preset_kw(),
     }
     body.update(kw)
     return body

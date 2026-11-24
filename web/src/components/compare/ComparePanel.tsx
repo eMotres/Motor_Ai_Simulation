@@ -35,6 +35,7 @@ import { bestValueColor, buildComparisonModel, shouldSuppressMixedBasisColor } f
 import { ktFromKv } from '../../lib/kvKt';
 import { nsT } from '../../i18n/nsT';
 import { coggingComparable, storedNumber } from '../../lib/coggingPp';
+import { sweepMetricsComparable } from '../../lib/sweepSettings';
 
 const API = import.meta.env.VITE_API_URL ?? 'http://localhost:8001';
 
@@ -801,6 +802,20 @@ const ComparePanel: React.FC = () => {
         .filter(Boolean).join(' ') || undefined,
     };
   });
+  // Sweep points computed at different steps / gap rows / presets (a 108-step and a 48-step sweep) are never ranked
+  // against each other: their result columns lose the colour and the ranking, with the reason in the hover text.
+  const sweepMixed = !sweepMetricsComparable(sims.map(s => s.results as any));
+  if (sweepMixed) {
+    resultModelColumns.forEach((c, i) => {
+      if (c.key.endsWith(':cogging_pp_Nm')) return;
+      const base = c;
+      resultModelColumns[i] = { ...base,
+        rankValues: () => [],
+        noColor: () => true,
+        title: (v, s) => [txSim('sweepMixedSettings'), base.title ? base.title(v, s) : ''].filter(Boolean).join(' ') || undefined,
+      };
+    });
+  }
   const selectedComparisonModel = buildComparisonModel(selected, paramModelColumns, valEq);
   const libraryComparisonModel = buildComparisonModel(sims, resultModelColumns, valEq);
   const diffKeys = selectedComparisonModel.differingInputKeys.map(k => k.slice(2)).sort((a, b) => {

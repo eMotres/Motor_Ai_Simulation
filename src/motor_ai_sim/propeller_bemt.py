@@ -69,8 +69,10 @@ _W_RTOL = 1e-6
 #: the uncovered open part counts at the free-stream speed, so the value itself is already conservative
 BAND_MIN_COVERAGE = 0.5
 
-POLAR_DIR = Path(__file__).resolve().parents[2] / "config" / "propellers" / "_polars"
-MFOIL_POLAR_DIR = Path(__file__).resolve().parents[2] / "config" / "propellers" / "_polars_mfoil"   # viscous model tables (mfoil, MIT), 2026-11-19
+# checkout: <app>/config/...; deployed image: <app>/config-seed/... (the image has no config/; hotfix 2026-11-24: the mfoil default of the
+# Designer failed on live because these two paths were the checkout ones only)
+POLAR_DIR = _pp.seeded_config_path("propellers", "_polars")
+MFOIL_POLAR_DIR = _pp.seeded_config_path("propellers", "_polars_mfoil")   # viscous model tables (mfoil, MIT), 2026-11-19
 
 
 class BemtError(_pi.InflowModelError):

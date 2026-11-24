@@ -198,7 +198,61 @@ def test_a_label_whose_only_documents_are_archived_does_not_exist(client, board)
         r = client.get("/api/projects/p1/documents.zip?revision=R0", headers=hdr(who))
         assert r.status_code == 404 and r.json() == {"detail": "Release not found"}, who
     assert all(g["revision"] != "R0" for g in listing(client, "owner")["releases"])
-    archived_list = client.get("/api/projects/p1/documents?archived=true", headers=hdr("owner")).json()
-    assert any(d["name"] == "old.pdf" for d in archived_list["documents"])            # an editor still lists it (archived view)
-    assert all(g["revision"] != "R0" for g in archived_list["releases"])
+    owner_view = client.get("/api/projects/p1/documents?archived=true", headers=hdr("owner")).json()
+    assert all(d["name"] != "old.pdf" for d in owner_view["documents"])               # customer side: never listed (owner rule)
+    staff_view = client.get("/api/projects/p1/documents?archived=true", headers=hdr("admin")).json()
+    assert any(d["name"] == "old.pdf" for d in staff_view["documents"])               # staff list it in the archived view
+    assert all(g["revision"] != "R0" for g in staff_view["releases"])
     assert client.put("/api/projects/p1/documents/release", headers=hdr("owner"), json={"revision": "R0"}).status_code == 404
+
+
+
+@pytest.mark.parametrize("who", ["owner", "eng", "cust"])
+def test_archived_documents_are_staff_only_whatever_the_project_role(client, board, who):
+    """Owner 2026-11-24: never listed for, downloadable by or restorable by the customer side (before: a customer-side owner /
+    engineer listed, downloaded and restored them)."""
+    doc = board["a_bom"]["id"]
+    assert client.delete("/api/projects/p1/documents/%s" % doc, headers=hdr("owner")).status_code == 200    # archiving stays theirs
+    listed = client.get("/api/projects/p1/documents?archived=true", headers=hdr(who)).json()["documents"]
+    assert all(d["id"] != doc for d in listed)
+    assert client.get("/api/projects/p1/documents/%s/download" % doc, headers=hdr(who)).status_code == 404
+    assert client.patch("/api/projects/p1/documents/%s" % doc, headers=hdr(who), json={"archived": False}).status_code == 404
+    assert client.get("/api/projects/p1/documents/%s/download" % doc, headers=hdr("admin")).status_code == 200
+    assert client.patch("/api/projects/p1/documents/%s" % doc, headers=hdr("admin"), json={"archived": False}).status_code == 200
+
+
+def test_a_release_with_a_missing_file_is_refused_never_incomplete(client, board):
+    import os
+    row = [r for r in store.load_documents("p1") if r["id"] == board["b_gerber"]["id"]][0]
+    os.remove(store.read_document_file("p1", row["file_id"]))
+    for who in ("cust", "admin"):
+        r = client.get("/api/projects/p1/documents.zip?revision=B", headers=hdr(who))
+        assert r.status_code == 409 and "gerber.zip" in r.json()["detail"], who
+    names, manifest, _d = zip_names(client, "admin", "")                    # the staff archive of everything: as before, noted
+    assert "Not available on disk (1): gerber.zip" in manifest
+
+
+def test_a_stored_release_that_loses_its_documents_is_cleared_and_editors_are_told(client, board, tmp_path):
+    assert client.put("/api/projects/p1/documents/release", headers=hdr("owner"), json={"revision": "A"}).status_code == 200
+    client.delete("/api/projects/p1/documents/%s" % board["a_gerber"]["id"], headers=hdr("owner"))
+    assert (store.get_project("p1") or {})["documents_release"]["revision"] == "A"          # one A document is still live
+    client.delete("/api/projects/p1/documents/%s" % board["a_bom"]["id"], headers=hdr("owner"))
+    project = store.get_project("p1") or {}
+    assert "documents_release" not in project and project["documents_release_cleared"]["revision"] == "A"
+    assert listing(client, "owner")["release_cleared"] == "A" and listing(client, "cust")["release_cleared"] is None
+    audit = [json.loads(x) for x in (tmp_path / "projects" / "p1" / "audit.jsonl").read_text().splitlines() if x.strip()]
+    assert any(a["action"] == "documents.release_cleared" and a["details"]["revision"] == "A" for a in audit)
+    # a restored A document does NOT re-activate the old choice
+    client.patch("/api/projects/p1/documents/%s" % board["a_bom"]["id"], headers=hdr("admin"), json={"archived": False})
+    assert listing(client, "cust")["current_release"] == "B"
+    # a new choice answers the note
+    client.put("/api/projects/p1/documents/release", headers=hdr("owner"), json={"revision": "B"})
+    assert listing(client, "owner")["release_cleared"] is None
+
+
+def test_relabelling_the_last_documents_of_the_stored_release_clears_it(client, board):
+    client.put("/api/projects/p1/documents/release", headers=hdr("owner"), json={"revision": "A"})
+    for key in ("a_gerber", "a_bom"):
+        assert client.patch("/api/projects/p1/documents/%s" % board[key]["id"], headers=hdr("owner"), json={"revision": "A1"}).status_code == 200
+    assert listing(client, "owner")["release_cleared"] == "A"
+    assert "documents_release" not in (store.get_project("p1") or {})

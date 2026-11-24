@@ -144,17 +144,22 @@ def test_delete_archives_keeps_file_and_audit_and_restore(client, tmp_path):
     assert client.delete(url, headers=hdr("t-customer")).status_code == 403
     r = client.delete(url, headers=hdr("t-owner"))
     assert r.status_code == 200 and r.json()["archived"] is True
-    assert client.delete(url, headers=hdr("t-owner")).status_code == 200              # idempotent: one audit row
+    assert client.delete(url, headers=hdr("t-owner")).status_code == 404              # archived = gone for the customer side
+    assert client.delete(url, headers=hdr("t-admin")).status_code == 200              # idempotent for staff: one audit row
     files = list((tmp_path / "projects" / "ciano" / "documents" / "files").iterdir())
     assert len(files) == 1 and files[0].read_bytes() == b"keep me"
     assert client.get("/api/projects/ciano/documents", headers=hdr("t-owner")).json()["documents"] == []
-    assert len(client.get("/api/projects/ciano/documents?archived=true", headers=hdr("t-owner")).json()["documents"]) == 1
+    # owner 2026-11-24: archived documents are staff-only, whatever the project role (before: the customer-side owner listed them)
+    assert client.get("/api/projects/ciano/documents?archived=true", headers=hdr("t-owner")).json()["documents"] == []
+    assert len(client.get("/api/projects/ciano/documents?archived=true", headers=hdr("t-admin")).json()["documents"]) == 1
     assert client.get("/api/projects/ciano/documents?archived=true", headers=hdr("t-customer")).json()["documents"] == []
     assert client.get(url + "/download", headers=hdr("t-customer")).status_code == 404
-    assert client.get(url + "/download", headers=hdr("t-owner")).status_code == 200    # staff can still fetch it
+    assert client.get(url + "/download", headers=hdr("t-owner")).status_code == 404
+    assert client.get(url + "/download", headers=hdr("t-admin")).status_code == 200    # staff can still fetch it
     assert audit_actions(tmp_path).count("document.archive") == 1
-    assert client.patch(url, headers=hdr("t-owner"), json={"archived": True}).status_code == 422
-    assert client.patch(url, headers=hdr("t-owner"), json={"archived": False}).json()["archived"] is False
+    assert client.patch(url, headers=hdr("t-admin"), json={"archived": True}).status_code == 422
+    assert client.patch(url, headers=hdr("t-owner"), json={"archived": False}).status_code == 404      # restore: staff only
+    assert client.patch(url, headers=hdr("t-admin"), json={"archived": False}).json()["archived"] is False
     assert len(client.get("/api/projects/ciano/documents", headers=hdr("t-customer")).json()["documents"]) == 1
     assert "document.restore" in audit_actions(tmp_path)
 
@@ -265,4 +270,4 @@ def test_a_visible_document_still_changes_for_the_editor_and_the_reply_does_not_
     assert OWNER not in r.text                                                    # the uploader's address is staff-only
     d = client.delete(url, headers=hdr("t-owner"))
     assert d.status_code == 200 and d.json()["archived"] is True and OWNER not in d.text
-    assert client.patch(url, headers=hdr("t-owner"), json={"archived": False}).json()["archived"] is False
+    assert client.patch(url, headers=hdr("t-owner"), json={"archived": False}).status_code == 404       # restore: staff only (2026-11-24)

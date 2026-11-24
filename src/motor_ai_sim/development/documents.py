@@ -7,7 +7,8 @@ Gerber / drill / pick-and-place zips, BOM, 3-D STEP models, PDF drawings, images
               ``<project>/documents/files/<file_id>``, never held in memory; up to ``models.DOCUMENT_MAX_BYTES`` (200 MB);
 * list        every project member; a document marked ``internal`` is listed for MOTRES staff only, one marked ``price_restricted``
               ("Price - restricted", owner 2026-11-22) for staff, project owners and members with ``sees_prices`` (never an MCP agent),
-              an archived one for those who may edit;
+              an archived one for MOTRES staff only (owner 2026-11-24: never listed for or downloadable by the customer side,
+              whatever its project role; until then a customer-side owner / engineer also listed, downloaded and restored them);
 * download    every project member (same visibility); each download - and the archive - is written to the traced download log
               (``model3d.log_download``) and to the project audit;
 * patch       ``internal`` / ``price_restricted`` / ``folder`` / ``revision`` (and ``archived: false`` to restore);
@@ -226,6 +227,30 @@ def _superseded(project: dict, rows: list[dict], label: str) -> bool:
     return any(g["revision"] == label and g["superseded"] for g in info["groups"])
 
 
+def _release_check(project_id: str, user: dict, reason: str) -> None:
+    """After a document is archived or relabelled: a STORED release whose label has no live document any more is cleared (an
+    audit row, and a note the editors see: "the chosen release no longer exists"), so the old string cannot re-activate when a
+    document of that label comes back later.  Judged on ALL documents, not on one caller's view."""
+    project = store.get_project(project_id) or {}
+    chosen = project.get("documents_release") if isinstance(project.get("documents_release"), dict) else None
+    if not chosen:
+        return
+    live = {_label(r) for r in store.load_documents(project_id) if not r.get("archived")}
+    if chosen.get("revision") in live:
+        return
+    now = datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds")
+
+    def edit(doc: dict) -> None:
+        cur = doc.get("documents_release")
+        if isinstance(cur, dict) and cur.get("revision") == chosen.get("revision"):
+            doc.pop("documents_release", None)
+            doc["documents_release_cleared"] = {"revision": chosen.get("revision"), "at": now, "by": _email(user), "reason": reason}
+        # NB: return nothing - json_store.mutate_json takes a returned value as the new document
+    store.mutate_project(project_id, edit)
+    store.append_audit(project_id, _email(user), "documents.release_cleared", "document", "",
+                       {"revision": chosen.get("revision"), "reason": reason})
+
+
 @router.put("/{project_id}/documents/release")
 def set_release(request: Request, project_id: str, body: dict):
     """Choose the current release: ``{"revision": "<label>"}``, or ``{"revision": null}`` for the derived default (the newest)."""
@@ -243,6 +268,7 @@ def set_release(request: Request, project_id: str, body: dict):
     now = datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds")
 
     def edit(doc: dict) -> None:
+        doc.pop("documents_release_cleared", None)          # a new choice answers the note
         if value is None:
             doc.pop("documents_release", None)
         else:
@@ -259,7 +285,7 @@ def set_release(request: Request, project_id: str, body: dict):
 def list_documents(request: Request, project_id: str, archived: bool = False):
     user, project, role, staff = _context(request, project_id)
     can_edit = _can_edit(user, role)
-    rows = _visible(store.load_documents(project_id), staff, include_archived=bool(archived and can_edit),
+    rows = _visible(store.load_documents(project_id), staff, include_archived=bool(archived and staff),
                     prices=_prices(user, project, staff))
     cover = (store.get_project(project_id) or {}).get("cover")
     cover = cover if isinstance(cover, dict) else {}
@@ -268,6 +294,8 @@ def list_documents(request: Request, project_id: str, archived: bool = False):
     return {"documents": [dict(_public(r, staff), is_cover=bool(cover) and r.get("id") == cover.get("document_id"),
                                superseded=_label(r) in old and not r.get("archived")) for r in rows],
             "releases": info["groups"], "current_release": info["current"], "release_stored": info["stored"],
+            "release_cleared": ((store.get_project(project_id) or {}).get("documents_release_cleared") or {}).get("revision")
+            if can_edit else None,
             "superseded_download": SUPERSEDED_SINGLE_DOWNLOAD or staff,
             "folders": list(models.DOCUMENT_FOLDERS), "can_edit": can_edit, "is_staff": staff, "max_bytes": models.DOCUMENT_MAX_BYTES,
             "cover_version": cover.get("version"), "can_restrict": _can_restrict(user, project)}
@@ -387,7 +415,7 @@ async def patch_document(request: Request, project_id: str, doc_id: str):
 
     def apply(doc: dict) -> None:
         for row in doc.setdefault("documents", []):
-            if row.get("id") == doc_id and _visible([row], staff_flag, True, prices):      # a row this caller cannot list is "not found"
+            if row.get("id") == doc_id and _visible([row], staff_flag, staff_flag, prices):   # a row this caller cannot list is "not found"
                 before = {k: row.get(k) for k in changes}
                 row.update(changes)
                 if changes.get("archived") is False:
@@ -411,6 +439,8 @@ async def patch_document(request: Request, project_id: str, doc_id: str):
             clear_cover(project_id, user, doc_id, "document marked price-restricted")
     finally:
         _flush(project_id)
+    if "revision" in (found.get("changed") or {}):
+        _release_check(project_id, user, "its documents were relabelled")
     return _public(found["row"], staff_flag)
 
 
@@ -418,7 +448,7 @@ def _require_row_then_editor(user: dict, project_id: str, doc_id: str, role: str
     """404 for a document this caller cannot list - exactly the answer for an unknown id (no existence oracle) - and only then 403
     for a member who sees it but may not edit."""
     can_edit = _can_edit(user, role)
-    _find(project_id, doc_id, staff, include_archived=can_edit, prices=prices)
+    _find(project_id, doc_id, staff, include_archived=staff, prices=prices)        # an archived row: staff only
     if not can_edit:
         raise HTTPException(status_code=403, detail="Project engineer access required")
 
@@ -433,7 +463,7 @@ def archive_document(request: Request, project_id: str, doc_id: str):
 
     def apply(doc: dict) -> None:
         for row in doc.setdefault("documents", []):
-            if row.get("id") == doc_id and _visible([row], staff_flag, True, prices):      # a row this caller cannot list is "not found"
+            if row.get("id") == doc_id and _visible([row], staff_flag, staff_flag, prices):   # a row this caller cannot list is "not found"
                 found["was"] = bool(row.get("archived"))
                 if not row.get("archived"):
                     row["archived"] = True
@@ -451,6 +481,7 @@ def archive_document(request: Request, project_id: str, doc_id: str):
             clear_cover(project_id, user, doc_id, "document archived")
         finally:
             _flush(project_id)
+        _release_check(project_id, user, "its last document was archived")
     return _public(found["row"], staff_flag)
 
 
@@ -460,7 +491,7 @@ def archive_document(request: Request, project_id: str, doc_id: str):
 def download_document(request: Request, project_id: str, doc_id: str):
     """One document, streamed from disk.  Staff may also fetch an archived one."""
     user, project, role, staff = _context(request, project_id)
-    row = _find(project_id, doc_id, staff, include_archived=_can_edit(user, role), prices=_prices(user, project, staff))
+    row = _find(project_id, doc_id, staff, include_archived=staff, prices=_prices(user, project, staff))
     superseded = not row.get("archived") and _superseded(
         project, _visible(store.load_documents(project_id), staff, prices=_prices(user, project, staff)), _label(row))
     if superseded and not staff and not SUPERSEDED_SINGLE_DOWNLOAD:
@@ -525,6 +556,10 @@ def download_documents_zip(request: Request, project_id: str, revision: str | No
             continue
         total += path.stat().st_size
         present.append((row, path))
+    if label is not None and missing:
+        # a release is a build package: never an incomplete one (Astra #852)
+        raise HTTPException(status_code=409, detail="Release %s is incomplete: %s not available on the server; ask MOTRES to "
+                            "re-upload them" % (label or "(no revision)", ", ".join(str(r.get("name")) for r in missing)))
     if len(present) > MAX_ZIP_FILES or total > MAX_ZIP_BYTES:
         raise HTTPException(status_code=413, detail="The documents exceed the %d MB archive limit; download them one by one."
                             % (MAX_ZIP_BYTES // (1024 * 1024)))

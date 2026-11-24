@@ -540,3 +540,14 @@ def test_a_controller_project_has_no_contract_for_anybody(client):
         p.pop("project_type", None)                          # return nothing: a returned value would BE the document
     store.mutate_project("proj1", motor_again)
     assert client.get(URL, headers=hdr("t-owner")).status_code == 200
+
+
+
+def test_no_contract_line_reaches_the_members_digest_of_a_controller_project(client):
+    """The other readers of contract data (Astra #852): contract.json and its files are read only by project_contract (all its
+    routes 404 for a controller project); its audit rows reach only staff readers.  The members' digest maps no contract action."""
+    from motor_ai_sim.digest import collect
+    up(client, "agreement")
+    store.mutate_project("proj1", lambda p: p.__setitem__("project_type", "controller"))
+    items = collect.collect_project(store.get_project("proj1"), 0, 4e9)
+    assert not any("contract" in repr(i).lower() for i in items)

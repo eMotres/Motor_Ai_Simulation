@@ -45,6 +45,7 @@ export default function ProjectDocuments({ projectId, language, t, onCoverChange
   const [releases, setReleases] = useState<DocumentRelease[]>([]);
   const [currentRelease, setCurrentRelease] = useState<string | null>(null);
   const [releaseStored, setReleaseStored] = useState(false);
+  const [releaseCleared, setReleaseCleared] = useState<string | null>(null);   // the chosen release lost its documents (editors only)
   const [supersededDownload, setSupersededDownload] = useState(true);
   const [moreAnchor, setMoreAnchor] = useState<HTMLElement | null>(null);
   const [confirmDoc, setConfirmDoc] = useState<ProjectDocument | null>(null);   // a superseded document asked for: confirm first
@@ -69,6 +70,7 @@ export default function ProjectDocuments({ projectId, language, t, onCoverChange
       setReleases(list.releases ?? []);
       setCurrentRelease(list.current_release ?? null);
       setReleaseStored(!!list.release_stored);
+      setReleaseCleared(list.release_cleared ?? null);
       setSupersededDownload(list.superseded_download !== false);
       const version = list.cover_version ?? null;
       if (version !== coverVersion.current) { coverVersion.current = version; onCoverChange?.(version); }
@@ -177,6 +179,9 @@ export default function ProjectDocuments({ projectId, language, t, onCoverChange
       </>}
       {currentRelease !== null && <Tooltip title={t('documents.releaseZipTip')}><span><Button size="small" startIcon={<DownloadIcon />} data-testid="documents-release-zip"
         onClick={() => void run(() => downloadProjectDocumentsZip(projectId, currentRelease))}>{t('documents.releaseZip', { release: currentRelease || t('documents.generalDocuments') })}</Button></span></Tooltip>}
+      {canEdit && labelled && currentRelease && (releaseStored
+        ? <Tooltip title={t('documents.currentReleaseTip')}><Button size="small" data-testid="documents-release-reset" onClick={() => setRelease(null)}>{t('documents.releaseDefault')}</Button></Tooltip>
+        : <Tooltip title={t('documents.pinCurrentTip')}><Button size="small" data-testid="documents-release-pin" onClick={() => setRelease(currentRelease)}>{t('documents.pinCurrent', { release: currentRelease })}</Button></Tooltip>)}
       {showInternal && <>
         <Tooltip title={t('documents.moreDownloads')}><IconButton size="small" aria-label={t('documents.moreDownloads')} disabled={!docs.length} onClick={(e) => setMoreAnchor(e.currentTarget)}><MoreVertIcon fontSize="small" /></IconButton></Tooltip>
         <Menu anchorEl={moreAnchor} open={!!moreAnchor} onClose={() => setMoreAnchor(null)}>
@@ -187,7 +192,7 @@ export default function ProjectDocuments({ projectId, language, t, onCoverChange
         {(['all', ...FOLDERS] as const).map((f) => <Chip key={f} size="small" clickable color={filter === f ? 'primary' : 'default'}
           label={f === 'all' ? t('documents.all') : t(`documents.folders.${f}`)} onClick={() => setFilter(f)} />)}
       </Box>
-      {canEdit && <Box sx={{ display: 'flex', alignItems: 'center', ml: 'auto' }}>
+      {showInternal && <Box sx={{ display: 'flex', alignItems: 'center', ml: 'auto' }}>
         <Switch size="small" checked={showArchived} onChange={(e) => setShowArchived(e.target.checked)} inputProps={{ 'aria-label': t('documents.showArchived') }} />
         <Typography sx={{ fontSize: 12, color: 'var(--text-2)' }}>{t('documents.showArchived')}</Typography>
         <HelpTip title={t('documents.archiveTip')} />
@@ -195,6 +200,7 @@ export default function ProjectDocuments({ projectId, language, t, onCoverChange
     </Box>
     {busy && <Typography sx={{ fontSize: 12, color: 'var(--text-2)', mb: 1 }}>{busy}</Typography>}
     {error && <Alert severity="error" onClose={() => setError('')} sx={{ mb: 1 }}>{error}</Alert>}
+    {canEdit && releaseCleared && <Alert severity="info" data-testid="documents-release-cleared" sx={{ mb: 1 }}>{t('documents.releaseCleared', { release: releaseCleared })}</Alert>}
     <Paper sx={{ bgcolor: 'var(--panel-2)', border: '1px solid var(--line-soft)', borderRadius: 1.5, overflow: 'auto' }}>
       <Table size="small" sx={{
         [NARROW]: { minWidth: 760 },
@@ -227,7 +233,6 @@ export default function ProjectDocuments({ projectId, language, t, onCoverChange
                       </Box>
                     </Tooltip>
                     {g.current && labelled && <Tooltip title={t('documents.currentReleaseTip')}><Chip size="small" color="primary" data-testid="documents-current-release" label={t('documents.currentRelease')} sx={{ height: 18, fontSize: 10.5 }} /></Tooltip>}
-                    {g.current && labelled && canEdit && releaseStored && <Tooltip title={t('documents.currentReleaseTip')}><Button size="small" onClick={() => setRelease(null)} sx={{ fontSize: 11 }}>{t('documents.releaseDefault')}</Button></Tooltip>}
                     {g.superseded && <Tooltip title={t('documents.supersededTip')}><Chip size="small" label={t('documents.superseded')} sx={{ height: 18, fontSize: 10.5 }} /></Tooltip>}
                     {g.superseded && canEdit && <Tooltip title={t('documents.makeCurrentTip')}><Button size="small" data-testid="documents-make-current" onClick={() => setRelease(g.key)} sx={{ fontSize: 11 }}>{t('documents.makeCurrent')}</Button></Tooltip>}
                   </Box>

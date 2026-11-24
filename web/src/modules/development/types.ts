@@ -113,4 +113,4 @@ export interface ProjectDocument {
 /** One revision group as a release (owner 2026-11-24), computed by the server from what the caller sees. */
 export interface DocumentRelease { revision: string; current: boolean; superseded: boolean; count: number; latest_upload: string }
 export interface ProjectDocumentList { documents: ProjectDocument[]; folders: DocumentFolder[]; can_edit: boolean; can_restrict?: boolean; is_staff?: boolean; max_bytes: number; cover_version?: string | null;
-  releases?: DocumentRelease[]; current_release?: string | null; release_stored?: boolean; superseded_download?: boolean }
+  releases?: DocumentRelease[]; current_release?: string | null; release_stored?: boolean; release_cleared?: string | null; superseded_download?: boolean }

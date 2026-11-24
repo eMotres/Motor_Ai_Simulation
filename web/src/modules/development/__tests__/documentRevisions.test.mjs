@@ -80,6 +80,6 @@ test('the current release and the general documents are open, a superseded group
 test('the release strings exist in EN and ZH', () => {
   for (const lang of ['en', 'zh-CN']) {
     const s = locale(lang).documents;
-    for (const k of ['releaseZip', 'releaseZipTip', 'allGroupsZip', 'moreDownloads', 'currentRelease', 'currentReleaseTip', 'superseded', 'supersededTip', 'makeCurrent', 'makeCurrentTip', 'releaseDefault', 'supersededConfirmTitle', 'supersededConfirm', 'supersededViewOnly', 'downloadAnyway', 'cancel', 'generalDocuments']) assert.ok(s[k], `${lang} documents.${k}`);
+    for (const k of ['releaseZip', 'releaseZipTip', 'allGroupsZip', 'moreDownloads', 'currentRelease', 'currentReleaseTip', 'superseded', 'supersededTip', 'makeCurrent', 'makeCurrentTip', 'releaseDefault', 'supersededConfirmTitle', 'supersededConfirm', 'supersededViewOnly', 'downloadAnyway', 'cancel', 'generalDocuments', 'pinCurrent', 'pinCurrentTip', 'releaseCleared']) assert.ok(s[k], `${lang} documents.${k}`);
   }
 });

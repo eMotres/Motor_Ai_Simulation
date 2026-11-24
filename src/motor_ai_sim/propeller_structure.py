@@ -28,7 +28,9 @@ BASIS = "beam model at every station, placeholder material, root flow not valida
 #: failure modes and loads this check does NOT cover; returned with every result (review 2026-11-24, 2d)
 NOT_CHECKED = ("fatigue", "flutter", "resonance (blade modes vs rpm and blade-pass orders)", "stress concentration K_t at the hub fillet",
                "torsion and section pitching moment", "transverse shear", "centrifugal bending from a curved stacking line",
-               "hub, bore and clamping / bolt loads", "fibre orientation of the moulded part", "material data (placeholder allowables)")
+               "hub, bore and clamping / bolt loads", "fibre orientation of the moulded part", "material data (placeholder allowables)",
+               "compression side / local buckling (one allowable for tension and compression)",
+               "principal axes taken as chord and normal (product of inertia I_xy neglected)")
 THIN_ELLIPSE_CENTROID = 0.40              # thin-section fallback: centroid at 40 % chord from the leading edge
 
 # Direction-dependent allowables: the value stored is the one used (the weakest direction that the check can load); the note says what

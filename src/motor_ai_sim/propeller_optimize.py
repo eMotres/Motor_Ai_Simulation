@@ -94,8 +94,9 @@ def _repair(d: pd.Design, v: Dict[str, Any], free_names: Optional[set] = None) -
         if prev is not None and v[n] > prev and (free_names is None or n in free_names):
             v[n] = prev
         prev = v[n]
-    R_mm = float(v["diameter_in"]) * 25.4 / 2.0
-    v["root_cutout_mm"] = min(max(v["root_cutout_mm"], v["hub_radius_mm"]), float(d.raw["inner_group_max_r_over_R"]) * R_mm)
+    if free_names is None or "root_cutout_mm" in free_names:   # follow-up: a fixed cut-out is not rewritten either
+        R_mm = float(v["diameter_in"]) * 25.4 / 2.0
+        v["root_cutout_mm"] = min(max(v["root_cutout_mm"], v["hub_radius_mm"]), float(d.raw["inner_group_max_r_over_R"]) * R_mm)
     return v
 
 

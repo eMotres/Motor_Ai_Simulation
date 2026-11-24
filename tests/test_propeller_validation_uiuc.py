@@ -25,6 +25,30 @@ flatplate_model     -38 %           -44 %           +0.059              -19 %
 ratio, i.e. efficiency, much less so).  Numbers from it are rankings, not values.  The static row is low with both sources: the blade
 Reynolds numbers at 4,000-6,500 rpm lie below the tables, so hover numbers are not usable until low-Re polars exist.
 
+How the pin relates to the check given to the owner on 2026-11-23 (CT -5 %, CP -9 %, efficiency +0.02 with the mfoil tables): same
+geometry file, same assumed airfoil zones (4412 root / 4408 outboard), same air (1.225 kg/m3, 20 C), same data file kt0471.  That check
+quoted ONE point (J 0.263); this test takes the MEAN over J 0.22-0.35, and the error trends with J (mfoil, per point, model / measured - 1):
+
+=====  ======  ======  ==========
+J      CT      CP      efficiency
+=====  ======  ======  ==========
+0.220  -8.7 %  -10.1 % +0.009
+0.242  -6.7 %  -9.4 %  +0.014
+0.263  -4.9 %  -8.5 %  +0.019     <- the 2026-11-23 point
+0.284  -2.3 %  -6.9 %  +0.027
+0.304  +0.3 %  -5.2 %  +0.033
+0.327  +3.6 %  -3.0 %  +0.039
+0.349  +3.9 %  -2.9 %  +0.042
+=====  ======  ======  ==========
+
+The kernel changes of the same review moved the point at J 0.263 by less than 0.01 %.  So -5 / -9 / +0.02 (one point) and -2 / -7 / +0.026
+(band mean) describe the same model; the per-point maxima are pinned too (``MAX_POINT``), so a model that keeps the mean but spreads the
+error is caught.
+
+THIS IS A REGRESSION PIN OF THE KNOWN BIAS, NOT AN ACCURACY GATE: the bands sit around today's error.  Normal CI has no data and skips the
+test; it is meant to run for real in a scheduled us1 job (proposed: ``propeller-validation``, weekly and on every propeller PR, with
+``$PROPELLER_UIUC_DIR`` set, where a failure is reported loudly, never skipped).
+
 The pinned numbers are the honest state of the model, not a target: a change that moves any of them outside its band must say why
 (better polars move the static row towards zero; that is wanted, and the band is then tightened in the same change).
 """
@@ -56,6 +80,13 @@ PINNED = {                                       # measured on this branch 2026-
 }
 
 
+#: largest per-point error allowed (absolute: relative for CT / CP, difference for efficiency); today's values in the comment
+MAX_POINT = {
+    "mfoil": {"max_ct": 0.12, "max_cp": 0.14, "max_eta": 0.06, "max_static_ct": 0.45},        # 0.087, 0.101, 0.042, 0.372
+    "flatplate": {"max_ct": 0.47, "max_cp": 0.51, "max_eta": 0.09, "max_static_ct": 0.30},    # 0.410, 0.455, 0.063, 0.209
+}
+
+
 def _table(name):
     rows = [ln.split() for ln in (DATA / name).read_text().splitlines() if ln.strip() and ln.split()[0][0].isdigit()]
     return np.array(rows, float)
@@ -82,7 +113,7 @@ def bias(source):
     """Mean relative bias in the flight band and in the static test (model minus measured)."""
     prop = _apc(source)
     pol = pb.polar_for(prop)
-    dct, dcp, deta = [], [], []
+    dct, dcp, deta, pts = [], [], [], []
     for f in ("apce_11x5.5_kt0471_6002.txt", "apce_11x5.5_kt0472_6000.txt"):
         rpm = float(f.split("_")[-1][:-4])
         n = rpm / 60.0
@@ -91,6 +122,7 @@ def bias(source):
                 continue
             r = pb.solve(prop.blade, 2, rpm, 1.225, J * n * 2 * R, polar=pol, temp_c=20.0)
             dct.append(r.ct / CT - 1); dcp.append(r.cp / CP - 1); deta.append(r.efficiency - eta)
+            pts.append((float(J), dct[-1], dcp[-1], deta[-1]))
     sct = []
     for rpm, CT, CP in _table("apce_11x5.5_static_kt0467.txt"):
         if rpm < 4000:
@@ -98,7 +130,8 @@ def bias(source):
         r = pb.solve(prop.blade, 2, float(rpm), 1.225, 0.0, polar=pol, temp_c=20.0)
         sct.append(r.ct / CT - 1)
     return {"ct": float(np.mean(dct)), "cp": float(np.mean(dcp)), "eta": float(np.mean(deta)), "static_ct": float(np.mean(sct)),
-            "n_flight": len(dct), "n_static": len(sct)}
+            "max_ct": float(np.max(np.abs(dct))), "max_cp": float(np.max(np.abs(dcp))), "max_eta": float(np.max(np.abs(deta))),
+            "max_static_ct": float(np.max(np.abs(sct))), "points": pts, "n_flight": len(dct), "n_static": len(sct)}
 
 
 @pytest.mark.parametrize("source", ["mfoil", "flatplate"])
@@ -107,3 +140,5 @@ def test_bemt_bias_against_uiuc_apce_11x5_5_is_pinned(source):
     assert b["n_flight"] >= 5 and b["n_static"] >= 3
     for k, (centre, width) in PINNED[source].items():
         assert abs(b[k] - centre) <= width, "%s %s: %.3f, pinned %.3f +- %.3f" % (source, k, b[k], centre, width)
+    for k, lim in MAX_POINT[source].items():
+        assert b[k] <= lim, "%s %s: %.3f above the per-point limit %.3f" % (source, k, b[k], lim)

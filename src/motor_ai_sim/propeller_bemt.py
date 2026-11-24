@@ -180,6 +180,12 @@ def zero_lift_angle(x, yu, yl) -> float:
     return float(-np.sum(slope * np.diff(g)) / math.pi)
 
 
+#: lift ceiling of the ESTIMATED cambered-plate polar (review 2026-11-24 follow-up): 2 pi (alpha - alpha_0) to a 12 deg stall gives
+#: cl 1.77 (4412) / 2.0 (6412); cambered 4-6 % sections at Re 1e5-3e5 reach about 1.2-1.5 (Selig et al., Summary of Low-Speed Airfoil
+#: Data, vols 1-3, 1995-1997).  1.4 is an assumption inside that range, not data for a given airfoil.
+CAMBER_CL_MAX = 1.4
+
+
 class CamberedPlatePolar(FlatPlatePolar):
     """ESTIMATED section polar with camber: thin-airfoil lift 2 pi (alpha - alpha_0) to the generic stall angle, alpha_0 from thin-airfoil
     theory on the section's own camber line (``propeller_airfoil``: generated NACA 4-digit or a library file).  Lift slope, drag and the
@@ -208,12 +214,15 @@ class CamberedPlatePolar(FlatPlatePolar):
         a0 = self.alpha0(airfoil)
         cd0 = self.cd0(Re, thickness)
         pre = np.abs(alpha) <= self.a_s
-        cl_pre = 2.0 * math.pi * (alpha - a0)
-        cl_pos, cd_pos = self._post(np.abs(alpha), cd0, 2.0 * math.pi * (self.a_s - a0))
-        cl_neg, cd_neg = self._post(np.abs(alpha), cd0, 2.0 * math.pi * (self.a_s + a0))
+        cl_pre = np.clip(2.0 * math.pi * (alpha - a0), -CAMBER_CL_MAX, CAMBER_CL_MAX)       # capped: no optimistic high-alpha lift
+        cl_pos, cd_pos = self._post(np.abs(alpha), cd0, min(2.0 * math.pi * (self.a_s - a0), CAMBER_CL_MAX))
+        cl_neg, cd_neg = self._post(np.abs(alpha), cd0, min(2.0 * math.pi * (self.a_s + a0), CAMBER_CL_MAX))
         cl = np.where(pre, cl_pre, np.where(alpha > 0, cl_pos, -cl_neg))
         cd = np.where(pre, cd0, np.where(alpha > 0, cd_pos, cd_neg))
-        return cl, cd, {"polar_estimated", "camber_thin_airfoil"}
+        fl = {"polar_estimated", "camber_thin_airfoil"}
+        if np.any(np.abs(2.0 * math.pi * (alpha - a0)) > CAMBER_CL_MAX) and np.any(pre):
+            fl.add("camber_cl_max_capped")
+        return cl, cd, fl
 
 
 class PrandtlGlauertPolar(PolarProvider):
@@ -482,7 +491,10 @@ class _Ctx:
 
 
 def _state(phi, r, c, th, af, t, x: _Ctx):
-    """Everything at inflow angle(s) ``phi`` for one element: residual and the force/velocity quantities."""
+    """Everything at inflow angle(s) ``phi`` for one element: residual and the force/velocity quantities.
+
+    Momentum form (Glauert, Ning 2014): dT = 4 pi rho r F (V + u_a) u_a - the mass-flux factor is the blade-local V + u_a and F
+    carries the loss; the azimuthal mean through-flow of the annulus is V + F u_a, which ``solve`` returns as ``axial_mean``."""
     phi = np.asarray(phi, float)
     sphi, cphi = np.sin(phi), np.cos(phi)
     tphi = sphi / cphi
@@ -505,6 +517,8 @@ def _state(phi, r, c, th, af, t, x: _Ctx):
         W = W_new
         if done:
             break
+    else:
+        flags.add("w_re_not_converged")                   # review 2026-11-24 follow-up: the 8 passes ran out (W and Re still moving)
     Ua = Ut * tphi
     return dict(phi=phi, F=F, Ka=Ka, Kt=Kt, Ua=Ua, Ut=Ut, W=W, Re=Re, cl=cl, cd=cd, cn=cn, ct=ct,
                 resid=(1.0 - Ka) * Ua - x.V, flags=flags)

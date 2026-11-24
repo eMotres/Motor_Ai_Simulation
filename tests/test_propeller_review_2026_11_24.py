@@ -100,7 +100,7 @@ def test_2c_unusable_loads_are_refused_not_passed():
 def test_2d_the_result_names_what_is_not_checked():
     out = ps.root_stress(pd.candidate_to_propeller2(D, pd.seed_vector(D, 10, 2)), 8000.0, "pa6_gf30")
     nc = " ".join(out["not_checked"])
-    for word in ("fatigue", "flutter", "resonance", "K_t", "torsion", "bolt"):
+    for word in ("fatigue", "flutter", "resonance", "K_t", "torsion", "bolt", "compression", "principal axes"):
         assert word in nc
 
 
@@ -156,10 +156,11 @@ def test_4b_table_ending_before_zero_lift_keeps_falling_below_its_first_angle():
 
 def test_4c_cambered_plate_stalls_at_the_generic_angle_not_shifted_by_alpha0():
     cp = pb.CamberedPlatePolar()
-    cl, _, _ = cp.eval("naca4-6412", np.radians([4.0, 6.0, 8.0, 10.0, 12.0]), 2e5, 0.1, 0.12)
-    assert all(np.diff(cl) > 0)                                       # was: peak at 6 deg, then falling
+    cl, _, fl = cp.eval("naca4-6412", np.radians([2.0, 4.0, 6.0, 8.0, 10.0, 12.0]), 2e5, 0.1, 0.12)
+    assert all(np.diff(cl) >= 0)                                      # was: peak at 6 deg, then falling
     a0 = cp.alpha0("naca4-6412")
-    assert cl[0] == pytest.approx(2 * math.pi * (math.radians(4.0) - a0))
+    assert cl[0] == pytest.approx(2 * math.pi * (math.radians(2.0) - a0))
+    assert max(cl) == pytest.approx(pb.CAMBER_CL_MAX) and "camber_cl_max_capped" in fl    # follow-up: no optimistic 2.0
 
 
 def test_8d_prandtl_glauert_is_faded_out_past_the_attached_range():
@@ -183,6 +184,8 @@ def test_5a_repair_leaves_fixed_variables_alone():
     free = {"twist_deg@0.2", "twist_deg@0.3"}
     assert po._repair(D, dict(v), free)["twist_deg@0.45"] == 22.0
     assert po._repair(D, dict(v))["twist_deg@0.45"] == 15.0          # all names free: as before
+    w = dict(v, hub_radius_mm=12.0, root_cutout_mm=10.0)                 # cut-out inside the hub; only the hub is free
+    assert po._repair(D, dict(w), {"hub_radius_mm"})["root_cutout_mm"] == 10.0
 
 
 def test_5b_duplicates_are_neither_re_evaluated_nor_listed_twice():
@@ -223,6 +226,9 @@ def test_6a_rpm_search_with_oncoming_air_does_not_give_up_at_zero_torque():
         v["twist_deg@%g" % x] = max(4.0, v["twist_deg@%g" % x] * 0.35)
     rec = pd.evaluate_candidate(D, v, "L12", v_inf=17.0)             # was DesignError "absorbs no positive torque at 13628 rpm"
     assert rec["operating"]["rpm"] > D.operating_points["L12"].rated_rpm_ref
+    lim = D.operating_points["L12"].torque_limit_Nm
+    assert rec["constraints"]["rpm_search_converged"] and rec["torque_Nm"] == pytest.approx(lim, rel=0.01) \
+        or ("rpm_capped" in rec["flags"] and rec["torque_Nm"] < lim)
 
 
 def test_6b_capped_design_far_below_the_torque_limit_is_not_feasible():

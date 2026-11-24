@@ -253,7 +253,9 @@ def curve(vec: Any, op: str, n: int = 11, v_inf: float = 0.0, polar_source: Any 
         if v_inf:                                        # review 2026-11-24 (3e): helical tip speed with oncoming air
             tm = math.hypot(tm, float(v_inf) / pb.sound_speed(float(air["temp_c"])))
         rows.append({"rpm": rpm, "thrust_N": f.thrust_N, "torque_Nm": f.torque_Nm, "shaft_power_W": f.shaft_power_W,
-                     "air_speed_ms": f.air_speed_ms, "tip_mach": tm, "flags": list(f.flags)})   # 3e: the model's flags per row
+                     "air_speed_ms": f.air_speed_ms, "tip_mach": tm, "flags": list(f.flags),   # 3e: the model's flags per row
+                     # follow-up: elements without a momentum solution carry an uninduced estimate that reads HIGH - say it per row
+                     "uninduced_elements": sum(int(x.split(":")[1]) for x in f.flags if x.startswith("uninduced_estimate:"))})
     return {"operating_point": op, "torque_limit_Nm": o.torque_limit_Nm, "rated_rpm_ref": o.rated_rpm_ref, "rows": rows,
             "tip_mach_limit": d.tip_mach_limit, "banner": pd.BANNER}
 

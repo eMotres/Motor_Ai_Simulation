@@ -3861,9 +3861,9 @@ def _upsert_duty(req: DutyCreate, _w: dict, *, may_move: bool = True) -> dict:
                     _sh = die_shape_diffs({**_die_geo, **_motor_ov}, geo)
                 except Exception:                          # noqa: BLE001 - cannot tell = keep the old verdict
                     _sh = []
-                if _sh and all(x["key"] == "slot_width" for x in _sh):
+                if _sh and all(x["key"] in POCKET_WIDTH_KEYS for x in _sh):
                     log.info("family: duty save '%s/%s/%s': the live machine differs from the die only by the "
-                             "slot width its own wire stack derives (%s) - saved into this configuration, "
+                             "pocket width its own wire stack derives (%s) - saved into this configuration, "
                              "no die is created", die, cfg, dname,
                              "; ".join(f"{x['die']} → {x['live']}" for x in _sh))
                     _die_diffs = []
@@ -5138,7 +5138,11 @@ def _auto_transition_die(die: str, cfg: Optional[str], duty: Optional[str],
 # the active configuration keeps adopting the edit as before.
 
 #: Labels of the die-level shape keys a transition names (the identity keys have theirs above).
-_SHAPE_KEY_LABELS: Dict[str, str] = {"slot_width": "slot width (wire + insulation)"}
+#: The BUILT coil pocket (not the stored `slot_width`, which is one wire_spacing_x wider).  Until 2026-11-24 this entry
+#: was keyed `slot_width`; :data:`POCKET_WIDTH_KEYS` keeps the old name readable for stored diffs and old clients.
+_SHAPE_KEY_LABELS: Dict[str, str] = {"pocket_width": "pocket width (wire + insulation)"}
+POCKET_WIDTH_KEY = "pocket_width"
+POCKET_WIDTH_KEYS = (POCKET_WIDTH_KEY, "slot_width")
 
 
 #: Two pockets closer than this are the same pocket: the round-wire proxy stack is rounded to the
@@ -5148,25 +5152,10 @@ SLOT_DIFFERS_FROM_DIE = "slot_width_differs_from_die"
 
 
 def _built_slot_width(geo: dict) -> Optional[float]:
-    """The coil pocket the builders actually CUT into the lamination [mm], or None when an input is missing.
-
-    ``column + 2 x insulation_thickness + wire_spacing_x`` with ``column = N x wire_width +
-    (N - 1) x STRIP_GAP_FACTOR x wire_spacing_x`` (``cadquery_geometry``: ``slot_w = wire_col_w + ins_w*2 +
-    wire_d_x``; ``iron_template``: the same ``coil_w``).  NOT ``derived_geometry()["slot_width"]``, which is
-    one ``wire_spacing_x`` wider (the wire pitch the slot has to accept): two wire stacks can agree in one
-    number and differ in the other, and the iron follows this one."""
-    try:
-        from motor_ai_sim.winding import STRIP_GAP_FACTOR as _gf
-        g = dict(geo or {})
-        ww, wsx, ins = float(g["wire_width"]), float(g["wire_spacing_x"]), float(g["insulation_thickness"])
-        try:
-            n = max(1, int(round(float(g.get("wire_split") or 1))))
-        except (TypeError, ValueError):
-            n = 1
-        col = ww if n <= 1 else n * ww + (n - 1) * _gf * wsx
-        return col + 2.0 * ins + wsx
-    except Exception:                                       # noqa: BLE001 - cannot tell = no verdict
-        return None
+    """Alias of :func:`motor_ai_sim.geometry.motor_geometry.pocket_width` (the ONE implementation): the coil
+    pocket the builders cut into the lamination, NOT the stored ``slot_width``."""
+    from motor_ai_sim.geometry.motor_geometry import pocket_width
+    return pocket_width(geo)
 
 
 def config_slot_mismatch(die: str, cfg: str, die_geo: dict, overrides: dict) -> Optional[dict]:
@@ -5229,7 +5218,7 @@ def die_shape_diffs(die_geo: dict, live_geo: dict) -> list:
     dsw, lsw = _built_slot_width(die_geo), _built_slot_width(live_geo)
     # the same tolerance as the slot warning: stacks that differ by a rounding micron are one pocket
     if dsw is not None and lsw is not None and abs(dsw - lsw) > SLOT_MISMATCH_WARN_MM:
-        out.append({"key": "slot_width", "label": _SHAPE_KEY_LABELS["slot_width"],
+        out.append({"key": POCKET_WIDTH_KEY, "label": _SHAPE_KEY_LABELS[POCKET_WIDTH_KEY],
                     "die": round(dsw, 6), "live": round(lsw, 6)})
     # `stator_outer_notches` is NOT here: it is a configuration key
     # (FREE_GEO_KEYS, owner 2026-11-03), so switching it never makes another

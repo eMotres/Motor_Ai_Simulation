@@ -135,8 +135,52 @@ def append_sim(bucket: str, name: str, params: Dict[str, Any],
 
 @router.get("/saved")
 def list_saved(request: Request):
-    """This user's saved simulation snapshots (newest first)."""
-    return {"sims": _load_all().get(_bucket(request), [])}
+    """This user's saved simulation snapshots (newest first).  A snapshot of an archived configuration (its params name the
+    die and the configuration) is left out for a non-admin, like the configuration itself (owner 2026-11-22)."""
+    sims = _load_all().get(_bucket(request), [])
+    from motor_ai_sim import motor_access as MA
+    if not MA.catalog_access(request.headers.get("authorization")).get("is_admin"):
+        sims = [s for s in sims if not _hidden_for_archive(s)]
+    return {"sims": sims}
+
+
+def _hidden_for_archive(entry: dict) -> bool:
+    """A non-admin does not see a snapshot of an archived SHARED configuration.  Only a snapshot that names its source - the
+    die and the configuration (its ``source`` stamp, else what its params name) - can be hidden, and only when that source is
+    in the shared layer (the stamped layer, else the reader's catalog resolves the die there).  A snapshot that names no source
+    stays listed, with a healthy and with a damaged archive: the archive declutters the catalog, it does not hide results
+    (round 4 of #820; no guessing by geometry)."""
+    from motor_ai_sim import config_archive as CA
+    from motor_ai_sim import motor_access as MA
+    die, cfg = _source_of(entry)
+    if not (die and cfg):
+        return False
+    src = entry.get("source") if isinstance(entry.get("source"), dict) else {}
+    if MA._die_layer_of(die, str(src.get("layer") or "") or None) != "shared":
+        return False
+    return CA.is_archived(die, cfg)
+
+
+def _source_of(entry: dict) -> tuple:
+    """``(die, config)`` the snapshot was made from: its ``source`` (stamped at save since 2026-11-22), else what its params name;
+    ``("", "")`` for an older snapshot that names none (it then belongs to no catalog configuration and stays listed)."""
+    src = entry.get("source") if isinstance(entry.get("source"), dict) else {}
+    params = entry.get("params") if isinstance(entry.get("params"), dict) else {}
+    return (str(src.get("die") or params.get("die") or ""), str(src.get("config") or params.get("config") or ""))
+
+
+def _active_source() -> dict:
+    """The configuration open in the editor when the snapshot is saved (the family context), or ``{}``."""
+    try:
+        from motor_ai_sim.routes import family as F
+        ctx = F._read_ctx() or {}
+        if not ctx.get("config"):
+            return {}
+        from motor_ai_sim import motor_access as MA
+        die = str(ctx.get("die") or "")
+        return {"die": die, "config": str(ctx.get("config") or ""), "layer": MA._die_layer_of(die)}
+    except Exception:                                       # noqa: BLE001 - a snapshot never fails for this
+        return {}
 
 
 @router.post("/saved")
@@ -153,6 +197,7 @@ def save_sim(req: SaveSimRequest, request: Request):
             "created": time.strftime("%Y-%m-%d %H:%M:%S"),
             "params": req.params or {},
             "results": req.results or {},
+            "source": _active_source(),           # which configuration it was made from: an archived one's snapshots follow it
         }
         items.insert(0, entry)               # newest first
         store[bucket] = items

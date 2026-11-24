@@ -374,6 +374,19 @@
       "saveCurrent": "＋ Save the current filters…",
       "count": "{shown} of {total} motors",
       "clear": "Clear"
-    }
+    },
+    "archiveMotor": "Archive"
+  },
+  "configArchive": {
+    "title": "Archive {die} / {config}",
+    "reason": "Reason",
+    "hint": "It leaves every list for everybody; nothing is deleted and Restore brings it back. Refused while a project links it, it has a Production record or a job runs on it.",
+    "confirm": "Archive",
+    "done": "{die} / {config} archived",
+    "restored": "{die} / {config} restored",
+    "show": "Show archived ({n})",
+    "open": "Open",
+    "restore": "Restore",
+    "reasonRequired": "A reason is required"
   }
 }

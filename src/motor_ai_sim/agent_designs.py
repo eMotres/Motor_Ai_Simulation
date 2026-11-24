@@ -542,7 +542,12 @@ def _winding_of(die: str, cfg: str, duty: str) -> Optional[Dict[str, Any]]:
     geo, w = pay.get("geometry") or {}, pay.get("winding") or {}
     slots = int(geo.get("num_slots") or 0) or int(
         (geo.get("num_seg") or 0) * (geo.get("num_slots_per_segment") or 0))
-    c = int(w.get("n_coils_per_phase") or 0) or max(1, slots // 6)
+    # DERIVED from the slots: the stored n_coils_per_phase is a copy that can lag behind the machine (24 slots
+    # storing 8 = coil sides).  It decides the connection label and the parallel-path choices, so it is the count
+    # the application's own connection rules use (n_series x n_parallel = coils_per_phase(slots), the same
+    # function connection_options / connection_error call), never the stored copy.
+    from motor_ai_sim.winding import coils_per_phase as _cpp
+    c = _cpp(slots) if slots else (int(w.get("n_coils_per_phase") or 0) or 1)
     p0 = int(w.get("n_parallel") or 0)
     if not p0:
         mm = re.search(r"(\d+)\s*P", str(w.get("connection") or pay["sim"].get("connection") or ""))
@@ -968,7 +973,10 @@ def build_sandbox_config(d: Dict[str, Any], ws) -> Path:
             geo["wire_height"] = round(float(geo["wire_height"]) * int(n0) / int(n1), 4)
     wind = dict(tpl.get("winding") or {})
     wind.update(pay.get("winding") or {})
-    c = int(internal.get("coils_per_phase") or wind.get("n_coils_per_phase") or 0)
+    from motor_ai_sim.winding import coils_per_phase as _cpp, slot_pole_counts
+    _slots_d = slot_pole_counts(geo)[0] if (geo.get("num_slots") or geo.get("num_seg")) else 0
+    c = int(internal.get("coils_per_phase") or 0) or (
+        _cpp(_slots_d) if _slots_d else int(wind.get("n_coils_per_phase") or 0))
     par = int(pr.get("parallel_paths") or wind.get("n_parallel") or 1)
     if c:
         wind.update(n_coils_per_phase=c, n_parallel=par, n_series=max(1, c // par),

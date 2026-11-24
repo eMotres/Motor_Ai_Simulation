@@ -56,7 +56,8 @@ export function movedSave(rj: any): MovedSave | null {
 
 const num = (v: unknown) => (typeof v === 'number' ? String(Math.round(v * 1000) / 1000) : String(v));
 
-/** "moved to new die 'X' (slot width 7.74 → 8.24); 'Y' is untouched". */
+/** "moved to new die 'X' (pocket width 7.74 → 8.24); 'Y' is untouched".  The label comes from the server; an old stored
+ *  diff keyed `slot_width` (before 2026-11-24, the same built pocket) is shown with its own label as it was. */
 export function movedLine(m: MovedSave): string {
   const why = m.diffs.map((d) => `${d.label || d.key} ${num(d.die)} → ${num(d.live)}`).join(', ');
   return `another lamination${why ? ` (${why})` : ''}: moved to ${m.created ? 'new' : 'existing'} die '${m.die}'`

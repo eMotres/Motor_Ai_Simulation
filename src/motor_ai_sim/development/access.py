@@ -17,6 +17,135 @@ def membership(email: str, project: dict) -> str | None:
     return None
 
 
+def holds_price_grant(entry: dict | None) -> bool:
+    """The PROJECT-level grant of one member or pending-invite entry: an owner always, anybody else only with ``sees_prices: true``.
+    A grant is not yet access: ``sees_prices`` below puts the account's identity first."""
+    if not isinstance(entry, dict):
+        return False
+    return str(entry.get("role") or "").lower() == "owner" or entry.get("sees_prices") is True
+
+
+def sees_prices(user: dict | None, project: dict) -> bool:
+    """THE central price rule (owner 2026-11-22 / coordinator 2026-11-23); the quote, the documents and messages marked
+    price-restricted, the Contract section and the digest all ask this one function.  The IDENTITY comes first and no project role
+    or flag overrides it:
+
+    1. no account, an MCP agent (``auth._AGENT_USER`` set) or a factory account (global role ``oem``): NEVER;
+    2. MOTRES staff (global role admin or engineer): ALWAYS, member or not;
+    3. anybody else: a project OWNER, or a member whose entry carries ``sees_prices: true`` (a project owner or staff grants it).
+    """
+    if not user or auth._AGENT_USER.get() is not None:
+        return False
+    role = str(user.get("role") or "").lower()
+    if role == "oem":
+        return False
+    if role in ("admin", "engineer"):
+        return True
+    email = str(user.get("email") or "").strip().lower()
+    for member in project.get("members", []):
+        if isinstance(member, dict) and str(member.get("email") or "").strip().lower() == email:
+            return holds_price_grant(member)
+    return False
+
+
+def _staff_account(email: str) -> bool:
+    """THE one account resolution of the staff rule, for read AND create AND by-address checks: an ENABLED account whose global role
+    is admin or engineer (an address of the ADMIN_EMAILS allowlist counts as admin unless its account is a factory account).  No
+    account, a disabled one, a factory (oem) account: never, whatever role a caller dict claims."""
+    from motor_ai_sim import users
+    key = str(email or "").strip().lower()
+    account = users.get_user(key) if key else None
+    if not account or account.get("disabled"):
+        return False
+    role = str(account.get("role") or "").lower()
+    if role == "oem":
+        return False
+    return role in ("admin", "engineer") or key in auth._ADMIN_EMAILS
+
+
+def is_staff(user: dict | None) -> bool:
+    """THE central staff rule for STAFF-ONLY messages (owner 2026-11-24, "one message stream"): MOTRES staff = an enabled account with
+    the GLOBAL role admin or engineer, never an MCP agent (even one acting for a staff owner), never a factory account, never a
+    project role, never a caller dict that only CLAIMS a role.  Independent of ``sees_prices``: a message may carry both marks and a
+    staff member always passes both."""
+    if not user or auth._AGENT_USER.get() is not None:
+        return False
+    return is_engineer(user) and _staff_account(str(user.get("email") or ""))
+
+
+can_see_staff_only = is_staff
+
+
+def is_staff_email(email: str) -> bool:
+    """``is_staff`` for a RECIPIENT known only by address (digest, notifications, owner report): the same account resolution."""
+    return _staff_account(email)
+
+
+def can_see_message(user: dict | None, project: dict, message: dict) -> bool:
+    """Two independent marks.  ``staff_only`` (an internal note, owner 2026-11-24): only ``is_staff``.  ``price_restricted`` (owner
+    2026-11-22): whoever ``sees_prices`` lets through now - the one central rule, no exception for the author (a revoked or demoted
+    author loses it too).  Nobody else sees the text or the existence.  This judges the message itself; ``visible_messages`` also hides
+    the replies of a hidden message."""
+    if not isinstance(message, dict):
+        return True
+    if message.get("staff_only") and not is_staff(user):
+        return False
+    if message.get("price_restricted") and not sees_prices(user, project):
+        return False
+    return True
+
+
+def visible_messages(user: dict | None, project: dict, messages: list) -> list:
+    """The messages ``user`` may see.  A reply (any depth) to a hidden message is hidden with it, whatever its own flag says."""
+    shown: list = []
+    hidden: set = set()
+    parent_of = {str(m.get("id")): str(m.get("reply_to") or "") for m in messages if isinstance(m, dict) and m.get("id")}
+    for m in messages:
+        if isinstance(m, dict) and m.get("id") and not can_see_message(user, project, m):
+            hidden.add(str(m["id"]))
+    changed = True
+    while changed:                                         # descendants of a hidden message are hidden
+        changed = False
+        for mid, parent in parent_of.items():
+            if parent and parent in hidden and mid not in hidden:
+                hidden.add(mid)
+                changed = True
+    for m in messages:
+        if not isinstance(m, dict) or str(m.get("id")) in hidden:
+            continue
+        shown.append(m)
+    return shown
+
+
+def may_restrict_messages(user: dict | None, project: dict) -> bool:
+    """Who may mark a message price-restricted: MOTRES staff and the project owner (``can_manage_prices``)."""
+    return can_manage_prices(user, project)
+
+
+def sees_prices_email(email: str, project: dict) -> bool:
+    """``sees_prices`` for a RECIPIENT known only by address (digest, notifications): the account's global role is resolved from the
+    user store, never derived from the project role.  An address with no (enabled) account is a pending invite or a stranger: False."""
+    from motor_ai_sim import users
+    key = str(email or "").strip().lower()
+    account = users.get_user(key) if key else None
+    if not account or account.get("disabled"):
+        return False
+    return sees_prices({"email": key, "role": account.get("role", "user")}, project)
+
+
+def can_manage_prices(user: dict | None, project: dict) -> bool:
+    """Who may change who sees the prices: MOTRES staff (admin / global engineer) and the project OWNER.  Never an agent, a factory
+    account or a project engineer / customer member."""
+    if not user or auth._AGENT_USER.get() is not None:
+        return False
+    role = str(user.get("role") or "").lower()
+    if role == "oem":
+        return False
+    if role in ("admin", "engineer"):
+        return True
+    return membership(str(user.get("email") or ""), project) == "owner"
+
+
 def can_view(user: dict, project: dict) -> bool:
     return is_engineer(user) or membership(str(user.get("email") or ""), project) is not None
 

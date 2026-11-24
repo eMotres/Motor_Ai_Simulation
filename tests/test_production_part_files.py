@@ -259,3 +259,35 @@ def test_real_step_becomes_a_box_sized_glb(tmp_path):
     volume = np.einsum("ij,ij->i", p[:, 0], np.cross(p[:, 1], p[:, 2])).sum() / 6.0
     assert volume > 0                                                             # outward winding
     assert volume == pytest.approx(10 * 20 * 30 - np.pi * 2 ** 2 * 30, rel=0.01)  # box minus the blind-through hole
+
+
+# ── legacy "[Superseded]" names (one rule: models.is_superseded) ──────────────────────────────────────────────────────
+
+def test_part_files_hides_a_legacy_upper_case_superseded_drawing(prod):
+    c, eng = prod["client"], prod["engineer"]
+    d = prod["docs"]
+    r = c.patch(f"{BASE}/parts/{prod['punch']['id']}", headers=eng, json={"drawing_files": [
+        {"file_id": d["png"]["file_id"], "kind": "png", "name": "[Superseded] punch_old.png"},
+        {"file_id": d["pdf"]["file_id"], "kind": "pdf", "name": "[supersededness] punch.pdf"}]})
+    assert r.status_code == 200, r.text
+    files = {p["part_id"]: p["files"] for p in c.get(f"{BASE}/part_files?list=tooling", headers=eng).json()["parts"]}[prod["punch"]["id"]]
+    assert [f["name"] for f in files] == ["[supersededness] punch.pdf"]       # the marker needs ] or a space after it
+
+
+def test_process_step_images_skip_a_legacy_upper_case_superseded_drawing(prod):
+    from motor_ai_sim.production import routes
+    from motor_ai_sim.production import store
+    c, eng = prod["client"], prod["engineer"]
+    part = prod["motor"]
+    old_id, new_id = "a" * 32, "b" * 32          # raw drawing files with no document row: only the name can tell them apart
+    store.save_uploaded_file(DIE, CONFIG, old_id, PNG)
+    store.save_uploaded_file(DIE, CONFIG, new_id, PNG)
+    assert c.patch(f"{BASE}/parts/{part['id']}", headers=eng, json={"drawing_files": [
+        {"file_id": old_id, "kind": "png", "name": "[Superseded] shaft_old.png"},
+        {"file_id": new_id, "kind": "png", "name": "shaft_now.png"}]}).status_code == 200
+    parts = c.get(f"{BASE}/parts", headers=eng).json()
+    parts = parts["parts"] if isinstance(parts, dict) else parts
+    steps = [{"id": "s1", "n": 1, "parts_resolved": [{"id": part["id"]}], "documents": []}]
+    imgs = routes._process_step_images(DIE, CONFIG, {"email": ENGINEER, "role": "admin"}, {"members": []}, parts, steps)
+    names = [i["name"] for i in imgs.get(1, [])]
+    assert "shaft_now.png" in names and "shaft_old.png" not in " ".join(names) and not any(n.startswith("[Superseded]") for n in names)

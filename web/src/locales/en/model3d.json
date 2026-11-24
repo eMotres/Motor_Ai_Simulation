@@ -141,6 +141,11 @@
     "restore": "Restore",
     "file": "File",
     "date": "Uploaded",
+    "frameless": "Frameless",
+    "framelessTip": "Show only the stator, coils, rotor, magnets and rings, found by component name. A view only: the model is not changed. A model without such names has no button.",
+    "otherParts": "Other parts",
+    "partNames": "Part names",
+    "partNamesTip": "On: the customer sees the component names, the tree and the Frameless button. Check the names first: they can hold supplier names and part numbers.",
     "noUpload": "No model has been uploaded for this project yet.",
     "noLinkedMotor": "No motor is linked to this project yet.",
     "noLive": "No current model; switch on Show archived to restore one."

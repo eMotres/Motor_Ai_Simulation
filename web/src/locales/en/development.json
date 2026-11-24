@@ -340,6 +340,7 @@
     "new": "New"
   },
   "documents": {
+    "loading": "Loading documents…",
     "upload": "Upload",
     "uploading": "Uploading {name}…",
     "dropHere": "Drop files here",

@@ -123,8 +123,8 @@ export class ModelViewer {
     const model = gltf.scene.getObjectByName('Model') ?? gltf.scene;
     const groups: PartGroup[] = [];
     for (const node of model.children) {
-      const ex = (node.userData ?? {}) as { family?: string; explode?: number };
-      groups.push({ name: node.name, family: ex.family ?? node.name, explode: Number(ex.explode ?? 0),
+      const ex = (node.userData ?? {}) as { family?: string; explode?: number; label?: string };
+      groups.push({ name: node.name, family: ex.family ?? node.name, explode: Number(ex.explode ?? 0), ...(ex.label ? { label: String(ex.label) } : {}),
         children: node.children.map((c) => c.name), colour: this.colourOf(node) });
     }
     this.setObject(gltf.scene, groups, model);

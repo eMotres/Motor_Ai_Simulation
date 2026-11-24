@@ -111,5 +111,5 @@ def test_the_valid_path_is_unchanged(stubbed_verbose):
     b1, ks = TABLE[REF_MM]
     assert pp["k_flux"] == ks * (b1 / B1_2D)
     assert pp["two_d"]["ratio_3d_mid_over_2d"] == b1 / B1_2D
-    assert pp["two_d"]["verdict"] == "FAIL"                  # 0.957 at 12 mm: see the proposal on this check
+    assert pp["two_d"]["verdict"] == "NOT CHECKED"           # one row at >= 1.0 x L (test_kflux_agreement_check)
     assert pp["k_flux_vs_L_method"] == EE.K_FLUX_VS_L_OWN_MID

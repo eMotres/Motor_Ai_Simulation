@@ -63,6 +63,50 @@ K_FLUX_VS_L_OWN_MID = "own_mid_ratio"
 #: ... and without one: k_flux(L) = k_flux_self(L) (no 2D ratio measured).
 K_FLUX_VS_L_SELF = "self_no_2d"
 
+#: The 3D-vs-2D agreement check (2026-11-24).  The end deficit D(L) = L (1 - k_flux(L)) of a real end effect is a
+#: length per machine, nearly constant in L (measured: a 28-pole 80 mm machine 0.93-0.96 mm from 12 to 48 mm; a 12s14p
+#: 40 mm machine 0.707-0.709 mm from 12 to 22 mm); a 3D-vs-2D model offset eps adds eps x L.  So the sweep rows at the
+#: reference stack and longer are fitted to D = D0 + eps L and the check passes when |eps| <= this and D0 > 0.  The
+#: mid-plane ratio alone (the earlier 2 % test) is NOT a model check: at a short stack the mid-plane itself sits below
+#: 2D (0.957 at 12 mm on the 80 mm machine, 0.9996 at 48 mm) and that is end physics.
+AGREEMENT_EPS_TOL = 0.01
+#: the earlier mid-plane tolerance, kept as a diagnostic beside the check
+MID_PLANE_TOL = 0.02
+
+
+def end_deficit_check(curve: Sequence[dict], ref_stack_mm: float,
+                      tol: float = AGREEMENT_EPS_TOL) -> dict:
+    """Fit D(L) = L (1 - k_flux(L)) = D0 + eps L over the rows at ``ref_stack_mm`` and longer that carry their own
+    3D-mid / 2D ratio; ``verdict`` PASS (|eps| <= tol and D0 > 0), FAIL, or NOT CHECKED (fewer than two such
+    lengths: one row cannot separate a constant end loss from a model offset, which is not a failure).  Shorter rows
+    stay out: there the two ends interact and D falls (0.90 -> 0.85 mm from 8 to 6 mm on the 80 mm machine)."""
+    pts: Dict[float, float] = {}
+    for r in curve:
+        try:
+            L, k = float(r["stack_mm"]), float(r["k_flux"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if ("ratio_3d_mid_over_2d" in r and math.isfinite(L) and math.isfinite(k)
+                and L >= float(ref_stack_mm) * (1.0 - 1e-9)):
+            pts[round(L, 9)] = L * (1.0 - k)
+    rows = sorted(pts.items())
+    out = dict(rule="D(L) = L(1 - k_flux) = D0 + eps*L over the rows at >= 1.0 x the reference stack; "
+                    "PASS when |eps| <= %g %% and D0 > 0" % (100 * tol),
+               tolerance_eps=tol, rows_mm=[L for L, _ in rows], D_mm=[d for _, d in rows],
+               eps=None, D0_mm=None)
+    if len(rows) < 2:
+        out["verdict"] = "NOT CHECKED"
+        out["reason"] = "fewer than two stack lengths at >= 1.0 x the reference stack"
+        return out
+    xs = np.array([L for L, _ in rows])
+    ys = np.array([d for _, d in rows])
+    xm, ym = float(xs.mean()), float(ys.mean())
+    eps = float(((xs - xm) * (ys - ym)).sum() / ((xs - xm) ** 2).sum())
+    d0 = ym - eps * xm
+    out.update(eps=eps, D0_mm=d0)
+    out["verdict"] = "PASS" if (abs(eps) <= tol and d0 > 0.0) else "FAIL"
+    return out
+
 
 # --------------------------------------------------------------------------
 # one solve
@@ -441,7 +485,13 @@ SCHEMA = {
         "spill_profile": "z stations (m, and z/(L/2)) with B1(z) in T and "
                          "B1(z)/B1(0). Stations beyond z/(L/2) = 1 are OUTSIDE "
                          "the iron and are the fringing tail, not stack flux.",
-        "two_d": "the 2D reference: solver, mesh, B1 and the 3D-mid/2D ratio.",
+        "two_d": "the 2D reference: solver, mesh, B1 and the 3D-mid/2D ratio; "
+                 "verdict / k_flux_usable from agreement_check (end deficit "
+                 "L(1 - k_flux) = D0 + eps*L over the rows at >= 1.0 x the "
+                 "reference stack: PASS |eps| <= 1 % and D0 > 0, FAIL, or NOT "
+                 "CHECKED with one such row - k_flux stays usable), INVALID "
+                 "when the 2D fundamental is zero / not a number; "
+                 "mid_plane_check is a diagnostic.",
         "demag": "H.Mhat per axial magnet slice; negative is demagnetising.",
         "l_stack_curve": "k_flux (both normalisations) vs stack length. Each row: "
                          "k_flux = k_flux_self * ratio_3d_mid_over_2d, the row's OWN "
@@ -718,27 +768,6 @@ def run_stage_a(geo_override: Optional[dict] = None,
             "the 2D reference fundamental is zero or not a number (B1 = %r T): "
             "no 3D-mid / 2D ratio is formed, k_flux = k_flux_self and every "
             "stack-length row is self-normalised" % (r2.B1_T,))
-    elif two_d is not None:
-        # The consistency check is only passed if the two models agree at the
-        # mid-plane.  When they do not, k_flux (which multiplies a 2D result by
-        # a number derived from BOTH models) inherits the disagreement, and
-        # publishing it would dress a modelling difference up as an end effect.
-        # k_flux_self — a ratio taken entirely inside the 3D model — does not.
-        off = abs(ratio - 1.0)
-        two_d["agreement_tolerance"] = 0.02
-        two_d["verdict"] = "PASS" if off <= 0.02 else "FAIL"
-        two_d["k_flux_usable"] = bool(off <= 0.02)
-        if off > 0.02:
-            two_d["warning"] = (
-                f"3D mid-plane and 2D differ by {100*off:.2f} % on the same "
-                "cross-section. Use k_flux_self and the spill profile; do NOT "
-                "use k_flux until the two models are reconciled. First two "
-                "things to check, in order: (1) the magnet constitutive law — "
-                "the 2D A_z source must be M/mu_rec, not M (see ref2d's "
-                "docstring); (2) the iron, by re-running this with "
-                "linear_iron=True at a ladder of mu_r: a residual that grows "
-                "with mu_r and vanishes with no iron is the total scalar "
-                "potential's cancellation, not a magnet error.")
     # Each stack length is divided by the 2D fundamental through ITS OWN
     # mid-plane value: k_flux(L) = <B1>_L / B1_2D = k_flux_self(L) * B1_mid(L) / B1_2D.
     # The mid-plane deficit against 2D is itself a stack-length effect (it
@@ -753,6 +782,35 @@ def run_stage_a(geo_override: Optional[dict] = None,
             row["k_flux"] = row["k_flux_self"] * row["ratio_3d_mid_over_2d"]
         else:
             row["k_flux"] = row["k_flux_self"] * ratio
+
+    if two_d is not None and b1_2d is not None:
+        # The 3D-vs-2D agreement check, on the rows just formed.  A FAIL means
+        # the end deficit grows with the stack length, i.e. the two models
+        # disagree beyond the end effect: k_flux (which multiplies a 2D result
+        # by a number derived from BOTH models) would inherit that, so it is
+        # marked not usable.  NOT CHECKED (a single length at >= the reference)
+        # leaves k_flux usable.  The mid-plane ratio stays as a diagnostic.
+        off = abs(ratio - 1.0)
+        chk = end_deficit_check(curve, section.stack_mm)
+        two_d["agreement_check"] = chk
+        two_d["agreement_tolerance"] = AGREEMENT_EPS_TOL
+        two_d["mid_plane_check"] = dict(
+            ratio=ratio, tolerance=MID_PLANE_TOL,
+            within=bool(off <= MID_PLANE_TOL),
+            note=("diagnostic only: at a short stack the mid-plane sits below "
+                  "2D by end physics, it is not a model check"))
+        two_d["verdict"] = chk["verdict"]
+        two_d["k_flux_usable"] = chk["verdict"] != "FAIL"
+        if chk["verdict"] == "FAIL":
+            two_d["warning"] = (
+                "the end deficit L(1 - k_flux) grows with the stack length "
+                f"(eps = {100 * chk['eps']:.2f} % per unit length, D0 = "
+                f"{chk['D0_mm']:.3f} mm): 3D and 2D disagree beyond the end "
+                "effect. Use k_flux_self and the spill profile; do NOT use "
+                "k_flux until the two models are reconciled. First two things "
+                "to check, in order: (1) the magnet constitutive law - the 2D "
+                "A_z source must be M/mu_rec, not M (see ref2d's docstring); "
+                "(2) the axial mesh (n_stack) of the longer rows.")
 
     passport = dict(
         version=PASSPORT_VERSION,

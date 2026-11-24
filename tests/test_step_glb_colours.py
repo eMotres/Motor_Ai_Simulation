@@ -55,7 +55,9 @@ def test_a_coloured_step_keeps_its_colours_one_material_each_and_one_node_per_pa
     assert model["name"] == "Model" and len(model["children"]) == info["solids"] == 4                     # one node per part
     parts = [doc["nodes"][i] for i in model["children"]]
     assert [p["name"] for p in parts] == ["Part_1", "Part_2", "Part_3", "Part_4"]
-    assert all(p["extras"] == {"family": p["name"], "explode": 0} for p in parts)
+    assert all({k: v for k, v in p["extras"].items() if k != "label"} == {"family": p["name"], "explode": 0} for p in parts)
+    labels = [p["extras"].get("label") for p in parts]                                                     # the STEP's component names
+    assert [next(x for x in ("pcb", "chip", "plain", "pins") if lab and x in lab) for lab in labels] == ["pcb", "chip", "plain", "pins"]
     prims = [doc["meshes"][p["mesh"]]["primitives"] for p in parts]
     assert sorted(len(p) for p in prims) == [1, 1, 1, 2]                                                    # the plain part: steel + red
     two = next(p for p in prims if len(p) == 2)
@@ -96,7 +98,7 @@ def test_colour_names_are_found_across_read_chunks(tmp_path):
 def test_the_child_process_and_the_v2_cache(tmp_path):
     src = _coloured(tmp_path / "c.step")
     data = step_glb.glb_for_step(src, "m1", tmp_path / "cache")
-    assert (tmp_path / "cache" / "m1.v2.glb").read_bytes() == data
+    assert (tmp_path / "cache" / "m1.v3.glb").read_bytes() == data
     assert len(_glb(data)["materials"]) == 4
 
 
@@ -143,7 +145,7 @@ def test_a_placement_inherits_its_parts_colour_and_its_own_colour_wins(tmp_path)
     assert step_glb.names_colours(str(src))
     found = step_glb.coloured_solids(str(src))
     by_x = {}
-    for solid, faces in found:
+    for solid, faces, _name in found:
         cols = {tuple(round(x, 3) for x in c) if c else None for _f, c in faces}
         by_x.setdefault(round(solid.BoundingBox().xmin, 3), []).append(cols)
     assert sorted(by_x) == [0.0, 10.0] and len(found) == 3                                                  # placements kept
@@ -252,3 +254,12 @@ def test_the_entity_scan_is_linear_on_long_names_spaces_and_open_strings(tmp_pat
         t = time.monotonic()
         assert step_glb.step_entities(str(p), step_glb.COLOUR_ENTITIES | step_glb.EXTERNAL_ENTITIES) == set()
         assert time.monotonic() - t < 2.0
+
+
+@pytest.mark.parametrize("raw, shown", [
+    ("Core:1", "Core:1"), ("  Stator_holder
+:1 ", "Stator_holder :1"), ("", ""), (None, ""), ("NAUO12", ""), ("=>[0:1:1:2]", ""),
+    ("0:1:1:2", ""), ("SOLID", ""), ("COMPOUND", ""), ("Solid rotor", "Solid rotor"), ("x" * 300, "x" * 120),
+])
+def test_a_component_name_is_one_short_line_and_a_generated_one_is_dropped(raw, shown):
+    assert step_glb.clean_label(raw) == shown

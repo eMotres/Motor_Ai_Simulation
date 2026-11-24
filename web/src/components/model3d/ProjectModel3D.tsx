@@ -16,12 +16,13 @@ import ArchiveOutlinedIcon from '@mui/icons-material/ArchiveOutlined';
 import UnarchiveOutlinedIcon from '@mui/icons-material/UnarchiveOutlined';
 import { useTranslation } from 'react-i18next';
 import HelpTip from '../common/HelpTip';
-import { UnifiedViewer } from '../../modules/viewer3d';
+import { UnifiedViewer, type PartGroup } from '../../modules/viewer3d';
 import { filenameFromDisposition, formatBytes } from '../../lib/model3d';
 import Model3DPanel from './Model3DPanel';
 import { useRememberedView } from '../../lib/useRememberedView';
 import { bool, oneOf, readView, writeView } from '../../lib/viewMemory';
 import { openingSource, sourceScope, type ModelSource } from './projectModelSource';
+import { hasFrameless, modelTree, notFrameless } from './projectModelTree';
 
 const API = ((import.meta.env.VITE_API_URL ?? 'http://localhost:8001') as string).replace(/\/$/, '');
 const enc = encodeURIComponent;
@@ -96,6 +97,9 @@ const ProjectModel3D: React.FC<{ projectId: string; motors: ReadonlyArray<{ die:
     if (value) writeView(pickKey, value);
     return value;
   });
+  // the components of the model on screen; Frameless hides everything that is not the stator, the coils or the rotor (owner 2026-11-24)
+  const [loaded, setLoaded] = useState<{ id: string; groups: PartGroup[] }>({ id: '', groups: [] });
+  const [frameless, setFrameless] = useRememberedView<boolean>('project.model3d.frameless', false, (raw) => bool(raw) ?? null);
   const [uploadOpen, setUploadOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -124,6 +128,11 @@ const ProjectModel3D: React.FC<{ projectId: string; motors: ReadonlyArray<{ die:
   }, [projectId, showArchived, reload]);
 
   const shown = useMemo(() => list?.models.find((m) => m.id === picked) ?? null, [list, picked]);
+  const groups = useMemo(() => (shown && loaded.id === shown.id ? loaded.groups : []), [loaded, shown]);
+  const canFrameless = useMemo(() => hasFrameless(groups), [groups]);
+  const framelessOn = frameless && canFrameless;
+  const tree = useMemo(() => modelTree(groups, framelessOn), [groups, framelessOn]);
+  const filtered = useMemo(() => (framelessOn ? notFrameless(groups) : null), [groups, framelessOn]);
   const staff = !!list?.can_upload;
   const date = (iso: string) => { try { return new Date(iso).toLocaleDateString(language || undefined); } catch { return iso.slice(0, 10); } };
 
@@ -190,6 +199,13 @@ const ProjectModel3D: React.FC<{ projectId: string; motors: ReadonlyArray<{ die:
               </Button>
             : <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}><Typography sx={{ fontSize: 12, color: 'var(--text-3)' }}>{t('downloadLocked')}</Typography><HelpTip title={t('downloadLockedHelp')} /></Box>
         )}
+        {source === 'uploaded' && shown && canFrameless && (
+          <Tooltip title={t('project.framelessTip')}>
+            <ToggleButton size="small" value="frameless" selected={framelessOn} onChange={() => setFrameless(!framelessOn)} sx={btn} data-testid="project-model-frameless">
+              {t('project.frameless')}
+            </ToggleButton>
+          </Tooltip>
+        )}
         <Box sx={{ flex: 1 }} />
         {source === 'uploaded' && staff && (
           <Button size="small" variant="contained" sx={btn} startIcon={<UploadIcon sx={{ fontSize: 16 }} />} onClick={() => setUploadOpen(true)} data-testid="project-model-upload">
@@ -219,7 +235,8 @@ const ProjectModel3D: React.FC<{ projectId: string; motors: ReadonlyArray<{ die:
           <Box sx={{ height: { xs: 420, md: 620 }, position: 'relative', border: '1px solid var(--line-soft)', borderRadius: 1.5, overflow: 'hidden' }}>
             {shown
               ? <UnifiedViewer sourceKey={`project-model:${projectId}:${shown.id}`} resetKey={`project-model:${projectId}:${shown.id}`}
-                  glbUrl={`${base(projectId)}/${enc(shown.id)}/model.glb`} toolbarSpec="full" tree={null}
+                  glbUrl={`${base(projectId)}/${enc(shown.id)}/model.glb`} toolbarSpec="full" tree={tree} hiddenNames={filtered}
+                  onLoaded={(r) => setLoaded({ id: shown.id, groups: r.groups })}
                   contextLostText={t('contextLost')} noViewText="" onError={(m) => m && setErr(m)} />
               : <Typography sx={{ p: 2, fontSize: 13, color: 'var(--text-3)' }}>{list ? t('project.noUpload') : ''}</Typography>}
           </Box>

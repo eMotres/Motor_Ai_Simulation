@@ -141,6 +141,8 @@
     "restore": "Restore",
     "file": "File",
     "date": "Uploaded",
+    "frameless": "Frameless",
+    "framelessTip": "Show only the stator, the coils and the rotor.",
     "noUpload": "No model has been uploaded for this project yet.",
     "noLinkedMotor": "No motor is linked to this project yet.",
     "noLive": "No current model; switch on Show archived to restore one."

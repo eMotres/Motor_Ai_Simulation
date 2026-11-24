@@ -141,6 +141,8 @@
     "restore": "恢复",
     "file": "文件",
     "date": "上传时间",
+    "frameless": "无框",
+    "framelessTip": "只显示定子、线圈和转子。",
     "noUpload": "本项目尚未上传模型。",
     "noLinkedMotor": "本项目尚未关联电机。",
     "noLive": "没有当前模型；打开“显示已归档”即可恢复。"

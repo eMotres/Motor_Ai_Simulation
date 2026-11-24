@@ -30,6 +30,8 @@ export interface UnifiedViewerProps {
   hostExtras?: React.ReactNode;
   /** show ONLY the top-level groups of these families (one part of the motor, e.g. a BOM line), no tree (owner 2026-10-18) */
   onlyFamilies?: readonly string[] | null;
+  /** top-level scene nodes the host hides on top of the tree (a view filter); the view is fitted again when it changes */
+  hiddenNames?: ReadonlySet<string> | null;
   /** with `onlyFamilies`: glow these families and ghost the rest of what is shown (an assembly step's own parts on the earlier ones) */
   highlightFamilies?: readonly string[] | null;
   /** the explode slider's start value (0..1) after every load / reset; default 0 */
@@ -84,10 +86,20 @@ const UnifiedViewer: React.FC<UnifiedViewerProps> = (p) => {
       const keep = new Set(p.onlyFamilies);
       return new Set(loadedGroups.filter((g) => !keep.has(g.family) && !keep.has(g.name)).map((g) => g.name));
     }
-    return hiddenSceneNames(tree, hiddenKeys);
-  }, [tree, hiddenKeys, loadedGroups, onlyKey]);  // eslint-disable-line react-hooks/exhaustive-deps
+    const hidden = hiddenSceneNames(tree, hiddenKeys);
+    for (const name of p.hiddenNames ?? []) hidden.add(name);
+    return hidden;
+  }, [tree, hiddenKeys, loadedGroups, onlyKey, p.hiddenNames]);  // eslint-disable-line react-hooks/exhaustive-deps
   // the view frames what is shown: after the other parts are hidden, fit to the remaining one
   useEffect(() => { if (onlyKey && loadedGroups.length) { const h = window.setTimeout(() => canvas.current?.fit(), 60); return () => window.clearTimeout(h); } return undefined; }, [onlyKey, loadedGroups]);
+  const filterKey = [...(p.hiddenNames ?? [])].sort().join('|');
+  const lastFilter = useRef(filterKey);
+  useEffect(() => {
+    if (lastFilter.current === filterKey) return undefined;
+    lastFilter.current = filterKey;
+    const h = window.setTimeout(() => canvas.current?.fit(), 60);
+    return () => window.clearTimeout(h);
+  }, [filterKey]);
   const glowKey = (p.highlightFamilies ?? []).join('|');
   const highlight = useMemo(() => {
     if (p.highlightFamilies && p.highlightFamilies.length > 0) {

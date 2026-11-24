@@ -21,6 +21,10 @@ fallback, on purpose: a ``StepConversionError`` (the file has no geometry - the 
 timeout of the child process.  A STEP that names an EXTERNAL document reference never reaches the XCAF reader (it could load other
 files from the disk; the bound OCCT has no switch to turn that off): it keeps the plain view, which does not follow references.
 
+Part names (owner 2026-11-24: the component tree and the Frameless button of the project model): the coloured path reads the STEP's
+component name of every part and writes it as ``extras.label``; the node name stays the unique ``Part_<n>``.  The plain path (a file
+without colours) has no names and is unchanged.
+
   python -m motor_ai_sim.production.step_glb in.step out.glb      (what the child process runs)
 """
 from __future__ import annotations
@@ -40,7 +44,7 @@ from typing import Optional
 log = logging.getLogger(__name__)
 
 #: bump when the writer or the tessellation changes: cached views of an older version are not read
-VERSION = "v2"                              # v2: STEP colours (a file without colours converts exactly as v1)
+VERSION = "v3"                              # v2: STEP colours (a file without colours converts exactly as v1); v3: part names (extras.label)
 #: what the GLB of a STEP without colours names as its converter: that path IS the v1 conversion, byte for byte
 PLAIN_VERSION = "v1"
 #: a STEP over this size is refused for the viewer (the download stays available)
@@ -159,9 +163,9 @@ def _material(name: str, rgb) -> dict:
                                                    "roughnessFactor": 0.55}, "doubleSided": True}
 
 
-def build_coloured_glb(parts: list[tuple[str, list]], palette: list) -> bytes:
-    """``parts`` = ``[(name, [(positions, normals, indices, material), ...]), ...]``: one node and ONE mesh per part, one primitive
-    per colour of its faces; ``palette[material]`` = linear RGB, ``palette[0]`` the steel grey of a face without a colour."""
+def build_coloured_glb(parts: list[tuple], palette: list) -> bytes:
+    """``parts`` = ``[(name, [(positions, normals, indices, material), ...], component name), ...]``: one node and ONE mesh per part,
+    one primitive per colour of its faces; ``palette[material]`` = linear RGB, ``palette[0]`` the steel grey of a face without a colour."""
     import numpy as np
 
     bin_parts: list[bytes] = []
@@ -182,7 +186,7 @@ def build_coloured_glb(parts: list[tuple[str, list]], palette: list) -> bytes:
         offset += len(data)
         return len(views) - 1
 
-    for i, (name, prims) in enumerate(parts):
+    for i, (name, prims, label) in enumerate(parts):
         primitives = []
         for pos, nrm, idx, mat in prims:
             pos = np.ascontiguousarray(pos, dtype="<f4")
@@ -197,7 +201,10 @@ def build_coloured_glb(parts: list[tuple[str, list]], palette: list) -> bytes:
             accessors.append({"bufferView": add_view(idx.tobytes(), 34963), "componentType": 5125, "count": int(len(idx)), "type": "SCALAR"})
             primitives.append({"attributes": {"POSITION": a_pos, "NORMAL": a_nrm}, "indices": a_idx, "material": int(mat), "mode": 4})
         meshes.append({"name": name, "primitives": primitives})
-        nodes.append({"name": name, "mesh": i, "extras": {"family": name, "explode": 0}})
+        extras = {"family": name, "explode": 0}
+        if label:
+            extras["label"] = label
+        nodes.append({"name": name, "mesh": i, "extras": extras})
 
     blob = b"".join(bin_parts)
     blob += b"\0" * ((-len(blob)) % 4)
@@ -259,9 +266,32 @@ def _rgb(style):
     return None
 
 
+#: names OCCT makes up itself for an unnamed instance: not a component name
+_GENERATED_NAME = re.compile(r"^(=>\[.*\]|NAUO\d+|\d+(:\d+)+|SOLID|COMPOUND|SHELL|Open CASCADE STEP translator.*)$", re.IGNORECASE)
+_LABEL_MAX = 120
+
+
+def clean_label(raw) -> str:
+    """A component name as shown in the tree: one line, at most ``_LABEL_MAX`` characters; "" for a generated or empty name."""
+    text = " ".join("".join(c if c.isprintable() else " " for c in str(raw or "")).split())[:_LABEL_MAX]
+    return "" if _GENERATED_NAME.match(text) else text
+
+
+def _component_name(node) -> str:
+    """The name of a leaf of the assembly: the instance's own name (Fusion "Core:1"), else the part's."""
+    from OCP.TDataStd import TDataStd_Name
+    for label in (node.Label, node.RefLabel):
+        attr = TDataStd_Name()
+        if not label.IsNull() and label.FindAttribute(TDataStd_Name.GetID_s(), attr):
+            text = clean_label(attr.Get().ToExtString())
+            if text:
+                return text
+    return ""
+
+
 def coloured_solids(step_path: str):
-    """``[(solid, [(face, rgb), ...]), ...]`` in the document's order, solids and faces already placed, ``rgb`` = linear RGB or None
-    per face; None when the document holds no colour at all.  Raises on a reader failure (the caller falls back)."""
+    """``[(solid, [(face, rgb), ...], component name), ...]`` in the document's order, solids and faces already placed, ``rgb`` =
+    linear RGB or None per face; None when the document holds no colour at all.  Raises on a reader failure (the caller falls back)."""
     import cadquery as cq
     from OCP.IFSelect import IFSelect_RetDone
     from OCP.STEPCAFControl import STEPCAFControl_Reader
@@ -289,6 +319,7 @@ def coloured_solids(step_path: str):
         node = explorer.Current()
         shape = shape_tool.GetShape_s(node.RefLabel)              # in the part's own frame; node.Location places it
         own = _rgb(node.Style)                                    # the leaf's colour, the assembly's inherited when it has none
+        component = _component_name(node)
         styles = XCAFPrs_IndexedDataMapOfShapeStyle()
         XCAFPrs.CollectStyleSettings_s(node.RefLabel, TopLoc_Location(), styles)
 
@@ -314,7 +345,7 @@ def coloured_solids(step_path: str):
                 coloured.append((cq.Face(faces.Current().Moved(node.Location)), colour_of(faces.Current(), base)))
                 faces.Next()
             any_colour = any_colour or any(c is not None for _f, c in coloured)
-            out.append((cq.Solid(solid.Moved(node.Location)), coloured))
+            out.append((cq.Solid(solid.Moved(node.Location)), coloured, component))
             solids.Next()
         if not found and not shape.IsNull():                      # a surface-only part: its faces as one body, as the plain path does
             faces, coloured = TopExp_Explorer(shape, TopAbs_FACE), []
@@ -323,7 +354,7 @@ def coloured_solids(step_path: str):
                 faces.Next()
             if coloured:
                 any_colour = any_colour or any(c is not None for _f, c in coloured)
-                out.append((cq.Shape.cast(shape.Moved(node.Location)), coloured))
+                out.append((cq.Shape.cast(shape.Moved(node.Location)), coloured, component))
         explorer.Next()
     return out if any_colour else None
 
@@ -336,13 +367,13 @@ def _convert_coloured(step_path: str):
     found = coloured_solids(step_path)
     if not found:
         return None
-    bb = cq.Compound.makeCompound([s for s, _ in found]).BoundingBox()
+    bb = cq.Compound.makeCompound([s for s, _f, _n in found]).BoundingBox()
     diag = max(bb.DiagonalLength, 1e-3)
     tol = min(0.2, max(0.002, diag * 0.0005))                    # the same tessellation as the plain path
     palette: list = [None]
     index: dict = {}
     parts, triangles = [], 0
-    for i, (_solid, faces) in enumerate(found, 1):
+    for i, (_solid, faces, component) in enumerate(found, 1):
         groups: dict = {}
         for face, rgb in faces:
             verts, tris = face.tessellate(tol, 0.1)
@@ -362,7 +393,7 @@ def _convert_coloured(step_path: str):
             triangles += len(idx) // 3
             prims.append((pos, nrm, idx, mat))
         if prims:
-            parts.append(("Part_%d" % i if len(found) > 1 else "Part", prims))
+            parts.append(("Part_%d" % i if len(found) > 1 else "Part", prims, component))
     if not parts:
         raise StepConversionError("The STEP file has no solid geometry.")
     info = {"solids": len(parts), "triangles": triangles, "colours": len(palette) - 1,

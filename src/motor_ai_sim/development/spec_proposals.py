@@ -226,7 +226,7 @@ def with_current(project_id: str, proposals: list[dict]) -> list[dict]:
 
 
 def create(project_id: str, field_id: str, value: Any, reason: str, *, by: str = "assistant", basis: str | None = None,
-           answer_status: str = "filled", sources: list | None = None) -> dict:
+           answer_status: str = "filled", sources: list | None = None, file_source: dict | None = None) -> dict:
     """Validate and store a proposal.  A newer proposal for the same field replaces the open one (dismissed as
     ``superseded``).  Raises ``ProposalError`` for an invalid one - nothing is stored then."""
     reason = " ".join(str(reason or "").split())
@@ -247,6 +247,9 @@ def create(project_id: str, field_id: str, value: Any, reason: str, *, by: str =
     urls = [str(u)[:300] for u in (sources or []) if isinstance(u, str) and u.startswith(("http://", "https://"))][:5]
     if urls:
         proposal["sources"] = urls
+    if isinstance(file_source, dict) and file_source.get("ref"):        # a value read from an uploaded specification file
+        proposal["file_source"] = {k: (v if isinstance(v, bool) else str(v)[:300]) for k, v in file_source.items()
+                                   if k in ("ref", "excerpt", "converted", "verified", "file_name", "document_id")}
 
     def mutate(doc: dict) -> None:
         rows = doc.setdefault("proposals", [])

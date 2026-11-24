@@ -28,16 +28,20 @@ def _doc() -> dict:
     return {"messages": []}
 
 
-def _row(role: str, text: str, proposals: list[str] | None = None, applied: list[str] | None = None) -> dict:
-    return {"id": "m-" + secrets.token_hex(5), "role": role, "text": str(text)[:MAX_TEXT], "at": models.now(),
-            "proposals": list(proposals or []), "applied": list(applied or [])}
+def _row(role: str, text: str, proposals: list[str] | None = None, applied: list[str] | None = None,
+         file: dict | None = None) -> dict:
+    row = {"id": "m-" + secrets.token_hex(5), "role": role, "text": str(text)[:MAX_TEXT], "at": models.now(),
+           "proposals": list(proposals or []), "applied": list(applied or [])}
+    if isinstance(file, dict) and file.get("name"):             # an attached specification file: its name and document id, never its text
+        row["file"] = {"name": str(file.get("name"))[:200], "document_id": str(file.get("document_id") or "")[:60]}
+    return row
 
 
 def append(project_id: str, email: str, rows: list[dict]) -> None:
     """Add messages (``{role, text, proposals?, applied?}``) to this user's history; the oldest fall off past ``MAX_STORED``."""
     if not rows:
         return
-    new = [_row(r["role"], r["text"], r.get("proposals"), r.get("applied")) for r in rows]
+    new = [_row(r["role"], r["text"], r.get("proposals"), r.get("applied"), r.get("file")) for r in rows]
 
     def mutate(doc: dict) -> None:
         msgs = doc.setdefault("messages", [])
@@ -59,6 +63,8 @@ def load(project_id: str, email: str) -> list[dict]:
     out: list[dict] = []
     for m in rows:
         row = {k: m.get(k) for k in ("id", "role", "text", "at")}
+        if isinstance(m.get("file"), dict):
+            row["file"] = m["file"]
         cards: dict[str, list[dict]] = {}
         for key in ("proposals", "applied"):
             found = [by_id[i] for i in (m.get(key) or []) if i in by_id]

@@ -21,19 +21,21 @@ import {
 import ChatBubbleOutlineIcon from '@mui/icons-material/ChatBubbleOutline';
 import CloseIcon from '@mui/icons-material/Close';
 import SendIcon from '@mui/icons-material/Send';
+import AttachFileIcon from '@mui/icons-material/AttachFile';
 import { useTranslation } from 'react-i18next';
 import { useAuth } from '../../contexts/AuthContext';
 import { useUIStore } from '../../stores/uiStore';
 import { APP_VERSION, APP_GIT_SHA } from '../../lib/version';
 import { askAssistant, submitTicket, listMyTickets, loadConversation, clearConversation, createFromHandoff, type Ticket } from '../../lib/support';
 import {
-  initialFlow, addUserMessage, receiveReply, editDraft, dismissDraft, runConfirm, nextStep, updateCard,
+  initialFlow, addUserMessage, receiveReply, editDraft, dismissDraft, runConfirm, nextStep, updateCard, forServer,
   type ChatReply, type FlowState, type SpecCard,
 } from '../../lib/supportFlow';
 import { buildSupportContext, installFailedCallRecorder } from '../../lib/supportContext';
 import { useAssistantPlace } from '../../lib/assistantPlace';
 import { projectOpenEvent, projectOpenStorageKey } from '../../modules/development/projectOpenIntent';
-import { specAssistantApi } from '../../modules/development/specAssistantApi';
+import { specAssistantApi, SpecAssistantError } from '../../modules/development/specAssistantApi';
+import { fileRefusal, FILE_EXTENSIONS } from '../../modules/development/specFile';
 import { fillEnabled, type Proposal } from '../../modules/development/specAssistant';
 import SupportMarkdown from './SupportMarkdown';
 import TicketDraftCard from './TicketDraftCard';
@@ -66,6 +68,7 @@ const SupportWidget: React.FC = () => {
   const { user, supportProvider } = useAuth();
   const { t, i18n } = useTranslation('support');
   const { t: tc } = useTranslation('common');
+  const { t: td } = useTranslation('development');
   const activeTab = useUIStore((s) => s.activeTab) as string;
   const [open, setOpen] = useState(false);
   const [tab, setTab] = useState<'ask' | 'tickets'>('ask');
@@ -114,6 +117,10 @@ const SupportWidget: React.FC = () => {
   const lang = i18n.resolvedLanguage ?? i18n.language;
   const placeKey = user ? (spec ? `spec:${spec.projectId}` : 'help') : 'visitor';
   const [canApply, setCanApply] = useState(false);
+  const [fileUpload, setFileUpload] = useState(false);
+  const [fileLimits, setFileLimits] = useState<{ maxBytes?: number; extensions?: string[] }>({});
+  const [fileError, setFileError] = useState('');
+  const fileInput = useRef<HTMLInputElement | null>(null);
   const [fill, setFill] = useState(() => fillEnabled(readStore(FILL_KEY)));
   const [busyId, setBusyId] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
@@ -130,10 +137,15 @@ const SupportWidget: React.FC = () => {
     return () => { live = false; };
   }, [open, user, placeKey, spec?.projectId]);
   useEffect(() => {
-    setCanApply(false);
+    setCanApply(false); setFileUpload(false); setFileError('');
     if (!spec?.projectId) return;
     let live = true;
-    specAssistantApi.status(spec.projectId).then((s) => { if (live) setCanApply(!!s.can_apply); }).catch(() => { /* no fill switch */ });
+    specAssistantApi.status(spec.projectId).then((s) => {
+      if (!live) return;
+      setCanApply(!!s.can_apply);
+      setFileUpload(!!s.file_upload);          // the attach control exists only for who may edit the specification, in a motor project
+      setFileLimits({ maxBytes: s.file_max_bytes, extensions: s.file_extensions });
+    }).catch(() => { /* no fill switch */ });
     return () => { live = false; };
   }, [spec?.projectId]);
 
@@ -184,6 +196,22 @@ const SupportWidget: React.FC = () => {
     if (sending) return;
     setSending(true);   // a message typed while the clear is on its way would be wiped with the old chat
     try { await clearConversation(spec?.projectId); setFlow(initialFlow()); } catch { setFailed(true); } finally { setSending(false); }
+  };
+  /** An attached specification file: checked here, then read by the server, which answers with proposal cards (never filled in). */
+  const attach = async (file: File | undefined) => {
+    if (!file || !spec || sending) return;
+    const why = fileRefusal(file.name, file.size, fileLimits.maxBytes, fileLimits.extensions ?? FILE_EXTENSIONS);
+    if (why) { setFileError(td(`specAssistant.file${why === 'doc' ? 'Doc' : why === 'macro' ? 'Macro' : why === 'type' ? 'Type' : why === 'size' ? 'Size' : 'Empty'}`)); return; }
+    const next = addUserMessage(flowRef.current, file.name);
+    setFlow(next); setFileError(''); setSending(true); setFailed(false);
+    try {
+      const out = await specAssistantApi.sendFile(spec.projectId, file, lang, forServer(flowRef.current.msgs));
+      setFlow((f) => receiveReply(f, { reply: out.reply, source: out.source, ticketDraft: null, mode: 'spec', proposals: out.proposals as unknown as SpecCard[], applied: [] }));
+      spec.onChanged?.();
+    } catch (e) {
+      setFlow((f) => ({ ...f, msgs: f.msgs.slice(0, -1) }));
+      setFileError(e instanceof SpecAssistantError && e.status !== 500 ? e.message : td('specAssistant.fileFailed'));
+    } finally { setSending(false); if (fileInput.current) fileInput.current.value = ''; }
   };
   const toggleFill = (on: boolean) => { setFill(on); writeStore(FILL_KEY, on ? '1' : '0'); };
   const cardOp = async (p: Proposal, op: 'undo' | 'apply' | 'dismiss') => {
@@ -315,6 +343,9 @@ const SupportWidget: React.FC = () => {
             {failed && (
               <Typography sx={{ ...BODY, color: '#f87171' }} role="alert">{t('failed')}</Typography>
             )}
+            {fileError && (
+              <Typography data-testid="assistant-file-error" sx={{ ...BODY, color: '#f87171' }} role="alert">{fileError}</Typography>
+            )}
           </Box>
           {/* every assistant says it is one (Terms of Use); when the help chat runs on the Gemini API free tier it also says that Google
               may use the messages (Privacy Policy section 5) */}
@@ -327,6 +358,19 @@ const SupportWidget: React.FC = () => {
             )}
           </Box>
           <Box sx={{ display: 'flex', gap: 0.75, p: 1 }}>
+            {spec && canApply && fileUpload && (
+              <>
+                <input ref={fileInput} type="file" hidden data-testid="assistant-file-input" accept={(fileLimits.extensions ?? [...FILE_EXTENSIONS]).join(',')}
+                  onChange={(e) => void attach(e.target.files?.[0])} />
+                <Tooltip title={td('specAssistant.attachTip')} placement="top">
+                  <span>
+                    <IconButton aria-label={td('specAssistant.attach')} data-testid="assistant-attach" disabled={sending} onClick={() => fileInput.current?.click()}>
+                      <AttachFileIcon sx={{ fontSize: 22 }} />
+                    </IconButton>
+                  </span>
+                </Tooltip>
+              </>
+            )}
             <TextField
               value={input} onChange={(e) => setInput(e.target.value)}
               onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void send(); } }}

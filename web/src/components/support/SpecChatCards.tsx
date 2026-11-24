@@ -3,10 +3,11 @@
  * the values it filled (with their basis and Undo) and the proposals that wait for the project owner (Apply / Dismiss).  The card
  * logic is the old side panel's (modules/development/specAssistant.ts); the calls are modules/development/specAssistantApi.ts.
  */
-import { Box, Button, Chip, CircularProgress, Typography } from '@mui/material';
+import { Box, Button, Chip, CircularProgress, Tooltip, Typography } from '@mui/material';
 import { useTranslation } from 'react-i18next';
 import type { DevelopmentSchema } from '../../modules/development/types';
 import { basisOf, cardAction, cardView, filledState, langOf, type Proposal } from '../../modules/development/specAssistant';
+import { fileSourceOf } from '../../modules/development/specFile';
 
 interface Props {
   applied?: Proposal[];
@@ -24,6 +25,17 @@ export default function SpecChatCards({ applied = [], proposals = [], schema, la
   const { t: td } = useTranslation('development');
   const ui = langOf(lang);
   const sources = (p: Proposal) => ((p as Proposal & { sources?: string[] }).sources ?? []).filter((u) => /^https?:\/\//.test(u));
+  /** Where a value read from an attached file came from: one chip, the details in its tooltip (no caption line). */
+  const fileChip = (p: Proposal) => {
+    const fs = fileSourceOf(p);
+    if (!fs) return null;
+    const tip = [td('specAssistant.sourceFrom', { ref: fs.ref }), fs.excerpt ? td('specAssistant.sourceExcerpt', { text: fs.excerpt }) : '',
+      fs.converted ? td('specAssistant.sourceConverted', { text: fs.converted }) : '', fs.verified === false ? td('specAssistant.sourceNotFound') : ''].filter(Boolean);
+    return <Tooltip title={<Box data-testid="spec-source-tip">{tip.map((t) => <Box key={t}>{t}</Box>)}</Box>}>
+      <Chip size="small" data-testid="spec-source" label={`${td('specAssistant.source')}: ${fs.ref}`} color={fs.verified === false ? 'warning' : 'default'} variant="outlined"
+        sx={{ height: 20, fontSize: 12, mt: 0.3, mr: 0.5, maxWidth: '100%' }} />
+    </Tooltip>;
+  };
   return <>
     {applied.map((a) => {
       const c = cardView(a, schema, ui);
@@ -49,6 +61,9 @@ export default function SpecChatCards({ applied = [], proposals = [], schema, la
         {c.current && <Typography sx={{ fontSize: 12, color: 'var(--text-2)' }}>{td('specAssistant.now', { value: c.current })}</Typography>}
         <Typography sx={{ fontSize: 12, color: 'var(--text-2)' }}>{c.reason}</Typography>
         <Typography sx={{ fontSize: 12, color: c.recalcNeeded ? 'warning.main' : 'var(--text-2)' }}>{td('specAssistant.recalc', { what: c.recalc })}</Typography>
+        {fileChip(p)}
+        {fileSourceOf(p) && basisOf(p) !== 'stated' && <Chip size="small" label={td(basisOf(p) === 'derived' ? 'specAssistant.basisDerived' : 'specAssistant.basisAssumed')}
+          color={basisOf(p) === 'assumed' ? 'warning' : 'default'} sx={{ height: 20, fontSize: 12, mt: 0.3 }} />}
         {cardAction(p, canApply) === 'apply' ? <Box sx={{ display: 'flex', gap: 1, mt: 0.8 }}>
           <Button size="small" variant="contained" disabled={busyId !== null} onClick={() => onApply(p)} sx={{ textTransform: 'none' }}>{busyId === c.id ? <CircularProgress size={14} /> : td('specAssistant.apply')}</Button>
           <Button size="small" disabled={busyId !== null} onClick={() => onDismiss(p)} sx={{ textTransform: 'none' }}>{td('specAssistant.dismiss')}</Button>

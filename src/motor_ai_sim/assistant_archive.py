@@ -38,6 +38,12 @@ from motor_ai_sim.private_files import ensure_private_dir, open_private
 
 log = logging.getLogger(__name__)
 
+#: Owner decision 2026-11-24 (specification-file upload): the text of an uploaded specification file, and everything said in a
+#: conversation that used one, follows NO training path.  ``False`` keeps those records out of ``export_lines`` (the dataset
+#: export) and out of every training use; it is the ONE switch, read wherever a conversation is logged or exported.  Changing it
+#: needs the owner's word and the lawyer's check of the Platform Agreement (7.3, FREE mode).
+SPEC_FILE_TEXT_IN_TRAINING = False
+
 ASSISTANTS = ("spec", "support", "assistant")
 #: The context of a record: new records name it, old ones are read from their assistant (spec -> spec, support -> help).
 CONTEXTS = ("help", "spec")
@@ -108,11 +114,16 @@ def _write(rec: dict) -> None:
 def log_turn(*, assistant: str, conv_id: str, account: str = "", project_id: str = "", page: str = "", user_text: str = "",
              reply: str = "", model: str = "", source: str = "", error: str = "", fill_mode: Optional[bool] = None,
              applied: Optional[List[dict]] = None, proposed: Optional[List[dict]] = None, refused: Optional[List[str]] = None,
-             dropped: int = 0, context: str = "", searches: Optional[List[str]] = None, sources: Optional[List[dict]] = None) -> None:
+             dropped: int = 0, context: str = "", searches: Optional[List[str]] = None, sources: Optional[List[dict]] = None,
+             file_turn: bool = False) -> None:
     if assistant not in ASSISTANTS:
         return
     ctx = context if context in CONTEXTS else _LEGACY_CONTEXT.get(assistant, "help")
-    _write({"kind": "turn", "assistant": assistant, "context": ctx, "conv_id": conv_id, "account": (account or "").strip().lower()[:200],
+    if file_turn and not SPEC_FILE_TEXT_IN_TRAINING:
+        # a turn that read an uploaded file: keep the service-analysis row, but without the user's text, the reply, the quoted
+        # fragments or the proposals (they quote the file), and flag it so no export carries it
+        user_text, reply, applied, proposed, sources = "", "", [], [], []
+    _write({**({"file_turn": True} if file_turn else {}), "kind": "turn", "assistant": assistant, "context": ctx, "conv_id": conv_id, "account": (account or "").strip().lower()[:200],
             "anon": not account, "project_id": project_id[:64], "page": str(page or "")[:80],
             "user_text": redact(user_text), "reply": redact(reply), "model": str(model or "")[:80], "source": str(source or "")[:30],
             "error": str(error or "")[:200], "fill_mode": fill_mode,
@@ -231,7 +242,12 @@ def export_lines(training_allowed=None, **flt: Any) -> Iterable[str]:
     the dataset; ``training_allowed`` is the account's own flag from the Platform Agreement and the dataset's own gate
     (``training_allow``) still decides downstream.  Anonymous visitors are never training-allowed."""
     cache: Dict[str, bool] = {}
+    tainted: set = set()
+    if not SPEC_FILE_TEXT_IN_TRAINING:                 # a conversation that ever carried a file stays out, every turn of it
+        tainted = {str(r.get("conv_id")) for r in iter_records() if r.get("file_turn") and r.get("conv_id")}
     for r in iter_records(**flt):
+        if not SPEC_FILE_TEXT_IN_TRAINING and (r.get("file_turn") or str(r.get("conv_id")) in tainted):
+            continue
         acct = str(r.get("account") or "")
         ok = False
         if acct and training_allowed is not None:

@@ -212,3 +212,10 @@ def test_an_unknown_scope_is_unknown_and_the_old_scope_keeps_its_meaning():
     assert SS.sweep_settings_of({"mesh_preset": {**st, "sig_scope": None}})["sig"] is None
     old = SS.sweep_settings_of({"mesh_preset": {**st, "sig_scope": 2, "sig": 77}})            # a stored scope-2 row stays as it was
     assert old["sig"] == 77 and old["sig_scope"] == 2
+
+
+def test_the_answer_carries_the_machine_counts_for_the_panels_reason_line():
+    cfg = _cfg()
+    r = RS.resolve("tab", _tab("optimization", cfg), cfg)
+    geo = cfg["geometry"]
+    assert r["geometry"] == {"num_slots": geo.get("num_slots"), "num_poles": geo.get("num_poles")}

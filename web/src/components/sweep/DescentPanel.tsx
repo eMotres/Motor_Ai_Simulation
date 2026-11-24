@@ -488,12 +488,14 @@ const DescentPanel: React.FC<{ chartsOnly?: boolean }> = ({ chartsOnly = false }
   // resolves when the whole sequence finishes.
   const launch = async () => {
     if (!rs.ready || !rs.resolved) return;
+    const rsReq = rs.verify();        // the tabs may have changed since the line was shown: the run uses what the line shows
+    if (!rsReq) return;
     setApplied(false);
     setLastOptSnapshot(optInputs);   // snapshot the inputs this run launches with
     localRun.current = true;
     try {
       await runDescent({ rippleMax, maxIters, wEff, wTd, steps, algorithm, nSectors,
-                         runSettings: runSettingsBody(rs.record, rs.resolved!),
+                         runSettings: runSettingsBody(rsReq, rs.resolved!),
                          targetTorque: 0, vPeakLimit: 1e9, optimizeGamma: false,   // fixed Simulation current, no voltage limit
                          autoExpand: autoWalk, maxRounds, surrogateSeed,
                          objective, currentBumpPct: currentBump,
@@ -644,7 +646,7 @@ const DescentPanel: React.FC<{ chartsOnly?: boolean }> = ({ chartsOnly = false }
               <Tooltip title="Run the 2 baseline sims now (at I and +X% I) and draw the current-only line on the chart below — see the reference before launching the full optimization." placement="top">
                 <span>
                   <Button size="small" variant="outlined"
-                    onClick={() => { if (rs.ready && rs.resolved) void computeBaselineLine({ currentBumpPct: currentBump, record: rs.record, resolved: rs.resolved }).then(r => { if (r.stale) rs.refresh(); }); }}
+                    onClick={() => { const q = rs.verify(); if (q && rs.ready && rs.resolved) void computeBaselineLine({ currentBumpPct: currentBump, request: q, resolved: rs.resolved }).then(r => { if (r.stale) rs.refresh(); }); }}
                     disabled={!connectedToApi || !rs.ready || baselineBusy || descentRunning}
                     startIcon={baselineBusy ? <CircularProgress size={12} color="inherit" /> : undefined}
                     sx={{ textTransform: 'none', fontSize: 10, height: 26 }}>

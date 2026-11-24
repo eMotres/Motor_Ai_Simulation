@@ -3242,6 +3242,48 @@ def _live_winding_healed(live: dict) -> tuple:
     return fixed, {"from": old, "to": fixed["n_coils_per_phase"]}
 
 
+def _heal_stored_coil_count(die: str, c: dict) -> tuple:
+    """``(fix, old, stale)`` for the STORED configuration ``c`` of a duty save: a stale ``n_coils_per_phase`` is corrected in place
+    (``fix`` = ``{"from", "to"}``, ``old`` = the stored value, for the alias).  A LOCKED configuration is healed too (owner 2026-11-24:
+    "yes, correct it automatically"): this ONE key only, the count reaches no solved number (the FEM reads ``n_parallel`` /
+    ``n_series``) and the alias keeps every stamp current; nothing else of a locked configuration changes.  The slots come ONLY from the
+    die geometry with the configuration's geometry overrides (what the build signature hashes); nothing is done when they cannot be read
+    (no die, no slot keys: ``slot_pole_counts`` would invent 24), for a block without the key or a non-3-phase block.  A double-layer
+    winding is NOT rewritten (the rule ignores layers: the owner's open decision): it is reported as ``stale`` =
+    ``{"stored", "derived"}`` when the count differs."""
+    from motor_ai_sim.winding import slot_pole_counts, with_derived_coil_count
+    w = c.get("winding")
+    if not isinstance(w, dict) or w.get("n_coils_per_phase") is None:
+        return None, None, None
+    try:
+        die_geo = dict(_load_yaml(_die_file(die), "die").get("geometry") or {})
+    except Exception:                                                    # noqa: BLE001 - no die document: nothing to derive from
+        return None, None, None
+    geo = {**die_geo, **dict(c.get("geometry_overrides") or {})}
+    try:
+        has_slots = float(geo.get("num_slots") or 0) > 0 or (float(geo.get("num_seg") or 0) > 0 and float(geo.get("num_slots_per_segment") or 0) > 0)
+    except (TypeError, ValueError):
+        has_slots = False
+    if not has_slots:
+        return None, None, None
+    fixed, old = with_derived_coil_count(w, slot_pole_counts(geo)[0])
+    if old is None:
+        return None, None, None
+    raw, want = w["n_coils_per_phase"], fixed["n_coils_per_phase"]
+    try:
+        double_layer = int(float(w.get("layers") or 1)) >= 2
+    except (TypeError, ValueError):
+        double_layer = True
+    if double_layer:
+        log.warning("family: configuration '%s/%s': double-layer winding, stored n_coils_per_phase %s (derived %s) left as stored",
+                    die, c.get("name"), raw, want)
+        return None, None, {"stored": raw, "derived": want}
+    c["winding"] = {**w, "n_coils_per_phase": want}
+    log.warning("family: configuration '%s/%s'%s: stored n_coils_per_phase %s corrected to the derived %s on a duty save",
+                die, c.get("name"), " (locked)" if c.get("locked") is True else "", raw, want)
+    return {"from": raw, "to": want}, raw, None
+
+
 def _alias_count_only(die_doc: dict, c: dict, old_count) -> None:
     """After a save healed ``c['winding']['n_coils_per_phase']`` (stale ``old_count`` -> derived): record in
     ``c['build_sig_count_aliases']`` (keyed by the current signature) the build signatures the configuration had with the OLD count and everything else as
@@ -3712,6 +3754,7 @@ def _upsert_duty(req: DutyCreate, _w: dict, *, may_move: bool = True) -> dict:
     p = _cfg_file(die, cfg)
     _cc_fix = None          # set when this save writes a healed n_coils_per_phase into the configuration
     _cc_old = None          # the count the configuration held before (its stamps were made with it)
+    _cc_stale = None        # {"stored", "derived"} when a LOCKED configuration holds a stale count (reported, not written)
     c = _load_yaml(p, "configuration")
     d = req.duty
     if d.mode not in ("motor", "generator"):
@@ -4061,6 +4104,12 @@ def _upsert_duty(req: DutyCreate, _w: dict, *, may_move: bool = True) -> dict:
     _prev_runs = dict((prev or {}).get("runs") or {})
     if _prev_runs:
         entry["runs"] = _prev_runs
+    if not _cc_fix:
+        # A configuration whose ONLY deviation is a stale stored n_coils_per_phase never reaches the heals above (they fire for a fresh
+        # configuration or one that adopts the live winding).  Correct that ONE key here, BEFORE the run is stamped (the new run is then
+        # stamped with the healed build; older stamps stay current through the alias below).  The count reaches no solved number (the
+        # FEM reads n_parallel / n_series), also in a locked configuration (owner 2026-11-24): this one key only.
+        _cc_fix, _cc_old, _cc_stale = _heal_stored_coil_count(die, c)
     if d.mesh is not None or d.summary is not None:
         _store_run(die, cfg, c, entry, _drive,
                    settings=d.mesh, summary=d.summary,
@@ -4110,7 +4159,8 @@ def _upsert_duty(req: DutyCreate, _w: dict, *, may_move: bool = True) -> dict:
                      die, cfg, dname, d.mode, d.current_arms, d.rpm, d.gamma_deg)
             return _with_slot_warning({"ok": True, "die": die, "config": cfg, "renamed_to": cfg,
                                        "drive": _drive, "primary": _is_primary,
-                                       **({"coil_count_corrected": _cc_fix} if _cc_fix else {})}, c)
+                                       **({"coil_count_corrected": _cc_fix} if _cc_fix else {}),
+                                       **({"coil_count_stale": _cc_stale} if _cc_stale else {})}, c)
     if _cc_fix:
         _alias_count_only(_die_doc_for_sig(die), c, _cc_old)
     _save_yaml(p, c, history_note=_coil_note(_cc_fix))
@@ -4123,7 +4173,8 @@ def _upsert_duty(req: DutyCreate, _w: dict, *, may_move: bool = True) -> dict:
     # correct but indistinguishable from one that did nothing.
     return _with_slot_warning({"ok": True, "die": die, "config": cfg, "drive": _drive,
                                "primary": _is_primary,
-                               **({"coil_count_corrected": _cc_fix} if _cc_fix else {})}, c)
+                               **({"coil_count_corrected": _cc_fix} if _cc_fix else {}),
+                                       **({"coil_count_stale": _cc_stale} if _cc_stale else {})}, c)
 
 
 @router.post("/duty_result")

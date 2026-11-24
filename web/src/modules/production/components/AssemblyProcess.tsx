@@ -17,7 +17,8 @@ import dagre from '@dagrejs/dagre';
 import { useTranslation } from 'react-i18next';
 import { useContentLang } from './BilingualText';
 import { displayText, extOf, IMAGE_EXT, stepModelFamilies } from '../helpers';
-import { fileObjectUrl, openFileInNewWindow, productionApi } from '../api';
+import { downloadFile, fileObjectUrl, openFileInNewWindow, productionApi } from '../api';
+import { isSupersededDoc, stepDocsOf } from '../documentTopics';
 import type { AssemblyStep, Bilingual, DocumentRec, Part, ProcessSection, ProdCtx } from '../types';
 import { UnifiedViewer, type PartGroup } from '../../viewer3d';
 
@@ -74,13 +75,16 @@ function layout(steps: AssemblyStep[], titleOf: (s: AssemblyStep) => string, sel
 const emptyBi: Bilingual = { en: '', zh: '', src_lang: 'en', status: { en: 'confirmed', zh: 'confirmed' } } as Bilingual;
 
 const StepDialog: React.FC<{ open: boolean; step: AssemblyStep | null; steps: AssemblyStep[]; parts: Part[]; sections: ProcessSection[];
-  onClose: () => void; onSave: (s: AssemblyStep) => void }> = ({ open, step, steps, parts, sections, onClose, onSave }) => {
+  documents?: DocumentRec[]; onClose: () => void; onSave: (s: AssemblyStep) => void }> = ({ open, step, steps, parts, sections, documents = [], onClose, onSave }) => {
   const { t } = useTranslation('production');
   const [d, setD] = useState<AssemblyStep | null>(step);
   useEffect(() => setD(step), [step]);
   if (!d) return null;
   const set = (patch: Partial<AssemblyStep>) => setD({ ...d, ...patch });
   const leaf = parts.filter((p) => p.kind !== 'assembly');
+  // the documents this step may name: current files of the Documents tab (no step picture, no certification file, nothing superseded)
+  const pickable = documents.filter((x) => !x.step_id && x.section !== 'certification' && !isSupersededDoc(x));
+  const pickedDocs = (d.documents ?? []).filter((x) => pickable.some((p) => p.id === x));
   return (
     <Dialog open={open} onClose={onClose} maxWidth="sm" fullWidth>
       <DialogTitle sx={{ fontSize: 15 }}>{t('process.editStep', 'Step')} {d.n}</DialogTitle>
@@ -98,6 +102,16 @@ const StepDialog: React.FC<{ open: boolean; step: AssemblyStep | null; steps: As
         <TextField select size="small" label={t('process.parts', 'Parts')} SelectProps={{ multiple: true }} value={d.parts.filter((x) => leaf.some((p) => p.id === x))}
           onChange={(e) => set({ parts: (typeof e.target.value === 'string' ? e.target.value.split(',') : e.target.value) as string[] })}>
           {leaf.map((p) => <MenuItem key={p.id} value={p.id}>{p.name.en || p.name.zh}</MenuItem>)}
+        </TextField>
+        {/* the step's own documents (a test sheet for a check step, a label drawing): shown in the step with its parts' drawings */}
+        <TextField select size="small" label={t('process.stepDocsPick', 'Documents')} SelectProps={{ multiple: true }} value={pickedDocs}
+          title={t('process.stepDocsPickTip', 'Files shown in this step besides the drawings of its parts.')}
+          onChange={(e) => {
+            const chosen = (typeof e.target.value === 'string' ? e.target.value.split(',') : e.target.value) as string[];
+            // a link to a file that is not offered here (superseded, removed) is kept as it is
+            set({ documents: [...(d.documents ?? []).filter((x) => !pickable.some((p) => p.id === x)), ...chosen] });
+          }}>
+          {pickable.map((x) => <MenuItem key={x.id} value={x.id}>{x.name}</MenuItem>)}
         </TextField>
         {/* the process sections this step shows and the process document prints under it (empty = by title keywords) */}
         <TextField select size="small" label={t('process.stepSectionsPick', 'Process sections')} SelectProps={{ multiple: true }}
@@ -172,6 +186,34 @@ const StepThumb: React.FC<{ ctx: ProdCtx; doc: DocumentRec; onError: (e: string)
   );
 };
 
+/** The documents of a step as a compact list of links: the name opens pdf / pictures in a new window and downloads every other type
+ *  (xlsx, dxf, svg, step ...), the button always downloads. */
+const StepDocLinks: React.FC<{ ctx: ProdCtx; docs: DocumentRec[]; onError: (e: string) => void }> = ({ ctx, docs, onError }) => {
+  const { t } = useTranslation('production');
+  if (docs.length === 0) return null;
+  const open = (d: DocumentRec) => {
+    const ext = extOf(d.name);
+    const run = ['pdf', 'png', 'jpg', 'jpeg'].includes(ext) ? openFileInNewWindow(ctx.die, ctx.config, d.file_id, ext === 'jpeg' ? 'jpg' : ext)
+      : downloadFile(ctx.die, ctx.config, d.file_id, d.name);
+    void run.catch((e) => onError(String(e)));
+  };
+  return (
+    <Box sx={{ mt: 1.25 }} data-testid="step-doc-links">
+      <Typography sx={{ fontSize: 12, color: 'var(--text-3)', mb: 0.5 }}>{t('process.stepDocs', 'Documents')} ({docs.length})</Typography>
+      <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.25 }}>
+        {docs.map((d) => (
+          <Box key={d.id} sx={{ display: 'flex', alignItems: 'center', gap: 1, minWidth: 0 }}>
+            <Box component="span" role="link" tabIndex={0} onClick={() => open(d)} onKeyDown={(e: React.KeyboardEvent) => { if (e.key === 'Enter') open(d); }}
+              sx={{ fontSize: 12.5, color: '#2563eb', cursor: 'pointer', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', '&:hover': { textDecoration: 'underline' } }}>{d.name}</Box>
+            <Button size="small" sx={{ textTransform: 'none', fontSize: 11, py: 0, minHeight: 0, flexShrink: 0 }}
+              onClick={() => void downloadFile(ctx.die, ctx.config, d.file_id, d.name).catch((e) => onError(String(e)))}>{t('docs.download')}</Button>
+          </Box>
+        ))}
+      </Box>
+    </Box>
+  );
+};
+
 /** Pictures of one step (owner 2026-10-18: "post pictures to every production step"): every member - the factory too -
  *  adds photos (button or Ctrl+V); they are production documents tagged with the step. */
 const StepPhotos: React.FC<{ ctx: ProdCtx; step: AssemblyStep; documents: DocumentRec[] }> = ({ ctx, step, documents }) => {
@@ -211,11 +253,15 @@ const StepPhotos: React.FC<{ ctx: ProdCtx; step: AssemblyStep; documents: Docume
   );
 };
 
-export const AssemblyProcess: React.FC<{ ctx: ProdCtx; parts: Part[]; sections?: ProcessSection[]; documents?: DocumentRec[] }> = ({ ctx, parts, sections = [], documents = [] }) => {
+export const AssemblyProcess: React.FC<{ ctx: ProdCtx; parts: Part[]; sections?: ProcessSection[]; documents?: DocumentRec[];
+  /** the selected step, owned by the page so that a link (/assembly?item=<step id>) and a click in Documents can select one */
+  stepId?: string | null; onStepChange?: (id: string | null) => void }> = ({ ctx, parts, sections = [], documents = [], stepId, onStepChange }) => {
   const { t } = useTranslation('production');
   const ui = useContentLang();
   const [steps, setSteps] = useState<AssemblyStep[]>([]);
-  const [sel, setSel] = useState<string | null>(null);
+  const [localSel, setLocalSel] = useState<string | null>(null);
+  const sel = onStepChange ? (stepId ?? null) : localSel;
+  const setSel = (id: string | null) => { if (onStepChange) onStepChange(id); else setLocalSel(id); };
   const [edit, setEdit] = useState<AssemblyStep | null>(null);
   const [err, setErr] = useState<string | null>(null);
 
@@ -227,6 +273,12 @@ export const AssemblyProcess: React.FC<{ ctx: ProdCtx; parts: Part[]; sections?:
   const titleOf = useCallback((s: AssemblyStep) => displayText(s.title, ui).text, [ui]);
   const { nodes, edges } = useMemo(() => layout(steps, titleOf, sel), [steps, titleOf, sel]);
   const cur = steps.find((s) => s.id === sel) ?? null;
+  // a step selected from outside (a link, a chip in Documents) is brought into view once, when the page draws it
+  const panelRef = React.useRef<HTMLDivElement | null>(null);
+  const preselected = React.useRef(!!stepId);
+  useEffect(() => {
+    if (preselected.current && cur && panelRef.current) { preselected.current = false; panelRef.current.scrollIntoView({ block: 'start' }); }
+  }, [cur]);
   const explicitSections = steps.some((s) => (s.sections ?? []).length > 0);
 
   const save = async (next: AssemblyStep[]) => {
@@ -261,7 +313,7 @@ export const AssemblyProcess: React.FC<{ ctx: ProdCtx; parts: Part[]; sections?:
         </ReactFlowProvider>
       </Paper>
       {cur && (
-        <Paper sx={{ p: 2, bgcolor: 'var(--panel)', border: `1px solid ${COLORS[cur.kind].border}`, borderRadius: 1.5 }}>
+        <Paper ref={panelRef} data-testid="step-panel" data-step-id={cur.id} sx={{ p: 2, bgcolor: 'var(--panel)', border: `1px solid ${COLORS[cur.kind].border}`, borderRadius: 1.5 }}>
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
             <Typography sx={{ fontSize: 15, fontWeight: 800 }}>{cur.n}. {titleOf(cur)}</Typography>
             <Chip size="small" label={t(`process.${cur.kind}`, cur.kind)} sx={{ bgcolor: COLORS[cur.kind].bg }} />
@@ -286,7 +338,9 @@ export const AssemblyProcess: React.FC<{ ctx: ProdCtx; parts: Part[]; sections?:
               ? <Typography sx={{ fontSize: 12.5, color: 'var(--text-4)' }}>—</Typography>
               : (cur.parts_resolved ?? []).map((p) => <Chip key={p.id} size="small" label={p.name.en || p.name.zh} />)}
           </Box>
-          {/* the step's drawings are shown open below (DocPreview); no file-name list here (owner 2026-10-18) */}
+          {/* the step's documents as links (name + download), whatever the file type: the previews below open only pdf and pictures
+              (owner 2026-11-24) */}
+          <StepDocLinks ctx={ctx} docs={stepDocsOf(cur, documents)} onError={setErr} />
           <StepPhotos ctx={ctx} step={cur} documents={documents} />
           </Box>
           <StepModel3D ctx={ctx} steps={steps} step={cur} />
@@ -306,7 +360,7 @@ export const AssemblyProcess: React.FC<{ ctx: ProdCtx; parts: Part[]; sections?:
         </Paper>
       )}
       {/* the whole process document is generated from these steps and lives in Documents (owner 2026-10-18) */}
-      <StepDialog open={!!edit} step={edit} steps={steps} parts={parts} sections={sections} onClose={() => setEdit(null)}
+      <StepDialog open={!!edit} step={edit} steps={steps} parts={parts} sections={sections} documents={documents} onClose={() => setEdit(null)}
         onSave={(s) => {
           const exists = steps.some((x) => x.id === s.id);
           const next = exists ? steps.map((x) => (x.id === s.id ? s : x)) : [...steps, s];
@@ -345,15 +399,6 @@ const FitToScreen: React.FC<{ nodeCount: number; label: string }> = ({ nodeCount
     </Panel>
   );
 };
-
-/** The drawings / documents of a step: its own documents and those of its parts (not step photos, not superseded files). */
-function stepDocsOf(step: AssemblyStep, documents: DocumentRec[]): DocumentRec[] {
-  const ids = new Set((step.parts_resolved ?? []).map((p) => p.id));
-  const own = new Set(step.documents ?? []);
-  const seen = new Set<string>();      // one drawing linked to two parts of the step is shown once (owner 2026-10-18)
-  return documents.filter((d) => !d.step_id && (own.has(d.id) || (!!d.part_id && ids.has(d.part_id))) && !d.name.startsWith('[superseded'))
-    .filter((d) => (seen.has(d.name) ? false : (seen.add(d.name), true)));
-}
 
 export function relatedSections(step: AssemblyStep, sections: ProcessSection[], explicit = false): ProcessSection[] {
   const own = step.sections ?? [];

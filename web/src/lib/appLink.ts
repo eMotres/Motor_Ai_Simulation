@@ -13,7 +13,7 @@
  *
  *  ONLY same-origin relative paths of these shapes are ever accepted or produced - never a URL, never `//host` (no open redirect).
  *  A link GRANTS NOTHING: the app asks the server who the caller is after sign-in. */
-import { parseProductionLink, validDay, MAX_LINK_IDS } from './productionLink.ts';
+import { parseProductionLink, validDay, knownQueryLength, MAX_LINK_IDS } from './productionLink.ts';
 
 export const PRODUCTION_TABS = ['bom', 'tooling', 'assembly', 'timeline', 'documents', 'discussion', 'proposals', 'changes', 'tests'] as const;
 export type ProductionTabId = (typeof PRODUCTION_TABS)[number];
@@ -35,7 +35,7 @@ const goodName = (s: string) => SEG.test(s) && !s.includes('..');
 
 /** Parse the address bar (`pathname` + `search`); null when it is not an app link.  Unknown query keys (`signin`, `verify`, ...) are ignored. */
 export function parseAppLink(pathname: string, search = ''): AppLink | null {
-  if (typeof pathname !== 'string' || typeof search !== 'string' || pathname.length + search.length > MAX_LEN) return null;
+  if (typeof pathname !== 'string' || typeof search !== 'string' || pathname.length + knownQueryLength(search, ['item', 'since', 'ids', 'die', 'config', 'new', 'handoff']) > MAX_LEN) return null;
   if (/[\u0000-\u001f\u007f\\]/.test(pathname + search) || pathname.startsWith('//')) return null;
   const q = new URLSearchParams(search);
   const item = q.get('item');

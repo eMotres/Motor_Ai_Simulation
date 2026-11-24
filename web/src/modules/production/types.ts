@@ -345,6 +345,8 @@ export interface DocumentRec {
   status?: 'superseded';
   superseded_by?: { doc_id: string; name: string; version: string | null; revision: string };
   archived_at?: string;
+  /** the topic an editor filed the document under (Documents tab); missing = derived (documentTopics.topicOf) */
+  topic?: 'process' | 'drawings' | 'tooling' | 'tests' | 'packaging' | 'photos' | 'general';
 }
 
 export interface Attachment { file_id: string; name: string }

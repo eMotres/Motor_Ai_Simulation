@@ -703,6 +703,9 @@ def normalize_process_section(raw: dict, section_id: Optional[str] = None) -> di
 
 #: The document sections besides the normal Documents list; a missing ``section`` means the Documents tab.
 DOCUMENT_SECTIONS = ("certification",)
+#: The topics of the Documents tab (owner 2026-11-24).  A document MAY store one (``topic``); without it the web derives it.
+#: Order = the order of the groups on screen (the web mirror is modules/production/documentTopics.ts); ``superseded`` is never stored.
+DOCUMENT_TOPICS = ("process", "drawings", "tooling", "tests", "packaging", "photos", "general")
 #: Status of a certification document (its own field: ``status`` stays reserved for ``superseded``).
 CERT_STATUSES = ("draft", "signed", "evidence_received")
 

@@ -1,6 +1,8 @@
 /** Documents: upload (owner/engineer/admin) and traced download (every member). */
-import React, { useRef, useState } from 'react';
-import { Box, Button, Chip, CircularProgress, MenuItem, Paper, Table, TableBody, TableCell, TableHead, TableRow, TextField, Typography } from '@mui/material';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { Box, Button, Chip, CircularProgress, InputAdornment, MenuItem, Paper, Table, TableBody, TableCell, TableHead, TableRow, TextField, Typography } from '@mui/material';
+import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
+import ChevronRightIcon from '@mui/icons-material/ChevronRight';
 import { useTranslation } from 'react-i18next';
 import { PartName } from './PartName';
 import HelpTip from '../../../components/common/HelpTip';
@@ -11,7 +13,9 @@ import { canDownloadProductionDocuments, processDocumentErrorKey, productionZipE
 import {
   canShareLink, documentsForLink, latestUploadDay, productionLinkUrl, validDay, type ProductionLink,
 } from '../../../lib/productionLink';
-import type { DocumentRec, Part, ProcessSection, ProdCtx } from '../types';
+import { DEFAULT_CLOSED, DOCUMENT_TOPICS, groupDocuments, isDocumentTopic, stepChipLabel, stepsOfDocuments, topicContext, topicOf, validClosedGroups, type TopicGroup } from '../documentTopics';
+import { useRememberedView } from '../../../lib/useRememberedView';
+import type { AssemblyStep, DocumentRec, Part, ProcessSection, ProdCtx } from '../types';
 import { NARROW } from '../../../lib/narrowLayout';
 
 const NEW_BG = 'rgba(37, 99, 235, 0.10)';
@@ -28,7 +32,11 @@ const DocumentsPanel: React.FC<{
   onLinkChange?: (l: ProductionLink | null) => void;
   /** file id -> number of the revision that brings or retires it and that this person has not acknowledged */
   unackedFiles?: Record<string, string>;
-}> = ({ documents, parts, ctx, sections = [], link = null, onLinkChange, unackedFiles = {} }) => {
+  /** part ids of the tooling order list (their documents are filed under Tooling) */
+  toolingPartIds?: readonly string[];
+  /** a click on a step chip: the page opens the Assembly tab with that step selected */
+  onOpenStep?: (stepId: string) => void;
+}> = ({ documents, parts, ctx, sections = [], link = null, onLinkChange, unackedFiles = {}, toolingPartIds = [], onOpenStep }) => {
   const { t } = useTranslation('production');
   const { isAdmin } = useAuth();
   const canShare = canShareLink(ctx.role, isAdmin);
@@ -48,6 +56,23 @@ const DocumentsPanel: React.FC<{
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const byId = new Map(parts.map((p) => [p.id, p]));
+  // the assembly steps (not for a project viewer, who has no Assembly tab): the chips of a row and the "named by a step" topic rule
+  const [steps, setSteps] = useState<AssemblyStep[]>([]);
+  useEffect(() => {
+    if (ctx.role === 'viewer') return undefined;
+    let dead = false;
+    productionApi.assemblyProcess(ctx.die, ctx.config).then((v) => { if (!dead) setSteps(v.steps); }).catch(() => undefined);
+    return () => { dead = true; };
+  }, [ctx.die, ctx.config, ctx.role]);
+  const tctx = useMemo(() => topicContext(parts, toolingPartIds, steps), [parts, toolingPartIds, steps]);
+  const stepsOf = useMemo(() => stepsOfDocuments(steps, documents), [steps, documents]);
+  const [query, setQuery] = useState('');
+  // collapsed groups are remembered per production (view memory); the superseded one starts closed
+  const [closed, setClosed] = useRememberedView<TopicGroup[]>(`production.docs.closed.${ctx.die}|${ctx.config}`, [...DEFAULT_CLOSED], validClosedGroups);
+  const groups = useMemo(() => groupDocuments(view.shown, tctx, query), [view.shown, tctx, query]);
+  // a search or a shared selection shows what it found: every group open
+  const forceOpen = view.narrowed || query.trim() !== '';
+  const toggle = (g: TopicGroup) => setClosed(closed.includes(g) ? closed.filter((x) => x !== g) : [...closed, g]);
   const [showSections, setShowSections] = useState(false);
   const procDoc = (lang: 'en' | 'zh', mode: 'view' | 'download') => {
     setProcessError(null);
@@ -138,7 +163,15 @@ const DocumentsPanel: React.FC<{
         </Box>
       )}
       {documents.length === 0 ? <Typography sx={{ fontSize: 13, color: 'var(--text-4)' }}>{t('docs.none')}</Typography> : (
-        <Paper sx={{ bgcolor: 'var(--panel-2)', border: '1px solid var(--line-soft)', borderRadius: 1.5, overflow: 'auto' }}>
+        <>
+          <TextField size="small" value={query} onChange={(e) => setQuery(e.target.value)} placeholder={t('docs.search')}
+            inputProps={{ 'aria-label': t('docs.search'), 'data-testid': 'docs-search' }} sx={{ mb: 1.25, width: { xs: '100%', sm: 320 } }}
+            InputProps={{ endAdornment: query ? (
+              <InputAdornment position="end"><Button size="small" sx={{ textTransform: 'none', minWidth: 0, fontSize: 11 }} onClick={() => setQuery('')}>{t('docs.clear')}</Button></InputAdornment>
+            ) : undefined }} />
+          {groups.length === 0 && <Typography sx={{ fontSize: 13, color: 'var(--text-4)' }}>{t('docs.noMatch')}</Typography>}
+          {groups.length > 0 && (
+          <Paper sx={{ bgcolor: 'var(--panel-2)', border: '1px solid var(--line-soft)', borderRadius: 1.5, overflow: 'auto' }}>
           <Table size="small" sx={{
             [NARROW]: { minWidth: 680 },  // phone: readable columns, the Paper scrolls sideways
             '& td, & th': { borderColor: 'var(--panel)', fontSize: 12.5 },
@@ -151,9 +184,27 @@ const DocumentsPanel: React.FC<{
               </TableRow>
             </TableHead>
             <TableBody>
-              {view.shown.map((d) => {
+              {groups.map((g) => {
+                const open = forceOpen || !closed.includes(g.group);
+                return (
+                  <React.Fragment key={g.group}>
+                    <TableRow data-testid={`docs-group-${g.group}`} hover onClick={() => { if (!forceOpen) toggle(g.group); }}
+                      sx={{ cursor: forceOpen ? 'default' : 'pointer', bgcolor: 'var(--panel)' }}>
+                      <TableCell colSpan={5} sx={{ py: 0.5 }}>
+                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                          {open ? <ExpandMoreIcon sx={{ fontSize: 18 }} /> : <ChevronRightIcon sx={{ fontSize: 18 }} />}
+                          <Typography sx={{ fontSize: 13, fontWeight: 800, color: g.group === 'superseded' ? 'var(--text-3)' : 'var(--text-0)' }}>
+                            {t(`docs.topic.${g.group}`)}
+                          </Typography>
+                          <Chip size="small" label={g.docs.length} sx={{ height: 18, fontSize: 10.5, ml: 0.5 }} />
+                          <HelpTip title={t(`docs.topicTip.${g.group}`)} />
+                        </Box>
+                      </TableCell>
+                    </TableRow>
+                    {open && g.docs.map((d) => {
                 const p = d.part_id ? byId.get(d.part_id) : undefined;
                 const isNew = view.newIds.has(d.id);
+                const docSteps = stepsOf.get(d.id) ?? [];
                 return (
                   <TableRow key={d.id} hover sx={isNew ? { bgcolor: NEW_BG } : undefined} data-new={isNew ? '1' : undefined}>
                     <TableCell>
@@ -179,8 +230,30 @@ const DocumentsPanel: React.FC<{
                           label={d.superseded_by ? t('docs.supersededBy', { name: d.superseded_by.name, rev: d.superseded_by.revision }) : t('docs.superseded')}
                           title={t('docs.supersededTip')} sx={{ ml: 1, height: 18, fontSize: 10 }} />
                       )}
+                      {/* the assembly steps that show this file: a click opens that step */}
+                      {docSteps.length > 0 && (
+                        <Box data-testid="doc-steps" sx={{ display: 'flex', gap: 0.5, flexWrap: 'wrap', mt: 0.5 }}>
+                          {docSteps.map((st) => (
+                            <Chip key={st.id} size="small" variant="outlined" clickable data-testid="doc-step-chip" label={stepChipLabel(st, ctx.uiLang)}
+                              title={t('docs.stepChipTip')} onClick={() => onOpenStep?.(st.id)} sx={{ height: 20, fontSize: 10.5, maxWidth: 260 }} />
+                          ))}
+                        </Box>
+                      )}
                     </TableCell>
-                    <TableCell>{p ? <PartName name={p.name} size={12.5} /> : <span style={{ color: 'var(--text-4)' }}>{t('docs.general')}</span>}</TableCell>
+                    <TableCell>
+                      {p ? <PartName name={p.name} size={12.5} /> : <span style={{ color: 'var(--text-4)' }}>{t('docs.general')}</span>}
+                      {/* editors file a document under a topic; "auto" = derived from what is known (documentTopics.topicOf) */}
+                      {ctx.canEdit && (
+                        <TextField select size="small" variant="standard" value={isDocumentTopic(d.topic) ? d.topic : ''} data-testid="doc-topic"
+                          title={t('docs.topicTip.select')} SelectProps={{ displayEmpty: true }} sx={{ display: 'block', mt: 0.25, '& .MuiSelect-select': { fontSize: 11.5, py: 0 } }}
+                          inputProps={{ 'aria-label': t('docs.topicLabel') }}
+                          onChange={(e) => void productionApi.updateDocument(ctx.die, ctx.config, d.id, { topic: (e.target.value || null) as DocumentRec['topic'] | null })
+                            .then(() => ctx.reload()).catch((err) => setErr(t('failed', { reason: String(err) })))}>
+                          <MenuItem value="">{t('docs.topicAuto', { topic: t(`docs.topic.${topicOf({ ...d, topic: undefined }, tctx)}`) })}</MenuItem>
+                          {DOCUMENT_TOPICS.map((k) => <MenuItem key={k} value={k}>{t(`docs.topic.${k}`)}</MenuItem>)}
+                        </TextField>
+                      )}
+                    </TableCell>
                     <TableCell sx={{ color: 'var(--text-2)' }}>
                       {d.uploader_email}
                       {/* internal = hidden from the factory; editors switch it (owner 2026-10-18) */}
@@ -203,10 +276,15 @@ const DocumentsPanel: React.FC<{
                     </TableCell>
                   </TableRow>
                 );
+                    })}
+                  </React.Fragment>
+                );
               })}
             </TableBody>
           </Table>
-        </Paper>
+          </Paper>
+          )}
+        </>
       )}
     </Box>
   );

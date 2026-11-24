@@ -1194,11 +1194,14 @@ def list_documents(request: Request, die: str, config: str):
 @router.patch("/{die}/{config}/documents/{doc_id}")
 async def patch_document(request: Request, die: str, config: str, doc_id: str):
     """Editors mark a document internal (hidden from the factory) or not, move it between Documents and Certification
-    (``section``: ``"certification"`` | ``null``) and set its certification ``group`` label and ``cert_status``."""
+    (``section``: ``"certification"`` | ``null``) and set its certification ``group`` label and ``cert_status``; ``topic`` (one of
+    :data:`models.DOCUMENT_TOPICS`, or ``null`` to go back to the derived topic) files it under a topic of the Documents tab."""
     user, _production = require_editor_with_full_view(request, die, config)
     body = await request.json()
-    if not isinstance(body, dict) or not any(k in body for k in ("internal", "section", "group", "cert_status")):
-        raise HTTPException(status_code=400, detail="internal, section, group or cert_status expected")
+    if not isinstance(body, dict) or not any(k in body for k in ("internal", "section", "group", "cert_status", "topic")):
+        raise HTTPException(status_code=400, detail="internal, section, group, cert_status or topic expected")
+    if body.get("topic") not in (None, "", *models.DOCUMENT_TOPICS):
+        raise HTTPException(status_code=422, detail="topic: %s or null expected" % " | ".join(models.DOCUMENT_TOPICS))
     if "internal" in body and not isinstance(body.get("internal"), bool):
         raise HTTPException(status_code=400, detail="internal: true | false expected")
     if body.get("section") not in (None, "", *models.DOCUMENT_SECTIONS):
@@ -1213,6 +1216,11 @@ async def patch_document(request: Request, die: str, config: str, doc_id: str):
                 continue
             if "internal" in body:
                 doc["internal"] = body["internal"]
+            if "topic" in body:
+                if body.get("topic"):
+                    doc["topic"] = body["topic"]
+                else:
+                    doc.pop("topic", None)
             if "section" in body:
                 if body.get("section"):
                     doc.update(models.normalize_certification_fields({
@@ -1234,7 +1242,7 @@ async def patch_document(request: Request, die: str, config: str, doc_id: str):
     if not found:
         raise HTTPException(status_code=404, detail="Document not found")
     _audit(_email(user), die, config, "update", "document", doc_id,
-           {k: body[k] for k in ("internal", "section", "group", "cert_status") if k in body})
+           {k: body[k] for k in ("internal", "section", "group", "cert_status", "topic") if k in body})
     return found["doc"]
 
 

@@ -12,6 +12,18 @@ const ID = /^[A-Za-z0-9_-]{1,40}$/;
 export const MAX_LINK_IDS = 50;
 const MAX_LEN = 280;
 
+/** Length of the part of a query string that a link parser actually reads (`keys` only).  A mailer or a messenger may append its own
+ *  tracking keys (`utm_source=...`, `fbclid=...`) to a shared link; they are ignored, so they must not count against the cap either -
+ *  an over-long address used to be rejected as a whole and the page then opened on the plain, unnarrowed list. */
+export function knownQueryLength(search: string, keys: readonly string[]): number {
+  try {
+    const q = new URLSearchParams(search);
+    let n = 0;
+    for (const k of keys) { const v = q.get(k); if (v !== null) n += k.length + v.length + 2; }
+    return n;
+  } catch { return search.length; }
+}
+
 export interface ProductionLink {
   die: string;
   config: string;
@@ -48,7 +60,7 @@ export function productionLinkUrl(origin: string, link: ProductionLink): string 
 
 /** Parse the address bar (`pathname` + `search`); null when it is not a valid production documents link. */
 export function parseProductionLink(pathname: string, search = ''): ProductionLink | null {
-  if (typeof pathname !== 'string' || pathname.length + search.length > MAX_LEN) return null;
+  if (typeof pathname !== 'string' || typeof search !== 'string' || pathname.length + knownQueryLength(search, ['since', 'ids']) > MAX_LEN) return null;
   if (/[\u0000-\u001f\u007f\\]/.test(pathname)) return null;
   const m = /^\/production\/([^/]+)\/([^/]+)\/documents\/?$/.exec(pathname);
   if (!m) return null;

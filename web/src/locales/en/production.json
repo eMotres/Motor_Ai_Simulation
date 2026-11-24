@@ -293,7 +293,9 @@
     "pdfUnavailable": "PDF generation is unavailable. Please try again later.",
     "pdfTooLarge": "The document or its images are too large to prepare as a PDF. Download files individually or use View.",
     "editSections": "Edit process sections",
-    "hideSections": "Hide sections"
+    "hideSections": "Hide sections",
+    "stepDocsPick": "Documents",
+    "stepDocsPickTip": "Files shown in this step besides the drawings of its parts."
   },
   "access": {
     "none": "You are not on this production.",
@@ -339,7 +341,33 @@
     "superseded": "Superseded",
     "supersededBy": "Superseded by {name} (revision {rev})",
     "supersededTip": "Replaced in a published revision. Do not make parts to it; the file is kept for reference.",
-    "changedUnacked": "Changed in revision {rev} - not acknowledged"
+    "changedUnacked": "Changed in revision {rev} - not acknowledged",
+    "search": "Search by name or part",
+    "noMatch": "No document matches.",
+    "topicLabel": "Topic",
+    "topicAuto": "Auto: {topic}",
+    "stepChipTip": "Open this assembly step",
+    "topic": {
+      "process": "Process & assembly",
+      "drawings": "Part drawings & 3-D",
+      "tooling": "Tooling",
+      "tests": "Tests & measurements",
+      "packaging": "Packaging & labels",
+      "photos": "Photos",
+      "general": "General",
+      "superseded": "Superseded"
+    },
+    "topicTip": {
+      "process": "Instructions and files named by an assembly step.",
+      "drawings": "Drawings, 3-D and CAD files of the parts.",
+      "tooling": "Files of the parts on the tooling order list.",
+      "tests": "Test sheets, measurements and files named by a check step.",
+      "packaging": "Packaging, labels and stickers.",
+      "photos": "Pictures that belong to no part, and pictures posted to a step.",
+      "general": "Everything else.",
+      "superseded": "Replaced by a newer file. Kept for reference; do not build to them.",
+      "select": "The topic this file is listed under. Auto picks it from the part, the assembly steps and the file type."
+    }
   },
   "unread": {
     "tip": "{count} unread messages",

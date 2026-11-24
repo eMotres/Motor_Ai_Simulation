@@ -44,8 +44,8 @@ def client(tmp_path, monkeypatch):
     monkeypatch.setattr(auth, "resolve_user", resolve)
     gate = {"open": False}
     monkeypatch.setattr(M, "can_download", lambda ident, rec=None: bool(ident.get("is_admin")) or gate["open"])
-    built = []
-    monkeypatch.setattr(step_glb, "glb_for_step", lambda path, file_id, cache_dir, timeout=0: built.append(file_id) or b"glTF-fake")
+    built, names = [], []
+    monkeypatch.setattr(step_glb, "glb_for_step", lambda path, file_id, cache_dir, timeout=0, *, labels=False: (built.append(file_id), names.append(labels)) and b"glTF-fake")
     store.create_project({"id": "proj1", "title": "Project", "customer_org": "Org", "status": "design", "created_at": "t",
                           "updated_at": "t", "owner_engineer": OWNER, "linked_motors": [], "notes": "", "pending_invites": [],
                           "members": [{"email": OWNER, "role": "owner"}, {"email": CUSTOMER, "role": "customer"}]})
@@ -54,6 +54,7 @@ def client(tmp_path, monkeypatch):
     c = TestClient(app)
     c.gate = gate
     c.built = built
+    c.names = names
     return c
 
 
@@ -332,3 +333,32 @@ def test_a_name_with_a_line_separator_is_recognised_once_written(client, tmp_pat
     assert audit_actions(tmp_path).count("model3d.upload") == 1
     doc = json.loads((tmp_path / "projects" / "proj1" / "model3d" / "models.json").read_text())
     assert "pending_audit" not in doc
+
+
+def test_component_names_reach_the_customer_only_where_staff_switched_them_on(client, tmp_path):
+    """Review of #856: part names can hold supplier names and part numbers - opt-in per row, off for every earlier row."""
+    row = upload(client, visible_to_customer="true").json()
+    assert row["show_part_names"] is False
+    glb = "%s/%s/model.glb" % (URL, row["id"])
+
+    def asked(who):
+        client.names.clear()
+        assert client.get(glb, headers=hdr(who)).status_code == 200
+        return client.names[-1]
+
+    assert asked("t-customer") is False and asked("t-owner") is False and asked("t-staff") is True
+    for who in ("t-customer", "t-owner"):
+        assert client.patch("%s/%s" % (URL, row["id"]), headers=hdr(who), json={"show_part_names": True}).status_code == 403
+    assert client.patch("%s/%s" % (URL, row["id"]), headers=hdr("t-staff"), json={"show_part_names": "yes"}).status_code == 422
+    assert asked("t-customer") is False
+    r = client.patch("%s/%s" % (URL, row["id"]), headers=hdr("t-staff"), json={"show_part_names": True})
+    assert r.status_code == 200 and r.json()["show_part_names"] is True and r.json()["visible_to_customer"] is True
+    assert asked("t-customer") is True and "model3d.part_names" in audit_actions(tmp_path)
+    assert client.patch("%s/%s" % (URL, row["id"]), headers=hdr("t-staff"), json={"show_part_names": False}).status_code == 200
+    assert asked("t-customer") is False
+
+
+@pytest.mark.parametrize("stored", [None, "true", 1, 0, {}, []])
+def test_only_an_explicit_true_publishes_names_of_a_stored_row(stored):
+    row = {"id": "x"} if stored is None else {"id": "x", "show_part_names": stored}
+    assert PM._names_shown(row) is False

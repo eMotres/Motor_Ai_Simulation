@@ -308,9 +308,7 @@ def test_a_too_deep_assembly_is_refused(tmp_path, monkeypatch):
     ("StepConversionError(500): trace", 422, "This STEP file could not be turned")])
 def test_a_child_refusal_becomes_a_fixed_status_and_text(tmp_path, monkeypatch, line, status, text):
     class Done:
-        returncode, stdout, stderr = 3, "", "noise
-%s
-" % line
+        returncode, stdout, stderr = 3, "", chr(10).join(("noise", line, ""))
     monkeypatch.setattr(step_glb.subprocess, "run", lambda *a, **k: Done())
     with pytest.raises(step_glb.StepConversionError) as err:
         step_glb._run_child(tmp_path / "a.step", tmp_path / "a.glb", 5)

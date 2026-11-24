@@ -790,6 +790,8 @@ _OPT_JOB = _ctxv_o.ContextVar("optimizer_job_token", default=None)
 #: Set by ``_OptimizerJob``; the pool workers run in a copy of the context, so every eval of the campaign reads it in ``_subprocess_eval``
 #: when its caller passed none.  None changes nothing: the eval is the one it always was.
 _RUN_MAGNET_T = _ctxv_o.ContextVar("optimizer_run_magnet_temp_c", default=None)
+#: the range a magnet temperature may be asked for (the Simulation field's own); NaN / Infinity fail it
+_MAGNET_T_MIN, _MAGNET_T_MAX = -60.0, 350.0
 _opt_jobs_cond = threading.Condition()
 _opt_jobs_inflight: Dict[int, int] = {}          # token -> evals in flight
 _opt_jobs_kind: Dict[int, str] = {}              # token -> "scan" / "descent" / …
@@ -2156,7 +2158,7 @@ class RunSettingsIn(BaseModel):
     overrides: Dict[str, Any] = Field(default_factory=dict)
     expect_sig: Optional[int] = None
     expect_token: Optional[str] = None   # the complete resolution token the panel showed (run_settings.resolution_token)
-    magnet_temp_c: Optional[float] = None   # the Simulation tab's magnet temperature when it holds a number (None = the card as written)
+    magnet_temp_c: Optional[float] = Field(None, ge=-60.0, le=350.0)   # the Simulation tab's magnet temperature when it holds a number (None = the card as written); finite, -60..350 C
 
 
 class ScanRequest(BaseModel):
@@ -2186,7 +2188,7 @@ class ScanRequest(BaseModel):
     # Opt-in magnet temperature of every point (°C).  None = the assigned
     # magnet card's own temperature, exactly as before (a cogging screen at
     # 20 °C on a 120 °C card needs it).
-    magnet_temp_c: Optional[float] = None
+    magnet_temp_c: Optional[float] = Field(None, ge=_MAGNET_T_MIN, le=_MAGNET_T_MAX)
     # Opt-in cogging screen: points at ZERO current are not rejected for an
     # out-of-range ripple PERCENT (undefined at ~0 mean torque); their result
     # is the cogging peak-to-peak in N·m.  Off = the sanity gate as before.
@@ -3461,17 +3463,24 @@ def _optimization_preset_steps(geometry=None) -> int:
         raise HTTPException(status_code=422, detail="the Optimization preset cannot be resolved: %s" % exc)
 
 
-def _resolve_run_settings(rs, mode: str):
+def _resolve_run_settings(rs, mode: str, body_magnet=None):
     """The run settings from the panel's ``{preset, overrides}`` (``run_settings.resolve``), for the loaded machine: steps per
     period and gap rows are what the run uses, the other keys are shown read-only.  A bad record is a 422; a record whose digest differs from the one the panel displayed is a 409."""
     from motor_ai_sim import run_settings as _RS
+    # the magnet temperature: the run settings' own, or the request body's (then the digest, the token and the stamp are resolved WITH it,
+    # so a number typed only in the body is part of the identity like one typed in the panel); two different numbers are refused
+    mt = rs.magnet_temp_c
+    if body_magnet is not None:
+        if mt is not None and abs(float(body_magnet) - float(mt)) > 1e-9:
+            raise HTTPException(status_code=422, detail="magnet_temp_c %g differs from the run settings' %g" % (float(body_magnet), float(mt)))
+        mt = float(body_magnet)
     try:
-        out = _RS.resolve(rs.preset, rs.overrides, get_config(), mode, magnet_temp_c=rs.magnet_temp_c)
+        out = _RS.resolve(rs.preset, rs.overrides, get_config(), mode, magnet_temp_c=mt)
     except _RS.RunSettingsError as exc:
         raise HTTPException(status_code=422, detail=str(exc))
-    if rs.magnet_temp_c is not None:
+    if mt is not None:
         from motor_ai_sim.routes.simulation import typed_magnet_temp_refusal
-        _why = typed_magnet_temp_refusal(rs.magnet_temp_c)      # the same limit the Simulation run refuses
+        _why = typed_magnet_temp_refusal(mt)      # the same limit the Simulation run refuses
         if _why:
             raise HTTPException(status_code=422, detail=_why)
     if rs.expect_token is not None and str(rs.expect_token) != str(out["token"]):
@@ -3506,6 +3515,16 @@ def _run_settings_stamp(rs, resolved):
             "sig": resolved["sig"], "sig_scope": resolved["sig_scope"], "coil_rel": resolved["coil_rel"],
             "coil_rel_stored": resolved["coil_rel_stored"], "coil_rel_override": resolved["coil_rel_override"],
             "magnet": resolved.get("magnet")}
+
+
+def _run_cache_pins(rpm, conn, magnet_temp_c=None) -> Dict[str, Any]:
+    """The eval-cache pins of an Auto (screen) run: speed and connection as always, and the typed magnet temperature ONLY when one was
+    typed (an empty field keeps today's key, so its cached points stay valid; a typed run neither reads nor writes the card-temperature
+    entries)."""
+    pins: Dict[str, Any] = {"rpm": float(rpm) if rpm is not None else None, "connection": str(conn) if conn else None}
+    if magnet_temp_c is not None:
+        pins["magnet_temp_c"] = round(float(magnet_temp_c), 2)
+    return pins
 
 
 def _effective_magnet_temp(body_value, resolved) -> Optional[float]:
@@ -3666,13 +3685,15 @@ def prepare_scan(req: ScanRequest) -> Dict[str, Any]:
     always did, and answers 400 only when none is left; the runner refuses)."""
     _rs_stamp = None
     if req.run_settings is not None:
-        _resolved = _resolve_run_settings(req.run_settings, "sweep")
+        _resolved = _resolve_run_settings(req.run_settings, "sweep", req.magnet_temp_c)
         req = _apply_run_settings(req, _resolved)
         _rs_stamp = _run_settings_stamp(req.run_settings, _resolved)
         req = req.model_copy(update={"magnet_temp_c": _effective_magnet_temp(req.magnet_temp_c, _resolved)})
         _preset_rec = {"name": _resolved.get("record_name", _resolved["preset"]), "label": _resolved["preset_label"], "version": _resolved["version"]}
     else:
         req, _preset_rec = _with_preset(req)
+        if req.magnet_temp_c is not None:
+            req = req.model_copy(update={"magnet_temp_c": _effective_magnet_temp(req.magnet_temp_c, None)})
     wl = get_config().get("sweep_whitelist", None)
     allowed = set(wl or [])
     variables = [{"name": v.name, "min": float(v.min), "max": float(v.max),
@@ -4042,6 +4063,9 @@ def _scan_validation_inputs(result: Dict[str, Any], req: ScanValidateRequest
             "airgap_macro": sp["airgap_macro"], "iron_template": sp["iron_template"],
             "geo_mesh": sp["geo_mesh"], "element_order": sp["element_order"],
             "demag": sp["demag"], "owner": "scan-validation"}
+    _mag_req = (sp.get("magnet") or {}).get("requested") if isinstance(sp.get("magnet"), dict) else None
+    if _mag_req is not None:                  # a typed sweep is validated at its own magnet temperature
+        args["magnet_temp_c"] = float(_mag_req)
     point["_provenance"] = ("pinned" if pinned else "legacy_machine_stamp")
     return point, args
 
@@ -4227,6 +4251,10 @@ def seed_cache(req: SeedCacheRequest):
                          "— its exact solver settings are unknown, so seeding "
                          "it would file the points under the wrong key. Re-run "
                          "the sweep once; new results seed fine."}
+    if isinstance(sp.get("magnet"), dict) and sp["magnet"].get("requested") is not None:
+        return {"seeded": 0, "cache_size": len(_EVAL_CACHE),
+                "error": "the stored sweep was solved at a typed magnet temperature (%g C); its cache keys carry it and are not "
+                         "rebuilt here, so seeding would file the points under the card-temperature key. Re-run the sweep." % float(sp["magnet"]["requested"])}
     coil = float(sp.get("coil_temp_c", _sim_coil_temp_c(req.coil_temp_c)))
     mesh = float(sp.get("mesh_size_mm", req.mesh_size_mm))
     mn = float(sp.get("min_size_mm", req.min_size_mm))
@@ -4755,7 +4783,7 @@ class DescentRequest(BaseModel):
     penalty_lambda: float = 1.0       # ripple-violation penalty
     max_iters: int = 8
     run_settings: Optional[RunSettingsIn] = None   # the panel's resolved run settings: when present they are the ONLY source of steps, gap rows, mesh, sectors, rotor eddy
-    magnet_temp_c: Optional[float] = None          # opt-in: the Simulation tab's typed magnet temperature (None = the card as written)
+    magnet_temp_c: Optional[float] = Field(None, ge=_MAGNET_T_MIN, le=_MAGNET_T_MAX)   # opt-in: the Simulation tab's typed magnet temperature (None = the card as written)
     steps_per_period: int = 24        # FEM frames/period (higher → cleaner ripple gradient)
     preset: Optional[str] = None      # "optimization" | "simulation" (mesh_presets.py): fills the settings the request does not state; opt-in
     coil_temp_c: Optional[float] = None   # None = the Simulation tab's (`_sim_coil_temp_c`)
@@ -4906,7 +4934,7 @@ class BaselineRequest(BaseModel):
     n_sectors: int = -1
     element_order: int = 2         # P2 by default — the baseline line must use the same basis as the descent
     run_settings: Optional[RunSettingsIn] = None   # the Descent panel's resolved run settings: when present the ONLY source of steps, gap rows, mesh sizes, sectors, rotor eddy, element order
-    magnet_temp_c: Optional[float] = None          # opt-in: the Simulation tab's typed magnet temperature (None = the card as written)
+    magnet_temp_c: Optional[float] = Field(None, ge=_MAGNET_T_MIN, le=_MAGNET_T_MAX)   # opt-in: the Simulation tab's typed magnet temperature (None = the card as written)
 
 
 def _msum(m: Dict[str, Any]) -> Dict[str, Any]:
@@ -6514,12 +6542,14 @@ def prepare_descent(req: DescentRequest) -> Dict[str, Any]:
     ``var_specs`` and why (the route ignores it, as it always did; the runner
     refuses).  An empty ``var_specs`` is the caller's to refuse."""
     if req.run_settings is not None:
-        _resolved = _resolve_run_settings(req.run_settings, "descent")
+        _resolved = _resolve_run_settings(req.run_settings, "descent", req.magnet_temp_c)
         req = _apply_run_settings(req, _resolved)
         _preset_rec = _run_settings_stamp(req.run_settings, _resolved)
         req = req.model_copy(update={"magnet_temp_c": _effective_magnet_temp(req.magnet_temp_c, _resolved)})
     else:
         req, _preset_rec = _with_preset(req)
+        if req.magnet_temp_c is not None:
+            req = req.model_copy(update={"magnet_temp_c": _effective_magnet_temp(req.magnet_temp_c, None)})
     cfg = get_config()
     schema = cfg.get("geometry_schema", {})
     wl = cfg.get("sweep_whitelist", None)
@@ -6733,7 +6763,7 @@ def descent_baseline(req: BaselineRequest):
     auto-weights via _make_bline (same as a descent computes internally)."""
     _rs_rec = None
     if req.run_settings is not None:        # the SAME resolve a Descent run does: the baseline is drawn with the run's settings
-        _resolved = _resolve_run_settings(req.run_settings, "descent")
+        _resolved = _resolve_run_settings(req.run_settings, "descent", req.magnet_temp_c)
         req = _apply_run_settings(req, _resolved)
         _rs_rec = _run_settings_stamp(req.run_settings, _resolved)
         req = req.model_copy(update={"magnet_temp_c": _effective_magnet_temp(req.magnet_temp_c, _resolved)})
@@ -6950,6 +6980,9 @@ def _descent_recheck_inputs(st: Dict[str, Any], req: DescentValidateRequest
             "connection": (op.get("connection") or None),
             "demag": (None if ep.get("demag") is None else bool(ep["demag"])),
             "owner": "descent-validation"}
+    _mag_req = (ep.get("magnet") or {}).get("requested") if isinstance(ep.get("magnet"), dict) else None
+    if _mag_req is not None:                  # the run was typed at this magnet temperature: the re-check solves at it too
+        args["magnet_temp_c"] = float(_mag_req)
     return point, args, provenance
 
 
@@ -8033,7 +8066,7 @@ def _auto_assemble(max_ripple_pct: float, budget_evals: int = 0,
     # rows, the mesh sizes, the sectors, rotor eddy and demag - the same resolver the panel's display used.
     _rs_resolved = None
     if run_settings is not None:
-        _rs_resolved = _resolve_run_settings(run_settings, "auto")
+        _rs_resolved = _resolve_run_settings(run_settings, "auto", magnet_temp_c)
         _st = _rs_resolved["settings"]
         ev.update({"steps_per_period": int(_st["steps_per_period"]),
                    "steps_per_period_requested": int(_st["steps_per_period"]),
@@ -8822,8 +8855,7 @@ def _screen_worker(plan: Dict[str, Any], run_id: str, bucket: str,
             # new-config fingerprint (and a later run at the new settings
             # cache-hit old-rpm physics).
             demag=bool(ev.get("demag", False)),
-            pins={"rpm": float(rpm) if rpm is not None else None,
-                  "connection": str(conn) if conn else None},
+            pins=_run_cache_pins(rpm, conn, ev.get("magnet_temp_c")),
             sampling_purpose=purpose)
 
     def _eval_at(d: Dict[str, float], cur: float,
@@ -9451,7 +9483,7 @@ class AutoOptRequest(BaseModel):
     plus WHICH SEARCH runs it, because the two available searches answer
     different questions and only the engineer knows which one is being asked."""
     run_settings: Optional[RunSettingsIn] = None   # the panel's resolved run settings (run_settings.py)
-    magnet_temp_c: Optional[float] = None          # opt-in: the Simulation tab's typed magnet temperature (None = the card as written)
+    magnet_temp_c: Optional[float] = Field(None, ge=_MAGNET_T_MIN, le=_MAGNET_T_MAX)   # opt-in: the Simulation tab's typed magnet temperature (None = the card as written)
     max_ripple_pct: float
     # 'cmaes'  — global population search; explores, can change basin, needs
     #            O(N²) evals before its covariance means anything.

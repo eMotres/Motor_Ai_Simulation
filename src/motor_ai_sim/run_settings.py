@@ -202,13 +202,19 @@ def _match_tab(settings: Mapping[str, Any], geometry: Mapping[str, Any], mode: s
     return None, first[1], first[2]
 
 
+#: the range of a magnet temperature a run may be asked for [C] (the Simulation field's own range, web/src/lib/magnetTemp.ts)
+MAGNET_T_MIN, MAGNET_T_MAX = -60.0, 350.0
+
+
 def magnet_block(requested: Any = None) -> Dict[str, Any]:
     """The magnet temperature a run solves at, as the SERVER resolves it: ``requested`` (the typed number or None), ``used_c``, ``source``
-    ("typed" / "card") and the assigned card with its own temperature.  Blank = the card as the library writes it (``used_c`` is the
-    card's reference temperature); it is never replaced by the coil temperature or anything else.  Read-only."""
+    ("typed" / "card") and the assigned card with its own temperature.  Blank = the card as the library writes it: ``used_c`` is what
+    the solver's own reader (``fem_solver_2d._run_magnet_temp_c``) answers, so it can never disagree with the solve; it is never
+    replaced by the coil temperature or anything else.  A number that is not finite or outside the range is not a request (None).
+    Read-only."""
     try:
         req = None if requested is None or str(requested).strip() == "" else float(requested)
-        if req is not None and not math.isfinite(req):
+        if req is not None and not (math.isfinite(req) and MAGNET_T_MIN <= req <= MAGNET_T_MAX):
             req = None
     except (TypeError, ValueError):
         req = None
@@ -216,11 +222,15 @@ def magnet_block(requested: Any = None) -> Dict[str, Any]:
                            "card": None, "card_c": None}
     try:
         from motor_ai_sim.routes.simulation import _assigned_magnet_card
-        name, card = _assigned_magnet_card()
+        name, _card = _assigned_magnet_card()
         out["card"] = str(name) if name else None
-        t = getattr(card, "temperature_c", None) if card is not None else None
-        out["card_c"] = None if t is None else float(t)
     except Exception:       # noqa: BLE001 - a display block must never break the resolve
+        pass
+    try:
+        from motor_ai_sim.simulation.fem_solver_2d import _run_magnet_temp_c
+        t = _run_magnet_temp_c(None)         # the card's reference temperature as the solver reads it (request materials included)
+        out["card_c"] = None if t is None else float(t)
+    except Exception:       # noqa: BLE001
         pass
     if req is None:
         out["used_c"] = out["card_c"]

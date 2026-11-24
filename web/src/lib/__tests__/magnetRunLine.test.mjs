@@ -49,6 +49,8 @@ const ans = (magnet) => ({ preset: 'optimization', label: 'optimization', custom
 test('the line names the magnet temperature with its source once; an answer without it reads as before', () => {
   assert.match(lineText(ans({ requested: null, used_c: 120, source: 'card', card: 'F52SH_120C', card_c: 120 }), words), /magnets 120 C \(card F52SH_120C\)$/);
   assert.match(lineText(ans({ requested: 60, used_c: 60, source: 'typed', card: 'F52SH_120C', card_c: 120 }), words), /magnets 60 C \(typed\)$/);
+  assert.match(lineText(ans({ requested: 0, used_c: null, source: 'typed', card: 'C', card_c: 120 }), words), /magnets 0 C \(typed\)$/);   // 0 C typed is 0 C
+  assert.doesNotMatch(lineText(ans({ requested: null, used_c: null, source: 'typed', card: 'C', card_c: 120 }), words), /magnets/);   // no number: no "0 C"
   assert.equal(lineText(ans(null), words), 'Optimization v2 · 48 steps (Simulation), 1 gap (Mesh), wire 2h (Mesh)');
   const { magnet, ...w2 } = words;   // a caller without the word is unchanged too
   assert.equal(lineText(ans({ requested: 60, used_c: 60, source: 'typed', card: null, card_c: null }), w2), lineText(ans(null), w2));
@@ -57,7 +59,8 @@ test('the line names the magnet temperature with its source once; an answer with
 test('a stored record without the magnet key is read as the card; a stored one as it states', () => {
   assert.deepEqual(magnetOfRecord({ scan_params: { coil_temp_c: 120 } }), { requested: null, used_c: null, source: 'card', card: null, card_c: null });
   assert.deepEqual(magnetOfRecord(null), { requested: null, used_c: null, source: 'card', card: null, card_c: null });
-  assert.equal(magnetOfRecord({ magnet_temp_used_c: 120 }).used_c, 120);
+  const pointOnly = magnetOfRecord({ magnet_temp_used_c: 60 });   // a point alone cannot say typed or card: never labelled card
+  assert.deepEqual([pointOnly.used_c, pointOnly.source], [60, 'unknown']);
   const typed = magnetOfRecord({ scan_params: { magnet: { requested: 60, used_c: 60, source: 'typed', card: 'C', card_c: 120 } } });
   assert.deepEqual([typed.requested, typed.used_c, typed.source, typed.card], [60, 60, 'typed', 'C']);
   const card = magnetOfRecord({ eval_params: { magnet: { requested: null, used_c: 120, source: 'card', card: 'C', card_c: 120 } } });

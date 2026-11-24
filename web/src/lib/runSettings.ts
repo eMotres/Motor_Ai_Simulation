@@ -19,7 +19,7 @@ export interface RunRequest {
 
 /** The magnet temperature a run solves at, as the server resolves it. */
 export interface MagnetResolved {
-  requested: number | null; used_c: number | null; source: 'typed' | 'card'; card: string | null; card_c: number | null;
+  requested: number | null; used_c: number | null; source: 'typed' | 'card' | 'unknown'; card: string | null; card_c: number | null;
 }
 
 export interface RunResolved {
@@ -127,8 +127,10 @@ export function magnetOfRecord(rec: unknown): MagnetResolved {
     const used = typeof m.used_c === 'number' ? m.used_c : req;
     return { requested: req, used_c: used ?? null, source: req != null ? 'typed' : 'card', card: m.card ?? null, card_c: m.card_c ?? null };
   }
+  // a point carries only the temperature it was solved at: whether that was typed or the card's is unknown without the run's block (a
+  // point of a typed sweep must never read "card"); a record with no magnet information at all is from before the field: the card
   const pt = typeof r.magnet_temp_used_c === 'number' ? r.magnet_temp_used_c : null;
-  return { requested: null, used_c: pt, source: 'card', card: null, card_c: pt };
+  return { requested: null, used_c: pt, source: pt != null ? 'unknown' : 'card', card: null, card_c: null };
 }
 
 /** The one line, from the SERVER answer.  Each value names its own source once; a run that is not the Optimization preset says so
@@ -141,7 +143,11 @@ export function lineText(r: RunResolved, w: LineWords): string {
   const st = r.settings;
   const values = [`${w.steps(Number(st.steps_per_period))} (${w.fromSim})`, `${w.gap(Number(st.gap_layers))} (${w.fromMesh})`,
                   `${w.wire(Number(st.coil_rel ?? 1))} (${w.fromMesh})`].join(', ');
-  const mg = r.magnet && w.magnet ? `, ${w.magnet(r.magnet.used_c, r.magnet.source, r.magnet.card)}` : '';
+  // the number shown is the server's used value (the typed one when it was typed); a typed answer without any number says nothing rather
+  // than a wrong "0 C"
+  const mgT = r.magnet ? (r.magnet.used_c ?? r.magnet.requested) : null;
+  const mg = r.magnet && w.magnet && r.magnet.source !== 'unknown' && !(r.magnet.source === 'typed' && mgT == null)
+    ? `, ${w.magnet(mgT, r.magnet.source, r.magnet.card)}` : '';
   const head = r.custom ? `${values}${mg}` : `${w.preset(r.preset_label, r.version)} \u00b7 ${values}${mg}`;
   if (!notOptimization(r)) return head;
   const names = Object.entries(r.differs).map(([k, d]) => w.diff(k, d.current, d.preset));

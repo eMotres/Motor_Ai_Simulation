@@ -98,5 +98,51 @@ def test_time_budget_stops_the_rebuild(saves, monkeypatch):
     _mk(saves, 5, with_old_sidecar=False)
     monkeypatch.setattr(ss, "REBUILD_SECONDS_PER_LISTING", -1.0)
     rows = ss.list_entries()
-    assert len(rows) == 5 and all(r["settings"]["source"] == "pending_rebuild" for r in rows)
-    assert {r["id"] for r in rows} == {f"s{i:03d}" for i in range(5)}
+    assert len(rows) == 5 and {r["id"] for r in rows} == {f"s{i:03d}" for i in range(5)}
+    # the first stale one is always admitted, the rest wait
+    assert len([r for r in rows if r["settings"]["source"] == "pending_rebuild"]) == 4
+
+
+def test_a_slow_scan_of_current_sidecars_cannot_starve_the_stale_tail(saves, monkeypatch):
+    _mk(saves, 6)
+    for i in range(3):                                   # current prefix: sidecars already in the new format
+        f = saves / f"s{i:03d}.json"
+        ss._write_meta(f, json.loads(f.read_text()))
+    clock = {"t": 0.0}
+    monkeypatch.setattr(ss.time, "monotonic", lambda: clock["t"])
+    monkeypatch.setattr(ss, "REBUILD_SECONDS_PER_LISTING", 2.0)
+    real = ss._read_meta_row
+
+    def slow(f, budget=None):
+        if ss._meta_path(f).exists() and (json.loads(ss._meta_path(f).read_text()).get("settings") or {}).get("v") == ss.SETTINGS_VERSION:
+            clock["t"] += 5.0                            # scanning a current sidecar is slow
+        return real(f, budget)
+
+    monkeypatch.setattr(ss, "_read_meta_row", slow)
+    last = None
+    for _ in range(8):
+        rows = ss.list_entries()
+        n = len([r for r in rows if r["settings"]["source"] == "pending_rebuild"])
+        assert last is None or n < last or n == 0
+        last = n
+        if n == 0:
+            break
+    assert last == 0
+
+
+@pytest.mark.skipif(not hasattr(__import__("os"), "chmod") or __import__("os").name != "posix", reason="POSIX modes")
+def test_atomic_write_keeps_the_target_mode_and_new_files_get_the_plain_write_mode(tmp_path):
+    import os
+    t = tmp_path / "a.json"
+    t.write_text("x")
+    os.chmod(t, 0o644)
+    ss._atomic_write(t, "y")
+    assert t.read_text() == "y" and (t.stat().st_mode & 0o777) == 0o644
+    os.chmod(t, 0o640)
+    ss._atomic_write(t, "z")
+    assert (t.stat().st_mode & 0o777) == 0o640
+    plain = tmp_path / "plain.txt"
+    plain.write_text("p")                                # what the old code produced
+    new = tmp_path / "b.json"
+    ss._atomic_write(new, "n")
+    assert (new.stat().st_mode & 0o777) == (plain.stat().st_mode & 0o777)

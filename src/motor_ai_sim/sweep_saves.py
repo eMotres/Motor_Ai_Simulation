@@ -39,8 +39,8 @@ import logging
 import os
 import re
 import shutil
-import tempfile
 import time
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -258,15 +258,34 @@ def write_entry(entry: Dict[str, Any]) -> Path:
 def _atomic_write(target: Path, text: str) -> None:
     """Write `text` to a UNIQUE temporary file beside `target`, then rename it over
     the target: concurrent writers never share a temporary name, and a reader sees
-    either the old file or the whole new one, never a half-written one."""
-    fd, name = tempfile.mkstemp(prefix=target.stem + ".", suffix=".tmp", dir=str(target.parent))
+    either the old file or the whole new one, never a half-written one.
+
+    The file keeps the metadata it had: an existing target keeps its mode (and its
+    owner / group where this process may set them); a new file gets the mode the plain
+    write gave it (0666 minus the umask), not the private 0600 of ``mkstemp``."""
+    tmp = target.with_name(f"{target.stem}.{uuid.uuid4().hex}.tmp")
+    fd = os.open(str(tmp), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o666)
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as fh:
             fh.write(text)
-        os.replace(name, target)
+        try:
+            st = target.stat()
+        except OSError:
+            st = None
+        if st is not None:
+            try:
+                os.chmod(tmp, st.st_mode & 0o7777)
+            except OSError:
+                pass
+            if hasattr(os, "chown"):
+                try:
+                    os.chown(tmp, st.st_uid, st.st_gid)
+                except (OSError, PermissionError):
+                    pass
+        os.replace(tmp, target)
     except BaseException:
         try:
-            os.unlink(name)
+            os.unlink(tmp)
         except OSError:
             pass
         raise
@@ -406,10 +425,19 @@ class _RebuildBudget:
 
     def __init__(self, max_n: Optional[int] = None, seconds: Optional[float] = None) -> None:
         self.left = REBUILD_MAX_PER_LISTING if max_n is None else max_n
-        self.deadline = time.monotonic() + (REBUILD_SECONDS_PER_LISTING if seconds is None else seconds)
+        self.seconds = REBUILD_SECONDS_PER_LISTING if seconds is None else seconds
+        self.deadline: Optional[float] = None
 
     def take(self) -> bool:
-        if self.left <= 0 or time.monotonic() > self.deadline:
+        """Admit one rebuild.  The clock starts at the FIRST stale sidecar, not at the start of the listing, so a slow scan of
+        current sidecars can never starve the stale ones: every listing admits at least one rebuild.  The time limit is an
+        ADMISSION deadline (no new rebuild after it), not a hard bound: a rebuild admitted just before it runs to its end."""
+        now = time.monotonic()
+        if self.deadline is None:
+            self.deadline = now + self.seconds
+            if self.left <= 0:
+                return False
+        elif self.left <= 0 or now > self.deadline:
             return False
         self.left -= 1
         return True

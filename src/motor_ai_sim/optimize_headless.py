@@ -324,6 +324,9 @@ class EvalMemo:
         fp = self.O._config_fingerprint(tuple(sorted(overrides or {})))
         payload = [fp, sorted((overrides or {}).items()), float(current_a),
                    int(steps), float(coil_temp_c), sorted(kw.items())]
+        cr = self.O._RUN_COIL_REL.get()
+        if cr is not None:          # the run's wire cell is part of the identity; an entry stored without one is never an answer to it
+            payload.append(["coil_rel", round(float(cr), 4)])
         return hashlib.sha256(json.dumps(payload, sort_keys=True, default=str)
                               .encode()).hexdigest()
 
@@ -443,7 +446,7 @@ def run_descent(O, body: Dict[str, Any], *, frozen: List[str] = (),
                       if req.auto_expand else []))
     log("plan: " + json.dumps(plan["response"], default=str))
     O.begin_descent_state(plan)
-    t = threading.Thread(target=O._with_run_coil(plan["worker"], plan["response"].get("mesh_preset")), args=plan["args"],
+    t = threading.Thread(target=plan["worker"], args=plan["args"],
                          kwargs=plan["kwargs"], name="headless-descent")
     t.start()
     last = None
@@ -504,7 +507,7 @@ def run_sweep(O, body: Dict[str, Any], *, frozen: List[str] = (),
     from motor_ai_sim import machine_binding as MB
     kw = {**plan["kwargs"], "binding": MB.MachineBinding(
         lambda keys: O._config_fingerprint(keys), what="FEM scan")}
-    t = threading.Thread(target=O._with_run_coil(O._scan_worker, plan["kwargs"].get("mesh_preset")), args=plan["args"], kwargs=kw,
+    t = threading.Thread(target=O._scan_worker, args=plan["args"], kwargs=kw,
                          name="headless-sweep")
     t.start()
     last = None
@@ -629,7 +632,10 @@ def main(argv: Optional[List[str]] = None) -> int:
         say(f"REFUSED: {e}")
         return 2
     final.pop("cancel", None)
-    final["mesh_preset"] = preset_rec
+    # keep the stamp the RUN wrote (digest, wire cell, what the solve verified); the fill record of this runner goes beside it
+    final["headless_preset_fill"] = preset_rec
+    if not isinstance(final.get("mesh_preset"), dict):
+        final["mesh_preset"] = preset_rec
     (req_p.parent / "result.json").write_text(
         json.dumps(O._json_sane(final), indent=1, default=str), encoding="utf-8")
     try:

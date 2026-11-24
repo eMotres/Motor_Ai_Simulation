@@ -33,7 +33,7 @@ export function sweepSettingsOf(x: any): SweepSettings {
     const mixed = s.mixed === true;
     const custom = s.custom === true || mixed;
     const es = s.effective_source && typeof s.effective_source === 'object' ? s.effective_source : null;
-    const bothSolved = !!es && es.steps_per_period === 'solved' && es.gap_layers === 'solved';
+    const bothSolved = !!es && es.steps_per_period === 'solved' && es.gap_layers === 'solved' && (!('coil_rel' in es) || es.coil_rel === 'solved');
     return { preset: s.source === 'preset' ? (custom ? 'custom' : (typeof s.preset === 'string' ? s.preset : null)) : null,
              steps: numOrNull(s.steps_per_period), gapLayers: numOrNull(s.gap_layers), custom, mixed,
              sig: s.source === 'preset' && !mixed && bothSolved && s.sig_scope === 2 && numOrNull(s.steps_per_period) !== null
@@ -47,12 +47,13 @@ export function sweepSettingsOf(x: any): SweepSettings {
     const srcs = mp.effective_source && typeof mp.effective_source === 'object' ? Object.values(mp.effective_source) : [];
     const mixed = mp.mixed === true || srcs.includes('mixed');
     const custom = mp.custom === true || mixed || mp.solved_differs === true;
-    const verified = mp.effective_source?.steps_per_period === 'solved' && mp.effective_source?.gap_layers === 'solved';
+    const verified = mp.effective_source?.steps_per_period === 'solved' && mp.effective_source?.gap_layers === 'solved'
+      && (!('coil_rel' in (mp.effective_source ?? {})) || mp.effective_source.coil_rel === 'solved');
     const sig = mixed || mp.solved_differs === true || !verified || numOrNull(eff.steps_per_period) === null
       || numOrNull(eff.gap_layers) === null || mp.sig_scope !== 2 ? null : sigOrNull(mp.sig);
     return { preset: custom ? 'custom' : (typeof mp.name === 'string' ? mp.name : null),
              steps: numOrNull(eff.steps_per_period), gapLayers: numOrNull(eff.gap_layers), custom, mixed, sig,
-             presetVersion: numOrNull(mp.version), coilRel: numOrNull(mp.coil_rel), source: 'preset' };
+             presetVersion: numOrNull(mp.version), coilRel: numOrNull(eff.coil_rel ?? mp.coil_rel), source: 'preset' };
   }
   return { preset: null, steps: numOrNull(x?.steps_per_period), gapLayers: numOrNull(x?.scan_params?.gap_layers),
            custom: false, mixed: false, sig: null,

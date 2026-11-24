@@ -592,7 +592,7 @@ _RES_KEYS = ("T_em_Nm", "efficiency", "torque_per_mass_Nm_kg", "T_ripple_pct",
              "cogging_sampling_final_quality_sufficient",
              "cogging_sampling_auto_raised", "cogging_sampling_reason",
              # The candidate's Coulomb gap self-check (never refined; flagged).
-             "torque_method", "gap_layers_per_side", "n_steps_per_period_solved", "steps_snapped",
+             "torque_method", "gap_layers_per_side", "n_steps_per_period_solved", "steps_snapped", "coil_rel_solved",
              "demag_prepass_frames", "ripple_self_check_rel",
              "ripple_mesh_limited", "gap_layers_persist", "gap_layers_note",
              # The end-winding factor the point was billed at and whose it was
@@ -1121,6 +1121,28 @@ def _with_run_coil(fn, rec):
         finally:
             _RUN_COIL_REL.reset(tok)
     return _run
+
+
+def _run_coil_worker(get_rec):
+    """Decorator for a campaign WORKER: the worker itself establishes the run's wire cell from the run's own stored settings record
+    (``get_rec(args, kwargs)``), before any cache access or evaluation, so every entry point (a live run, a resume after a restart,
+    the headless runner) gets it, and nothing else has to wrap the call.  Removed again when the worker returns (a reused
+    worker process starts its next job without it)."""
+    def deco(fn):
+        @functools.wraps(fn)
+        def _w(*a, **k):
+            try:
+                rec = get_rec(a, k)
+            except Exception:                    # noqa: BLE001 - no record, no override
+                rec = None
+            return _with_run_coil(fn, rec)(*a, **k)
+        return _w
+    return deco
+
+
+def _descent_rec(a, k):
+    with _descent_lock:
+        return (_descent_state or {}).get("mesh_preset")
 
 
 def _base_eval_env() -> Dict[str, str]:
@@ -2657,6 +2679,7 @@ def _cogging_limits_ok(pt: Dict[str, Any], cogging_max_nm: float, eff_min_pct: f
 
 
 @_optimizer_job("scan")
+@_run_coil_worker(lambda a, k: k.get("mesh_preset"))
 def _scan_worker(variables, operating_points, steps, coil_temp_c, ripple_max,
                  max_geom, seed, run_id, mesh_size_mm=4.0, min_size_mm=0.3,
                  pole_copy=None, torque_filter=False, n_sectors=1, gap_layers=None,
@@ -3503,6 +3526,10 @@ def _sweep_settings_record(preset_rec, steps, gap_layers, cls=None):
     rec["requested"] = {"steps_per_period": int(steps), "gap_layers": float(gap_layers)}
     rec["effective"] = dict(rec["requested"])
     rec["effective_source"] = {"steps_per_period": "requested", "gap_layers": "requested"}
+    if rec.get("coil_rel") is not None:          # a run-settings stamp also names the wire cell the run asked for
+        rec["requested"]["coil_rel"] = round(float(rec["coil_rel"]), 4)
+        rec["effective"]["coil_rel"] = rec["requested"]["coil_rel"]
+        rec["effective_source"]["coil_rel"] = "requested"
     return rec
 
 
@@ -3520,6 +3547,8 @@ def _stamp_solved(rec, points):
     eff, src = dict(req_eff), {}
     spec = (("steps_per_period", "n_steps_per_period_solved", int), ("gap_layers", "gap_layers_per_side",
                                                                      lambda x: round(float(x), 4)))
+    if "coil_rel" in req_eff:                    # the cell the MESHER used, reported by each point
+        spec = spec + (("coil_rel", "coil_rel_solved", lambda x: round(float(x), 4)),)
     mixed = differs = False
     n_rep = 0
     for field, key, conv in spec:
@@ -3538,7 +3567,7 @@ def _stamp_solved(rec, points):
             eff[field] = None
             mixed = True
     rec["effective"], rec["effective_source"], rec["n_points_reporting"] = eff, src, n_rep
-    if not (src.get("steps_per_period") == "solved" and src.get("gap_layers") == "solved"):
+    if not all(src.get(f) == "solved" for f in ("steps_per_period", "gap_layers") + (("coil_rel",) if "coil_rel" in req_eff else ())):
         rec["sig"] = None           # the identity needs BOTH numbers verified by the solve; one requested value makes it unknown
     if differs:
         rec["solved_differs"] = True
@@ -3753,7 +3782,7 @@ def scan_designs(req: ScanRequest):
     # spawns and the stores it writes are all that caller's.
     _new_scan_thread = threading.Thread(target=_WSP.bind(_JOBS.as_job(
                          "optimizer.scan", priority=_JOBS.Priority.CAMPAIGN,
-                         run_id=req.run_id)(_with_run_coil(_scan_worker, plan["kwargs"].get("mesh_preset")))),
+                         run_id=req.run_id)(_scan_worker)),
                      args=plan["args"],
                      # The machine the sweep is requested ON: the worker may
                      # wait in the job queue and must not adopt whatever is
@@ -4040,7 +4069,8 @@ def scan_validate_point(req: ScanValidateRequest):
         # The purpose is named HERE, not carried inside `args`, so the one
         # place that decides a Sweep point's final quality is readable (and
         # checked by tests/test_sampling_purpose_flow.py).
-        out = _subprocess_eval(sampling_purpose="cogging_quality", **args)
+        # at the wire cell the sweep used (its stored stamp), not the machine's block as it is now
+        out = _with_run_coil(_subprocess_eval, (result or {}).get("mesh_preset"))(sampling_purpose="cogging_quality", **args)
         good, reason = _standard_quality(out)
         if not good:
             raise HTTPException(status_code=422, detail=f"Standard 6× validation failed: {reason}")
@@ -5578,6 +5608,7 @@ def _mtpa_gamma_sweep(geom, ref_I, steps, coil_temp, mesh_size, min_size, n_sect
 
 
 @_optimizer_job("descent")
+@_run_coil_worker(_descent_rec)
 def _descent_worker(var_specs, op, ripple_max, w_eff, w_td, lam,
                     steps, coil_temp, mesh_size, min_size, max_iters, run_id,
                     n_sectors=-1, v_peak_limit=1e9, target_torque=0.0,
@@ -6006,6 +6037,7 @@ def _surrogate_seed_overrides(var_specs, ripple_max, min_n=20):
 
 
 @_optimizer_job("descent")
+@_run_coil_worker(_descent_rec)
 def _cmaes_worker(var_specs, op, ripple_max, w_eff, w_td, lam,
                   steps, coil_temp, mesh_size, min_size, max_iters, run_id,
                   n_sectors=-1, v_peak_limit=1e9, target_torque=0.0,
@@ -6614,7 +6646,7 @@ def descent_start(req: DescentRequest):
     threading.Thread(
         target=_WSP.bind(_JOBS.as_job(           # Stage 3 + Stage 4: workspace + slot
             "optimizer.descent", priority=_JOBS.Priority.CAMPAIGN,
-            run_id=req.run_id)(_with_run_coil(plan["worker"], plan["response"].get("mesh_preset")))),
+            run_id=req.run_id)(plan["worker"])),
         args=plan["args"], kwargs=plan["kwargs"],
         daemon=True).start()
     return plan["response"]
@@ -6856,7 +6888,8 @@ def descent_validate_point(req: DescentValidateRequest):
                                 detail="A point of this run is already being re-checked")
         _descent_recheck_running[ws] = key
     try:
-        out = _subprocess_eval(sampling_purpose="cogging_quality", **args)
+        # the re-check solves at the wire cell the run used (its stored stamp), not at whatever the machine's block says now
+        out = _with_run_coil(_subprocess_eval, st.get("mesh_preset"))(sampling_purpose="cogging_quality", **args)
         good, reason = _standard_quality(out)
         if not good:
             raise HTTPException(status_code=422,
@@ -8139,6 +8172,7 @@ def _auto_assemble(max_ripple_pct: float, budget_evals: int = 0,
 
 
 @_optimizer_job("auto")
+@_run_coil_worker(lambda a, k: (a[0] if a else k.get("plan") or {}).get("run_settings"))
 def _auto_worker(plan: Dict[str, Any], run_id: str, bucket: str,
                  point_name: str) -> None:
     """CMA-ES over the whitelist in PHYSICAL units with a per-variable sigma.
@@ -8608,6 +8642,7 @@ def _auto_worker(plan: Dict[str, Any], run_id: str, bucket: str,
 
 
 @_optimizer_job("auto")
+@_run_coil_worker(lambda a, k: (a[0] if a else k.get("plan") or {}).get("run_settings"))
 def _screen_worker(plan: Dict[str, Any], run_id: str, bucket: str,
                    point_name: str) -> None:
     """Screening descent — the user's method, mechanised.  See the block comment
@@ -9443,7 +9478,7 @@ def auto_start(req: AutoOptRequest, request: Request):
             "run_id": req.run_id, "error": None, "cancel": False})
 
     worker = _screen_worker if plan["mode"] == "screen" else _auto_worker
-    threading.Thread(target=_WSP.bind(_with_run_coil(worker, plan.get("run_settings"))),    # Stage 3: carry the workspace
+    threading.Thread(target=_WSP.bind(worker),    # Stage 3: carry the workspace
                      args=(plan, req.run_id, bucket, name),
                      daemon=True).start()
     return {"started": True, "run_id": req.run_id, "plan": plan, "point_name": name}

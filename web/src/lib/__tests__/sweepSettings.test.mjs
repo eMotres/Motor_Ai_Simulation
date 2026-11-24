@@ -115,3 +115,10 @@ test('a list row without the digest scope has no digest (fail closed in the read
   assert.equal(sweepSettingsOf(row(undefined)).sig, null);
   assert.equal(sweepSettingsOf(row(1)).sig, null);
 });
+
+test('a stamp that names the wire cell has a digest only when the solve verified the cell too', () => {
+  const es = (c) => ({ steps_per_period: 'solved', gap_layers: 'solved', coil_rel: c });
+  assert.equal(sweepSettingsOf(stamp({ effective: { steps_per_period: 48, gap_layers: 1, coil_rel: 2 }, effective_source: es('solved') })).sig, 111);
+  assert.equal(sweepSettingsOf(stamp({ effective: { steps_per_period: 48, gap_layers: 1, coil_rel: 2 }, effective_source: es('requested') })).sig, null);
+  assert.equal(sweepSettingsOf(stamp({ effective: { steps_per_period: 48, gap_layers: 1, coil_rel: 2 }, effective_source: es('solved') })).coilRel, 2);
+});

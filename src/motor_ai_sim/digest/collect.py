@@ -602,3 +602,180 @@ def collect_production(production: dict, start: float, end: float) -> list[Item]
     for (part_id, internal), g in doc_groups.items():
         items.append(_document_item(g, part_id, internal, pnames, link))
     return _merge(items)
+
+
+def owed_map(production: dict) -> dict:
+    """``{revision number: {emails}}`` still owed a digest line (``digest_pending`` of the revision records; an urgent revision owes only where its mail failed)."""
+    from motor_ai_sim.production import store as PR
+    die, config = str(production.get("die") or ""), str(production.get("config") or "")
+    try:
+        revs = (PR.load_file(die, config, "revisions.json") or {}).get("revisions", [])
+    except Exception:                                      # noqa: BLE001
+        return {}
+    out = {}
+    for r in revs:
+        if not isinstance(r, dict):
+            continue
+        who = {str(x).strip().lower() for x in r.get("digest_pending") or [] if x}
+        if who:
+            out[str(r.get("number"))] = who
+    return out
+
+
+def owed_revision_items(production: dict, emails: Iterable[str], before: float, end: float) -> list:
+    """Revision lines OLDER than ``before`` that some of ``emails`` have not been told about yet (``digest_pending`` of the revision).
+
+    The group's activity cursor moves on whether or not every member received a digest (a member who was unverified, without the NDA
+    or out of the text's access when it went out, a send that failed, a revision beyond the line cap): an obligation to tell
+    somebody about a revision must not depend on the cursor (Astra review of #773).  The lines are built from the REVISION RECORDS;
+    the audit only supplies the richer text of the publication when it exists (a failure between the two writes of a publication,
+    or an audit that was trimmed, loses no line).  The line says it is a repeat."""
+    from motor_ai_sim.production import store as PR
+    die, config = str(production.get("die") or ""), str(production.get("config") or "")
+    want = {str(e).strip().lower() for e in emails}
+    try:
+        revs = [r for r in (PR.load_file(die, config, "revisions.json") or {}).get("revisions", []) if isinstance(r, dict)]
+    except Exception:                                      # noqa: BLE001
+        return []
+    mine = {str(r.get("number")): r for r in revs
+            if want & {str(x).strip().lower() for x in r.get("digest_pending") or []}}
+    if not mine:
+        return []
+    audited = {it.key[4:]: it for it in collect_production(production, 0.0, end) if it.kind == "revision" and it.key.startswith("rev:")}
+    out = []
+    for number, r in sorted(mine.items()):
+        link = RP.production_path(die, config, "changes", item=number) or RP.production_path(die, config)
+        it = audited.get(number)
+        if it is None:                                     # no publication line in the audit: from the record itself
+            alert = r.get("alert") if isinstance(r.get("alert"), dict) else {}
+            ts = DS.parse_ts(r.get("date")) or DS.parse_ts(alert.get("sent_at")) or 0.0
+            s_en, s_zh = bilingual(r.get("summary"))
+            n = len([c for c in r.get("changes") or [] if c])
+            tail_en, tail_zh = (f" ({n} changes)", f"（{n} 项变更）") if n else ("", "")
+            it = Item("revision", ts, f"Revision {number} published: {s_en}{tail_en}", f"版本 {number} 已发布：{s_zh}{tail_zh}",
+                      link, frozenset(), key=f"rev:{number}", link_policy="none")
+        if it.ts < before:
+            en = it.en.replace(" - already e-mailed when it was published", "")      # an urgent mail that failed was NOT delivered
+            zh = it.zh.replace("（发布时已邮件通知）", "")
+            out.append(Item(it.kind, it.ts, en + " (repeated: not yet delivered to everyone)",
+                            zh + "（重复：尚未送达所有人）", it.link, it.requires, it.key, it.motor, it.group, it.link_policy))
+    return out
+
+
+def _sent_by_log(scope: str) -> dict:
+    """``{revision number: {email: sent_at}}`` from the DURABLE send logs of every draft of ``scope`` (and its owed-revisions drafts)
+    that carried the revision line: what the mail module recorded as ``sent``, whatever happened to the stamp afterwards."""
+    from motor_ai_sim import mailing
+    out: dict = {}
+    base = DS.base_scope(scope)
+    for d in DS.list_drafts():
+        if DS.base_scope(d.get("scope")) != base:
+            continue
+        nums = set()
+        for i in d.get("items") or []:
+            if i.get("kind") != "revision":
+                continue
+            key = str(i.get("key") or "")
+            if key.startswith("rev:"):
+                nums.add(key[4:])
+            else:                                          # a draft from before the key was stored: "Revision 1.2 published: ..."
+                en = str(i.get("en") or "")
+                if en.startswith("Revision ") and " published" in en:
+                    nums.add(en[9:].split(" published", 1)[0])
+        if not nums:
+            continue
+        try:
+            state = mailing.log_state(mailing.read_log(DS.sendlog_file(d["id"])), d["id"])
+        except Exception:                                  # noqa: BLE001
+            continue
+        at = (d.get("sent") or d.get("partial") or {}).get("at") or d.get("updated_at") or DS.iso()
+        for n in nums:
+            for em, st in state.items():
+                if st == "sent":
+                    prev = out.setdefault(n, {}).get(str(em).lower())
+                    if prev is None or (DS.parse_ts(at) or 0) < (DS.parse_ts(prev) or 0):
+                        out[n][str(em).lower()] = at   # the FIRST delivery is the reminder clock
+    return out
+
+
+def reconcile_ledger(production: dict, now: Optional[float] = None, *, write: bool = True) -> list:
+    """Bring the revision delivery ledger in line with what is durably known; every change is audited.  Returns the changes.
+
+    1. A member the send log shows as ``sent`` a draft carrying the revision, but whose ``digest_pending`` entry is still there (the stamp
+       write failed after the mail went out), is moved to ``digest_sent`` with the time of that send: the next digest does not repeat it.
+    2. A revision from before the ledger existed (no ``digest_pending`` / ``digest_sent`` at all, published with an alert that waited for
+       the digest) is checked against the send logs: members it demonstrably reached get ``digest_sent``, the others who have not
+       acknowledged become ``digest_pending`` (owed).  What cannot be proved delivered is treated as owed, never as delivered.
+    3. A member who joined AFTER the newest non-urgent revision was published owes that ONE revision (the older ones are superseded
+       by it); older revisions are not replayed to new members.
+    Urgent revisions were mailed at once and are left alone (a failed urgent mail is put in ``digest_pending`` at publication)."""
+    from motor_ai_sim.production import store as PR, models, revision_alert
+    die, config = str(production.get("die") or ""), str(production.get("config") or "")
+    try:
+        revs = [r for r in (PR.load_file(die, config, "revisions.json") or {}).get("revisions", []) if isinstance(r, dict)]
+    except Exception:                                      # noqa: BLE001
+        return []
+    if not revs:
+        return []
+    logs = _sent_by_log(DS.production_scope(die, config))
+    members = {r["email"] for r in revision_alert.recipients(production)}
+    newest = next((str(r.get("number")) for r in reversed(revs)
+                   if not (isinstance(r.get("alert"), dict) and r["alert"].get("mode") == "urgent")), None)
+    changes: list = []
+
+    def plan(r: dict) -> Optional[dict]:
+        n = str(r.get("number"))
+        alert = r.get("alert") if isinstance(r.get("alert"), dict) else None
+        pend = [str(x).lower() for x in r.get("digest_pending") or []]
+        if alert is not None and alert.get("mode") == "urgent":      # only an urgent mail that failed is owed; a lost stamp is repaired
+            lost = {em: logged_at for em in pend for logged_at in [logs.get(n, {}).get(em)] if logged_at}
+            return {"number": n, "sent": lost, "pending": []} if lost else None
+        sent = {str(x.get("email")).lower() for x in r.get("digest_sent") or [] if isinstance(x, dict)}
+        acked = {str(a.get("email") or "").lower() for a in r.get("acknowledgements") or [] if isinstance(a, dict)}
+        logged = logs.get(n, {})
+        add_sent, add_pend = {}, []
+        for em in pend:                                    # 1. stamp lost
+            if em in logged and em not in sent:
+                add_sent[em] = logged[em]
+        if "digest_pending" not in r and "digest_sent" not in r and alert is not None:   # 2. before the ledger
+            for x in alert.get("recipients") or []:
+                em = str((x or {}).get("email") or "").lower()
+                if not em:
+                    continue
+                if em in logged:
+                    add_sent[em] = logged[em]
+                elif em not in acked:
+                    add_pend.append(em)
+            add_pend = sorted(set(add_pend))
+        if n == newest and alert is not None:               # 3. joined after the publication
+            known = set(pend) | sent | set(add_pend) | set(add_sent) | {str((x or {}).get("email") or "").lower()
+                                                                          for x in alert.get("recipients") or []}
+            add_pend += sorted(members - known - acked)
+        no_keys = "digest_pending" not in r and "digest_sent" not in r and alert is not None
+        if not (add_sent or add_pend or no_keys):
+            return None
+        return {"number": n, "sent": add_sent, "pending": add_pend}
+
+    changes = [p for p in (plan(r) for r in revs) if p is not None]
+    if not write or not changes:
+        return changes
+    by_n = {c["number"]: c for c in changes}
+
+    def mut(d):
+        for r in d.get("revisions", []):
+            c = by_n.get(str(r.get("number"))) if isinstance(r, dict) else None
+            if c is None:
+                continue
+            rows = [x for x in r.get("digest_sent") or [] if isinstance(x, dict)]
+            have = {str(x.get("email")).lower() for x in rows}
+            if not (isinstance(r.get("alert"), dict) and r["alert"].get("mode") == "urgent"):     # urgent: the reminders count from the publication
+                rows += [{"email": e, "sent_at": at, "reconciled": True} for e, at in sorted(c["sent"].items()) if e not in have]
+            pend = [str(e) for e in r.get("digest_pending") or [] if str(e).lower() not in c["sent"]]
+            pend += [e for e in c["pending"] if e not in {x.lower() for x in pend}]
+            r["digest_sent"], r["digest_pending"] = rows, pend
+
+    PR.mutate_file(die, config, "revisions.json", mut)
+    for c in changes:
+        PR.append_audit(die, config, models.audit_entry("system/digest", "revision_ledger_reconcile", "revision", c["number"],
+                                                        {"delivered_per_send_log": sorted(c["sent"]), "owed": c["pending"]}))
+    return changes

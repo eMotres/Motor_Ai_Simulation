@@ -124,7 +124,9 @@ def test_a_sandbox_sends_no_reminder_and_never_calls_the_mail_module():
             rev = publish()
             rows = RK.run_reminders(t0_of(rev) + 25 * H)
             assert {r["mail"] for r in rows} == {"not_configured"} and calls == []
-            assert RK.run_reminders(t0_of(rev) + 26 * H) == []                                  # recorded: no retry loop in a sandbox
+            again = RK.run_reminders(t0_of(rev) + 26 * H)
+            assert {r["mail"] for r in again} == {"not_configured"} and calls == []             # nothing was delivered: still due, never recorded
+            assert not store.load_file(DIE, CFG, "revisions.json")["revisions"][0].get("reminders")
     finally:
         auth_email._send = real
         for k, v in saved.items():

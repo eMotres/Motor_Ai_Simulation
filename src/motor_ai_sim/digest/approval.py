@@ -157,8 +157,16 @@ def _send(draft_id: str, who: str, content_hash: str, *, deliver: Callable, now:
     outstanding = [r.email for r in to_send if state.get(r.email) != "sent"]
     info = {"sent": len(delivered), "failed": len(outstanding), "skipped": result["skipped"], "aborted": result["aborted"]}
     stamp = DS.iso(now())                                  # the time of this send (the run's clock; the wall clock when it is time.time)
-    _stamp_production_revisions(draft, delivered, stamp)
-    if not outstanding and not result["aborted"]:
+    stamped = _stamp_production_revisions(draft, delivered, stamp)
+    if not stamped and not outstanding and not result["aborted"]:
+        # everybody was mailed but the ledger could not be written: the draft is NOT closed and the cursor does not move, so the
+        # obligation stays visible; the next send of this draft skips everyone the send log shows as sent and only repeats the stamp
+        draft["last_error"] = {"at": stamp, "by": who, "code": "ledger_stamp_failed",
+                               "message": "Mailed, but the delivery ledger could not be written; send again to finish."}
+        DS.save_draft(draft)
+        DS.append_log({"event": "stamp_failed", "scope": draft["scope"], "draft_id": draft_id, "by": who})
+        info["stamp_failed"] = True
+    elif not outstanding and not result["aborted"]:
         _close(draft, "sent", who, info, at=stamp)
         DS.append_log({"event": "sent", "scope": draft["scope"], "draft_id": draft_id, "by": who, "sent": info["sent"],
                        "failed": 0, "skipped": len(result["skipped"])})
@@ -180,19 +188,20 @@ def _send(draft_id: str, who: str, content_hash: str, *, deliver: Callable, now:
     return result
 
 
-def _stamp_production_revisions(draft: dict, emails: list, stamp: str) -> None:
+def _stamp_production_revisions(draft: dict, emails: list, stamp: str) -> bool:
     """A production digest that carried revisions to ``emails``: remember it on each revision (``digest_sent``), because the 24 h / 72 h
     acknowledgement reminders count from the digest, not from the publication (owner 2026-11-19).  A revision published ``urgent`` was
-    mailed at once and keeps counting from its publication.  Never raises: a stamp must not undo a sent mail."""
+    mailed at once and keeps counting from its publication.  Never raises: a stamp must not undo a sent mail.  Returns False when the
+    ledger could not be written (the caller keeps the draft open; ``collect.reconcile_ledger`` also repairs it from the send log)."""
     try:
         parsed = DS.parse_scope(draft.get("scope"))
         if not emails or not parsed or parsed[0] != "production":
-            return
+            return True
         die, config = parsed[1]
         nums = {str(i.get("key"))[4:] for i in draft.get("items") or []
                 if i.get("kind") == "revision" and str(i.get("key") or "").startswith("rev:")}
         if not nums:
-            return
+            return True
         from motor_ai_sim.production import store as PR
         mine = {str(e).lower() for e in emails}
 
@@ -201,15 +210,24 @@ def _stamp_production_revisions(draft: dict, emails: list, stamp: str) -> None:
                 if not isinstance(r, dict) or str(r.get("number")) not in nums:
                     continue
                 if isinstance(r.get("alert"), dict) and r["alert"].get("mode") == "urgent":
+                    # mailed at once: the reminders keep counting from the publication; only an urgent mail that did not go out
+                    # (``digest_pending`` set at publication) is settled by this digest
+                    r["digest_pending"] = [e for e in r.get("digest_pending") or [] if str(e).lower() not in mine]
                     continue
-                rows = [x for x in r.get("digest_sent") or [] if isinstance(x, dict) and str(x.get("email")).lower() not in mine]
-                rows += [{"email": e, "sent_at": stamp} for e in sorted(mine)]
+                # the FIRST successful delivery to a member is the clock of his reminders: a retry (which includes members already
+                # served) never moves it (Astra review of #773)
+                rows = [x for x in r.get("digest_sent") or [] if isinstance(x, dict)]
+                have = {str(x.get("email")).lower() for x in rows}
+                rows += [{"email": e, "sent_at": stamp} for e in sorted(mine) if e not in have]
                 r["digest_sent"] = rows
+                r["digest_pending"] = [e for e in r.get("digest_pending") or [] if str(e).lower() not in mine]
 
         PR.mutate_file(die, config, "revisions.json", mut)
+        return True
     except Exception as exc:                               # noqa: BLE001
         import logging
         logging.getLogger(__name__).warning("digest stamp for %s failed: %s", draft.get("scope"), exc)
+        return False
 
 
 # -- the scheduled run: build the drafts, send the ones whose group is in mode ``auto`` --------------------------------------------

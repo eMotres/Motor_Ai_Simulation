@@ -2293,6 +2293,12 @@ def _publish_revision(die: str, config: str, user: dict, summary: dict, changes:
         "changes": changes,
         "files": files,
     })
+    # THE DELIVERY LEDGER (Astra review of #773): who still has to be told about this revision in a digest.  Written for every
+    # revision, whatever `notify` and the digest cursor do, and emptied per recipient only when a digest that carries it was SENT to
+    # that recipient (digest.approval); an urgent revision was mailed at once and owes nothing.
+    if not urgent:
+        revision = {**revision, "digest_pending": [r["email"] for r in revision_alert.recipients(
+            store.load_file(die, config, "production.json"))]}
     store.mutate_file(die, config, "revisions.json", lambda d: d.setdefault("revisions", []).append(revision))
     store.mutate_file(die, config, "production.json", lambda d: d.update({"current_revision": number, "updated_at": _now()}))
     if files["superseded"]:
@@ -2306,6 +2312,10 @@ def _publish_revision(die: str, config: str, user: dict, summary: dict, changes:
             for r in d.get("revisions", []):
                 if isinstance(r, dict) and str(r.get("number")) == number:
                     r["alert"] = alert
+                    if urgent:                           # an urgent mail that did not go out is still owed (the digest carries it)
+                        missed = [x["email"] for x in alert.get("recipients") or [] if x.get("mail") != "sent"]
+                        if missed:
+                            r["digest_pending"] = missed
 
         store.mutate_file(die, config, "revisions.json", attach)
         _audit(_email(user), die, config, "revision_alert", "revision", number,

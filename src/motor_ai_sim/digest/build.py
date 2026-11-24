@@ -22,7 +22,7 @@ import html
 import json
 import re
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from email import policy
 from email.message import EmailMessage
 from email.utils import formatdate, make_msgid
@@ -53,6 +53,8 @@ class Group:
     members: list = field(default_factory=list)       # [(email, role)]
     active: bool = True
     path: Optional[str] = None      # the app path of the group's own page
+    #: set on the group of an owed-revisions draft: the members who still have to be told about a revision (see ``_owed_group``)
+    owed: Optional[frozenset] = None
 
     def caps(self, role: str) -> frozenset:
         """What a member of this role may see (see collect.INTERNAL / COSTS)."""
@@ -301,7 +303,8 @@ def compose(group: Group, items: list, more: int, start: float, end: float, bili
             if url:
                 t_lines.append(f"  {url}")
         h_parts.append("</ul>")
-        ack = next((it.link for it in reversed(items) if it.kind == "revision" and it.link), None) if group.kind == "production" else None
+        _revs = [it for it in items if it.kind == "revision" and it.link] if group.kind == "production" else []
+        ack = max(_revs, key=lambda it: it.ts).link if _revs else None          # the NEWEST revision
         if ack:
             # a revision is in this production's digest: ONE "open and acknowledge" link to the newest of them (owner 2026-11-19)
             ack_url = _url(ack)
@@ -398,6 +401,7 @@ def unsub_purpose(scope: str) -> str:
 
 
 def unsub_url(email: str, scope: str, base: str) -> str:
+    scope = DS.base_scope(scope)                        # the owed-revisions draft unsubscribes from the production's digest
     return (base.rstrip("/") + "/api/digest/unsubscribe/" + DS.scope_token(scope) + "/"
             + CP.make_token(email, purpose=unsub_purpose(scope)))
 
@@ -462,7 +466,11 @@ def build_draft(group: Group, settings: dict, items: list, recipients: list[dict
                      key=lambda i: i.ts, reverse=True)
     if not visible:
         return None
-    shown, more = visible[:MAX_ITEMS], max(0, len(visible) - MAX_ITEMS)
+    # a revision line is a delivery obligation, never cut by the line cap (Astra review of #773): the other lines give way
+    rev_items = [i for i in visible if i.kind == "revision"]
+    room = max(0, MAX_ITEMS - len(rev_items))
+    shown = sorted(rev_items + [i for i in visible if i.kind != "revision"][:room], key=lambda i: i.ts, reverse=True)
+    more = max(0, len(visible) - len(shown))
     bilingual = any(r["lang"] == "zh-CN" for r in recipients)
     text, body_html = compose(group, shown, more, start, end, bilingual)
     now = DS.iso()
@@ -486,6 +494,40 @@ def build_draft(group: Group, settings: dict, items: list, recipients: list[dict
     return draft
 
 
+def _period_start(group: Group, now: float) -> float:
+    """Where the group's own (ordinary) period starts: its open draft's start, else its cursor, else one window back."""
+    freq = DS.get_settings(group.scope).get("frequency", "daily")
+    state = DS.get_state(DS.base_scope(group.scope))
+    current = DS.load_draft(state.get("draft_id")) if state.get("draft_id") else None
+    if current is not None and current.get("status") in ("pending", "partial"):
+        start = DS.parse_ts((current.get("period") or {}).get("start"))
+        if start is not None:
+            return start
+    cursor = DS.parse_ts(state.get("cursor"))
+    return cursor if cursor is not None else now - WINDOW_S[freq]
+
+
+def _with_owed(groups: list, now: float, *, write: bool = True) -> list:
+    """Every production group followed by its owed-revisions group when somebody still has to be told about a revision.  The ledger is
+    first reconciled with the durable send logs (``collect.reconcile_ledger``, audited; a dry run reads only)."""
+    out: list = []
+    for g in groups:
+        out.append(g)
+        if g.kind != "production" or not g.active or DS.get_settings(g.scope)["mode"] == "off":
+            continue
+        try:
+            C.reconcile_ledger(g.record, now, write=write)
+            who = set().union(*C.owed_map(g.record).values()) if C.owed_map(g.record) else set()
+        except Exception:                                  # noqa: BLE001 - a broken ledger must not stop the digests
+            continue
+        if not who:
+            continue
+        out.append(replace(g, scope=DS.owed_scope(g.scope), owed=frozenset(who),
+                           members=[(e, r) for e, r in g.members if str(e).lower() in who],
+                           title_en=g.title_en + " - revision not yet delivered", title_zh=g.title_zh + " - 版本尚未送达"))
+    return out
+
+
 def run(now: Optional[float] = None, *, scopes: Optional[list] = None, write: bool = True,
         results: Callable[[str, str], dict] = C.stored_results) -> list[dict]:
     """Make the due drafts.  Returns one report row per group looked at.  NEVER sends anything (``approval.run_daily`` does that).
@@ -497,8 +539,8 @@ def run(now: Optional[float] = None, *, scopes: Optional[list] = None, write: bo
     ``write=False`` (dry run) computes the same rows and touches no file."""
     now = time.time() if now is None else now
     report: list[dict] = []
-    for group in list_groups():
-        if scopes is not None and group.scope not in scopes:
+    for group in _with_owed(list_groups(), now, write=write):
+        if scopes is not None and DS.base_scope(group.scope) not in scopes and group.scope not in scopes:
             continue
         settings = DS.get_settings(group.scope)
         row = {"scope": group.scope, "title": group.title_en}
@@ -519,18 +561,26 @@ def run(now: Optional[float] = None, *, scopes: Optional[list] = None, write: bo
         cursor = DS.parse_ts(state.get("cursor"))
         if pending is not None:
             start = DS.parse_ts(pending["period"]["start"]) or now - WINDOW_S[freq]
+        elif group.owed is not None:
+            start = now - WINDOW_S[freq]                  # owed revisions are not "due" by a clock: they are an obligation
         else:
             start = cursor if cursor is not None else now - WINDOW_S[freq]
             if now - start < GATE_S[freq]:
                 row["action"], row["reason"] = "skipped", "not_due"
                 continue
-        if group.kind == "project":
+        if group.owed is not None:
+            items = []                                   # filled below from the revision records, for the people who owe it
+        elif group.kind == "project":
             from motor_ai_sim.development import store as PS
             record = PS.get_project(group.record.get("id")) or group.record
             items = C.collect_project(record, start, now, results=results)
         else:
             items = C.collect_production(group.record, start, now)
         recipients, skipped = resolve_recipients(group, settings)
+        if group.owed is not None and recipients:
+            # revisions some recipient has not been told about yet, from before the group's own period (its cursor moved on): their
+            # OWN draft, to exactly the people who owe them - a member already served is never mailed the revision again
+            items = C.owed_revision_items(group.record, [r["email"] for r in recipients], _period_start(group, now), now)
         revision = int((pending or {}).get("revision") or 0)
         draft = build_draft(group, settings, items, recipients, skipped, start, now, existing=pending, revision=revision)
         if draft is None:

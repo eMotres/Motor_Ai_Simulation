@@ -53,7 +53,15 @@ from .periodic import Periodic, dof_pairs, outer_boundary_dofs
 from .ref2d import gap_fundamental
 from .solver import MU0, Region, Solution, solve_static3d, solve_static3d_nonlinear
 
-PASSPORT_VERSION = "static3d-stageA-1"
+# -2 (2026-11-24): the l_stack_curve rows divide by their OWN mid-plane / 2D
+# ratio and the passport says so in ``k_flux_vs_L_method``.  A -1 passport's
+# per-length rows used the reference length's ratio (only its reference row and
+# scalar k_flux are right); a table without the marker is such a table.
+PASSPORT_VERSION = "static3d-stageA-2"
+#: ``k_flux_vs_L_method`` of a sweep with a 2D leg: k_flux(L) = k_flux_self(L) * B1_mid(L) / B1_2D.
+K_FLUX_VS_L_OWN_MID = "own_mid_ratio"
+#: ... and without one: k_flux(L) = k_flux_self(L) (no 2D ratio measured).
+K_FLUX_VS_L_SELF = "self_no_2d"
 
 
 # --------------------------------------------------------------------------
@@ -435,7 +443,15 @@ SCHEMA = {
                          "the iron and are the fringing tail, not stack flux.",
         "two_d": "the 2D reference: solver, mesh, B1 and the 3D-mid/2D ratio.",
         "demag": "H.Mhat per axial magnet slice; negative is demagnetising.",
-        "l_stack_curve": "k_flux (both normalisations) vs stack length.",
+        "l_stack_curve": "k_flux (both normalisations) vs stack length. Each row: "
+                         "k_flux = k_flux_self * ratio_3d_mid_over_2d, the row's OWN "
+                         "B1_mid / B1_2D (method in k_flux_vs_L_method).",
+        "k_flux_vs_L_method": "how the l_stack_curve k_flux rows were formed: "
+                              "'own_mid_ratio' (each length's own mid-plane / 2D "
+                              "ratio) or 'self_no_2d' (no 2D leg, k_flux = "
+                              "k_flux_self). Absent (version static3d-stageA-1): "
+                              "every row used the REFERENCE length's ratio, so only "
+                              "the reference row is right.",
         "bracket": "Dirichlet vs Neumann outer boundary at the chosen box — a "
                    "CONSERVATIVE bound on the truncation error, not an estimate.",
         "solves": "dofs, elements, wall time and Picard state of every solve.",
@@ -687,8 +703,20 @@ def run_stage_a(geo_override: Optional[dict] = None,
                 "linear_iron=True at a ladder of mu_r: a residual that grows "
                 "with mu_r and vanishes with no iron is the total scalar "
                 "potential's cancellation, not a magnet error.")
+    # Each stack length is divided by the 2D fundamental through ITS OWN
+    # mid-plane value: k_flux(L) = <B1>_L / B1_2D = k_flux_self(L) * B1_mid(L) / B1_2D.
+    # The mid-plane deficit against 2D is itself a stack-length effect (it
+    # vanishes in the long-stack limit), so the reference length's ratio must
+    # not be carried to the other lengths: that held k_flux nearly flat in L
+    # and read short stacks several per cent high.  The reference row is the
+    # same float division as ``ratio`` above, so it is bit-identical to the
+    # passport's k_flux.  Without a 2D leg the row keeps k_flux_self (x 1.0).
     for row in curve:
-        row["k_flux"] = row["k_flux_self"] * ratio
+        if two_d is not None:
+            row["ratio_3d_mid_over_2d"] = row["B1_mid_T"] / two_d["B1_T"]
+            row["k_flux"] = row["k_flux_self"] * row["ratio_3d_mid_over_2d"]
+        else:
+            row["k_flux"] = row["k_flux_self"] * ratio
 
     passport = dict(
         version=PASSPORT_VERSION,
@@ -740,6 +768,8 @@ def run_stage_a(geo_override: Optional[dict] = None,
         two_d=two_d,
         demag=demag,
         l_stack_curve=curve,
+        k_flux_vs_L_method=(K_FLUX_VS_L_OWN_MID if two_d is not None
+                            else K_FLUX_VS_L_SELF),
         bracket=bracket,
         solves=solves,
         total_wall_s=time.perf_counter() - t_all,

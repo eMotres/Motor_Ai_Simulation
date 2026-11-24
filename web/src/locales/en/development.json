@@ -57,7 +57,10 @@
     "sourceFrom": "From the file: {ref}",
     "sourceExcerpt": "Quoted: {text}",
     "sourceConverted": "Converted: {text}",
-    "sourceNotFound": "The quoted text was not found in the file: check this value."
+    "sourceFound": "Found in the file as written; check that it is the right quantity.",
+    "sourceNotFound": "Not found in the file as written: this value is an assumption. Check it.",
+    "sourceFoundShort": "Found in file",
+    "sourceNotFoundShort": "Not found in file"
   },
   "loading": "Loading projects…",
   "showClosed": "Show closed",

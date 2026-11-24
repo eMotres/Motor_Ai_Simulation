@@ -57,7 +57,10 @@
     "sourceFrom": "来自文件：{ref}",
     "sourceExcerpt": "原文：{text}",
     "sourceConverted": "换算：{text}",
-    "sourceNotFound": "在文件中未找到所引用的原文：请核对此值。"
+    "sourceFound": "已在文件中找到原文；请核对是否为正确的量。",
+    "sourceNotFound": "在文件中未找到原文：此值为假设，请核对。",
+    "sourceFoundShort": "文件中找到",
+    "sourceNotFoundShort": "文件中未找到"
   },
   "loading": "正在加载项目…",
   "showClosed": "显示已关闭的项目",

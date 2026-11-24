@@ -119,10 +119,10 @@ def test_clean_table_gives_cards_with_sources_and_conversions_and_changes_nothin
     assert out["applied"] == [] and out["fill_mode"] is False
     cards = {p["field_id"]: p for p in out["proposals"]}
     assert set(cards) == {"1_6", "2_1", "3_2", "4_1"}
-    assert cards["1_6"]["file_source"] == {"ref": "Spec!A2:C2", "excerpt": "B2=6000; C2=rpm", "converted": "", "verified": True,
-                                           "file_name": "requirements.xlsx", "document_id": out["file"]["document_id"]}
+    assert cards["1_6"]["file_source"] == {"ref": "Spec!A2:C2", "cited": "Spec!A2:C2", "excerpt": "B2=6000; C2=rpm", "converted": "", "found": True}
+    assert cards["1_6"]["source_file"] == {"name": "requirements.xlsx", "document_id": out["file"]["document_id"]}      # the editor sees which file
     assert cards["4_1"]["file_source"]["converted"] == "8 cm -> 80 mm" and cards["4_1"]["value"]["length_mm"] == 80
-    assert all(c["file_source"]["verified"] is True for c in cards.values())            # every excerpt, number and unit is in the file
+    assert all(c["file_source"]["found"] is True for c in cards.values())            # every excerpt, number and unit is in the file
     assert all(c["status"] == "open" for c in cards.values())
     assert revision() == before and P.draft_wrapper("alpha")["draft"]["fields"].keys() == {"1_1"}      # nothing was written to the form
     assert not (store.path_for("alpha") / "audit.jsonl").exists() or "spec.submit" not in (store.path_for("alpha") / "audit.jsonl").read_text()
@@ -164,7 +164,7 @@ def test_messy_mail_stated_derived_assumed_and_unverified_values(env, monkeypatc
     assert cards["4_1"]["basis"] == "stated" and cards["2_1"]["basis"] == "derived"
     assert cards["1_6"]["basis"] == "assumed" and "(assumed, to confirm)" in cards["1_6"]["reason"]
     # the excerpt is not in the file: shown as assumed, with the flag
-    assert cards["3_2"]["basis"] == "assumed" and cards["3_2"]["file_source"]["verified"] is False
+    assert cards["3_2"]["basis"] == "assumed" and cards["3_2"]["file_source"]["found"] is False
     assert "dropped" in out["reply"] and out["reply"].startswith("The speed is only 'around' 6000 rpm: is that the continuous or the peak speed?")
     assert out["applied"] == []                                                      # an assumed STATED_ONLY value is never a fill either
 
@@ -395,7 +395,7 @@ def test_real_pdf_end_to_end(env, monkeypatch):
     calls = model(monkeypatch, marker("1_6", {"maximum_rpm": 6000}, "page 1", "Maximum speed 6000 rpm"))
     out = send(env, "req.pdf", buf.getvalue()).json()
     assert "[page 1] Requirements for a small drone motor." in calls[0][0][-1]["content"]
-    assert out["proposals"][0]["file_source"]["ref"] == "page 1" and out["proposals"][0]["file_source"]["verified"] is True
+    assert out["proposals"][0]["file_source"]["ref"] == "page 1" and out["proposals"][0]["file_source"]["found"] is True
 
 
 def test_too_much_text_for_the_model_is_refused_before_it(env, monkeypatch):
@@ -463,6 +463,9 @@ def test_a_conversation_with_a_file_never_reaches_the_training_export(env, monke
     conv = AR.conv_key("spec", "alpha", OWN)
     AR.log_turn(assistant="assistant", context="spec", conv_id=conv, account=OWN, project_id="alpha", user_text="what about the voltage?",
                 reply="The file said 6000 rpm, which voltage do you use?")
+    store.create_project({"id": "beta", "title": "B", "customer_org": "O", "status": "spec", "created_at": "t", "updated_at": "t",
+                          "owner_engineer": OWN, "members": [{"email": OWN, "role": "owner"}], "linked_motors": [], "notes": "",
+                          "pending_invites": []})
     AR.log_turn(assistant="assistant", context="spec", conv_id=AR.conv_key("spec", "beta", OWN), account=OWN, project_id="beta",
                 user_text="plain question", reply="plain answer")
     rows = list(AR.iter_records())
@@ -488,20 +491,24 @@ def test_the_file_text_is_in_no_archive_row_even_through_the_chat_logger(env, mo
 
 # ── source binding (adversarial) ─────────────────────────────────────────────
 
-PAGES = [FX.Block("page 1", "Rated power 2.2 kW. Maximum speed 6000 rpm. Supply 48 V."),
+PAGES = [FX.Block("page 1", "Rated power 2.2 kW. Maximum speed 6000 rpm. Supply 48 V. Housing: open frame."),
          FX.Block("page 2", "Peak speed 9000 rpm. The pump flow is 5 mW of noise. Limit 16000 rpm only for the test rig."),
-         FX.Block("Spec!A5:C5", "A5=Maximum length; B5=8; C5=cm"), FX.Block("Spec!A6:C6", "A6=Rated power; B6=2; C6=MW")]
+         FX.Block("Spec!A5:C5", "A5=Maximum length; B5=8; C5=cm"), FX.Block("Spec!A6:C6", "A6=Rated power; B6=2; C6=MW"),
+         FX.Block("page 4", "Max ambient 104, Fan cooled. Shaft 1, fits in hub. Min -40 \u00b0C but the tank is 6 000 rpm. Length 0,125 mm."),
+         FX.Block("lines 1-4", "first line 100 mm\nsecond line 200 mm\nthird line 300 mm\nfourth 400 mm")]
 
 
 def bind(field, value, source, excerpt, converted=""):
     return FA.bind_source(field, 2, value, source, excerpt, converted, PAGES)
 
 
-def test_binding_accepts_the_honest_card():
-    assert bind("1_6", {"maximum_rpm": 6000}, "page 1", "Maximum speed 6000 rpm")
-    assert bind("1_6", {"maximum_rpm": 6000}, "p1", "Maximum speed 6000 rpm")                           # p1 = page 1
-    assert bind("4_1", {"length_mm": 80}, "Spec!B5", "B5=8; C5=cm", "8 cm -> 80 mm")                     # a cell of the block's range
-    assert bind("1_6", {"maximum_rpm": 6000}, "page 1", "Maximum   speed\n6000 rpm")                      # whitespace is not a difference
+def test_binding_accepts_the_honest_card_and_returns_the_resolved_block():
+    assert bind("1_6", {"maximum_rpm": 6000}, "page 1", "Maximum speed 6000 rpm") == "page 1"
+    assert bind("1_6", {"maximum_rpm": 6000}, "p1", "Maximum speed 6000 rpm") == "page 1"                  # p1 = page 1
+    assert bind("4_1", {"length_mm": 80}, "Spec!B5", "B5=8; C5=cm", "8 cm -> 80 mm") == "Spec!A5:C5"      # a cell of the block's range
+    assert bind("1_6", {"maximum_rpm": 6000}, "page 1", "Maximum   speed\n6000 rpm") == "page 1"           # whitespace is not a difference
+    assert bind("3_3", "open frame", "page 1", "Housing: open frame") == "page 1"                          # a string, as written
+    assert bind("3_2", {"temperature_min_C": -40}, "page 4", "Min \u221240 \u00b0C") == "page 4"          # a Unicode minus is a minus
 
 
 @pytest.mark.parametrize("source,excerpt,value", [
@@ -510,34 +517,82 @@ def test_binding_accepts_the_honest_card():
     ("page 1", "Maximum speed 6000 rpm", 9000),                    # the excerpt is real, the proposed value is not in it
     ("page 1", "Peak speed 9000 rpm", 9000),                       # the excerpt is from ANOTHER page than the one cited
     ("page 2", "Limit 16000 rpm only", 6000),                      # 6000 is a substring of a longer number
-    ("page 2", "Limit 16000 rpm only", 1600),
+    ("page 2", "Limit 16000 rpm", 1600),
     ("page 3", "Maximum speed 6000 rpm", 6000),                    # the cited page does not exist
     ("page 1", "maximum speed 6000 rpm", 6000),                    # the case of the excerpt is not the file's
     ("page 1", "Maximum speed 6000 rpm", 6001),
+    ("page 2", "6000 rpm", 6000),                                  # "6000 rpm" is inside "16000 rpm": no token boundary, no match
+    ("page 1", "speed 6000", 6000),                                # a number without its unit behind it
+    ("page 1", "Supply 48 V", 48),                                 # right number and unit, wrong field (rpm): the unit is not the field's
 ])
 def test_binding_refuses_a_card_the_file_does_not_prove(source, excerpt, value):
-    assert not bind("1_6", {"maximum_rpm": value}, source, excerpt)
+    assert bind("1_6", {"maximum_rpm": value}, source, excerpt) is None
+
+
+def test_binding_token_boundaries_for_decimals():
+    assert bind("2_6", {"continuous_Arms": 2}, "page 1", "Rated power 2 kW") is None                    # "2 kW" is not in "2.2 kW"
+    assert bind("1_6", {"maximum_rpm": 6000}, "page 4", "the tank is 6 000 rpm") == "page 4"              # "6 000" is 6000
+    assert bind("1_6", {"maximum_rpm": 6}, "page 4", "the tank is 6 000 rpm") is None                    # and not 6
+
+
+def test_strings_and_booleans_are_compared_too():
+    assert bind("3_3", "liquid cooled", "page 1", "Supply 48 V") is None                                  # the excerpt does not say it
+    assert bind("3_3", "open frame", "page 1", "Supply 48 V") is None
+    assert bind("3_3", "OPEN FRAME", "page 1", "Housing: open frame") == "page 1"                          # case-insensitive for words
+    assert bind("1_6", {"maximum_rpm": 6000, "proof_or_runaway": "x"}, "page 1", "Maximum speed 6000 rpm") is None   # every leaf, not the first
+    assert bind("3_1", {"cooling_medium": "air", "forced": True}, "page 1", "Maximum speed 6000 rpm") is None         # a boolean is never proved
+
+
+@pytest.mark.parametrize("raw,value,ambiguous", [
+    ("6000", 6000, False), ("6.5", 6.5, False), ("6,5", 6.5, False), ("0,125", 0.125, False), ("0.125", 0.125, False),
+    ("1,234,567", 1234567, False), ("1.234,5", 1234.5, False), ("6 000", 6000, False), ("12 345", 12345, False),
+    ("\u221240", -40, False), ("-40", -40, False), ("2,2", 2.2, False),
+    ("1,234", None, True), ("1.234", None, True), ("6.000", None, True), ("1 23", None, True), ("1,23,4", None, True),
+])
+def test_one_number_reader(raw, value, ambiguous):
+    got, amb = FA.parse_number(raw)
+    assert amb is ambiguous and (got == value if value is not None else got is None)
+
+
+def test_decimal_commas_and_signs_in_cards():
+    assert bind("4_1", {"length_mm": 0.125}, "page 4", "Length 0,125 mm") == "page 4"                    # 0,125 is 0.125 ...
+    assert bind("4_1", {"length_mm": 125}, "page 4", "Length 0,125 mm") is None                          # ... and not 125
+    assert bind("3_2", {"temperature_min_C": -40}, "page 4", "Min -40 \u00b0C") == "page 4"
+    assert bind("3_2", {"temperature_min_C": 40}, "page 4", "Min -40 \u00b0C") is None                  # the sign is not dropped
+    assert bind("1_6", {"maximum_rpm": 1234}, "page 4", "x 1,234 rpm") is None and bind("1_6", {"maximum_rpm": 1.234}, "page 4", "x 1,234 rpm") is None
+
+
+def test_the_cited_line_or_cell_must_hold_the_excerpt():
+    # a text block of four lines: the excerpt is on line 3, the card cites line 1
+    assert bind("4_1", {"length_mm": 300}, "lines 1-4", "third line 300 mm") == "lines 1-4"
+    assert bind("4_1", {"length_mm": 300}, "line 3", "third line 300 mm") == "lines 1-4"
+    assert bind("4_1", {"length_mm": 300}, "line 1", "third line 300 mm") is None
+    assert bind("4_1", {"length_mm": 100}, "line 1", "first line 100 mm") == "lines 1-4"
+    # a sheet row: the excerpt is in C5, the card cites A5 only
+    assert bind("4_1", {"length_mm": 80}, "Spec!B5", "B5=8; C5=cm", "8 cm -> 80 mm") == "Spec!A5:C5"
+    assert bind("4_1", {"length_mm": 80}, "Spec!A5", "B5=8; C5=cm", "8 cm -> 80 mm") is None
+    assert bind("4_1", {"length_mm": 80}, "Spec!A6", "B5=8; C5=cm", "8 cm -> 80 mm") is None            # row 6 is another block
 
 
 def test_binding_units_are_case_sensitive_and_conversions_must_compute():
-    assert not bind("2_6", {"continuous_Arms": 2}, "Spec!A6:C6", "B6=2; C6=MW", "2 MW -> 2 A")           # not a conversion at all
+    assert bind("2_6", {"continuous_Arms": 2}, "Spec!A6:C6", "B6=2; C6=MW", "2 MW -> 2 A") is None       # not a conversion at all
     assert FA._convert(2, "MW", "W") == 2_000_000 and FA._convert(5, "mW", "W") == 0.005                  # mW is not MW
     assert FA._convert(1, "kW", "mW") == 1_000_000 and FA._convert(1, "m", "kW") is None
-    assert FA._convert(104, "°F", "°C") == 40 and round(FA._convert(628.3185, "rad/s", "rpm")) == 6000
-    # a stated conversion that does not compute: 8 cm is 80 mm, not 800 mm
-    assert not bind("4_1", {"length_mm": 800}, "Spec!B5", "B5=8; C5=cm", "8 cm -> 800 mm")
-    # a conversion of a number that is not in the excerpt
-    assert not bind("4_1", {"length_mm": 100}, "Spec!B5", "B5=8; C5=cm", "10 cm -> 100 mm")
-    # the unit written in the excerpt differs (case) from the unit of the conversion
-    assert not bind("4_1", {"length_mm": 80000}, "Spec!B5", "B5=8; C5=cm", "8 Cm -> 80000 um")
-    # the unit next to the number is not the field's unit: 5 mW for a field in W
-    assert not FA.bind_source("2_6", 2, {"continuous_Arms": 5}, "page 2", "flow is 5 mW of noise", "", PAGES)
+    assert FA._convert(104, "\u00b0F", "\u00b0C") == 40 and round(FA._convert(628.3185, "rad/s", "rpm")) == 6000
+    assert bind("4_1", {"length_mm": 800}, "Spec!B5", "B5=8; C5=cm", "8 cm -> 800 mm") is None            # 8 cm is 80 mm
+    assert bind("4_1", {"length_mm": 100}, "Spec!B5", "B5=8; C5=cm", "10 cm -> 100 mm") is None           # 10 is not in the excerpt
+    assert bind("4_1", {"length_mm": 80000}, "Spec!B5", "B5=8; C5=cm", "8 Cm -> 80000 um") is None
+    assert bind("2_6", {"continuous_Arms": 5}, "page 2", "pump flow is 5 mW of noise") is None            # 5 mW for a field in A rms
+    # the unit of the conversion is matched as a TOKEN: the F of "Fan" is not 104 F, and a number with no unit next to it has none
+    assert bind("3_2", {"temperature_max_C": 40}, "page 4", "Max ambient 104, Fan cooled", "104 F -> 40 C") is None
+    assert bind("4_1", {"length_mm": 25.4}, "page 4", "Shaft 1, fits in hub", "1 in -> 25.4 mm") is None
+    assert bind("4_1", {"length_mm": 80}, "lines 1-4", "first line 100 mm", "100 mm -> 80 mm") is None   # a no-op "conversion" that does not compute
 
 
 def test_binding_downgrades_stated_to_assumed_in_the_card(env, monkeypatch):
     model(monkeypatch, marker("1_6", {"maximum_rpm": 9000}, "lines 1-2", "Maximum speed 6000 rpm", basis="stated"))
     card = send(env, "m.txt", b"Maximum speed 6000 rpm\n").json()["proposals"][0]
-    assert card["basis"] == "assumed" and card["file_source"]["verified"] is False and "(assumed, to confirm)" in card["reason"]
+    assert card["basis"] == "assumed" and card["file_source"]["found"] is False and "(assumed, to confirm)" in card["reason"]
 
 
 # ── commercial text in ANY model-controlled part of a card ───────────────────
@@ -612,6 +667,9 @@ def test_once_a_file_was_used_no_conversation_of_that_project_is_exported(env, m
     other = AR.conv_key("spec", "alpha", "cust@example.test")
     AR.log_turn(assistant="assistant", context="spec", conv_id=other, account="cust@example.test", project_id="alpha",
                 user_text="what is the max speed?", reply="6000 rpm, from the file")
+    store.create_project({"id": "gamma", "title": "G", "customer_org": "O", "status": "spec", "created_at": "t", "updated_at": "t",
+                          "owner_engineer": OWN, "members": [{"email": OWN, "role": "owner"}], "linked_motors": [], "notes": "",
+                          "pending_invites": []})
     AR.log_turn(assistant="assistant", context="spec", conv_id=AR.conv_key("spec", "gamma", OWN), account=OWN, project_id="gamma",
                 user_text="plain", reply="plain")
     assert [json.loads(x)["project_id"] for x in AR.export_lines(lambda a: True)] == ["gamma"]
@@ -684,3 +742,76 @@ def test_no_bytes_stay_behind_when_storing_the_row_fails(env, monkeypatch):
         FA.store_original("alpha", {"email": OWN}, "a.txt", b"value 1\n", "text/plain")
     docs = store.path_for("alpha") / "documents" / "files"
     assert not docs.exists() or list(docs.iterdir()) == []
+
+
+# ── who sees the name of the file; the flag first; the semaphore ───────────────────────────────────────────────────────────
+
+def test_the_file_name_and_document_id_go_only_to_who_may_open_the_file(env, monkeypatch):
+    model(monkeypatch, marker("1_6", {"maximum_rpm": 6000}, "lines 1-2", "Maximum speed 6000 rpm"))
+    out = send(env, "secret-customer-spec.txt", b"Maximum speed 6000 rpm\n").json()
+    assert out["proposals"][0]["source_file"]["name"] == "secret-customer-spec.txt"                           # the editor
+    listed = env["client"].get("/api/projects/alpha/spec/proposals", headers=H).json()["proposals"][0]
+    assert listed["source_file"]["document_id"] == out["file"]["document_id"] and listed["file_source"]["excerpt"] == "Maximum speed 6000 rpm"
+    for email, role in (("cust@example.test", "user"), ("eng@example.test", "user")):
+        env["as"](email, role)
+        card = env["client"].get("/api/projects/alpha/spec/proposals", headers=H).json()["proposals"][0]
+        assert "source_file" not in card and card["file_source"]["ref"] == "lines 1-2" and card["file_source"]["excerpt"]
+        assert "secret-customer-spec" not in json.dumps(card) and out["file"]["document_id"] not in json.dumps(card)
+    env["as"]("staff@example.test", "engineer")                                            # staff can open the file: they keep the name
+    assert env["client"].get("/api/projects/alpha/spec/proposals", headers=H).json()["proposals"][0]["source_file"]["name"] == "secret-customer-spec.txt"
+    env["as"](OWN, "user")
+    hist = env["client"].get("/api/projects/alpha/spec/assistant/history", headers=H).json()["messages"]
+    assert any(m.get("proposals") and m["proposals"][0]["source_file"]["name"] == "secret-customer-spec.txt" for m in hist)
+
+
+def test_the_project_flag_is_set_before_the_row_and_a_failure_refuses_the_upload(env, monkeypatch):
+    model(monkeypatch, "ok")
+    order = []
+    real_mark = FA.mark_project
+    monkeypatch.setattr(FA, "mark_project", lambda pid: (order.append("flag"), real_mark(pid))[1])
+    real_mutate = store.mutate_json
+    monkeypatch.setattr(store, "mutate_json", lambda pid, name, fn, default=None: (order.append("row" if "documents" in name else name), real_mutate(pid, name, fn, default))[1])
+    assert send(env, "a.txt", b"value 1\n").status_code == 200
+    assert order.index("flag") < order.index("row")
+    monkeypatch.setattr(store, "mutate_json", real_mutate)
+    monkeypatch.setattr(FA, "mark_project", lambda pid: (_ for _ in ()).throw(OSError("disk")))
+    FA.reset_limits()
+    before = len(store.load_documents("alpha"))
+    r = send(env, "b.txt", b"value 2\n")
+    assert r.status_code == 422 and len(store.load_documents("alpha")) == before
+    docs = store.path_for("alpha") / "documents" / "files"
+    assert len(list(docs.iterdir())) == before
+
+
+def test_only_two_extraction_workers_run_at_once(monkeypatch):
+    import threading
+    got = []
+    monkeypatch.setattr(FX, "BUSY_WAIT_SECONDS", 0.05)
+    held = [FX._SLOTS.acquire() for _ in range(FX.MAX_WORKERS)]
+    try:
+        with pytest.raises(FX.ExtractError) as info:
+            FX.extract_isolated("a.txt", b"x 1\n")
+        assert info.value.code == "busy"
+    finally:
+        for _ in held:
+            FX._SLOTS.release()
+    assert FX.extract_isolated("a.txt", b"x 1\n").kind == "txt"
+
+
+def test_a_busy_reader_is_a_429_and_stores_nothing(env, monkeypatch):
+    model(monkeypatch, "ok")
+    monkeypatch.setattr(FX, "extract_isolated", lambda name, data: (_ for _ in ()).throw(FX.ExtractError("busy", *FX._MSG["busy"])))
+    r = send(env, "a.txt", b"value 1\n")
+    assert r.status_code == 429 and r.json()["detail"]["code"] == "busy" and not store.load_documents("alpha")
+
+
+def test_a_deleted_project_that_had_a_file_stays_out_of_the_export(env, monkeypatch):
+    import shutil
+    store.create_project({"id": "eps", "title": "E", "customer_org": "O", "status": "spec", "created_at": "t", "updated_at": "t",
+                          "owner_engineer": OWN, "members": [{"email": OWN, "role": "owner"}], "linked_motors": [], "notes": "",
+                          "pending_invites": []})
+    FA.mark_project("eps")                                                                  # also writes the archive's own file_project event
+    AR.log_turn(assistant="assistant", context="spec", conv_id=AR.conv_key("spec", "eps", OWN), account=OWN, project_id="eps",
+                user_text="q", reply="the file said 6000 rpm")
+    shutil.rmtree(store.path_for("eps"))                                                    # the project (and its flag) is gone
+    assert "eps" not in [json.loads(x)["project_id"] for x in AR.export_lines(lambda a: True)]

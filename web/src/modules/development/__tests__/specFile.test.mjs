@@ -25,7 +25,7 @@ test('the browser refuses what the server refuses, with the reason', () => {
 test('the source of a card is read from the proposal; a card without a file has none', () => {
   assert.equal(fileSourceOf({}), null);
   assert.equal(fileSourceOf({ file_source: { ref: '' } }), null);
-  assert.deepEqual(fileSourceOf({ file_source: { ref: 'page 3', excerpt: '6000 rpm', verified: true } }), { ref: 'page 3', excerpt: '6000 rpm', verified: true });
+  assert.deepEqual(fileSourceOf({ file_source: { ref: 'page 3', excerpt: '6000 rpm', found: true } }), { ref: 'page 3', excerpt: '6000 rpm', found: true });
 });
 
 test('the attach control is only for who may edit the specification, and the cards show their source in a tooltip', () => {
@@ -43,7 +43,7 @@ test('the attach control is only for who may edit the specification, and the car
 test('every new string exists in English and Chinese, and the tooltip names who and what', () => {
   const en = JSON.parse(read('../../../locales/en/development.json')).specAssistant;
   const zh = JSON.parse(read('../../../locales/zh-CN/development.json')).specAssistant;
-  const keys = ['attach', 'attachTip', 'fileDoc', 'fileMacro', 'fileType', 'fileSize', 'fileEmpty', 'fileFailed', 'source', 'sourceFrom', 'sourceExcerpt', 'sourceConverted', 'sourceNotFound'];
+  const keys = ['attach', 'attachTip', 'fileDoc', 'fileMacro', 'fileType', 'fileSize', 'fileEmpty', 'fileFailed', 'source', 'sourceFrom', 'sourceExcerpt', 'sourceConverted', 'sourceFound', 'sourceNotFound', 'sourceFoundShort', 'sourceNotFoundShort'];
   for (const k of keys) { assert.ok(typeof en[k] === 'string' && en[k], `en ${k}`); assert.ok(typeof zh[k] === 'string' && zh[k], `zh ${k}`); }
   assert.match(en.attachTip, /owner and admin only; motor projects only/);
   assert.match(zh.attachTip, /仅限项目负责人和管理员；仅限电机项目/);

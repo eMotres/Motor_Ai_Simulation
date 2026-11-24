@@ -81,27 +81,48 @@ def _zip_names(resp):
     return set(zipfile.ZipFile(io.BytesIO(resp.content)).namelist())
 
 
-@pytest.mark.parametrize("who", BLIND + ["t-owner"])
-def test_the_current_release_zip_never_holds_it_for_a_non_staff_caller(env, who):
+def _plain_and_labelled(env):
     plain, src = put_files(env)
     env.patch(f"/api/projects/alpha/documents/{plain}", headers=hdr("t-owner"), json={"revision": "A"})
-    resp = env.get("/api/projects/alpha/documents.zip", headers=hdr("t-staff") if False else hdr(who), params={"revision": "A"})
+    return plain, src
+
+
+@pytest.mark.parametrize("who", BLIND)
+def test_the_zips_never_hold_the_original_for_a_member_who_may_not_edit_the_specification(env, who):
+    _plain_and_labelled(env)
+    resp = env.get("/api/projects/alpha/documents.zip", headers=hdr(who))
+    assert resp.status_code in (200, 403)                                                        # a customer-side member: the current release only
     if resp.status_code == 200:
-        names = _zip_names(resp)
-        assert not any("requirements" in n for n in names)
+        assert "requirements.txt" not in " ".join(_zip_names(resp))
+    cur = env.get("/api/projects/alpha/documents.zip", headers=hdr(who), params={"revision": "A"})
+    assert cur.status_code == 200 and not any("requirements" in n for n in _zip_names(cur)) and any("board.txt" in n for n in _zip_names(cur))
+    other = env.get("/api/projects/alpha/documents.zip", headers=hdr(who), params={"revision": "specification source"})
+    assert other.status_code in (403, 404, 409) or not any("requirements" in n for n in _zip_names(other))
 
 
-def test_the_staff_zip_of_every_group_holds_it_and_the_release_list_ignores_it(env):
-    plain, src = put_files(env)
-    names = _zip_names(env.get("/api/projects/alpha/documents.zip", headers=hdr("t-staff")))
-    assert any(n.endswith("requirements.txt") for n in names)
-    for who in SEE + BLIND:                                                            # the spec source is no release: no group, no "current"
+def test_the_zips_hold_the_original_for_staff_and_the_owner_by_its_label(env):
+    _plain_and_labelled(env)
+    every = env.get("/api/projects/alpha/documents.zip", headers=hdr("t-staff"))
+    assert every.status_code == 200 and any(n.endswith("requirements.txt") for n in _zip_names(every))
+    for who in ("t-owner", "t-staff", "t-admin"):
+        got = env.get("/api/projects/alpha/documents.zip", headers=hdr(who), params={"revision": "specification source"})
+        assert got.status_code == 200 and any(n.endswith("requirements.txt") for n in _zip_names(got)), who
+        assert not any("requirements" in n for n in _zip_names(env.get("/api/projects/alpha/documents.zip", headers=hdr(who), params={"revision": "A"})))
+
+
+def test_the_spec_source_is_no_release_for_anybody(env):
+    put_files(env)
+    for who in SEE + BLIND:
         info = env.get("/api/projects/alpha/documents", headers=hdr(who)).json()
         assert all(g["revision"] != "specification source" for g in info["releases"]), who
         assert info["current_release"] != "specification source"
-    plain_zip = _zip_names(env.get("/api/projects/alpha/documents.zip", headers=hdr("t-cust")) if False else
-                           env.get("/api/projects/alpha/documents.zip", headers=hdr("t-staff"), params={"revision": ""}))
-    assert not any("requirements" in n for n in plain_zip)
+
+
+def test_the_visibility_filter_defaults_to_nobody():
+    rows = [{"id": "s", "spec_source": True}, {"id": "p"}]
+    assert [r["id"] for r in documents._visible(rows, True)] == ["p"]                              # even a staff-context caller that says nothing
+    assert [r["id"] for r in documents._visible(rows, True, spec=True)] == ["s", "p"]
+    assert [r["id"] for r in documents._visible(rows, False)] == ["p"]
 
 
 def test_it_can_never_be_the_cover(env):
@@ -112,14 +133,42 @@ def test_it_can_never_be_the_cover(env):
     assert cover._cover_allowed({"id": "x", "spec_source": True}) is False and cover._cover_allowed({"id": "x"}) is True
 
 
-def test_only_the_documents_module_and_the_cover_read_the_project_documents():
-    """The digest, the owner report, the counts and every other reader of project documents go through ``documents._visible``: a new reader
-    of ``store.load_documents`` is a new place that must apply the same rule (this list is the guard)."""
+def test_readers_of_the_project_documents_are_a_known_short_list():
+    """Every reader of a project's documents (rows or bytes) in the application, the scripts and the deploy files.  A new one is a new
+    place that must apply ``documents._visible`` / ``documents._spec``: this list is the guard.  Backups and a mirror copy folders as
+    they are, on the staff side (not an API for members); the digest, the owner report and MCP are tested below."""
+    from pathlib import Path
+    repo = Path(documents.__file__).resolve().parents[3]
+    needles = ("load_documents(", "DOCUMENTS_JSON", "read_document_file(", "documents_file_dir(", "documents/documents.json", "documents/files")
+    found = set()
+    for base in ("src", "scripts", "deploy"):
+        if not (repo / base).is_dir():
+            continue
+        for p in (repo / base).rglob("*"):
+            if p.suffix not in (".py", ".sh", ".yml", ".yaml", ".service", ".timer", ".cfg", ".ini", ".toml") or not p.is_file():
+                continue
+            if any(n in p.read_text(encoding="utf-8", errors="replace") for n in needles):
+                found.add(str(p.relative_to(repo)))
+    assert found == {"src/motor_ai_sim/development/cover.py", "src/motor_ai_sim/development/documents.py",
+                     "src/motor_ai_sim/development/models.py", "src/motor_ai_sim/development/spec_file_assistant.py",
+                     "src/motor_ai_sim/development/store.py"}, sorted(found)
+
+
+def test_the_digest_the_owner_report_and_mcp_do_not_expose_it(env):
     from pathlib import Path
     root = Path(documents.__file__).resolve().parents[1]
-    readers = sorted(str(p.relative_to(root)) for p in root.rglob("*.py") if "load_documents(" in p.read_text(encoding="utf-8")
-                     and p.name != "store.py")
-    assert readers == ["development/cover.py", "development/documents.py", "development/spec_file_assistant.py"], readers
+    for rel in ("digest", "mcp_app.py", "mcp_tools.py", "mcp_discovery.py", "owner_report"):
+        p = root / rel
+        for f in ([p] if p.is_file() else sorted(p.rglob("*.py"))):
+            text = f.read_text(encoding="utf-8")
+            assert "load_documents" not in text and "development.documents" not in text and "read_document_file" not in text, f.name
+    from motor_ai_sim.owner_report import sources as OR
+    plain, src = put_files(env)
+    env.get(f"/api/projects/alpha/documents/{src}/download", headers=hdr("t-owner"))
+    audit = [json.loads(x) for x in (store.path_for("alpha") / "audit.jsonl").read_text(encoding="utf-8").splitlines() if x.strip()]
+    texts = [OR._project_audit_text(ev) for ev in audit]
+    assert all("requirements.txt" not in json.dumps(t) for t in texts)                            # no line names the original (upload, attach, download)
+    assert any(t and "board.txt" in t[0] for t in texts)                                          # an ordinary upload is still reported
 
 
 def test_the_upload_route_does_not_let_the_flag_be_set_or_cleared_by_hand(env):

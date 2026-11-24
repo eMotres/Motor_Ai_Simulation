@@ -22,7 +22,7 @@ export function fileRefusal(name: string, size: number, maxBytes: number = FILE_
   return null;
 }
 
-export interface FileSource { ref: string; excerpt?: string; converted?: string; verified?: boolean; file_name?: string; document_id?: string }
+export interface FileSource { ref: string; cited?: string; excerpt?: string; converted?: string; found?: boolean }
 
 /** The source of a card as it is read from the proposal (a card without a file has none). */
 export function fileSourceOf(p: { file_source?: unknown }): FileSource | null {

@@ -149,8 +149,8 @@ def sanitise(blocks: list[Block]) -> Sanitised:
                 kept.append(REMOVED_COMMERCIAL.format(ref=where))
             else:
                 kept.append(neutralise(line))
-        text = "\n".join(kept).strip()
-        if text:
+        text = "\n".join(kept).rstrip()                       # leading blank lines stay: the line numbers of a block must not move
+        if text.strip():
             out.blocks.append(Block(ref, text))
     return out
 
@@ -266,14 +266,17 @@ def _refs_text(refs: list[str], limit: int = 8) -> str:
 
 
 # ── source binding ───────────────────────────────────────────────────────────
+#
+# A card is "found in the file" only when its excerpt is a contiguous run of TOKENS of the cited block (at the cited line / cell when the
+# reference names one) and every leaf of the value is a token sequence of that excerpt: a number with its unit right behind it (or in the
+# next table cell), a string as written, a stated conversion that computes.  Which QUANTITY a number belongs to cannot be proved by code:
+# the card says "found in the file; check it is the right quantity".  Anything else is shown as assumed.
 
-_NUM = re.compile(r"(?<![\w.])[-+]?\d+(?:\.\d+)?(?!\d)(?!\.\d)")
-_CONV = re.compile(r"([-+]?\d+(?:\.\d+)?)\s*([^\s\d=>→;][^\s=>→;]*)\s*(?:->|→|=>|=)\s*([-+]?\d+(?:\.\d+)?)\s*([^\s;]+)")
+_TOKEN = re.compile(
+    r"(?P<num>(?<![\w.,])[-+]?\d+(?:[ ,.]\d{3})*(?:[.,]\d+)?(?![\w]))"      # 6000  6.5  0,125  1,234  6 000  1.234,5
+    r"|(?P<num2>(?<![\w.,])[-+]?\d+(?:[.,]\d+)?)"                          # a number glued to its unit: 6000rpm
+    r"|(?P<word>[^\W_]+)|(?P<other>\S)")
 _CELL = re.compile(r"^(.+)!([A-Z]{1,3})(\d+)(?::([A-Z]{1,3})(\d+))?$")
-_CELL_UNIT = re.compile(r"^;\s*[A-Z]{1,3}\d+=([A-Za-zµ°Ω][A-Za-zµ°Ω/·*]*)")
-_UNIT_AFTER = re.compile(r"^\s?([A-Za-zµ°Ω][A-Za-zµ°Ω/·*]*)")
-
-# (dimension, factor to the base unit); units are matched CASE-SENSITIVELY: mW is not MW
 _UNITS: dict[str, tuple[str, float]] = {
     "mm": ("L", 1e-3), "cm": ("L", 1e-2), "m": ("L", 1.0), "in": ("L", 0.0254),
     "mW": ("P", 1e-3), "W": ("P", 1.0), "kW": ("P", 1e3), "MW": ("P", 1e6), "hp": ("P", 745.7),
@@ -283,6 +286,62 @@ _UNITS: dict[str, tuple[str, float]] = {
     "mNm": ("N", 1e-3), "Nm": ("N", 1.0), "kNm": ("N", 1e3), "lbf·ft": ("N", 1.3558179),
     "rpm": ("S", 1.0), "krpm": ("S", 1e3), "rad/s": ("S", 60 / (2 * math.pi)), "rps": ("S", 60.0), "Hz": ("S", 60.0),
 }
+_MINUS = str.maketrans({"−": "-", "‒": "-", "–": "-", "﹣": "-", "－": "-", " ": " ", " ": " ", " ": " "})
+
+
+@dataclass
+class Tok:
+    text: str                    # as written
+    kind: str                    # num | word | other
+    value: Optional[float] = None
+    ambiguous: bool = False      # "1,234": 1.234 or 1234?
+    line: int = 0
+
+
+def parse_number(raw: str) -> tuple[Optional[float], bool]:
+    """THE number reader: ``(value, ambiguous)``.  "6000", "6.5", "6,5", "0,125" (a thousands group never starts with 0), "1,234,567",
+    "1.234,5", "6 000", a Unicode minus.  "1,234" / "1.234" / "1 234" alone could be 1.234 or 1234: ambiguous (value None)."""
+    t = str(raw).translate(_MINUS).strip()
+    sign = -1.0 if t.startswith("-") else 1.0
+    t = t.lstrip("+-")
+    if not re.fullmatch(r"\d[\d ,.]*", t):
+        return None, False
+    seps = re.findall(r"[ ,.]", t)
+    if not seps:
+        return sign * float(t), False
+    if len(set(seps)) == 1 and seps[0] == " ":                    # "6 000": groups of exactly three after the first
+        parts = t.split(" ")
+        return (sign * float("".join(parts)), False) if all(len(x) == 3 for x in parts[1:]) and 1 <= len(parts[0]) <= 3 else (None, True)
+    last = max(t.rfind(","), t.rfind("."))
+    head, tail = t[:last], t[last + 1:]
+    kinds = set(re.findall(r"[,.]", t))
+    if len(kinds) == 2:                                          # "1.234,5": the LAST separator is the decimal point
+        group = re.sub(r"[,.]", "", head)
+        okay = all(len(x) == 3 for x in re.split(r"[,.]", head)[1:]) and len(tail) != 3
+        return (sign * float(f"{group}.{tail}"), False) if okay else (None, True)
+    if t.count(seps[-1]) > 1 and all(c != " " for c in seps):    # "1,234,567" / "1.234.567": thousands
+        parts = re.split(r"[,.]", t)
+        return (sign * float("".join(parts)), False) if all(len(x) == 3 for x in parts[1:]) and parts[0][0] != "0" else (None, True)
+    if len(tail) == 3 and head and head[0] != "0" and len(head) <= 3 and " " not in t:
+        return None, True                                         # "1,234": a decimal or a thousands separator
+    if " " in t:
+        return None, True
+    return sign * float(f"{head}.{tail}"), False
+
+
+def tokenize(text: str) -> list[Tok]:
+    out: list[Tok] = []
+    for ln, line in enumerate(str(text or "").translate(_MINUS).split("\n")):
+        for m in _TOKEN.finditer(line):
+            if m.group("num") or m.group("num2"):
+                raw = m.group("num") or m.group("num2")
+                v, amb = parse_number(raw)
+                out.append(Tok(" ".join(raw.split()), "num", v, amb, ln))
+            elif m.group("word"):
+                out.append(Tok(m.group("word"), "word", line=ln))
+            else:
+                out.append(Tok(m.group("other"), "other", line=ln))
+    return out
 
 
 def _unit_norm(u: str) -> str:
@@ -306,26 +365,51 @@ def _convert(x: float, u1: str, u2: str) -> Optional[float]:
     return None
 
 
-def _numbers(text: str) -> list[tuple[float, str]]:
-    """(value, unit word that follows it or "") of every plain number in a text; "6,000" is 6000, a number inside a longer one is not found."""
-    t = re.sub(r"(?<=\d),(?=\d{3}(?!\d))", "", str(text or ""))
-    t = re.sub(r"(?<=\d),(?=\d)", ".", t)
+def _units_after(toks: list[Tok], i: int) -> list[str]:
+    """The unit strings that can follow the number at ``i``: the next 1-3 tokens joined ("°C", "N·m", "rad/s"), or the next table cell
+    ("; C2=rpm").  Token-level: "F" is not found inside "Fan"."""
     out = []
-    for m in _NUM.finditer(t):
-        tail = t[m.end():m.end() + 24]
-        u = _UNIT_AFTER.match(tail) or _CELL_UNIT.match(tail)          # "6000 rpm", or a table: "B2=6000; C2=rpm"
-        out.append((float(m.group(0)), u.group(1) if u else ""))
+    j = i + 1
+    if j < len(toks) and toks[j].kind == "other" and toks[j].text == ";":                 # a table: B2=6000; C2=rpm
+        k = j + 1
+        if k + 2 < len(toks) + 0 and toks[k].kind == "word" and toks[k + 1].text == "=" and re.fullmatch(r"[A-Z]{1,3}\d+", toks[k].text):
+            parts = []
+            for t in toks[k + 2:k + 5]:
+                if t.kind == "num" or t.text == ";":
+                    break
+                parts.append(t.text)
+            out.append("".join(parts))
+        return out
+    acc = ""
+    for t in toks[j:j + 3]:
+        if t.kind == "num" or t.text in ";,":
+            break
+        acc += t.text
+        out.append(acc)
     return out
 
 
-def _leaves(node: dict, value: Any) -> list[tuple[float, str]]:
-    """(number, field unit) of every numeric leaf of a proposed value, units from the schema."""
-    out: list[tuple[float, str]] = []
-    unit = str(node.get("unit") or "")
-    if isinstance(value, bool) or value is None:
-        return out
+def _unit_follows(toks: list[Tok], i: int, unit: str) -> bool:
+    return any(_same_unit(c, unit) for c in _units_after(toks, i))
+
+
+def _contains_run(hay: list[Tok], needle: list[Tok]) -> list[int]:
+    """Start indexes where ``needle`` occurs as a contiguous run of tokens (text equal, case kept)."""
+    n = len(needle)
+    return [i for i in range(len(hay) - n + 1) if all(hay[i + k].text == needle[k].text for k in range(n))] if n else []
+
+
+def _leaves(node: dict, value: Any) -> list[tuple[str, Any, dict]]:
+    """``(kind, value, schema node)`` of every leaf of a proposed value: ``num`` / ``str`` / ``bool``."""
+    if value is None:
+        return []
+    if isinstance(value, bool):
+        return [("bool", value, node)]
     if isinstance(value, (int, float)):
-        return [(float(value), unit)]
+        return [("num", float(value), node)]
+    if isinstance(value, str):
+        return [("str", value, node)]
+    out: list = []
     if isinstance(value, dict):
         props = {p.get("id"): p for p in (node.get("properties") or [])}
         for k, v in value.items():
@@ -337,21 +421,39 @@ def _leaves(node: dict, value: Any) -> list[tuple[float, str]]:
     return out
 
 
-def _blocks_for(ref: str, blocks: list[Block]) -> list[Block]:
-    """The block(s) the cited reference names: an exact reference, a cell or cell range of a sheet, a line of a text file."""
+def _cell_span(toks: list[Tok], first: tuple[str, int], last: tuple[str, int]) -> Optional[tuple[int, int]]:
+    """Token span of the cells of a sheet row block ("A5=..; B5=..") from the first to the last cited cell."""
+    def start(cell: str) -> Optional[int]:
+        for i in range(len(toks) - 1):
+            if toks[i].kind == "word" and toks[i].text == cell and toks[i + 1].text == "=":
+                return i
+        return None
+    a, b = start(f"{first[0]}{first[1]}"), start(f"{last[0]}{last[1]}")
+    if a is None or b is None:
+        return None
+    end = next((i for i in range(b, len(toks)) if toks[i].text == ";" and i + 2 < len(toks) and toks[i + 1].kind == "word"
+                and re.fullmatch(r"[A-Z]{1,3}\d+", toks[i + 1].text) and toks[i + 2].text == "="), len(toks))
+    return (a, end) if a <= b else None
+
+
+def resolve(ref: str, blocks: list[Block]) -> list[tuple[Block, Optional[tuple[int, int]], Optional[int]]]:
+    """The block(s) a cited reference names, with the narrower place inside the block: ``(block, token span | None, line | None)``.  A
+    reference that names a block exactly, a cell / range of a sheet row, or a line of a text file."""
     r = " ".join(str(ref or "").strip().strip("[]").split())
     r = re.sub(r"(?i)^p\.?\s*(\d+)$", r"page \1", r)
-    exact = [b for b in blocks if b.ref.casefold() == r.casefold()]
+    exact = [(b, None, None) for b in blocks if b.ref.casefold() == r.casefold()]
     if exact:
         return exact
     m = _CELL.match(r)
     if m:
-        sheet, row1, row2 = m.group(1), int(m.group(3)), int(m.group(5) or m.group(3))
+        sheet, c1, r1, c2, r2 = m.group(1), m.group(2), int(m.group(3)), m.group(4) or m.group(2), int(m.group(5) or m.group(3))
         found = []
         for b in blocks:
             bm = _CELL.match(b.ref)
-            if bm and bm.group(1).casefold() == sheet.casefold() and row1 <= int(bm.group(3)) <= row2:
-                found.append(b)
+            if bm and bm.group(1).casefold() == sheet.casefold() and r1 <= int(bm.group(3)) <= r2:
+                toks = tokenize(b.text)
+                row = int(bm.group(3))
+                found.append((b, _cell_span(toks, (c1, row), (c2, row)), None))
         return found
     m = re.match(r"(?i)^lines? (\d+)(?:-(\d+))?$", r)
     if m:
@@ -360,34 +462,58 @@ def _blocks_for(ref: str, blocks: list[Block]) -> list[Block]:
         for b in blocks:
             bm = re.match(r"^lines (\d+)-(\d+)$", b.ref)
             if bm and int(bm.group(1)) <= lo and hi <= int(bm.group(2)):
-                found.append(b)
+                found.append((b, None, (lo - int(bm.group(1)), hi - int(bm.group(1)))))
         return found
     return []
 
 
-def _ws(text: str) -> str:
-    return re.sub(r"\s+", " ", str(text or "")).strip()
+def bind_source(field_id: str, version: int, value: Any, source: str, excerpt: str, converted: str, blocks: list[Block]) -> Optional[str]:
+    """The resolved block reference when the card is FOUND IN THE FILE, else ``None`` (shown as assumed).  See the section comment."""
+    ex = tokenize(excerpt)
+    if len(ex) < 2 and not (len(ex) == 1 and len(ex[0].text) >= 3):
+        return None
+    for block, span, lines in resolve(source, blocks):
+        bt = tokenize(block.text)
+        hits = _contains_run(bt, ex)
+        if span:
+            hits = [h for h in hits if h < span[1] and h + len(ex) > span[0]]                    # the excerpt must touch the cited cell(s)
+        if lines:
+            hits = [h for h in hits if any(lines[0] <= bt[k].line <= lines[1] for k in range(h, h + len(ex)))]
+        if hits and _leaves_found(field_id, version, value, ex, converted):
+            return block.ref
+    return None
 
 
-def bind_source(field_id: str, version: int, value: Any, source: str, excerpt: str, converted: str, blocks: list[Block]) -> bool:
-    """True only when the card is PROVED by the file: the cited reference names a real block, the excerpt occurs inside THAT block (case
-    kept), and every number of the value is in the excerpt (with the unit of the field when a unit stands next to it) or is the exact
-    result of a stated conversion of a number of the excerpt (checked numerically, units case-sensitive).  Otherwise the card is shown
-    as assumed."""
-    ex = _ws(excerpt)
-    if len(ex) < 2:
-        return False
-    cited = _blocks_for(source, blocks)
-    if not any(ex in _ws(b.text) for b in cited):
-        return False
+def _leaves_found(field_id: str, version: int, value: Any, ex: list[Tok], converted: str) -> bool:
     try:
         _, node = P.field_info(field_id, version)
     except Exception:                                         # noqa: BLE001
         return False
-    nums = _numbers(ex)
-    conv = [(float(x), u1, float(y), u2) for x, u1, y, u2 in _CONV.findall(str(converted or "").replace(",", "."))]
-    for leaf, unit in _leaves(node, value):
-        ok = any(math.isclose(n, leaf, rel_tol=1e-9, abs_tol=1e-9) and (not w or not unit or _same_unit(w, unit)) for n, w in nums)
+    leaves = _leaves(node, value)
+    if not leaves:
+        return False
+    conv = []
+    for x, u1, y, u2 in re.findall(r"([-+−]?\d[\d.,]*)\s*([^\s\d=>→;][^\s=>→;]*)\s*(?:->|→|=>|=)\s*([-+−]?\d[\d.,]*)\s*([^\s;]+)",
+                                   str(converted or "")):
+        xv, xa = parse_number(x)
+        yv, ya = parse_number(y)
+        if xv is not None and yv is not None:
+            conv.append((xv, u1, yv, u2))
+    for kind, leaf, sub in leaves:
+        if kind == "bool":
+            return False                                      # a yes / no is never proved by words: assumed
+        if kind == "str":
+            if not _string_found(leaf, sub, ex):
+                return False
+            continue
+        unit = str(sub.get("unit") or "")
+        ok = False
+        for i, t in enumerate(ex):
+            if t.kind != "num" or t.value is None or not math.isclose(t.value, leaf, rel_tol=1e-9, abs_tol=1e-9):
+                continue
+            if not unit or _unit_follows(ex, i, unit):
+                ok = True
+                break
         if not ok:
             for x, u1, y, u2 in conv:
                 got = _convert(x, u1, u2)
@@ -395,13 +521,27 @@ def bind_source(field_id: str, version: int, value: Any, source: str, excerpt: s
                     continue
                 if unit and not _same_unit(u2, unit):
                     continue
-                if any(math.isclose(n, x, rel_tol=1e-9, abs_tol=1e-9) and (not w or _unit_norm(w) == _unit_norm(u1)) for n, w in nums) \
-                        and u1 in ex:
-                    ok = True
+                if any(t.kind == "num" and t.value is not None and math.isclose(t.value, x, rel_tol=1e-9, abs_tol=1e-9)
+                       and any(_unit_norm(c) == _unit_norm(u1) for c in _units_after(ex, i)) for i, t in enumerate(ex)):
+                    ok = True                                  # the source number WITH its unit stands in the excerpt; the arithmetic holds
                     break
         if not ok:
             return False
     return True
+
+
+def _string_found(text: str, node: dict, ex: list[Tok]) -> bool:
+    """A string value is in the excerpt as a token sequence (case-insensitive); for an option field, its own label in either language."""
+    wanted = [str(text)]
+    for o in node.get("options") or []:
+        if isinstance(o, dict) and o.get("value") == text:
+            wanted += [str(v) for v in (o.get("label") or {}).values()] if isinstance(o.get("label"), dict) else [str(o.get("label") or "")]
+    low = [Tok(t.text.casefold(), t.kind) for t in ex]
+    for w in wanted:
+        wt = [Tok(t.text.casefold(), t.kind) for t in tokenize(w)]
+        if wt and _contains_run(low, wt):
+            return True
+    return False
 
 
 def prepare_markers(found: list[dict], san: Sanitised, name: str, document_id: str, version: int = 2) -> tuple[list[dict], int, int]:
@@ -424,11 +564,11 @@ def prepare_markers(found: list[dict], san: Sanitised, name: str, document_id: s
             dropped += 1
             money += 1
             continue
-        verified = bind_source(fid, version, fields.get("value"), ref, excerpt, converted, san.blocks)
+        resolved = bind_source(fid, version, fields.get("value"), ref, excerpt, converted, san.blocks)
         fields = dict(fields)
-        if not verified:
+        if not resolved:
             fields["basis"] = "assumed"
-        fields["_file_source"] = {"ref": ref, "excerpt": excerpt, "converted": converted, "verified": verified,
+        fields["_file_source"] = {"ref": resolved or ref, "cited": ref, "excerpt": excerpt, "converted": converted, "found": bool(resolved),
                                   "file_name": name[:200], "document_id": document_id}
         keep.append(fields)
     return keep, dropped, money
@@ -477,8 +617,8 @@ def run_turn(project_id: str, project: dict, user: dict, *, name: str, document_
     if san.commercial_refs:
         notes.append(NOTES["commercial"][lang].format(n=len(san.commercial_refs), refs=_refs_text(san.commercial_refs)))
     reply = "\n\n".join(x for x in (clean, "\n".join(notes)) if x)
-    return {"reply": reply, "proposals": P.with_current(project_id, stored), "applied": [], "source": source, "model": model,
-            "refused": got["refused"], "dropped": dropped, "fill_mode": False, "file": info}
+    return {"reply": reply, "proposals": P.with_current(project_id, stored, source_file=True), "applied": [], "source": source,
+            "model": model, "refused": got["refused"], "dropped": dropped, "fill_mode": False, "file": info}
 
 
 # ── storage of the original ──────────────────────────────────────────────────
@@ -491,6 +631,10 @@ def store_original(project_id: str, user: dict, name: str, data: bytes, content_
     used = sum(int(r.get("size") or 0) for r in store.load_documents(project_id))
     if used >= D.PROJECT_MAX_BYTES:
         raise ExtractError("storage_full", "The project's document storage is full.", "项目文档存储空间已满。")
+    try:
+        mark_project(project_id)                              # BEFORE the row exists: if the flag cannot be written nothing is stored
+    except Exception:                                         # noqa: BLE001
+        raise ExtractError("flag", "The file could not be recorded safely; please try again in a minute.", "无法安全记录该文件，请一分钟后再试。") from None
     file_id = secrets.token_urlsafe(16)
     stored = store.documents_file_dir(project_id) / file_id
     try:
@@ -510,7 +654,6 @@ def store_original(project_id: str, user: dict, name: str, data: bytes, content_
     D._flush(project_id)
     store.append_audit(project_id, D._email(user), "spec.file.attach", "document", str(row["id"]),
                        {"name": row["name"], "size": size, "sha256": sha256})
-    mark_project(project_id)
     return row
 
 
@@ -520,3 +663,5 @@ def mark_project(project_id: str) -> None:
     def edit(doc: dict) -> None:
         doc["spec_file_used"] = True
     store.mutate_project(project_id, edit)
+    from motor_ai_sim import assistant_archive as AR              # the archive remembers it too (the project may be deleted later)
+    AR.log_event(assistant="assistant", context="spec", event="file_project", project_id=project_id)

@@ -385,6 +385,8 @@ def _project_audit_text(ev: dict) -> Optional[tuple]:
     det = ev.get("details") if isinstance(ev.get("details"), dict) else {}
     if action == "read" or action.endswith(".read") or "view" in action.split(".")[-1:]:
         return None
+    if det.get("spec_source") or action == "spec.file.attach":           # the original of an attached specification file: never in a report
+        return None
     if action == "create" and entity == "project":
         return ("project created by the customer (self-service)" if det.get("self_service") else "project created"), None
     if action == "update" and entity == "project":

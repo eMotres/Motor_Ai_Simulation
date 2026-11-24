@@ -4,6 +4,7 @@ reason when the library is absent, and a stub covers the PDF rules either way.""
 from __future__ import annotations
 
 import io
+import os
 import socket
 import struct
 import subprocess
@@ -578,3 +579,101 @@ def test_the_worker_is_killed_as_a_group_on_a_timeout_and_its_answer_is_checked(
 def test_the_answer_of_the_worker_must_have_the_schema(bad):
     with pytest.raises(X.ExtractError):
         X.from_dict(bad)
+
+
+# ── relationships are PARSED, not matched ────────────────────────────────────────────────────────────────────────────────
+
+def _rels(inner: str, prefix: str = "", ns: str = "http://schemas.openxmlformats.org/package/2006/relationships", enc: str = "utf-8", bom: bool = False) -> bytes:
+    tag = f"{prefix}:Relationship" if prefix else "Relationship"
+    root = f"{prefix}:Relationships" if prefix else "Relationships"
+    xmlns = f'xmlns:{prefix}="{ns}"' if prefix else f'xmlns="{ns}"'
+    body = f'<?xml version="1.0" encoding="{enc}"?><{root} {xmlns}>' + inner.replace("<R ", f"<{tag} ") + f"</{root}>"
+    raw = body.encode(enc)
+    return (b"\xff\xfe" + raw if enc == "utf-16" and False else raw)
+
+
+ATT = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/attachedTemplate"
+IMG = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/image"
+LNK = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink"
+
+
+@pytest.mark.parametrize("name,raw", [
+    ("prefixed element", _rels(f'<R Id="a" Type="{ATT}" Target="http://e.test/t.dotm" TargetMode="External"/>', prefix="pr")),
+    ("character reference in the mode", _rels(f'<R Id="a" Type="{IMG}" Target="http://e.test/p.png" TargetMode="&#69;xternal"/>')),
+    ("character reference in the type", _rels(f'<R Id="a" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/attached&#84;emplate" Target="x"/>')),
+    ("hex character reference", _rels(f'<R Id="a" Type="{IMG}" Target="http://e.test/p.png" TargetMode="&#x45;xternal"/>')),
+    ("mixed case", _rels(f'<R Id="a" Type="{IMG}" Target="http://e.test/p.png" TargetMode="eXTernal"/>')),
+    ("single quotes and spaces", _rels(f"<R   Id='a'   Type='{IMG}'\n Target='http://e.test/p.png'\n TargetMode = ' External '  />")),
+    ("utf-16 file", _rels(f'<R Id="a" Type="{IMG}" Target="http://e.test/p.png" TargetMode="External"/>', enc="utf-16")),
+    ("other namespace prefix on the attribute", _rels(f'<R Id="a" Type="{IMG}" Target="http://e.test/p.png" xmlns:q="urn:q" q:TargetMode="External"/>')),
+    ("ole object", _rels('<R Id="a" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/oleObject" Target="embeddings/o.bin"/>')),
+    ("embedded package", _rels('<R Id="a" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/package" Target="embeddings/p.xlsx"/>')),
+])
+def test_relationship_bypasses_are_refused(name, raw):
+    with pytest.raises(X.ExtractError) as info:
+        X._check_relationships(raw)
+    assert info.value.code == "active", name
+    base = make_docx()
+    assert _err("a.docx", _rewrite(base, {"word/_rels/x.xml.rels": raw})).code in ("active", "dtd"), name
+
+
+def test_a_utf16_rels_without_a_bom_is_parsed_or_refused_never_stored():
+    raw = f'<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="a" Type="{ATT}" Target="x"/></Relationships>'.encode("utf-16-le")
+    with pytest.raises(X.ExtractError):
+        X._check_relationships(raw)
+
+
+def test_ordinary_relationships_pass_and_a_hyperlink_is_inert():
+    ok = _rels(f'<R Id="a" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>'
+               f'<R Id="b" Type="{LNK}" Target="https://example.test/x" TargetMode="External"/>')
+    X._check_relationships(ok)
+    prefixed = _rels(f'<R Id="b" Type="{LNK}" Target="https://example.test/x" TargetMode="External"/>', prefix="pr")
+    X._check_relationships(prefixed)
+    assert X.extract("a.docx", _rewrite(make_docx(), {"word/_rels/x.xml.rels": ok})).kind == "docx"
+
+
+def test_a_rels_that_does_not_parse_or_declares_entities_is_refused():
+    with pytest.raises(X.ExtractError) as info:
+        X._check_relationships(b"<Relationships><Relationship")
+    assert info.value.code == "unreadable"
+    with pytest.raises(X.ExtractError) as info:
+        X._check_relationships(b'<?xml version="1.0"?><!DOCTYPE r [<!ENTITY a "b">]><Relationships/>')
+    assert info.value.code == "dtd"
+
+
+def test_macro_content_types_are_read_by_the_parser_too():
+    ct = ('<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
+          '<Override PartName="/word/document.xml" ContentType="application/vnd.ms-word.document.macroEnabled.main+xml"/></Types>')
+    with pytest.raises(X.ExtractError) as info:
+        X._check_relationships(ct.encode("utf-16"))
+    assert info.value.code == "macro"
+
+
+# ── the worker's surroundings ────────────────────────────────────────────────
+
+def test_on_a_platform_without_process_groups_extraction_refuses_cleanly(monkeypatch):
+    monkeypatch.delattr(os, "killpg", raising=False)
+    with pytest.raises(X.ExtractError) as info:
+        X.extract_isolated("a.txt", b"x 1\n")
+    assert info.value.code == "no_reader" and "not available" in info.value.en
+    monkeypatch.undo()
+    monkeypatch.setattr(os, "name", "nt")
+    with pytest.raises(X.ExtractError) as info:
+        X.extract_isolated("a.txt", b"x 1\n")
+    assert info.value.code == "no_reader"
+
+
+def test_a_module_planted_in_the_working_directory_is_not_imported_by_the_worker(tmp_path, monkeypatch):
+    (tmp_path / "json.py").write_text("raise SystemExit(99)\n")                    # would break `import json` if the cwd were on sys.path
+    monkeypatch.chdir(tmp_path)
+    assert X.extract_isolated("a.txt", b"x 1\n").kind == "txt"
+    seen = {}
+    real = subprocess.Popen
+
+    def spy(cmd, **kw):
+        seen.update(cmd=cmd, cwd=kw.get("cwd"))
+        return real(cmd, **kw)
+
+    monkeypatch.setattr(subprocess, "Popen", spy)
+    X.extract_isolated("a.txt", b"x 1\n")
+    assert seen["cwd"] and seen["cwd"] != str(tmp_path) and ("-P" in seen["cmd"] or sys.version_info < (3, 11))

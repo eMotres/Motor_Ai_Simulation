@@ -29,10 +29,12 @@ export default function SpecChatCards({ applied = [], proposals = [], schema, la
   const fileChip = (p: Proposal) => {
     const fs = fileSourceOf(p);
     if (!fs) return null;
+    const found = fs.found === true;
     const tip = [td('specAssistant.sourceFrom', { ref: fs.ref }), fs.excerpt ? td('specAssistant.sourceExcerpt', { text: fs.excerpt }) : '',
-      fs.converted ? td('specAssistant.sourceConverted', { text: fs.converted }) : '', fs.verified === false ? td('specAssistant.sourceNotFound') : ''].filter(Boolean);
+      fs.converted ? td('specAssistant.sourceConverted', { text: fs.converted }) : '',
+      td(found ? 'specAssistant.sourceFound' : 'specAssistant.sourceNotFound')].filter(Boolean);
     return <Tooltip title={<Box data-testid="spec-source-tip">{tip.map((t) => <Box key={t}>{t}</Box>)}</Box>}>
-      <Chip size="small" data-testid="spec-source" label={`${td('specAssistant.source')}: ${fs.ref}`} color={fs.verified === false ? 'warning' : 'default'} variant="outlined"
+      <Chip size="small" data-testid="spec-source" label={`${td(found ? 'specAssistant.sourceFoundShort' : 'specAssistant.sourceNotFoundShort')}: ${fs.ref}`} color={found ? 'default' : 'warning'} variant="outlined"
         sx={{ height: 20, fontSize: 12, mt: 0.3, mr: 0.5, maxWidth: '100%' }} />
     </Tooltip>;
   };

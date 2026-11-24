@@ -124,7 +124,7 @@ def _visible(rows: list[dict], staff: bool, include_archived: bool = False, pric
     """``prices``: the caller may read price-restricted rows (default: staff only, so a reader that does not know the project
     never shows one).  ``spec``: the caller may read spec-source rows (``_spec``; default: staff only)."""
     prices = staff if prices is None else prices
-    spec = staff if spec is None else spec
+    spec = bool(spec)                      # never by default: a caller that does not say it may read spec sources, does not
     if staff:
         return [r for r in rows if (include_archived or not r.get("archived")) and (prices or not r.get("price_restricted"))
                 and (spec or not r.get("spec_source"))]
@@ -135,7 +135,7 @@ def _visible(rows: list[dict], staff: bool, include_archived: bool = False, pric
 def _details(row: dict, extra: dict | None = None) -> dict:
     details = {"name": row.get("name"), "folder": row.get("folder"), "revision": row.get("revision"),
                "internal": bool(row.get("internal")), "price_restricted": bool(row.get("price_restricted")),
-               "size": row.get("size")}
+               "spec_source": bool(row.get("spec_source")), "size": row.get("size")}
     details.update(extra or {})
     return details
 

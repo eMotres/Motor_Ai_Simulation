@@ -29,6 +29,7 @@ import os
 import re
 import subprocess
 import sys
+import threading
 import zipfile
 from dataclasses import dataclass, field
 from typing import Any
@@ -120,6 +121,8 @@ _MSG: dict[str, tuple[str, str]] = {
     "active": ("The file contains active content (macros, embedded files or objects, scripts, or links to remote content); it is not read. "
                "Please send a plain copy.", "文件含有活动内容（宏、嵌入文件或对象、脚本或远程内容链接），无法读取。请发送纯净副本。"),
     "dtd": ("The file contains an XML document type declaration or entities; it is not read.", "文件含有 XML 文档类型声明或实体，无法读取。"),
+    "busy": ("The server is busy reading other files. Please try again in a minute.", "服务器正忙于读取其他文件，请一分钟后再试。"),
+    "no_reader": ("Reading files is not available on this server.", "此服务器暂不支持读取文件。"),
     "unreadable": ("The file could not be read. Please check it or send another copy.", "无法读取该文件。请检查或发送另一份。"),
     "timeout": ("The file took too long to read; it is refused.", "读取文件耗时过长，已拒绝。"),
     "pdf_unavailable": ("PDF reading is not available on this server.", "此服务器暂不支持读取 PDF。"),
@@ -221,38 +224,68 @@ def check_zip(data: bytes) -> zipfile.ZipFile:
     if total > ZIP_RATIO_FLOOR and total > ZIP_MAX_RATIO * max(len(data), 1):
         raise _err("bomb")
     try:
-        if "[Content_Types].xml" in zf.namelist() and b"macroenabled" in zf.read("[Content_Types].xml").lower():
+        if "[Content_Types].xml" in zf.namelist() and any(m in zf.read("[Content_Types].xml").lower().replace(b"\x00", b"")
+                                                          for m in (b"macroenabled", b"vbaproject")):
             raise _err("macro")
         for info in infos:                                  # every XML part: no DTD / entities; every relationship: nothing remote or active
             low = info.filename.lower()
             if not low.endswith((".xml", ".rels", ".vml")):
                 continue
-            body = zf.read(info).lower()
+            raw = zf.read(info)
+            body = raw.lower()
             if any(tag in body for tag in _DTD_MARKS):
                 raise _err("dtd")
-            if low.endswith(".rels"):
-                _check_relationships(body)
+            if low.endswith(".rels") or info.filename == "[Content_Types].xml":
+                _check_relationships(raw)
     except (KeyError, zipfile.BadZipFile, RuntimeError, ValueError):
         raise _err("unreadable") from None
     return zf
 
 
 _DTD_MARKS = tuple(m for t in ("<!doctype", "<!entity") for m in (t.encode(), t.encode("utf-16-le"), t.encode("utf-16-be")))
-_REL = re.compile(rb"<relationship\b[^>]*>", re.IGNORECASE)
-_ACTIVE_TYPES = frozenset({b"oleobject", b"package", b"activexcontrol", b"vbaproject", b"vbadata", b"externallink", b"attachedtemplate",
-                           b"oleobjectbin", b"macrosheet", b"dialogsheet"})
+_ACTIVE_TYPES = frozenset({"oleobject", "package", "activexcontrol", "vbaproject", "vbadata", "externallink", "attachedtemplate",
+                           "oleobjectbin", "macrosheet", "dialogsheet"})
 
 
-def _check_relationships(body: bytes) -> None:
-    """A relationship that points outside the file (remote template, external link, linked image) or at an active / embedded part is
-    refused; a plain external HYPERLINK is inert text and passes (it is never followed)."""
-    for tag in _REL.findall(body):
-        kind = re.search(rb"type\s*=\s*[\"']([^\"']*)", tag)
-        kind = kind.group(1) if kind else b""
-        if kind.rsplit(b"/", 1)[-1].lower() in _ACTIVE_TYPES:
-            raise _err("active")
-        if re.search(rb"targetmode\s*=\s*[\"']external", tag) and not kind.endswith(b"/hyperlink"):
-            raise _err("active")
+def _check_relationships(raw: bytes) -> None:
+    """Parse one ``.rels`` (or ``[Content_Types].xml``) with a namespace-aware XML parser (expat; any DOCTYPE or entity declaration
+    raises; the encoding comes from the BOM / declaration, so UTF-16 is read as UTF-16; prefixes, character references and any case
+    are resolved by the parser, never by a regex).  A relationship that points outside the file (remote template, external link, linked
+    image) or at an active / embedded part is refused; a plain external HYPERLINK is inert text and passes (it is never followed).  A
+    content type that is macro-enabled is refused.  A part that does not parse is refused."""
+    import xml.parsers.expat as expat
+
+    def local(name: str) -> str:
+        return name.rsplit(" ", 1)[-1].lower()
+
+    def forbidden(*_a, **_k):
+        raise _err("dtd")
+
+    def start(name, attrs):
+        tag = local(name)
+        a = {local(k): " ".join(str(v).split()).lower() for k, v in attrs.items()}
+        if tag == "relationship":
+            kind = a.get("type", "")
+            if kind.rsplit("/", 1)[-1] in _ACTIVE_TYPES:
+                raise _err("active")
+            if a.get("targetmode") == "external" and not kind.endswith("/hyperlink"):
+                raise _err("active")
+        elif tag in ("default", "override"):
+            ct = a.get("contenttype", "")
+            if "macroenabled" in ct or "vbaproject" in ct:
+                raise _err("macro")
+
+    parser = expat.ParserCreate(namespace_separator=" ")
+    parser.StartDoctypeDeclHandler = forbidden
+    parser.EntityDeclHandler = forbidden
+    parser.NotationDeclHandler = forbidden
+    parser.ExternalEntityRefHandler = lambda *a: forbidden()
+    parser.StartElementHandler = start
+    try:
+        parser.SetParamEntityParsing(expat.XML_PARAM_ENTITY_PARSING_NEVER)
+        parser.Parse(raw, True)
+    except expat.ExpatError:
+        raise _err("unreadable") from None
 
 
 # ── TXT / CSV / MD ───────────────────────────────────────────────────────────
@@ -598,6 +631,9 @@ CHILD_MEMORY = 1536 * 1024 * 1024
 CHILD_CPU_SECONDS = 20
 CHILD_WALL_SECONDS = 25
 CHILD_OUT_BYTES = 4 * 1024 * 1024
+MAX_WORKERS = 2
+BUSY_WAIT_SECONDS = 5
+_SLOTS = threading.BoundedSemaphore(MAX_WORKERS)
 _WORKER_BAD_LIMITS = 3
 
 
@@ -644,14 +680,26 @@ def extract_isolated(name: str, data: bytes) -> Extracted:
         raise _err("empty")
     if len(data) > MAX_BYTES:
         raise _err("too_big")
+    if os.name != "posix" or not hasattr(os, "killpg"):          # no resource limits, no process groups: no reading (fail closed)
+        raise _err("no_reader")
+    if not _SLOTS.acquire(timeout=BUSY_WAIT_SECONDS):             # at most two workers at once (1.5 GB each)
+        raise _err("busy")
+    try:
+        return _run_worker(name, data)
+    finally:
+        _SLOTS.release()
+
+
+def _run_worker(name: str, data: bytes) -> Extracted:
     import signal
     import tempfile
     env = {k: os.environ[k] for k in _CHILD_ENV if k in os.environ}
-    with tempfile.TemporaryFile() as out:
+    flags = ["-P"] if sys.version_info >= (3, 11) else []          # never put the working directory on sys.path
+    with tempfile.TemporaryFile() as out, tempfile.TemporaryDirectory() as empty:
         try:
-            proc = subprocess.Popen([sys.executable, "-m", "motor_ai_sim.development.spec_file_extract", "--name", name],
+            proc = subprocess.Popen([sys.executable, *flags, "-m", "motor_ai_sim.development.spec_file_extract", "--name", name],
                                     stdin=subprocess.PIPE, stdout=out, stderr=subprocess.DEVNULL, env=env, start_new_session=True,
-                                    close_fds=True)
+                                    close_fds=True, cwd=empty)
         except OSError:
             raise _err("unreadable") from None
 

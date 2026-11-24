@@ -24,7 +24,7 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.concurrency import run_in_threadpool
 
 from motor_ai_sim.development import access, models, spec_assistant as A, spec_assistant_history as H, spec_proposals as P, store
-from motor_ai_sim.development import spec_file_assistant as FA, spec_file_extract as FX
+from motor_ai_sim.development import documents, spec_file_assistant as FA, spec_file_extract as FX
 
 router = APIRouter(prefix="/api/projects", tags=["development-spec-assistant"])
 
@@ -159,7 +159,7 @@ async def assistant_file(request: Request, project_id: str):
             if not san.blocks:
                 raise FX.ExtractError("no_text", *FX._MSG["no_text"])
         except FX.ExtractError as exc:
-            raise _refusal(exc, lang, 413 if exc.code in ("too_big", "storage_full") else 422)
+            raise _refusal(exc, lang, 429 if exc.code == "busy" else 413 if exc.code in ("too_big", "storage_full") else 422)
         # the file is accepted: now the quotas are used (the chat day cap, the account cap, the file limits)
         if not access.is_engineer(user):
             from motor_ai_sim.routes import support as S
@@ -175,7 +175,7 @@ async def assistant_file(request: Request, project_id: str):
         try:
             row = await run_in_threadpool(FA.store_original, project_id, user, name, data, str(getattr(uploaded, "content_type", "") or ""))
         except FX.ExtractError as exc:
-            raise _refusal(exc, lang, 413)
+            raise _refusal(exc, lang, 413 if exc.code == "storage_full" else 422)
         except ValueError:                                     # the store's own size / empty refusal
             raise HTTPException(status_code=413, detail={"message": FX._MSG["too_big"][0 if lang == "en" else 1], "code": "too_big"})
     finally:
@@ -269,7 +269,8 @@ def _history_owner(request: Request, user: dict) -> str:
 @router.get("/{project_id}/spec/assistant/history")
 def assistant_history(request: Request, project_id: str):
     user, _, _ = _allowed(request, project_id)
-    return {"messages": H.load(project_id, _history_owner(request, user))}
+    _, project, _ = access.require_project(request, project_id)
+    return {"messages": H.load(project_id, _history_owner(request, user), source_file=documents._spec(user, project))}
 
 
 @router.delete("/{project_id}/spec/assistant/history")
@@ -281,11 +282,11 @@ def assistant_history_clear(request: Request, project_id: str):
 
 @router.get("/{project_id}/spec/proposals")
 def list_proposals(request: Request, project_id: str):
-    _, _, can_apply = _allowed(request, project_id)
+    user, project, can_apply = _allowed(request, project_id)
     wanted = request.query_params.get("status", "open")
     rows = P.list_proposals(project_id, None if wanted == "all" else "open")
     wrapper = P.draft_wrapper(project_id)
-    return {"proposals": P.with_current(project_id, rows), "revision": int(wrapper.get("revision", 0)),
+    return {"proposals": P.with_current(project_id, rows, source_file=documents._spec(user, project)), "revision": int(wrapper.get("revision", 0)),
             "can_apply": can_apply}
 
 

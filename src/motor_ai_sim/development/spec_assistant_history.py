@@ -55,7 +55,7 @@ def clear(project_id: str, email: str) -> None:
     store.save_json(project_id, _name(email), _doc())
 
 
-def load(project_id: str, email: str) -> list[dict]:
+def load(project_id: str, email: str, *, source_file: bool = False) -> list[dict]:
     """The stored messages of this user; every card id is replaced by the proposal as it stands now (open / applied / undone ...)."""
     doc = store.load_json(project_id, _name(email), _doc())
     rows = [m for m in (doc.get("messages") if isinstance(doc, dict) else []) or [] if isinstance(m, dict)]
@@ -68,7 +68,7 @@ def load(project_id: str, email: str) -> list[dict]:
         cards: dict[str, list[dict]] = {}
         for key in ("proposals", "applied"):
             found = [by_id[i] for i in (m.get(key) or []) if i in by_id]
-            cards[key] = P.with_current(project_id, found) if found else []
+            cards[key] = P.with_current(project_id, found, source_file=source_file) if found else []
         row.update(cards)
         out.append(row)
     return out

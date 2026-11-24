@@ -246,7 +246,8 @@ def _project_had_file(pid: str, known: set, cache: Dict[str, bool]) -> bool:
     if pid not in cache:
         try:
             from motor_ai_sim.development import store as DS
-            cache[pid] = bool((DS.get_project(pid) or {}).get("spec_file_used")) if DS.valid_id(pid) else False
+            project = DS.get_project(pid) if DS.valid_id(pid) else None
+            cache[pid] = bool((project or {}).get("spec_file_used"))      # a deleted project is remembered by the archive's own file_project event
         except Exception:                              # noqa: BLE001 - an unreadable project is not exported either: fail closed
             cache[pid] = True
     return cache[pid]
@@ -262,8 +263,9 @@ def export_lines(training_allowed=None, **flt: Any) -> Iterable[str]:
     seen_projects: Dict[str, bool] = {}
     if not SPEC_FILE_TEXT_IN_TRAINING:                 # a project that ever had a file stays out: every conversation of it, every member
         for r in iter_records():
-            if r.get("file_turn"):
-                tainted.add(str(r.get("conv_id")))
+            if r.get("file_turn") or r.get("event") == "file_project":
+                if r.get("conv_id"):
+                    tainted.add(str(r.get("conv_id")))
                 file_projects.add(str(r.get("project_id") or ""))
     for r in iter_records(**flt):
         if not SPEC_FILE_TEXT_IN_TRAINING and (r.get("file_turn") or str(r.get("conv_id")) in tainted

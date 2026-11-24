@@ -371,6 +371,28 @@ def _point_at(store: Path) -> None:
 
 
 CLEARED_ENV: List[str] = []
+#: --roots-are-mounts: on the server the four roots are four bind mounts under the store directory (as in the API container)
+ROOTS_ARE_MOUNTS = False
+STORE_ROOTS = ("shared", "identity", "workspaces", "published")
+
+
+def mount_problem(root: Path, mounts_text: str, roots_are_mounts: bool, top_entries: List[str]) -> str:
+    """'' when the store's layout is acceptable, else why not.  Without the flag nothing may be mounted inside the store.  With
+    it, exactly the four roots may be mount points and the store may hold nothing else at its top; a mount BELOW a root is
+    always refused."""
+    allowed = {str(root / r) for r in STORE_ROOTS} if roots_are_mounts else set()
+    if roots_are_mounts:
+        extra = sorted(set(top_entries) - set(STORE_ROOTS))
+        if extra:
+            return f"the store holds other top-level entries {extra} (only {list(STORE_ROOTS)} with --roots-are-mounts)"
+    for line in mounts_text.splitlines():
+        parts = line.split()
+        if len(parts) < 2:
+            continue
+        mp = parts[1].replace("\\040", " ")
+        if mp.startswith(str(root) + "/") and mp not in allowed:
+            return f"a filesystem is mounted inside the store ({mp})"
+    return ""
 ROUTES: Dict[str, str] = {}
 
 
@@ -414,12 +436,12 @@ def _assert_destinations(store: Path) -> Dict[str, str]:
             if not str(t).startswith(str(root) + "/"):
                 raise SystemExit(f"refused: the symlink {p} points outside the store ({t})")
     try:
-        for line in Path("/proc/mounts").read_text().splitlines():
-            mp = line.split()[1].replace("\\040", " ")
-            if mp.startswith(str(root) + "/"):
-                raise SystemExit(f"refused: a filesystem is mounted inside the store ({mp})")
+        mounts_text = Path("/proc/mounts").read_text()
     except OSError:
-        pass
+        mounts_text = ""
+    problem = mount_problem(root, mounts_text, ROOTS_ARE_MOUNTS, [p.name for p in store.iterdir()])
+    if problem:
+        raise SystemExit(f"refused: {problem}")
     return out
 
 
@@ -779,7 +801,8 @@ def switch(store: Path, m: Dict[str, Any], *, dry_run: bool, actor: str) -> Dict
         # 7. the retired die is NOT tombstoned: its access stays as it was, so every project member keeps the snapshots and
         #    old configurations he could open before (the current motors of the projects are the successor's copies)
         log.append({"step": "retire", "die": retired, "tombstone": False})
-    return {"refused": [], "dry_run": dry_run, "cleared_env": CLEARED_ENV, "destinations": ROUTES, "log": log}
+    return {"refused": [], "dry_run": dry_run, "roots_are_mounts": ROOTS_ARE_MOUNTS, "cleared_env": CLEARED_ENV,
+            "destinations": ROUTES, "log": log}
 
 
 
@@ -1202,7 +1225,12 @@ def main(argv: List[str] | None = None) -> int:
     vd.add_argument("--manifest", required=True, type=Path)
     vd.add_argument("--date", required=True)
     vd.add_argument("--out", required=True, type=Path)
+    for sp in sub.choices.values():
+        sp.add_argument("--roots-are-mounts", action="store_true",
+                        help="the four roots shared / identity / workspaces / published are bind mounts under --store")
     a = ap.parse_args(argv)
+    global ROOTS_ARE_MOUNTS
+    ROOTS_ARE_MOUNTS = bool(getattr(a, "roots_are_mounts", False))
     if a.cmd == "surfaces":
         r = surfaces(a.store, a.pred, a.retired)
         a.out.write_text(json.dumps(r, indent=1, ensure_ascii=False, default=str), encoding="utf-8")

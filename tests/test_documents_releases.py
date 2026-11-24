@@ -275,3 +275,20 @@ def test_a_relabelled_internal_group_is_not_named_to_the_customer_side(client, b
     assert client.patch("/api/projects/p1/documents/%s" % board["c_hidden"]["id"], headers=hdr("admin"), json={"revision": "C2"}).status_code == 200
     assert listing(client, "admin")["release_cleared"] == "C"
     assert listing(client, "owner")["release_cleared"] == ""
+
+
+@pytest.mark.parametrize("unflag", [{"internal": False}, {"price_restricted": False}])
+def test_a_relabel_that_also_clears_a_flag_still_hides_the_old_label(client, board, unflag):
+    """Astra #852 r3: the note judges the group by the flags its last document HAD, not the ones the same PATCH sets."""
+    secret = up(client, "plan.pdf", "CONFIDENTIAL", at="2026-11-30T00:00:00", **({"internal": "true"} if "internal" in unflag
+                                                                                    else {"price_restricted": "true"}))
+    assert client.put("/api/projects/p1/documents/release", headers=hdr("admin"), json={"revision": "CONFIDENTIAL"}).status_code == 200
+    r = client.patch("/api/projects/p1/documents/%s" % secret["id"], headers=hdr("admin"), json={"revision": "PUBLIC", **unflag})
+    assert r.status_code == 200
+    assert listing(client, "admin")["release_cleared"] == "CONFIDENTIAL"
+    for who in ("owner", "eng"):
+        if "price_restricted" in unflag and who == "owner":
+            continue                                          # a project owner sees price-restricted documents: the label is his
+        assert listing(client, who)["release_cleared"] == "", who
+    if "price_restricted" in unflag:
+        assert listing(client, "owner")["release_cleared"] == "CONFIDENTIAL"

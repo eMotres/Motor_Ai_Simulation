@@ -1328,47 +1328,90 @@ def test_a_public_containing_draft_never_disappears_when_internal_lines_crowd_it
     owner, staff = _settings_pending(d, public=1, internal_newer=25)            # the public lines fall into the overflow
     assert owner is not None and owner["items"] == quiet["items"]
     assert staff["items"] == quiet["items"] + 25
-    from motor_ai_sim.digest import routes as DR
-    assert DR._hidden_from({"items": [{"requires": ["staff"]}], "public_total": 0, "more": 4, "more_requires": ["staff"]})   # nothing public: no draft for the owner
-    assert not DR._hidden_from({"items": [{"requires": ["staff"]}], "public_total": 1, "more": 4, "more_requires": ["staff"]})
 
 
-def test_an_older_draft_without_the_public_total_is_answered_from_what_it_holds(d):
-    from motor_ai_sim.digest import routes as DR
-    draft = {"items": [{"requires": ["staff"]}, {"requires": []}], "more": 3, "more_requires": ["staff"]}
-    assert DR._public_total(draft) == 1
-    assert DR._public_total({"items": [{"requires": []}], "more": 2, "more_requires": []}) == 3
-    assert DR._public_total({"items": [{"requires": []}], "public_total": 7, "more": 2}) == 7
+def _legacy(d, draft):
+    """A draft as stored before the public fields existed."""
+    for k in [k for k in draft if k.startswith("public_")]:
+        draft.pop(k)
+    return draft
 
 
-def test_a_rebuild_by_an_added_internal_line_changes_nothing_a_non_staff_owner_sees(d):
-    """The non-staff answer is byte-identical before and after a rebuild that adds only an internal line (also across the rebuilt draft's
-    id and age), and does change when a PUBLIC line is added."""
+def test_a_legacy_draft_is_backfilled_at_read_from_the_public_lines_and_nothing_is_written(d):
     from motor_ai_sim.digest import build as B, collect as C, routes as DR
     d["U"].update_user(BOB, role="engineer")
+    for n in range(22):
+        d["PS"].append_jsonl(PID, "thread.jsonl", {"id": f"p{n}", "author_email": ANNA, "created_at": at(-2000 - n), "text": f"public {n}"})
     project = d["PS"].get_project(PID)
     group = B.project_group(project)
     rec = [{"email": BOB, "role": "customer", "name": "B", "lang": "en"}]
 
-    def rebuild(existing, now_offset, revision=0):
+    def legacy_draft(extra_internal):
+        for n in range(extra_internal):
+            d["PS"].append_jsonl(PID, "thread.jsonl", {"id": f"in{n}{extra_internal}", "author_email": BOB, "created_at": at(-50 - n), "staff_only": True, "text": "internal"})
         items = C.collect_project(d["PS"].get_project(PID), T0 - 86400, T0, results=lambda die, cfg: {})
-        draft = B.build_draft(group, {"mode": "daily"}, items, rec, [], T0 - 86400, T0, existing=existing, revision=revision)
-        draft["updated_at"] = at(now_offset)                                   # the wall clock of this rebuild
-        return draft
-
-    def owner_view(draft):
+        draft = _legacy(d, B.build_draft(group, {"mode": "daily"}, items, rec, [], T0 - 86400, T0))
         d["DS"].save_draft(draft)
         d["DS"].set_state(PSCOPE, draft_id=draft["id"])
-        return json.dumps(DR._settings_view(group, can_edit=True, staff=False)["pending"], sort_keys=True)
+        return draft
+    legacy_draft(0)
+    plain = DR._settings_view(group, can_edit=True, staff=False)["pending"]
+    stored = json.dumps(d["DS"].load_draft(d["DS"].get_state(PSCOPE)["draft_id"]), sort_keys=True)
+    legacy_draft(5)                                                             # internal lines in the overflow of the legacy draft
+    again = DR._settings_view(group, can_edit=True, staff=False)["pending"]
+    assert again["items"] == plain["items"] >= 22                               # the aggregate (more_requires, counts) is never used
+    assert (again["id"], again["revision"], again["created_at"], again["updated_at"]) == (plain["id"], plain["revision"], plain["created_at"], plain["updated_at"])
+    assert again["revision"] == 0 and "public_hash" not in d["DS"].load_draft(d["DS"].get_state(PSCOPE)["draft_id"])   # nothing was stored by a read
+    assert stored != json.dumps(d["DS"].load_draft(d["DS"].get_state(PSCOPE)["draft_id"]), sort_keys=True)
 
-    first = rebuild(None, -500)
-    before = owner_view(first)
-    d["PS"].append_jsonl(PID, "thread.jsonl", {"id": "ix1", "author_email": BOB, "created_at": at(-60), "staff_only": True, "text": "internal one"})
-    second = rebuild(first, -100)
-    assert second["updated_at"] != first["updated_at"] and second["public_total"] == first["public_total"]
-    assert owner_view(second) == before                                        # byte-identical for the non-staff caller
-    staff_view = json.dumps(DR._settings_view(group, can_edit=True, staff=True)["pending"], sort_keys=True)
-    assert staff_view != before                                                # staff do see the change
-    d["PS"].append_jsonl(PID, "thread.jsonl", {"id": "px1", "author_email": ANNA, "created_at": at(-30), "text": "a new public line"})
-    third = rebuild(second, -10)
-    assert owner_view(third) != before                                         # a public change is visible, as it must be
+
+def test_a_legacy_draft_whose_aggregate_would_leak_is_withheld_when_the_source_is_gone(d):
+    from motor_ai_sim.digest import build as B, routes as DR
+    group = B.project_group(d["PS"].get_project(PID))
+    legacy = {"id": "d-00000000000000b1", "scope": PSCOPE, "status": "pending", "kind": "project", "title": "t", "caps": ["internal"],
+              "period": {"start": at(-86400), "end": at(0)}, "items": [{"requires": ["staff"]}] * 3, "more": 9, "more_requires": ["staff"],
+              "recipients": [{"email": BOB}], "created_at": at(-50), "updated_at": at(-50), "revision": 4}
+    d["DS"].save_draft(legacy)
+    d["DS"].set_state(PSCOPE, draft_id=legacy["id"])
+    d["PS"].path_for(PID).joinpath("thread.jsonl").unlink(missing_ok=True)
+    d["PS"].path_for(PID).joinpath("audit.jsonl").unlink(missing_ok=True)       # the source activity is gone
+    view = DR._settings_view(group, can_edit=True, staff=False)
+    assert view["pending"] is None                                              # not the aggregate 12, not revision 4
+    broken = dict(group.record, id=None)
+    assert DR._public_meta(B.Group(group.scope, "project", broken, "t", "t"), legacy) is None
+    assert DR._settings_view(group, can_edit=True, staff=True)["pending"]["items"] == 12
+
+
+def test_last_sent_skips_a_legacy_sent_draft_that_cannot_be_shown_publicly(d):
+    from motor_ai_sim.digest import build as B, routes as DR
+    group = B.project_group(d["PS"].get_project(PID))
+    legacy = {"id": "d-00000000000000c1", "scope": PSCOPE, "status": "sent", "kind": "project", "caps": ["internal"],
+              "period": {"start": at(-86400 * 30), "end": at(-86400 * 29)}, "items": [{"requires": ["staff"]}], "more": 0,
+              "recipients": [{"email": BOB}], "created_at": at(-86400 * 29), "updated_at": at(-86400 * 29)}
+    d["DS"].save_draft(legacy)
+    d["DS"].append_log({"event": "sent", "scope": PSCOPE, "draft_id": legacy["id"], "by": ADMIN, "sent": 1, "failed": 0, "skipped": 0})
+    assert DR._settings_view(group, can_edit=True, staff=False)["last_sent"] is None
+    assert DR._settings_view(group, can_edit=True, staff=True)["last_sent"] is not None
+
+
+def test_the_public_revision_sequence_moves_only_with_public_changes(d):
+    """Two hidden supersessions (aggregate revision 2) and then a public edit: the non-staff reader sees public revision 1, never 3."""
+    from motor_ai_sim.digest import build as B, collect as C
+    d["U"].update_user(BOB, role="engineer")
+    group = B.project_group(d["PS"].get_project(PID))
+    rec = [{"email": BOB, "role": "customer", "name": "B", "lang": "en"}]
+
+    def make(existing, revision):
+        items = C.collect_project(d["PS"].get_project(PID), T0 - 86400, T0, results=lambda die, cfg: {})
+        return B.build_draft(group, {"mode": "daily"}, items, rec, [], T0 - 86400, T0, existing=existing, revision=revision)
+    first = make(None, 0)
+    d["PS"].append_jsonl(PID, "thread.jsonl", {"id": "h1", "author_email": BOB, "created_at": at(-70), "staff_only": True, "text": "internal 1"})
+    second = make(first, 1)
+    d["PS"].append_jsonl(PID, "thread.jsonl", {"id": "h2", "author_email": BOB, "created_at": at(-60), "staff_only": True, "text": "internal 2"})
+    third = make(second, 2)
+    assert third["revision"] == 2 and (third["public_revision"], third["public_id"]) == (first["public_revision"], first["public_id"]) == (0, first["public_id"])
+    d["PS"].append_jsonl(PID, "thread.jsonl", {"id": "pp", "author_email": ANNA, "created_at": at(-40), "text": "a public edit"})
+    fourth = make(third, 3)
+    assert fourth["revision"] == 3 and fourth["public_revision"] == 1                  # the aggregate 3 is never shown
+    assert fourth["public_id"] != third["public_id"] and fourth["public_id"] != fourth["id"]
+

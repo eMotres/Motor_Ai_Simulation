@@ -489,9 +489,15 @@ def build_draft(group: Group, settings: dict, items: list, recipients: list[dict
     public = [i for i in visible if "staff" not in i.requires]
     fingerprint = hashlib.sha256(json.dumps([[i.kind, i.key, i.ts, i.en] for i in public], ensure_ascii=False).encode("utf-8")).hexdigest()
     ex = existing or {}
-    same = bool(ex) and ex.get("public_hash") == fingerprint and ex.get("public_updated_at")
+    same = bool(ex) and ex.get("public_hash") == fingerprint and ex.get("public_updated_at") is not None
     inherits = bool(ex) and int(ex.get("public_total") or 0) > 0
-    new_id = DS.draft_id_for(group.scope, DS.iso(start), revision)
+    # the PUBLIC-only revision / id sequence: it advances only when the public lines change, never with the aggregate revision (hidden
+    # supersessions by staff-only lines do not move it)
+    if same:
+        pub_revision = int(ex["public_revision"]) if ex.get("public_revision") is not None else 0
+    else:
+        pub_revision = int(ex["public_revision"]) + 1 if ex.get("public_revision") is not None else 0
+    pub_id = DS.draft_id_for(group.scope, DS.iso(start), pub_revision)
     draft = {
         "id": DS.draft_id_for(group.scope, DS.iso(start), revision), "revision": revision, "scope": group.scope, "kind": group.kind,
         "title": group.title_en, "title_zh": group.title_zh, "status": "pending",
@@ -508,8 +514,7 @@ def build_draft(group: Group, settings: dict, items: list, recipients: list[dict
         "public_total": len(public), "public_hash": fingerprint,
         "public_updated_at": ex["public_updated_at"] if same else now,
         "public_created_at": (ex.get("public_created_at") or ex.get("created_at") or now) if inherits else now,
-        "public_id": (ex.get("public_id") or ex.get("id") or new_id) if same else new_id,
-        "public_revision": (ex["public_revision"] if "public_revision" in ex else ex.get("revision", revision)) if same else revision,
+        "public_id": pub_id, "public_revision": pub_revision,
         "more": more, "more_requires": sorted(frozenset().union(*[i.requires for i in hidden_more])) if hidden_more else [],
         "recipients": recipients, "skipped": skipped,
     }

@@ -35,6 +35,7 @@ from motor_ai_sim import auth_email as E
 from motor_ai_sim import mailing
 from motor_ai_sim.digest import approval as AP
 from motor_ai_sim.digest import build as B
+from motor_ai_sim.digest import collect as C
 from motor_ai_sim.digest import store as DS
 from motor_ai_sim.production.access import require_signed_in
 
@@ -69,28 +70,49 @@ def _needs_staff(item: dict) -> bool:
     return "staff" in (item.get("requires") or [])
 
 
-def _public_total(d: dict) -> int:
-    """The number of lines of the draft that need no staff access, counted over ALL lines before the cut (``public_total``).  A draft
-    stored before that field existed is answered from what it holds, and a staff-only overflow it cannot count is not guessed."""
-    if isinstance(d.get("public_total"), int):
-        return d["public_total"]
-    shown = sum(1 for i in d.get("items") or [] if not _needs_staff(i))
-    return shown + (0 if "staff" in (d.get("more_requires") or []) else int(d.get("more") or 0))
+def _public_meta(group: B.Group, d: dict) -> Optional[dict]:
+    """What a reader who may not see staff-only lines is told about draft ``d``: ``{total, id, revision, created_at, updated_at}``,
+    computed from the PUBLIC lines only, or None when there is nothing public (or nothing can be established).
+
+    A draft with the public fields (``public_hash`` ...) answers from them.  A LEGACY draft (stored before them) is BACKFILLED AT READ,
+    nothing is written: its public lines are rebuilt from the authoritative project activity of the draft's own period through the
+    same collector and visibility rules as ``build_draft``, restricted to lines without staff access; id and revision are derived from
+    the period alone, the times from the public lines.  If the source cannot be read, the metadata is WITHHELD (None), never
+    guessed from the draft's aggregates."""
+    if d.get("public_hash") and all(d.get(k) is not None for k in ("public_total", "public_id", "public_revision", "public_created_at", "public_updated_at")):
+        total = int(d["public_total"])
+        return {"total": total, "id": d["public_id"], "revision": d["public_revision"], "created_at": d["public_created_at"],
+                "updated_at": d["public_updated_at"]} if total > 0 else None
+    try:
+        if group.kind != "project":
+            return None
+        period = d.get("period") or {}
+        start, end = DS.parse_ts(period.get("start")), DS.parse_ts(period.get("end"))
+        if start is None or end is None or not isinstance(group.record, dict) or not group.record.get("id"):
+            return None
+        caps = frozenset(d.get("caps") or []) - {"staff"}
+        emails = [str(r.get("email") or "") for r in d.get("recipients") or [] if isinstance(r, dict)]
+        items = C.collect_project(group.record, start, end)
+        seen = B.motors_visible_to_all(items, emails)
+        public = sorted((i for i in items if "staff" not in i.requires and i.requires <= caps and (not i.motor or seen.get(tuple(i.motor), False))),
+                        key=lambda i: i.ts)
+    except Exception:                                      # noqa: BLE001 - the source is gone or unreadable: withhold
+        return None
+    if not public:
+        return None
+    return {"total": len(public), "id": DS.draft_id_for(group.scope, DS.iso(start), 0), "revision": 0,
+            "created_at": DS.iso(public[0].ts), "updated_at": DS.iso(public[-1].ts)}
 
 
-def _hidden_from(d: dict) -> bool:
-    """For a caller who is not staff the draft is judged from its PUBLIC lines only: none = it does not exist for him."""
-    return _public_total(d) == 0
-
-
-def _viewer_summary(d: dict, staff: bool) -> dict:
+def _viewer_summary(group: B.Group, d: dict, staff: bool) -> Optional[dict]:
     out = _summary(d)
-    if not staff:
-        out["items"] = _public_total(d)                    # the same number whatever staff-only lines exist, shown or in the overflow
-        for key, public in (("id", "public_id"), ("revision", "public_revision"), ("created_at", "public_created_at"),
-                            ("updated_at", "public_updated_at")):
-            if d.get(public) is not None:                  # identity and age as of the PUBLIC lines: a rebuild by staff-only lines is invisible
-                out[key] = d[public]
+    if staff:
+        return out
+    meta = _public_meta(group, d)
+    if meta is None:
+        return None                                        # as if no draft existed
+    out.update({"items": meta["total"], "id": meta["id"], "revision": meta["revision"], "created_at": meta["created_at"],
+                "updated_at": meta["updated_at"]})
     return out
 
 
@@ -101,13 +123,11 @@ def _settings_view(group: B.Group, *, can_edit: bool, staff: bool = True) -> dic
     recipients, skipped = B.resolve_recipients(group, s)
     state = DS.get_state(group.scope)
     pending = DS.load_draft(state["draft_id"]) if state.get("draft_id") else None
-    if pending and not staff and _hidden_from(pending):
-        pending = None
     sent = [r for r in DS.read_log(group.scope) if r.get("event") == "sent"]
     if not staff:
         def internal_only(row):
             d = DS.load_draft(row.get("draft_id")) if row.get("draft_id") else None
-            return bool(d) and _hidden_from(d)
+            return d is None or _public_meta(group, d) is None       # a sent draft that cannot be shown publicly does not count
         sent = [r for r in sent if not internal_only(r)]
     return {
         "scope": group.scope, "title": group.title_en, "mode": s["mode"], "frequency": s["frequency"], "recipients": s["recipients"],
@@ -116,7 +136,7 @@ def _settings_view(group: B.Group, *, can_edit: bool, staff: bool = True) -> dic
         "members": [{"email": e, "role": r, "opted_out": e in s["optouts"]} for e, r in group.members],
         "will_receive": [{"email": r["email"], "role": r["role"], "lang": r["lang"]} for r in recipients],
         "not_receiving": skipped,
-        "pending": _viewer_summary(pending, staff) if pending and pending.get("status") in DS.OPEN_STATUSES else None,
+        "pending": _viewer_summary(group, pending, staff) if pending and pending.get("status") in DS.OPEN_STATUSES else None,
         "last_sent": sent[-1]["ts"] if sent else None,
     }
 

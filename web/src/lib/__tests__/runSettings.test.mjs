@@ -106,16 +106,35 @@ test('the request carries the values and the digest and token that were shown', 
   assert.deepEqual(runSettingsBody(a, { sig: 7, token: 'abc' }), { preset: 'tab', overrides: a.overrides, expect_sig: 7, expect_token: 'abc' });
 });
 
-const words = { preset: (l, v) => `${l} preset v${v}`, custom: 'custom', steps: n => `${n} steps`, gap: n => `${n} gap ${n === 1 ? 'row' : 'rows'}`, wire: n => `wire cell ${n}h` };
-const ans = (over) => ({ label: 'optimization', custom: false, preset_label: 'Optimization', version: 2, settings: { steps_per_period: 48, gap_layers: 1, coil_rel: 2 }, ...over });
+const words = {
+  preset: (l, v) => `${l} preset v${v}`, steps: n => `${n} steps`, gap: n => `${n} gap ${n === 1 ? 'row' : 'rows'}`, wire: n => `wire cell ${n}h`,
+  fromSim: 'Simulation tab', fromMesh: 'Mesh', notOptimization: 'not the Optimization preset',
+  diff: (k, cur, pre) => { const u = (v) => (k === 'coil_rel' ? `${v}h` : v);
+    return `${{ steps_per_period: 'steps', coil_rel: 'wire cell', gap_layers: 'gap rows' }[k] ?? k} ${u(cur)} (preset ${u(pre)})`; },
+};
+const ans = (over) => ({ label: 'optimization', custom: false, preset_label: 'Optimization', version: 2, differs: {},
+  settings: { steps_per_period: 48, gap_layers: 1, coil_rel: 2 }, ...over });
 
-test('the line is ONE sentence from the server answer; the warning follows the label, not the panel', () => {
-  assert.equal(lineText(ans(), words), 'Optimization preset v2 \u00b7 48 steps \u00b7 1 gap row \u00b7 wire cell 2h');
+test('the line names each value\'s source once and, when it is not the Optimization preset, the value that breaks it', () => {
+  assert.equal(lineText(ans(), words), 'Optimization preset v2 \u00b7 48 steps (Simulation tab), 1 gap row (Mesh), wire cell 2h (Mesh)');
   assert.equal(notOptimization(ans()), false);
-  const c = ans({ label: 'custom', custom: true, settings: { steps_per_period: 108, gap_layers: 1, coil_rel: 1 } });
-  assert.equal(lineText(c, words), 'custom: 108 steps, 1 gap row, wire cell 1h');
-  assert.equal(notOptimization(c), true);
-  assert.equal(notOptimization(ans({ label: 'simulation', preset_label: 'Simulation' })), true);
+  // one differing value: named with the preset's number
+  const one = ans({ label: 'custom', custom: true, settings: { steps_per_period: 108, gap_layers: 1, coil_rel: 2 },
+    differs: { steps_per_period: { preset: 48, current: 108 } } });
+  assert.equal(lineText(one, words),
+    '108 steps (Simulation tab), 1 gap row (Mesh), wire cell 2h (Mesh) \u00b7 not the Optimization preset: steps 108 (preset 48)');
+  assert.equal(notOptimization(one), true);
+  // several: each one is named
+  const many = ans({ label: 'custom', custom: true, settings: { steps_per_period: 108, gap_layers: 2, coil_rel: 1 },
+    differs: { steps_per_period: { preset: 48, current: 108 }, gap_layers: { preset: 1, current: 2 }, coil_rel: { preset: 2, current: 1 } } });
+  assert.equal(lineText(many, words),
+    '108 steps (Simulation tab), 2 gap rows (Mesh), wire cell 1h (Mesh) \u00b7 not the Optimization preset: steps 108 (preset 48), gap rows 2 (preset 1), wire cell 1h (preset 2h)');
+  // a run that equals the Simulation preset: the server lists no differences; the line only says it is not the Optimization preset
+  const sim = ans({ label: 'simulation', preset_label: 'Simulation', settings: { steps_per_period: 96, gap_layers: 2, coil_rel: 1 } });
+  assert.equal(lineText(sim, words), 'Simulation preset v2 \u00b7 96 steps (Simulation tab), 2 gap rows (Mesh), wire cell 1h (Mesh) \u00b7 not the Optimization preset');
+  assert.equal(notOptimization(sim), true);
+  // no source appears twice and the old tail is gone
+  assert.ok(!/set in Mesh|custom:/.test(lineText(one, words)));
 });
 
 test('why the steps are what they are: the Simulation tab\'s own rule, from the same helpers', () => {
@@ -129,7 +148,7 @@ test('why the steps are what they are: the Simulation tab\'s own rule, from the 
 test('the line has no editable field and no preset button; Change in Mesh opens the Mesh tab', () => {
   const bar = read('components/sweep/RunSettingsBar.tsx');
   assert.ok(!/TextField|<Select|applyPreset|setOverride|choose\(/.test(bar));
-  assert.ok(bar.includes("goToTab('mesh'") && bar.includes('runSettingsChangeInMesh') && bar.includes('runSettingsNotOptimization'));
+  assert.ok(bar.includes("goToTab('mesh'") && bar.includes('runSettingsChangeInMesh') && !bar.includes('<Chip'));   // the words are in the line itself (lineText), the colour stays
   assert.ok(bar.includes('stepsReason(') && !bar.includes('rippleGradeSteps'));            // imported helper, rule not restated
 });
 
@@ -200,9 +219,10 @@ test('the Draw baseline body carries the resolved steps and gap rows and the req
 test('the new line strings exist in EN and zh-CN and the removed ones are gone', () => {
   for (const l of ['en', 'zh-CN']) {
     const j = JSON.parse(read(`locales/${l}/simulation.json`));
-    for (const k of ['runSettingsPresetLine', 'runSettingsStepsN', 'runSettingsGapOne', 'runSettingsGapMany', 'runSettingsWireN', 'runSettingsSetInMesh',
+    for (const k of ['runSettingsPresetLine', 'runSettingsStepsN', 'runSettingsGapOne', 'runSettingsGapMany', 'runSettingsWireN', 'runSettingsFromSim', 'runSettingsFromMesh', 'runSettingsKeySteps', 'runSettingsKeyGap', 'runSettingsKeyMinMesh', 'runSettingsKeyWire', 'runSettingsDiff',
                      'runSettingsChangeInMesh', 'runSettingsNotOptimization', 'runSettingsUnknown', 'runSettingsReasonRipple', 'runSettingsReasonEddy']) assert.ok(j[k], `${l} ${k}`);
     for (const k of ['runPresetOptimization', 'runPresetSimulation', 'runSettingsSteps', 'runSettingsGap', 'runSettingsLabel', 'runSettingsPresetWord', 'runSettingsSrcTyped']) assert.ok(!(k in j), `${l} ${k}`);
+    for (const k of ['runSettingsSetInMesh', 'runSettingsCustom']) assert.ok(!(k in j), `${l} ${k}`);
   }
 });
 

@@ -365,5 +365,6 @@
   "propConstraint_rpm_search_converged": "转速搜索已收敛",
   "propConstraint_torque_reached_at_cap": "转速上限处达到扭矩",
   "propConstraint_tip_mach_within_polar_model": "马赫数在极曲线范围内",
-  "propConstraint_polar_data_supported": "在极曲线表覆盖范围内"
+  "propConstraint_polar_data_supported": "在极曲线表覆盖范围内",
+  "propConstraint_w_re_converged": "W 与雷诺数已收敛"
 }

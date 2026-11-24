@@ -227,7 +227,20 @@ def _superseded(project: dict, rows: list[dict], label: str) -> bool:
     return any(g["revision"] == label and g["superseded"] for g in info["groups"])
 
 
-def _release_check(project_id: str, user: dict, reason: str) -> None:
+def _cleared_note(project_id: str, staff: bool, prices: bool) -> str | None:
+    """The editors' note that the chosen release no longer exists: its LABEL for a caller who could see a document of that group
+    (the caller's internal / price rules applied, the archived state set aside), else ``""`` - the generic notice, so a pin on a
+    group the caller never saw does not name it (Astra #852 round 2).  ``None``: no note."""
+    note = (store.get_project(project_id) or {}).get("documents_release_cleared")
+    label = note.get("revision") if isinstance(note, dict) else None
+    if not isinstance(label, str):
+        return None
+    rows = [{"internal": bool(f.get("internal")), "price_restricted": bool(f.get("price_restricted"))}
+            for f in (note.get("rows") or []) if isinstance(f, dict)]
+    return label if _visible(rows, staff, prices=prices) else ""
+
+
+def _release_check(project_id: str, user: dict, reason: str, moved: dict | None = None) -> None:
     """After a document is archived or relabelled: a STORED release whose label has no live document any more is cleared (an
     audit row, and a note the editors see: "the chosen release no longer exists"), so the old string cannot re-activate when a
     document of that label comes back later.  Judged on ALL documents, not on one caller's view."""
@@ -235,16 +248,21 @@ def _release_check(project_id: str, user: dict, reason: str) -> None:
     chosen = project.get("documents_release") if isinstance(project.get("documents_release"), dict) else None
     if not chosen:
         return
-    live = {_label(r) for r in store.load_documents(project_id) if not r.get("archived")}
+    docs = store.load_documents(project_id)
+    live = {_label(r) for r in docs if not r.get("archived")}
     if chosen.get("revision") in live:
         return
+    # who could see that group: the flags of the documents that carried the label (archived ones, and a relabelled one)
+    carried = [r for r in docs if _label(r) == chosen.get("revision")] + ([moved] if moved else [])
+    flags = [{"internal": bool(r.get("internal")), "price_restricted": bool(r.get("price_restricted"))} for r in carried]
     now = datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds")
 
     def edit(doc: dict) -> None:
         cur = doc.get("documents_release")
         if isinstance(cur, dict) and cur.get("revision") == chosen.get("revision"):
             doc.pop("documents_release", None)
-            doc["documents_release_cleared"] = {"revision": chosen.get("revision"), "at": now, "by": _email(user), "reason": reason}
+            doc["documents_release_cleared"] = {"revision": chosen.get("revision"), "at": now, "by": _email(user), "reason": reason,
+                                                "rows": flags}
         # NB: return nothing - json_store.mutate_json takes a returned value as the new document
     store.mutate_project(project_id, edit)
     store.append_audit(project_id, _email(user), "documents.release_cleared", "document", "",
@@ -294,8 +312,7 @@ def list_documents(request: Request, project_id: str, archived: bool = False):
     return {"documents": [dict(_public(r, staff), is_cover=bool(cover) and r.get("id") == cover.get("document_id"),
                                superseded=_label(r) in old and not r.get("archived")) for r in rows],
             "releases": info["groups"], "current_release": info["current"], "release_stored": info["stored"],
-            "release_cleared": ((store.get_project(project_id) or {}).get("documents_release_cleared") or {}).get("revision")
-            if can_edit else None,
+            "release_cleared": _cleared_note(project_id, staff, _prices(user, project, staff)) if can_edit else None,
             "superseded_download": SUPERSEDED_SINGLE_DOWNLOAD or staff,
             "folders": list(models.DOCUMENT_FOLDERS), "can_edit": can_edit, "is_staff": staff, "max_bytes": models.DOCUMENT_MAX_BYTES,
             "cover_version": cover.get("version"), "can_restrict": _can_restrict(user, project)}
@@ -440,7 +457,7 @@ async def patch_document(request: Request, project_id: str, doc_id: str):
     finally:
         _flush(project_id)
     if "revision" in (found.get("changed") or {}):
-        _release_check(project_id, user, "its documents were relabelled")
+        _release_check(project_id, user, "its documents were relabelled", moved=found["row"])
     return _public(found["row"], staff_flag)
 
 

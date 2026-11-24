@@ -49,6 +49,7 @@ export default function ProjectDocuments({ projectId, language, t, onCoverChange
   const [supersededDownload, setSupersededDownload] = useState(true);
   const [moreAnchor, setMoreAnchor] = useState<HTMLElement | null>(null);
   const [confirmDoc, setConfirmDoc] = useState<ProjectDocument | null>(null);   // a superseded document asked for: confirm first
+  const [confirmArchive, setConfirmArchive] = useState<ProjectDocument | null>(null);   // customer side: archived = restorable by staff only
   const [busy, setBusy] = useState('');
   const [error, setError] = useState('');
   const [dragging, setDragging] = useState(false);
@@ -121,6 +122,7 @@ export default function ProjectDocuments({ projectId, language, t, onCoverChange
   const groups = orderByRelease(groupByRevision(shown), releases);
   const labelled = releases.some((r) => r.revision);
   const setRelease = (revision: string | null) => void run(async () => { await developmentApi.setDocumentRelease(projectId, revision); await load(); });
+  const archiveNow = (d: ProjectDocument) => run(async () => { await developmentApi.archiveDocument(projectId, d.id); await load(); });
   const download = (d: ProjectDocument) => { if (d.superseded) setConfirmDoc(d); else void run(() => downloadProjectDocument(projectId, d)); };
   const dateOf = (iso: string) => { const d = new Date(iso); return Number.isNaN(d.getTime()) ? '' : d.toLocaleDateString(language); };
   const onDrop = (e: React.DragEvent) => {
@@ -155,7 +157,7 @@ export default function ProjectDocuments({ projectId, language, t, onCoverChange
         : (!d.internal && !d.price_restricted && isCoverImage(d.name)) && <Tooltip title={t('documents.coverSet')}><IconButton size="small" aria-label={t('documents.coverSet')} onClick={() => void setCover(d.id)}><StarBorderIcon fontSize="small" /></IconButton></Tooltip>)}
       {canEdit && (d.archived
         ? <Tooltip title={t('documents.restore')}><IconButton size="small" aria-label={t('documents.restore')} onClick={() => void patch(d, { archived: false })}><UnarchiveOutlinedIcon fontSize="small" /></IconButton></Tooltip>
-        : <Tooltip title={t('documents.archive')}><IconButton size="small" aria-label={t('documents.archive')} onClick={() => void run(async () => { await developmentApi.archiveDocument(projectId, d.id); await load(); })}><ArchiveOutlinedIcon fontSize="small" /></IconButton></Tooltip>)}
+        : <Tooltip title={t('documents.archive')}><IconButton size="small" aria-label={t('documents.archive')} onClick={() => { if (showInternal) void archiveNow(d); else setConfirmArchive(d); }}><ArchiveOutlinedIcon fontSize="small" /></IconButton></Tooltip>)}
     </TableCell>
   </TableRow>;
 
@@ -200,7 +202,8 @@ export default function ProjectDocuments({ projectId, language, t, onCoverChange
     </Box>
     {busy && <Typography sx={{ fontSize: 12, color: 'var(--text-2)', mb: 1 }}>{busy}</Typography>}
     {error && <Alert severity="error" onClose={() => setError('')} sx={{ mb: 1 }}>{error}</Alert>}
-    {canEdit && releaseCleared && <Alert severity="info" data-testid="documents-release-cleared" sx={{ mb: 1 }}>{t('documents.releaseCleared', { release: releaseCleared })}</Alert>}
+    {canEdit && releaseCleared !== null && <Alert severity="info" data-testid="documents-release-cleared" sx={{ mb: 1 }}>{releaseCleared
+      ? t('documents.releaseCleared', { release: releaseCleared }) : t('documents.releaseClearedGeneric')}</Alert>}
     <Paper sx={{ bgcolor: 'var(--panel-2)', border: '1px solid var(--line-soft)', borderRadius: 1.5, overflow: 'auto' }}>
       <Table size="small" sx={{
         [NARROW]: { minWidth: 760 },
@@ -249,6 +252,14 @@ export default function ProjectDocuments({ projectId, language, t, onCoverChange
         </TableBody>
       </Table>
     </Paper>
+    <Dialog open={!!confirmArchive} onClose={() => setConfirmArchive(null)} maxWidth="xs" fullWidth>
+      <DialogTitle>{t('documents.archiveConfirmTitle')}</DialogTitle>
+      <DialogContent><Typography sx={{ fontSize: 13 }}>{confirmArchive && t('documents.archiveConfirm', { name: confirmArchive.name })}</Typography></DialogContent>
+      <DialogActions>
+        <Button onClick={() => setConfirmArchive(null)}>{t('documents.cancel')}</Button>
+        <Button color="warning" data-testid="documents-archive-confirm" onClick={() => { const d = confirmArchive; setConfirmArchive(null); if (d) void archiveNow(d); }}>{t('documents.archive')}</Button>
+      </DialogActions>
+    </Dialog>
     <Dialog open={!!confirmDoc} onClose={() => setConfirmDoc(null)} maxWidth="xs" fullWidth>
       <DialogTitle>{t('documents.supersededConfirmTitle')}</DialogTitle>
       <DialogContent><Typography sx={{ fontSize: 13 }}>{confirmDoc && t('documents.supersededConfirm', {

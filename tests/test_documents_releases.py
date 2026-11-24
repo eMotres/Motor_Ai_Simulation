@@ -256,3 +256,22 @@ def test_relabelling_the_last_documents_of_the_stored_release_clears_it(client, 
         assert client.patch("/api/projects/p1/documents/%s" % board[key]["id"], headers=hdr("owner"), json={"revision": "A1"}).status_code == 200
     assert listing(client, "owner")["release_cleared"] == "A"
     assert "documents_release" not in (store.get_project("p1") or {})
+
+
+def test_the_cleared_note_names_only_a_group_the_caller_could_see(client, board):
+    """Staff pin the internal-only group C, then its last file is archived: a customer-side editor gets the generic notice, never
+    the label C; staff get the label."""
+    assert client.put("/api/projects/p1/documents/release", headers=hdr("admin"), json={"revision": "C"}).status_code == 200
+    client.delete("/api/projects/p1/documents/%s" % board["c_hidden"]["id"], headers=hdr("admin"))
+    assert listing(client, "admin")["release_cleared"] == "C"
+    for who in ("owner", "eng"):
+        note = listing(client, who)
+        assert note["release_cleared"] == "" and "C" not in json.dumps(note["release_cleared"]), who
+    assert listing(client, "cust")["release_cleared"] is None             # not an editor: no note at all
+
+
+def test_a_relabelled_internal_group_is_not_named_to_the_customer_side(client, board):
+    assert client.put("/api/projects/p1/documents/release", headers=hdr("admin"), json={"revision": "C"}).status_code == 200
+    assert client.patch("/api/projects/p1/documents/%s" % board["c_hidden"]["id"], headers=hdr("admin"), json={"revision": "C2"}).status_code == 200
+    assert listing(client, "admin")["release_cleared"] == "C"
+    assert listing(client, "owner")["release_cleared"] == ""

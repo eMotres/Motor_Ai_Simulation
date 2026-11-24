@@ -1260,6 +1260,26 @@ def _build_sigs(die_doc: dict, cfg_doc: dict) -> tuple:
         s = _build_sig_of(die_doc, cfg_doc, alt)
         if s not in out:
             out.append(s)
+    # The coil count is DERIVED (slots, layers) and the stored copy is healed on the next save.  A stamp written
+    # while the copy was stale (slots/3 coil sides instead of slots/6 coils) names the same machine: accept the
+    # spellings of the winding block with the count absent or at either historic value.
+    w = cfg_doc.get("winding")
+    if isinstance(w, dict) and w.get("n_coils_per_phase") is not None:
+        try:
+            if int(float(w.get("phases") or 3)) != 6:
+                from motor_ai_sim.winding import slot_pole_counts
+                n = slot_pole_counts({**(die_doc.get("geometry") or {}),
+                                      **(cfg_doc.get("geometry_overrides") or {})})[0]
+                for v in (None, max(1, int(round(n / 6))), max(1, int(round(n / 3)))):
+                    w2 = {k: x for k, x in w.items() if k != "n_coils_per_phase"}
+                    if v is not None:
+                        w2["n_coils_per_phase"] = v
+                    for alt in (mats, _materials_without_defaults(mats), _materials_with_defaults(mats)):
+                        s = _build_sig_of(die_doc, {**cfg_doc, "winding": w2}, alt)
+                        if s not in out:
+                            out.append(s)
+        except Exception:                                    # noqa: BLE001 - the extra spellings are a courtesy
+            pass
     return tuple(out)
 
 
@@ -3215,6 +3235,22 @@ def create_config(req: ConfigCreate, _w: dict = Depends(require_catalog_write)):
     return out
 
 
+def _live_winding_healed(live: dict) -> dict:
+    """The live winding block for a configuration being saved, with a stale ``n_coils_per_phase`` replaced by the
+    derived value (slots of the live geometry, ``layers`` of the block).  The stale copy heals on the next save;
+    nothing is migrated and a block without the key stays without it."""
+    from motor_ai_sim.winding import slot_pole_counts, with_derived_coil_count
+    w = _plain(live.get("winding")) or {}
+    try:
+        fixed, old = with_derived_coil_count(w, slot_pole_counts(_plain(live.get("geometry")) or {})[0])
+    except Exception:                                          # noqa: BLE001 - a save never fails on the heal
+        return w
+    if old is not None:
+        log.warning("family: saved winding: stored n_coils_per_phase %s corrected to the derived %s",
+                    old, fixed["n_coils_per_phase"])
+    return fixed
+
+
 def _config_doc_from_live(die: str, name: str, role: str, live: dict) -> tuple:
     """``(name, doc)`` — a fresh configuration document snapshotted from the
     live machine, the name corrected to the live stack.  Shared by
@@ -3246,7 +3282,7 @@ def _config_doc_from_live(die: str, name: str, role: str, live: dict) -> tuple:
         "created": datetime.now().isoformat(timespec="seconds"),
         "geometry_overrides": {k: geo.get(k) for k in FREE_GEO_KEYS
                                if geo.get(k) is not None},
-        "winding": _plain(live.get("winding")) or {},
+        "winding": _live_winding_healed(live),
         # The build's materials — a configuration is a physical product, and
         # what it is made of is part of what was built.  EVERY saved part, the
         # same set the duty save keeps (2026-10-30: this writer still kept the
@@ -3689,7 +3725,7 @@ def _upsert_duty(req: DutyCreate, _w: dict, *, may_move: bool = True) -> dict:
         geo = _plain(live.get("geometry")) or {}
         _live_build = {k: geo.get(k) for k in FREE_GEO_KEYS
                        if geo.get(k) is not None}
-        _live_wind = _plain(live.get("winding")) or {}
+        _live_wind = _live_winding_healed(live)
         _live_mats = _live_saved_materials(live)
         _live_pstates = _live_parts()
         _stored = c.get("geometry_overrides") or None
@@ -4929,8 +4965,9 @@ def _repick_config_winding(c: dict, geo: Optional[dict], where: str) -> Optional
         # 4S-2P): no re-pick to announce, but the payload must carry a label
         # PATCH /api/winding/config accepts
         c["winding"] = fixed
-        log.info("family: %s: connection label %r normalised to %r", where,
-                 w.get("connection"), fixed.get("connection"))
+        log.info("family: %s: winding block normalised (connection label %r -> %r, n_coils_per_phase %r -> %r)",
+                 where, w.get("connection"), fixed.get("connection"),
+                 w.get("n_coils_per_phase"), fixed.get("n_coils_per_phase"))
     return note
 
 

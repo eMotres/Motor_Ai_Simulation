@@ -284,6 +284,16 @@ def build_bom(dump, inputs):
         en_g = length * enam_sec * rho_en * 1e-6
         stock = _wire_stock_item(inputs.get("wire_stock") or [], ww, wh)
         w = inputs.get("winding", {})
+        # coils per phase: DERIVED from the model's slot count when it carries one (the stored copy can lag behind
+        # the machine); the stored value only when the model gives no slot count
+        _n_cpp = w.get("n_coils_per_phase", 0)
+        try:
+            _sl = int(round(m.p("num_slots")))
+        except (KeyError, TypeError, ValueError):
+            _sl = 0
+        if _sl > 0:
+            from motor_ai_sim.winding import derived_n_coils_per_phase
+            _n_cpp = derived_n_coils_per_phase(w, _sl)
         add("coils", "Coil (edge-wound flat wire, formed, with two leads)", "manufactured", n_coils, "pcs", "Copper, enamel AIW class 200",
             "%d turns of %.1f x %.1f mm bare wire (enamel %.2f mm per side), conductor length %.1f mm per coil incl. leads" % (
                 turns, ww, wh, ins, length),
@@ -292,7 +302,7 @@ def build_bom(dump, inputs):
             "simulation lists %d coils/phase (coil sides), CAD has %d coils of %d turns (single-layer, 2 per phase); "
             "length = coil volume / (%.1f x %.1f); lead trimming, insulation of joints, lead ends: to be specified" % (
                 length * n_coils / 1000.0, n_coils, cu_g * n_coils, rho_cu, cu_src, en_g * n_coils, rho_en,
-                w.get("n_coils_per_phase", 0), n_coils, turns, ww, wh),
+                _n_cpp, n_coils, turns, ww, wh),
             sim_g=simg("Copper windings"), tbs_text=None)
         lines[-1]["_cu_g_unit"] = cu_g
         lines[-1]["_length_mm"] = length

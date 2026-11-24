@@ -111,7 +111,7 @@ def test_internal_documents_are_hidden_from_customers(client):
     owner = client.get("/api/projects/ciano/documents", headers=hdr("t-owner")).json()
     assert [d["id"] for d in owner["documents"]] == [public["id"]] and owner["can_edit"] is True and owner["is_staff"] is False
     assert client.get("/api/projects/ciano/documents/%s/download" % secret["id"], headers=hdr("t-owner")).status_code == 404
-    assert client.patch("/api/projects/ciano/documents/%s" % secret["id"], headers=hdr("t-owner"), json={"internal": False}).status_code == 403
+    assert client.patch("/api/projects/ciano/documents/%s" % secret["id"], headers=hdr("t-owner"), json={"internal": False}).status_code == 404     # hidden from the customer side: like an unknown id
     assert client.patch("/api/projects/ciano/documents/%s" % public["id"], headers=hdr("t-owner"), json={"internal": True}).status_code == 403
     assert upload(client, name="mine.step", internal="true").json()["internal"] is False
     public2 = [d["id"] for d in client.get("/api/projects/ciano/documents", headers=hdr("t-customer")).json()["documents"] if d["name"] == "mine.step"]
@@ -129,11 +129,11 @@ def test_patch_internal_folder_revision_with_audit(client, tmp_path):
     r = client.patch(url, headers=hdr("t-admin"), json={"internal": True, "folder": "bom", "revision": "C"})
     assert r.status_code == 200 and (r.json()["internal"], r.json()["folder"], r.json()["revision"]) == (True, "bom", "C")
     assert client.get("/api/projects/ciano/documents", headers=hdr("t-customer")).json()["documents"] == []
-    assert client.patch(url, headers=hdr("t-owner"), json={"folder": "nope"}).status_code == 422
+    assert client.patch(url, headers=hdr("t-owner"), json={"folder": "nope"}).status_code == 404     # the document is internal now: hidden, like an unknown id
     assert client.patch(url, headers=hdr("t-admin"), json={"internal": "yes"}).status_code == 422
-    assert client.patch(url, headers=hdr("t-owner"), json={"revision": "r" * 41}).status_code == 422
-    assert client.patch(url, headers=hdr("t-owner"), json={}).status_code == 422
-    assert client.patch(url, headers=hdr("t-customer"), json={"internal": False}).status_code == 403
+    assert client.patch(url, headers=hdr("t-owner"), json={"revision": "r" * 41}).status_code == 404
+    assert client.patch(url, headers=hdr("t-owner"), json={}).status_code == 404
+    assert client.patch(url, headers=hdr("t-customer"), json={"internal": False}).status_code == 404
     assert client.patch("/api/projects/ciano/documents/doc-missing", headers=hdr("t-admin"), json={"internal": False}).status_code == 404
     assert "document.update" in audit_actions(tmp_path)
 
@@ -144,17 +144,22 @@ def test_delete_archives_keeps_file_and_audit_and_restore(client, tmp_path):
     assert client.delete(url, headers=hdr("t-customer")).status_code == 403
     r = client.delete(url, headers=hdr("t-owner"))
     assert r.status_code == 200 and r.json()["archived"] is True
-    assert client.delete(url, headers=hdr("t-owner")).status_code == 200              # idempotent: one audit row
+    assert client.delete(url, headers=hdr("t-owner")).status_code == 404              # archived = gone for the customer side
+    assert client.delete(url, headers=hdr("t-admin")).status_code == 200              # idempotent for staff: one audit row
     files = list((tmp_path / "projects" / "ciano" / "documents" / "files").iterdir())
     assert len(files) == 1 and files[0].read_bytes() == b"keep me"
     assert client.get("/api/projects/ciano/documents", headers=hdr("t-owner")).json()["documents"] == []
-    assert len(client.get("/api/projects/ciano/documents?archived=true", headers=hdr("t-owner")).json()["documents"]) == 1
+    # owner 2026-11-24: archived documents are staff-only, whatever the project role (before: the customer-side owner listed them)
+    assert client.get("/api/projects/ciano/documents?archived=true", headers=hdr("t-owner")).json()["documents"] == []
+    assert len(client.get("/api/projects/ciano/documents?archived=true", headers=hdr("t-admin")).json()["documents"]) == 1
     assert client.get("/api/projects/ciano/documents?archived=true", headers=hdr("t-customer")).json()["documents"] == []
     assert client.get(url + "/download", headers=hdr("t-customer")).status_code == 404
-    assert client.get(url + "/download", headers=hdr("t-owner")).status_code == 200    # staff can still fetch it
+    assert client.get(url + "/download", headers=hdr("t-owner")).status_code == 404
+    assert client.get(url + "/download", headers=hdr("t-admin")).status_code == 200    # staff can still fetch it
     assert audit_actions(tmp_path).count("document.archive") == 1
-    assert client.patch(url, headers=hdr("t-owner"), json={"archived": True}).status_code == 422
-    assert client.patch(url, headers=hdr("t-owner"), json={"archived": False}).json()["archived"] is False
+    assert client.patch(url, headers=hdr("t-admin"), json={"archived": True}).status_code == 422
+    assert client.patch(url, headers=hdr("t-owner"), json={"archived": False}).status_code == 404      # restore: staff only
+    assert client.patch(url, headers=hdr("t-admin"), json={"archived": False}).json()["archived"] is False
     assert len(client.get("/api/projects/ciano/documents", headers=hdr("t-customer")).json()["documents"]) == 1
     assert "document.restore" in audit_actions(tmp_path)
 
@@ -192,28 +197,34 @@ def test_zip_holds_only_visible_files_in_folders(client, tmp_path):
     assert client.get("/api/projects/ciano/documents.zip").status_code == 401
     assert client.get("/api/projects/ciano/documents.zip", headers=hdr("t-outsider")).status_code == 404
 
-    def names(who):
-        r = client.get("/api/projects/ciano/documents.zip", headers=hdr(who))
+    def names(who, query=""):
+        r = client.get("/api/projects/ciano/documents.zip" + query, headers=hdr(who))
         assert r.status_code == 200 and r.headers["content-type"] == "application/zip"
         z = zipfile.ZipFile(io.BytesIO(r.content))
         assert z.testzip() is None
         return z, sorted(z.namelist())
 
-    z, listed = names("t-customer")
-    assert listed == ["MANIFEST.txt", "bom/bom (2).csv", "bom/bom.csv", "kicad/board.kicad_pro"]
+    # releases (owner 2026-11-24): the customer side downloads ONE group; the archive of every group is MOTRES staff's
+    assert client.get("/api/projects/ciano/documents.zip", headers=hdr("t-customer")).status_code == 403
+    _z, release = names("t-customer", "?revision=A")
+    assert release == ["MANIFEST.txt", "bom/bom.csv"]
+    z, listed = names("t-customer", "?revision=")                                   # the unlabelled (general) documents
+    assert listed == ["MANIFEST.txt", "bom/bom.csv", "kicad/board.kicad_pro"]
     assert z.read("kicad/board.kicad_pro") == b"kicad" and a["sha256"] in z.read("MANIFEST.txt").decode()
     assert "@" not in z.read("MANIFEST.txt").decode()
     _z, staff = names("t-admin")
     assert "3d/hidden.step" in staff and "docs/archived.pdf" not in staff
+    assert "bom/bom (2).csv" in staff and "kicad/board.kicad_pro" in staff               # every group, as before
     log = [json.loads(x) for x in (tmp_path / "downloads.jsonl").read_text(encoding="utf-8").splitlines()]
-    assert [row["kind"] for row in log] == ["project_documents_zip", "project_documents_zip"]
+    assert [row["kind"] for row in log] == ["project_documents_zip"] * 3
     assert "documents.zip" in audit_actions(tmp_path)
 
 
 def test_zip_over_the_limit_is_refused(client, monkeypatch):
     upload(client, name="a.pdf", data=b"x" * 50)
     monkeypatch.setattr(documents, "MAX_ZIP_BYTES", 10)
-    assert client.get("/api/projects/ciano/documents.zip", headers=hdr("t-owner")).status_code == 413
+    assert client.get("/api/projects/ciano/documents.zip?revision=", headers=hdr("t-owner")).status_code == 413
+    assert client.get("/api/projects/ciano/documents.zip", headers=hdr("t-admin")).status_code == 413
 
 
 def test_project_storage_cap(client, monkeypatch):
@@ -259,4 +270,4 @@ def test_a_visible_document_still_changes_for_the_editor_and_the_reply_does_not_
     assert OWNER not in r.text                                                    # the uploader's address is staff-only
     d = client.delete(url, headers=hdr("t-owner"))
     assert d.status_code == 200 and d.json()["archived"] is True and OWNER not in d.text
-    assert client.patch(url, headers=hdr("t-owner"), json={"archived": False}).json()["archived"] is False
+    assert client.patch(url, headers=hdr("t-owner"), json={"archived": False}).status_code == 404       # restore: staff only (2026-11-24)

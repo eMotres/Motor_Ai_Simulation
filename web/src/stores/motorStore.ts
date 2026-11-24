@@ -6,6 +6,8 @@ import { setGeoGetter } from '../lib/apiAuth';
 import { canWriteServer, getStoredUser } from '../lib/localAuth';
 import { autoSaveAppliedDesign } from '../lib/appliedAutoSave';
 import type { AppliedSaveResult, ApplyMode } from '../lib/appliedAutoSave';
+import { baselineBody } from '../lib/runSettings';
+import type { RunRequest, RunResolved } from '../lib/runSettings';
 import { geoSignature, setGeoSigGetter } from '../components/common/geoSig';
 import { geometryApplyOutcome } from '../lib/geometryApplyOutcome';
 import { dutyApplyInProgress } from '../lib/familyFollow';
@@ -47,8 +49,10 @@ function restoreDescentEvalParams(st: any): void {
   const ep = st?.eval_params;
   if (!ep || typeof ep !== 'object') return;
   const put = (k: string, v: unknown) => { if (v != null) { try { localStorage.setItem(k, JSON.stringify(v)); } catch { /* quota */ } } };
-  put('sim.stepsPP', ep.steps_per_period);  put('mesh.nSectors', ep.n_sectors);
-  put('mesh.gapLayers', ep.gap_layers);     put('sim.coilTemp', ep.coil_temp_c);
+  // NOT written any more (owner 2026-11-24): the run's steps per period, gap rows, sector count and mesh sizes. Applying a
+  // geometry or a result must not change the fidelity of the user's ordinary runs (108 steps / 2 gap rows stayed 48 / 1 after
+  // an Apply).  The other fields below were restored before and still are.
+  put('sim.coilTemp', ep.coil_temp_c);
   put('mesh.poleCopy', ep.pole_copy);       put('sim.torqueFilter', ep.torque_filter);
   put('sim.fieldLosses', ep.rotor_eddy);
   // k_end: 0 in a descent means "auto" — the solver recomputes it from each
@@ -56,8 +60,10 @@ function restoreDescentEvalParams(st: any): void {
   // every consumer reading `sim.endWinding`.  The applied design's geometry re-seeds
   // the real factor, so only carry an EXPLICIT override across.
   if (Number(ep.end_winding_factor) > 0) put('sim.endWinding', ep.end_winding_factor);
-  put('mesh.meshSize', ep.mesh_size_mm);    put('mesh.minSize', ep.min_size_mm);
-  try { window.dispatchEvent(new CustomEvent('descent-eval-params', { detail: ep })); } catch { /* SSR */ }
+  // the live event carries the same restore, without the fidelity keys, so no panel adopts them from it either
+  const { steps_per_period: _s, gap_layers: _g, n_sectors: _n, mesh_size_mm: _m, min_size_mm: _mm, ...rest } = ep;
+  void _s; void _g; void _n; void _m; void _mm;
+  try { window.dispatchEvent(new CustomEvent('descent-eval-params', { detail: rest })); } catch { /* SSR */ }
 }
 
 // k_end follows the geometry (masses.end_winding_factor is the SINGLE SOURCE) and the
@@ -251,7 +257,8 @@ interface MotorState {
                        maxRounds?: number; surrogateSeed?: boolean;
                        objective?: string; currentBumpPct?: number;
                        ripplePenaltyLambda?: number;
-                       thdPenaltyLambda?: number; thdMaxPct?: number }) => Promise<void>;
+                       thdPenaltyLambda?: number; thdMaxPct?: number;
+                       runSettings?: { preset: string; overrides: Record<string, unknown>; expect_sig?: number; expect_token?: string } }) => Promise<void>;
   cancelDescent: () => Promise<void>;
   applyDescentBest: () => Promise<void>;
   applyDescentPoint: (pt: any) => Promise<void>;   // apply a USER-PICKED scatter point
@@ -266,7 +273,7 @@ interface MotorState {
    *  must never look like an apply that was archived. */
   appliedSave: (AppliedSaveResult & { busy?: boolean }) | null;
   loadLastDescent: () => Promise<void>;   // re-hydrate the last run's charts from the backend
-  computeBaselineLine: (opts: { currentBumpPct: number; steps: number; nSectors: number }) => Promise<void>;
+  computeBaselineLine: (opts: { currentBumpPct: number; request: RunRequest; resolved: RunResolved }) => Promise<{ stale: boolean }>;
 
   /** Hydrate sweepConfig from the backend so the selected variables follow the
    *  user across browsers; seeds the server if it has none yet but this browser does. */
@@ -1002,7 +1009,7 @@ export const useMotorStore = create<MotorState>()(
       lastOptSnapshot: null,
       appliedSave: null,
       setLastOptSnapshot: (s) => set({ lastOptSnapshot: s }),
-      runDescent: async ({ rippleMax, maxIters, wEff, wTd, steps, algorithm, nSectors, targetTorque, vPeakLimit, optimizeGamma, autoExpand, maxRounds, surrogateSeed, objective, currentBumpPct, ripplePenaltyLambda, thdPenaltyLambda, thdMaxPct }) => {
+      runDescent: async ({ rippleMax, maxIters, wEff, wTd, steps, algorithm, nSectors, targetTorque, vPeakLimit, optimizeGamma, autoExpand, maxRounds, surrogateSeed, objective, currentBumpPct, ripplePenaltyLambda, thdPenaltyLambda, thdMaxPct, runSettings }) => {
         const { sweepConfig } = get();
         const _inv = invertedRangeNames(sweepConfig.variations as never);
         if (_inv.length) {
@@ -1070,6 +1077,9 @@ export const useMotorStore = create<MotorState>()(
               mesh_size_mm, min_size_mm, pole_copy, torque_filter,
               rotor_eddy, end_winding_factor, gap_layers, coil_temp_c, structured_gap, airgap_macro, iron_template, geo_mesh, element_order,
               algorithm, n_sectors: nSectors,
+              // the panel's resolved run settings: when present the server takes the count, gap rows, mesh, sectors and
+              // rotor eddy from them alone (the fields above are then ignored)
+              ...(runSettings ? { run_settings: runSettings } : {}),
               target_torque_nm: targetTorque ?? 0,
               v_peak_limit: vPeakLimit ?? 1e9,
               optimize_gamma: optimizeGamma ?? true,
@@ -1108,22 +1118,19 @@ export const useMotorStore = create<MotorState>()(
           set({ descentError: String(e?.message ?? e), descentRunning: false });
         }
       },
-      computeBaselineLine: async ({ currentBumpPct, steps, nSectors }) => {
+      computeBaselineLine: async ({ currentBumpPct, request, resolved }) => {
         // Draw the current-only baseline line up-front (2 sims @ I, +bump% I), WITHOUT
         // a full optimization. Same eval params (single sources) as runDescent so the
         // line matches what the optimizer will evaluate against.
         const { sweepConfig } = get();
         const op0 = sweepConfig.operatingPoints[0] || ({} as any);
-        let mesh_size_mm = 4.0, min_size_mm = 0.3, pole_copy = false, torque_filter = false;
-        try { mesh_size_mm = Number(JSON.parse(localStorage.getItem('mesh.meshSize') ?? '4')) || 4.0; } catch { /* default */ }
-        try { min_size_mm  = Number(JSON.parse(localStorage.getItem('mesh.minSize')  ?? '0.3')) || 0.3; } catch { /* default */ }
+        // The run's settings (steps, gap rows, mesh sizes, sectors, rotor eddy, element order) are the panel's resolved ones:
+        // the request carries them under run_settings and nothing of them is read from the stored Mesh / Simulation tabs.
+        let pole_copy = false, torque_filter = false;
         try { pole_copy    = JSON.parse(localStorage.getItem('mesh.poleCopy') ?? 'false') === true; } catch { /* default */ }
         try { torque_filter = JSON.parse(localStorage.getItem('sim.torqueFilter') ?? 'false') === true; } catch { /* default */ }
-        let rotor_eddy = true, end_winding_factor = 0;
-        try { rotor_eddy = JSON.parse(localStorage.getItem('sim.fieldLosses') ?? 'true') !== false; } catch { /* default */ }
+        let end_winding_factor = 0;
         end_winding_factor = endWindingPin(get().geometry).k;   // typed, or 0 = per-candidate coil
-        // gap layers: the Mesh tab's, or undefined = the machine's saved setting
-        const gap_layers = storedGapLayers();
         let coil_temp_c = 120, structured_gap = false;
         try { coil_temp_c = Number(JSON.parse(localStorage.getItem('sim.coilTemp')  ?? '120')) || 120; } catch { /* default */ }
         // Belt (mapped) gap mesh — SINGLE SOURCE: the Mesh tab "Structured" toggle.
@@ -1137,18 +1144,20 @@ export const useMotorStore = create<MotorState>()(
         // Geometry-driven CDT mesh — SINGLE SOURCE: Mesh tab (same build as Simulation).
         let geo_mesh = true;
         try { geo_mesh = JSON.parse(localStorage.getItem('mesh.geoMesh') ?? 'true') !== false; } catch { /* default */ }
-        const element_order = 2;   // P2 — the only basis (see runDescent)
+                let stale = false;     // the server refused the held answer (409): the caller refreshes it
         set({ baselineBusy: true, baselineError: null });
         try {
           const res = await fetch(`${API_BASE_URL}/api/optimization/descent/baseline`, {
             method: 'POST', headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
-              operating_point: { gamma_deg: op0.gamma_deg ?? 0, current_a: op0.current_a, rpm: op0.rpm },
-              current_bump_pct: currentBumpPct, steps_per_period: steps, n_sectors: nSectors,
-              mesh_size_mm, min_size_mm, pole_copy, torque_filter,
-              rotor_eddy, end_winding_factor, gap_layers, coil_temp_c, structured_gap, airgap_macro, iron_template, geo_mesh, element_order,
+              ...baselineBody({
+                operating_point: { gamma_deg: op0.gamma_deg ?? 0, current_a: op0.current_a, rpm: op0.rpm },
+                current_bump_pct: currentBumpPct,
+              }, request, resolved),
+              pole_copy, torque_filter, end_winding_factor, coil_temp_c, structured_gap, airgap_macro, iron_template, geo_mesh,
             }),
           });
+          if (res.status === 409) stale = true;
           if (!res.ok) throw new Error(`HTTP ${res.status}: ${(await res.text()).slice(0, 200)}`);
           const j = await res.json();
           set({ baselineLine: j.baseline_line ?? null });
@@ -1157,6 +1166,7 @@ export const useMotorStore = create<MotorState>()(
         } finally {
           set({ baselineBusy: false });
         }
+        return { stale };
       },
       cancelDescent: async () => {
         try { await fetch(`${API_BASE_URL}/api/optimization/descent/cancel`, { method: 'POST' }); }

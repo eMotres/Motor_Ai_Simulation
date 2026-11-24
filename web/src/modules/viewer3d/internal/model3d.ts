@@ -8,6 +8,8 @@ export interface PartGroup {
   name: string;
   family: string;
   explode: number;
+  /** the component name from the CAD file (GLB extras.label); a display name, not unique */
+  label?: string;
   children?: string[];
   colour?: string;
   explodeDirection?: Vec3;

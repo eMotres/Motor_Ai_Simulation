@@ -295,6 +295,8 @@
     "ktTip3d": "3-D corrected (measured k_T).",
     "ktTipFlux": "3-D flux factor (k_T not measured).",
     "ktTip2d": "2-D: no 3-D result.",
+    "kLStale": "k(L) computed before 2026-11-24: recompute",
+    "kLStaleTip": "This motor's 3-D end-effect table (k_flux vs stack length) was computed before the 2026-11-24 fix: only its value at the reference stack is used, at every stack length. Re-run the 3-D end effect (Stage A) to restore the stack-length dependence.",
     "torqueTip": "Shaft torque at the set current and speed.",
     "powerTip": "Shaft power = torque × speed.",
     "torque": "Torque",

@@ -81,7 +81,7 @@ def test_both_presets_resolve_for_every_size_without_falling_back(od, slots, pol
         assert v["min_size_mm"] == pytest.approx(cls["f_min"] * h["h0"], abs=1e-4) and 0 < v["min_size_mm"] < v["mesh_size_mm"]
         cm = v["component_mesh"]
         assert cm["stator"] == cm["rotor"] == cm["magnet"] == pytest.approx(h["h0"], abs=1e-4)
-        assert cm["outer"] == pytest.approx(cls["air"] * h["h0"], abs=1e-3) and cm["coil_rel"] == 1.0
+        assert cm["outer"] == pytest.approx(cls["air"] * h["h0"], abs=1e-3) and cm["coil_rel"] == (2.0 if name == "optimization" else 1.0)
         assert v["n_sectors"] == math.gcd(slots, poles) >= 1 and v["element_order"] == 2
         assert all(k in v for k in ("n_steps_per_period", "gap_layers", "n_periods", "outer_air_factor", "eddy", "rotor_eddy", "demag"))
         assert all(x in MP.SOURCES for x in r["sources"].values())
@@ -132,10 +132,10 @@ def test_fill_takes_the_preset_for_empty_fields_and_reports_what_the_request_cha
     assert json.loads(empty["settings"]["component_mesh"]) == r["values"]["component_mesh"]
     same = MP.fill(r, {"n_steps_per_period": 48, "gap_layers": 1.0, "eddy": True})
     assert not same["custom"]
-    custom = MP.fill(r, {"n_steps_per_period": 96, "gap_layers": 2, "demag": False, "component_mesh": '{"coil_rel": 2}'})
+    custom = MP.fill(r, {"n_steps_per_period": 96, "gap_layers": 2, "demag": False, "component_mesh": '{"coil_rel": 1}'})
     assert custom["custom"] and custom["settings"]["n_steps_per_period"] == 96 and custom["settings"]["gap_layers"] == 2
     assert set(custom["overridden"]) == {"n_steps_per_period", "gap_layers", "demag", "component_mesh.coil_rel"}
-    assert json.loads(custom["settings"]["component_mesh"])["coil_rel"] == 2 and "outer" in json.loads(custom["settings"]["component_mesh"])
+    assert json.loads(custom["settings"]["component_mesh"])["coil_rel"] == 1 and "outer" in json.loads(custom["settings"]["component_mesh"])
 
 
 def test_the_record_carries_name_version_effective_settings_and_what_a_clamp_changed():
@@ -230,7 +230,7 @@ def test_fill_body_completes_what_the_body_leaves_out_and_lists_what_it_states_o
     assert body["steps_per_period"] == 48 and body["gap_layers"] == 1.0 and body["x_other"] == 1
     assert body["mesh_size_mm"] == 9.0                                   # stated: stays
     assert rec["custom"] and set(rec["overridden"]) == {"mesh_size_mm"}
-    assert json.loads(body["component_mesh"])["coil_rel"] == 1.0
+    assert json.loads(body["component_mesh"])["coil_rel"] == 2.0      # owner 2026-11-24: 2h in the Optimization preset
     clean = MP.fill_body("optimization", {}, g)["record"]
     assert not clean["custom"] and clean["version"] == MP.version()
 
@@ -304,3 +304,11 @@ def test_the_coupled_run_takes_the_simulation_preset_only_when_asked(monkeypatch
     with pytest.raises(Exception) as e:
         C._with_mesh_preset({"preset": "fast"})
     assert "unknown mesh preset" in str(e.value.detail)
+
+
+def test_the_optimization_preset_has_the_2h_wire_cell_and_the_simulation_preset_keeps_1h():
+    g = _machine(80.0, 12, 10)
+    assert MP.resolve("optimization", g)["values"]["component_mesh"]["coil_rel"] == 2.0
+    assert MP.resolve("simulation", g)["values"]["component_mesh"]["coil_rel"] == 1.0
+    assert MP.resolve("optimization", g)["sources"]["component_mesh"] == "owner"
+    assert MP.version() >= 2

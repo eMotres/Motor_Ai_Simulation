@@ -2,7 +2,7 @@
  *  Pure helpers, so the restore rules are tested without a browser. */
 import { oneOf, shape, smallInt, text } from '../../lib/viewMemory.ts';
 
-export const DEVELOPMENT_VIEWS = ['specification', 'motors', 'messages', 'notes', 'documents'] as const;
+export const DEVELOPMENT_VIEWS = ['specification', 'motors', 'messages', 'notes', 'documents', 'model3d', 'contract'] as const;   // + the 3D model tab and the Contract section (owner 2026-11-22)
 export type DevelopmentViewTab = (typeof DEVELOPMENT_VIEWS)[number];
 export interface DevelopmentView { project: string; view: DevelopmentViewTab; step: number; stepId?: string }
 
@@ -31,10 +31,10 @@ export function parseDevelopmentView(raw: unknown): DevelopmentView | null {
 export const LEGACY_CARD_STEPS = ['application', 'project', 'mechanical', 'operating', 'review'] as const;
 
 /** A remembered view that still fits the page: the step by its id (or, for an old record, the closest step to its old card),
- *  falling back to the first step; and no Notes tab for a viewer who does not have it.  `steps` is the number of steps (the
+ *  falling back to the first step; an old Notes view opens Messages.  `steps` is the number of steps (the
  *  old numeric rule) or the ids of the steps that exist. */
-export function restorableView(saved: DevelopmentView, steps: number | readonly string[], canEditProject: boolean): { view: DevelopmentViewTab; step: number } {
-  const view = saved.view === 'notes' && !canEditProject ? 'specification' : saved.view;
+export function restorableView(saved: DevelopmentView, steps: number | readonly string[], _canEditProject: boolean): { view: Exclude<DevelopmentViewTab, 'notes'>; step: number } {
+  const view = saved.view === 'notes' ? ('messages' as const) : saved.view;   // the Internal notes tab is gone: its notes are staff-only messages (owner 2026-11-24)
   if (typeof steps === 'number') return { view, step: steps > 0 ? Math.min(Math.max(0, saved.step), steps - 1) : 0 };
   const wanted = saved.stepId ?? LEGACY_CARD_STEPS[saved.step];
   const index = wanted ? steps.indexOf(wanted) : -1;

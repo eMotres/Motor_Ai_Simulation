@@ -484,6 +484,14 @@ def build_draft(group: Group, settings: dict, items: list, recipients: list[dict
     subject = _subject(group, end, bilingual)
     if not header_safe(subject):
         return None                      # cannot happen after safe_text; never build a header from an unsafe value
+    # what a reader who may not see the staff-only lines is told about the draft's identity and age: kept stable across a rebuild that
+    # only added or changed staff-only lines, so such a rebuild is invisible to him (the public-only view of the digest settings)
+    public = [i for i in visible if "staff" not in i.requires]
+    fingerprint = hashlib.sha256(json.dumps([[i.kind, i.key, i.ts, i.en] for i in public], ensure_ascii=False).encode("utf-8")).hexdigest()
+    ex = existing or {}
+    same = bool(ex) and ex.get("public_hash") == fingerprint and ex.get("public_updated_at")
+    inherits = bool(ex) and int(ex.get("public_total") or 0) > 0
+    new_id = DS.draft_id_for(group.scope, DS.iso(start), revision)
     draft = {
         "id": DS.draft_id_for(group.scope, DS.iso(start), revision), "revision": revision, "scope": group.scope, "kind": group.kind,
         "title": group.title_en, "title_zh": group.title_zh, "status": "pending",
@@ -497,7 +505,11 @@ def build_draft(group: Group, settings: dict, items: list, recipients: list[dict
                    **({"group_en": i.group[0], "group_zh": i.group[1]} if i.group else {})} for i in shown],
         #: how many of ALL the visible lines (before the cut at MAX_ITEMS) need no staff access: what a non-staff reader of the digest
         #: settings is told, as if the staff-only lines did not exist
-        "public_total": sum(1 for i in visible if "staff" not in i.requires),
+        "public_total": len(public), "public_hash": fingerprint,
+        "public_updated_at": ex["public_updated_at"] if same else now,
+        "public_created_at": (ex.get("public_created_at") or ex.get("created_at") or now) if inherits else now,
+        "public_id": (ex.get("public_id") or ex.get("id") or new_id) if same else new_id,
+        "public_revision": (ex["public_revision"] if "public_revision" in ex else ex.get("revision", revision)) if same else revision,
         "more": more, "more_requires": sorted(frozenset().union(*[i.requires for i in hidden_more])) if hidden_more else [],
         "recipients": recipients, "skipped": skipped,
     }

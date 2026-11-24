@@ -87,6 +87,10 @@ def _viewer_summary(d: dict, staff: bool) -> dict:
     out = _summary(d)
     if not staff:
         out["items"] = _public_total(d)                    # the same number whatever staff-only lines exist, shown or in the overflow
+        for key, public in (("id", "public_id"), ("revision", "public_revision"), ("created_at", "public_created_at"),
+                            ("updated_at", "public_updated_at")):
+            if d.get(public) is not None:                  # identity and age as of the PUBLIC lines: a rebuild by staff-only lines is invisible
+                out[key] = d[public]
     return out
 
 

@@ -1339,3 +1339,36 @@ def test_an_older_draft_without_the_public_total_is_answered_from_what_it_holds(
     assert DR._public_total(draft) == 1
     assert DR._public_total({"items": [{"requires": []}], "more": 2, "more_requires": []}) == 3
     assert DR._public_total({"items": [{"requires": []}], "public_total": 7, "more": 2}) == 7
+
+
+def test_a_rebuild_by_an_added_internal_line_changes_nothing_a_non_staff_owner_sees(d):
+    """The non-staff answer is byte-identical before and after a rebuild that adds only an internal line (also across the rebuilt draft's
+    id and age), and does change when a PUBLIC line is added."""
+    from motor_ai_sim.digest import build as B, collect as C, routes as DR
+    d["U"].update_user(BOB, role="engineer")
+    project = d["PS"].get_project(PID)
+    group = B.project_group(project)
+    rec = [{"email": BOB, "role": "customer", "name": "B", "lang": "en"}]
+
+    def rebuild(existing, now_offset, revision=0):
+        items = C.collect_project(d["PS"].get_project(PID), T0 - 86400, T0, results=lambda die, cfg: {})
+        draft = B.build_draft(group, {"mode": "daily"}, items, rec, [], T0 - 86400, T0, existing=existing, revision=revision)
+        draft["updated_at"] = at(now_offset)                                   # the wall clock of this rebuild
+        return draft
+
+    def owner_view(draft):
+        d["DS"].save_draft(draft)
+        d["DS"].set_state(PSCOPE, draft_id=draft["id"])
+        return json.dumps(DR._settings_view(group, can_edit=True, staff=False)["pending"], sort_keys=True)
+
+    first = rebuild(None, -500)
+    before = owner_view(first)
+    d["PS"].append_jsonl(PID, "thread.jsonl", {"id": "ix1", "author_email": BOB, "created_at": at(-60), "staff_only": True, "text": "internal one"})
+    second = rebuild(first, -100)
+    assert second["updated_at"] != first["updated_at"] and second["public_total"] == first["public_total"]
+    assert owner_view(second) == before                                        # byte-identical for the non-staff caller
+    staff_view = json.dumps(DR._settings_view(group, can_edit=True, staff=True)["pending"], sort_keys=True)
+    assert staff_view != before                                                # staff do see the change
+    d["PS"].append_jsonl(PID, "thread.jsonl", {"id": "px1", "author_email": ANNA, "created_at": at(-30), "text": "a new public line"})
+    third = rebuild(second, -10)
+    assert owner_view(third) != before                                         # a public change is visible, as it must be

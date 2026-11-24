@@ -80,15 +80,18 @@ def _decode(d: pd.Design, base: Dict[str, Any], rows: List[Dict[str, Any]], zone
     for z, c in zip(zones, cat):
         opts = d.raw["airfoil_options"][z]
         v["airfoil_" + z] = opts[int(c) % len(opts)]
-    return _repair(d, v)
+    return _repair(d, v, {r["name"] for r in rows})
 
 
-def _repair(d: pd.Design, v: Dict[str, Any]) -> Dict[str, Any]:
-    """Make the vector satisfy the cheap structural rules: twist never increases outward, cut-out between hub and the inner zone."""
+def _repair(d: pd.Design, v: Dict[str, Any], free_names: Optional[set] = None) -> Dict[str, Any]:
+    """Make the vector satisfy the cheap structural rules: twist never increases outward, cut-out between hub and the inner zone.
+
+    Only the names in ``free_names`` are changed (review 2026-11-24, 5a: a fixed outer twist was overwritten when only the inner group was
+    free); ``None`` = every name.  A conflict with a fixed value is left for ``check_candidate`` to refuse."""
     prev = None
     for r in d.control:
         n = pd._cname("twist_deg", r)
-        if prev is not None and v[n] > prev:
+        if prev is not None and v[n] > prev and (free_names is None or n in free_names):
             v[n] = prev
         prev = v[n]
     R_mm = float(v["diameter_in"]) * 25.4 / 2.0
@@ -223,14 +226,16 @@ def _structure_violation(design: pd.Design, vec: Dict[str, Any], rec: Dict[str, 
     1 when the check itself cannot run (an unchecked candidate is not accepted)."""
     from motor_ai_sim import propeller_structure as ps
     try:
-        s = ps.root_stress(pd.candidate_to_propeller2(design, vec), float(rec["operating"]["rpm"]), material)
+        o = rec.get("operating") or {}                       # review 2026-11-24 (5e): the loads at the run's own air speed and density
+        s = ps.root_stress(pd.candidate_to_propeller2(design, vec), float(o["rpm"]), material,
+                           rho_air=float(o.get("rho_kg_m3", 1.225)), v_inf=float(o.get("v_inf_ms") or 0.0))
         ok = bool(s.get("load_valid", False))
         sf = float(s["safety_factor"]) if ok else None
     except Exception as exc:                                 # noqa: BLE001 - the reason goes into the record
         rec["structure"] = {"material": material, "error": "%s: %s" % (type(exc).__name__, exc), "validated": False}
         return 1.0
     rec["structure"] = {"material": material, "safety_factor": sf, "required": sf_min, "passes": bool(ok and sf >= sf_min),
-                        "load_valid": ok, "load_problems": s.get("load_problems", []), "check": "root static screening",
+                        "load_valid": ok, "load_problems": s.get("load_problems", []), "check": "every-station static screening",
                         "validated": False, "overspeed_assumption": s.get("overspeed_assumption")}
     if not ok:                                           # review 2026-11-21 H1: failed loads make the candidate infeasible
         return 1.0
@@ -283,7 +288,10 @@ def optimize(design: pd.Design, base: Dict[str, Any], op: str, *, objectives: Se
         raise OptimizeError("chord_max_step must be a number between 0.01 and 0.3 (chord/R)")
     if flight and design.operating_points[op].flight_speed_ms is None:
         raise OptimizeError("operating point %r has no flight_speed_ms" % op)
-    free = [g for g in free if g in FREE_GROUPS]
+    unknown = [g for g in free if g not in FREE_GROUPS]
+    if unknown:                                          # review 2026-11-24 (5d): a misspelt group is refused, not dropped
+        raise OptimizeError("unknown group(s) %s; known: %s" % (unknown, list(FREE_GROUPS)))
+    free = list(free)
     if not free:
         raise OptimizeError("choose at least one group to vary: %s" % list(FREE_GROUPS))
     bad = pd.check_candidate(design, base)
@@ -312,6 +320,8 @@ def optimize(design: pd.Design, base: Dict[str, Any], op: str, *, objectives: Se
     evalf = evaluate or (lambda dz, v, o: pd.evaluate_candidate(dz, v, o, flight=flight))
     rows = _free_names(design, base, free)
     zones = [z for z in ("root", "mid", "tip")] if "airfoil" in free else []
+    if isinstance(seed, bool) or not isinstance(seed, int) or not 0 <= seed < 2 ** 32:   # review 2026-11-24 (10b)
+        raise OptimizeError("seed must be an integer between 0 and 2^32 - 1")
     rng = np.random.default_rng(int(seed))
     n_cont = len(rows)
     run_id = "opt-" + uuid.uuid4().hex[:10]
@@ -324,11 +334,14 @@ def optimize(design: pd.Design, base: Dict[str, Any], op: str, *, objectives: Se
 
     def evaluate_ind(ind: Individual, generation: int) -> Individual:
         ind.vector = dict(ind.exact) if ind.exact is not None else _decode(design, base, rows, zones, ind.x, ind.cat)
+        if ind.exact is None:                              # review 2026-11-24 (5a): the repaired values go back into the genes
+            for i, r in enumerate(rows):
+                ind.x[i] = float(np.clip((float(ind.vector[r["name"]]) - r["lo"]) / (r["hi"] - r["lo"]), 0.0, 1.0))
         key = json.dumps(ind.vector, sort_keys=True, default=str)
         ind.generation = generation
         if key in cache:                                   # an identical design is not evaluated twice
-            src = cache[key]
-            ind.objs, ind.viol, ind.record, ind.note = src.objs, src.viol, src.record, "duplicate"
+            src = cache[key]                               # review 2026-11-24 (5b): it points at its original and stays out of the population
+            ind.objs, ind.viol, ind.record, ind.note, ind.index = src.objs, src.viol, src.record, "duplicate", src.index
             return ind
         viol = pd.check_candidate(design, ind.vector)
         if viol:
@@ -344,6 +357,10 @@ def optimize(design: pd.Design, base: Dict[str, Any], op: str, *, objectives: Se
                 ind.record = rec
                 ind.objs = [rec["objectives"].get(o) for o in objectives]
                 ind.viol = _violation(rec, enforce_tip_mach, limit)
+                missing = [o for o, val in zip(objectives, ind.objs) if val is None]
+                if missing:                                # review 2026-11-24 (5c): a requested objective without a value is not feasible
+                    ind.viol += 1.0
+                    ind.note = "objective_unavailable: " + ", ".join(missing)
                 if sf_min is not None:
                     ind.viol += _structure_violation(design, ind.vector, rec, structure_material, sf_min)
                 if chord_max_step is not None:              # opt-in makeable chord shape (one maximum, bounded steps)
@@ -382,7 +399,7 @@ def optimize(design: pd.Design, base: Dict[str, Any], op: str, *, objectives: Se
                 if len(kids) >= pop:
                     break
         kids = [evaluate_ind(k, g) for k in kids]
-        merged = popn + kids
+        merged = popn + [k for k in kids if k.note != "duplicate"]
         fronts = _sort(merged)
         nxt: List[Individual] = []
         for f in fronts:
@@ -399,7 +416,7 @@ def optimize(design: pd.Design, base: Dict[str, Any], op: str, *, objectives: Se
     requirements = {                                     # review H2: what this run enforced and what it did not
         "flight": bool(flight), "polar_source": pd.polar_source(design), "compressibility": design.raw.get("polars_compressibility") or "off",
         "tip_mach_limit": limit if enforce_tip_mach else "off",
-        "structure": ({"material": structure_material, "min_safety_factor": sf_min, "check": "root static screening"}
+        "structure": ({"material": structure_material, "min_safety_factor": sf_min, "check": "every-station static screening"}
                       if sf_min is not None else "off"),
         "chord_max_step": float(chord_max_step) if chord_max_step is not None else "off",
     }
@@ -424,7 +441,7 @@ def optimize(design: pd.Design, base: Dict[str, Any], op: str, *, objectives: Se
                          "tip_mach": (i.record or {}).get("tip_mach"), "constraints_met": _feasible(i),
                          "flags": (i.record or {}).get("flags", []),
                          **({"safety_factor": ((i.record or {}).get("structure") or {}).get("safety_factor"),
-                            "structure_check": "root static screening (placeholder material, not a qualification)"} if sf_min is not None else {})}
+                            "structure_check": "every-station static screening (placeholder material, not a qualification)"} if sf_min is not None else {})}
                         for i in evaluations],
         "elapsed_s": round(time.time() - t0, 2), "stored": str(out_file) if out_file else None, "estimated": True, "validated_against": None,
     }

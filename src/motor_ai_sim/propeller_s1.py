@@ -669,8 +669,8 @@ def losses(m: Mapping[str, Any], rpm: float, I: float, t_winding_c: float,
     A group the grid HAS but cannot give at this point (a null cell) is listed in
     ``unavailable`` (the caller refuses the point; its 0 here is a placeholder, not
     a loss).  The drive's PWM extra loss comes from the drive's own grid; where
-    that grid has no value it is listed in ``drive_unavailable`` and counted 0
-    (flagged).  ``below_loss_grid_speed`` / ``_current``: a value read below the
+    that grid has no value it is listed in ``drive_unavailable`` AND in
+    ``unavailable`` (refused; review 2026-11-24).  ``below_loss_grid_speed`` / ``_current``: a value read below the
     grid's first speed / first feasible current (extrapolated)."""
     g = m["grid"]
     r = resistance(m, t_winding_c)
@@ -694,8 +694,9 @@ def losses(m: Mapping[str, Any], rpm: float, I: float, t_winding_c: float,
     pw = (drive or {}).get("pwm_extra_W")
     if g["loss_W"].get("pwm_extra") is None and pw is not None:
         v, _, _ = grid_eval(drive["rpm"], drive["I_A"], pw, rpm, I, kind="loss")
-        if v is None:
+        if v is None:                                     # review 2026-11-24 (7b): a missing PWM loss refuses the point, it is not 0 W
             drive_unavailable.append("pwm_extra")
+            unavailable.append("pwm_extra")
         out["pwm_extra"] = 0.0 if v is None else v
     # resistance-limited eddy in the conductors goes with the conductivity
     out["cu_ac"] *= resistance(m, float(m["R_temp_C"])) / r
@@ -1083,11 +1084,14 @@ def voltage_check(m: Mapping[str, Any], drive: Mapping[str, Any], rpm: float, I:
     if i_hint is not None and I < i_hint <= cap:
         # warm start (the fixed point's previous answer): the edge is usually close by
         if ok(i_hint) is not None:
+            # review 2026-11-24 (7a): the hint is an UPPER bracket only; the edge is searched below it.  (Before, ``prev = i_hint`` was set
+            # unconditionally, the bracket had zero width and a stale, too high hint current was returned as the answer.)
             hit = i_hint
             near = max(I, i_hint - 0.3)
             if near > I and ok(near) is None:
-                prev = near
-            prev = i_hint
+                prev = near                                # the edge lies in [near, hint]
+            else:
+                hit, prev = None, I                        # the edge lies below near: full search from the grid's current
     if hit is None:
         start = prev
         for k in range(1, 25):

@@ -100,6 +100,8 @@ def zone_air_detail(field: _pi.AirField, die_radii: Mapping[str, Any]) -> Dict[s
         if coverage[z] < MIN_ZONE_COVERAGE:              # review 2026-11-21 H9: a small modelled sliver is not the zone's air speed
             flags.add("%s_coverage_too_small" % z)
             continue
+        if float(v) < 0.0:                               # review 2026-11-24 (11.7): reverse flow is named, the zone gets 0 (no credit)
+            flags.add("%s_reverse_flow" % z)
         if coverage[z] < FULL_ZONE_COVERAGE:
             flags.add("%s_partly_modelled" % z)
             partial[z] = {"axial_ms": max(0.0, float(v)), "coverage": coverage[z]}

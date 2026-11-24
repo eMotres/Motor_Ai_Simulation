@@ -129,11 +129,12 @@ def test_real_candidate_end_to_end_is_labelled_not_validated():
     assert all(s["method"].startswith("airfoil_outline") for s in secs)
     out = ps.root_stress(raw, 8000.0, "pa6_gf30")
     assert out["validated"] is False
-    assert out["basis"] == "beam model, placeholder material, root flow not validated"
+    assert out["basis"] == "beam model at every station, placeholder material, root flow not validated"
     assert out["material"]["source"] == "placeholder - supplier data sheet / factory question"
     assert out["rpm_max_assumed"] is True and out["rpm_check"] == pytest.approx(1.2 * 8000.0)
     assert out["overspeed_assumption"]
-    assert out["section_used"]["r_m"] == pytest.approx(secs[0]["r_m"])
+    assert out["section_used"]["r_m"] == pytest.approx(out["governing_r_m"])              # review 2026-11-24: the weakest station
+    assert out["per_station"][0]["r_m"] == pytest.approx(secs[0]["r_m"]) and out["not_checked"]
     assert out["stress_Pa"]["combined"] > 0 and out["safety_factor"] > 0
     assert isinstance(out["passes"], bool)
     given = ps.root_stress(raw, 8000.0, "pa6_gf30", rpm_max=9000.0)

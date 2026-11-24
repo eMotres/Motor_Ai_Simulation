@@ -14,6 +14,7 @@ from typing import Any, Dict, List, Optional
 
 from motor_ai_sim import propeller as pp
 from motor_ai_sim import propeller_airfoil as af
+from motor_ai_sim import propeller_bemt as pb
 from motor_ai_sim import propeller_design as pd
 from motor_ai_sim import workspace
 
@@ -22,6 +23,8 @@ DRAFT_DIR = "propeller_designs"
 NAME_RX = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,59}$")
 MAX_SWEEP_POINTS = 25
 MAX_DRAFTS = 200
+MAX_VECTOR_KEYS = 64
+MAX_KEY_LEN = 64
 
 
 class ApiProblem(Exception):
@@ -89,11 +92,17 @@ def _clean_vector(vec: Any) -> Dict[str, Any]:
     if not isinstance(vec, dict):
         raise ApiProblem(422, "vector must be an object of design variables")
     out: Dict[str, Any] = {}
+    if len(vec) > MAX_VECTOR_KEYS:                        # review 2026-11-24 (10c): bounded input
+        raise ApiProblem(422, "at most %d design variables" % MAX_VECTOR_KEYS)
     for k, v in vec.items():
-        if not isinstance(k, str):
-            raise ApiProblem(422, "variable names must be strings")
+        if not isinstance(k, str) or len(k) > MAX_KEY_LEN:
+            raise ApiProblem(422, "variable names must be strings of at most %d characters" % MAX_KEY_LEN)
         if isinstance(v, bool) or not isinstance(v, (int, float, str)):
             raise ApiProblem(422, "variable %r must be a number or a string" % k)
+        if isinstance(v, str) and len(v) > MAX_KEY_LEN:
+            raise ApiProblem(422, "variable %r: text values have at most %d characters" % (k, MAX_KEY_LEN))
+        if k in ("diameter_in", "blades") and isinstance(v, str):   # review 2026-11-24 (10b): a number, not a text
+            raise ApiProblem(422, "%s must be a number" % k)
         if isinstance(v, float) and not math.isfinite(v):
             raise ApiProblem(422, "variable %r must be finite" % k)
         out[k] = v
@@ -190,7 +199,8 @@ def sweep(vec: Any, op: str, variable: str, values: Optional[List[Any]] = None, 
     if values is None:
         if not isinstance(v.get(variable), (int, float)):
             raise ApiProblem(422, "give explicit values for the non-numeric variable %r" % variable)
-        if lo is None or hi is None or not (isinstance(n, int) and 2 <= n <= MAX_SWEEP_POINTS) or not hi > lo:
+        num = lambda x: isinstance(x, (int, float)) and not isinstance(x, bool) and math.isfinite(x)   # review 2026-11-24 (10b)
+        if not (num(lo) and num(hi)) or not (isinstance(n, int) and 2 <= n <= MAX_SWEEP_POINTS) or not hi > lo:
             raise ApiProblem(422, "give lo < hi and 2 <= n <= %d" % MAX_SWEEP_POINTS)
         values = [lo + (hi - lo) * i / (n - 1) for i in range(n)]
     if not isinstance(values, list) or not (1 <= len(values) <= MAX_SWEEP_POINTS):
@@ -239,8 +249,11 @@ def curve(vec: Any, op: str, n: int = 11, v_inf: float = 0.0, polar_source: Any 
         rpm = o.rated_rpm_ref * (0.4 + 0.9 * i / (n - 1))
         f = pi.get_model("bemt-1").evaluate(pi.InflowRequest(propeller=prop, rpm=rpm, rho=float(air["rho_kg_m3"]), v_inf_ms=float(v_inf),
                                                               r_min_m=0.0, r_max_m=o.motor_radius_mm / 1000.0, air_temp_c=float(air["temp_c"])))
+        tm = pd._tip_mach(prop.blade.tip_radius_m, rpm, float(air["temp_c"]))
+        if v_inf:                                        # review 2026-11-24 (3e): helical tip speed with oncoming air
+            tm = math.hypot(tm, float(v_inf) / pb.sound_speed(float(air["temp_c"])))
         rows.append({"rpm": rpm, "thrust_N": f.thrust_N, "torque_Nm": f.torque_Nm, "shaft_power_W": f.shaft_power_W,
-                     "air_speed_ms": f.air_speed_ms, "tip_mach": pd._tip_mach(prop.blade.tip_radius_m, rpm, float(air["temp_c"]))})
+                     "air_speed_ms": f.air_speed_ms, "tip_mach": tm, "flags": list(f.flags)})   # 3e: the model's flags per row
     return {"operating_point": op, "torque_limit_Nm": o.torque_limit_Nm, "rated_rpm_ref": o.rated_rpm_ref, "rows": rows,
             "tip_mach_limit": d.tip_mach_limit, "banner": pd.BANNER}
 
@@ -257,6 +270,8 @@ def optimize(vec: Any, op: str, pop: Any = 12, generations: Any = 6, seed: Any =
     if not isinstance(pop, int) or isinstance(pop, bool) or not isinstance(generations, int) or isinstance(generations, bool) \
             or not isinstance(seed, int) or isinstance(seed, bool):
         raise ApiProblem(422, "pop, generations and seed must be integers")
+    if not 0 <= seed < 2 ** 32:                           # review 2026-11-24 (10b): the random generator takes no negative seed
+        raise ApiProblem(422, "seed must be between 0 and 2^32 - 1")
     if objectives is not None and not (isinstance(objectives, list) and all(isinstance(o, str) for o in objectives)):
         raise ApiProblem(422, "objectives must be a list of names")
     if free is not None and not (isinstance(free, list) and all(isinstance(g, str) for g in free)):

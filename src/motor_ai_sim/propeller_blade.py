@@ -21,6 +21,7 @@ INTERPOLATIONS = ("linear", "pchip")
 POLAR_SOURCES = ("neuralfoil", "xfoil_table", "measured", "flatplate_model", "camber_model", "mfoil_table")
 COMPRESSIBILITY = ("prandtl_glauert",)
 ROTATIONS = ("cw_from_front", "ccw_from_front")
+MAX_STATIONS = 200
 MIN_STATIONS = 8
 DEFAULT_PITCH_AXIS = 0.25            # fraction of chord from the leading edge
 DEFAULT_INTERPOLATION = "pchip"
@@ -107,6 +108,8 @@ def parse_blade(raw: Any, diameter_m: float, where: str) -> BladeGeometry:
     st_raw = raw.get("stations")
     if not isinstance(st_raw, list) or len(st_raw) < MIN_STATIONS:
         raise PropellerDataError(f"{w}: stations must be a list of at least {MIN_STATIONS} entries")
+    if len(st_raw) > MAX_STATIONS:                       # review 2026-11-24 (10c): bounded input
+        raise PropellerDataError(f"{w}: at most {MAX_STATIONS} stations")
     stations = []
     last = -math.inf
     for i, s in enumerate(st_raw):

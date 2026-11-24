@@ -1,8 +1,9 @@
 """Structural root check of the own propeller — plan section 9.5 ("Structural hook") of docs/PROPELLER_MODULE_PLAN_2026-11-15.md.
 
-A beam model of ONE blade: centrifugal tension at the root from the mass distribution, bending at the root from the blade-element loads
-(thrust = flapwise, torque force = edgewise) resolved on the section's principal axes through the twist, combined stress at the root
-section, safety factor against the material allowables, ``passes = factor >= 3`` (owner rule: mechanics are always checked, SF 3).
+A beam model of ONE blade: centrifugal tension from the mass distribution, bending from the blade-element loads (thrust = flapwise,
+torque force = edgewise) resolved on the section's principal axes through the twist, combined stress - at EVERY station (review 2026-11-24,
+2a: a thin outboard section can be weaker than the root), the minimum safety factor against the material allowables reported with its
+station, ``passes = factor >= 3`` (owner rule: mechanics are always checked, SF 3).
 
 What this is NOT: no FEM, no torsion in the stress, no centrifugal bending from a centroid line that is not straight, no stress
 concentration at the hub fillet, no fatigue, no moulded-fibre orientation.  Stresses are taken at the bounding-box extremes of the
@@ -23,7 +24,11 @@ from motor_ai_sim import propeller_bemt as pb
 SAFETY_FACTOR = 3.0                       # owner rule: mechanics always checked, SF 3
 OVERSPEED_FACTOR = 1.2                    # assumption: runaway / overspeed rpm = 1.2 x the design rpm when the caller gives none
 PLACEHOLDER = "placeholder - supplier data sheet / factory question"
-BASIS = "beam model, placeholder material, root flow not validated"
+BASIS = "beam model at every station, placeholder material, root flow not validated"
+#: failure modes and loads this check does NOT cover; returned with every result (review 2026-11-24, 2d)
+NOT_CHECKED = ("fatigue", "flutter", "resonance (blade modes vs rpm and blade-pass orders)", "stress concentration K_t at the hub fillet",
+               "torsion and section pitching moment", "transverse shear", "centrifugal bending from a curved stacking line",
+               "hub, bore and clamping / bolt loads", "fibre orientation of the moulded part", "material data (placeholder allowables)")
 THIN_ELLIPSE_CENTROID = 0.40              # thin-section fallback: centroid at 40 % chord from the leading edge
 
 # Direction-dependent allowables: the value stored is the one used (the weakest direction that the check can load); the note says what
@@ -77,8 +82,11 @@ def get_material(material: Any) -> Dict[str, Any]:
 
 def _outline_props(x: np.ndarray, yu: np.ndarray, yl: np.ndarray, t_scale: float) -> Dict[str, float]:
     """Unit-chord area, centroid and second moments of the closed outline (shoelace), y scaled by ``t_scale``."""
+    # review 2026-11-24 (2b): the thickness is scaled about the UNCHANGED camber line (scaling y as a whole also scaled the camber)
+    yc, yt = 0.5 * (np.asarray(yu) + np.asarray(yl)), 0.5 * (np.asarray(yu) - np.asarray(yl))
+    yu, yl = yc + t_scale * yt, yc - t_scale * yt
     px = np.concatenate([x, x[::-1][1:]])
-    py = np.concatenate([yu, yl[::-1][1:]]) * t_scale
+    py = np.concatenate([yu, yl[::-1][1:]])
     x0, y0 = px, py
     x1, y1 = np.roll(px, -1), np.roll(py, -1)
     cr = x0 * y1 - x1 * y0
@@ -165,67 +173,89 @@ def _trapz(y: np.ndarray, x: np.ndarray) -> float:
     return float(np.sum(0.5 * (y[1:] + y[:-1]) * np.diff(x))) if len(x) > 1 else 0.0
 
 
+def _check_station(sec: List[Dict[str, Any]], k: int, om: float, mat: Dict[str, Any], lr: np.ndarray, dT: np.ndarray, dQ: np.ndarray,
+                   n_int: int) -> Dict[str, Any]:
+    """Stresses at station ``k`` from the blade outboard of it (centrifugal tension, flap and edge moments)."""
+    st = sec[k]
+    r_s = np.array([s["r_m"] for s in sec[k:]])
+    r0, R = float(r_s[0]), float(r_s[-1])
+    rr = np.linspace(r0, R, n_int)
+    area = np.interp(rr, r_s, [s["area_m2"] for s in sec[k:]])
+    rho = float(mat["density_kg_m3"])
+    n_cf = rho * om ** 2 * _trapz(area * rr, rr)
+    mass = rho * _trapz(area, rr)
+    m = lr >= r0 - 1e-12
+    l, t, q = lr[m], dT[m], dQ[m]
+    if len(l) >= 1 and l[0] > r0:                      # the load point grid starts outboard of the station: start the integral at it
+        l, t, q = np.concatenate([[r0], l]), np.concatenate([[t[0]], t]), np.concatenate([[q[0]], q])
+    Ft = q / l if len(l) else q
+    arm = l - r0
+    thrust = _trapz(t, l)
+    m_flap = _trapz(t * arm, l)
+    m_edge = _trapz(Ft * arm, l)
+    th = math.radians(st["twist_deg"])
+    # principal axes are the chord line and its normal; the twist turns them against the plane of rotation.  The two terms are added in
+    # absolute value (worst combination of signs): safe side.
+    m_c = abs(m_flap * math.cos(th)) + abs(m_edge * math.sin(th))
+    m_n = abs(m_edge * math.cos(th)) + abs(m_flap * math.sin(th))
+    s_axial = n_cf / st["area_m2"]
+    s_bend = m_c * st["n_max_m"] / st["i_flap_m4"] + m_n * st["c_max_m"] / st["i_edge_m4"]
+    util = s_axial / mat["tensile_allowable_Pa"] + s_bend / mat["bending_allowable_Pa"]      # linear interaction
+    return {"r_m": r0, "s_axial": s_axial, "s_bend": s_bend, "util": util, "factor": (1.0 / util) if util > 0 else math.inf,
+            "n_cf": n_cf, "mass": mass, "thrust": thrust, "m_flap": m_flap, "m_edge": m_edge}
+
+
 def root_stress_from_sections(sections: Sequence[Dict[str, Any]], rpm: float, material: Any, loads: Dict[str, Any], *,
                               rpm_design: Optional[float] = None, rpm_max_assumed: bool = False, n_int: int = 400) -> Dict[str, Any]:
-    """The beam model on already-computed sections (see ``blade_sections``).  ``rpm`` is the rpm of the check (the maximum rpm)."""
+    """The beam model on already-computed sections (see ``blade_sections``) at EVERY station; ``rpm`` is the rpm of the check (the maximum
+    rpm).  The reported safety factor is the minimum over the stations and ``section_used`` is that station (review 2026-11-24, 2a).
+    Loads that ``load_problems`` refuses raise ``StructureError`` (2c: no factor from an incomplete load)."""
     mat = get_material(material)
     if not (isinstance(rpm, (int, float)) and rpm > 0 and math.isfinite(rpm)):
         raise StructureError("rpm must be positive")
     if len(sections) < 2:
         raise StructureError("need at least two sections")
+    if not (isinstance(n_int, int) and 10 <= n_int <= 5000):
+        raise StructureError("n_int must be an integer 10..5000")
     sec = sorted(sections, key=lambda s: s["r_m"])
     r_s = np.array([s["r_m"] for s in sec])
-    root = sec[0]
     r0, R = float(r_s[0]), float(r_s[-1])
     if not R > r0:
         raise StructureError("section radii must increase")
+    bad = load_problems(loads, r0, R)
+    if bad:
+        raise StructureError("loads cannot be used for a strength check: %s" % ", ".join(bad))
     om = rpm * 2.0 * math.pi / 60.0
-    rr = np.linspace(r0, R, n_int)
-    area = np.interp(rr, r_s, [s["area_m2"] for s in sec])
-    rho = float(mat["density_kg_m3"])
-    n_cf = rho * om ** 2 * _trapz(area * rr, rr)                       # centrifugal tension at the root, N
-    mass = rho * _trapz(area, rr)
-
     lr = np.asarray(loads["r_m"], dtype=float)
     dT = np.asarray(loads["dT_dr_N_per_m"], dtype=float)
     dQ = np.asarray(loads["dQ_dr_Nm_per_m"], dtype=float)
-    if not (len(lr) == len(dT) == len(dQ) and len(lr) >= 2):
-        raise StructureError("loads: r_m, dT_dr_N_per_m, dQ_dr_Nm_per_m must be arrays of the same length >= 2")
-    m = lr >= r0 - 1e-12
-    lr, dT, dQ = lr[m], dT[m], dQ[m]
-    if len(lr) < 2:
+    if len(lr[lr >= r0 - 1e-12]) < 2:
         raise StructureError("loads: fewer than two load points outboard of the root section")
-    Ft = dQ / lr                                                         # tangential force per unit span, N/m
-    arm = lr - r0
-    thrust = _trapz(dT, lr)
-    m_flap = _trapz(dT * arm, lr)                                        # moment of the axial load about the root, Nm
-    m_edge = _trapz(Ft * arm, lr)                                        # moment of the tangential load about the root, Nm
-    th = math.radians(root["twist_deg"])
-    # principal axes are the chord line and its normal; the twist turns them against the plane of rotation.  The two terms are added in
-    # absolute value (worst combination of signs): safe side.
-    m_c = abs(m_flap * math.cos(th)) + abs(m_edge * math.sin(th))       # about the chord-parallel axis, uses i_flap and n_max
-    m_n = abs(m_edge * math.cos(th)) + abs(m_flap * math.sin(th))       # about the normal axis, uses i_edge and c_max
-    A0 = root["area_m2"]
-    s_axial = n_cf / A0
-    s_bend = m_c * root["n_max_m"] / root["i_flap_m4"] + m_n * root["c_max_m"] / root["i_edge_m4"]
-    s_comb = s_axial + s_bend
-    util = s_axial / mat["tensile_allowable_Pa"] + s_bend / mat["bending_allowable_Pa"]      # linear interaction
-    factor = (1.0 / util) if util > 0 else math.inf
+    rows = [_check_station(sec, k, om, mat, lr, dT, dQ, n_int) for k in range(len(sec) - 1)]
+    gov = min(range(len(rows)), key=lambda i: rows[i]["factor"])
+    g, root, st = rows[gov], rows[0], sec[gov]
+    factor = g["factor"]
+    util = g["util"]
+    s_comb = g["s_axial"] + g["s_bend"]
     allow_eq = (s_comb * factor) if util > 0 else None
     methods = sorted({s["method"] for s in sec})
     return {
         "rpm_check": float(rpm), "rpm_design": rpm_design, "rpm_max_assumed": bool(rpm_max_assumed),
         "overspeed_assumption": ("rpm_max = %g x the design rpm (assumption, not a confirmed runaway speed)" % OVERSPEED_FACTOR) if rpm_max_assumed else None,
-        "stress_Pa": {"centrifugal_axial": s_axial, "bending": s_bend, "combined": s_comb},
+        "stress_Pa": {"centrifugal_axial": g["s_axial"], "bending": g["s_bend"], "combined": s_comb},
         "allowable_Pa": {"tensile": mat["tensile_allowable_Pa"], "bending": mat["bending_allowable_Pa"], "combined_equivalent": allow_eq},
         "utilisation": util, "safety_factor": factor, "required_factor": SAFETY_FACTOR, "passes": bool(factor >= SAFETY_FACTOR),
-        "forces": {"centrifugal_tension_N": n_cf, "blade_mass_kg": mass, "thrust_per_blade_N": thrust,
-                   "root_moment_flap_Nm": m_flap, "root_moment_edge_Nm": m_edge},
-        "section_used": {k: root[k] for k in ("r_m", "chord_m", "twist_deg", "thickness_rel", "area_m2", "centroid_from_le_m",
-                                              "i_flap_m4", "i_edge_m4", "n_max_m", "c_max_m", "method")},
+        "governing_r_m": g["r_m"], "root_safety_factor": root["factor"],
+        "per_station": [{"r_m": r["r_m"], "safety_factor": r["factor"], "stress_axial_Pa": r["s_axial"], "stress_bending_Pa": r["s_bend"]}
+                        for r in rows],
+        "forces": {"centrifugal_tension_N": root["n_cf"], "blade_mass_kg": root["mass"], "thrust_per_blade_N": root["thrust"],
+                   "root_moment_flap_Nm": root["m_flap"], "root_moment_edge_Nm": root["m_edge"]},
+        "section_used": {k: st[k] for k in ("r_m", "chord_m", "twist_deg", "thickness_rel", "area_m2", "centroid_from_le_m",
+                                            "i_flap_m4", "i_edge_m4", "n_max_m", "c_max_m", "method")},
         "section_methods": methods,
-        "material": {"name": mat.get("name"), "density_kg_m3": rho, "direction_note": mat.get("direction_note"), "source": mat["source"]},
-        "validated": False, "basis": BASIS,
+        "material": {"name": mat.get("name"), "density_kg_m3": float(mat["density_kg_m3"]), "direction_note": mat.get("direction_note"),
+                     "source": mat["source"]},
+        "validated": False, "basis": BASIS, "not_checked": list(NOT_CHECKED),
     }
 
 
@@ -253,7 +283,7 @@ def root_stress(propeller2: Dict[str, Any], rpm: float, material: Any, loads: Op
         return {"rpm_check": rmax, "rpm_design": float(rpm), "rpm_max_assumed": assumed, "safety_factor": None,
                 "required_factor": SAFETY_FACTOR, "passes": False, "load_valid": False, "load_problems": bad,
                 "load_flags": list(loads.get("flags") or []), "material": {"name": mat.get("name"), "source": mat["source"]},
-                "validated": False, "basis": BASIS}
+                "validated": False, "basis": BASIS, "not_checked": list(NOT_CHECKED)}
     out = root_stress_from_sections(sections, rmax, material, loads, rpm_design=float(rpm), rpm_max_assumed=assumed)
     if loads.get("flags"):
         out["load_flags"] = list(loads["flags"])

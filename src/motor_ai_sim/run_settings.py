@@ -23,6 +23,11 @@ from typing import Any, Dict, List, Mapping, Optional
 from motor_ai_sim import mesh_presets as MP
 
 PRESETS = ("optimization", "simulation")
+#: the third input mode (owner 2026-11-24, one place for the settings): the request carries the VISIBLE values of the Mesh /
+#: Simulation tabs as ``overrides``; nothing is taken from a preset, the label is found by MATCH against the two presets
+TAB = "tab"
+#: the values a ``tab`` request must carry (a missing one is refused: no silent default)
+TAB_REQUIRED = ("steps_per_period", "gap_layers", "mesh_size_mm", "min_size_mm", "n_sectors", "coil_rel")
 #: settings the run request carries (and a user may override), by mode
 _OVERRIDABLE = {
     "sweep": ("steps_per_period", "gap_layers", "mesh_size_mm", "min_size_mm", "n_sectors", "rotor_eddy", "demag", "coil_rel"),
@@ -123,17 +128,61 @@ def resolution_token(out: Mapping[str, Any], geometry: Mapping[str, Any]) -> str
     return hashlib.md5(json.dumps(body, sort_keys=True, default=str).encode()).hexdigest()
 
 
+#: the settings a ``tab`` request is matched on (the demag of a Descent run is the machine's, so it is not matched there)
+_MATCH_KEYS = ("steps_per_period", "gap_layers", "mesh_size_mm", "min_size_mm", "n_sectors", "coil_rel", "rotor_eddy", "demag")
+
+
+def _preset_numbers(pv: Mapping[str, Any]) -> Dict[str, Any]:
+    v = pv["values"]
+    return {"steps_per_period": int(v["n_steps_per_period"]), "gap_layers": float(v["gap_layers"]),
+            "mesh_size_mm": float(v["mesh_size_mm"]), "min_size_mm": float(v["min_size_mm"]),
+            "n_sectors": int(v["n_sectors"]), "coil_rel": float((v.get("component_mesh") or {}).get("coil_rel", 1.0)),
+            "rotor_eddy": bool(v["rotor_eddy"]), "demag": bool(v["demag"])}
+
+
+def _match_tab(settings: Mapping[str, Any], geometry: Mapping[str, Any], mode: str, opt_pv: Mapping[str, Any],
+               opt_base: Mapping[str, Any]):
+    """``(matched, reference label, differs)`` of a ``tab`` request: the preset whose numbers the visible values equal
+    (Optimization first), else ``None`` with the keys that differ from the Optimization preset (the reference of a new sweep).  The Simulation preset reads "that many steps or more" (owner 2026-11-17: 96 or more), decided HERE so
+    the panel never repeats the rule."""
+    keys = [k for k in _MATCH_KEYS if not (k == "demag" and mode == "descent")]
+    cands = [("optimization", opt_pv["label"], _preset_numbers(opt_pv))]
+    try:
+        sim_pv = MP.resolve("simulation", geometry)
+        cands.append(("simulation", sim_pv["label"], _preset_numbers(sim_pv)))
+    except MP.PresetError:
+        pass                                # the Simulation preset cannot be resolved for this machine: it cannot match
+    first = None
+    for pname, plabel, nums in cands:
+        diff: Dict[str, Any] = {}
+        for k in keys:
+            cur, w = settings[k], nums[k]
+            same = (float(cur) >= float(w) - 1e-9) if (k == "steps_per_period" and pname == "simulation") else _same(cur, w)
+            if not same:
+                diff[k] = {"preset": w, "current": cur}
+        if not diff:
+            return pname, plabel, {}
+        if first is None:
+            first = (pname, plabel, diff)
+    return None, first[1], first[2]
+
+
 def resolve(preset: Optional[str], overrides: Optional[Mapping[str, Any]], cfg: Mapping[str, Any],
             mode: str = "sweep") -> Dict[str, Any]:
     """The complete effective settings of one run, the label and every difference from the preset, the clamps applied."""
     name = str(preset or "optimization").strip().lower()
-    if name not in PRESETS:
-        raise RunSettingsError("unknown preset %r; the presets are %s" % (preset, ", ".join(PRESETS)))
+    tab = name == TAB
+    if name not in PRESETS and not tab:
+        raise RunSettingsError("unknown preset %r; the presets are %s, %s" % (preset, ", ".join(PRESETS), TAB))
+    if tab:
+        missing = [k for k in TAB_REQUIRED if k not in dict(overrides or {})]
+        if missing:
+            raise RunSettingsError("a tab request must carry %s; missing %s" % (", ".join(TAB_REQUIRED), ", ".join(missing)))
     if mode not in _OVERRIDABLE:
         raise RunSettingsError("unknown run mode %r" % (mode,))
     geometry = dict(cfg.get("geometry") or {})
     try:
-        pv = MP.resolve(name, geometry)
+        pv = MP.resolve("optimization" if tab else name, geometry)
     except MP.PresetError as exc:
         raise RunSettingsError("the %s preset cannot be resolved for this machine: %s" % (name, exc))
     v = pv["values"]
@@ -149,8 +198,9 @@ def resolve(preset: Optional[str], overrides: Optional[Mapping[str, Any]], cfg: 
     nominal = {"steps_per_period": base["steps_per_period"], "gap_layers": base["gap_layers"]}
     # the preset's own value is bounded like a typed one (e.g. 324 steps on a 36-slot / 10-pole machine): the run gets the
     # bounded number and the label reads custom, because it is no longer the preset's number
-    settings["steps_per_period"] = _bound("steps_per_period", float(base["steps_per_period"]), mode, "preset", clamps)
-    settings["gap_layers"] = _bound("gap_layers", float(base["gap_layers"]), mode, "preset", clamps)
+    if not tab:             # a tab request takes every value from the request: the preset base is a scaffold, not a source
+        settings["steps_per_period"] = _bound("steps_per_period", float(base["steps_per_period"]), mode, "preset", clamps)
+        settings["gap_layers"] = _bound("gap_layers", float(base["gap_layers"]), mode, "preset", clamps)
     given: Dict[str, Any] = {}
     allowed = _OVERRIDABLE[mode]
     for k, raw in dict(overrides or {}).items():
@@ -188,7 +238,7 @@ def resolve(preset: Optional[str], overrides: Optional[Mapping[str, Any]], cfg: 
                     clamps.append({"key": k, "requested": x, "used": used, "source": "override",
                                    "reason": "outside %g..%g" % (lo, hi)})
             settings[k] = used
-        sources[k] = "override"
+        sources[k] = "tab" if tab else "override"
     if mode == "descent":                     # the descent evals read demag from the stored Simulation block
         settings["demag"], sources["demag"] = mach["demag_cfg"], "machine"
     settings["eddy"], sources["eddy"] = mach["eddy"], "machine"
@@ -205,7 +255,9 @@ def resolve(preset: Optional[str], overrides: Optional[Mapping[str, Any]], cfg: 
             settings["n_sectors"] = sym
     # THE LABEL IS ABOUT THE PAIR (steps, gap rows) ONLY: what differs from the chosen preset's own numbers
     differs: Dict[str, Any] = {}
-    for k in ("steps_per_period", "gap_layers"):
+    matched: Optional[str] = None
+    ref_label = pv["label"]
+    for k in (() if tab else ("steps_per_period", "gap_layers")):
         cur, w = settings[k], nominal[k]
         same = (cur >= float(w) - 1e-9) if (k == "steps_per_period" and name == "simulation") else _same(cur, w)
         if not same:
@@ -219,12 +271,16 @@ def resolve(preset: Optional[str], overrides: Optional[Mapping[str, Any]], cfg: 
         coil_rel_stored = 1.0
     coil_rel_used = float(settings["coil_rel"])
     coil_rel_preset = float(base["coil_rel"])
-    if not _same(coil_rel_used, coil_rel_preset):
+    if tab:
+        matched, ref_label, differs = _match_tab(settings, geometry, mode, pv, base)
+    elif not _same(coil_rel_used, coil_rel_preset):
         differs["coil_rel"] = {"preset": coil_rel_preset, "current": coil_rel_used}
     coil_rel_override = None if _same(coil_rel_used, coil_rel_stored) else coil_rel_used
-    custom = bool(differs)
-    out = {"preset": name, "overrides": given, "label": "custom" if custom else name, "custom": custom,
-            "preset_label": pv["label"], "differs": differs, "settings": settings, "sources": sources,
+    custom = bool(differs) if not tab else matched is None
+    label = ("custom" if custom else (matched if tab else name))
+    out = {"preset": name, "overrides": given, "label": label, "custom": custom,
+            "preset_label": ref_label, "matched": matched,
+            "record_name": label if tab else name, "differs": differs, "settings": settings, "sources": sources,
             "clamps": clamps, "version": MP.version(), "mode": mode,
             "finalist_note": finalist_note(settings["steps_per_period"], geometry),
             "coil_rel": coil_rel_used, "coil_rel_stored": coil_rel_stored, "coil_rel_override": coil_rel_override,

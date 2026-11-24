@@ -176,3 +176,35 @@ export function gPerW(nPerW: number | null | undefined): number | null {
 export function fmt2(v: number | null | undefined): string {
   return v == null || !Number.isFinite(v) ? '—' : String(round2(v));
 }
+
+/** Stored runs of one operating point -> one line per diameter: the best feasible value of ``objective`` at each rpm
+ *  (several seeds at the same diameter and rpm keep the best).  Runs without that objective are left out. */
+export interface MapRunIn { diameter_in: number; blades: number; operating: { rpm: number } | null; best: Record<string, { value: number } | null> | null }
+export function runMap(runs: readonly MapRunIn[], objective: string, blades?: number): Array<{ diameter_in: number; points: Array<{ rpm: number; value: number }> }> {
+  const by = new Map<number, Map<number, number>>();
+  for (const r of runs) {
+    const b = r.best?.[objective];
+    if (!b || !r.operating || (blades != null && r.blades !== blades)) continue;
+    const m = by.get(r.diameter_in) ?? new Map<number, number>();
+    const rpm = Math.round(r.operating.rpm);
+    m.set(rpm, Math.max(m.get(rpm) ?? -Infinity, b.value));
+    by.set(r.diameter_in, m);
+  }
+  return [...by.entries()].sort((a, b) => a[0] - b[0])
+    .map(([d, m]) => ({ diameter_in: d, points: [...m.entries()].sort((a, b) => a[0] - b[0]).map(([rpm, value]) => ({ rpm, value })) }));
+}
+
+/** Best feasible value of ``objective`` reached by the end of each generation (null until the first feasible design). */
+export function convergence(evals: ReadonlyArray<{ generation: number; feasible: boolean; objectives: Record<string, number | null> }>, objective: string):
+    Array<{ generation: number; best: number | null; feasible: number; total: number }> {
+  const gens = [...new Set(evals.map((e) => e.generation))].sort((a, b) => a - b);
+  let best: number | null = null;
+  return gens.map((g) => {
+    const here = evals.filter((e) => e.generation === g);
+    for (const e of here) {
+      const v = e.objectives[objective];
+      if (e.feasible && v != null && (best === null || v > best)) best = v;
+    }
+    return { generation: g, best, feasible: here.filter((e) => e.feasible).length, total: here.length };
+  });
+}

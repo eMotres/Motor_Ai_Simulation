@@ -119,3 +119,21 @@ t('toRun copies the vector so a later edit cannot change the stored run', () => 
   assert.equal(run.vector.a, 1);
   assert.equal(run.air_ms, 8);
 });
+
+t('runMap keeps the best value per diameter and rpm, sorted, and filters blades', () => {
+  const run = (d, b, rpm, v) => ({ diameter_in: d, blades: b, operating: { rpm }, best: { flight_thrust_N: v === null ? null : { value: v } } });
+  const m = P.runMap([run(12, 2, 13000, 30), run(12, 2, 13000, 31), run(12, 2, 12000, 29), run(11.5, 2, 13000, 31.2), run(12, 3, 13000, 40), run(13, 2, 13000, null)],
+    'flight_thrust_N', 2);
+  assert.deepEqual(m, [
+    { diameter_in: 11.5, points: [{ rpm: 13000, value: 31.2 }] },
+    { diameter_in: 12, points: [{ rpm: 12000, value: 29 }, { rpm: 13000, value: 31 }] },
+  ]);
+  assert.equal(P.runMap([run(12, 3, 13000, 40)], 'flight_thrust_N').length, 1);
+});
+
+t('convergence is the best feasible value so far per generation', () => {
+  const e = (g, ok, v) => ({ generation: g, feasible: ok, objectives: { flight_thrust_N: v } });
+  const c = P.convergence([e(0, false, 50), e(0, false, 1), e(1, true, 20), e(1, false, 99), e(2, true, 18), e(2, true, 25)], 'flight_thrust_N');
+  assert.deepEqual(c.map((x) => x.best), [null, 20, 25]);
+  assert.deepEqual(c.map((x) => [x.feasible, x.total]), [[0, 2], [1, 2], [2, 2]]);
+});

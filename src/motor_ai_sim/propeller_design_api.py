@@ -53,6 +53,38 @@ def _design(polar_source: Any = None, compressibility: Any = None) -> pd.Design:
     return d
 
 
+def _operating(d: pd.Design, op: str, rpm: Any, power_W: Any, flight: bool) -> tuple:
+    """Opt-in operating point (rpm and / or shaft power, owner 2026-11-22) and its motor check.  Returns (design, motor_check):
+    the check is the motor's S1 continuous torque at that rpm with the flight speed over the housing (no slipstream credit);
+    a point the motor cannot hold is refused (422); no S1 model = ``unchecked`` (the run says so)."""
+    if rpm is None and power_W is None:
+        return d, None
+    if op not in d.operating_points:
+        raise ApiProblem(422, "unknown operating point %r; known: %s" % (op, sorted(d.operating_points)))
+    try:
+        d = pd.with_operating_point(d, op, rpm, power_W)
+    except pd.DesignError as exc:
+        raise ApiProblem(422, str(exc))
+    o = d.operating_points[op]
+    from motor_ai_sim import propeller_s1 as s1
+    air = float(o.flight_speed_ms) if (flight and o.flight_speed_ms) else 0.0
+    try:
+        m = s1.load_model(o.die, o.config)
+    except s1.S1ModelNotFound:
+        return d, {"status": "unchecked", "reason": "no S1 model of %s %s on this server" % (o.die, o.config)}
+    except s1.S1Error as exc:
+        return d, {"status": "unchecked", "reason": str(exc)}
+    env = s1.continuous_torque(m, o.rated_rpm_ref, air)
+    mc = {"status": "ok" if o.torque_limit_Nm <= env["torque_Nm"] else "exceeds", "rpm": o.rated_rpm_ref,
+          "torque_needed_Nm": o.torque_limit_Nm, "torque_continuous_Nm": env["torque_Nm"], "air_speed_ms": air,
+          "air_basis": "flight speed over the housing, no slipstream credit" if air else "still air, no slipstream credit",
+          "stops": env["stops"], "model": "S1 %s %s" % (o.die, o.config)}
+    if mc["status"] == "exceeds":
+        raise ApiProblem(422, {"message": "the motor cannot hold %.3f N*m continuously at %.0f rpm (S1: %.3f N*m)"
+                               % (o.torque_limit_Nm, o.rated_rpm_ref, env["torque_Nm"]), "motor_check": mc})
+    return d, mc
+
+
 def _clean_vector(vec: Any) -> Dict[str, Any]:
     if not isinstance(vec, dict):
         raise ApiProblem(422, "vector must be an object of design variables")
@@ -68,15 +100,15 @@ def _clean_vector(vec: Any) -> Dict[str, Any]:
     return out
 
 
-def family(diameter_in: int = 10, blades: int = 2) -> Dict[str, Any]:
+def family(diameter_in: float = 10, blades: int = 2) -> Dict[str, Any]:
     d = _design()
-    if diameter_in not in d.diameters_in:
-        raise ApiProblem(422, "diameter_in must be one of %s" % list(d.diameters_in))
+    if not pd.in_family(d, diameter_in):
+        raise ApiProblem(422, "diameter_in must be one of %s" % pd.family_diameters(d))
     if blades not in d.blades_options:
         raise ApiProblem(422, "blades must be one of %s" % d.blades_options)
     seed = pd.seed_vector(d, diameter_in, blades)
     return {
-        "id": d.id, "banner": pd.BANNER, "diameters_in": list(d.diameters_in), "blades_options": d.blades_options,
+        "id": d.id, "banner": pd.BANNER, "diameters_in": pd.family_diameters(d), "blades_options": d.blades_options,
         "scaling_rule": d.raw["scaling_rule"],
         "operating_points": {n: {"die": o.die, "config": o.config, "torque_limit_Nm": o.torque_limit_Nm, "rated_rpm_ref": o.rated_rpm_ref,
                                  "rpm_search_max": o.rpm_search_max, "motor_radius_mm": o.motor_radius_mm, "source": o.source}
@@ -126,11 +158,13 @@ def geometry(vec: Any) -> Dict[str, Any]:
 
 
 def evaluate(vec: Any, op: str, v_inf: float = 0.0, polar_source: Any = None, flight: Any = False,
-             compressibility: Any = None) -> Dict[str, Any]:
-    """One candidate: static (``v_inf`` 0), at ``v_inf``, or ``flight=True`` = at the rated rpm and the point's flight speed."""
+             compressibility: Any = None, rpm: Any = None, power_W: Any = None) -> Dict[str, Any]:
+    """One candidate: static (``v_inf`` 0), at ``v_inf``, or ``flight=True`` = at the rated rpm (or the opt-in ``rpm`` / ``power_W``)
+    and the point's flight speed."""
     d = _design(polar_source, compressibility)
     if not isinstance(flight, bool):
         raise ApiProblem(422, "flight must be true or false")
+    d, mc = _operating(d, op, rpm, power_W, flight)
     v = _clean_vector(vec)
     if op not in d.operating_points:
         raise ApiProblem(422, "unknown operating point %r; known: %s" % (op, sorted(d.operating_points)))
@@ -140,9 +174,10 @@ def evaluate(vec: Any, op: str, v_inf: float = 0.0, polar_source: Any = None, fl
     if viol:
         raise ApiProblem(422, {"message": "invalid candidate", "violations": viol})
     try:
-        return pd.evaluate_candidate(d, v, op, flight=True) if flight else pd.evaluate_candidate(d, v, op, v_inf=float(v_inf))
+        rec = pd.evaluate_candidate(d, v, op, flight=True) if flight else pd.evaluate_candidate(d, v, op, v_inf=float(v_inf))
     except pd.DesignError as exc:
         raise ApiProblem(422, str(exc))
+    return {**rec, "motor_check": mc} if mc is not None else rec
 
 
 def sweep(vec: Any, op: str, variable: str, values: Optional[List[Any]] = None, lo: Optional[float] = None,
@@ -213,7 +248,7 @@ def curve(vec: Any, op: str, n: int = 11, v_inf: float = 0.0, polar_source: Any 
 def optimize(vec: Any, op: str, pop: Any = 12, generations: Any = 6, seed: Any = 1, objectives: Any = None, free: Any = None,
              enforce_tip_mach: Any = True, tip_mach_limit: Any = None,
              structure_material: Any = None, min_safety_factor: Any = None, polar_source: Any = None, flight: Any = False,
-             chord_max_step: Any = None, compressibility: Any = None) -> Dict[str, Any]:
+             chord_max_step: Any = None, compressibility: Any = None, rpm: Any = None, power_W: Any = None) -> Dict[str, Any]:
     """Two-objective optimisation from the given design (diameter and blade count stay).  Synchronous and capped (pop x (generations + 1) <= 200);
     every evaluation is appended to ``<workspace>/propeller_designs/_runs/<run_id>.jsonl``."""
     from motor_ai_sim import propeller_optimize as po
@@ -236,6 +271,7 @@ def optimize(vec: Any, op: str, pop: Any = 12, generations: Any = 6, seed: Any =
         raise ApiProblem(422, "min_safety_factor must be a number")
     if not isinstance(flight, bool):
         raise ApiProblem(422, "flight must be true or false")
+    d, mc = _operating(d, op, rpm, power_W, flight)
     kw: Dict[str, Any] = {"pop": pop, "generations": generations, "seed": seed, "enforce_tip_mach": enforce_tip_mach,
                           "tip_mach_limit": tip_mach_limit, "store_dir": _draft_dir() / "_runs"}
     if objectives is not None:
@@ -250,6 +286,8 @@ def optimize(vec: Any, op: str, pop: Any = 12, generations: Any = 6, seed: Any =
         if isinstance(chord_max_step, bool) or not isinstance(chord_max_step, (int, float)):
             raise ApiProblem(422, "chord_max_step must be a number or null")
         kw["chord_max_step"] = chord_max_step
+    if mc is not None:
+        kw["motor_check"] = mc
     try:
         return po.optimize(d, v, op, **kw)
     except po.OptimizeError as exc:
@@ -322,3 +360,61 @@ def delete_draft(name: str) -> Dict[str, Any]:
         raise ApiProblem(404, "no draft named %r" % name)
     p.unlink()
     return {"deleted": True, "name": name}
+
+
+# ---------------------------------------------------------------------------
+# Stored optimisation runs: <workspace>/propeller_designs/_runs/<run_id>.jsonl + <run_id>.run.json
+# ---------------------------------------------------------------------------
+
+RUN_ID_RX = re.compile(r"^opt-[0-9a-f]{10}$")
+MAX_RUN_RECORDS = 2000
+
+
+def list_runs() -> Dict[str, Any]:
+    """Every stored run that has its settings file, newest first: operating point (with the opt-in rpm / power), diameter, blades,
+    counts and the best feasible value of each objective.  Read-only."""
+    root = _draft_dir() / "_runs"
+    runs = []
+    for f in sorted(root.glob("opt-*.run.json")) if root.is_dir() else []:
+        try:
+            j = json.loads(f.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        st = j.get("settings") or {}
+        runs.append({"run_id": j.get("run_id"), "created_utc": j.get("created_utc"), "operating_point": j.get("operating_point"),
+                     "objectives": j.get("objectives"), "diameter_in": st.get("diameter_in"), "blades": st.get("blades"),
+                     "operating": st.get("operating"), "requirements": st.get("requirements"), "not_checked": st.get("not_checked"),
+                     "n_evaluations": j.get("n_evaluations"), "n_feasible": j.get("n_feasible"), "best": j.get("best"),
+                     "label": j.get("label"), "source": j.get("source")})
+    runs.sort(key=lambda r: str(r.get("created_utc") or ""), reverse=True)
+    return {"runs": runs, "banner": pd.BANNER}
+
+
+def get_run(run_id: str) -> Dict[str, Any]:
+    """One stored run: its settings and every evaluation in compact form (generation, objectives, violation, feasibility, rpm,
+    thrust, power, efficiency, tip Mach, vector)."""
+    if not isinstance(run_id, str) or not RUN_ID_RX.match(run_id):
+        raise ApiProblem(422, "run_id must look like opt-<10 hex digits>")
+    root = _draft_dir() / "_runs"
+    side, rec_file = root / (run_id + ".run.json"), root / (run_id + ".jsonl")
+    if not side.is_file() or not rec_file.is_file():
+        raise ApiProblem(404, "no stored run %s" % run_id)
+    meta = json.loads(side.read_text(encoding="utf-8"))
+    rows = []
+    with rec_file.open(encoding="utf-8") as fh:
+        for n, line in enumerate(fh):
+            if n >= MAX_RUN_RECORDS:
+                break
+            try:
+                e = json.loads(line)
+            except ValueError:
+                continue
+            r = e.get("record") or {}
+            objs = e.get("objectives") or {}
+            fl = r.get("flight") or {}
+            rows.append({"index": e.get("index"), "generation": e.get("generation"), "objectives": objs, "violation": e.get("violation"),
+                         "feasible": bool(r) and e.get("violation") == 0 and bool(objs) and all(v is not None for v in objs.values()),
+                         "note": e.get("note"), "rpm": (r.get("operating") or {}).get("rpm"), "thrust_N": r.get("thrust_N"),
+                         "shaft_power_W": r.get("shaft_power_W"), "eta": fl.get("propulsive_efficiency"), "tip_mach": r.get("tip_mach"),
+                         "vector": e.get("vector")})
+    return {**meta, "evaluations": rows, "banner": pd.BANNER}

@@ -359,7 +359,7 @@ def _problem(exc: "pda.ApiProblem") -> HTTPException:
 
 
 @router.get("/design/family")
-def design_family(diameter_in: int = Query(default=10), blades: int = Query(default=2)) -> Dict[str, Any]:
+def design_family(diameter_in: float = Query(default=10), blades: int = Query(default=2)) -> Dict[str, Any]:
     try:
         return pda.family(diameter_in, blades)
     except pda.ApiProblem as exc:
@@ -386,7 +386,7 @@ def design_geometry(body: Dict[str, Any] = Body(...)) -> Dict[str, Any]:
 def design_evaluate(body: Dict[str, Any] = Body(...)) -> Dict[str, Any]:
     try:
         return pda.evaluate(body.get("vector"), str(body.get("op") or ""), body.get("v_inf_ms", 0.0), body.get("polar_source"),
-                            body.get("flight", False), body.get("compressibility"))
+                            body.get("flight", False), body.get("compressibility"), body.get("rpm"), body.get("power_W"))
     except pda.ApiProblem as exc:
         raise _problem(exc)
 
@@ -414,7 +414,20 @@ def design_optimize(body: Dict[str, Any] = Body(...)) -> Dict[str, Any]:
         return pda.optimize(body.get("vector"), str(body.get("op") or ""), body.get("pop", 12), body.get("generations", 6), body.get("seed", 1),
                             body.get("objectives"), body.get("free"), body.get("enforce_tip_mach", True), body.get("tip_mach_limit"),
                             body.get("structure_material"), body.get("min_safety_factor"), body.get("polar_source"), body.get("flight", False),
-                            body.get("chord_max_step"), body.get("compressibility"))
+                            body.get("chord_max_step"), body.get("compressibility"), body.get("rpm"), body.get("power_W"))
+    except pda.ApiProblem as exc:
+        raise _problem(exc)
+
+
+@router.get("/design/runs")
+def design_runs() -> Dict[str, Any]:
+    return pda.list_runs()
+
+
+@router.get("/design/runs/{run_id}")
+def design_run_get(run_id: str) -> Dict[str, Any]:
+    try:
+        return pda.get_run(run_id)
     except pda.ApiProblem as exc:
         raise _problem(exc)
 

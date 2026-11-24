@@ -87,9 +87,12 @@ const Group: React.FC<{ label: string; children: React.ReactNode }> = ({ label, 
   </Box>
 );
 
+const RS_STALE = 'The run settings changed since they were shown. Check the line above and press Run again.';
+
 const DescentPanel: React.FC<{ chartsOnly?: boolean }> = ({ chartsOnly = false }) => {
   // the run settings of THIS panel (preset button + overrides, resolved by the server); the ordinary-run settings are never touched
   const rs = useRunSettings('descent');
+  const [rsStale, setRsStale] = useState<string | null>(null);   // Run / Draw baseline refused because the tabs changed since the line was shown
   const {
     sweepConfig, connectedToApi, parameterSchema, materials,
     updateRippleThreshold,
@@ -489,7 +492,8 @@ const DescentPanel: React.FC<{ chartsOnly?: boolean }> = ({ chartsOnly = false }
   const launch = async () => {
     if (!rs.ready || !rs.resolved) return;
     const rsReq = rs.verify();        // the tabs may have changed since the line was shown: the run uses what the line shows
-    if (!rsReq) return;
+    if (!rsReq) { setRsStale(RS_STALE); return; }
+    setRsStale(null);
     setApplied(false);
     setLastOptSnapshot(optInputs);   // snapshot the inputs this run launches with
     localRun.current = true;
@@ -646,7 +650,7 @@ const DescentPanel: React.FC<{ chartsOnly?: boolean }> = ({ chartsOnly = false }
               <Tooltip title="Run the 2 baseline sims now (at I and +X% I) and draw the current-only line on the chart below — see the reference before launching the full optimization." placement="top">
                 <span>
                   <Button size="small" variant="outlined"
-                    onClick={() => { const q = rs.verify(); if (q && rs.ready && rs.resolved) void computeBaselineLine({ currentBumpPct: currentBump, request: q, resolved: rs.resolved }).then(r => { if (r.stale) rs.refresh(); }); }}
+                    onClick={() => { const q = rs.verify(); setRsStale(q ? null : RS_STALE); if (q && rs.ready && rs.resolved) void computeBaselineLine({ currentBumpPct: currentBump, request: q, resolved: rs.resolved }).then(r => { if (r.stale) rs.refresh(); }); }}
                     disabled={!connectedToApi || !rs.ready || baselineBusy || descentRunning}
                     startIcon={baselineBusy ? <CircularProgress size={12} color="inherit" /> : undefined}
                     sx={{ textTransform: 'none', fontSize: 10, height: 26 }}>
@@ -720,6 +724,9 @@ const DescentPanel: React.FC<{ chartsOnly?: boolean }> = ({ chartsOnly = false }
             : 'NOT constrained — trimmed on the chart only; set ripple λ > 0 to enforce the limit'}. Only whitelisted geometry variables are varied.`} />
       </Box>
 
+      {rsStale && (
+        <Typography color="error" sx={{ display: 'block', mb: 1, fontSize: 11 }} role="alert">{rsStale}</Typography>
+      )}
       {descentError && (
         <Typography color="error" variant="caption" sx={{ display: 'block', mb: 1 }}>
           Descent error: {descentError}

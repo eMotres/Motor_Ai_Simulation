@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { readLocalContext } from './machineBattery';
-import { readCurrentSettings } from './meshPresets';
+import { readCurrentSettings, readStepsSource } from './currentSettings';
 import { answerKey, sameRequest, tabRequest, type RunMode, type RunRequest, type RunResolved } from './runSettings';
 
 const API = import.meta.env.VITE_API_URL ?? 'http://localhost:8001';
@@ -26,10 +26,6 @@ export function contextKey(): string {
     const c = readLocalContext();
     return c ? `${c.die}/${c.config}/${c.duty ?? ''}` : 'none';
   } catch { return 'none'; }
-}
-
-function stepsSource(): unknown {
-  try { return JSON.parse(localStorage.getItem('sim.stepsSource') ?? 'null'); } catch { return null; }
 }
 
 export interface RunSettingsState {
@@ -103,6 +99,6 @@ export function useRunSettings(mode: RunMode): RunSettingsState {
   }, [mode, check]);
   return {
     request: tab.request, missing: tab.missing, resolved, error, ready: !!resolved && !error && !!tab.request,
-    stepsSource: stepsSource(), verify, refresh: () => { check(); setTick(t => t + 1); },
+    stepsSource: readStepsSource(), verify, refresh: () => { check(); setTick(t => t + 1); },
   };
 }

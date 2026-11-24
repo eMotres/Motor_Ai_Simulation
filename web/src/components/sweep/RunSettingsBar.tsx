@@ -14,7 +14,7 @@ import type { RunSettingsState } from '../../lib/useRunSettings';
 
 const tx = nsT('simulation');
 
-const SRC: Record<string, string> = { preset: 'runSettingsSrcPreset', machine: 'runSettingsSrcMachine', tab: 'runSettingsSrcTab' };
+const SRC: Record<string, string> = { preset: 'runSettingsSrcPreset', machine: 'runSettingsSrcMachine', tab: 'runSettingsSrcTab', fixed: 'runSettingsSrcFixed' };
 
 /** The settings besides steps, gap rows and the wire cell, READ-ONLY, each with where it comes from. */
 export function describeSettings(st: Record<string, any>, src: Record<string, string> = {}): string {
@@ -34,7 +34,7 @@ export function describeSettings(st: Record<string, any>, src: Record<string, st
 }
 
 const RunSettingsBar: React.FC<{ rs: RunSettingsState; dense?: boolean }> = ({ rs, dense = true }) => {
-  const goToTab = useUIStore((st: any) => st.setActiveTab);
+  const goToTab = useUIStore(st => st.setActiveTab);
   const r = rs.resolved;
   const st = r?.settings;
   const clamps = r ? r.clamps.map(c => `${c.key}: ${String(c.requested)} → ${String(c.used)} (${c.reason})`) : [];
@@ -65,7 +65,7 @@ const RunSettingsBar: React.FC<{ rs: RunSettingsState; dense?: boolean }> = ({ r
             {tx('runSettingsUnknown', { what: rs.missing.join(', ') })}
           </Typography>
         )}
-        <Button size="small" onClick={() => goToTab('mesh' as never)} sx={{ textTransform: 'none', fontSize: 11, minWidth: 0, py: 0.1 }}>
+        <Button size="small" onClick={() => goToTab('mesh')} sx={{ textTransform: 'none', fontSize: 11, minWidth: 0, py: 0.1 }}>
           {tx('runSettingsChangeInMesh')}
         </Button>
         {rs.error && (

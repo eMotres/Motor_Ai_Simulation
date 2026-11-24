@@ -4,17 +4,18 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { tabRequest, sameRequest, answerKey, runSettingsBody, baselineBody, lineText, notOptimization, wireCellOf } from '../runSettings.ts';
 import { stepsReason } from '../eddySteps.ts';
+import { readCurrentSettings, readStepsSource } from '../currentSettings.ts';
 
 const root = new URL('../../', import.meta.url);
 const read = (f) => readFileSync(new URL(f, root), 'utf8');
-const tab = { steps: 48, gap_layers: 1, mesh_size_mm: 1.8, min_size_mm: 0.2, n_sectors: 2, demag: true, component_mesh: { coil_rel: 2 } };
+const tab = { steps: 48, gap_layers: 1, mesh_size_mm: 1.8, min_size_mm: 0.2, n_sectors: 2, demag: true, rotor_eddy: true, component_mesh: { coil_rel: 2 } };
 
 test('the request carries the visible values under the name tab; a descent request omits demag (the machine\'s)', () => {
   const { request, missing } = tabRequest(tab, 'sweep');
   assert.deepEqual(missing, []);
-  assert.deepEqual(request, { preset: 'tab', overrides: { steps_per_period: 48, gap_layers: 1, mesh_size_mm: 1.8, min_size_mm: 0.2, n_sectors: 2, coil_rel: 2, demag: true } });
+  assert.deepEqual(request, { preset: 'tab', overrides: { steps_per_period: 48, gap_layers: 1, mesh_size_mm: 1.8, min_size_mm: 0.2, n_sectors: 2, coil_rel: 2, rotor_eddy: true, demag: true } });
   assert.equal('demag' in tabRequest(tab, 'descent').request.overrides, false);
-  assert.equal('demag' in tabRequest({ ...tab, demag: undefined }, 'auto').request.overrides, false);
+  assert.equal(tabRequest({ ...tab, rotor_eddy: false }, 'sweep').request.overrides.rotor_eddy, false);   // the tab's value, not a default
 });
 
 test('a value the tabs do not hold is named and gives no request (unknown, Run disabled): nothing is filled in', () => {
@@ -22,6 +23,57 @@ test('a value the tabs do not hold is named and gives no request (unknown, Run d
   assert.equal(r.request, null);
   assert.deepEqual(r.missing, ['steps per period', 'sectors']);
   assert.equal(tabRequest({ ...tab, gap_layers: NaN }, 'sweep').request, null);
+  // rotor eddy and demag come from the tabs too: a missing one is unknown (demag not for a Descent run, which uses the machine's)
+  assert.deepEqual(tabRequest({ ...tab, rotor_eddy: undefined }, 'sweep').missing, ['rotor eddy']);
+  assert.deepEqual(tabRequest({ ...tab, demag: undefined }, 'sweep').missing, ['demag']);
+  assert.deepEqual(tabRequest({ ...tab, demag: undefined }, 'auto').missing, ['demag']);
+  assert.notEqual(tabRequest({ ...tab, demag: undefined }, 'descent').request, null);
+});
+
+const store = (o) => ({ getItem: (k) => (k in o ? o[k] : null) });
+const stored = { 'sim.stepsPP': '48', 'mesh.gapLayers': '1', 'mesh.meshSize': '1.8', 'mesh.minSize': '0.2', 'mesh.nSectors': '2',
+  'sim.demag': 'true', 'mesh.componentMesh': '{"stator":1.8,"coil_rel":2}' };
+
+test('the REAL readCurrentSettings output feeds tabRequest: the names match, the wire cell comes from mesh.componentMesh', () => {
+  const cur = readCurrentSettings(store(stored));
+  for (const k of ['steps', 'gap_layers', 'mesh_size_mm', 'min_size_mm', 'n_sectors', 'demag', 'rotor_eddy', 'component_mesh']) {
+    assert.ok(k in cur, k);
+  }
+  const { request, missing } = tabRequest(cur, 'sweep');
+  assert.deepEqual(missing, []);
+  assert.deepEqual(request.overrides, { steps_per_period: 48, gap_layers: 1, mesh_size_mm: 1.8, min_size_mm: 0.2, n_sectors: 2,
+    coil_rel: 2, rotor_eddy: true, demag: true });
+  // no wire-cell key = the Mesh tab's 1h; a stored sim.fieldLosses wins over the tab's constant
+  assert.equal(tabRequest(readCurrentSettings(store({ ...stored, 'mesh.componentMesh': '{"stator":1.8}' })), 'sweep').request.overrides.coil_rel, 1);
+  assert.equal(tabRequest(readCurrentSettings(store({ ...stored, 'sim.fieldLosses': 'false' })), 'sweep').request.overrides.rotor_eddy, false);
+  // a field the tabs never wrote is unknown (nothing defaulted): fresh browser
+  const fresh = tabRequest(readCurrentSettings(store({})), 'sweep');
+  assert.equal(fresh.request, null);
+  assert.deepEqual(fresh.missing, ['steps per period', 'gap rows', 'mesh size', 'min mesh size', 'sectors', 'demag']);
+  const hook = read('lib/useRunSettings.ts');
+  assert.ok(/import \{ readCurrentSettings, readStepsSource \} from '\.\/currentSettings'/.test(hook) && hook.includes('tabRequest(readCurrentSettings(), mode)'));
+  assert.ok(read('lib/meshPresets.ts').includes("export { readCurrentSettings } from './currentSettings'"));
+});
+
+test('sim.stepsSource is read whether the tab stored it as JSON or as a plain string', () => {
+  assert.equal(readStepsSource(store({ 'sim.stepsSource': '"eddy_default"' })), 'eddy_default');
+  assert.equal(readStepsSource(store({ 'sim.stepsSource': 'eddy_default' })), 'eddy_default');
+  assert.equal(readStepsSource(store({ 'sim.stepsSource': 'null' })), null);
+  assert.equal(readStepsSource(store({})), null);
+  assert.deepEqual(stepsReason(108, readStepsSource(store({ 'sim.stepsSource': 'eddy_default' })), 24, 28),
+    { kind: 'ripple_grade', steps: 108, cycles: 12, samples: 9 });
+});
+
+test('Change in Mesh calls the typed store action with the tab id the app really uses', () => {
+  const bar = read('components/sweep/RunSettingsBar.tsx');
+  assert.ok(bar.includes('useUIStore(st => st.setActiveTab)') && bar.includes("goToTab('mesh')") && !/as never|: any/.test(bar));
+  assert.ok(/setActiveTab: \(tab: [^)]*'mesh'[^)]*\) => void/.test(read('stores/uiStore.ts')));
+  assert.ok(/\{ id: 'mesh', label: 'Mesh'/.test(read('App.tsx')));
+});
+
+test('Descent Run and Draw baseline say so when the tabs changed since the line was shown', () => {
+  const d = read('components/sweep/DescentPanel.tsx');
+  assert.ok(d.includes('setRsStale(RS_STALE)') && d.includes('setRsStale(q ? null : RS_STALE)') && d.includes('{rsStale && ('));
 });
 
 test('the wire cell is the Mesh tab\'s own reading: a missing key is 1h', () => {

@@ -314,5 +314,6 @@
   "runSettingsUnknown": "未知：网格/仿真标签页未设置 {what}，运行已禁用",
   "runSettingsReasonRipple": "纹波等级：{cycles} 个齿槽周期 x {samples}",
   "runSettingsReasonEddy": "涡流默认值",
-  "runSettingsSrcTab": "标签页"
+  "runSettingsSrcTab": "标签页",
+  "runSettingsSrcFixed": "固定"
 }

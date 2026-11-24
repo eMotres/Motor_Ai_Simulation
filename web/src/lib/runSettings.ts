@@ -27,6 +27,7 @@ export interface RunResolved {
 /** The values of the tabs this module needs (by the request names; a missing one is absent). */
 export interface TabState {
   steps?: number; gap_layers?: number; mesh_size_mm?: number; min_size_mm?: number; n_sectors?: number; demag?: boolean;
+  rotor_eddy?: boolean;
   component_mesh?: Record<string, number>;
 }
 
@@ -45,12 +46,15 @@ const NEEDED: Array<[keyof TabState, string]> = [
  */
 export function tabRequest(cur: TabState, mode: RunMode): { request: RunRequest | null; missing: string[] } {
   const missing = NEEDED.filter(([k]) => typeof cur[k] !== 'number' || !Number.isFinite(cur[k] as number)).map(([, n]) => n);
+  if (typeof cur.rotor_eddy !== 'boolean') missing.push('rotor eddy');
+  if (mode !== 'descent' && typeof cur.demag !== 'boolean') missing.push('demag');   // a Descent run reads the machine's demag
   if (missing.length) return { request: null, missing };
   const o: Record<string, number | boolean> = {
     steps_per_period: cur.steps as number, gap_layers: cur.gap_layers as number, mesh_size_mm: cur.mesh_size_mm as number,
     min_size_mm: cur.min_size_mm as number, n_sectors: cur.n_sectors as number, coil_rel: wireCellOf(cur.component_mesh),
+    rotor_eddy: cur.rotor_eddy as boolean,
   };
-  if (mode !== 'descent' && typeof cur.demag === 'boolean') o.demag = cur.demag;
+  if (mode !== 'descent') o.demag = cur.demag as boolean;
   return { request: { preset: 'tab', overrides: o }, missing: [] };
 }
 

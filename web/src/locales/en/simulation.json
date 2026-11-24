@@ -314,5 +314,6 @@
   "runSettingsUnknown": "unknown: {what} not set in the Mesh / Simulation tab, Run is disabled",
   "runSettingsReasonRipple": "ripple grade: {cycles} cogging cycles x {samples}",
   "runSettingsReasonEddy": "eddy default",
-  "runSettingsSrcTab": "tab"
+  "runSettingsSrcTab": "tab",
+  "runSettingsSrcFixed": "fixed"
 }

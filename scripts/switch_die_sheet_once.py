@@ -219,6 +219,12 @@ def _action(rel: str, pred: str, succ: str, cont: set, stays: set, aside: set) -
         return "grants of continuing configurations keep their key (= the successor's copy); others follow to the retired name", "grants"
     if parts[0] == "workspaces" and "optimization_saves" in parts:
         return "marked 'previous sheet' (machine names the retired die; numbers kept)", "a saved sweep of the previous sheet"
+    if parts[0] == "workspaces" and parts[-1] == ".duty_results.json":
+        return "rows of the predecessor -> the retired name; rows of the successor -> the predecessor's name", "duty_results.rename_die"
+    if parts[0] == "workspaces" and parts[-1] == ".last_scan.json":
+        return "the machine it names follows (retired name, or the aside copy of the successor)", "last scan relabel"
+    if parts[0] == "workspaces" and parts[-1] == "saved_simulations.json":
+        return "rows of the predecessor marked previous_sheet (source / params / '<die> / ...' name -> the retired name)", "Compare rows"
     if parts[0] == "workspaces":
         return "left", "a user's own working state (presets, panel settings, datasets) naming the old machine"
     if parts[:2] in (["shared", "cad"], ["shared", "production"], ["shared", "motor_tests"]):
@@ -336,6 +342,15 @@ def _point_at(store: Path) -> None:
         raise SystemExit("refused: the application was imported before its roots were pointed at the store")
     # the process config directory IS the identity directory on the server (deploy/README.md, "the identity trap"): users,
     # die access, tombstones, the admin audit and the process workspace all resolve from it - bound to the store here
+    # every other destination override of the application is CLEARED (its default then resolves inside the store, asserted
+    # below): ADMIN_AUDIT_FILE, MOTRES_* (object registry, projects, production, motor tests, revisions, CAD, ...),
+    # MOTOR_AI_SIM_* (presets, ...)
+    global CLEARED_ENV
+    CLEARED_ENV = sorted(k for k in os.environ if k.startswith(("MOTRES_", "MOTOR_AI_SIM_")) or k == "ADMIN_AUDIT_FILE")
+    for k in CLEARED_ENV:
+        os.environ.pop(k)
+    os.environ["PYTHONDONTWRITEBYTECODE"] = "1"
+    _sys.dont_write_bytecode = True
     os.environ["MOTOR_AI_SIM_CONFIG"] = str(store / "identity" / "motor_config.yaml")
     os.environ["SHARED_ROOT"] = str(store / "shared")
     os.environ["WORKSPACES_ROOT"] = str(store / "workspaces")
@@ -351,6 +366,61 @@ def _point_at(store: Path) -> None:
     for name, path in (("shared", WS.shared_root()), ("workspaces", WS.workspaces_root()), ("published", WS.published_root())):
         if not str(Path(str(path)).resolve()).startswith(str(store.resolve()) + "/"):
             raise SystemExit(f"refused: the {name} root {path} is not inside the store")
+    global ROUTES
+    ROUTES = _assert_destinations(store)
+
+
+CLEARED_ENV: List[str] = []
+ROUTES: Dict[str, str] = {}
+
+
+def _assert_destinations(store: Path) -> Dict[str, str]:
+    """Every store the called code can write, resolved by the DEPLOYED application's own resolvers, must lie inside the store
+    (symlinks followed); no symlink in the store may point outside it and no other filesystem may be mounted inside it."""
+    import importlib
+    root = store.resolve()
+    probes = {
+        "admin audit": ("motor_ai_sim.admin_audit", "audit_path"),
+        "object registry": ("motor_ai_sim.object_registry", "registry_root"),
+        "display state": ("motor_ai_sim.display_state", "registry_root"),
+        "config archive": ("motor_ai_sim.config_archive", "store_path"),
+        "die archive": ("motor_ai_sim.die_archive", "store_path"),
+        "projects": ("motor_ai_sim.development.store", "root"),
+        "production": ("motor_ai_sim.production.store", "production_root"),
+        "motor tests": ("motor_ai_sim.motor_tests.store", "root"),
+        "motor revisions": ("motor_ai_sim.motor_revisions", "root"),
+        "cad": ("motor_ai_sim.model3d", "cad_root"),
+        "cad download log": ("motor_ai_sim.model3d", "download_log_path"),
+        "presets": ("motor_ai_sim.routes.presets", "_presets_path"),
+        "shared ledger": ("motor_ai_sim.duty_results", "shared_store_path"),
+        "process ledger": ("motor_ai_sim.duty_results", "store_path"),
+        "tombstones": ("motor_ai_sim.workspace", "_tombstones_file"),
+        "users": ("motor_ai_sim.users", None),
+    }
+    out: Dict[str, str] = {}
+    for name, (mod, fn) in probes.items():
+        m = importlib.import_module(mod)
+        try:
+            path = Path(str(getattr(m, fn)() if fn else m._USERS_FILE))
+        except AttributeError:
+            raise SystemExit(f"refused: the deployed {mod} has no {fn}: its destination cannot be asserted")
+        r = path.resolve()
+        if r != root and not str(r).startswith(str(root) + "/"):
+            raise SystemExit(f"refused: the {name} destination {path} (-> {r}) is outside the store")
+        out[name] = str(r)
+    for p in store.rglob("*"):
+        if p.is_symlink():
+            t = p.resolve()
+            if not str(t).startswith(str(root) + "/"):
+                raise SystemExit(f"refused: the symlink {p} points outside the store ({t})")
+    try:
+        for line in Path("/proc/mounts").read_text().splitlines():
+            mp = line.split()[1].replace("\\040", " ")
+            if mp.startswith(str(root) + "/"):
+                raise SystemExit(f"refused: a filesystem is mounted inside the store ({mp})")
+    except OSError:
+        pass
+    return out
 
 
 def _fam():
@@ -709,7 +779,7 @@ def switch(store: Path, m: Dict[str, Any], *, dry_run: bool, actor: str) -> Dict
         # 7. the retired die is NOT tombstoned: its access stays as it was, so every project member keeps the snapshots and
         #    old configurations he could open before (the current motors of the projects are the successor's copies)
         log.append({"step": "retire", "die": retired, "tombstone": False})
-    return {"refused": [], "dry_run": dry_run, "log": log}
+    return {"refused": [], "dry_run": dry_run, "cleared_env": CLEARED_ENV, "destinations": ROUTES, "log": log}
 
 
 
@@ -829,7 +899,8 @@ def check(before: Path, after: Path, m: Dict[str, Any], rep: Dict[str, Any]) -> 
                     for d in body.get("duties") or []:
                         if DRS.history(pred, c, str(d.get("name"))):
                             bad.append(f"{rel}: duty_results.history({pred}, {c}, {d.get('name')}) is not empty")
-    res["ledgers"] = {"ok": True, "rows": ledger_rows}
+    res["ledgers"] = {"ok": not any(": " in b and ("results[" in b or "history[" in b or "duty_results." in b) for b in bad),
+                      "rows": ledger_rows}
     for f in sorted((after / "shared" / ".answers").rglob("*.json")):
         docs = _load(f)
         if docs and any(True for _ in _names_in(docs[0], tuple(f"{pred}/{c}" for c in cont) + (pred,))):
@@ -940,11 +1011,19 @@ def check(before: Path, after: Path, m: Dict[str, Any], rep: Dict[str, Any]) -> 
     return res
 
 
+def _acct(email: str) -> str:
+    import hashlib
+    return hashlib.sha256(email.strip().lower().encode()).hexdigest()[:16]
+
+
 def visibility(store: Path) -> Dict[str, Any]:
-    """Which project snapshot each project member can open, decided by the application's own snapshot visibility
-    (development/routes ``_catalog_origin`` + ``_snapshot_catalog_visible``) with the member's grants from the store."""
+    """Per ACCOUNT (key = sha256 of the e-mail; role kept), in that account's own workspace context, with the application's own
+    guards: every catalog entry of the three dies (``motor_access.may_see_config`` AND ``family._require_die_access``, the
+    route's 404 guard) and every project snapshot of a CILN28-family machine (``_catalog_origin`` + ``_snapshot_catalog_visible``,
+    as ``list_snapshots`` does).  Raw rows are kept."""
     _point_at(store)
     from motor_ai_sim import motor_access
+    from motor_ai_sim import workspace as WS
     from motor_ai_sim.development import routes as DR
     from motor_ai_sim.development import store as PS
     F = _fam()
@@ -957,73 +1036,97 @@ def visibility(store: Path) -> Dict[str, Any]:
     class Req:
         def __init__(self, email):
             self.headers = {"authorization": email}
-    rows = []
-    for project in PS.list_projects():
-        pid = str(project.get("id") or "")
-        snaps = PS.list_snapshots(pid) if PS.valid_id(pid) else []
-        named = [x for x in snaps if "CILN28" in json.dumps(x.get("machine", {}).get("die_name", ""))]
-        if not named:
-            continue
-        for mem in project.get("members") or []:
-            email = str(mem.get("email") or "").lower()
-            user = dict(table.get(email) or {}, email=email)
-            for item in named:
-                machine = item.get("machine") if isinstance(item.get("machine"), dict) else {}
-                try:
-                    origin = DR._catalog_origin(machine, item.get("access_scope"),
-                                                allow_unresolved_claim=str(user.get("role") or "").lower() == "admin")
-                    ok = DR._snapshot_catalog_visible(Req(email), user, origin)
-                except Exception as exc:                    # noqa: BLE001
-                    ok = f"error {exc!r}"
-                rows.append({"project": pid, "member": f"{email[:3]}... ({user.get('role')}, {mem.get('role')})",
-                             "snapshot": item.get("id"), "machine": f"{machine.get('die_name')}/{machine.get('config_name')}",
-                             "visible": ok})
-    catalog = {}
     dies = store / "shared" / "dies"
     names = [n for n in ("CILN28", "CILN28 sheet 1", "CILN28 vadim 2") if (dies / n / "die.yaml").is_file()]
-    for email in table:
-        acc = motor_access.access_for_email(email)
-        seen = []
-        for d in names:
-            if not motor_access.may_see_die(acc, d):
-                continue
-            for f in sorted((dies / d).glob("*.yaml")):
-                if f.name != "die.yaml" and motor_access.may_see_config(acc, d, f.stem):
-                    seen.append(f"{d}/{f.stem}")
-        if seen:
-            catalog[email] = seen
-    return {"rows": rows, "catalog": catalog}
+    entries = [(d, f.stem) for d in names for f in sorted((dies / d).glob("*.yaml")) if f.name != "die.yaml"]
+    projects = [p for p in PS.list_projects() if PS.valid_id(str(p.get("id") or ""))]
+    members: Dict[str, set] = {}
+    for p in projects:
+        for mem in p.get("members") or []:
+            members.setdefault(str(mem.get("email") or "").lower(), set()).add(str(p.get("id")))
+    catalog_rows, snap_rows = [], []
+    for email in sorted(set(table) | set(members)):
+        email = email.lower()
+        user = dict(table.get(email) or {}, email=email)
+        key, role = _acct(email), str(user.get("role") or "")
+        # the account's workspace, built without ensure_layout (which would create and seed folders in the store)
+        ws = WS.Workspace(id=WS.workspace_id(email), email=email, root=Path(str(WS.workspaces_root())) / WS.workspace_id(email),
+                          shared_root=WS.shared_root())
+        with WS.use_workspace(ws):
+            acc = motor_access.access_for_email(email)
+            for d, c in entries:
+                ok = False
+                try:
+                    if motor_access.may_see_die(acc, d) and motor_access.may_see_config(acc, d, c):
+                        F._require_die_access(d, email, c)
+                        ok = True
+                except Exception:                           # noqa: BLE001 - the route's 404: not readable
+                    ok = False
+                catalog_rows.append({"account": key, "role": role, "entry": f"{d}/{c}", "readable": ok})
+            for p in projects:
+                if str(p.get("id")) not in members.get(email, set()):
+                    continue
+                for item in PS.list_snapshots(str(p.get("id"))):
+                    machine = item.get("machine") if isinstance(item.get("machine"), dict) else {}
+                    if not str(machine.get("die_name") or "").startswith("CILN28"):
+                        continue
+                    try:
+                        origin = DR._catalog_origin(machine, item.get("access_scope"),
+                                                    allow_unresolved_claim=role.lower() == "admin")
+                        ok = DR._snapshot_catalog_visible(Req(email), user, origin) is True
+                    except Exception:                       # noqa: BLE001
+                        ok = False
+                    snap_rows.append({"account": key, "role": role, "project": p.get("id"), "snapshot": item.get("id"),
+                                      "machine": f"{machine.get('die_name')}/{machine.get('config_name')}", "visible": ok})
+    return {"catalog_rows": catalog_rows, "snapshot_rows": snap_rows}
 
 
 def visibility_diff(before: Dict[str, Any], after: Dict[str, Any], m: Dict[str, Any]) -> Dict[str, Any]:
-    """Rule (coordinator 2026-11-24): after the switch every member opens everything he opened before (the predecessor's
-    entries under the retired name, the successor's under the predecessor's name, the moved-aside copy under its new name)
-    plus the new copies of the continuing motors he could open before; nothing else."""
+    """Rule (coordinator 2026-11-24): every account reads after the switch exactly what it read before (the predecessor's
+    entries under the retired name, the successor's under the predecessor's name, the aside copy under its new name) PLUS,
+    for each continuing configuration it read before, the new copy; it MUST read both; nothing else is gained.  Every
+    snapshot visible before is visible after and none becomes visible."""
     pred, succ, retired, date = m["pred"], m["succ"], m["retired"], m.get("date", "")
     cont = {c["config"] for c in m["continuing"]}
     aside = {c["config"]: c["successor_own"]["moved_aside_as"].format(date=date) for c in m["continuing"] if c.get("successor_own")}
 
-    def mapped(key: str) -> str:
-        die, cfg = key.split("/", 1)
-        if die == pred:
-            return f"{retired}/{cfg}"
-        if die == succ:
-            return f"{pred}/{aside.get(cfg, cfg)}"
-        return key
-    lost, gained = [], []
-    for email in sorted(set(before["catalog"]) | set(after["catalog"])):
-        b = {mapped(k) for k in before["catalog"].get(email, [])}
-        allowed_new = {f"{pred}/{k.split('/', 1)[1]}" for k in before["catalog"].get(email, [])
-                       if k.split("/", 1)[0] == pred and k.split("/", 1)[1] in cont}
-        a = set(after["catalog"].get(email, []))
-        who = f"{email[:3]}..."
-        lost += [f"{who} {k}" for k in sorted(b - a)]
-        gained += [f"{who} {k}" for k in sorted(a - b - allowed_new)]
-    sb = {(r["project"], r["member"], r["snapshot"]) for r in before["rows"] if r["visible"] is True}
-    sa = {(r["project"], r["member"], r["snapshot"]) for r in after["rows"] if r["visible"] is True}
-    return {"ok": not lost and not gained and not (sb - sa), "catalog_lost": lost, "catalog_gained": gained,
+    def mapped(entry: str) -> str:
+        die, cfg = entry.split("/", 1)
+        return f"{retired}/{cfg}" if die == pred else f"{pred}/{aside.get(cfg, cfg)}" if die == succ else entry
+    def readable(rows):
+        out: Dict[str, set] = {}
+        for r in rows:
+            if r["readable"]:
+                out.setdefault(r["account"], set()).add(r["entry"])
+        return out
+    rb, ra = readable(before["catalog_rows"]), readable(after["catalog_rows"])
+    lost, gained, missing_copy = [], [], []
+    for acct in sorted(set(rb) | set(ra)):
+        b = rb.get(acct, set())
+        want = {mapped(e) for e in b}
+        copies = {f"{pred}/{e.split('/', 1)[1]}" for e in b if e.split("/", 1)[0] == pred and e.split("/", 1)[1] in cont}
+        a = ra.get(acct, set())
+        lost += [f"{acct} {e}" for e in sorted(want - a)]
+        missing_copy += [f"{acct} {e}" for e in sorted(copies - a)]
+        gained += [f"{acct} {e}" for e in sorted(a - want - copies)]
+    vis = lambda rows: {(r["account"], r["project"], r["snapshot"]) for r in rows if r["visible"]}     # noqa: E731
+    sb, sa = vis(before["snapshot_rows"]), vis(after["snapshot_rows"])
+    per_account: Dict[str, Dict[str, int]] = {}
+    for r in after["catalog_rows"]:
+        e = per_account.setdefault(r["account"], {"role": r["role"], "copies_read": 0, "retired_read": 0, "snapshots": 0})
+        if r["readable"] and r["entry"].split("/", 1)[0] == pred and r["entry"].split("/", 1)[1] in cont:
+            e["copies_read"] += 1
+        if r["readable"] and r["entry"].startswith(retired + "/"):
+            e["retired_read"] += 1
+    for r in after["snapshot_rows"]:
+        if r["visible"]:
+            per_account.setdefault(r["account"], {"role": r["role"], "copies_read": 0, "retired_read": 0, "snapshots": 0})["snapshots"] += 1
+    per_account = {k: v for k, v in per_account.items() if v["copies_read"] or v["retired_read"] or v["snapshots"]}
+    ok = not (lost or gained or missing_copy or (sb - sa) or (sa - sb))
+    return {"ok": ok, "catalog_lost": lost, "catalog_gained": gained, "copy_not_readable": missing_copy,
             "snapshots_lost": sorted(map(list, sb - sa)), "snapshots_gained": sorted(map(list, sa - sb)),
-            "snapshots_visible_before": len(sb), "snapshots_visible_after": len(sa)}
+            "snapshots_visible_before": len(sb), "snapshots_visible_after": len(sa),
+            "accounts_checked": len({r["account"] for r in after["catalog_rows"]}), "readers_after": per_account}
 
 
 def surfaces(store: Path, pred: str, retired: str) -> Dict[str, Any]:
@@ -1067,7 +1170,7 @@ def main(argv: List[str] | None = None) -> int:
     mf.add_argument("--continuing", action="append", required=True)
     mf.add_argument("--stays", action="append", default=[])
     mf.add_argument("--pocket", type=float, default=None)
-    mf.add_argument("--keep-nested", action="append", default=[],
+    mf.add_argument("--keep-nested", action="append", default=None,
                     help="a nested key normally dropped that is copied after all, e.g. bearings.thermal_path (owner's choice)")
     mf.add_argument("--out", required=True, type=Path)
     for name in ("dry-run", "apply"):
@@ -1115,7 +1218,8 @@ def main(argv: List[str] | None = None) -> int:
     if a.cmd == "visibility":
         r = visibility(a.store)
         a.out.write_text(json.dumps(r, indent=1, ensure_ascii=False, default=str), encoding="utf-8")
-        print(len(r["rows"]), "rows;", sum(1 for x in r["rows"] if x["visible"] is True), "visible")
+        print(len(r["catalog_rows"]), "catalog rows,", sum(1 for x in r["catalog_rows"] if x["readable"]), "readable;",
+              len(r["snapshot_rows"]), "snapshot rows,", sum(1 for x in r["snapshot_rows"] if x["visible"]), "visible")
         return 0
     if a.cmd == "check":
         m = json.loads(a.manifest.read_text(encoding="utf-8"))
@@ -1137,7 +1241,7 @@ def main(argv: List[str] | None = None) -> int:
         print(json.dumps(r, ensure_ascii=False, default=str)[:4000])
         return 1 if r.get("refused") else 0
     if a.cmd == "manifest":
-        for k in a.keep_nested:
+        for k in (a.keep_nested or []):
             NEVER_NESTED.pop(tuple(k.split(".", 1)), None)
         m = build_manifest(a.store, json.loads(a.inventory.read_text()), a.pred, a.succ, a.retired, a.continuing, a.stays, a.pocket)
         a.out.write_text(json.dumps(m, indent=1, ensure_ascii=False, default=str), encoding="utf-8")

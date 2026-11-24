@@ -56,3 +56,15 @@ def test_a_new_part_is_a_bom_line_at_once(prod_env):
     rows = prod_env["client"].get("/api/production/%s/%s/bom" % (DIE, CONFIG), headers=prod_env["engineer"]).json()["rows"]
     parts = prod_env["client"].get("/api/production/%s/%s/parts" % (DIE, CONFIG), headers=prod_env["engineer"]).json()["parts"]
     assert {r["part_id"] for r in rows} >= {p["id"] for p in parts if p.get("kind") != "assembly"}
+
+
+def test_the_process_is_read_behind_the_same_nda_gate_as_the_other_production_reads(prod_env):
+    from tests.test_production_access import OEM_NO_NDA
+    payload = {"title": {"en": "P", "zh": "P", "src_lang": "en", "status": {"en": "confirmed", "zh": "confirmed"}}, "order_quantity": 10,
+               "members": [{"email": ENGINEER, "role": "engineer"}, {"email": OEM_NDA, "role": "oem"}, {"email": OEM_NO_NDA, "role": "oem"}]}
+    c = prod_env["client"]
+    assert c.post("/api/admin/production/%s/%s" % (DIE, CONFIG), json=payload, headers=prod_env["admin"]).status_code in (200, 201)
+    denied = c.get(_url(), headers=prod_env["oem_no_nda"])
+    assert denied.status_code == 403 and "nda_required" in denied.text
+    assert c.get(_url(), headers=prod_env["oem_nda"]).status_code == 200
+    assert c.get(_url(), headers=prod_env["engineer"]).status_code == 200

@@ -50,7 +50,48 @@
     "changes": "变更",
     "assembly": "装配流程",
     "tooling": "工装",
-    "tests": "测试"
+    "tests": "测试",
+    "certification": "认证",
+    "checklist": "检查清单"
+  },
+  "checklist": {
+    "tip": "量产检查清单由本生产模块自动生成：装配工序、工艺要求与测试限值、零件、未决讨论和缺失的认证证据。此处只保存各项的状态和证据；要求变更的条目会回到“待确认”。",
+    "revision": "版本 {rev}",
+    "openCount": "未决 {open} / 共 {total}",
+    "openOnly": "仅显示未决项",
+    "download": "Excel（EN + 中文）",
+    "downloadTip": "下载 Excel：主清单、未决项跟踪和统计。仅为导出文件：状态和要求请在系统中修改。",
+    "none": "没有条目。",
+    "status": "状态",
+    "evidence": "证据",
+    "noEvidence": "无证据",
+    "changed": "已变更",
+    "changedTip": "状态设定后要求发生了变更，请重新确认。",
+    "uploadTip": "上传新文件作为此项的证据",
+    "byTip": "由 {by} 于 {at} 设定",
+    "statuses": {
+      "to_do": "待办",
+      "to_confirm": "待确认",
+      "missing_info": "信息缺失",
+      "optional": "可选",
+      "done": "已完成"
+    },
+    "responsible": {
+      "factory": "工厂",
+      "supplier": "供应商",
+      "MOTRES": "MOTRES"
+    },
+    "categories": {
+      "assembly": "装配工序",
+      "checks": "过程检验",
+      "process": "工艺要求",
+      "tests": "测试限值",
+      "parts": "零件、材料与表面处理",
+      "fasteners": "紧固件",
+      "packaging": "包装",
+      "discussion": "未决讨论事项",
+      "certification": "认证证据"
+    }
   },
   "bilingual": {
     "machine": "机器翻译，未经核实",
@@ -252,7 +293,10 @@
     "pdfUnavailable": "PDF 生成功能暂不可用，请稍后重试。",
     "pdfTooLarge": "文档或其中的图片过大，无法生成 PDF。请逐个下载文件或使用“查看”。",
     "editSections": "编辑工艺章节",
-    "hideSections": "收起章节"
+    "hideSections": "收起章节",
+    "stepDocsPick": "文件",
+    "stepDocsPickTip": "除零件图纸外，此步骤显示的文件。",
+    "stepDocsTooMany": "此步骤引用的文件超过上限 {max} 个（当前 {n} 个）。请先移除一些再保存。"
   },
   "access": {
     "none": "您不在此生产项目中。",
@@ -298,7 +342,34 @@
     "superseded": "已作废",
     "supersededBy": "已由 {name} 取代（版本 {rev}）",
     "supersededTip": "已在已发布的版本中被替换。请勿按其制造零件；文件仅保留供参考。",
-    "changedUnacked": "版本 {rev} 中有变更 - 尚未确认"
+    "changedUnacked": "版本 {rev} 中有变更 - 尚未确认",
+    "search": "按文件名或零件搜索",
+    "noMatch": "没有匹配的文件。",
+    "topicLabel": "主题",
+    "topicAuto": "自动：{topic}",
+    "stepChipTip": "打开此装配步骤",
+    "topic": {
+      "process": "工艺与装配",
+      "drawings": "零件图纸与 3-D",
+      "tooling": "工装",
+      "tests": "测试与测量",
+      "packaging": "包装与标签",
+      "photos": "照片",
+      "general": "通用",
+      "superseded": "已作废"
+    },
+    "topicTip": {
+      "process": "装配步骤引用的作业指导和文件。",
+      "drawings": "零件的图纸、3-D 和 CAD 文件。",
+      "tooling": "工装订购清单中零件的文件。",
+      "tests": "测试表、测量记录和检验步骤引用的文件。",
+      "packaging": "包装、标签和贴纸。",
+      "photos": "不属于任何零件的图片，以及发布到步骤的图片。",
+      "general": "其他所有文件。",
+      "superseded": "已被新文件取代。仅供参考，请勿据此制造。",
+      "select": "此文件所属的主题。自动：根据零件、装配步骤和文件类型判断。"
+    },
+    "linkInvalid": "此链接无效：文件列表为空、过长或格式错误。"
   },
   "unread": {
     "tip": "{count} 条未读消息",
@@ -349,11 +420,14 @@
     "by": "发布人 {email}",
     "tip": "请在按新版本生产前确认每个版本。",
     "review": "检查并发送版本 {rev}",
-    "reviewTitle": "版本 {rev}：发布时将发送此消息",
+    "reviewTitle": "版本 {rev}：成员将在每日邮件中收到此内容",
     "recipients": "{count, plural, other {# 位收件人}}",
     "subject": "主题",
     "cancel": "取消",
-    "sendPublish": "发送并发布 {rev}",
+    "sendPublish": "发布 {rev}",
+    "digestNote": "版本和确认请求会立即出现在生产中。邮件每天发送一次，与其他所有变更合并在一封摘要中。",
+    "urgentMail": "紧急：立即发送邮件",
+    "sendPublishUrgent": "发布 {rev} 并立即发送邮件",
     "cannotMail": "此服务器无法发送电子邮件：成员只会在讨论区看到通知。",
     "addReplace": "替换文件",
     "replaceOld": "旧文件",
@@ -637,6 +711,8 @@
     "note": {
       "unexplained": "无法解释 {w} W",
       "noModel": "无仿真点",
+      "notComparableNoBenchTemp": "不可比：磁钢温度未知",
+      "notComparableNoModelTemp": "不可比：该温度下无仿真点",
       "freqFlag": "{hz} Hz，仿真为低频",
       "remaining": "{mohm} mΩ 相位板和接头",
       "modelAbove": "仿真比读数高 {mohm} mΩ",
@@ -812,5 +888,21 @@
     "startTitle": "开始生产",
     "paymentLabel": "已收款（日期或备注，不写金额）",
     "startOk": "开始"
+  },
+  "cert": {
+    "tip": "本电机的认证文件包：分析、技术文件、符合性声明、安全说明、标识、供应商声明、测试报告。发布前草稿仅限内部人员查看。",
+    "none": "暂无认证文件。",
+    "group": "分组（可选）",
+    "ungrouped": "未分组",
+    "internal": "内部（仅限员工）",
+    "uploadTip": "上传到此标签页。内部文件对工厂不可见；取消勾选即可发布文件。",
+    "status": "状态",
+    "statuses": {
+      "draft": "草稿",
+      "signed": "已签署",
+      "evidence_received": "已收到证明材料"
+    },
+    "move": "移至文件",
+    "moveTip": "将此文件移回文件标签页"
   }
 }

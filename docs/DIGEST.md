@@ -126,3 +126,17 @@ How the target survives a visit by someone who is not signed in:
 * a remembered copy of the canonical target is kept in the tab's sessionStorage and put back after sign-in if the bar lost the link.
 * the NDA step of a production is inside the page on the same URL, so it does not lose the target.
 * only same-origin paths of these exact shapes are accepted (no URL, no `//host`, unknown query keys dropped): no open redirect.
+
+## Production notifications: no mail of their own (owner 2026-11-19)
+
+Everything recorded in a production (revision published, Discussion message, files, parts, tests, members) stays in the production at
+once and mails nobody. The production's daily digest above IS the mail: its section lists everything since the last digest (a revision
+published with `notify=False` too: the collector reads the production audit), English then Chinese for a group with factory members,
+with ONE "Open and acknowledge" link to the newest revision. A factory member is in the audience like everybody else (verified, enabled,
+not unsubscribed from all e-mail, NDA signed, not left this digest). Time: the daily run, 06:00 Europe/Ljubljana = 13:00 Shanghai in winter
+(12:00 in summer).
+
+* "Urgent: mail now" on the publish dialog (default off) is the only immediate mail; that revision is listed in the next digest as
+  "already e-mailed when it was published".
+* The 24 h / 72 h acknowledgement reminders count from the digest that carried the revision to that member (`revision.digest_sent`, set
+  when the digest is sent); before that digest there is nothing to remind about.

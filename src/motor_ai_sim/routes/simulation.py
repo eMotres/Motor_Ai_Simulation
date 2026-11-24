@@ -121,9 +121,14 @@ _VALID_MESH_COMPONENTS = ("stator", "rotor", "magnet", "coil", "shaft",
 
 def _parse_component_mesh(s: str) -> dict:
     """Parse the per-component mesh-size JSON ({comp: size_mm}) coming from the
-    UI into a clean {comp: float} dict.  Unknown keys / non-positive sizes are
-    dropped so a stray value can never corrupt the gmsh size field.  Returns {}
-    for an empty / malformed string (→ global size everywhere).
+    UI into a clean {comp: float} dict.  Non-positive sizes are dropped so a stray
+    value can never corrupt the gmsh size field.  Returns {} for an empty /
+    malformed string (→ global size everywhere).
+
+    An UNKNOWN key is refused with a 422 naming it and the valid ones (it used to be
+    dropped silently: "air" is not a key - the far-air size is "outer" - and a
+    request that thought it was coarsening the air did nothing; mesh study
+    2026-11-17, agreed with US · simulation).  Not an alias.
 
     "coil_rel" is the one dimensionless entry: it is snapped to the nearest of
     0.5 / 1 / 2 rather than dropped or rejected, so a hand-written or older
@@ -139,6 +144,12 @@ def _parse_component_mesh(s: str) -> dict:
     except Exception:
         return {}
     out = {}
+    unknown = sorted(str(k) for k in raw if str(k).lower() not in _VALID_MESH_COMPONENTS)
+    if unknown:
+        from fastapi import HTTPException as _HTTPException
+        raise _HTTPException(status_code=422, detail=(
+            "unknown component_mesh key(s): %s (valid: %s; the far-air size is \"outer\")"
+            % (", ".join(unknown), ", ".join(_VALID_MESH_COMPONENTS))))
     for k, v in raw.items():
         kk = str(k).lower()
         if kk not in _VALID_MESH_COMPONENTS:
@@ -410,6 +421,7 @@ def run_simulation(req: SimRunRequest, background_tasks: BackgroundTasks):
     """Enqueue a PINN training job and return a job_id to poll."""
     job_id = str(uuid.uuid4())[:8]
     _jobs[job_id] = {
+        "owner":    _JOBS.current_owner(),
         "status":   "queued",
         "progress": 0.0,
         "result":   None,
@@ -476,6 +488,9 @@ def get_result(job_id: str):
         raise HTTPException(status_code=404, detail=f"Job '{job_id}' not found")
 
     job = _jobs[job_id]
+    # a job is read by the account that started it (or an admin); anything else answers as an unknown id does
+    if not _WSP.is_admin() and job.get("owner") != _JOBS.current_owner():
+        raise HTTPException(status_code=404, detail=f"Job '{job_id}' not found")
     elapsed = None
     if job["start_t"]:
         elapsed = time.time() - job["start_t"]

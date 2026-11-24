@@ -53,11 +53,21 @@ class Group:
     members: list = field(default_factory=list)       # [(email, role)]
     active: bool = True
     path: Optional[str] = None      # the app path of the group's own page
+    #: project groups: the members who see the prices (owners and ``sees_prices`` members); a restricted message needs it
+    price_emails: frozenset = field(default_factory=frozenset)
+    #: project groups: the members whose ACCOUNT is MOTRES staff (global admin / engineer); a staff-only message needs it
+    staff_emails: frozenset = field(default_factory=frozenset)
 
-    def caps(self, role: str) -> frozenset:
-        """What a member of this role may see (see collect.INTERNAL / COSTS)."""
+    def caps(self, role: str, email: str = "") -> frozenset:
+        """What a member of this role may see (see collect.INTERNAL / COSTS / PRICES; the last is by member, so it needs ``email``)."""
         if self.kind == "project":
-            return frozenset({C.INTERNAL}) if role in ("owner", "engineer") else frozenset()
+            base = frozenset({C.INTERNAL}) if role in ("owner", "engineer") else frozenset()
+            who = str(email or "").strip().lower()
+            if who in self.price_emails:
+                base = base | {C.PRICES}
+            if who in self.staff_emails:
+                base = base | {C.STAFF}
+            return base
         if role in ("owner", "engineer"):
             return frozenset({C.INTERNAL, C.COSTS})
         return frozenset({C.COSTS}) if self.record.get("share_costs_with_oem") else frozenset()
@@ -88,8 +98,12 @@ def _members(record: dict) -> list:
 def project_group(project: dict) -> Group:
     pid = str(project.get("id") or "")
     title = safe_text(project.get("title"), pid)
+    # by ACCOUNT identity, the one central rule (a factory account never, staff always; owner 2026-11-23), resolved at build AND at send
+    from motor_ai_sim.development import access as _access
+    prices = frozenset(e for e, _role in _members(project) if _access.sees_prices_email(e, project))
+    staff = frozenset(e for e, _role in _members(project) if _access.is_staff_email(e))     # staff-only messages: by account, never by project role
     return Group(DS.project_scope(pid), "project", project, title, title, _members(project),
-                 str(project.get("status") or "spec") != "closed", RP.project_path(pid))
+                 str(project.get("status") or "spec") != "closed", RP.project_path(pid), price_emails=prices, staff_emails=staff)
 
 
 def production_group(production: dict) -> Group:
@@ -196,7 +210,7 @@ def common_caps(group: Group, recipients: list[dict]) -> frozenset:
     """The capabilities EVERY recipient has - the text may contain only what these allow."""
     caps: Optional[frozenset] = None
     for r in recipients:
-        c = group.caps(r["role"])
+        c = group.caps(r["role"], r.get("email") or "")
         caps = c if caps is None else caps & c
     return caps if caps is not None else frozenset()
 
@@ -301,6 +315,14 @@ def compose(group: Group, items: list, more: int, start: float, end: float, bili
             if url:
                 t_lines.append(f"  {url}")
         h_parts.append("</ul>")
+        ack = next((it.link for it in reversed(items) if it.kind == "revision" and it.link), None) if group.kind == "production" else None
+        if ack:
+            # a revision is in this production's digest: ONE "open and acknowledge" link to the newest of them (owner 2026-11-19)
+            ack_url = _url(ack)
+            lab = "Open and acknowledge" if lang == "en" else "打开并确认"
+            t_lines += ["", f"{lab}: {ack_url}"]
+            h_parts.append(f'<p style="margin:0 0 12px;font-size:15px" lang="{attr}"><a href="{html.escape(ack_url, quote=True)}" '
+                           f'style="color:#2563eb;font-weight:bold">{lab}</a></p>')
         if more:
             url = _url(group.path)
             if url in seen:                                   # the group's page was already linked above: say it, without a repeat
@@ -454,13 +476,28 @@ def build_draft(group: Group, settings: dict, items: list, recipients: list[dict
                      key=lambda i: i.ts, reverse=True)
     if not visible:
         return None
-    shown, more = visible[:MAX_ITEMS], max(0, len(visible) - MAX_ITEMS)
+    shown, hidden_more = visible[:MAX_ITEMS], visible[MAX_ITEMS:]
+    more = len(hidden_more)
     bilingual = any(r["lang"] == "zh-CN" for r in recipients)
     text, body_html = compose(group, shown, more, start, end, bilingual)
     now = DS.iso()
     subject = _subject(group, end, bilingual)
     if not header_safe(subject):
         return None                      # cannot happen after safe_text; never build a header from an unsafe value
+    # what a reader who may not see the staff-only lines is told about the draft's identity and age: kept stable across a rebuild that
+    # only added or changed staff-only lines, so such a rebuild is invisible to him (the public-only view of the digest settings)
+    public = [i for i in visible if "staff" not in i.requires]
+    fingerprint = hashlib.sha256(json.dumps([[i.kind, i.key, i.ts, i.en] for i in public], ensure_ascii=False).encode("utf-8")).hexdigest()
+    ex = existing or {}
+    same = bool(ex) and ex.get("public_hash") == fingerprint and ex.get("public_updated_at") is not None
+    inherits = bool(ex) and int(ex.get("public_total") or 0) > 0
+    # the PUBLIC-only revision / id sequence: it advances only when the public lines change, never with the aggregate revision (hidden
+    # supersessions by staff-only lines do not move it)
+    if same:
+        pub_revision = int(ex["public_revision"]) if ex.get("public_revision") is not None else 0
+    else:
+        pub_revision = int(ex["public_revision"]) + 1 if ex.get("public_revision") is not None else 0
+    pub_id = DS.draft_id_for(group.scope, DS.iso(start), pub_revision)
     draft = {
         "id": DS.draft_id_for(group.scope, DS.iso(start), revision), "revision": revision, "scope": group.scope, "kind": group.kind,
         "title": group.title_en, "title_zh": group.title_zh, "status": "pending",
@@ -469,9 +506,17 @@ def build_draft(group: Group, settings: dict, items: list, recipients: list[dict
         "bilingual": bilingual, "caps": sorted(caps), "frequency": settings.get("frequency", "daily"),
         "subject": subject, "text_body": text, "html_body": body_html,
         "items": [{"kind": i.kind, "ts": DS.iso(i.ts), "en": i.en, "zh": i.zh, "link": i.link, "link_policy": i.policy,
+                   **({"key": i.key} if i.kind == "revision" and i.key else {}),
                    "requires": sorted(i.requires), **({"motor": list(i.motor)} if i.motor else {}),
                    **({"group_en": i.group[0], "group_zh": i.group[1]} if i.group else {})} for i in shown],
-        "more": more, "recipients": recipients, "skipped": skipped,
+        #: how many of ALL the visible lines (before the cut at MAX_ITEMS) need no staff access: what a non-staff reader of the digest
+        #: settings is told, as if the staff-only lines did not exist
+        "public_total": len(public), "public_hash": fingerprint,
+        "public_updated_at": ex["public_updated_at"] if same else now,
+        "public_created_at": (ex.get("public_created_at") or ex.get("created_at") or now) if inherits else now,
+        "public_id": pub_id, "public_revision": pub_revision,
+        "more": more, "more_requires": sorted(frozenset().union(*[i.requires for i in hidden_more])) if hidden_more else [],
+        "recipients": recipients, "skipped": skipped,
     }
     draft["content_hash"] = content_hash(draft)
     return draft

@@ -4351,8 +4351,12 @@ class TdmAttemptFailed(RuntimeError):
     owner's-terms stop, else (and then) as a march."""
 
     def __init__(self, stage: str, reason: str, info: Optional[Dict] = None,
-                 retry_residual: bool = False, retry_full: bool = False) -> None:
+                 retry_residual: bool = False, retry_full: bool = False,
+                 code: Optional[str] = None) -> None:
         super().__init__("%s: %s" % (stage, reason))
+        # plain-language reason code of the march that replaces this attempt
+        # ("memory_guard"); None = no code (the free-text note says it)
+        self.code = (str(code) if code else None)
         self.stage = str(stage)
         self.reason = str(reason)
         self.info = info
@@ -4439,10 +4443,12 @@ def fem_transient_sliding_band(*args, **kwargs) -> dict:
     kw.pop("_tdm_ctl", None)
     attempts: List[Dict[str, Any]] = []
     _msg = ""
+    _code: Optional[str] = None
     _hint: Dict[str, Any] = {"retry": False}
     try:
         return _fem_transient_sliding_band_once(**kw)
     except TdmAttemptFailed as _e1:
+        _code = getattr(_e1, "code", None)
         _r1, _msg, _hint = _drop_attempt(_e1)
         attempts.append(_r1)
         log.warning("SB TDM attempt 1 rejected (%s) — %s", _msg,
@@ -4455,6 +4461,7 @@ def fem_transient_sliding_band(*args, **kwargs) -> dict:
                 **kw, _tdm_ctl={"stop": "residual", "period": "full",
                                 "attempts": list(attempts)})
         except TdmAttemptFailed as _e2:
+            _code = getattr(_e2, "code", None) or _code
             _r2, _msg, _ = _drop_attempt(_e2)
             attempts.append(_r2)
             log.warning("SB TDM attempt 2 rejected (%s) — marching instead", _msg)
@@ -4462,7 +4469,8 @@ def fem_transient_sliding_band(*args, **kwargs) -> dict:
     note = ("march: TDM failed (%s) — marched instead" % (_msg,))
     return _fem_transient_sliding_band_once(
         **dict(kw, eddy_method="march"),
-        _tdm_ctl={"fallback": {"note": note, "attempts": attempts}})
+        _tdm_ctl={"fallback": {"note": note, "attempts": attempts,
+                               "code": _code}})
 
 
 def _ring_on_24_grid(req_steps: int, nodes_per_period: int, pole_pairs: int,
@@ -10340,9 +10348,18 @@ def _fem_transient_sliding_band_once(
             if _tdm_info is not None:
                 _tdm_info["failed"] = "%s: %s" % (type(_e_tdm).__name__, _e_tdm)
                 _tdm_info.pop("t_report_start", None)
+            _mem_code = None
+            _c_ = _e_tdm
+            for _ in range(8):           # the guard may sit under a wrapper
+                if type(_c_).__name__ == "TdmMemoryExceeded":
+                    _mem_code = "memory_guard"
+                    break
+                _c_ = getattr(_c_, "__cause__", None) or getattr(_c_, "__context__", None)
+                if _c_ is None:
+                    break
             raise TdmAttemptFailed(
                 _td_stage[0], "%s: %s" % (type(_e_tdm).__name__, _e_tdm),
-                info=_tdm_info) from _e_tdm
+                info=_tdm_info, code=_mem_code) from _e_tdm
     # Cross-run warm seed (see _SB_WARM_CACHE above).  The cached frame is the
     # one at electrical angle ≡ −3 steps, i.e. EXACTLY the one-dt-old history
     # the first probe frame (k = −2) wants.  The meshes differ between runs
@@ -15352,6 +15369,10 @@ def _fem_transient_sliding_band_once(
         **({} if not eddy else {
             "eddy_method": _eddy_method,
             "eddy_method_requested": _eddy_method_requested,
+            # the march that replaced a TDM attempt, as a plain code (only
+            # present then; never a path or an exception text)
+            **({"eddy_method_fallback_reason": _tdm_fb["code"]}
+               if (_tdm_fb and _tdm_fb.get("code")) else {}),
             "eddy_method_note": ("; ".join(_n for _n in (
                 _tdm_note, (_tdm_demag_note if (demag and _eddy_method == "tdm")
                             else None)) if _n) or None),

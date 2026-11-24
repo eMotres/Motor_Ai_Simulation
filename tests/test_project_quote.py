@@ -31,13 +31,17 @@ ECB_XML = """<?xml version="1.0" encoding="UTF-8"?>
 USERS = {
     "admin": {"email": "admin@example.test", "role": "admin"},
     "owner": {"email": "customer@example.test", "role": "user"},          # project role "owner" of alpha
-    "member-eng": {"email": "eng@example.test", "role": "engineer"},      # project role "engineer" of alpha
+    "member-eng": {"email": "eng@example.test", "role": "user"},          # project role "engineer" of alpha (global role user)
     "viewer": {"email": "viewer@example.test", "role": "user"},           # project role "customer" of alpha
     "other": {"email": "other@example.test", "role": "user"},             # member of beta only
     "staff": {"email": "staff@example.test", "role": "engineer"},         # a global engineer, member of nothing
     "stranger": {"email": "stranger@example.test", "role": "user"},
+    "owner2": {"email": "owner2@example.test", "role": "user"},           # a SECOND project owner of alpha
+    "factory-owner": {"email": "factory@example.test", "role": "oem"},    # a factory account (global role oem), project owner of alpha
+    "factory-flagged": {"email": "flagged@example.test", "role": "oem"},  # a factory account, customer member WITH the flag
 }
 MEMBERS = ("owner", "member-eng", "viewer")
+NON_OWNER_MEMBERS = ("member-eng", "viewer")
 FORBIDDEN_KEYS = {"note", "notes", "source", "source_ref", "contingency", "contingency_pct", "factor", "hint", "pct", "by",
                   "dhl", "dhl_lanes", "manual", "ecb", "fx", "revision", "snapshot_n", "shared_by", "diff", "estimate",
                   "updated_by", "analog_mass_kg", "target_mass_kg", "production", "project"}
@@ -68,12 +72,15 @@ def client(tmp_path, monkeypatch):
     store.create_project({**base, "id": "alpha", "title": "Alpha",
                           "members": [{"email": "customer@example.test", "role": "owner"},
                                       {"email": "eng@example.test", "role": "engineer"},
-                                      {"email": "viewer@example.test", "role": "customer"}]})
+                                      {"email": "viewer@example.test", "role": "customer"},
+                                      {"email": "owner2@example.test", "role": "owner"}]})
     store.create_project({**base, "id": "beta", "title": "Beta", "members": [{"email": "other@example.test", "role": "owner"}]})
     app = FastAPI()
     app.include_router(R.router)
     app.include_router(QR.router)
     app.include_router(project_router)
+    from motor_ai_sim.development import project_contract as _PC
+    app.include_router(_PC.router)
     return TestClient(app)
 
 
@@ -126,8 +133,13 @@ def _keys(obj, out=None):
 
 # ── access ──────────────────────────────────────────────────────────────────────────────────────────────────────────
 
-@pytest.mark.parametrize("who", MEMBERS + ("admin",))
-def test_members_of_the_project_and_admins_read_the_shared_quote(client, who):
+def _switch(client, email, value, who="owner"):
+    return client.patch("/api/projects/alpha/members/sees_prices", json={"email": email, "sees_prices": value}, headers=_h(who))
+
+
+@pytest.mark.parametrize("who", ("owner", "owner2", "admin"))
+def test_owners_and_admins_read_the_shared_quote(client, who):
+    """Owner 2026-11-22: every project owner sees the prices, always."""
     _complete(client)
     assert _share(client).status_code == 200
     resp = _quote(client, who)
@@ -136,8 +148,67 @@ def test_members_of_the_project_and_admins_read_the_shared_quote(client, who):
     assert resp.json()["total_price"] > 0
 
 
-@pytest.mark.parametrize("who", ["stranger", "other", "staff"])
-def test_non_members_members_of_another_project_and_global_engineers_get_404(client, who):
+@pytest.mark.parametrize("who", NON_OWNER_MEMBERS)
+def test_an_engineer_or_customer_member_sees_no_price_by_default(client, who):
+    _complete(client)
+    assert _share(client).status_code == 200
+    resp = _quote(client, who)
+    assert resp.status_code == 404 and resp.json()["detail"] == "Quote not found"
+    assert _quote(client, who, "nope").json() == resp.json()          # the answer of a project with no quote
+    assert client.get("/api/projects/alpha", headers=_h(who)).json()["quote_shared"] is False
+    assert client.get("/api/projects/alpha", headers=_h("owner")).json()["quote_shared"] is True
+
+
+def test_the_owner_switches_one_member_on_and_off(client):
+    _complete(client)
+    _share(client)
+    assert _switch(client, "viewer@example.test", True).json() == {"email": "viewer@example.test", "sees_prices": True}
+    assert _quote(client, "viewer").status_code == 200 and _quote(client, "member-eng").status_code == 404
+    assert client.get("/api/projects/alpha", headers=_h("viewer")).json()["quote_shared"] is True
+    assert _switch(client, "viewer@example.test", False, "owner2").status_code == 200       # the second owner may switch it off
+    assert _quote(client, "viewer").status_code == 404
+    assert _switch(client, "viewer@example.test", True, "admin").status_code == 200         # and so may an admin
+    assert _quote(client, "viewer").status_code == 200
+    import json
+    rows = [json.loads(x) for x in store._file("alpha", "audit.jsonl").read_text(encoding="utf-8").splitlines() if x.strip()]
+    rows = [r for r in rows if r["action"] == "sees_prices"]
+    assert [(r["actor_email"], r["entity_id"], r["details"]["to"]) for r in rows] == [
+        ("customer@example.test", "viewer@example.test", True), ("owner2@example.test", "viewer@example.test", False),
+        ("admin@example.test", "viewer@example.test", True)] and all(r["time"] for r in rows)
+
+
+def test_an_engineer_member_cannot_grant_anybody_the_flag_nor_make_an_owner(client):
+    _complete(client)
+    _share(client)
+    assert _switch(client, "eng@example.test", True, "member-eng").status_code == 403          # not himself
+    assert _switch(client, "viewer@example.test", True, "member-eng").status_code == 403
+    assert _switch(client, "viewer@example.test", True, "viewer").status_code in (403, 404)
+    add = lambda body, who: client.post("/api/projects/alpha/members", json=body, headers=_h(who))        # noqa: E731
+    assert add({"email": "eng@example.test", "role": "owner"}, "member-eng").status_code == 403
+    assert add({"email": "new@example.test", "role": "customer", "sees_prices": True}, "member-eng").status_code == 403
+    assert _quote(client, "member-eng").status_code == 404
+
+
+def test_owners_are_not_switchable_and_unknown_members_are_refused(client):
+    assert _switch(client, "owner2@example.test", False).status_code == 422
+    assert _switch(client, "nobody@example.test", True).status_code == 404
+    assert client.patch("/api/projects/alpha/members/sees_prices", json={"email": "viewer@example.test", "sees_prices": "yes"},
+                        headers=_h("owner")).status_code == 422
+    assert _switch(client, "viewer@example.test", True, "stranger").status_code in (403, 404)
+
+
+def test_a_pending_invite_carries_the_flag_until_it_is_claimed(client):
+    r = client.post("/api/projects/alpha/members", json={"email": "later@example.test", "role": "customer", "sees_prices": True},
+                    headers=_h("owner"))
+    assert r.status_code == 200
+    pending = store.get_project("alpha")["pending_invites"]
+    assert [p.get("sees_prices") for p in pending if p["email"] == "later@example.test"] == [True]
+    assert _switch(client, "later@example.test", False).status_code == 200
+    assert not [p for p in store.get_project("alpha")["pending_invites"] if p["email"] == "later@example.test"][0].get("sees_prices")
+
+
+@pytest.mark.parametrize("who", ["stranger", "other"])
+def test_non_members_and_members_of_another_project_get_404(client, who):
     _complete(client)
     assert _share(client).status_code == 200
     resp = _quote(client, who)
@@ -264,6 +335,7 @@ def test_share_and_unshare_are_audited(client, tmp_path):
 def test_the_payload_is_exactly_the_whitelist(client):
     _complete(client)
     _share(client)
+    _switch(client, "viewer@example.test", True)
     q = _quote(client, "viewer").json()
     assert tuple(q) == Q.QUOTE_KEYS
     assert all(tuple(it) == Q.ITERATION_KEYS for it in q["iterations"])
@@ -328,6 +400,8 @@ def test_the_project_payload_carries_only_the_flag(client):
     for who in ("owner", "viewer"):
         assert client.get("/api/projects/alpha", headers=_h(who)).json()["quote_shared"] is False
     _share(client)
+    for email in ("eng@example.test", "viewer@example.test"):
+        assert _switch(client, email, True).status_code == 200
     for who in MEMBERS + ("admin",):
         got = client.get("/api/projects/alpha", headers=_h(who))
         assert got.status_code == 200 and got.json()["quote_shared"] is True, who
@@ -335,9 +409,419 @@ def test_the_project_payload_carries_only_the_flag(client):
         assert "cost" not in got.text.lower() and "1000" not in got.text and "payment" not in got.text.lower()
     listed = client.get("/api/projects", headers=_h("owner")).json()["projects"]
     assert [(p["id"], p["quote_shared"]) for p in listed] == [("alpha", True)]
-    # a global engineer sees the project but is no member: no quote for him, so no flag either
+    # a global engineer is MOTRES staff: he reads every shared quote, member or not (coordinator 2026-11-23)
     staff = client.get("/api/projects", headers=_h("staff")).json()["projects"]
-    assert {p["id"]: p["quote_shared"] for p in staff} == {"alpha": False, "beta": False}
+    assert {p["id"]: p["quote_shared"] for p in staff} == {"alpha": True, "beta": False}
     assert client.get("/api/projects", headers=_h("other")).json()["projects"][0]["quote_shared"] is False
     client.delete("/api/admin/projects/alpha/cost-estimate/share", headers=_h("admin"))
     assert client.get("/api/projects/alpha", headers=_h("owner")).json()["quote_shared"] is False
+
+
+# ── the owner's member list for the switches (Astra pre-merge 2026-11-22) ───────────────────────────────────────────
+
+def _switches(client, who, project="alpha"):
+    return client.get(f"/api/projects/{project}", headers=_h(who)).json().get("member_switches")
+
+
+def _invite(client, email, role="customer", who="owner", **extra):
+    return client.post("/api/projects/alpha/members", json={"email": email, "role": role, **extra}, headers=_h(who))
+
+
+@pytest.mark.parametrize("who", ("owner", "owner2", "admin"))
+def test_an_ordinary_owner_gets_every_member_and_pending_invite_with_the_flag(client, who):
+    """The summary of an ordinary (non-staff) owner holds only his own member record; the switches need the whole list."""
+    assert _invite(client, "later@example.test", "engineer", sees_prices=True).status_code == 200
+    assert _switch(client, "viewer@example.test", True).status_code == 200
+    rows = {r["email"]: r for r in _switches(client, who)}
+    assert set(rows) == {"customer@example.test", "eng@example.test", "viewer@example.test", "owner2@example.test", "later@example.test"}
+    assert rows["customer@example.test"]["sees_prices"] is True and rows["owner2@example.test"]["sees_prices"] is True
+    assert rows["eng@example.test"]["sees_prices"] is False and rows["viewer@example.test"]["sees_prices"] is True
+    assert (rows["later@example.test"]["pending"], rows["later@example.test"]["role"], rows["later@example.test"]["sees_prices"]) == (True, "engineer", True)
+    assert all(set(r) == {"email", "role", "pending", "sees_prices"} for r in rows.values())
+    if who != "admin":
+        mine = client.get("/api/projects/alpha", headers=_h(who)).json()
+        assert [m["email"] for m in mine["members"]] == [f"{'customer' if who == 'owner' else 'owner2'}@example.test"]
+        assert "notes" not in mine and "project_motor_grants" not in mine and "grant_removal_candidates" not in mine
+
+
+def test_a_pending_invite_is_toggled_from_that_list(client):
+    assert _invite(client, "later@example.test").status_code == 200
+    assert {r["email"]: r["sees_prices"] for r in _switches(client, "owner")}["later@example.test"] is False
+    assert _switch(client, "later@example.test", True).status_code == 200
+    assert {r["email"]: r["sees_prices"] for r in _switches(client, "owner")}["later@example.test"] is True
+
+
+@pytest.mark.parametrize("who", ("member-eng", "viewer", "stranger", "other"))
+def test_no_other_caller_gets_the_switch_list(client, who):
+    got = client.get("/api/projects/alpha", headers=_h(who))
+    if got.status_code == 200:
+        assert "member_switches" not in got.json()
+    if who != "other":                    # "other" owns the project beta and gets the list of THAT project only
+        assert "member_switches" not in client.get("/api/projects", headers=_h(who)).text
+
+
+def test_a_re_role_keeps_the_flag_and_an_owner_role_drops_it(client):
+    assert _invite(client, "later@example.test", "engineer", sees_prices=True).status_code == 200
+    assert _invite(client, "later@example.test", "customer").status_code == 200                       # None keeps it
+    assert {r["email"]: r["sees_prices"] for r in _switches(client, "owner")}["later@example.test"] is True
+    assert _invite(client, "later@example.test", "owner").status_code == 200
+    got = [p for p in store.get_project("alpha")["pending_invites"] if p["email"] == "later@example.test"][0]
+    assert got["role"] == "owner" and "sees_prices" not in got
+    assert _invite(client, "later@example.test", "customer").status_code == 200                       # back down: no stale flag
+    assert {r["email"]: r["sees_prices"] for r in _switches(client, "owner")}["later@example.test"] is False
+
+
+def test_a_revoked_member_who_is_invited_again_starts_without_the_flag(client):
+    _complete(client)
+    _share(client)
+    assert _switch(client, "viewer@example.test", True).status_code == 200
+    assert _quote(client, "viewer").status_code == 200
+    assert _switch(client, "viewer@example.test", False).status_code == 200
+    assert _quote(client, "viewer").status_code == 404
+    assert client.delete("/api/projects/alpha/members?email=viewer@example.test", headers=_h("owner")).status_code == 200
+    assert "viewer@example.test" not in {r["email"] for r in _switches(client, "owner")}
+    assert _invite(client, "viewer@example.test").status_code == 200
+    assert {r["email"]: r["sees_prices"] for r in _switches(client, "owner")}["viewer@example.test"] is False
+
+
+def test_the_access_matrix_with_a_populated_next_unit(client):
+    """Owners, admin and the switched-on member read the quote including the next unit; everybody else gets the same 404."""
+    _complete(client)
+    assert _share(client).status_code == 200
+    assert _switch(client, "viewer@example.test", True).status_code == 200
+    for who in ("owner", "owner2", "admin", "viewer", "staff"):
+        assert _quote(client, who).status_code == 200, who
+    for who in ("member-eng", "stranger", "other"):
+        assert _quote(client, who).status_code == 404, who
+    assert _quote(client, "").status_code in (401, 403)
+
+
+# ── the central identity rule, indirect permission changes, durable audit, dry list (Astra 2026-11-23) ──────────────────────────
+
+from motor_ai_sim.development import access  # noqa: E402
+
+
+def _members(*rows):
+    store.mutate_project("alpha", lambda p: p["members"].extend(rows))
+
+
+def _events(project="alpha", action="sees_prices"):
+    path = store._file(project, "audit.jsonl")
+    rows = [json.loads(x) for x in path.read_text(encoding="utf-8").splitlines() if x.strip()] if path.exists() else []
+    return [r for r in rows if r["action"] == action]
+
+
+def test_the_identity_rule_comes_before_roles_and_flags(client):
+    """A factory account (global role oem) never sees prices - owner role or flag or not; staff always; the flag only for the rest."""
+    _complete(client)
+    _share(client)
+    _members({"email": "factory@example.test", "role": "owner"}, {"email": "flagged@example.test", "role": "customer", "sees_prices": True})
+    assert _quote(client, "factory-owner").status_code == 404
+    assert _quote(client, "factory-flagged").status_code == 404
+    assert client.get("/api/projects/alpha", headers=_h("factory-owner")).json()["quote_shared"] is False
+    assert _quote(client, "staff").status_code == 200 and _quote(client, "admin").status_code == 200
+    project = store.get_project("alpha")
+    assert access.sees_prices({"email": "staff@example.test", "role": "engineer"}, project) is True
+    assert access.sees_prices({"email": "factory@example.test", "role": "oem"}, project) is False
+    assert access.sees_prices(None, project) is False
+
+
+def test_an_agent_never_sees_prices_whatever_the_account(client):
+    project = store.get_project("alpha")
+    for who in ("owner", "admin", "staff"):
+        assert access.sees_prices(USERS[who], project) is True
+        with auth.use_agent_user(USERS[who]):
+            assert access.sees_prices(USERS[who], project) is False and access.can_manage_prices(USERS[who], project) is False
+
+
+def test_a_recipient_known_by_address_is_resolved_by_account(client, monkeypatch):
+    from motor_ai_sim import users as U
+    accounts = {"customer@example.test": {"role": "user"}, "factory@example.test": {"role": "oem"}, "staff@example.test": {"role": "engineer"},
+                "off@example.test": {"role": "admin", "disabled": True}}
+    monkeypatch.setattr(U, "get_user", lambda email: accounts.get(str(email).strip().lower()))
+    _members({"email": "factory@example.test", "role": "owner"}, {"email": "off@example.test", "role": "owner"})
+    project = store.get_project("alpha")
+    got = {e: access.sees_prices_email(e, project) for e in accounts}
+    assert got == {"customer@example.test": True, "factory@example.test": False, "staff@example.test": True, "off@example.test": False}
+    assert access.sees_prices_email("nobody@example.test", project) is False
+
+
+def test_a_project_engineer_cannot_demote_or_remove_a_price_holder(client, monkeypatch):
+    """Astra: re-posting an existing owner as customer, or DELETE of an owner / flagged member, revoked price access indirectly."""
+    from motor_ai_sim import users as U
+    from motor_ai_sim.development import motors as MO
+    monkeypatch.setattr(U, "get_user", lambda email: {"role": "user"})          # every address has an account: members, not pending
+    monkeypatch.setattr(MO, "_sync_grants", lambda *a, **k: None)               # the motor grants are not under test
+    _complete(client)
+    _share(client)
+    assert _switch(client, "viewer@example.test", True).status_code == 200
+    add = lambda body, who: client.post("/api/projects/alpha/members", json=body, headers=_h(who))        # noqa: E731
+    assert add({"email": "owner2@example.test", "role": "customer"}, "member-eng").status_code == 403
+    assert add({"email": "owner2@example.test", "role": "engineer"}, "member-eng").status_code == 403
+    assert client.delete("/api/projects/alpha/members?email=owner2@example.test", headers=_h("member-eng")).status_code == 403
+    assert client.delete("/api/projects/alpha/members?email=viewer@example.test", headers=_h("member-eng")).status_code == 403
+    assert _quote(client, "owner2").status_code == 200 and _quote(client, "viewer").status_code == 200
+    # the same re-post without any change of the grant stays allowed (flag kept by None)
+    assert add({"email": "viewer@example.test", "role": "customer"}, "member-eng").status_code == 200
+    assert _quote(client, "viewer").status_code == 200
+    # an owner and staff may do it
+    assert add({"email": "viewer@example.test", "role": "engineer", "sees_prices": False}, "owner").status_code == 200
+    assert _quote(client, "viewer").status_code == 404
+    assert client.delete("/api/projects/alpha/members?email=owner2@example.test", headers=_h("owner")).status_code == 200
+
+
+def test_global_engineers_may_switch_the_flag(client):
+    assert _switch(client, "viewer@example.test", True, "staff").status_code == 200
+    assert _switch(client, "viewer@example.test", False, "staff").status_code == 200
+    assert [r["actor_email"] for r in _events()] == ["staff@example.test", "staff@example.test"]
+
+
+def test_the_price_audit_is_committed_with_the_change(client, monkeypatch):
+    """Astra reproduction: a failing audit append used to leave the flag on with no row, and the retry recorded nothing."""
+    real = store.append_jsonl
+
+    def broken(project_id, name, entry):
+        if name == "audit.jsonl":
+            raise OSError("disk full")
+        return real(project_id, name, entry)
+
+    monkeypatch.setattr(store, "append_jsonl", broken)
+    resp = _switch(client, "viewer@example.test", True)
+    assert resp.status_code == 200                                              # the change stands ...
+    project = store.get_project("alpha")
+    assert [m for m in project["members"] if m["email"] == "viewer@example.test"][0]["sees_prices"] is True
+    pending = project["pending_audit"]                                           # ... and its row is stored WITH it
+    assert [(e["action"], e["entity_id"], e["details"]) for e in pending] == [("sees_prices", "viewer@example.test", {"from": False, "to": True})]
+    assert _events() == []
+    monkeypatch.setattr(store, "append_jsonl", real)
+    assert "pending_audit" not in client.get("/api/projects/alpha", headers=_h("owner")).json()
+    assert _switch(client, "viewer@example.test", True).status_code == 200      # any later call writes the pending row once
+    rows = _events()
+    assert [(r["actor_email"], r["entity_id"], r["details"]["from"], r["details"]["to"]) for r in rows] == [
+        ("customer@example.test", "viewer@example.test", False, True)]
+    assert "pending_audit" not in store.get_project("alpha")
+    assert _switch(client, "viewer@example.test", True).status_code == 200      # no change: no new row
+    assert len(_events()) == 1
+
+
+def test_role_changes_and_removals_of_a_price_holder_are_audited_with_old_and_new(client):
+    assert client.post("/api/projects/alpha/members", json={"email": "owner2@example.test", "role": "customer"}, headers=_h("owner")).status_code == 200
+    assert client.delete("/api/projects/alpha/members?email=viewer@example.test", headers=_h("owner")).status_code == 200      # no grant: no row
+    assert _switch(client, "later@example.test", True).status_code == 404
+    assert _switch(client, "eng@example.test", True).status_code == 200
+    assert client.delete("/api/projects/alpha/members?email=eng@example.test", headers=_h("owner")).status_code == 200
+    got = [(r["entity_id"], r["details"]["from"], r["details"]["to"]) for r in _events()]
+    assert got == [("owner2@example.test", True, False), ("eng@example.test", False, True), ("eng@example.test", True, False)]
+
+
+def test_the_dry_list_compares_before_and_after_per_account(client, tmp_path):
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("dry_list", __import__("pathlib").Path(__file__).resolve().parents[1] / "scripts" / "quote_price_visibility_dry_list.py")
+    dry = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(dry)
+    _complete(client)
+    _share(client)
+    _members({"email": "factory@example.test", "role": "owner"})
+    users_file = tmp_path / "users.json"
+    users_file.write_text(json.dumps({
+        "admin@example.test": {"role": "admin"}, "staff@example.test": {"role": "engineer"}, "customer@example.test": {"role": "user"},
+        "viewer@example.test": {"role": "user"}, "eng@example.test": {"role": "user"}, "owner2@example.test": {"role": "user"},
+        "factory@example.test": {"role": "oem"}}), encoding="utf-8")
+    accounts, bad = dry.load_accounts(users_file)
+    assert bad is None
+    rows, problems = dry.scan(tmp_path / "projects", accounts)
+    row = [r for r in rows if r["project"] == "alpha"][0]
+    assert problems == [] and row["snapshot_readable"] is True
+    assert sorted(row["lose_the_view"]) == ["eng@example.test", "factory@example.test", "viewer@example.test"]
+    assert row["gain_the_view"] == ["staff@example.test"]                   # admin keeps it, staff gains it
+    assert row["members_without_account"] == []
+
+
+def test_the_dry_list_reports_unreadable_inputs_instead_of_skipping(client, tmp_path):
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("dry_list2", __import__("pathlib").Path(__file__).resolve().parents[1] / "scripts" / "quote_price_visibility_dry_list.py")
+    dry = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(dry)
+    _complete(client)
+    _share(client)
+    root = tmp_path / "projects"
+    snap = sorted((root / "alpha" / "cost_estimate" / "snapshots").glob("*.json"))[-1]
+    snap.write_text("{broken", encoding="utf-8")
+    (root / "beta" / "cost_estimate").mkdir(parents=True, exist_ok=True)
+    (root / "beta" / "cost_estimate" / "shared_quote.json").write_text("not json", encoding="utf-8")
+    rows, problems = dry.scan(root, {})
+    assert {(p["project"], p["input"]) for p in problems} == {("alpha", "shared snapshot"), ("beta", "cost_estimate/shared_quote.json")}
+    assert [r for r in rows if r["project"] == "alpha"][0]["snapshot_readable"] is False
+    _, bad = dry.load_accounts(tmp_path / "missing_users.json")
+    assert bad is None or "users file" in bad
+    users_file = tmp_path / "u.json"
+    users_file.write_text("[1", encoding="utf-8")
+    assert "users file" in dry.load_accounts(users_file)[1]
+    assert dry.main(["--root", str(root), "--users", str(users_file)]) == 1
+
+
+# ── Astra round 2 (2026-11-23) ────────────────────────────────────────────────────────────────────────────────────────────────
+
+def test_a_flagged_project_engineer_cannot_make_himself_an_owner(client, monkeypatch):
+    """Old and new price grants are both true, yet entering owner authority needs can_manage_prices."""
+    from motor_ai_sim import users as U
+    from motor_ai_sim.development import motors as MO
+    monkeypatch.setattr(U, "get_user", lambda email: {"role": "user"})
+    monkeypatch.setattr(MO, "_sync_grants", lambda *a, **k: None)
+    assert _switch(client, "eng@example.test", True).status_code == 200
+    add = lambda body, who: client.post("/api/projects/alpha/members", json=body, headers=_h(who))        # noqa: E731
+    assert add({"email": "eng@example.test", "role": "owner"}, "member-eng").status_code == 403
+    assert add({"email": "new@example.test", "role": "owner"}, "member-eng").status_code == 403
+    role = {m["email"]: m["role"] for m in store.get_project("alpha")["members"]}
+    assert role["eng@example.test"] == "engineer" and "new@example.test" not in role
+    assert add({"email": "eng@example.test", "role": "owner"}, "owner").status_code == 200             # an owner may
+    assert add({"email": "owner2@example.test", "role": "engineer"}, "viewer").status_code in (403, 404)   # leaving owner is gated too
+
+
+def test_concurrent_member_changes_and_the_flag_switch_both_survive(client, monkeypatch):
+    """POST /members used to write a snapshot over a PATCH that ran meanwhile (grant and audit intent lost)."""
+    import threading
+    import time
+    from motor_ai_sim import users as U
+    from motor_ai_sim.development import motors as MO
+    monkeypatch.setattr(U, "get_user", lambda email: {"role": "user"})
+    inside, release = threading.Event(), threading.Event()
+
+    def slow_sync(*a, **k):                         # runs inside the membership change, before its write
+        inside.set()
+        time.sleep(0.4)
+
+    monkeypatch.setattr(MO, "_sync_grants", slow_sync)
+    out = {}
+    t1 = threading.Thread(target=lambda: out.update(post=_invite(client, "late@example.test", "customer", sees_prices=True)))
+    t1.start()
+    assert inside.wait(5)
+    out["patch"] = _switch(client, "viewer@example.test", True)                  # starts while the POST is mid-change
+    t1.join(10)
+    assert out["post"].status_code == 200 and out["patch"].status_code == 200
+    project = store.get_project("alpha")
+    flags = {m["email"]: m.get("sees_prices") for m in [*project["members"], *project.get("pending_invites", [])]}
+    assert flags.get("viewer@example.test") is True and flags.get("late@example.test") is True
+    pending = project.get("pending_audit", [])
+    done = {r["entity_id"] for r in _events()} | {e["entity_id"] for e in pending}
+    assert {"viewer@example.test", "late@example.test"} <= done
+
+
+def test_the_project_payload_names_who_manages_prices(client):
+    got = {who: client.get("/api/projects/alpha", headers=_h(who)).json().get("can_manage_prices") for who in
+           ("owner", "owner2", "admin", "staff", "member-eng", "viewer")}
+    assert got == {"owner": True, "owner2": True, "admin": True, "staff": True, "member-eng": False, "viewer": False}
+    assert [r["email"] for r in _switches(client, "staff")]                      # staff get the member list for the switches
+
+
+def _dry():
+    import importlib.util
+    import pathlib
+    spec = importlib.util.spec_from_file_location("dry_list3", pathlib.Path(__file__).resolve().parents[1] / "scripts" / "quote_price_visibility_dry_list.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def test_the_dry_list_does_not_count_accountless_members_as_previous_readers(client, tmp_path):
+    dry = _dry()
+    _complete(client)
+    _share(client)
+    accounts = {"admin@example.test": "admin", "customer@example.test": "user", "owner2@example.test": "user"}     # viewer / eng: no account
+    rows, problems = dry.scan(tmp_path / "projects", accounts)
+    row = [r for r in rows if r["project"] == "alpha"][0]
+    assert problems == []
+    assert row["lose_the_view"] == [] and set(row["members_without_account"]) == {"viewer@example.test", "eng@example.test"}
+
+
+def test_the_dry_list_gives_no_lists_for_an_unreadable_snapshot_and_reports_corrupt_projects(client, tmp_path):
+    dry = _dry()
+    _complete(client)
+    _share(client)
+    root = tmp_path / "projects"
+    sorted((root / "alpha" / "cost_estimate" / "snapshots").glob("*.json"))[-1].write_text("{x", encoding="utf-8")
+    (root / "gamma").mkdir()
+    (root / "gamma" / "project.json").write_text("{corrupt", encoding="utf-8")        # no share at all
+    rows, problems = dry.scan(root, {"admin@example.test": "admin"})
+    row = [r for r in rows if r["project"] == "alpha"][0]
+    assert row["snapshot_readable"] is False and row["lose_the_view"] is None and row["gain_the_view"] is None
+    assert {(p["project"], p["input"]) for p in problems} == {("alpha", "shared snapshot"), ("gamma", "project.json")}
+
+
+def test_the_contract_answers_a_hidden_and_an_unknown_project_alike(client):
+    store.mutate_project("alpha", lambda p: None)
+    hidden = client.get("/api/projects/alpha/contract", headers=_h("viewer"))
+    unknown = client.get("/api/projects/nope/contract", headers=_h("viewer"))
+    assert hidden.status_code == unknown.status_code == 404 and hidden.json() == unknown.json()
+
+
+# ── Astra round 3 (2026-11-23) ────────────────────────────────────────────────────────────────────────────────────────────────
+
+def _accounts(monkeypatch):
+    from motor_ai_sim import users as U
+    from motor_ai_sim.development import motors as MO
+    monkeypatch.setattr(MO, "_sync_grants", lambda *a, **k: None)
+    return U
+
+
+def test_a_revoked_owner_invite_is_not_claimed_from_a_stale_copy(client, monkeypatch):
+    from motor_ai_sim.development import routes as RT
+    U = _accounts(monkeypatch)
+    assert _invite(client, "late@example.test", "owner").status_code == 200
+    assert [p["role"] for p in store.get_project("alpha")["pending_invites"] if p["email"] == "late@example.test"] == ["owner"]
+
+    def revoke_then_account(email):                       # the invite is withdrawn after claim_pending_invites read it
+        store.mutate_project("alpha", lambda p: p.update(pending_invites=[i for i in p["pending_invites"] if i["email"] != "late@example.test"]))
+        return {"role": "user"}
+
+    monkeypatch.setattr(U, "get_user", revoke_then_account)
+    assert RT.claim_pending_invites("late@example.test") == []
+    project = store.get_project("alpha")
+    assert "late@example.test" not in {m["email"] for m in project["members"] + project["pending_invites"]}
+
+
+def test_a_claim_takes_the_current_role_and_flag_of_the_invite(client, monkeypatch):
+    from motor_ai_sim.development import routes as RT
+    U = _accounts(monkeypatch)
+    assert _invite(client, "late@example.test", "owner").status_code == 200
+
+    def downgrade_then_account(email):                    # an owner demoted the invite to a flagged-off customer meanwhile
+        def demote(p):
+            for i in p["pending_invites"]:
+                if i["email"] == "late@example.test":
+                    i["role"] = "customer"
+        store.mutate_project("alpha", demote)
+        return {"role": "user"}
+
+    monkeypatch.setattr(U, "get_user", downgrade_then_account)
+    assert RT.claim_pending_invites("late@example.test") == ["alpha"]
+    project = store.get_project("alpha")
+    assert [m["role"] for m in project["members"] if m["email"] == "late@example.test"] == ["customer"]
+    assert "late@example.test" not in {i["email"] for i in project["pending_invites"]}
+
+
+def test_a_failed_index_write_undoes_only_its_own_change(client, monkeypatch):
+    """The rollback used to restore the old WHOLE document, erasing a concurrent PATCH's grant and audit intent."""
+    U = _accounts(monkeypatch)
+    monkeypatch.setattr(U, "get_user", lambda email: {"role": "user"})
+    real = store.sync_membership_index
+    calls = {"n": 0}
+
+    def failing(project_id, old, new):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            assert _switch(client, "viewer@example.test", True).status_code == 200      # a PATCH lands before the rollback
+            raise OSError("index write failed")
+        return real(project_id, old, new)
+
+    monkeypatch.setattr(store, "sync_membership_index", failing)
+    with pytest.raises(OSError):
+        _invite(client, "late@example.test", "customer", sees_prices=True)
+    monkeypatch.setattr(store, "sync_membership_index", real)
+    project = store.get_project("alpha")
+    assert {m["email"]: m.get("sees_prices") for m in project["members"]}["viewer@example.test"] is True       # the PATCH grant survives
+    assert "late@example.test" not in {m["email"] for m in [*project["members"], *project.get("pending_invites", [])]}     # the POST is undone
+    _flush = __import__("motor_ai_sim.development.routes", fromlist=["x"])._flush_price_audit
+    _flush("alpha")
+    assert "viewer@example.test" in [r["entity_id"] for r in _events()]            # the PATCH's audit intent survives
+    assert [r["entity_id"] for r in _events(action="sees_prices_undone")] == ["late@example.test"]   # a flushed row of the undone POST is answered

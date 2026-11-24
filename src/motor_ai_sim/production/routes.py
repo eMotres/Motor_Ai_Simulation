@@ -1037,7 +1037,7 @@ def _process_step_images(die: str, config: str, user: dict, production: dict,
             part = part_by_id.get(part_id) or {}
             for drawing in part.get("drawing_files", []) or []:
                 if (isinstance(drawing, dict) and drawing.get("kind") == "png" and
-                        not str(drawing.get("name") or "").startswith("[superseded") and
+                        not models.is_superseded({"name": drawing.get("name")}) and
                         str(drawing.get("file_id") or "") not in document_file_ids and
                         str(drawing.get("file_id") or "") not in superseded_file_ids):
                     part_value = part.get("name")
@@ -1193,23 +1193,56 @@ def list_documents(request: Request, die: str, config: str):
 
 @router.patch("/{die}/{config}/documents/{doc_id}")
 async def patch_document(request: Request, die: str, config: str, doc_id: str):
-    """Editors mark a document internal (hidden from the factory) or not."""
+    """Editors mark a document internal (hidden from the factory) or not, move it between Documents and Certification
+    (``section``: ``"certification"`` | ``null``) and set its certification ``group`` label and ``cert_status``; ``topic`` (one of
+    :data:`models.DOCUMENT_TOPICS`, or ``null`` to go back to the derived topic) files it under a topic of the Documents tab."""
     user, _production = require_editor_with_full_view(request, die, config)
     body = await request.json()
-    if not isinstance(body, dict) or "internal" not in body:
+    if not isinstance(body, dict) or not any(k in body for k in ("internal", "section", "group", "cert_status", "topic")):
+        raise HTTPException(status_code=400, detail="internal, section, group, cert_status or topic expected")
+    if "topic" in body and body["topic"] is not None and body["topic"] not in models.DOCUMENT_TOPICS:     # null clears; "" is refused
+        raise HTTPException(status_code=422, detail="topic: %s or null expected" % " | ".join(models.DOCUMENT_TOPICS))
+    if "internal" in body and not isinstance(body.get("internal"), bool):
         raise HTTPException(status_code=400, detail="internal: true | false expected")
-    flag = bool(body.get("internal"))
+    if body.get("section") not in (None, "", *models.DOCUMENT_SECTIONS):
+        raise HTTPException(status_code=422, detail="section: 'certification' or null expected")
+    if body.get("cert_status") is not None and body.get("cert_status") not in models.CERT_STATUSES:
+        raise HTTPException(status_code=422, detail="cert_status: %s expected" % " | ".join(models.CERT_STATUSES))
     found = {}
 
     def mut(d):
         for doc in d.get("documents", []):
-            if doc.get("id") == doc_id:
-                doc["internal"] = flag
-                found["doc"] = doc
+            if doc.get("id") != doc_id:
+                continue
+            if "internal" in body:
+                doc["internal"] = body["internal"]
+            if "topic" in body:
+                if body.get("topic"):
+                    doc["topic"] = body["topic"]
+                else:
+                    doc.pop("topic", None)
+            if "section" in body:
+                if body.get("section"):
+                    doc.update(models.normalize_certification_fields({
+                        "section": "certification",
+                        "group": body["group"] if "group" in body else doc.get("group"),
+                        "cert_status": body["cert_status"] if body.get("cert_status") else doc.get("cert_status")}))
+                else:      # back to the normal Documents list
+                    for k in ("section", "group", "cert_status"):
+                        doc.pop(k, None)
+            elif models.is_certification(doc):
+                if "group" in body:
+                    doc["group"] = models.normalize_certification_fields({"section": "certification", "group": body["group"]})["group"]
+                if body.get("cert_status"):
+                    doc["cert_status"] = body["cert_status"]
+            elif "group" in body or body.get("cert_status"):
+                raise HTTPException(status_code=422, detail="group and cert_status belong to a certification document")
+            found["doc"] = doc
     store.mutate_file(die, config, "documents.json", mut)
     if not found:
         raise HTTPException(status_code=404, detail="Document not found")
-    _audit(_email(user), die, config, "update", "document", doc_id, {"internal": flag})
+    _audit(_email(user), die, config, "update", "document", doc_id,
+           {k: body[k] for k in ("internal", "section", "group", "cert_status", "topic") if k in body})
     return found["doc"]
 
 
@@ -1319,7 +1352,20 @@ async def upload_document(request: Request, die: str, config: str):
     step_id = str(step_id).strip()[:40] if step_id else None
     if step_id and not all(c.isalnum() or c in "-_" for c in step_id):
         raise HTTPException(status_code=422, detail="bad step id")
-    doc = models.normalize_document({"step_id": step_id}, file_id, _email(user), str(uploaded.filename or "unnamed"),
+    raw = {"step_id": step_id}
+    section = str(form.get("section") or "").strip().lower()
+    if section:
+        if section not in models.DOCUMENT_SECTIONS:
+            raise HTTPException(status_code=422, detail="section: 'certification' expected")
+        # certification drafts are staff work: owner / engineer / admin only, internal unless said otherwise
+        if not access.can_edit(user["email"], _production, access.is_admin(user)):
+            raise HTTPException(status_code=403, detail="Editor access required.")
+        cert_status = str(form.get("cert_status") or "draft").strip().lower()
+        if cert_status not in models.CERT_STATUSES:
+            raise HTTPException(status_code=422, detail="cert_status: %s expected" % " | ".join(models.CERT_STATUSES))
+        internal = str(form.get("internal") or "true").strip().lower() not in ("0", "false", "no", "off")
+        raw.update(section=section, group=str(form.get("group") or ""), cert_status=cert_status, internal=internal)
+    doc = models.normalize_document(raw, file_id, _email(user), str(uploaded.filename or "unnamed"),
                                     part_id if part_id else None)
     store.mutate_file(die, config, "documents.json", lambda d: d.setdefault("documents", []).append(doc))
     _touch(die, config)
@@ -1476,7 +1522,7 @@ def _part_files(die: str, config: str, user: dict, production: dict, list_name: 
             if not fid or fid in found or fid in sup_ids or not _file_download_allowed(fid, die, config, user, production, blocked):
                 return
             nm = str(name or _original_name(die, config, fid) or "")
-            if nm.startswith("[superseded"):
+            if models.is_superseded({"name": nm}):
                 return
             kind = forced or _VIEW_KIND.get(PurePosixPath(nm.lower()).suffix)
             if kind is None or store.read_uploaded_file(die, config, fid) is None:
@@ -2117,6 +2163,14 @@ def _revision_inputs(body: Any) -> tuple:
     return summary_norm, changes_norm, supersedes
 
 
+def _urgent_flag(body: Any) -> bool:
+    """"Urgent: mail now" of a publish / preview request (default off): only an explicit true counts."""
+    if not isinstance(body, dict):
+        return False
+    v = body.get("urgent")
+    return v is True or str(v).strip().lower() in ("1", "true", "yes", "on")
+
+
 def _require_change_line(changes: list, supersedes: list) -> None:
     """A revision that replaces a file needs at least one change line saying what changed (owner 2026-11-15)."""
     if supersedes and not any(models.bilingual_has_text(c) for c in changes):
@@ -2181,7 +2235,8 @@ async def preview_revision(request: Request, die: str, config: str):
     """The exact mail the publish would send and who gets it - nothing is written or sent (owner rule: he sees the final text and the
     recipients first; publishing is sending)."""
     user, production = require_editor_with_full_view(request, die, config)
-    summary, changes, supersedes = _revision_inputs(await _json_or_form(request))
+    body = await _json_or_form(request)
+    summary, changes, supersedes = _revision_inputs(body)
     existing = store.load_file(die, config, "revisions.json").get("revisions", [])
     number = models.next_revision_number(existing)
     try:
@@ -2190,15 +2245,17 @@ async def preview_revision(request: Request, die: str, config: str):
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc))
     revision = models.normalize_revision({"number": number, "author_email": _email(user), "summary": summary, "changes": changes, "files": files})
-    return revision_alert.preview(die, config, production, revision)
+    return revision_alert.preview(die, config, production, revision, urgent=_urgent_flag(body))
 
 
 @router.post("/{die}/{config}/revisions")
 async def publish_revision(request: Request, die: str, config: str):
     user, _production = require_editor_with_full_view(request, die, config)
-    summary_norm, changes_norm, supersedes = _revision_inputs(await _json_or_form(request))
+    body = await _json_or_form(request)
+    summary_norm, changes_norm, supersedes = _revision_inputs(body)
     try:
-        return await run_in_threadpool(_publish_revision, die, config, user, summary_norm, changes_norm, supersedes=supersedes)
+        return await run_in_threadpool(_publish_revision, die, config, user, summary_norm, changes_norm, supersedes=supersedes,
+                                       urgent=_urgent_flag(body))
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc))
 
@@ -2228,9 +2285,10 @@ async def ack_revision(request: Request, die: str, config: str, rev_number: str)
 
 
 def _publish_revision(die: str, config: str, user: dict, summary: dict, changes: list, *, supersedes: Optional[list] = None,
-                      notify: bool = True) -> dict:
-    """Publish a revision.  PUBLISHING IS SENDING (owner 2026-11-15): unless ``notify`` is False (tests of the bookkeeping only) the alert
-    goes to every member by mail and into the Discussion, and the record of who was mailed is stored on the revision and in the audit.
+                      notify: bool = True, urgent: bool = False) -> dict:
+    """Publish a revision.  Unless ``notify`` is False (tests of the bookkeeping only) the alert goes into the Discussion at once and the
+    revision waits for the members' daily digest (owner 2026-11-19); only ``urgent`` ("urgent: mail now", default off) mails every member
+    now (owner 2026-11-15 rule kept for a released drawing change).  The record is stored on the revision and in the audit.
     Marks the files it supersedes (kept, archived).  Server-side scripts and bulk tools publish through this function too."""
     existing = store.load_file(die, config, "revisions.json").get("revisions", [])
     number = models.next_revision_number(existing)
@@ -2251,7 +2309,7 @@ def _publish_revision(die: str, config: str, user: dict, summary: dict, changes:
     _audit(_email(user), die, config, "publish_revision", "revision", number, {"revision": revision})
     if notify:
         production = store.load_file(die, config, "production.json")
-        alert = revision_alert.deliver(die, config, production, revision, _email(user))
+        alert = revision_alert.deliver(die, config, production, revision, _email(user), urgent=urgent)
         def attach(d):                                   # returns None: json_store would take a return value as the new file content
             for r in d.get("revisions", []):
                 if isinstance(r, dict) and str(r.get("number")) == number:
@@ -2259,7 +2317,8 @@ def _publish_revision(die: str, config: str, user: dict, summary: dict, changes:
 
         store.mutate_file(die, config, "revisions.json", attach)
         _audit(_email(user), die, config, "revision_alert", "revision", number,
-               {"recipients": alert["recipients"], "subject": alert["subject"], "thread_id": alert.get("thread_id")})
+               {"recipients": alert["recipients"], "subject": alert["subject"], "thread_id": alert.get("thread_id"),
+                "mode": alert.get("mode")})
         revision = {**revision, "alert": alert}
     return revision
 
@@ -2457,7 +2516,7 @@ async def _json_or_form(request: Request):
 @router.get("/{die}/{config}/assembly_process")
 def get_assembly_process(request: Request, die: str, config: str):
     from motor_ai_sim.production import process_steps as PS
-    access.require_member(request, die, config)
+    access.require_member_with_full_view(request, die, config)          # the same NDA / full-view gate as the neighbouring reads
     parts = store.load_file(die, config, "parts.json").get("parts") or []
     return PS.view(store.load_file(die, config, "assembly_process.json"), parts,
                    models.product_type_of(access.load_production(die, config)))

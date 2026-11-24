@@ -322,6 +322,8 @@ export interface ProcessSection {
   };
 }
 
+export type CertStatus = 'draft' | 'signed' | 'evidence_received';
+
 export interface DocumentRec {
   id: string;
   uploader_email: string;
@@ -333,10 +335,18 @@ export interface DocumentRec {
   internal?: boolean;
   /** a picture posted to one assembly step */
   step_id?: string | null;
+  /** `certification`: filed in the Certification tab; missing = the normal Documents list */
+  section?: 'certification';
+  /** Certification tab: free-text group label the list is grouped by */
+  group?: string;
+  /** Certification tab: draft / signed / evidence received (`status` stays reserved for `superseded`) */
+  cert_status?: CertStatus;
   /** `superseded`: replaced by a newer file in a published revision; the file is kept, downloads warn */
   status?: 'superseded';
   superseded_by?: { doc_id: string; name: string; version: string | null; revision: string };
   archived_at?: string;
+  /** the topic an editor filed the document under (Documents tab); missing = derived (documentTopics.topicOf) */
+  topic?: 'process' | 'drawings' | 'tooling' | 'tests' | 'packaging' | 'photos' | 'general';
 }
 
 export interface Attachment { file_id: string; name: string }
@@ -403,7 +413,7 @@ export interface Revision {
 
 /** The exact message the publish would send (nothing is sent or written by asking for it). */
 export interface RevisionPreview {
-  number: string; subject: string; body: string; link: string; will_send: boolean;
+  number: string; subject: string; body: string; link: string; will_send: boolean; mode?: 'digest' | 'urgent';
   recipients: Array<{ email: string; role: string }>;
   files: { new: RevisionFileRow[]; superseded: RevisionFileRow[] };
 }

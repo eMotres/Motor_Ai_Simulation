@@ -287,8 +287,9 @@ def _send_verification(email: str, return_path: str = "", return_host: str = "",
     subj, body = E.verify_mail(email, url, return_path, return_host, zh=E.wants_zh(lang or _stored_lang(email), email))
     if not E.send(email, subj, body, kind="verify"):
         U.mark_pending_approval(email, "smtp_not_configured")
-        log.warning("auth: SMTP not configured - verification link for %s "
-                    "(or approve in Admin -> Pending sign-ups): %s", email, url)
+        # the link itself is never logged: whoever reads the log must not be able to confirm an address
+        log.warning("auth: the verification mail for %s was not sent (SMTP not configured or refused) "
+                    "- approve the account in Admin -> Pending sign-ups", email)
 
 
 def _valid_email(email: str) -> bool:
@@ -601,7 +602,7 @@ def _send_reset_mail(email: str) -> None:
     url = E.short_link("reset", sid)
     subj, body = E.reset_mail(email, url, zh=E.wants_zh(_stored_lang(email), email))
     if not E.send(email, subj, body, kind="reset"):
-        log.warning("auth: SMTP not configured - password-reset link for %s: %s", email, url)
+        log.warning("auth: the password-reset mail for %s was not sent (SMTP not configured or refused)", email)
 
 
 def _relay_reset(email: str, region: str) -> None:

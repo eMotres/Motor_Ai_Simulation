@@ -522,6 +522,8 @@ def build_workbook(parts: list, bom_rows: list, cost_rows: list, list_name: str)
     for column, width in zip("ABCDEFGHIJ", (20, 32, 24, 12, 10, 28, 28, 12, 9, 28)):
         ws.column_dimensions[column].width = width
     ws.freeze_panes = "A2"
+    from motor_ai_sim.spreadsheet_text import force_text_cells
+    force_text_cells(ws)                      # names, materials, notes are user text: text it stays, never a formula
     buffer = io.BytesIO()
     wb.save(buffer)
     return buffer.getvalue()

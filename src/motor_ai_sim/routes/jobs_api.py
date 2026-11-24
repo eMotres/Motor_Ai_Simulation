@@ -37,6 +37,11 @@ log = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/jobs", tags=["jobs"])
 
 
+def _may_read(owner: Any) -> bool:
+    """May this caller read a job of ``owner``?  The owner themself, or an admin."""
+    return bool(_WSP.is_admin()) or str(owner or "") == _JOBS.current_owner()
+
+
 def _with_progress(rec: "_JOBS.JobRecord") -> Dict[str, Any]:
     """One record + the live bar of the run it names.
 
@@ -81,31 +86,38 @@ def list_jobs(limit: int = 50, all: bool = False) -> Dict[str, Any]:
     out = {"owner": owner, "jobs": rows}
     snap = getattr(q, "snapshot", None)
     if snap is not None:
-        out["queue"] = snap()
+        qs = snap()
+        if not admin:
+            # the queue as COUNTS: the items carry other accounts' owners, workspaces and request bodies
+            qs = {k: v for k, v in qs.items() if k != "items"}
+        out["queue"] = qs
     return out
 
 
 @router.get("/{run_id}")
 def get_job(run_id: str) -> Dict[str, Any]:
-    """One job by run id — the record, its queue position and its progress.
+    """One job by run id - the record, its queue position and its progress.
 
-    Readable by anyone who has the id, like every other progress route: an id is
-    an opaque nonce, and a strip that 403s on the run it is drawing helps nobody.
-    Cancelling is the operation that checks ownership.
+    The caller's own job, or any job for an admin; anything else answers 404 exactly as an unknown id does, so the
+    answer does not tell whether somebody else's run exists.
     """
     rec = _JOBS.queue().status(run_id)
     if rec is None:
         from motor_ai_sim import compute_nodes as _CN
         rj = _CN.get_job(run_id)
         if rj is not None:
+            if not _may_read(rj.get("owner")):
+                raise HTTPException(status_code=404, detail="no such run")
             return _CN.public(rj)
-        # It may still have a progress entry — a solve that never went through
+        # It may still have a progress entry - a solve that never went through
         # the queue (a nested one, or a route not yet admitted) still reports.
         e = _PROG.registry().entry(run_id)
-        if e is None:
+        if e is None or (e.owner and not _may_read(e.owner)):
             raise HTTPException(status_code=404, detail="no such run")
         return {"run_id": run_id, "state": "unknown", "kind": e.kind,
                 "progress": {**e.snapshot(), "kind": e.kind}}
+    if not _may_read(rec.owner):
+        raise HTTPException(status_code=404, detail="no such run")
     return _with_progress(rec)
 
 

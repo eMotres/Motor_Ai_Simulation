@@ -470,8 +470,8 @@ ROW_TEXT_KEYS = frozenset({
 ROW_TEXT_PARENTS = frozenset({"text"})
 #: The only keys of an end-effect passport entry that cross (the admin ``note``, ``source`` paths ... stay on EU).
 PASSPORT_KEYS = frozenset({"k_flux", "k_flux_self", "fidelity", "generated_utc", "adopted_utc", "machine", "stack_mm",
-                           "k_flux_vs_L", "materials", "mesh", "k_torque", "k_t"})
-PASSPORT_TEXT_KEYS = frozenset({"fidelity", "generated_utc", "adopted_utc", "machine"})
+                           "k_flux_vs_L", "k_flux_vs_L_method", "materials", "mesh", "k_torque", "k_t"})
+PASSPORT_TEXT_KEYS = frozenset({"fidelity", "generated_utc", "adopted_utc", "machine", "k_flux_vs_L_method"})
 PASSPORT_TEXT_PARENTS = frozenset({"materials", "mesh"})
 SAFE_TOKEN = re.compile(r"[A-Za-z0-9 _.:+%-]{0,64}")
 PASSPORT_SAFE = re.compile(r"[A-Za-z0-9 _.:+%,()=/-]{0,80}")

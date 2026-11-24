@@ -121,6 +121,9 @@ export interface Passport {
   // points; scaleMotor interpolates it under the length slider.  Absent/null =
   // not measured — the tuner then shows honest 2D values, flagged as such.
   end3d?: { k_flux: number; k_flux_vs_L?: Record<string, number> | null;
+            /** how the table's rows were formed (Stage A, 2026-11-24 fix); absent on a multi-row table = stale */
+            k_flux_vs_L_method?: string | null;
+            stack_mm?: number | null;
             fidelity?: string;
             /** MEASURED 3-D torque factor (Stage B) — the only factor Kt / Km
              *  may carry (owner 2026-09-30); absent = Kt / Km stay 2-D */
@@ -291,6 +294,9 @@ export interface ScaledResult {
   /** 3D end-effect factor applied to T/EMF at this length (null = not measured,
    *  values are pure 2D). */
   k_end3d: number | null;
+  /** the passport's k(L) table was computed before the 2026-11-24 fix: only its
+   *  reference value is used (end3dKTable) and the card shows one flag */
+  k_end3d_stale: boolean;
   /** What the torque, P_mech, Kt, Km and Km/mass carry (owner 2026-09-30):
    *  "3-D" = the passport's MEASURED torque factor k_T, "3-D flux" = the flux
    *  factor k(L) (k_T not measured), "2-D" = no 3-D result.  EMF and KV
@@ -385,6 +391,35 @@ export function turnsFactor(p: Passport, k: Knobs): number {
 
 /** Instant analytical scaling of a passport to a new (length, turns, wire, I, rpm).
  *  `poles` (optional) enables ψ_PM — the electrical frequency needs it. */
+/** ``k_flux_vs_L_method`` values whose per-length rows are right (Stage A since 2026-11-24;
+ *  mirror of ``end3d_factors.K_FLUX_VS_L_METHODS_OK``). */
+export const K_FLUX_VS_L_METHODS_OK: ReadonlySet<string> = new Set(['own_mid_ratio', 'self_no_2d']);
+
+/** The k(L) points a reader may interpolate, sorted by length, and whether a stored table was refused as STALE
+ *  (mirror of ``end3d_factors.k_flux_table``).  A table with one row, or marked with a method above, is used as it is.
+ *  A multi-row table WITHOUT the marker was written before the 2026-11-24 fix (its rows but the reference one used the
+ *  reference length's mid-plane ratio): only the reference row is kept - the entry's ``stack_mm``, else the one row
+ *  equal to the scalar ``k_flux`` - and ``stale`` is true.  Marked and unmarked rows are never mixed. */
+export function end3dKTable(e3: Passport['end3d']): { pts: [number, number][]; stale: boolean } {
+  const m = e3?.k_flux_vs_L;
+  if (!e3 || !m) return { pts: [], stale: false };
+  // Entries, not key round-trips: the backend writes '35.0' and
+  // String(Number('35.0')) is '35' — the lookup missed its own key and a
+  // NaN k poisoned torque/EMF/KV across the card (measured live
+  // 2026-08-25: "a pile of empty cells").
+  const pts = Object.entries(m)
+    .map(([kk, vv]) => [Number(kk), Number(vv)] as [number, number])
+    .filter(([x, y]) => Number.isFinite(x) && Number.isFinite(y))
+    .sort((a, b) => a[0] - b[0]);
+  if (pts.length <= 1 || K_FLUX_VS_L_METHODS_OK.has(String(e3.k_flux_vs_L_method ?? ''))) return { pts, stale: false };
+  const k = Number(e3.k_flux);
+  if (!Number.isFinite(k)) return { pts: [], stale: true };
+  const own = Number(e3.stack_mm);
+  if (Number.isFinite(own) && own > 0) return { pts: [[own, k]], stale: true };
+  const ref = pts.filter(([, y]) => Math.abs(y - k) <= 5e-6);
+  return { pts: ref.length === 1 ? [[ref[0][0], k]] : [], stale: true };
+}
+
 export function scaleMotor(p: Passport, k: Knobs, poles?: number): ScaledResult {
   const fN = turnsFactor(p, k);
   const fL = p.L0_mm ? k.L_mm / p.L0_mm : 1;
@@ -402,29 +437,20 @@ export function scaleMotor(p: Passport, k: Knobs, poles?: number): ScaledResult 
   // as the raw 2D base.  Losses stay 2D (conservative, same convention as the
   // Simulation card).  Null when the machine has no Stage A measurement.
   const e3 = p.end3d;
+  const kTable = end3dKTable(e3);
   const kOfL = (L: number): number | null => {
     if (!e3) return null;
-    const m = e3.k_flux_vs_L;
-    if (m) {
-      // Entries, not key round-trips: the backend writes '35.0' and
-      // String(Number('35.0')) is '35' — the lookup missed its own key and a
-      // NaN k poisoned torque/EMF/KV across the card (measured live
-      // 2026-08-25: "a pile of empty cells").
-      const pts = Object.entries(m)
-        .map(([kk, vv]) => [Number(kk), Number(vv)] as [number, number])
-        .filter(([x, y]) => Number.isFinite(x) && Number.isFinite(y))
-        .sort((a, b) => a[0] - b[0]);
-      if (pts.length >= 2) {
-        const xs = pts.map((q) => q[0]);
-        const ys = pts.map((q) => q[1]);
-        // clamp, no extrapolation: beyond the measured L-range the end effect
-        // is unknown — the nearest measured point is the honest bound.
-        if (L <= xs[0]) return ys[0];
-        if (L >= xs[xs.length - 1]) return ys[xs.length - 1];
-        return interp(xs, ys, L);
-      }
-      if (pts.length === 1) return pts[0][1];
+    const pts = kTable.pts;
+    if (pts.length >= 2) {
+      const xs = pts.map((q) => q[0]);
+      const ys = pts.map((q) => q[1]);
+      // clamp, no extrapolation: beyond the measured L-range the end effect
+      // is unknown — the nearest measured point is the honest bound.
+      if (L <= xs[0]) return ys[0];
+      if (L >= xs[xs.length - 1]) return ys[xs.length - 1];
+      return interp(xs, ys, L);
     }
+    if (pts.length === 1) return pts[0][1];
     return e3.k_flux ?? null;
   };
   const kEnd = kOfL(k.L_mm);
@@ -629,6 +655,7 @@ export function scaleMotor(p: Passport, k: Knobs, poles?: number): ScaledResult 
     mass_winding_known: hasCopperMass || (k.N === p.N0 && k.wireH_mm === p.wireH0_mm),
     torque_per_mass: mass > 0 ? T / mass : 0,
     k_end3d: kEnd,
+    k_end3d_stale: kTable.stale,
     power_per_mass_W_kg: mass > 0 ? P_mech / mass : 0,
     loss_density_W_kg: mass > 0 ? P_loss / mass : 0,
     Vline_peak_V: Vphase * Math.sqrt(3),

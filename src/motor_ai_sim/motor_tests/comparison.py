@@ -341,25 +341,15 @@ def _info_groups(rec: Dict[str, Any], model: Dict[str, Any]) -> List[Dict[str, A
 # ---------------------------------------------------------------------------
 
 def _row_magnet_temp(row: Dict[str, Any], rec: Dict[str, Any], rows: List[Dict[str, Any]]) -> tuple:
-    """The magnet temperature a free-run row is scaled to, and where it came from."""
+    """The bench magnet temperature of a free-run row and where it came from: the row's own, else the record's; else unknown."""
     if num(row.get("magnet_temp_c")) is not None:
         return float(row["magnet_temp_c"]), "row"
     cond = rec.get("conditions") or {}
     if num(cond.get("magnet_temp_c")) is not None:
         return float(cond["magnet_temp_c"]), "record"
-    pts = sorted((float(r["rpm"]), float(r["temp_c"])) for r in rows
-                 if num(r.get("temp_c")) is not None and num(r.get("rpm")) is not None)
-    n = num(row.get("rpm"))
-    if pts and n is not None:
-        if n <= pts[0][0]:
-            return pts[0][1], "measured T"
-        if n >= pts[-1][0]:
-            return pts[-1][1], "measured T"
-        for (n0, t0), (n1, t1) in zip(pts, pts[1:]):
-            if n0 <= n <= n1:
-                return (t0 + (t1 - t0) * (n - n0) / (n1 - n0) if n1 > n0 else t0), "measured T"
-    if num(cond.get("ambient_c")) is not None:
-        return float(cond["ambient_c"]), "ambient"
+    # the row's general temperature column (``temp_c``) is the housing / bearing reading, not a magnet temperature: it is
+    # not borrowed (owner 2026-11-18)
+    # the ambient temperature is NOT a magnet temperature: the row stays "unknown" and is not compared
     return None, "unknown"
 
 
@@ -597,15 +587,9 @@ _TEMP_BASIS_TEXT = {
 
 
 def _temp_group_basis(rows_x: List[Dict[str, Any]]) -> Tuple[str, Dict[str, Any]]:
-    """``(suffix, params)`` of a group from its rows' ``emf_temp_*`` provenance: the least exact case present wins, so
-    the group never claims more than its weakest row - Br-scaled ``_ts`` > fitted ``_fit`` > a stored point at another
-    temperature ``_pt`` > exact (no suffix)."""
+    """``(suffix, params)`` of a group from its rows' ``emf_temp_*`` provenance: a stored point at another temperature
+    (within 10 K) ``_pt``, else exact (no suffix).  Rows that are not comparable carry no model value and are skipped."""
     xs = [x for x in rows_x if x.get("emf_temp_basis")]
-    if any(x["emf_temp_basis"] == C.TEMP_BR_SCALED for x in xs):
-        return "_ts", {}
-    fitted = [x for x in xs if x["emf_temp_basis"] == C.TEMP_FITTED]
-    if fitted:
-        return "_fit", {"el": "%.2f" % float(fitted[0]["emf_elasticity"])}
     off = [x for x in xs if x["emf_temp_basis"] == C.TEMP_STORED_POINT and x.get("magnet_temp_c") is not None
            and x.get("emf_model_temp_c") is not None
            and abs(float(x["emf_model_temp_c"]) - float(x["magnet_temp_c"])) > C.EMF_SAME_TEMP_K]
@@ -617,25 +601,14 @@ def _temp_group_basis(rows_x: List[Dict[str, Any]]) -> Tuple[str, Dict[str, Any]
 
 
 def _emf_temp_detail(tb: Dict[str, Any], t_mag: Optional[float], t_src: str) -> str:
-    """The row detail (EN) for how the simulated EMF of one free-run row reached the bench magnet temperature."""
+    """The row detail (EN) for how the simulated EMF of one free-run row was matched to the bench magnet temperature."""
     ref = tb["ref"]
     t0 = ref.get("magnet_temp_c")
     head = "no-load duty '%s' at %g rpm, magnet %s C" % (ref["duty"], ref["rpm"], "?" if t0 is None else "%g" % t0)
-    if tb["basis"] == C.TEMP_NO_BENCH_T:
-        return head + ", bench magnet temperature unknown: not scaled"
+    if not tb.get("comparable"):
+        return tb["reason"]
     bench = "%.0f C (%s)" % (t_mag, t_src)
-    if tb["basis"] == C.TEMP_STORED_POINT:
-        return head + ", bench %s: stored point within %g K, compared directly (speed only)" % (bench, C.EMF_DIRECT_TEMP_K)
-    if tb["basis"] == C.TEMP_FITTED:
-        fit = tb["fit"] or {}
-        return head + (" -> %s, x %.4f = (Br ratio %.4f) ^ %.3f, the EMF elasticity to Br fitted from this configuration's "
-                       "%s no-load temperatures (%.0f K span)"
-                       % (bench, tb["factor"], tb["br_ratio"], tb["elasticity"], fit.get("n"), fit.get("span_k", 0.0)))
-    note = ""
-    fit = tb.get("fit")
-    if fit and not fit.get("accepted"):
-        note = "; the fitted elasticity %.3f is outside %s and is not used" % (fit["elasticity"], C.EMF_ELASTICITY_RANGE)
-    return head + " -> %s, Br ratio %.4f: temperature-scaled with Br (approximate)%s" % (bench, tb["br_ratio"], note)
+    return head + ", bench %s: stored point within %g K, compared directly (speed only)" % (bench, C.EMF_DIRECT_TEMP_K)
 
 
 def _free_run(rec: Dict[str, Any], model: Dict[str, Any], die: str, config: str) -> Dict[str, Any]:
@@ -665,18 +638,30 @@ def _free_run(rec: Dict[str, Any], model: Dict[str, Any], die: str, config: str)
             if num(r.get("shaft_power_w")) is not None:
                 loss_rows.append(_row("loss", lbl, "W", r.get("shaft_power_w"), None, tip="loss", params=params))
             continue
-        # THE NO-LOAD LOSS keeps the point nearest in speed and loss ~ Br^2 (unchanged; a separate question)
-        ratio = C.br_ratio(pts, t_mag, ref.get("magnet_temp_c"))
-        # THE EMF (EMF audit 2026-11-07): EMF does not follow Br in a saturated rotor.  (a) a stored point within 10 K of
-        # the bench is compared directly; (b) else the elasticity fitted from this configuration's own no-load points;
-        # (c) else Br scaling, labelled approximate.  ``compare.emf_temperature_basis`` decides and says which.
+        # A ROW IS COMPARED ONLY at a matching magnet temperature (owner 2026-11-18, model-vs-bench investigation): the bench
+        # magnet temperature must be known and a stored no-load point of this configuration must lie within 10 K of it.
+        # The EMF and the no-load loss then use that point directly (speed scaling only); anything else is shown as
+        # "not comparable" and is NOT scaled with Br (the EMF) or Br^2 (the loss).
         tb = C.emf_temperature_basis(n, refs, pts, t_mag)
-        eref = tb["ref"]
+        if not tb["comparable"]:
+            nc = {"magnet_temp_c": t_mag, "magnet_temp_source": t_src, "not_comparable": tb["basis"],
+                  "emf_temp_basis": tb["basis"], "emf_model_temp_c": tb["model_temp_c"]}
+            emf_rows.append(_row("emf_peak", lbl, "V", vpk_meas, None, tip="emf_peak", params=params, detail=tb["reason"],
+                                 extra=dict(nc)))
+            rms_rows.append(_row("emf_rms", lbl, "V", r.get("v_ll_rms_v"), None, tip="emf_rms", params=params,
+                                 detail=tb["reason"], extra=dict(nc)))
+            if num(r.get("shaft_power_w")) is not None:
+                loss_rows.append(_row("loss", lbl, "W", r.get("shaft_power_w"), None, tip="loss", params=params,
+                                      detail=tb["reason"], extra=dict(nc)))
+            continue
+        ref = tb["ref"]
+        ratio = 1.0
+        eref = ref
         emf = C.emf_model_at(n, eref, tb["factor"])
         if t_mag is not None:
             temps_used.append(float(t_mag))
         det = (f"no-load duty '{ref['duty']}' at {ref['rpm']:g} rpm, magnet {ref.get('magnet_temp_c') if ref.get('magnet_temp_c') is not None else '?'} C"
-               f" -> {('?' if t_mag is None else f'{t_mag:.0f}')} C ({t_src}), Br ratio {ratio:.3f}")
+               f" -> {('?' if t_mag is None else f'{t_mag:.0f}')} C ({t_src}), stored point within {C.EMF_DIRECT_TEMP_K:g} K, compared directly")
         extra = {"magnet_temp_c": t_mag, "magnet_temp_source": t_src, "br_ratio": ratio, "ref_duty": ref["duty"],
                  "ref_rpm": ref["rpm"]}
         # the EMF carries the end-effect flux factor (corrected value only)

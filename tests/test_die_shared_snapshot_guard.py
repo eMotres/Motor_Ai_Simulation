@@ -148,7 +148,7 @@ def test_a_wider_derived_slot_moves_the_configuration(dies):
     assert target == "CIANO56 400_80 vadim"
     assert _bytes(dies) == before
     tf = _ctx()["transitioned_from"]
-    assert [x["key"] for x in tf["diffs"]] == ["slot_width"]
+    assert [x["key"] for x in tf["diffs"]] == ["pocket_width"]
     assert tf["diffs"][0]["die"] == pytest.approx(7.4) and tf["diffs"][0]["live"] == pytest.approx(7.54)   # the BUILT pocket
     assert tf["others"] == ["L100"]
     # the new die stamps the configuration's slot: a duty save there no longer reads "build differs"

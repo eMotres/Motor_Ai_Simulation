@@ -50,7 +50,48 @@
     "changes": "Changes",
     "assembly": "Assembly process",
     "tooling": "Tooling",
-    "tests": "Tests"
+    "tests": "Tests",
+    "certification": "Certification",
+    "checklist": "Checklist"
+  },
+  "checklist": {
+    "tip": "The mass-production checklist is generated from this production: assembly steps, process requirements and test limits, parts, open discussion and missing certification evidence. Only the status and the evidence of an item are kept here; an item whose requirement changed returns to To confirm.",
+    "revision": "Revision {rev}",
+    "openCount": "{open} open of {total}",
+    "openOnly": "Open items only",
+    "download": "Excel (EN + 中文)",
+    "downloadTip": "Download the checklist as Excel with the main list, the open-items tracker and the statistics. It is an export only: change statuses and requirements in the system.",
+    "none": "No items.",
+    "status": "Status",
+    "evidence": "Evidence",
+    "noEvidence": "No evidence",
+    "changed": "Changed",
+    "changedTip": "The requirement changed after the status was set. Confirm it again.",
+    "uploadTip": "Upload a new document as the evidence of this item",
+    "byTip": "Set by {by} at {at}",
+    "statuses": {
+      "to_do": "To do",
+      "to_confirm": "To confirm",
+      "missing_info": "Missing info",
+      "optional": "Optional",
+      "done": "Done"
+    },
+    "responsible": {
+      "factory": "Factory",
+      "supplier": "Supplier",
+      "MOTRES": "MOTRES"
+    },
+    "categories": {
+      "assembly": "Assembly steps",
+      "checks": "Checks in the process",
+      "process": "Process requirements",
+      "tests": "Test limits",
+      "parts": "Parts, materials and finish",
+      "fasteners": "Fasteners",
+      "packaging": "Packaging",
+      "discussion": "Open discussion items",
+      "certification": "Certification evidence"
+    }
   },
   "bilingual": {
     "machine": "Machine translation, not verified",
@@ -252,7 +293,10 @@
     "pdfUnavailable": "PDF generation is unavailable. Please try again later.",
     "pdfTooLarge": "The document or its images are too large to prepare as a PDF. Download files individually or use View.",
     "editSections": "Edit process sections",
-    "hideSections": "Hide sections"
+    "hideSections": "Hide sections",
+    "stepDocsPick": "Documents",
+    "stepDocsPickTip": "Files shown in this step besides the drawings of its parts.",
+    "stepDocsTooMany": "This step names more documents than the limit of {max} ({n}). Remove some before saving."
   },
   "access": {
     "none": "You are not on this production.",
@@ -298,7 +342,34 @@
     "superseded": "Superseded",
     "supersededBy": "Superseded by {name} (revision {rev})",
     "supersededTip": "Replaced in a published revision. Do not make parts to it; the file is kept for reference.",
-    "changedUnacked": "Changed in revision {rev} - not acknowledged"
+    "changedUnacked": "Changed in revision {rev} - not acknowledged",
+    "search": "Search by name or part",
+    "noMatch": "No document matches.",
+    "topicLabel": "Topic",
+    "topicAuto": "Auto: {topic}",
+    "stepChipTip": "Open this assembly step",
+    "topic": {
+      "process": "Process & assembly",
+      "drawings": "Part drawings & 3-D",
+      "tooling": "Tooling",
+      "tests": "Tests & measurements",
+      "packaging": "Packaging & labels",
+      "photos": "Photos",
+      "general": "General",
+      "superseded": "Superseded"
+    },
+    "topicTip": {
+      "process": "Instructions and files named by an assembly step.",
+      "drawings": "Drawings, 3-D and CAD files of the parts.",
+      "tooling": "Files of the parts on the tooling order list.",
+      "tests": "Test sheets, measurements and files named by a check step.",
+      "packaging": "Packaging, labels and stickers.",
+      "photos": "Pictures that belong to no part, and pictures posted to a step.",
+      "general": "Everything else.",
+      "superseded": "Replaced by a newer file. Kept for reference; do not build to them.",
+      "select": "The topic this file is listed under. Auto picks it from the part, the assembly steps and the file type."
+    },
+    "linkInvalid": "This link is not valid: its document list is empty, too long or malformed."
   },
   "unread": {
     "tip": "{count} unread messages",
@@ -349,11 +420,14 @@
     "by": "by {email}",
     "tip": "Acknowledge each revision before you build to it.",
     "review": "Review and send revision {rev}",
-    "reviewTitle": "Revision {rev}: this message is sent when you publish",
+    "reviewTitle": "Revision {rev}: members get this in their daily e-mail",
     "recipients": "{count, plural, one {# recipient} other {# recipients}}",
     "subject": "Subject",
     "cancel": "Cancel",
-    "sendPublish": "Send and publish {rev}",
+    "sendPublish": "Publish {rev}",
+    "digestNote": "The revision and the acknowledgement request appear in the production at once. The e-mail goes out once a day, in one digest with everything else that changed.",
+    "urgentMail": "Urgent: mail now",
+    "sendPublishUrgent": "Publish {rev} and mail now",
     "cannotMail": "This server cannot send e-mail: members will see the notice in the Discussion only.",
     "addReplace": "Replaces a file",
     "replaceOld": "Old file",
@@ -637,6 +711,8 @@
     "note": {
       "unexplained": "unexplained {w} W",
       "noModel": "no simulation point",
+      "notComparableNoBenchTemp": "not comparable: magnet temperature unknown",
+      "notComparableNoModelTemp": "not comparable: no model point at this temperature",
       "freqFlag": "{hz} Hz vs low-frequency simulation",
       "remaining": "{mohm} mΩ board and joints",
       "modelAbove": "simulation {mohm} mΩ above the reading",
@@ -812,5 +888,21 @@
     "startTitle": "Start production",
     "paymentLabel": "Payment received (a date or a note, no amount)",
     "startOk": "Start"
+  },
+  "cert": {
+    "tip": "The certification package of this motor: analysis, technical file, declarations of conformity, safety leaflet, labelling, supplier declarations, test reports. Drafts are staff-only until released.",
+    "none": "No certification documents.",
+    "group": "Group (optional)",
+    "ungrouped": "No group",
+    "internal": "Internal (staff only)",
+    "uploadTip": "Uploads into this tab. Internal documents are hidden from the factory; clear the box to release a file.",
+    "status": "Status",
+    "statuses": {
+      "draft": "Draft",
+      "signed": "Signed",
+      "evidence_received": "Evidence received"
+    },
+    "move": "To Documents",
+    "moveTip": "Move this file back to the Documents tab"
   }
 }

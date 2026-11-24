@@ -73,6 +73,22 @@ FREE_GEO_KEYS = (
     "stator_outer_notches",
 )
 
+# MOTOR keys (owner 2026-11-18, one die per size and pole count): the magnet fill of the rotor pocket and the magnet
+# segmentation belong to the MOTOR, not to the stamped lamination, so a configuration may override them on top of its
+# die (``geometry_overrides``, written only by ``PATCH /config/{die}/{cfg}/motor_keys``).  The die check of a duty save
+# compares these keys with die + override; every other die key is still compared with the die alone.  A configuration
+# without such an override behaves exactly as before.
+MOTOR_GEO_KEYS = (
+    "magnet_fill_up", "magnet_fill_down", "magnet_fill_radius", "magnet_lamination",
+)
+
+
+def _motor_key_overrides(cfg_doc: Optional[dict]) -> Dict[str, float]:
+    """The configuration's own MOTOR_GEO_KEYS overrides (numbers only; a null or absent key = the die's value)."""
+    ov = (cfg_doc or {}).get("geometry_overrides") or {}
+    return {k: ov[k] for k in MOTOR_GEO_KEYS
+            if isinstance(ov.get(k), (int, float)) and not isinstance(ov.get(k), bool)}
+
 # What stays EDITABLE while the die is locked — the user's definition, and
 # deliberately narrower than FREE_GEO_KEYS: stack length, wire height, turn
 # count.  Everything else (wire width, spacings, split, insulation) is part
@@ -898,7 +914,7 @@ def _load_yaml(p: Path, what: str) -> dict:
         raise HTTPException(500, detail=f"{what} file {p.name} is unreadable: {e}")
 
 
-def _save_yaml(p: Path, d: dict) -> None:
+def _save_yaml(p: Path, d: dict, history_note: Optional[str] = None) -> None:
     # A configuration that is a FROZEN product revision (Rev A once Rev B exists) is read-only for good - one check here covers
     # every route that would rewrite it (owner 2026-10-27, motor_revisions).
     if p.name != "die.yaml":
@@ -977,7 +993,8 @@ def _save_yaml(p: Path, d: dict) -> None:
                 hdir = p.parent.parent / ".history" / p.parent.name
                 hdir.mkdir(parents=True, exist_ok=True)
                 stamp = _dt.now().strftime("%Y%m%d-%H%M%S")
-                (hdir / f"{p.stem}.{stamp}.yaml").write_bytes(old)
+                _hn = f".{history_note}" if history_note else ""     # "<stem>.<stamp>[.note].yaml"
+                (hdir / f"{p.stem}.{stamp}{_hn}.yaml").write_bytes(old)
                 snaps = sorted(hdir.glob(f"{p.stem}.*.yaml"))
                 for s in snaps[:-30]:
                     s.unlink()
@@ -1244,6 +1261,14 @@ def _build_sigs(die_doc: dict, cfg_doc: dict) -> tuple:
         s = _build_sig_of(die_doc, cfg_doc, alt)
         if s not in out:
             out.append(s)
+    # Stamps written while the stored coil count was stale: a save that healed the count recorded the signatures of
+    # that build (count-only difference) in ``build_sig_count_aliases`` (:func:`_alias_count_only`), so nothing the heal
+    # touched reads "computed on an older build".
+    _al = cfg_doc.get("build_sig_count_aliases")
+    if isinstance(_al, dict):                      # {current signature: [stamps of the same build before the heal]}
+        for alias in (_al.get(out[0]) or []):      # valid only while the build is still the one that was healed
+            if isinstance(alias, str) and alias and alias not in out:
+                out.append(alias)
     return tuple(out)
 
 
@@ -1403,6 +1428,19 @@ def _with_mech_loss(d: Dict[str, Any]) -> Any:
         except (TypeError, ValueError):
             continue
     return r
+
+
+def _terminal_loss_view(d: Dict[str, Any], c: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """``terminals.duty_terminal_budget`` of the duty's stored summary and the configuration's ``terminals:`` block, or
+    None (no block, no summary, no phase current).  Never raises: a malformed block must not sink the tree."""
+    blk = (c or {}).get("terminals")
+    if not blk:
+        return None
+    try:
+        from motor_ai_sim.terminals import duty_terminal_budget
+        return duty_terminal_budget(d.get("summary"), blk)
+    except Exception:                                        # noqa: BLE001
+        return None
 
 
 def _die_doc_for_sig(die: str) -> dict:
@@ -2466,6 +2504,10 @@ def _build_config_row(die: dict, c: dict, name: str, _dr_cfg: dict) -> dict:
                             or (d.get("summary") or {}).get("star_delta")),
              "torque_nm": d.get("torque_nm"), "power_kw": d.get("power_kw"),
              "note": d.get("note", ""), "result": _with_mech_loss(d),
+             # The lead / phase-board loss as its own term and the efficiency AT THE TERMINALS, derived at serve time from
+             # the configuration's `terminals:` block (owner 2026-11-18); absent when none is stated.  The duty's own
+             # `result` / `summary` above are never changed.
+             **({"terminal_loss": _tl} if (_tl := _terminal_loss_view(d, c)) else {}),
              # What the machine DOES with this point (S1 / S2 / S3 /
              # segments) — a handful of numbers, so the catalog row can
              # say "S3 ED 25 % · 60 s" without a second request.  None
@@ -2655,6 +2697,13 @@ def _tree_dies(_acc: dict, *, heads_only: bool = False) -> tuple:
         # exhibit stays exactly the passport-filtered shared set it always was.
         if _layer == _WS.LAYER_PUBLISHED and _acc["mode"] == MODE_ANONYMOUS:
             continue
+        # The configuration files this caller may see (the same gate as the rows below).  A die with NONE is an empty
+        # header (coordinator / owner 2026-11-19: the dies emptied by a move showed as headers with nothing under
+        # them): it is not listed - unless it is the caller's own workspace die, which they may be filling right now.
+        _visible = [cf for cf in sorted(dd.glob("*.yaml")) if cf.name != "die.yaml"
+                    and may_see_config_file(_acc, _die_name, cf.stem, cf, layer=_layer)]
+        if not _visible and not (_ws_layering() and _layer == _WS.LAYER_WORKSPACE):
+            continue
         head = _die_head(dd, _die_name)
         if _client_filter and not _die_is_client_ready(head["geo"]):
             continue
@@ -2671,17 +2720,13 @@ def _tree_dies(_acc: dict, *, heads_only: bool = False) -> tuple:
             return _box[0]
 
         cfgs = []
-        for cf in sorted(dd.glob("*.yaml")):
-            if cf.name == "die.yaml":
-                continue
-            # A configuration the caller may not see (motor_access.config_visible:
-            # a PRIVATE one without its grant, or an "inherit" one of a die that is
-            # visible only through ANOTHER configuration) is not a row at all: not
-            # listed, not counted (config_count / cards below are computed from
-            # what is left).  The caller's own workspace copy is theirs (layering
-            # on), whatever the file says.
-            if not may_see_config_file(_acc, _die_name, cf.stem, cf, layer=_layer):
-                continue
+        # A configuration the caller may not see (motor_access.config_visible:
+        # a PRIVATE one without its grant, or an "inherit" one of a die that is
+        # visible only through ANOTHER configuration) is not a row at all: not
+        # listed, not counted (config_count / cards below are computed from
+        # what is left).  The caller's own workspace copy is theirs (layering
+        # on), whatever the file says.
+        for cf in _visible:
             cfgs.append(_config_row(dd, _die_name, cf, _caller_key, _dr_die))
         out.append({
             "name": _die_name,
@@ -3172,11 +3217,96 @@ def create_config(req: ConfigCreate, _w: dict = Depends(require_catalog_write)):
     _autolink_new_config(die, name, _w, copied_from=(str(_src.get("die") or "") or None),
                          source_config=(str(_src.get("config") or "") or None))
     out = {"ok": True, "die": die, "config": name}
+    _cc_fix = _live_winding_healed(live)[1]
+    if _cc_fix:
+        out["coil_count_corrected"] = _cc_fix
     _shaft_note = _live_shaft_note()
     if _shaft_note:
         log.warning("family: configuration '%s/%s' — %s", die, name, _shaft_note)
         out["note"] = _shaft_note
     return out
+
+
+def _live_winding_healed(live: dict) -> tuple:
+    """``(winding, fix)``: the live winding block for a configuration being SAVED (only explicit saves call this),
+    with a stale ``n_coils_per_phase`` replaced by the derived value (slots of the live geometry).  ``fix`` is
+    ``{"from": old, "to": new}`` when the count was corrected, else None; the caller reports it in the save
+    response and names it in the history snapshot.  A block without the key stays without it."""
+    from motor_ai_sim.winding import slot_pole_counts, with_derived_coil_count
+    w = _plain(live.get("winding")) or {}
+    fixed, old = with_derived_coil_count(w, slot_pole_counts(_plain(live.get("geometry")) or {})[0])
+    if old is None:
+        return w, None
+    log.warning("family: saved winding: stored n_coils_per_phase %s corrected to the derived %s",
+                old, fixed["n_coils_per_phase"])
+    return fixed, {"from": old, "to": fixed["n_coils_per_phase"]}
+
+
+def _heal_stored_coil_count(die: str, c: dict) -> tuple:
+    """``(fix, old, stale)`` for the STORED configuration ``c`` of a duty save: a stale ``n_coils_per_phase`` is corrected in place
+    (``fix`` = ``{"from", "to"}``, ``old`` = the stored value, for the alias).  A LOCKED configuration is healed too (owner 2026-11-24:
+    "yes, correct it automatically"): this ONE key only, the count reaches no solved number (the FEM reads ``n_parallel`` /
+    ``n_series``) and the alias keeps every stamp current; nothing else of a locked configuration changes.  The slots come ONLY from the
+    die geometry with the configuration's geometry overrides (what the build signature hashes); nothing is done when they cannot be read
+    (no die, no slot keys: ``slot_pole_counts`` would invent 24), for a block without the key or a non-3-phase block.  A double-layer
+    winding is NOT rewritten (the rule ignores layers: the owner's open decision): it is reported as ``stale`` =
+    ``{"stored", "derived"}`` when the count differs."""
+    from motor_ai_sim.winding import slot_pole_counts, with_derived_coil_count
+    w = c.get("winding")
+    if not isinstance(w, dict) or w.get("n_coils_per_phase") is None:
+        return None, None, None
+    try:
+        die_geo = dict(_load_yaml(_die_file(die), "die").get("geometry") or {})
+    except Exception:                                                    # noqa: BLE001 - no die document: nothing to derive from
+        return None, None, None
+    geo = {**die_geo, **dict(c.get("geometry_overrides") or {})}
+    try:
+        has_slots = float(geo.get("num_slots") or 0) > 0 or (float(geo.get("num_seg") or 0) > 0 and float(geo.get("num_slots_per_segment") or 0) > 0)
+    except (TypeError, ValueError):
+        has_slots = False
+    if not has_slots:
+        return None, None, None
+    fixed, old = with_derived_coil_count(w, slot_pole_counts(geo)[0])
+    if old is None:
+        return None, None, None
+    raw, want = w["n_coils_per_phase"], fixed["n_coils_per_phase"]
+    try:
+        double_layer = int(float(w.get("layers") or 1)) >= 2
+    except (TypeError, ValueError):
+        double_layer = True
+    if double_layer:
+        log.warning("family: configuration '%s/%s': double-layer winding, stored n_coils_per_phase %s (derived %s) left as stored",
+                    die, c.get("name"), raw, want)
+        return None, None, {"stored": raw, "derived": want}
+    c["winding"] = {**w, "n_coils_per_phase": want}
+    log.warning("family: configuration '%s/%s'%s: stored n_coils_per_phase %s corrected to the derived %s on a duty save",
+                die, c.get("name"), " (locked)" if c.get("locked") is True else "", raw, want)
+    return {"from": raw, "to": want}, raw, None
+
+
+def _alias_count_only(die_doc: dict, c: dict, old_count) -> None:
+    """After a save healed ``c['winding']['n_coils_per_phase']`` (stale ``old_count`` -> derived): record in
+    ``c['build_sig_count_aliases']`` (keyed by the current signature) the build signatures the configuration had with the OLD count and everything else as
+    it is now.  The count reaches no solved number (the FEM reads ``n_parallel`` / ``n_series``; the legacy dry run
+    passes it to a function that ignores it), so results stamped before the heal stay current; a stamp that also
+    differs in anything else does not match an alias and still reads as an older build."""
+    w = c.get("winding")
+    if old_count is None or not isinstance(w, dict) or w.get("n_coils_per_phase") in (None, old_count):
+        return
+    c_old = {**c, "winding": {**w, "n_coils_per_phase": old_count}}
+    now = _build_sigs(die_doc or {}, c)
+    extra = [x for x in _build_sigs(die_doc or {}, c_old) if x not in now]
+    if extra:
+        # keyed by the signature the healed build has NOW: a later real change moves that signature and the
+        # aliases stop applying (they never keep results of another build current)
+        book = c.get("build_sig_count_aliases") if isinstance(c.get("build_sig_count_aliases"), dict) else {}
+        book[now[0]] = sorted(set(book.get(now[0]) or []) | set(extra))
+        c["build_sig_count_aliases"] = book
+
+
+def _coil_note(fix: Optional[dict]) -> Optional[str]:
+    """The history-snapshot note of a healed save (file-name safe)."""
+    return f"coil_count_corrected_{fix['from']}_to_{fix['to']}" if fix else None
 
 
 def _config_doc_from_live(die: str, name: str, role: str, live: dict) -> tuple:
@@ -3210,7 +3340,7 @@ def _config_doc_from_live(die: str, name: str, role: str, live: dict) -> tuple:
         "created": datetime.now().isoformat(timespec="seconds"),
         "geometry_overrides": {k: geo.get(k) for k in FREE_GEO_KEYS
                                if geo.get(k) is not None},
-        "winding": _plain(live.get("winding")) or {},
+        "winding": _live_winding_healed(live)[0],
         # The build's materials — a configuration is a physical product, and
         # what it is made of is part of what was built.  EVERY saved part, the
         # same set the duty save keeps (2026-10-30: this writer still kept the
@@ -3229,7 +3359,7 @@ def _config_doc_from_live(die: str, name: str, role: str, live: dict) -> tuple:
         "end_winding_factor": sim.get("end_winding_factor"),
         "duties": [],
     }
-    _repick_config_winding(doc, geo, f"new configuration '{die}/{name}'")
+    _repick_config_winding(doc, geo, f"new configuration '{die}/{name}'", _die_doc_for_sig(die))
     return name, doc
 
 
@@ -3458,9 +3588,8 @@ def duplicate_config(die: str, cfg: str, req: ConfigDuplicate,
     # PWM/BLDC runs and their sidecars are copied like the duties they belong to.
     _refile_config_runs(die, c, cfg, new, copy=True)
     try:
-        _repick_config_winding(
-            c, dict(_load_yaml(_die_file(die), "die").get("geometry") or {}),
-            f"'{die}/{new}'")
+        _die_d = _load_yaml(_die_file(die), "die")
+        _repick_config_winding(c, dict(_die_d.get("geometry") or {}), f"'{die}/{new}'", _die_d)
     except Exception:   # noqa: BLE001
         pass
     _save_yaml(dst, c)
@@ -3623,6 +3752,9 @@ def _upsert_duty(req: DutyCreate, _w: dict, *, may_move: bool = True) -> dict:
     dname = _check_name(req.duty.name, "duty")
     _require_die_write(die, _w, cfg)
     p = _cfg_file(die, cfg)
+    _cc_fix = None          # set when this save writes a healed n_coils_per_phase into the configuration
+    _cc_old = None          # the count the configuration held before (its stamps were made with it)
+    _cc_stale = None        # {"stored", "derived"} when a LOCKED configuration holds a stale count (reported, not written)
     c = _load_yaml(p, "configuration")
     d = req.duty
     if d.mode not in ("motor", "generator"):
@@ -3653,13 +3785,17 @@ def _upsert_duty(req: DutyCreate, _w: dict, *, may_move: bool = True) -> dict:
         geo = _plain(live.get("geometry")) or {}
         _live_build = {k: geo.get(k) for k in FREE_GEO_KEYS
                        if geo.get(k) is not None}
-        _live_wind = _plain(live.get("winding")) or {}
+        _live_wind, _cc_live_fix = _live_winding_healed(live)
         _live_mats = _live_saved_materials(live)
         _live_pstates = _live_parts()
         _stored = c.get("geometry_overrides") or None
+        # the configuration's MOTOR-key overrides survive a free-key adoption, and the die check reads them
+        _motor_ov = _motor_key_overrides(c)
         if not _stored:
             c["geometry_overrides"] = _live_build
+            _cc_old = (c.get("winding") or {}).get("n_coils_per_phase")
             c["winding"] = _live_wind
+            _cc_fix = _cc_live_fix
             c["materials"] = _live_mats
             if _live_pstates:
                 c["parts"] = _live_pstates
@@ -3693,7 +3829,7 @@ def _upsert_duty(req: DutyCreate, _w: dict, *, may_move: bool = True) -> dict:
                 if c.get("locked") is True:
                     _diffs.extend(_free_diffs)
                 else:
-                    c["geometry_overrides"] = _live_build
+                    c["geometry_overrides"] = {**_live_build, **_motor_ov}
                     _build_adopted = True
                     # A stored end-winding factor belongs to the build it was
                     # measured on: after a stack/wire change it is a different
@@ -3764,7 +3900,9 @@ def _upsert_duty(req: DutyCreate, _w: dict, *, may_move: bool = True) -> dict:
                 if c.get("locked") is True:
                     _diffs.extend(_mc_diffs)
                 else:
+                    _cc_old = (c.get("winding") or {}).get("n_coils_per_phase")
                     c["winding"] = _live_wind
+                    _cc_fix = _cc_live_fix
                     c["materials"] = _live_mats
                     if _live_pstates:
                         c["parts"] = _live_pstates
@@ -3808,6 +3946,7 @@ def _upsert_duty(req: DutyCreate, _w: dict, *, may_move: bool = True) -> dict:
                 for k, dv in _die_geo.items():
                     if k in FREE_GEO_KEYS or not isinstance(dv, (int, float)):
                         continue
+                    dv = _motor_ov.get(k, dv)          # a motor key: die + the configuration's override
                     lv = geo.get(k)
                     if isinstance(lv, (int, float)) and abs(float(dv) - float(lv)) > 1e-6:
                         _die_diffs.append("die %s: %s → %s" % (k, dv, lv))
@@ -3819,12 +3958,12 @@ def _upsert_duty(req: DutyCreate, _w: dict, *, may_move: bool = True) -> dict:
             # the result belongs to THIS configuration of THIS die.  It used to fork a derived die here.
             if _die_diffs:
                 try:
-                    _sh = die_shape_diffs(_die_geo, geo)
+                    _sh = die_shape_diffs({**_die_geo, **_motor_ov}, geo)
                 except Exception:                          # noqa: BLE001 - cannot tell = keep the old verdict
                     _sh = []
-                if _sh and all(x["key"] == "slot_width" for x in _sh):
+                if _sh and all(x["key"] in POCKET_WIDTH_KEYS for x in _sh):
                     log.info("family: duty save '%s/%s/%s': the live machine differs from the die only by the "
-                             "slot width its own wire stack derives (%s) - saved into this configuration, "
+                             "pocket width its own wire stack derives (%s) - saved into this configuration, "
                              "no die is created", die, cfg, dname,
                              "; ".join(f"{x['die']} → {x['live']}" for x in _sh))
                     _die_diffs = []
@@ -3918,7 +4057,10 @@ def _upsert_duty(req: DutyCreate, _w: dict, *, may_move: bool = True) -> dict:
     # first given, so nothing is lost on a duty that only ever ran on PWM.
     _drive = _drive_of(d.drive, d.mesh, d.summary)
     _has_primary = bool(prev and (prev.get("summary") or prev.get("mesh")))
-    _is_primary = (_drive == "current") or not _has_primary
+    # a save of the SAME excitation as the duty's own primary (a rectifier duty whose only run is custom_current)
+    # replaces that primary, so its headline can be refreshed; a sine primary stays the sine
+    _is_primary = ((_drive == "current") or not _has_primary
+                   or (_drive != "current" and _drive == _primary_drive(prev or {})))
     # THE DUTY CYCLE, before anything is written: a block naming a duty this
     # configuration does not have (a rename away, a typo) would be accepted
     # here and refused only much later, by the thermal run, with nothing on
@@ -3962,6 +4104,12 @@ def _upsert_duty(req: DutyCreate, _w: dict, *, may_move: bool = True) -> dict:
     _prev_runs = dict((prev or {}).get("runs") or {})
     if _prev_runs:
         entry["runs"] = _prev_runs
+    if not _cc_fix:
+        # A configuration whose ONLY deviation is a stale stored n_coils_per_phase never reaches the heals above (they fire for a fresh
+        # configuration or one that adopts the live winding).  Correct that ONE key here, BEFORE the run is stamped (the new run is then
+        # stamped with the healed build; older stamps stay current through the alias below).  The count reaches no solved number (the
+        # FEM reads n_parallel / n_series), also in a locked configuration (owner 2026-11-24): this one key only.
+        _cc_fix, _cc_old, _cc_stale = _heal_stored_coil_count(die, c)
     if d.mesh is not None or d.summary is not None:
         _store_run(die, cfg, c, entry, _drive,
                    settings=d.mesh, summary=d.summary,
@@ -3996,7 +4144,9 @@ def _upsert_duty(req: DutyCreate, _w: dict, *, may_move: bool = True) -> dict:
             # The runs folder is named after the configuration — it has to
             # follow the rename, exactly as rename_config does it.
             _refile_config_runs(die, c, _oldn, cfg, copy=False)
-            _save_yaml(_cfg_file(die, cfg), c)
+            if _cc_fix:
+                _alias_count_only(_die_doc_for_sig(die), c, _cc_old)
+            _save_yaml(_cfg_file(die, cfg), c, history_note=_coil_note(_cc_fix))
             p.unlink()
             ctx = _read_ctx() or {}
             if ctx.get("die") == die and ctx.get("config") == _oldn:
@@ -4008,8 +4158,12 @@ def _upsert_duty(req: DutyCreate, _w: dict, *, may_move: bool = True) -> dict:
             log.info("family: duty '%s/%s/%s' saved (%s, %.1f Arms @ %.0f rpm, γ=%.2f°)",
                      die, cfg, dname, d.mode, d.current_arms, d.rpm, d.gamma_deg)
             return _with_slot_warning({"ok": True, "die": die, "config": cfg, "renamed_to": cfg,
-                                       "drive": _drive, "primary": _is_primary}, c)
-    _save_yaml(p, c)
+                                       "drive": _drive, "primary": _is_primary,
+                                       **({"coil_count_corrected": _cc_fix} if _cc_fix else {}),
+                                       **({"coil_count_stale": _cc_stale} if _cc_stale else {})}, c)
+    if _cc_fix:
+        _alias_count_only(_die_doc_for_sig(die), c, _cc_old)
+    _save_yaml(p, c, history_note=_coil_note(_cc_fix))
     log.info("family: duty '%s/%s/%s' saved (%s, %.1f Arms @ %.0f rpm, γ=%.2f°, "
              "%s run, %s)", die, cfg, dname, d.mode, d.current_arms, d.rpm,
              d.gamma_deg, _drive,
@@ -4018,7 +4172,9 @@ def _upsert_duty(req: DutyCreate, _w: dict, *, may_move: bool = True) -> dict:
     # bare tick: a PWM save that quietly left the sine numbers standing is
     # correct but indistinguishable from one that did nothing.
     return _with_slot_warning({"ok": True, "die": die, "config": cfg, "drive": _drive,
-                               "primary": _is_primary}, c)
+                               "primary": _is_primary,
+                               **({"coil_count_corrected": _cc_fix} if _cc_fix else {}),
+                                       **({"coil_count_stale": _cc_stale} if _cc_stale else {})}, c)
 
 
 @router.post("/duty_result")
@@ -4057,7 +4213,7 @@ def record_duty_result(req: DutyResult, _w: dict = Depends(require_catalog_write
     # excitation without disturbing them.  A duty with no result yet takes the
     # first one it is given, whatever ran it.
     _drive = _drive_of(req.drive)
-    if _drive == "current" or not found.get("result"):
+    if _drive == "current" or not found.get("result") or _drive == _primary_drive(found):
         found["result"] = res
         _primary = True
     else:
@@ -4864,7 +5020,8 @@ def _matching_die(live_geo: dict, exclude: str) -> Optional[str]:
     return None
 
 
-def _repick_config_winding(c: dict, geo: Optional[dict], where: str) -> Optional[str]:
+def _repick_config_winding(c: dict, geo: Optional[dict], where: str,
+                           die_doc: Optional[dict] = None) -> Optional[str]:
     """Make configuration ``c``'s winding connection valid for ``geo``'s slot
     count, IN PLACE.  Returns the one-line note when it was re-picked (logged),
     None when it was already valid or there is no winding block.
@@ -4881,14 +5038,17 @@ def _repick_config_winding(c: dict, geo: Optional[dict], where: str) -> Optional
     fixed, note = repick_connection(w, slot_pole_counts(geo or {})[0])
     if note:
         c["winding"] = fixed
+        _alias_count_only(die_doc or {"geometry": dict(geo or {})}, c, w.get("n_coils_per_phase"))
         log.warning("family: %s: %s", where, note)
     elif fixed != w:
         # same machine, label normalised (a two-set winding's per-set "4S" is
         # 4S-2P): no re-pick to announce, but the payload must carry a label
         # PATCH /api/winding/config accepts
         c["winding"] = fixed
-        log.info("family: %s: connection label %r normalised to %r", where,
-                 w.get("connection"), fixed.get("connection"))
+        _alias_count_only(die_doc or {"geometry": dict(geo or {})}, c, w.get("n_coils_per_phase"))
+        log.info("family: %s: winding block normalised (connection label %r -> %r, n_coils_per_phase %r -> %r)",
+                 where, w.get("connection"), fixed.get("connection"),
+                 w.get("n_coils_per_phase"), fixed.get("n_coils_per_phase"))
     return note
 
 
@@ -4910,7 +5070,7 @@ def _repick_die_windings(die: str, *, skip_locked: bool = False) -> list:
             continue
         if skip_locked and c.get("locked") is True:
             continue
-        n = _repick_config_winding(c, geo, f"'{die}/{pth.stem}'")
+        n = _repick_config_winding(c, geo, f"'{die}/{pth.stem}'", d)
         if n:
             _save_yaml(pth, c)
             notes.append(f"{pth.stem}: {n}")
@@ -4982,9 +5142,9 @@ def _copy_config_into(src_die: str, dst_die: str, cfg: str) -> str:
     dst_name = _unique_config_name(dst_die, _caller_config_name(dst_die, cfg))
     c["die"] = dst_die
     try:
-        _repick_config_winding(
-            c, dict(_load_yaml(_die_file(dst_die), "die").get("geometry") or {}),
-            f"'{dst_die}/{dst_name}' (copied from '{src_die}')")
+        _dst_d = _load_yaml(_die_file(dst_die), "die")
+        _repick_config_winding(c, dict(_dst_d.get("geometry") or {}),
+                               f"'{dst_die}/{dst_name}' (copied from '{src_die}')", _dst_d)
     except Exception:   # noqa: BLE001 — the solve still refuses an invalid one
         pass
     if dst_name != cfg:
@@ -5096,7 +5256,11 @@ def _auto_transition_die(die: str, cfg: Optional[str], duty: Optional[str],
 # the active configuration keeps adopting the edit as before.
 
 #: Labels of the die-level shape keys a transition names (the identity keys have theirs above).
-_SHAPE_KEY_LABELS: Dict[str, str] = {"slot_width": "slot width (wire + insulation)"}
+#: The BUILT coil pocket (not the stored `slot_width`, which is one wire_spacing_x wider).  Until 2026-11-24 this entry
+#: was keyed `slot_width`; :data:`POCKET_WIDTH_KEYS` keeps the old name readable for stored diffs and old clients.
+_SHAPE_KEY_LABELS: Dict[str, str] = {"pocket_width": "pocket width (wire + insulation)"}
+POCKET_WIDTH_KEY = "pocket_width"
+POCKET_WIDTH_KEYS = (POCKET_WIDTH_KEY, "slot_width")
 
 
 #: Two pockets closer than this are the same pocket: the round-wire proxy stack is rounded to the
@@ -5106,25 +5270,10 @@ SLOT_DIFFERS_FROM_DIE = "slot_width_differs_from_die"
 
 
 def _built_slot_width(geo: dict) -> Optional[float]:
-    """The coil pocket the builders actually CUT into the lamination [mm], or None when an input is missing.
-
-    ``column + 2 x insulation_thickness + wire_spacing_x`` with ``column = N x wire_width +
-    (N - 1) x STRIP_GAP_FACTOR x wire_spacing_x`` (``cadquery_geometry``: ``slot_w = wire_col_w + ins_w*2 +
-    wire_d_x``; ``iron_template``: the same ``coil_w``).  NOT ``derived_geometry()["slot_width"]``, which is
-    one ``wire_spacing_x`` wider (the wire pitch the slot has to accept): two wire stacks can agree in one
-    number and differ in the other, and the iron follows this one."""
-    try:
-        from motor_ai_sim.winding import STRIP_GAP_FACTOR as _gf
-        g = dict(geo or {})
-        ww, wsx, ins = float(g["wire_width"]), float(g["wire_spacing_x"]), float(g["insulation_thickness"])
-        try:
-            n = max(1, int(round(float(g.get("wire_split") or 1))))
-        except (TypeError, ValueError):
-            n = 1
-        col = ww if n <= 1 else n * ww + (n - 1) * _gf * wsx
-        return col + 2.0 * ins + wsx
-    except Exception:                                       # noqa: BLE001 - cannot tell = no verdict
-        return None
+    """Alias of :func:`motor_ai_sim.geometry.motor_geometry.pocket_width` (the ONE implementation): the coil
+    pocket the builders cut into the lamination, NOT the stored ``slot_width``."""
+    from motor_ai_sim.geometry.motor_geometry import pocket_width
+    return pocket_width(geo)
 
 
 def config_slot_mismatch(die: str, cfg: str, die_geo: dict, overrides: dict) -> Optional[dict]:
@@ -5187,7 +5336,7 @@ def die_shape_diffs(die_geo: dict, live_geo: dict) -> list:
     dsw, lsw = _built_slot_width(die_geo), _built_slot_width(live_geo)
     # the same tolerance as the slot warning: stacks that differ by a rounding micron are one pocket
     if dsw is not None and lsw is not None and abs(dsw - lsw) > SLOT_MISMATCH_WARN_MM:
-        out.append({"key": "slot_width", "label": _SHAPE_KEY_LABELS["slot_width"],
+        out.append({"key": POCKET_WIDTH_KEY, "label": _SHAPE_KEY_LABELS[POCKET_WIDTH_KEY],
                     "die": round(dsw, 6), "live": round(lsw, 6)})
     # `stator_outer_notches` is NOT here: it is a configuration key
     # (FREE_GEO_KEYS, owner 2026-11-03), so switching it never makes another
@@ -6248,7 +6397,9 @@ def save_as_new_die(req: SaveAsNewDie, _w: dict = Depends(require_catalog_write)
                                                    .get("changed") or ["no identity diff"]))
               if rel.get("released_from") else "no released context"),
              cfg_name, duty_name)
+    _cc_new = _live_winding_healed(live)[1]
     return {"ok": True, "die": name, "config": cfg_name, "duty": duty_name,
+            **({"coil_count_corrected": _cc_new} if _cc_new else {}),
             "derived_from": die_doc.get("derived_from"),
             "topology": {"stator_diameter": geo.get("stator_diameter"),
                          "num_slots": geo.get("num_slots"),
@@ -6836,6 +6987,88 @@ def patch_config_coil(die: str, cfg: str, req: CoilPatch, _w: dict = Depends(req
     _require_die_write(die, _w, cfg)
     sent = set(getattr(req, "model_fields_set", None) or getattr(req, "__fields_set__", None) or ())
     return set_config_coil(die, cfg, {k: getattr(req, k) for k in sent}, source="form")
+
+
+class MotorKeysPatch(BaseModel):
+    # {key: value | null} over MOTOR_GEO_KEYS; null (or the die's own value) clears the override
+    keys: Dict[str, Optional[Any]]
+    dry_run: bool = False
+
+
+def _motor_key_value(key: str, raw: Any) -> Optional[float]:
+    """A validated MOTOR_GEO_KEYS value, or None for "clear".  Raises 422 in words."""
+    if raw is None:
+        return None
+    if isinstance(raw, bool) or not isinstance(raw, (int, float)):
+        raise HTTPException(422, detail=f"{key}: a number is needed, not {raw!r}")
+    v = float(raw)
+    if key in ("magnet_fill_up", "magnet_fill_down") and not 0.0 < v <= 1.0:
+        raise HTTPException(422, detail=f"{key}: a fill ratio in (0, 1], not {v:g}")
+    if key == "magnet_fill_radius" and not 0.0 <= v <= 50.0:
+        raise HTTPException(422, detail=f"{key}: a radius 0..50 mm, not {v:g}")
+    if key == "magnet_lamination":
+        if v != int(v) or not 0 <= v <= 100:
+            raise HTTPException(422, detail=f"{key}: a whole number of segments 0..100, not {v:g}")
+        v = int(v)
+    return v
+
+
+@router.patch("/config/{die}/{cfg}/motor_keys")
+def patch_config_motor_keys(die: str, cfg: str, req: MotorKeysPatch, dry_run: bool = False,
+                            _w: dict = Depends(require_catalog_write)):
+    """Admin: set or clear the configuration's own MOTOR keys (``MOTOR_GEO_KEYS``: the magnet fill and segmentation)
+    on top of its die (owner 2026-11-18: one die per size and pole count, the magnet fill belongs to the motor).
+
+    A key that is NOT SENT is left unchanged; ``null``, or the die's own value, clears the override.  Any other key is
+    refused (422): the lamination stays the die's.  ``dry_run`` (body or ``?dry_run=1``) writes nothing and answers the
+    same document.  The overrides are part of the build signature, so the configuration's stored results then read as
+    "computed on an older build" (``results_stale``).  A LOCKED configuration is refused (409).  The previous values
+    are kept in the admin audit entry (``config.motor_keys``)."""
+    from motor_ai_sim import admin_audit as _AA
+    if not _w.get("is_admin"):
+        raise HTTPException(403, detail="only an admin may set a configuration's motor keys")
+    die, cfg = _check_name(die, "die"), _check_name(cfg, "configuration")
+    _require_die_write(die, _w, cfg)
+    bad = sorted(k for k in (req.keys or {}) if k not in MOTOR_GEO_KEYS)
+    if bad:
+        raise HTTPException(422, detail=("not a motor key: %s (allowed: %s)"
+                                         % (", ".join(bad), ", ".join(MOTOR_GEO_KEYS))))
+    vals = {k: _motor_key_value(k, v) for k, v in (req.keys or {}).items()}
+    dry = bool(dry_run or req.dry_run)
+    d = _load_yaml(_die_file(die), "die")
+    cfile = _cfg_file(die, cfg)
+    c = _load_yaml(cfile, "configuration")
+    die_geo = d.get("geometry") or {}
+    before = _motor_key_overrides(c)
+    ov = dict(c.get("geometry_overrides") or {})
+    for k, v in vals.items():
+        dv = die_geo.get(k)
+        same_as_die = (v is not None and isinstance(dv, (int, float)) and not isinstance(dv, bool)
+                       and abs(float(dv) - float(v)) <= 1e-9)
+        if v is None or same_as_die:
+            ov.pop(k, None)
+        else:
+            ov[k] = v
+    c2 = dict(c, geometry_overrides=ov)
+    after = _motor_key_overrides(c2)
+    changed = sorted(k for k in MOTOR_GEO_KEYS if before.get(k) != after.get(k))
+    if changed and c.get("locked") is True:
+        raise HTTPException(409, detail=f"configuration '{die}/{cfg}' is locked: unlock it to change its motor keys")
+    has_results = any(isinstance(x, dict) and (x.get("result") or x.get("summary") or x.get("runs"))
+                      for x in (c.get("duties") or []))
+    out = {"ok": True, "dry_run": dry, "die": die, "config": cfg, "changed": changed,
+           "before": {k: before.get(k) for k in changed}, "after": {k: after.get(k) for k in changed},
+           "die_values": {k: die_geo.get(k) for k in MOTOR_GEO_KEYS},
+           "build_sig_before": _build_sig(d, c), "build_sig_after": _build_sig(d, c2),
+           "results_stale": bool(changed) and has_results}
+    if dry or not changed:
+        return out
+    _save_yaml(cfile, c2)
+    actor = str((_w.get("user") or {}).get("email") or "local-dev").strip().lower()
+    _AA.record(actor, "config.motor_keys", f"{die}/{cfg}", details={"from": before, "to": after})
+    log.info("family: motor keys of '%s/%s': %s", die, cfg,
+             ", ".join("%s %s -> %s" % (k, before.get(k), after.get(k)) for k in changed))
+    return out
 
 
 class CadMassPut(BaseModel):
@@ -7685,10 +7918,15 @@ def payload(die: str, cfg: str, duty: Optional[str] = None,
     # announces nothing (owner 2026-10-30).
     _wc = {"winding": dict(c.get("winding") or {})}
     _repick_config_winding(_wc, geo, f"apply '{die}/{cfg}'")
+    _cc_apply = None
+    _o_n, _n_n = (c.get("winding") or {}).get("n_coils_per_phase"), _wc["winding"].get("n_coils_per_phase")
+    if _o_n is not None and _n_n is not None and _o_n != _n_n:
+        _cc_apply = {"from": _o_n, "to": _n_n}      # shown, not written: the file keeps its value until a save
     out = {
         "die": die, "config": cfg,
         "geometry": geo,
         "winding": _wc["winding"],
+        **({"coil_count_corrected": _cc_apply} if _cc_apply else {}),
         "materials": mats,
         # {part: default} for the parts filled from _ABSENT_MATERIALS, and the
         # one-line statement of it (plus any part left as loaded) — the load

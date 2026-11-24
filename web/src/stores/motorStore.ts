@@ -1,3 +1,4 @@
+import { sweepContentKey, isRealEdit, mayPush } from '../lib/sweepSync';
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import { syncActiveMotor } from '../components/common/motorSettings';
@@ -5,6 +6,8 @@ import { setGeoGetter } from '../lib/apiAuth';
 import { canWriteServer, getStoredUser } from '../lib/localAuth';
 import { autoSaveAppliedDesign } from '../lib/appliedAutoSave';
 import type { AppliedSaveResult, ApplyMode } from '../lib/appliedAutoSave';
+import { baselineBody } from '../lib/runSettings';
+import type { RunRequest, RunResolved } from '../lib/runSettings';
 import { geoSignature, setGeoSigGetter } from '../components/common/geoSig';
 import { geometryApplyOutcome } from '../lib/geometryApplyOutcome';
 import { dutyApplyInProgress } from '../lib/familyFollow';
@@ -46,8 +49,10 @@ function restoreDescentEvalParams(st: any): void {
   const ep = st?.eval_params;
   if (!ep || typeof ep !== 'object') return;
   const put = (k: string, v: unknown) => { if (v != null) { try { localStorage.setItem(k, JSON.stringify(v)); } catch { /* quota */ } } };
-  put('sim.stepsPP', ep.steps_per_period);  put('mesh.nSectors', ep.n_sectors);
-  put('mesh.gapLayers', ep.gap_layers);     put('sim.coilTemp', ep.coil_temp_c);
+  // NOT written any more (owner 2026-11-24): the run's steps per period, gap rows, sector count and mesh sizes. Applying a
+  // geometry or a result must not change the fidelity of the user's ordinary runs (108 steps / 2 gap rows stayed 48 / 1 after
+  // an Apply).  The other fields below were restored before and still are.
+  put('sim.coilTemp', ep.coil_temp_c);
   put('mesh.poleCopy', ep.pole_copy);       put('sim.torqueFilter', ep.torque_filter);
   put('sim.fieldLosses', ep.rotor_eddy);
   // k_end: 0 in a descent means "auto" — the solver recomputes it from each
@@ -55,8 +60,10 @@ function restoreDescentEvalParams(st: any): void {
   // every consumer reading `sim.endWinding`.  The applied design's geometry re-seeds
   // the real factor, so only carry an EXPLICIT override across.
   if (Number(ep.end_winding_factor) > 0) put('sim.endWinding', ep.end_winding_factor);
-  put('mesh.meshSize', ep.mesh_size_mm);    put('mesh.minSize', ep.min_size_mm);
-  try { window.dispatchEvent(new CustomEvent('descent-eval-params', { detail: ep })); } catch { /* SSR */ }
+  // the live event carries the same restore, without the fidelity keys, so no panel adopts them from it either
+  const { steps_per_period: _s, gap_layers: _g, n_sectors: _n, mesh_size_mm: _m, min_size_mm: _mm, ...rest } = ep;
+  void _s; void _g; void _n; void _m; void _mm;
+  try { window.dispatchEvent(new CustomEvent('descent-eval-params', { detail: rest })); } catch { /* SSR */ }
 }
 
 // k_end follows the geometry (masses.end_winding_factor is the SINGLE SOURCE) and the
@@ -250,7 +257,8 @@ interface MotorState {
                        maxRounds?: number; surrogateSeed?: boolean;
                        objective?: string; currentBumpPct?: number;
                        ripplePenaltyLambda?: number;
-                       thdPenaltyLambda?: number; thdMaxPct?: number }) => Promise<void>;
+                       thdPenaltyLambda?: number; thdMaxPct?: number;
+                       runSettings?: { preset: string; overrides: Record<string, unknown>; expect_sig?: number; expect_token?: string } }) => Promise<void>;
   cancelDescent: () => Promise<void>;
   applyDescentBest: () => Promise<void>;
   applyDescentPoint: (pt: any) => Promise<void>;   // apply a USER-PICKED scatter point
@@ -265,7 +273,7 @@ interface MotorState {
    *  must never look like an apply that was archived. */
   appliedSave: (AppliedSaveResult & { busy?: boolean }) | null;
   loadLastDescent: () => Promise<void>;   // re-hydrate the last run's charts from the backend
-  computeBaselineLine: (opts: { currentBumpPct: number; steps: number; nSectors: number }) => Promise<void>;
+  computeBaselineLine: (opts: { currentBumpPct: number; request: RunRequest; resolved: RunResolved }) => Promise<{ stale: boolean }>;
 
   /** Hydrate sweepConfig from the backend so the selected variables follow the
    *  user across browsers; seeds the server if it has none yet but this browser does. */
@@ -276,6 +284,13 @@ interface MotorState {
 // after the store): _sweepHydrating suppresses echoing a server-driven hydrate
 // back to the server; _sweepSaveTimer debounces saves while the user edits.
 let _sweepHydrating = false;
+// The content (see lib/sweepSync) and edit stamp of the copy this browser last LOADED from, or PUSHED to, the server.
+let _sweepKnownKey: string | null = null;
+let _sweepBaseAt = 0;
+const _sweepMarkSynced = (cfg: { updatedAt?: number } | null | undefined) => {
+  _sweepKnownKey = sweepContentKey(cfg as never);
+  _sweepBaseAt = Number(cfg?.updatedAt) || 0;
+};
 let _sweepSaveTimer: ReturnType<typeof setTimeout> | undefined;
 // A config counts as "real" only if ≥1 variable is actually selected
 // (mode !== 'fixed').  A fresh browser carries all schema params as 'fixed', so
@@ -994,7 +1009,7 @@ export const useMotorStore = create<MotorState>()(
       lastOptSnapshot: null,
       appliedSave: null,
       setLastOptSnapshot: (s) => set({ lastOptSnapshot: s }),
-      runDescent: async ({ rippleMax, maxIters, wEff, wTd, steps, algorithm, nSectors, targetTorque, vPeakLimit, optimizeGamma, autoExpand, maxRounds, surrogateSeed, objective, currentBumpPct, ripplePenaltyLambda, thdPenaltyLambda, thdMaxPct }) => {
+      runDescent: async ({ rippleMax, maxIters, wEff, wTd, steps, algorithm, nSectors, targetTorque, vPeakLimit, optimizeGamma, autoExpand, maxRounds, surrogateSeed, objective, currentBumpPct, ripplePenaltyLambda, thdPenaltyLambda, thdMaxPct, runSettings }) => {
         const { sweepConfig } = get();
         const _inv = invertedRangeNames(sweepConfig.variations as never);
         if (_inv.length) {
@@ -1062,6 +1077,9 @@ export const useMotorStore = create<MotorState>()(
               mesh_size_mm, min_size_mm, pole_copy, torque_filter,
               rotor_eddy, end_winding_factor, gap_layers, coil_temp_c, structured_gap, airgap_macro, iron_template, geo_mesh, element_order,
               algorithm, n_sectors: nSectors,
+              // the panel's resolved run settings: when present the server takes the count, gap rows, mesh, sectors and
+              // rotor eddy from them alone (the fields above are then ignored)
+              ...(runSettings ? { run_settings: runSettings } : {}),
               target_torque_nm: targetTorque ?? 0,
               v_peak_limit: vPeakLimit ?? 1e9,
               optimize_gamma: optimizeGamma ?? true,
@@ -1100,22 +1118,19 @@ export const useMotorStore = create<MotorState>()(
           set({ descentError: String(e?.message ?? e), descentRunning: false });
         }
       },
-      computeBaselineLine: async ({ currentBumpPct, steps, nSectors }) => {
+      computeBaselineLine: async ({ currentBumpPct, request, resolved }) => {
         // Draw the current-only baseline line up-front (2 sims @ I, +bump% I), WITHOUT
         // a full optimization. Same eval params (single sources) as runDescent so the
         // line matches what the optimizer will evaluate against.
         const { sweepConfig } = get();
         const op0 = sweepConfig.operatingPoints[0] || ({} as any);
-        let mesh_size_mm = 4.0, min_size_mm = 0.3, pole_copy = false, torque_filter = false;
-        try { mesh_size_mm = Number(JSON.parse(localStorage.getItem('mesh.meshSize') ?? '4')) || 4.0; } catch { /* default */ }
-        try { min_size_mm  = Number(JSON.parse(localStorage.getItem('mesh.minSize')  ?? '0.3')) || 0.3; } catch { /* default */ }
+        // The run's settings (steps, gap rows, mesh sizes, sectors, rotor eddy, element order) are the panel's resolved ones:
+        // the request carries them under run_settings and nothing of them is read from the stored Mesh / Simulation tabs.
+        let pole_copy = false, torque_filter = false;
         try { pole_copy    = JSON.parse(localStorage.getItem('mesh.poleCopy') ?? 'false') === true; } catch { /* default */ }
         try { torque_filter = JSON.parse(localStorage.getItem('sim.torqueFilter') ?? 'false') === true; } catch { /* default */ }
-        let rotor_eddy = true, end_winding_factor = 0;
-        try { rotor_eddy = JSON.parse(localStorage.getItem('sim.fieldLosses') ?? 'true') !== false; } catch { /* default */ }
+        let end_winding_factor = 0;
         end_winding_factor = endWindingPin(get().geometry).k;   // typed, or 0 = per-candidate coil
-        // gap layers: the Mesh tab's, or undefined = the machine's saved setting
-        const gap_layers = storedGapLayers();
         let coil_temp_c = 120, structured_gap = false;
         try { coil_temp_c = Number(JSON.parse(localStorage.getItem('sim.coilTemp')  ?? '120')) || 120; } catch { /* default */ }
         // Belt (mapped) gap mesh — SINGLE SOURCE: the Mesh tab "Structured" toggle.
@@ -1129,18 +1144,20 @@ export const useMotorStore = create<MotorState>()(
         // Geometry-driven CDT mesh — SINGLE SOURCE: Mesh tab (same build as Simulation).
         let geo_mesh = true;
         try { geo_mesh = JSON.parse(localStorage.getItem('mesh.geoMesh') ?? 'true') !== false; } catch { /* default */ }
-        const element_order = 2;   // P2 — the only basis (see runDescent)
+                let stale = false;     // the server refused the held answer (409): the caller refreshes it
         set({ baselineBusy: true, baselineError: null });
         try {
           const res = await fetch(`${API_BASE_URL}/api/optimization/descent/baseline`, {
             method: 'POST', headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
-              operating_point: { gamma_deg: op0.gamma_deg ?? 0, current_a: op0.current_a, rpm: op0.rpm },
-              current_bump_pct: currentBumpPct, steps_per_period: steps, n_sectors: nSectors,
-              mesh_size_mm, min_size_mm, pole_copy, torque_filter,
-              rotor_eddy, end_winding_factor, gap_layers, coil_temp_c, structured_gap, airgap_macro, iron_template, geo_mesh, element_order,
+              ...baselineBody({
+                operating_point: { gamma_deg: op0.gamma_deg ?? 0, current_a: op0.current_a, rpm: op0.rpm },
+                current_bump_pct: currentBumpPct,
+              }, request, resolved),
+              pole_copy, torque_filter, end_winding_factor, coil_temp_c, structured_gap, airgap_macro, iron_template, geo_mesh,
             }),
           });
+          if (res.status === 409) stale = true;
           if (!res.ok) throw new Error(`HTTP ${res.status}: ${(await res.text()).slice(0, 200)}`);
           const j = await res.json();
           set({ baselineLine: j.baseline_line ?? null });
@@ -1149,6 +1166,7 @@ export const useMotorStore = create<MotorState>()(
         } finally {
           set({ baselineBusy: false });
         }
+        return { stale };
       },
       cancelDescent: async () => {
         try { await fetch(`${API_BASE_URL}/api/optimization/descent/cancel`, { method: 'POST' }); }
@@ -1322,13 +1340,14 @@ export const useMotorStore = create<MotorState>()(
                 modulation: config.modulation ?? local.modulation,
                 updatedAt: srvAt,
               } });
+              _sweepMarkSynced(get().sweepConfig);
               _sweepHydrating = false;
             } else if (_sweepSelected(local.variations) > 0) {
               // This browser's copy is the newer one → it becomes the server's.
               fetch(`${API_BASE_URL}/api/sweep/config`, {
                 method: 'PUT', headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(local),
-              }).catch(() => {});
+              }).then((pr) => { if (pr.ok) _sweepMarkSynced(local); }).catch(() => {});
             }
             return;
           }
@@ -1360,6 +1379,7 @@ export const useMotorStore = create<MotorState>()(
               vBusV: typeof config.vBusV === 'number' ? config.vBusV : local.vBusV,
               modulation: config.modulation ?? local.modulation,
             } });
+            _sweepMarkSynced({ ...get().sweepConfig, updatedAt: srvAt });
             _sweepHydrating = false;
           } else if (_geoSel(local.variations) > 0
                      || (_sweepSelected(local.variations) > 0 && _sweepSelected(srvVars) === 0)) {
@@ -1370,7 +1390,7 @@ export const useMotorStore = create<MotorState>()(
             fetch(`${API_BASE_URL}/api/sweep/config`, {
               method: 'PUT', headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify(local),
-            }).catch(() => {});
+            }).then((pr) => { if (pr.ok) _sweepMarkSynced(local); }).catch(() => {});
           }
         } catch { /* ignore */ }
       },
@@ -1397,11 +1417,15 @@ export const useMotorStore = create<MotorState>()(
 // not just the one that holds localStorage.  Hydrate is suppressed via the flag
 // so a server-driven load isn't echoed straight back.
 let _prevSweepConfig = useMotorStore.getState().sweepConfig;
+_sweepMarkSynced(_prevSweepConfig);   // the copy this browser booted with is the baseline
 let _sweepStamping = false;
 useMotorStore.subscribe((state) => {
   if (state.sweepConfig === _prevSweepConfig) return;
   _prevSweepConfig = state.sweepConfig;
   if (_sweepHydrating || _sweepStamping) return;
+  // Not an edit: the content is the one already known (an automatic re-apply of the operating point on mount, a schema
+  // init that changed nothing) - never stamped "now", never pushed (bug 2026-11-19).
+  if (!isRealEdit(_sweepKnownKey, state.sweepConfig)) return;
   // Never persist an all-'fixed' config — that's a fresh/just-loaded browser
   // (e.g. right after the schema populates every param as 'fixed'), and saving
   // it would wipe another browser's real selections off the server.
@@ -1417,12 +1441,24 @@ useMotorStore.subscribe((state) => {
   _prevSweepConfig = useMotorStore.getState().sweepConfig;
   if (!canWriteServer()) return;   // non-writers keep sweep setup local-only
   clearTimeout(_sweepSaveTimer);
-  _sweepSaveTimer = setTimeout(() => {
-    fetch(`${API_BASE_URL}/api/sweep/config`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(useMotorStore.getState().sweepConfig),
-    }).catch(() => { /* offline / backend down — localStorage still holds it */ });
+  _sweepSaveTimer = setTimeout(async () => {
+    try {
+      // compare-and-swap: a server copy NEWER than the one this browser last saw is somebody else's edit (another tab
+      // or browser) - adopt it, do not overwrite it
+      const cur = await fetch(`${API_BASE_URL}/api/sweep/config`).then((r) => (r.ok ? r.json() : null)).catch(() => null);
+      const srvAt = Number(cur?.config?.updatedAt) || 0;
+      if (!mayPush(_sweepBaseAt, srvAt)) {
+        await useMotorStore.getState().loadServerSweepConfig();
+        return;
+      }
+      const mine = useMotorStore.getState().sweepConfig;
+      const r = await fetch(`${API_BASE_URL}/api/sweep/config`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(mine),
+      });
+      if (r.ok) { _sweepKnownKey = sweepContentKey(mine); _sweepBaseAt = Number(mine.updatedAt) || _sweepBaseAt; }
+    } catch { /* offline / backend down — localStorage still holds it */ }
   }, 600);
 });
 
@@ -1443,6 +1479,7 @@ const _adoptSweepCopy = (cfg: SweepConfig) => {
   try {
     useMotorStore.setState({ sweepConfig: cfg });
     _prevSweepConfig = useMotorStore.getState().sweepConfig;
+    _sweepMarkSynced(cfg);
   } finally {
     _sweepHydrating = false;
   }

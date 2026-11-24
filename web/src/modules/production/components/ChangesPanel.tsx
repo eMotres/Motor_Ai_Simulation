@@ -1,6 +1,6 @@
 /** Revisions (newest first). The acknowledge banner lists revisions this account has not acknowledged yet; owner/engineer/admin publish. */
 import React, { useEffect, useState } from 'react';
-import { Alert, Box, Button, Chip, Dialog, DialogActions, DialogContent, DialogTitle, MenuItem, Paper, Select, Typography } from '@mui/material';
+import { Alert, Box, Button, Checkbox, Chip, Dialog, DialogActions, DialogContent, DialogTitle, FormControlLabel, MenuItem, Paper, Select, Typography } from '@mui/material';
 import { useTranslation } from 'react-i18next';
 import BilingualText, { BilingualInput, useContentLang } from './BilingualText';
 import HelpTip from '../../../components/common/HelpTip';
@@ -18,6 +18,8 @@ const ChangesPanel: React.FC<{ revisions: Revision[]; currentRevision: string; c
   const [lines, setLines] = useState<string[]>(['']);
   const [err, setErr] = useState<string | null>(null);
   const [preview, setPreview] = useState<RevisionPreview | null>(null);
+  // "urgent: mail now" (owner 2026-11-19): off by default; the revision otherwise waits for the daily digest e-mail
+  const [urgent, setUrgent] = useState(false);
   const [replaces, setReplaces] = useState<Array<{ old: string; new: string }>>([]);
   const [docs, setDocs] = useState<DocumentRec[]>([]);
   useEffect(() => { if (ctx.canEdit) productionApi.documents(ctx.die, ctx.config).then((d) => setDocs(replaceableDocs(d))).catch(() => setDocs([])); }, [ctx.canEdit, ctx.die, ctx.config, revisions.length]);
@@ -81,7 +83,11 @@ const ChangesPanel: React.FC<{ revisions: Revision[]; currentRevision: string; c
       <Dialog open={preview !== null} onClose={() => setPreview(null)} maxWidth="md" fullWidth>
         <DialogTitle sx={{ fontSize: 15 }}>{t('changes.reviewTitle', { rev: preview?.number ?? '' })}</DialogTitle>
         <DialogContent data-testid="changes-preview">
-          {preview && !preview.will_send && <Alert severity="info" sx={{ mb: 1, fontSize: 12.5 }}>{t('changes.cannotMail')}</Alert>}
+          {preview && !urgent && <Alert severity="info" sx={{ mb: 1, fontSize: 12.5 }}>{t('changes.digestNote')}</Alert>}
+          {preview && urgent && !preview.will_send && <Alert severity="info" sx={{ mb: 1, fontSize: 12.5 }}>{t('changes.cannotMail')}</Alert>}
+          <FormControlLabel sx={{ mb: 0.5 }} label={<Typography sx={{ fontSize: 13 }}>{t('changes.urgentMail')}</Typography>}
+            control={<Checkbox size="small" checked={urgent} inputProps={{ 'aria-label': t('changes.urgentMail') }}
+              onChange={(e) => { setUrgent(e.target.checked); setPreview((p) => (p ? { ...p, will_send: e.target.checked && p.will_send, mode: e.target.checked ? 'urgent' : 'digest' } : p)); }} />} />
           <Typography sx={{ fontSize: 12, color: 'var(--text-3)' }}>{t('changes.recipients', { count: preview?.recipients.length ?? 0 })}</Typography>
           <Box sx={{ display: 'flex', gap: 0.5, flexWrap: 'wrap', my: 0.5 }}>
             {(preview?.recipients ?? []).map((r) => <Chip key={r.email} size="small" label={`${r.email} · ${t(`role.${r.role}`, { defaultValue: r.role })}`} sx={{ fontSize: 11 }} />)}
@@ -92,13 +98,13 @@ const ChangesPanel: React.FC<{ revisions: Revision[]; currentRevision: string; c
             wordBreak: 'break-word', maxHeight: 320, overflow: 'auto', fontFamily: 'inherit' }}>{preview?.body}</Box>
         </DialogContent>
         <DialogActions>
-          <Button size="small" sx={{ textTransform: 'none' }} onClick={() => setPreview(null)}>{t('changes.cancel')}</Button>
+          <Button size="small" sx={{ textTransform: 'none' }} onClick={() => { setPreview(null); setUrgent(false); }}>{t('changes.cancel')}</Button>
           <Button size="small" variant="contained" sx={{ textTransform: 'none' }}
             onClick={() => void guard(async () => {
               await productionApi.publishRevision(ctx.die, ctx.config, makeBilingual(summary, lang),
-                lines.filter((l) => l.trim()).map((l) => makeBilingual(l, lang)), supersedePairs(replaces));
-              setSummary(''); setLines(['']); setReplaces([]); setPreview(null);
-            })}>{t('changes.sendPublish', { rev: preview?.number ?? '' })}</Button>
+                lines.filter((l) => l.trim()).map((l) => makeBilingual(l, lang)), supersedePairs(replaces), urgent);
+              setSummary(''); setLines(['']); setReplaces([]); setPreview(null); setUrgent(false);
+            })}>{t(urgent ? 'changes.sendPublishUrgent' : 'changes.sendPublish', { rev: preview?.number ?? '' })}</Button>
         </DialogActions>
       </Dialog>
       <Typography sx={{ fontSize: 12, color: 'var(--text-3)' }}>{t('changes.current', { rev: currentRevision })}</Typography>

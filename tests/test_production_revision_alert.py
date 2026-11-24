@@ -63,6 +63,7 @@ def bil(en, zh=None):
 def publish(summary="Shaft thread added", changes=None, **kw):
     user = {"email": ENG, "role": "engineer"}
     ch = changes if changes is not None else [dict(bil("M5 thread added to the shaft end", "轴端增加 M5 螺纹"))]
+    kw.setdefault("urgent", True)           # these tests are about the mail itself: the urgent path mails at once (the digest has its own tests)
     return R._publish_revision(DIE, CFG, user, bil(summary, "增加轴螺纹"), ch, **kw)
 
 
@@ -144,7 +145,7 @@ def test_the_preview_is_exactly_what_is_sent_and_writes_nothing():
         pv = RA.preview(DIE, CFG, store.load_file(DIE, CFG, "production.json"), rev)
         assert store.load_file(DIE, CFG, "revisions.json")["revisions"] == [] and store.load_file(DIE, CFG, "threads.json")["threads"] == []
         assert mail.sent == []
-        R._publish_revision(DIE, CFG, client_user, bil("S"), [bil("C")])
+        R._publish_revision(DIE, CFG, client_user, bil("S"), [bil("C")], urgent=True)
         assert len(mail.sent) == 4 and all(m[1] == pv["subject"] and m[2] == pv["body"] for m in mail.sent)
         assert [r["email"] for r in pv["recipients"]] == [m[0] for m in mail.sent]
 
@@ -261,7 +262,7 @@ def test_http_preview_then_publish_sends_the_previewed_message_and_the_factory_c
         base = "/api/production/%s/%s" % (DIE, CFG)
         prod = models.normalize_production({"members": [{"email": OEM1, "role": "oem"}, {"email": ENG, "role": "engineer"}, {"email": OWNER, "role": "owner"}]}, DIE, CFG)
         store.save_file(DIE, CFG, "production.json", prod)
-        body = {"summary": bil("Shaft thread added"), "changes": [bil("M5 thread")]}
+        body = {"summary": bil("Shaft thread added"), "changes": [bil("M5 thread")], "urgent": True}
         assert client.post(base + "/revisions/preview", json=body, headers=h["oem"]).status_code in (401, 403, 404)
         assert client.post(base + "/revisions", json=body, headers=h["oem"]).status_code in (401, 403, 404)
         assert mail.sent == []
@@ -277,3 +278,17 @@ def test_http_preview_then_publish_sends_the_previewed_message_and_the_factory_c
         bad = client.post(base + "/revisions", json={**body, "supersedes": [{"old_doc_id": "x", "new_doc_id": "y"}]}, headers=h["eng"])
         assert bad.status_code == 422 and len(mail.sent) == 3                                                          # refused before anything is sent
         assert client.post(base + "/revisions/preview", json={"summary": "x"}, headers=h["eng"]).status_code == 400
+
+
+def test_publishing_without_urgent_mails_nobody_and_the_record_says_the_digest_carries_it():
+    """Owner 2026-11-19: every production notification waits for the daily digest; only "urgent: mail now" mails at once."""
+    with production() as mail:
+        rev = publish(urgent=False)
+        assert mail.sent == []
+        assert rev["alert"]["mode"] == "digest" and {r["mail"] for r in rev["alert"]["recipients"]} == {"digest"}
+        assert rev["alert"]["thread_id"]                                   # the Discussion message is still posted at once
+        pv = RA.preview(DIE, CFG, store.load_file(DIE, CFG, "production.json"), rev)
+        assert pv["mode"] == "digest" and pv["will_send"] is False
+    with production() as mail:
+        rev = publish(urgent=True)
+        assert rev["alert"]["mode"] == "urgent" and len(mail.sent) == 4

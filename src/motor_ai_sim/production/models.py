@@ -701,6 +701,35 @@ def normalize_process_section(raw: dict, section_id: Optional[str] = None) -> di
     }
 
 
+#: The document sections besides the normal Documents list; a missing ``section`` means the Documents tab.
+DOCUMENT_SECTIONS = ("certification",)
+#: The topics of the Documents tab (owner 2026-11-24).  A document MAY store one (``topic``); without it the web derives it.
+#: Order = the order of the groups on screen (the web mirror is modules/production/documentTopics.ts); ``superseded`` is never stored.
+DOCUMENT_TOPICS = ("process", "drawings", "tooling", "tests", "packaging", "photos", "general")
+#: Status of a certification document (its own field: ``status`` stays reserved for ``superseded``).
+CERT_STATUSES = ("draft", "signed", "evidence_received")
+
+
+def normalize_certification_fields(raw: Optional[dict]) -> dict:
+    """``{section, group, cert_status}`` for a certification document, ``{}`` for a normal one (backward compatible: old rows have none).
+
+    ``group`` is a free-text label (<= 60 characters) the tab groups its list by; ``cert_status`` defaults to ``draft``."""
+    raw = raw if isinstance(raw, dict) else {}
+    if str(raw.get("section") or "").strip().lower() not in DOCUMENT_SECTIONS:
+        return {}
+    status = str(raw.get("cert_status") or "draft").strip().lower()
+    return {
+        "section": "certification",
+        "group": " ".join(str(raw.get("group") or "").split())[:60],
+        "cert_status": status if status in CERT_STATUSES else "draft",
+    }
+
+
+def is_certification(doc: Any) -> bool:
+    """A document filed in the Certification tab."""
+    return isinstance(doc, dict) and doc.get("section") == "certification"
+
+
 def normalize_document(raw: dict, file_id: str, uploader_email: str, name: str,
                        part_id: Optional[str] = None) -> dict:
     return {
@@ -714,6 +743,8 @@ def normalize_document(raw: dict, file_id: str, uploader_email: str, name: str,
         "internal": bool((raw or {}).get("internal", False)),
         # a picture posted to one assembly step (owner 2026-10-18: images in every production step)
         "step_id": str((raw or {}).get("step_id"))[:40] if (raw or {}).get("step_id") else None,
+        # Certification tab (owner 2026-11-19): section / group / cert_status are present only on a certification document
+        **normalize_certification_fields(raw),
     }
 
 
@@ -782,9 +813,18 @@ def file_version(name: str) -> Optional[str]:
     return m.group(1) if m else None
 
 
+#: The legacy hand-archive marker: ``[superseded`` in any letter case at the very start of the name, then ``]`` or a space
+#: (web mirror: documentTopics.ts ``isSupersededDoc``).  ``[supersededness] a.pdf`` is a normal name.
+_LEGACY_SUPERSEDED = re.compile(r"^\[superseded[\] ]", re.IGNORECASE)
+
+
 def is_superseded(doc: Any) -> bool:
     """A document replaced in a published revision (``status: superseded``) or archived by hand under the older "[superseded ..." name."""
-    return isinstance(doc, dict) and (doc.get("status") == "superseded" or str(doc.get("name") or doc.get("filename") or "").startswith("[superseded"))
+    if not isinstance(doc, dict):
+        return False
+    if doc.get("status") == "superseded":          # the field is authoritative
+        return True
+    return bool(_LEGACY_SUPERSEDED.match(str(doc.get("name") or doc.get("filename") or "")))
 
 
 def bilingual_has_text(c: Any) -> bool:

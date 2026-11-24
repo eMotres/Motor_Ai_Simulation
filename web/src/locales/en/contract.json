@@ -1,0 +1,130 @@
+{
+  "tab": "Contract",
+  "scheme": {
+    "title": "How it works",
+    "tip": "Who signs with whom, how the money goes and how the goods go.",
+    "view": "Scheme view",
+    "customerView": "Customer view",
+    "staffView": "Staff view",
+    "staffMissing": "The staff scheme is not configured on this server.",
+    "customer": "Customer",
+    "customerSub": "Signs the contract, pays, is the importer of the goods",
+    "motres": "MOTRES d.o.o.",
+    "motresSub": "Slovenia. Contract and one invoice; development, simulation and support",
+    "china": "Made in China",
+    "chinaSub": "Exported by the MOTRES company in Shanghai, shipped directly to the customer",
+    "money": "Payment, 100 % in advance",
+    "goods": "Goods, DAP, shipped directly",
+    "docsMotres": "Contract, invoice, test report",
+    "docsChina": "Packing list",
+    "noteImporter": "The customer is the importer and pays the import duty and the import VAT.",
+    "noteSupport": "Development, simulation and support come from MOTRES d.o.o.",
+    "legend": {
+      "money": "Money",
+      "goods": "Goods",
+      "documents": "Documents"
+    },
+    "upload": "Upload scheme (JSON)",
+    "uploadCustomer": "Upload customer scheme (JSON)",
+    "confirmTitle": "Publish the scheme",
+    "confirmCustomer": "{name} becomes the scheme EVERY reader of the Contract section sees, customers included.",
+    "confirmStaff": "{name} becomes the staff scheme: MOTRES staff only.",
+    "audienceMismatch": "The file says it is for \"{marked}\", not \"{kind}\": it is not published. Set \"audience\" in the file.",
+    "confirmPublish": "Publish"
+  },
+  "steps": {
+    "title": "Project steps",
+    "specification": "Specification",
+    "simulation_agreement": "Simulation and agreement",
+    "contract_payment": "Contract and payment",
+    "samples_1": "Samples, iteration 1 (tests)",
+    "samples_2": "Samples, iteration 2 (tests)",
+    "series": "Series"
+  },
+  "status": {
+    "title": "Status",
+    "tip": "Each step keeps its date and who made it. Sign: download the PDF, sign it and upload the scan.",
+    "draft": "Draft",
+    "sent": "Sent",
+    "signed_customer": "Signed by customer",
+    "signed_both": "Signed by both",
+    "set": {
+      "sent": "Mark as sent",
+      "newRevision": "Start new revision"
+    },
+    "sendTip": "Freezes this revision's agreement and annexes; the customer then uploads the signed scan.",
+    "newRevisionTip": "Back to draft as a new revision: the terms may change and both sides sign again.",
+    "scan_uploaded": "Scan uploaded",
+    "scan_rejected": "Scan rejected"
+  },
+  "sampleIteration": "Sample iteration",
+  "files": {
+    "title": "Agreement and annexes",
+    "tip": "Every upload is a new version; the earlier ones are kept.",
+    "none": "Nothing uploaded yet."
+  },
+  "kind": {
+    "agreement": "Agreement",
+    "annex_a": "Annex A: product, guaranteed values, test conditions",
+    "annex_b": "Annex B: commercial terms",
+    "signed_customer": "Scan signed by the customer",
+    "signed_motres": "Scan signed by MOTRES",
+    "other": "Other"
+  },
+  "annexATip": "Annex A will be generated from the project's guaranteed values; until then it is uploaded.",
+  "company": {
+    "filled": "Company details filled in",
+    "confirmed": "Company details confirmed {date}",
+    "missing": "Company details missing",
+    "filledTip": "Annex B takes the customer company from the Company details form.",
+    "missingTip": "The customer fills in the Company details form; Annex B takes the company from it.",
+    "notYetTip": "The Company details form is not available yet."
+  },
+  "terms": {
+    "title": "Standard terms",
+    "tip": "The standard agreement is the same for every customer.",
+    "advance": "Payment: 100 % in advance.",
+    "samples": "Samples are test units without warranty; a guaranteed value a sample misses is taken into account in the next iteration.",
+    "series": "Series: 12 months warranty from DAP delivery, after at least two sample iterations with full testing.",
+    "dispatch": "Dispatch within two months of receipt of the payment.",
+    "supply": "Supply from China directly to the customer.",
+    "law": "Law of Slovenia; courts in Ljubljana."
+  },
+  "pickFile": "Choose a file (PDF, DOCX, PNG, JPG)",
+  "note": "Note",
+  "cancel": "Cancel",
+  "upload": "Upload",
+  "uploadNew": "Upload new version",
+  "download": "Download",
+  "archive": "Archive",
+  "restore": "Restore",
+  "archived": "archived",
+  "showArchived": "Show archived",
+  "revision": "Revision {n}",
+  "revisionShort": "rev. {n}",
+  "frozenTip": "The signing of this revision rests on this file: it cannot be replaced or archived. Start a new revision to change the terms.",
+  "review": {
+    "awaitingCustomer": "Your signed scan {name} is awaiting the MOTRES check.",
+    "awaitingStaff": "Signed scan {name} awaits your check: open it, then confirm or reject.",
+    "open": "Open",
+    "confirmCustomer": "Confirm signed by customer",
+    "confirmBoth": "Confirm signed by both",
+    "reject": "Reject",
+    "rejectTitle": "Reject the scan",
+    "reason": "Reason"
+  },
+  "template": {
+    "only": "Template only",
+    "onlyTip": "No terms of the project's own yet: the standard agreement is what is sent.",
+    "agreement": "Standard agreement (template {version})",
+    "annex_a": "Annex A blank (template {version})",
+    "annex_b": "Annex B blank (template {version})",
+    "upload": "New template version",
+    "uploadTitle": "New version of a standard document",
+    "kind": "Document",
+    "version": "Version",
+    "pickFile": "Choose a file (PDF, DOCX)",
+    "ref": "standard agreement {version}",
+    "unavailable": "The standard contract documents need repair on this server: none is shown or sent."
+  }
+}

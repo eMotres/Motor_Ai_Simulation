@@ -31,6 +31,8 @@ from motor_ai_sim.digest import store as DS
 #: Capability names (see module docstring).
 INTERNAL = "internal"
 COSTS = "costs"
+STAFF = "staff"            # a staff-only (internal) project message: only recipients whose ACCOUNT is MOTRES staff (owner 2026-11-24)
+PRICES = "prices"          # a price-restricted project message: only recipients who see the prices (owner 2026-11-22)
 
 EXCERPT = 90
 
@@ -79,6 +81,24 @@ class Item:
 
 
 # -- small helpers ---------------------------------------------------------------------------------------------------------
+
+def _marked_thread_ids(rows: list, flag: str) -> set:
+    """Ids of the messages carrying ``flag`` and of every reply (any depth) to one: the digest treats a reply to a hidden message as hidden."""
+    out = {str(m.get("id") or "") for m in rows if m.get(flag)}
+    parent = {str(m.get("id") or ""): str(m.get("reply_to") or "") for m in rows}
+    grew = True
+    while grew:
+        grew = False
+        for mid, par in parent.items():
+            if par and par in out and mid not in out:
+                out.add(mid)
+                grew = True
+    return out
+
+
+def _restricted_thread_ids(rows: list) -> set:
+    return _marked_thread_ids(rows, "price_restricted")
+
 
 def excerpt(text: Any, n: int = EXCERPT) -> str:
     s = re.sub(r"\s+", " ", str(text or "")).strip()
@@ -310,9 +330,10 @@ def collect_project(project: dict, start: float, end: float, *,
             if public:
                 items.append(Item("project", ts, "Project details updated (" + ", ".join(public) + ")",
                                   "项目信息已更新（" + ", ".join(public) + "）", RP.project_path(pid), frozenset(), key="project"))
-    for m in _read_jsonl(PS.path_for(pid) / "thread.jsonl"):
-        if m.get("kind") == "resolution":
-            continue
+    thread_rows = [m for m in _read_jsonl(PS.path_for(pid) / "thread.jsonl") if m.get("kind") != "resolution"]
+    restricted_ids = _restricted_thread_ids(thread_rows)
+    staff_ids = _marked_thread_ids(thread_rows, "staff_only")
+    for m in thread_rows:
         ts = DS.parse_ts(m.get("created_at"))
         if not _in(ts, start, end):
             continue
@@ -320,7 +341,9 @@ def collect_project(project: dict, start: float, end: float, *,
         text = excerpt(m.get("text"))
         mid = str(m.get("id") or "")
         items.append(Item("message", ts, f"New message from {who_en}: {text}", f"{who_zh} 的新留言：{text}",
-                          RP.project_path(pid, "messages", item=mid) or RP.project_path(pid, "messages"), frozenset(), key=f"msg:{mid}"))
+                          RP.project_path(pid, "messages", item=mid) or RP.project_path(pid, "messages"),
+                          (frozenset({PRICES}) if mid in restricted_ids else frozenset())
+                          | (frozenset({STAFF}) if mid in staff_ids else frozenset()), key=f"msg:{mid}"))
     # new computed points of the project's motors
     for link in links.values():
         die, config = str(link.get("die") or ""), str(link.get("config") or "")
@@ -529,6 +552,9 @@ def collect_production(production: dict, start: float, end: float) -> list[Item]
     threads = {t.get("id"): t for t in (PR.load_file(die, config, "threads.json") or {}).get("threads", []) if isinstance(t, dict)}
     proposals = {p.get("id"): p for p in (PR.load_file(die, config, "proposals.json") or {}).get("proposals", []) if isinstance(p, dict)}
     parts_now = {p.get("id"): p for p in (PR.load_file(die, config, "parts.json") or {}).get("parts", []) if isinstance(p, dict)}
+    # revisions published "urgent: mail now" were e-mailed at once: their digest line says so (owner 2026-11-19)
+    urgent = {str(r.get("number")) for r in (PR.load_file(die, config, "revisions.json") or {}).get("revisions", [])
+              if isinstance(r, dict) and isinstance(r.get("alert"), dict) and r["alert"].get("mode") == "urgent"}
     pnames: dict = {pid: _plain_name(p.get("name")) for pid, p in parts_now.items()}
     tracker = _PartTracker()
     doc_groups: dict = {}
@@ -549,8 +575,10 @@ def collect_production(production: dict, start: float, end: float) -> list[Item]
             s_en, s_zh = bilingual(rev.get("summary"))
             n = len([c for c in rev.get("changes") or [] if c])
             tail_en, tail_zh = (f" ({n} changes)", f"（{n} 项变更）") if n else ("", "")
+            if eid in urgent:
+                tail_en, tail_zh = tail_en + " - already e-mailed when it was published", tail_zh + "（发布时已邮件通知）"
             items.append(Item("revision", ts, f"Revision {eid} published: {s_en}{tail_en}", f"版本 {eid} 已发布：{s_zh}{tail_zh}",
-                              link("changes", item=eid), frozenset(), key=f"rev:{eid}"))
+                              link("changes", item=eid), frozenset(), key=f"rev:{eid}", link_policy="none"))   # one "open and acknowledge" link per production (build.compose)
         elif action == "create" and entity == "document":
             d = docs.get(eid) or (snap.get("doc") if isinstance(snap.get("doc"), dict) else {})
             g = doc_groups.setdefault((str(d.get("part_id") or ""), bool(d.get("internal"))),

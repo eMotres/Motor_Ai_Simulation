@@ -12,6 +12,7 @@ the Simulation tab.
 """
 from __future__ import annotations
 
+import functools
 import hashlib
 import json
 import logging
@@ -24,7 +25,7 @@ from pathlib import Path
 from typing import List, Optional, Dict, Any, Tuple, Literal, Callable
 
 from fastapi import APIRouter, HTTPException, Request
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from motor_ai_sim import jobs as _JOBS
 from motor_ai_sim import workspace as _WSP
@@ -488,6 +489,9 @@ def _eval_cache_key(overrides: Dict[str, float], current_a: float, steps: int,
         # `warm_seeded` and `demag_seed_from` (fem_solver_2d), so a cached
         # point says for itself whose state it continued.
     }
+    _cr_run = _RUN_COIL_REL.get()
+    if _cr_run is not None:                      # a run at another wire cell than the stored block never shares an entry with one at it
+        payload["cr"] = round(float(_cr_run), 4)
     return hashlib.md5(json.dumps(payload, sort_keys=True, default=str).encode()).hexdigest()
 
 
@@ -578,6 +582,7 @@ _RES_KEYS = ("T_em_Nm", "efficiency", "torque_per_mass_Nm_kg", "T_ripple_pct",
              # experimental result must not re-seed the cache as a steady one
              "steady_state", "steady_state_note", "demag_settled", "demag_warning",
              "eddy_method", "eddy_method_requested", "eddy_method_note",
+             "eddy_method_fallback_reason",
              "tdm_experimental", "qualified",
              "cogging_sampling_purpose", "cogging_target_raw_samples_per_cycle",
              "cogging_cycles_per_electrical_period",
@@ -587,7 +592,8 @@ _RES_KEYS = ("T_em_Nm", "efficiency", "torque_per_mass_Nm_kg", "T_ripple_pct",
              "cogging_sampling_final_quality_sufficient",
              "cogging_sampling_auto_raised", "cogging_sampling_reason",
              # The candidate's Coulomb gap self-check (never refined; flagged).
-             "torque_method", "gap_layers_per_side", "ripple_self_check_rel",
+             "torque_method", "gap_layers_per_side", "n_steps_per_period_solved", "steps_snapped", "coil_rel_solved",
+             "demag_prepass_frames", "ripple_self_check_rel",
              "ripple_mesh_limited", "gap_layers_persist", "gap_layers_note",
              # The end-winding factor the point was billed at and whose it was
              # (typed pin / the point's own coil), owner 2026-10-30.
@@ -1007,7 +1013,7 @@ _EVAL_S_PER_FRAME_DEFAULT = 2.4
 
 #: steps/period an optimizer candidate screens at when the Simulation tab holds
 #: only its eddy-run default (72) — the tab default screening has always used.
-OPT_SCREEN_STEPS_PER_PERIOD = 40
+OPT_SCREEN_STEPS_PER_PERIOD = 40   # RETIRED: kept only so old imports resolve; the descent reads the Optimization preset
 
 
 def measured_eval_seconds(steps_per_period: int = 36,
@@ -1079,6 +1085,70 @@ _EVAL_THREAD_KEYS = ("MKL_NUM_THREADS", "OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS
                      "NUMEXPR_NUM_THREADS", "VECLIB_MAXIMUM_THREADS")
 
 
+# Evals the sweep fan-out runs at the same time (set around its submits; the
+# workspace pool copies the context into its workers).  None = a single eval.
+_EVAL_SIBLINGS = _ctxv_o.ContextVar("eval_siblings", default=None)
+
+
+# The wire cell (coil_rel) a RUN solves with when it is not the one in the machine's stored Mesh block: the Optimization / Simulation
+# preset's own cell, or the user's override (owner 2026-11-24).  None = the stored block, exactly as before.  Set by
+# ``_with_run_coil`` around the run's worker (the pool copies the context into its workers), written to the eval subprocess as
+# MOTRES_RUN_COIL_REL by ``_base_eval_env`` and read in ``refine_proc.run_one``; part of ``_eval_cache_key``.  Never written to the
+# machine's stored settings.
+_RUN_COIL_REL = _ctxv_o.ContextVar("run_coil_rel", default=None)
+
+
+def _run_coil_of(rec: Any) -> Optional[float]:
+    """The per-run wire cell a settings record carries (``coil_rel_override``), or None."""
+    try:
+        v = rec.get("coil_rel_override") if isinstance(rec, dict) else None
+        return float(v) if v is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _with_run_coil(fn, rec):
+    """``fn`` wrapped so that it runs with the record's per-run wire cell set (no wrapper when the record has none)."""
+    cr = _run_coil_of(rec)
+    if cr is None:
+        return fn
+
+    @functools.wraps(fn)
+    def _run(*a, **k):
+        tok = _RUN_COIL_REL.set(cr)
+        try:
+            return fn(*a, **k)
+        finally:
+            _RUN_COIL_REL.reset(tok)
+    return _run
+
+
+def _run_coil_worker(get_rec):
+    """Decorator for a campaign WORKER: the worker itself establishes the run's wire cell from the run's own stored settings record
+    (``get_rec(args, kwargs)``), before any cache access or evaluation, so every entry point (a live run, a resume after a restart,
+    the headless runner) gets it, and nothing else has to wrap the call.  Removed again when the worker returns (a reused
+    worker process starts its next job without it)."""
+    def deco(fn):
+        @functools.wraps(fn)
+        def _w(*a, **k):
+            try:
+                rec = get_rec(a, k)
+            except Exception:                    # noqa: BLE001 - no record, no override
+                rec = None
+            tok = _RUN_COIL_REL.set(_run_coil_of(rec))     # unconditional, None included: a nested unstamped worker must not inherit the outer cell
+            try:
+                return fn(*a, **k)
+            finally:
+                _RUN_COIL_REL.reset(tok)
+        return _w
+    return deco
+
+
+def _descent_rec(a, k):
+    with _descent_lock:
+        return (_descent_state or {}).get("mesh_preset")
+
+
 def _base_eval_env() -> Dict[str, str]:
     """The eval subprocess's environment, fresh, with the caller's WORKSPACE in it.
 
@@ -1106,6 +1176,19 @@ def _base_eval_env() -> Dict[str, str]:
                 "subprocess (%s) — refusing to evaluate on the process "
                 "machine" % _exc) from _exc
     env["SB_SEED_FROM_PREVIOUS"] = "1"
+    # How many evals of this pool run together: the TDM memory guard divides
+    # the container limit by it.  Unset outside a fan-out, so a single eval
+    # reads the guard exactly as before.
+    _sibs = _EVAL_SIBLINGS.get()
+    if _sibs and int(_sibs) > 1:
+        env["SB_TDM_SIBLINGS"] = str(int(_sibs))
+    else:
+        env.pop("SB_TDM_SIBLINGS", None)
+    _cr = _RUN_COIL_REL.get()
+    if _cr is not None:
+        env["MOTRES_RUN_COIL_REL"] = repr(float(_cr))
+    else:
+        env.pop("MOTRES_RUN_COIL_REL", None)      # a value inherited from the server's own environment never reaches an eval
     from motor_ai_sim.simulation.pardiso_runtime import pardiso_subprocess_env
     return pardiso_subprocess_env(env)
 
@@ -1324,8 +1407,18 @@ def _seed_usable_for(steps: int, coil_temp_c: float, rpm: Optional[float],
     return True, ""
 
 
+def _sweep_eddy_method() -> str:
+    """The eddy method the sweep's evals resolve to (argument, SB_EDDY_METHOD, config, default)."""
+    from motor_ai_sim.simulation.time_periodic import resolve_eddy_method
+    try:
+        return resolve_eddy_method(None, get_config().get("simulation"))
+    except ValueError:
+        return "tdm"
+
+
 def serial_first_decision(n_tasks: int, n_workers: int, demag: bool,
-                          rotor_eddy: bool, seed_ok: bool) -> Tuple[bool, str]:
+                          rotor_eddy: bool, seed_ok: bool,
+                          eddy_method: Optional[str] = None) -> Tuple[bool, str]:
     """Should the FIRST queued point be solved ALONE before the fan-out?
 
     The rule (user 2026-09-06, "the demagnetization pass is done once per
@@ -1348,6 +1441,10 @@ def serial_first_decision(n_tasks: int, n_workers: int, demag: bool,
     if not (demag and rotor_eddy):
         return False, ("no coupled-eddy demag in this run — no warm-up or "
                        "pre-pass to amortise")
+    if str(eddy_method or "").strip().lower() == "tdm":
+        return False, ("TDM solves the periodic orbit and takes no seed "
+                       "(warm_seeded is false there by design) — a solo first "
+                       "point would only idle the other workers")
     if seed_ok:
         return False, "a usable seed already exists — every point starts warm"
     if int(n_tasks) <= int(n_workers):
@@ -1512,7 +1609,9 @@ def _subprocess_eval(overrides: Dict[str, float], current_a: float, steps: int,
                      ripple_pct_gate: bool = True,
                      sampling_purpose: Literal["standard", "optimization", "cogging_quality"] =
                      "optimization",
-                     optimizer_candidate: bool = True) -> Dict[str, Any]:
+                     optimizer_candidate: bool = True,
+                     no_load: bool = False,
+                     report_demag_loss: bool = False) -> Dict[str, Any]:
     """Evaluate ONE (geometry, current, γ) with the real sliding-band transient
     in an isolated subprocess (FEM/LLVM crash → failed design, not a dead API).
     Rebuilds the CadQuery geometry + gmsh mesh for the candidate in-memory.
@@ -1578,7 +1677,10 @@ def _subprocess_eval(overrides: Dict[str, float], current_a: float, steps: int,
                        **({} if n_parallel is None
                           else {"n_parallel": int(n_parallel)}),
                        **({} if connection is None
-                          else {"connection": str(connection)})})
+                          else {"connection": str(connection)}),
+                       # opt-in unexcited no-load eval (Sweep "Cogging pp"); absent otherwise
+                       **({"no_load": True} if no_load else {}),
+                       **({"report_demag_loss": True} if report_demag_loss else {})})
     import time as _t_eval
     # What this eval was solved WITH -- provenance for the eval log (schema 2).
     _solve_meta = {
@@ -2029,11 +2131,22 @@ def refine_cancel(run_id: str = ""):
 # the variables (sweep → grid, optimize → linspace), capped, and each geometry
 # is evaluated at both operating currents in parallel isolated subprocesses.
 # ─────────────────────────────────────────────────────────────────────────────
+class RunSettingsIn(BaseModel):
+    """The run settings of an optimisation panel (``run_settings.py``): a preset button and the overrides typed after it.
+    The route resolves them with the SAME function the panel's display uses; ``expect_sig`` is the digest the panel showed,
+    a different one is refused (409) rather than run with settings the user did not see."""
+    preset: Optional[str] = "optimization"   # "optimization" | "simulation" | "tab": a tab request carries the visible Mesh / Simulation values in ``overrides`` and is labelled by match (run_settings.TAB_REQUIRED)
+    overrides: Dict[str, Any] = Field(default_factory=dict)
+    expect_sig: Optional[int] = None
+    expect_token: Optional[str] = None   # the complete resolution token the panel showed (run_settings.resolution_token)
+
+
 class ScanRequest(BaseModel):
     variables: List[OptVariable] = Field(default_factory=list)
     operating_points: List[OptOperating] = Field(default_factory=lambda: [OptOperating()])
     steps_per_period: int = 6              # FEM frames per electrical period
     preset: Optional[str] = None           # "optimization" | "simulation" (mesh_presets.py): fills the settings the request does not state; opt-in
+    run_settings: Optional[RunSettingsIn] = None   # the panel's resolved run settings: when present they are the ONLY source of the settings below
     ripple_max_pct: float = 100.0
     max_geometries: int = 24               # cap on enumerated geometries
     coil_temp_c: Optional[float] = None   # None = the Simulation tab's (`_sim_coil_temp_c`)
@@ -2060,6 +2173,17 @@ class ScanRequest(BaseModel):
     # out-of-range ripple PERCENT (undefined at ~0 mean torque); their result
     # is the cogging peak-to-peak in N·m.  Off = the sanity gate as before.
     cogging_screen: bool = False
+    # Opt-in "Cogging pp" (owner 2026-11-22): ONE extra no-load (I = 0) solve per
+    # GEOMETRY, at the loaded points' own magnet temperature, steps, mesh and rotor
+    # positions, shared by every operating point of that geometry and cached.  Its
+    # peak-to-peak torque [N*m] rides on each loaded point next to T_ripple_pct; the
+    # loaded points themselves are never replaced.  Off = nothing changes.
+    cogging_pp: bool = False
+    # Opt-in limit on that value [N*m] (0 = off): a point above it is not eligible.
+    # Only together with a floor on efficiency or torque (never cogging alone).
+    cogging_max_nm: float = Field(0.0, ge=0.0)
+    efficiency_min_pct: float = Field(0.0, ge=0.0, le=100.0)   # floor on efficiency [%] (0 = off)
+    torque_min_nm: float = Field(0.0, ge=0.0)                  # floor on the point torque [N*m] (0 = off)
     # The BASELINE point (the current motor, un-varied, at operating point 0)
     # is an extra full FEM eval that used to run unconditionally and LAST —
     # the user stopped every sweep at "22/23" to skip it (2026-09-04).  Opt-in.
@@ -2068,6 +2192,20 @@ class ScanRequest(BaseModel):
     run_id: str = ""
     # See OptRequest.allow_new_lamination.
     allow_new_lamination: bool = False
+
+    @model_validator(mode="after")
+    def _cogging_never_alone(self):
+        if float(self.cogging_max_nm) > 0.0:
+            _refuse_cogging_alone(bool(self.cogging_pp))
+        return self
+
+
+def _refuse_cogging_alone(measured: bool) -> None:
+    """Owner 2026-11-22: a cogging limit exists only beside the sweep's own torque-per-mass /
+    efficiency ranking (the Pareto front, always kept) and needs the no-load solve that
+    measures it.  Raises ValueError (a 422 on a route)."""
+    if not measured:
+        raise ValueError("a cogging limit needs cogging_pp = true (the no-load solve that measures it)")
 
 
 def _enumerate_geometries(variables: List[Dict[str, Any]], max_geom: int,
@@ -2105,7 +2243,19 @@ def _enumerate_geometries(variables: List[Dict[str, Any]], max_geom: int,
 
 
 def _geometry_reject(ov: Dict[str, float]) -> Optional[str]:
-    """Engineer-readable reason this grid geometry must NOT be solved, or None.
+    """The reason text of ``_geometry_reject_detail`` (None = solvable)."""
+    d = _geometry_reject_detail(ov)
+    return None if d is None else d[0]
+
+
+def _geometry_reject_detail(ov: Dict[str, float]):
+    """``(text, violations)`` for a grid geometry that must NOT be solved, or None.
+
+    ``text`` carries EVERY violation with its overlap pair (no "... and N more" cut); ``violations``
+    is the structured list ``[{code, part_a, part_b, likely_params, overlap_area_mm2}]`` the Sweep
+    banner groups by (a closed-form bound is ``code = "bound"`` with its target in ``likely_params``).
+
+    Engineer-readable reason this grid geometry must NOT be solved, or None.
 
     A SWEEP is an explicit list of values the user asked for.  Silently pulling
     one back to its feasibility bound and solving that instead answers a
@@ -2138,13 +2288,21 @@ def _geometry_reject(ov: Dict[str, float]) -> Optional[str]:
                **{k: v for k, v in ov.items() if k != "gamma_deg"}}
         why = _vmsg(geo)
         if why:
-            return why
+            from motor_ai_sim.geometry_constraints import violations as _viol
+            return why, [{"code": "bound", "part_a": str(r.get("target")), "part_b": "",
+                          "likely_params": [str(r.get("target"))], "overlap_area_mm2": 0.0}
+                         for r in _viol(geo)]
     except Exception:                      # cannot decide → not a reject
         return None
     try:
         from motor_ai_sim.geometry_validation import validate_geometry as _vgeo
         res = _vgeo(geo)
-        return None if res.ok else res.summary()
+        if res.ok:
+            return None
+        return res.summary(limit=60), [
+            {"code": v.code, "part_a": v.part_a, "part_b": v.part_b,
+             "likely_params": list(v.likely_params),
+             "overlap_area_mm2": round(float(v.overlap_area_mm2), 6)} for v in res.errors]
     except Exception as _e:                # noqa: BLE001 — cannot decide
         log.debug("sweep gate could not build a candidate's polygons (%s) — "
                   "deferring to the eval subprocess", _e)
@@ -2204,14 +2362,338 @@ def _scan_pins(rpm=None, magnet_temp_c=None, cogging_screen=False) -> Optional[D
     return pins or None
 
 
+_COG_PP_FINAL_STEPS = 120      # owner rule: cogging is final from 120 steps per period ...
+_COG_PP_FINAL_TEMP_C = 20.0    # ... at 20 C magnets
+
+
+#: A sweep whose loaded points lose more than this share of Br irreversibly (demag on) cannot be
+#: described by the full-strength no-load value: the value of that geometry is refused (missing).
+COGGING_DEMAG_REFUSE_FRACTION = 0.005
+#: The basis every Cogging pp value is stated on.
+COGGING_BASIS = "no_load_full_strength"
+COGGING_BASIS_TEXT = "no-load, full-strength magnets (demagnetisation at load not applied)"
+
+
+class _CogIdentityError(RuntimeError):
+    """A cogging identity failure with a FIXED public reason code (build_unknown,
+    material_not_assigned, material_library_unreadable); the message is for the server log only."""
+    def __init__(self, code: str, msg: str):
+        super().__init__(msg)
+        self.code = code
+
+
+def _cogging_identity() -> Dict[str, Any]:
+    """The build and material identity a stored Cogging pp value stands on; RAISES when either is not
+    really known (fail closed: no cache, no value).  Build = a real code version (not "unknown",
+    not the release label alone); materials = the content of every assigned card of the parts the
+    no-load field sees (a card that cannot be resolved, or resolves to nothing, raises)."""
+    from motor_ai_sim import duty_results as _dr
+    stamp = dict(_dr.solver_stamp() or {})
+    cv = str(stamp.get("code_version") or "")
+    if not cv or cv == "unknown":
+        raise _CogIdentityError("build_unknown", "the solver build is not identified (no code version)")
+    from motor_ai_sim.config import get_material_assignments
+    from motor_ai_sim import materials as _ml
+    from motor_ai_sim.material_context import get_request_materials
+    import dataclasses as _dc
+    import hashlib as _hl
+    _ml_default = dict(getattr(_ml, "DEFAULT_PART_MATERIAL", {}) or {})
+    asg = dict(get_material_assignments() or {})
+    ov = get_request_materials() or {}
+    asg.update({k: v for k, v in (ov.get("assignment") or {}).items() if v})
+    ov_props = ov.get("materials") or {}
+    cards: Dict[str, Any] = {}
+    for part in ("stator_core", "rotor_core", "magnet", "shaft", "sleeve"):
+        # the SAME default-material rule the solver uses: an unassigned part with a default card
+        # (the sleeve: DEFAULT_PART_MATERIAL) is solved with that card, so it is part of the identity
+        name = asg.get(part) or _ml_default.get(part)
+        if not name:
+            if part in ("stator_core", "magnet"):
+                raise _CogIdentityError("material_not_assigned", "no %s material is assigned" % part)
+            continue
+        name = str(name)
+        if name in ov_props and isinstance(ov_props[name], dict) and ov_props[name]:
+            props = ov_props[name]
+        else:
+            obj = _ml.resolve_assigned(part, name)        # raises when the library / overlay lacks it
+            props = _dc.asdict(obj) if _dc.is_dataclass(obj) else dict(vars(obj))
+        if not props:
+            raise _CogIdentityError("material_library_unreadable", "the %s card %r resolved to no content" % (part, name))
+        cards[part] = [name, props]
+    digest = _hl.md5(json.dumps(cards, sort_keys=True, default=str).encode()).hexdigest()[:16]
+    return {"build": cv, "image": stamp.get("image"), "materials": digest}
+
+
+def _cogging_identity_code(e: BaseException) -> str:
+    """The fixed public reason code of an identity failure (never the exception text)."""
+    if isinstance(e, _CogIdentityError):
+        return e.code
+    if isinstance(e, (OSError, KeyError, ValueError)):     # library / card missing or unparsable
+        return "material_library_unreadable"
+    return "error"
+
+
+_COG_STATUS: Dict[str, Any] = {"t": 0.0, "v": None}
+
+
+def cogging_identity_status(max_age_s: float = 60.0) -> Dict[str, Any]:
+    """Whether the Cogging pp identity can be formed right now (code version known AND the assigned
+    material cards readable).  Never raises; cached for ``max_age_s`` (health polls it)."""
+    import time as _t
+    now = _t.monotonic()
+    if _COG_STATUS["v"] is not None and now - _COG_STATUS["t"] < max_age_s:
+        return dict(_COG_STATUS["v"])
+    try:
+        _cogging_identity()
+        v: Dict[str, Any] = {"ok": True, "reason": None}
+    except Exception as e:                                  # noqa: BLE001
+        v = {"ok": False, "reason": _cogging_identity_code(e)}
+        logging.getLogger(__name__).error("cogging identity unavailable (%s): %s", v["reason"], e)
+    _COG_STATUS["t"], _COG_STATUS["v"] = now, v
+    return dict(v)
+
+
+def _cogging_sig(parts: List[Any]) -> int:
+    """A numeric digest of every setting two Cogging pp values must share to be compared (it rides in
+    the numbers-only applied metrics; two values compare only when both sigs are KNOWN and equal)."""
+    import hashlib as _hl
+    return int(_hl.md5(json.dumps(parts, sort_keys=True, default=str).encode()).hexdigest()[:12], 16)
+
+
+def _cogging_pp_fields(out: Optional[Dict[str, Any]], steps_requested: int,
+                       magnet_temp_c_resolved: Optional[float],
+                       missing: Optional[str] = None,
+                       demag_at_load: bool = False,
+                       identity: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """The fields a loaded sweep point carries from its geometry's no-load solve ``out``.
+
+    Provenance is the EFFECTIVE one: the steps the solver really reported (it may snap them), the
+    RESOLVED magnet temperature (the card's own when the request named none), the mesh it really
+    built.  ``cogging_final`` is true only for a SUCCESSFUL measurement at >= 120 effective steps,
+    20 C and sufficient cogging sampling; anything else (48 steps, a missing value) is a ranking
+    value or missing, never final.  A value that is missing is None - never 0 - and says why."""
+    pp, err, enough, prov = None, missing, False, {}
+    if missing is None:
+        if isinstance(out, dict) and out.get("ok") and isinstance(out.get("res"), dict):
+            r = out["res"]
+            prov = r.get("no_load_provenance") if isinstance(r.get("no_load_provenance"), dict) else {}
+            try:
+                v = float(r.get("T_ripple_pp_Nm"))
+                pp = v if math.isfinite(v) else None
+            except (TypeError, ValueError):
+                pp = None
+            if pp is None:
+                err = "no-load solve gave no finite peak-to-peak torque"
+            elif not prov:
+                pp, err = None, "no-load solve carried no provenance (not an unexcited no-load run)"
+            enough = r.get("cogging_sampling_final_quality_sufficient") is True
+        else:
+            logging.getLogger(__name__).warning("cogging no-load solve failed: %s", (out or {}).get("error") or "no result")
+            err = "no-load solve failed"
+    eff_steps = prov.get("steps_per_period_effective") if prov else None
+    # the temperature the SOLVE used (from its result), never the request or a pre-solve guess
+    eff_temp = prov.get("magnet_temp_c_effective") if prov else None
+    final = bool(pp is not None and isinstance(eff_steps, int) and eff_steps >= _COG_PP_FINAL_STEPS
+                 and enough and isinstance(eff_temp, (int, float))
+                 and abs(float(eff_temp) - _COG_PP_FINAL_TEMP_C) < 1e-9)
+    f: Dict[str, Any] = {
+        "cogging_pp_Nm": pp,
+        "cogging_steps_per_period": eff_steps if pp is not None else None,
+        "cogging_steps_requested": int(steps_requested),
+        # the basis is explicit and never silent: the solve is demag OFF whatever the loaded points do
+        "cogging_basis": COGGING_BASIS, "cogging_demag_at_load": bool(demag_at_load),
+        "cogging_magnet_temp_c": (float(eff_temp) if isinstance(eff_temp, (int, float)) else None),
+        "cogging_final": final}
+    if pp is not None:
+        f.update(cogging_gap_layers=prov.get("gap_layers_effective"),
+                 cogging_n_sectors=prov.get("n_sectors"),
+                 cogging_mesh_mm=prov.get("mesh_size_effective_mm"),
+                 cogging_rotor_eddy=bool(prov.get("rotor_eddy")), cogging_eddy=bool(prov.get("eddy")))
+        ident = identity or {}
+        if ident.get("build") and ident.get("materials"):
+            f["cogging_build"], f["cogging_materials"] = ident["build"], ident["materials"]
+            f["cogging_sig"] = _cogging_sig([
+                eff_steps, eff_temp, prov.get("mesh_size_effective_mm"), prov.get("gap_layers_effective"),
+                prov.get("n_sectors"), COGGING_BASIS, bool(demag_at_load), bool(prov.get("rotor_eddy")),
+                bool(prov.get("eddy")), ident["build"], ident["materials"]])
+    if err:
+        f["cogging_error"] = err
+    return f
+
+
+class _SweepCogging:
+    """ONE no-load solve per geometry for a whole sweep (shared by every operating point).
+
+    ``key_of(geo_ov)`` is the eval-cache key (geometry + resolved settings, current 0) and may
+    raise (fail closed: the point stays, its value is missing); ``solve(geo_ov)`` runs the no-load
+    eval.  A concurrent second point of the same geometry waits for the first; the outcome - a
+    value OR a failure - is remembered for the sweep, so a refused geometry is attempted once, not
+    once per current.  Only successes enter the persistent eval cache.  ``refuse`` is a reason this
+    sweep cannot share one no-load solve at all (nothing is solved, every value is missing).
+    ``solves`` counts the real solves of this run."""
+
+    def __init__(self, key_of, solve, steps: int, magnet_temp_c_resolved: Optional[float],
+                 refuse: Optional[str] = None, demag_at_load: bool = False,
+                 identity: Optional[Dict[str, Any]] = None):
+        self._key_of, self._solve = key_of, solve
+        self.identity = identity
+        self.demag_at_load = bool(demag_at_load)
+        self.steps, self.temp = int(steps), magnet_temp_c_resolved
+        self.refuse = refuse
+        self.solves = 0
+        self._memo: Dict[str, Dict[str, Any]] = {}
+        self._locks: Dict[str, threading.Lock] = {}
+        self._guard = threading.Lock()
+
+    def _missing(self, why: str) -> Dict[str, Any]:
+        return _cogging_pp_fields(None, self.steps, self.temp, missing=why,
+                                  demag_at_load=self.demag_at_load, identity=self.identity)
+
+    def cached(self, geo_ov: Dict[str, float]) -> Optional[Dict[str, Any]]:
+        if self.refuse:
+            return self._missing(self.refuse)
+        try:
+            key = self._key_of(geo_ov)
+        except Exception as e:                      # noqa: BLE001 - fail closed
+            logging.getLogger(__name__).warning("cogging cache key unavailable: %s", e)
+            return self._missing("cache key unavailable")
+        if key in self._memo:
+            return self._memo[key]
+        out = _EVAL_CACHE.get(key)
+        return None if out is None else _cogging_pp_fields(
+            out, self.steps, self.temp, demag_at_load=self.demag_at_load, identity=self.identity)
+
+    def fields(self, geo_ov: Dict[str, float]) -> Dict[str, Any]:
+        if self.refuse:
+            return self._missing(self.refuse)
+        try:
+            key = self._key_of(geo_ov)
+        except Exception as e:                      # noqa: BLE001 - fail closed
+            logging.getLogger(__name__).warning("cogging cache key unavailable: %s", e)
+            return self._missing("cache key unavailable")
+        with self._guard:
+            lock = self._locks.setdefault(key, threading.Lock())
+        with lock:
+            if key in self._memo:
+                return self._memo[key]
+            out = _EVAL_CACHE.get(key)
+            if out is None:
+                try:
+                    out = self._solve(geo_ov)
+                except Exception as e:              # noqa: BLE001
+                    logging.getLogger(__name__).warning("cogging no-load solve raised: %s", e, exc_info=True)
+                    out = {"ok": False, "error": "solve raised"}
+                self.solves += 1
+                if out and out.get("ok"):
+                    _store_eval(key, out)
+            f = self._memo[key] = _cogging_pp_fields(
+                out, self.steps, self.temp, demag_at_load=self.demag_at_load, identity=self.identity)
+        return f
+
+
+def _cogging_no_load_refusal() -> Optional[str]:
+    """Why ONE no-load solve cannot stand for the loaded points of this sweep (None = it can).
+
+    Only an excitation that is not the sinusoidal current drive (block current, applied voltage,
+    PWM allowed): the no-load eval is forced unexcited, but it would then not be the same machine
+    state.  Demag does NOT refuse here: the no-load solve is always demag OFF, full-strength
+    magnets, and says so (`cogging_basis`); a geometry whose loaded points lose Br irreversibly
+    above COGGING_DEMAG_REFUSE_FRACTION is refused later, per geometry (`_cogging_refuse_demagged`)."""
+    try:
+        from motor_ai_sim.optimization.refine_proc import _excitation_args
+        drive = _excitation_args(dict(get_config().get("simulation") or {})).get("drive")
+    except Exception as e:                          # noqa: BLE001
+        logging.getLogger(__name__).warning("cogging excitation unresolved: %s", e)
+        return "the loaded excitation could not be resolved"
+    if drive != "current":
+        return ("the loaded points run on the %s drive: one unexcited no-load solve cannot be "
+                "guaranteed to be the same machine state" % drive)
+    return None
+
+
+def _geo_identity(p: Dict[str, Any]) -> tuple:
+    """The PHYSICAL geometry of a point: its overrides without gamma - the identity the no-load memo
+    uses, so the gamma rows of one geometry are one geometry here too."""
+    try:
+        return tuple(sorted((str(k), round(float(v), 6)) for k, v in (p.get("overrides") or {}).items()
+                            if k != "gamma_deg"))
+    except (TypeError, ValueError):
+        return ("?", id(p))
+
+
+def _cogging_refuse_demagged(points: List[Dict[str, Any]], cogging_max_nm: float = 0.0) -> int:
+    """Per PHYSICAL geometry (gamma rows together): when any loaded point reports an irreversible
+    magnet loss above COGGING_DEMAG_REFUSE_FRACTION of Br (`demag_loss_pct`, % of the Br volume), the
+    full-strength no-load value does not describe that geometry under load: its value goes missing
+    with the reason, on every point of it.  A point that reports no loss (an older cached eval) is NOT
+    refused: its basis is recorded and `cogging_demag_loss_pct` stays None.  Idempotent; returns the
+    number of geometries refused."""
+    limit_pct = 100.0 * COGGING_DEMAG_REFUSE_FRACTION
+    worst: Dict[Any, float] = {}
+    for p in points:
+        try:
+            v = float(p.get("demag_loss_pct"))
+        except (TypeError, ValueError):
+            continue
+        if math.isfinite(v):
+            g = _geo_identity(p)
+            worst[g] = max(worst.get(g, 0.0), v)
+    bad = {g for g, v in worst.items() if v > limit_pct}
+    for p in points:
+        if "cogging_pp_Nm" not in p:
+            continue
+        g = _geo_identity(p)
+        p["cogging_demag_loss_pct"] = worst.get(g)
+        if g in bad:
+            p["cogging_pp_Nm"] = None
+            p["cogging_final"] = False
+            p["cogging_error"] = ("the loaded points lose %.2f %% of Br irreversibly (limit %.2f %%): "
+                                  "the full-strength no-load value does not describe this geometry "
+                                  "under load" % (worst[g], limit_pct))
+            for k in ("cogging_steps_per_period", "cogging_gap_layers", "cogging_n_sectors",
+                      "cogging_mesh_mm", "cogging_sig"):
+                p[k] = None
+            if cogging_max_nm > 0.0:
+                p["eligible"] = False
+    return len(bad)
+
+
+def _cogging_limits_ok(pt: Dict[str, Any], cogging_max_nm: float, eff_min_pct: float,
+                       torque_min_nm: float) -> bool:
+    """The opt-in limits of a cogging sweep on one point (a limit that is on and whose value is
+    missing counts as broken, never as met)."""
+    def _v(k):
+        try:
+            x = float(pt.get(k))
+            return x if math.isfinite(x) else None
+        except (TypeError, ValueError):
+            return None
+    if cogging_max_nm > 0.0:
+        c = _v("cogging_pp_Nm")
+        if c is None or c > cogging_max_nm:
+            return False
+    if eff_min_pct > 0.0:
+        e = _v("efficiency")
+        if e is None or e * 100.0 < eff_min_pct:
+            return False
+    if torque_min_nm > 0.0:
+        t = _v("T_em_Nm")
+        if t is None or abs(t) < torque_min_nm:
+            return False
+    return True
+
+
 @_optimizer_job("scan")
+@_run_coil_worker(lambda a, k: k.get("mesh_preset"))
 def _scan_worker(variables, operating_points, steps, coil_temp_c, ripple_max,
                  max_geom, seed, run_id, mesh_size_mm=4.0, min_size_mm=0.3,
                  pole_copy=None, torque_filter=False, n_sectors=1, gap_layers=None,
                  end_winding=0.0, rotor_eddy=False, hi_fidelity=False,
                  structured_gap=False, airgap_macro=False, iron_template=True,
                  geo_mesh=True, element_order=2, demag=False,
-                 with_baseline=False, magnet_temp_c=None, cogging_screen=False) -> None:
+                 with_baseline=False, magnet_temp_c=None, cogging_screen=False,
+                 cogging_pp=False, cogging_max_nm=0.0, efficiency_min_pct=0.0,
+                 torque_min_nm=0.0, mesh_preset=None) -> None:
     import numpy as np  # noqa: F401
     from concurrent.futures import wait, FIRST_COMPLETED
     # Workspace-carrying pool — see workspace.WorkspaceThreadPoolExecutor.
@@ -2298,7 +2780,14 @@ def _scan_worker(variables, operating_points, steps, coil_temp_c, ripple_max,
                 "airgap_macro": airgap_macro, "iron_template": iron_template,
                 "geo_mesh": geo_mesh, "element_order": element_order,
                 "demag": demag, "with_baseline": with_baseline,
+                "mesh_preset": mesh_preset,
             }
+            if cogging_pp:          # absent unless asked: a resume reproduces the opt-in
+                _req_body.update({"cogging_pp": True, "cogging_max_nm": float(cogging_max_nm),
+                                  "efficiency_min_pct": float(efficiency_min_pct),
+                                  "torque_min_nm": float(torque_min_nm)})
+                if magnet_temp_c is not None:
+                    _req_body["magnet_temp_c"] = float(magnet_temp_c)
             _total_pts = len(_enumerate_geometries(variables, int(max_geom), n_opt=4, seed=seed)) * len(operating_points)
             if with_baseline:
                 _total_pts += 1
@@ -2370,6 +2859,10 @@ def _scan_worker(variables, operating_points, steps, coil_temp_c, ripple_max,
 
         def _mk_point(out, ov, I, gi, oi, g, rpm=None, source_fp=None):
             pt = _point_from_eval(out, ov, I, gi, oi, ripple_max)
+            if not (cogging_pp and demag):
+                # a shared-cache entry stored by an opt-in run carries the loaded Br loss; an option-OFF
+                # sweep returns exactly the payload it always did
+                pt.pop("demag_loss_pct", None)
             pt["gamma_deg"] = g    # stamp γ so the chart can group/connect without the request
             pt["source_cfg_fp"] = source_fp or _config_fingerprint(
                 tuple(k for k in ov if k != "gamma_deg"))
@@ -2388,6 +2881,100 @@ def _scan_worker(variables, operating_points, steps, coil_temp_c, ripple_max,
         # alone (see _eval_env_for).
         _solo_ctx = {"threads": None}
 
+        # ── COGGING pp (opt-in): one no-load solve per geometry ────────────
+        # Same steps, n_periods (so the same rotor positions), mesh, gap layers
+        # and magnet temperature as the loaded points; current 0, gamma 0, the
+        # config speed (at I = 0 the speed only sets the time axis), rotor eddy
+        # and demag off (nothing to eddy / de-rate without current).  The key
+        # carries the geometry + these settings and NOT the operating point, so
+        # both currents of a geometry (and a later sweep) share one solve.
+        _cog = None
+        if cogging_pp:
+            from motor_ai_sim.simulation.fem_solver_2d import _run_magnet_temp_c as _mt_res
+            _mt_resolved = _mt_res(magnet_temp_c)
+            try:
+                _cog_ident = _cogging_identity()      # fail closed: no identity = no cache, no value
+                _cog_ident_err = None
+            except Exception as _e_id:                # noqa: BLE001
+                _code = _cogging_identity_code(_e_id)
+                logging.getLogger(__name__).warning("cogging identity unavailable (%s): %s", _code, _e_id)
+                _cog_ident, _cog_ident_err = None, "build / material identity unavailable (%s)" % _code
+
+            def _cog_key(geo_ov):
+                _excl = tuple(geo_ov.keys())
+                _fp = _config_fingerprint(_excl)
+                if _fp == "nofp":
+                    raise RuntimeError("the config fingerprint is unavailable")
+                if _cog_ident is None:
+                    raise RuntimeError("the build / material identity is unavailable")
+                _sim = dict(get_config().get("simulation") or {})
+                return _eval_cache_key(geo_ov, 0.0, steps, coil_temp_c, _NPER, 0.0,
+                                       mesh_size_mm, min_size_mm, n_sectors, pole_copy,
+                                       torque_filter, _fp,
+                                       gap_layers, end_winding, rotor_eddy, hi_fidelity,
+                                       structured_gap, airgap_macro,
+                                       iron_template=iron_template, geo_mesh=geo_mesh,
+                                       element_order=element_order, demag=False,
+                                       pins={**(_scan_pins(None, magnet_temp_c) or {}),
+                                             "cogging_pp": True, "no_load": True,
+                                             "basis": COGGING_BASIS,
+                                             "drive": "current",
+                                             "eddy": bool(_sim.get("eddy", False)),
+                                             "magnet_temp_resolved": _mt_resolved,
+                                             "materials": _cog_ident["materials"],
+                                             "solver": _cog_ident["build"],
+                                             "image": _cog_ident.get("image")},
+                                       sampling_purpose="optimization",
+                                       fp_excludes=_excl)
+
+            def _cog_solve(geo_ov):
+                # Unexcited (no_load: current drive, zero current and voltage, no PWM / block
+                # current), rotor eddy as the loaded points have it, demag OFF with the magnets at
+                # the loaded points' temperature: the stated basis is "no-load, full-strength
+                # magnets".  rpm = the config speed (time axis only).
+                return _subprocess_eval(geo_ov, 0.0, steps, coil_temp_c, n_periods=_NPER,
+                                        gamma_deg=0.0, mesh_size_mm=mesh_size_mm,
+                                        min_size_mm=min_size_mm, pole_copy=pole_copy,
+                                        torque_filter=torque_filter, n_sectors=n_sectors,
+                                        gap_layers=gap_layers, end_winding_factor=end_winding,
+                                        rotor_eddy=rotor_eddy, hi_fidelity=hi_fidelity,
+                                        structured_gap=structured_gap, airgap_macro=airgap_macro,
+                                        iron_template=iron_template, geo_mesh=geo_mesh,
+                                        element_order=element_order, demag=False,
+                                        owner="scan", magnet_temp_c=magnet_temp_c,
+                                        ripple_pct_gate=False, sampling_purpose="optimization",
+                                        no_load=True)
+            _cog = _SweepCogging(_cog_key, _cog_solve, steps, _mt_resolved,
+                                 refuse=(_cog_ident_err or _cogging_no_load_refusal()),
+                                 demag_at_load=bool(demag), identity=_cog_ident)
+
+        def _with_cogging(pt, geo_ov, cached_only=False):
+            """Add the geometry's Cogging pp to a loaded point and apply the opt-in limits.
+            A point that did not solve keeps no value (its error says why)."""
+            if _cog is None or not pt.get("feasible"):
+                return pt
+            f = _cog.cached(geo_ov) if cached_only else _cog.fields(geo_ov)
+            if f is None:
+                return pt
+            pt.update(f)
+            if pt.get("eligible") and not _cogging_limits_ok(
+                    pt, float(cogging_max_nm), float(efficiency_min_pct), float(torque_min_nm)):
+                pt["eligible"] = False
+            return pt
+
+        def _pub():
+            """The live list of finished points; the 0.5 % Br-loss rule (per PHYSICAL geometry, gamma rows
+            together) is applied to it BEFORE it is published, so neither the chart nor a live Apply ever
+            sees a value the rule would refuse."""
+            lst = [p for p in points if p is not None]
+            if _cog is not None:
+                _cogging_refuse_demagged(lst, float(cogging_max_nm))
+            return lst
+
+        # a cache-hit point that still lacks its Cogging pp: its loaded eval is
+        # reused, only the (shared) no-load solve is missing
+        _hit_out: Dict[int, Dict[str, Any]] = {}
+
         def _do(i_t):
             # COMPUTE path — only cache MISSES reach here (hits are pre-filled
             # before the pool starts, see below).  γ as a swept variable
@@ -2400,6 +2987,10 @@ def _scan_worker(variables, operating_points, steps, coil_temp_c, ripple_max,
             # compare the new machine with itself (incident 2026-10-29).
             fp_before = (_bind.fingerprint_for(tuple(geo_ov)) if _bind is not None
                          else _config_fingerprint(tuple(geo_ov)))
+            if i in _hit_out:
+                # loaded eval already cached: only the no-load solve is missing
+                return i, _with_cogging(_mk_point(_hit_out[i], ov, I, gi, oi, g, oprpm, fp_before),
+                                        geo_ov)
             out = _subprocess_eval(geo_ov, I, steps, coil_temp_c,
                                    n_periods=_NPER, gamma_deg=g,
                                    mesh_size_mm=mesh_size_mm, min_size_mm=min_size_mm,
@@ -2414,6 +3005,7 @@ def _scan_worker(variables, operating_points, steps, coil_temp_c, ripple_max,
                                     threads=_solo_ctx["threads"],
                                     magnet_temp_c=magnet_temp_c,
                                     **({"ripple_pct_gate": False} if cogging_screen else {}),
+                                    **({"report_demag_loss": True} if cogging_pp and demag else {}),
                                     sampling_purpose="optimization")
             if _config_fingerprint(tuple(geo_ov)) != fp_before:
                 out = {"ok": False, "error": "source config changed during FEM scan",
@@ -2438,7 +3030,7 @@ def _scan_worker(variables, operating_points, steps, coil_temp_c, ripple_max,
                 _log_eval_failure_cache(_cache_key(geo_ov, I, g, oprpm), out,
                                         overrides=geo_ov, current_a=I,
                                         gamma_deg=g)
-            return i, _mk_point(out, ov, I, gi, oi, g, oprpm, fp_before)
+            return i, _with_cogging(_mk_point(out, ov, I, gi, oi, g, oprpm, fp_before), geo_ov)
 
         # PREFILL: instantly plot every point already in the cache (from prior
         # sweeps — survives a backend restart via .scan_cache.jsonl) with NO FEM
@@ -2449,7 +3041,7 @@ def _scan_worker(variables, operating_points, steps, coil_temp_c, ripple_max,
         # breaks a closed-form feasibility bound — a winding that cannot fit the
         # slot being the one that bites — is REJECTED, not clamped-and-solved.
         # One check per geometry, memoised by geom_id; pure arithmetic.
-        _rej: Dict[int, Optional[str]] = {}
+        _rej: Dict[int, Any] = {}
         misses = []
         n_rejected = 0
         for i, t in enumerate(tasks):
@@ -2457,24 +3049,32 @@ def _scan_worker(variables, operating_points, steps, coil_temp_c, ripple_max,
             g = float(ov.get("gamma_deg", opg))
             geo_ov = {k: v for k, v in ov.items() if k != "gamma_deg"}
             if gi not in _rej:
-                _rej[gi] = _geometry_reject(ov)
+                _rej[gi] = _geometry_reject_detail(ov)
             if _rej[gi]:
+                _why, _viol = _rej[gi]
                 points[i] = {"overrides": ov, "current_a": I, "geom_id": gi,
                              "op_index": oi, "gamma_deg": g, "fem": False,
                              "feasible": False, "eligible": False,
-                             "geometry_rejected": True, "error": _rej[gi]}
+                             "geometry_rejected": True, "error": _why,
+                             "geometry_violations": _viol}
                 n_rejected += 1
-                _log_prefence_reject(geo_ov, I, g, _rej[gi])
+                _log_prefence_reject(geo_ov, I, g, _why)
                 continue
             out = _EVAL_CACHE.get(_cache_key(geo_ov, I, g, oprpm))
             if out is not None:
                 points[i] = _mk_point(out, ov, I, gi, oi, g, oprpm)
+                if _cog is not None and points[i].get("feasible"):
+                    _with_cogging(points[i], geo_ov, cached_only=True)
+                    if "cogging_pp_Nm" not in points[i]:
+                        _hit_out[i] = out          # computed below, loaded eval reused
+                        misses.append((i, t))
+                        points[i] = None
             else:
                 misses.append((i, t))
         if n_rejected:
             log.info("sweep: %d of %d points rejected before solving — %s",
                      n_rejected, len(tasks),
-                     next(m for m in _rej.values() if m))
+                     next(m[0] for m in _rej.values() if m))
         n_cached = sum(1 for p in points if p is not None) - n_rejected
         with _scan_lock:
             if _scan_owns(run_id):
@@ -2484,7 +3084,7 @@ def _scan_worker(variables, operating_points, steps, coil_temp_c, ripple_max,
                 # it — so it counts towards progress, or the bar stalls short of
                 # total for the whole run.
                 _scan_state["done"] = n_cached + n_rejected
-                _scan_state["points"] = [p for p in points if p is not None]   # instant plot
+                _scan_state["points"] = _pub()   # instant plot
         # SWEEP JOURNAL: mark all prefilled/rejected points as done — by their
         # ACTUAL task index (wherever `points[i]` got filled above), not by
         # `range(n_cached + n_rejected)`: a cache hit is rarely the first N
@@ -2525,7 +3125,7 @@ def _scan_worker(variables, operating_points, steps, coil_temp_c, ripple_max,
             need_br=bool(demag))
         _serial_first, _sf_why = serial_first_decision(
             len(misses), _job_workers(), bool(demag), bool(rotor_eddy),
-            _seed_ok)
+            _seed_ok, eddy_method=_sweep_eddy_method())
         log.info("sweep seeding: %s — %s%s",
                  "FIRST POINT SOLO, then fan out" if _serial_first
                  else "fan out immediately", _sf_why,
@@ -2549,10 +3149,15 @@ def _scan_worker(variables, operating_points, steps, coil_temp_c, ripple_max,
             with _scan_lock:
                 if _scan_owns(run_id):
                     _scan_state["done"] = done
-                    _scan_state["points"] = [p for p in points if p is not None]
+                    _scan_state["points"] = _pub()
 
-        ex = ThreadPoolExecutor(max_workers=_job_workers())
-        futs = [ex.submit(_do, it) for it in misses]
+        _n_pool = _job_workers()
+        ex = ThreadPoolExecutor(max_workers=_n_pool)
+        _sib_tok = _EVAL_SIBLINGS.set(min(len(misses), _n_pool))
+        try:
+            futs = [ex.submit(_do, it) for it in misses]
+        finally:
+            _EVAL_SIBLINGS.reset(_sib_tok)
         try:
             # Poll with a 1 s timeout instead of blocking on as_completed(): a Stop
             # must take effect within ~1 s EVEN IF the in-flight subprocess evals
@@ -2589,7 +3194,7 @@ def _scan_worker(variables, operating_points, steps, coil_temp_c, ripple_max,
                     # live-stream the points computed so far so the chart fills in
                     # as the sweep runs (not only at the end).
                     if _scan_owns(run_id):
-                        _scan_state["points"] = [p for p in points if p is not None]
+                        _scan_state["points"] = _pub()
         finally:
             ex.shutdown(wait=False, cancel_futures=True)
         _src_changed = (_bind.tripped if _bind is not None else None)
@@ -2611,6 +3216,8 @@ def _scan_worker(variables, operating_points, steps, coil_temp_c, ripple_max,
                                   "error": _src_changed}
             log.warning("sweep %s stopped: %s", run_id, _src_changed)
         points = [p for p in points if p is not None]
+        _n_demag_refused = (_cogging_refuse_demagged(points, float(cogging_max_nm))
+                            if _cog is not None else 0)
 
         # segments: the two operating points of one geometry
         by_geom: Dict[int, List[int]] = {}
@@ -2658,10 +3265,16 @@ def _scan_worker(variables, operating_points, steps, coil_temp_c, ripple_max,
                                        element_order=element_order, demag=demag,
                                        magnet_temp_c=magnet_temp_c,
                                        **({"ripple_pct_gate": False} if cogging_screen else {}),
+                                       **({"report_demag_loss": True} if cogging_pp and demag else {}),
                                        sampling_purpose="optimization")
                 if base_out and base_out.get("ok"):
                     _store_eval(_bck, base_out)
             baseline = _point_from_eval(base_out, {}, _bI, -1, 0, ripple_max)
+            if not (cogging_pp and demag):
+                baseline.pop("demag_loss_pct", None)
+            if _cog is not None and baseline.get("feasible"):
+                _with_cogging(baseline, {})
+                _cogging_refuse_demagged([baseline], float(cogging_max_nm))
         with _scan_lock:
             if _scan_owns(run_id):
                 _scan_state["done"] = len(tasks) + (1 if with_baseline else 0)
@@ -2681,6 +3294,9 @@ def _scan_worker(variables, operating_points, steps, coil_temp_c, ripple_max,
             "operating_points": operating_points, "ripple_max_pct": float(ripple_max),
             "objective": "pareto_torque_density_vs_efficiency_FEM",
             "steps_per_period": int(steps), "fem": True,
+            # the preset the sweep ran at and the EFFECTIVE steps / gap rows (a sweep stored before this key is labelled
+            # from its stored request by sweep_settings_of)
+            **({"mesh_preset": _stamp_solved(mesh_preset, points)} if mesh_preset else {}),
             "final_validation_status": "preliminary",
             # WHICH RUN THIS IS.  The panel polls one endpoint for "is my run
             # done" and "here is the result", and those were only ever the same
@@ -2719,6 +3335,26 @@ def _scan_worker(variables, operating_points, steps, coil_temp_c, ripple_max,
                              "validation_provenance_version": 1,
                              "sampling_purpose": "optimization"},
         }
+        if _cog is not None:        # absent unless asked: the saved sweep keeps what was measured
+            _feas = [p for p in points if p.get("feasible")]
+            _cp = [p for p in _feas if "cogging_pp_Nm" in p]
+            _meas = [p for p in _cp if p.get("cogging_pp_Nm") is not None]
+            result["cogging_pp"] = {
+                "steps_requested": int(steps),
+                "steps_effective": sorted({p["cogging_steps_per_period"] for p in _meas
+                                           if p.get("cogging_steps_per_period") is not None}),
+                "magnet_temp_c": _cog.temp, "refused": _cog.refuse,
+                "basis": COGGING_BASIS, "basis_text": COGGING_BASIS_TEXT,
+                "demag_at_load": bool(demag), "demag_refuse_fraction": COGGING_DEMAG_REFUSE_FRACTION,
+                "n_geometries_refused_by_demag": int(_n_demag_refused),
+                "no_load_solves": int(_cog.solves), "n_geometries": len(geos),
+                "n_measured": len(_meas), "n_missing": len(_cp) - len(_meas),
+                # final only when EVERY point carries a successful final measurement
+                # final only when EVERY feasible point carries a successful final measurement
+                "final": bool(_feas and len(_cp) == len(_feas) and len(_meas) == len(_cp)
+                              and all(p.get("cogging_final") for p in _meas)),
+                "limit_nm": float(cogging_max_nm), "efficiency_min_pct": float(efficiency_min_pct),
+                "torque_min_nm": float(torque_min_nm)}
         if _src_changed:
             result["source_changed"] = _src_changed
         # WHICH MACHINE: the start-of-run stamp (die / config / duty +
@@ -2778,7 +3414,8 @@ def _with_preset(req):
     if not name:
         return req, None
     from motor_ai_sim import mesh_presets as _MP
-    stated = {k: getattr(req, k) for k in req.model_fields_set if k in _PRESET_REQUEST_KEYS and getattr(req, k) is not None}
+    stated = {k: getattr(req, k) for k in req.model_fields_set
+              if k in _PRESET_REQUEST_KEYS and getattr(req, k) is not None}
     try:
         done = _MP.fill_body(name, stated, dict(get_config().get("geometry") or {}), steps_key="steps_per_period")
     except _MP.PresetError as exc:
@@ -2788,6 +3425,167 @@ def _with_preset(req):
     rec = dict(done["record"])
     rec["not_applied"] = ["outer_air_factor", "component_mesh"]
     return new, rec
+
+
+def _optimization_preset_steps(geometry=None) -> int:
+    """Steps per electrical period of the Optimization preset for the loaded machine (read from the stored preset)."""
+    from motor_ai_sim import mesh_presets as _MP
+    g = dict(geometry if geometry is not None else (get_config().get("geometry") or {}))
+    try:
+        return int(_MP.steps_for("optimization", g))
+    except _MP.PresetError as exc:
+        raise HTTPException(status_code=422, detail="the Optimization preset cannot be resolved: %s" % exc)
+
+
+def _resolve_run_settings(rs, mode: str):
+    """The run settings from the panel's ``{preset, overrides}`` (``run_settings.resolve``), for the loaded machine: steps per
+    period and gap rows are what the run uses, the other keys are shown read-only.  A bad record is a 422; a record whose digest differs from the one the panel displayed is a 409."""
+    from motor_ai_sim import run_settings as _RS
+    try:
+        out = _RS.resolve(rs.preset, rs.overrides, get_config(), mode)
+    except _RS.RunSettingsError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    if rs.expect_token is not None and str(rs.expect_token) != str(out["token"]):
+        raise HTTPException(status_code=409, detail=(
+            "the run settings changed since the panel showed them (the machine now resolves to other settings, e.g. the sectors); "
+            "the panel refreshes them, check them and press Run again"))
+    if rs.expect_sig is not None and int(rs.expect_sig) != int(out["sig"]):
+        raise HTTPException(status_code=409, detail=(
+            "the run settings changed since the panel showed them (the steps per period or the gap rows differ now); "
+            "the panel refreshes them, check them and press Run again"))
+    return out
+
+
+def _apply_run_settings(req, resolved):
+    """The request with the settings the run takes from the resolved record (steps and gap rows are never read from another tab)."""
+    st = resolved["settings"]
+    fields = type(req).model_fields
+    upd = {"steps_per_period": int(st["steps_per_period"]), "gap_layers": float(st["gap_layers"]),
+           "mesh_size_mm": float(st["mesh_size_mm"]), "min_size_mm": float(st["min_size_mm"]),
+           "n_sectors": int(st["n_sectors"]), "rotor_eddy": bool(st["rotor_eddy"]), "demag": bool(st["demag"]),
+           "hi_fidelity": bool(st["hi_fidelity"]), "element_order": int(st["element_order"])}
+    return req.model_copy(update={k: v for k, v in upd.items() if k in fields})
+
+
+def _run_settings_stamp(rs, resolved):
+    """The record a run stores about its settings: the label (about steps and gap rows only), what differs, the resolved settings
+    shown read-only and the steps-and-gap digest."""
+    return {"name": resolved["label"], "label": resolved["preset_label"] if not resolved["custom"] else "custom",
+            "version": resolved["version"], "custom": resolved["custom"], "differs": resolved["differs"],
+            "run_settings": {"preset": resolved["preset"], "overrides": resolved["overrides"]},
+            "settings": resolved["settings"], "sources": resolved["sources"], "clamps": resolved["clamps"],
+            "sig": resolved["sig"], "sig_scope": resolved["sig_scope"], "coil_rel": resolved["coil_rel"],
+            "coil_rel_stored": resolved["coil_rel_stored"], "coil_rel_override": resolved["coil_rel_override"]}
+
+
+@router.post("/run-settings/resolve")
+def run_settings_resolve(rs: RunSettingsIn, mode: str = "sweep"):
+    """The run settings for the loaded machine: the steps per period and gap rows the run receives (what the panel displays), and
+    the other keys read-only with their source."""
+    return _resolve_run_settings(rs.model_copy(update={"expect_sig": None, "expect_token": None}), mode)
+
+
+def _settings_class(*, steps, gap_layers, mesh_size_mm, min_size_mm, n_sectors, rotor_eddy, demag,
+                    preset_rec=None, geometry=None) -> Dict[str, Any]:
+    """Which preset the settings of a run equal ("optimization" / "simulation"), or "custom" with what differs from the
+    Optimization preset (the default one).  Every preset-controlled setting is compared (``mesh_presets.yaml``: steps, gap
+    rows, mesh sizes, sectors, rotor eddy, demag; the Simulation preset reads "96 steps or more")."""
+    from motor_ai_sim import mesh_presets as _MP
+    g = dict(geometry if geometry is not None else (get_config().get("geometry") or {}))
+    sect = max(1, int(n_sectors)) if int(n_sectors) > 0 else 1
+    cur = {"steps_per_period": float(steps), "gap_layers": float(gap_layers), "mesh_size_mm": float(mesh_size_mm),
+           "min_size_mm": float(min_size_mm), "n_sectors": sect, "rotor_eddy": bool(rotor_eddy), "demag": bool(demag)}
+    out: Dict[str, Any] = {"name": "custom", "custom": True, "differs": {}}
+    for name in ("optimization", "simulation"):
+        try:
+            v = _MP.resolve(name, g)["values"]
+        except _MP.PresetError:
+            continue
+        want = {"steps_per_period": v["n_steps_per_period"], "gap_layers": v["gap_layers"],
+                "mesh_size_mm": v["mesh_size_mm"], "min_size_mm": v["min_size_mm"], "n_sectors": v["n_sectors"],
+                "rotor_eddy": v["rotor_eddy"], "demag": v["demag"]}
+        diff = {}
+        for k, w in want.items():
+            c = cur[k]
+            if k == "steps_per_period" and name == "simulation":
+                same = c >= float(w) - 1e-9
+            elif isinstance(w, bool):
+                same = bool(c) == bool(w)
+            else:
+                same = _MP._same(c, w)
+            if not same:
+                diff[k] = {"preset": w, "current": c}
+        if not diff:
+            return {"name": name, "label": _MP.resolve(name, g)["label"], "version": _MP.version(), "custom": False,
+                    "differs": {}}
+        if name == "optimization":
+            out["differs"] = diff
+    return out
+
+
+def _sweep_settings_record(preset_rec, steps, gap_layers, cls=None):
+    """What a Sweep stores about its own settings: the label (a preset, or custom with what differs), the steps and gap rows it
+    ASKED for (``requested``) and ``effective`` with a source per field (``requested`` until points are solved,
+    ``_stamp_solved`` then replaces it by what the solver reports)."""
+    rec = dict(preset_rec or {})
+    if cls:
+        rec.update({k: v for k, v in cls.items() if k in ("name", "label", "version", "custom", "differs")})
+        if cls.get("custom"):
+            rec["name"] = "custom"
+    rec["requested"] = {"steps_per_period": int(steps), "gap_layers": float(gap_layers)}
+    rec["effective"] = dict(rec["requested"])
+    rec["effective_source"] = {"steps_per_period": "requested", "gap_layers": "requested"}
+    if rec.get("coil_rel") is not None:          # a run-settings stamp also names the wire cell the run asked for
+        rec["requested"]["coil_rel"] = round(float(rec["coil_rel"]), 4)
+        rec["effective"]["coil_rel"] = rec["requested"]["coil_rel"]
+        rec["effective_source"]["coil_rel"] = "requested"
+    return rec
+
+
+def _stamp_solved(rec, points):
+    """The sweep's settings record with ``effective`` taken from the SOLVED points, per field and marked ``solved`` /
+    ``requested`` / ``mixed``: ``solved`` only when EVERY point reports the field and they agree; ``requested`` when none
+    reports it (the solve returned nothing); ``mixed`` (value None) when the points disagree or only some report.  A solved
+    value that differs from the request, or a mixed one, makes the record ``custom`` (name ``custom``, no digest): it is
+    never called by a preset's name and is never ranked against other sweeps."""
+    if not rec:
+        return rec
+    rec = dict(rec)
+    req_eff = dict(rec.get("requested") or {})
+    pts = [p for p in points if isinstance(p, dict) and p.get("fem") is not False and p.get("feasible", True)]
+    eff, src = dict(req_eff), {}
+    spec = (("steps_per_period", "n_steps_per_period_solved", int), ("gap_layers", "gap_layers_per_side",
+                                                                     lambda x: round(float(x), 4)))
+    if "coil_rel" in req_eff:                    # the cell the MESHER used, reported by each point
+        spec = spec + (("coil_rel", "coil_rel_solved", lambda x: round(float(x), 4)),)
+    mixed = differs = False
+    n_rep = 0
+    for field, key, conv in spec:
+        vals = [conv(p[key]) for p in pts if p.get(key) is not None]
+        n_rep = max(n_rep, len(vals))
+        if not vals:
+            src[field] = "requested"
+        elif len(vals) == len(pts) and len(set(vals)) == 1:
+            src[field] = "solved"
+            eff[field] = vals[0]
+            want = req_eff.get(field)
+            if want is not None and abs(float(vals[0]) - float(want)) > 1e-9:
+                differs = True
+        else:
+            src[field] = "mixed"
+            eff[field] = None
+            mixed = True
+    rec["effective"], rec["effective_source"], rec["n_points_reporting"] = eff, src, n_rep
+    if not all(src.get(f) == "solved" for f in ("steps_per_period", "gap_layers") + (("coil_rel",) if "coil_rel" in req_eff else ())):
+        rec["sig"] = None           # the identity needs BOTH numbers verified by the solve; one requested value makes it unknown
+    if differs:
+        rec["solved_differs"] = True
+    if mixed:
+        rec["mixed"] = True
+    if differs or mixed:
+        rec["custom"], rec["name"], rec["label"] = True, "custom", "custom"
+        rec["sig"] = None
+    return rec
 
 
 def _mesh_sizes(req, preset_rec):
@@ -2814,7 +3612,14 @@ def prepare_scan(req: ScanRequest) -> Dict[str, Any]:
     Shared by ``scan_designs`` and the headless runner.  ``dropped`` lists the
     requested variables the whitelist left out (the route ignores it, as it
     always did, and answers 400 only when none is left; the runner refuses)."""
-    req, _preset_rec = _with_preset(req)
+    _rs_stamp = None
+    if req.run_settings is not None:
+        _resolved = _resolve_run_settings(req.run_settings, "sweep")
+        req = _apply_run_settings(req, _resolved)
+        _rs_stamp = _run_settings_stamp(req.run_settings, _resolved)
+        _preset_rec = {"name": _resolved.get("record_name", _resolved["preset"]), "label": _resolved["preset_label"], "version": _resolved["version"]}
+    else:
+        req, _preset_rec = _with_preset(req)
     wl = get_config().get("sweep_whitelist", None)
     allowed = set(wl or [])
     variables = [{"name": v.name, "min": float(v.min), "max": float(v.max),
@@ -2920,7 +3725,18 @@ def prepare_scan(req: ScanRequest) -> Dict[str, Any]:
               else {"magnet_temp_c": float(req.magnet_temp_c)})
     if req.cogging_screen:
         kwargs["cogging_screen"] = True
-    response = {"started": True, **({"mesh_preset": _preset_rec} if _preset_rec else {}),
+    if req.cogging_pp:               # absent unless asked: the default worker call is unchanged
+        kwargs.update(cogging_pp=True, cogging_max_nm=float(req.cogging_max_nm),
+                      efficiency_min_pct=float(req.efficiency_min_pct),
+                      torque_min_nm=float(req.torque_min_nm))
+    _sweep_rec = _sweep_settings_record(
+        _rs_stamp or _preset_rec, steps, gap_layers,
+        None if _rs_stamp else _settings_class(
+            steps=steps, gap_layers=gap_layers, mesh_size_mm=mesh_size, min_size_mm=min_size,
+            n_sectors=int(req.n_sectors), rotor_eddy=rotor_eddy, demag=demag))
+    kwargs["mesh_preset"] = _sweep_rec
+    init_state["mesh_preset"] = _sweep_rec
+    response = {"started": True, "mesh_preset": _sweep_rec, "gap_layers": gap_layers,
                 "steps_per_period": steps, "max_geometries": max_geom,
                 "mesh_size_mm": mesh_size, "min_size_mm": min_size,
                 **({"mesh_clamped": _mesh_clamped} if _mesh_clamped else {})}
@@ -3262,7 +4078,8 @@ def scan_validate_point(req: ScanValidateRequest):
         # The purpose is named HERE, not carried inside `args`, so the one
         # place that decides a Sweep point's final quality is readable (and
         # checked by tests/test_sampling_purpose_flow.py).
-        out = _subprocess_eval(sampling_purpose="cogging_quality", **args)
+        # at the wire cell the sweep used (its stored stamp), not the machine's block as it is now
+        out = _with_run_coil(_subprocess_eval, (result or {}).get("mesh_preset"))(sampling_purpose="cogging_quality", **args)
         good, reason = _standard_quality(out)
         if not good:
             raise HTTPException(status_code=422, detail=f"Standard 6× validation failed: {reason}")
@@ -3884,6 +4701,7 @@ class DescentRequest(BaseModel):
     w_td: float = 1.0                 # weight on torque-density ratio
     penalty_lambda: float = 1.0       # ripple-violation penalty
     max_iters: int = 8
+    run_settings: Optional[RunSettingsIn] = None   # the panel's resolved run settings: when present they are the ONLY source of steps, gap rows, mesh, sectors, rotor eddy
     steps_per_period: int = 24        # FEM frames/period (higher → cleaner ripple gradient)
     preset: Optional[str] = None      # "optimization" | "simulation" (mesh_presets.py): fills the settings the request does not state; opt-in
     coil_temp_c: Optional[float] = None   # None = the Simulation tab's (`_sim_coil_temp_c`)
@@ -3968,18 +4786,48 @@ class DescentRequest(BaseModel):
     #  'product': the legacy (efficiency/eff0)^w_eff · (T/mass/td0)^w_td.
     #  'min_ripple' (opt-in): minimise T_ripple_pct at the operating point.  Use it with the hard
     #    limits below; no baseline line is measured.
+    #  'min_cogging' (opt-in): minimise the no-load cogging torque (pk-pk, N*m) of each candidate,
+    #    measured by the extra solve described at cogging_max_nm, BESIDE the torque / efficiency
+    #    ranking (the product ranking stays in the cost: cogging is never the only objective); the
+    #    hard limits below still apply.  No baseline line is measured.
     objective: str = "baseline_line"
     current_bump_pct: float = 10.0    # 2nd baseline current = I·(1 + pct/100)
     # Opt-in HARD limits (0 = off): a design that breaks one never beats a feasible design.
     efficiency_min_pct: float = Field(0.0, ge=0.0, le=100.0)   # floor on efficiency [%]
     j_max_a_mm2: float = Field(0.0, ge=0.0)                    # cap on the coil current density [A/mm2]
     v_ll_peak_max_v: float = Field(0.0, ge=0.0)                # cap on the line-line peak voltage [V]
+    # Opt-in cogging torque (owner 2026-11-19).  When cogging_max_nm > 0 or objective is
+    # 'min_cogging', every candidate geometry gets ONE extra no-load solve in its own worker:
+    # 0 A, magnets at 20 C (owner rule: cogging at 20 C), cogging_steps_per_period steps
+    # (>= 120, owner rule; never the 48 of the load eval), eddy / rotor eddy / demag off, the
+    # run's mesh.  cogging_max_nm is a HARD cap on that pk-pk value [N*m], 0 = off.
+    cogging_max_nm: float = Field(0.0, ge=0.0)
+    cogging_steps_per_period: int = Field(144, ge=120)
     # See OptRequest.allow_new_lamination.
     allow_new_lamination: bool = False
     # Opt-in: the MTPA pre-sweep solves its angles with THIS run's eval
     # switches (rotor eddy, gap mesh, k_end, speed) instead of the eval
     # defaults.  Off = the angle choice exactly as before.
     mtpa_run_settings: bool = False
+
+    @model_validator(mode="after")
+    def _cogging_never_alone(self):
+        # Owner 2026-11-22: cogging is an additional objective or a limit BESIDE the torque /
+        # efficiency ranking, never alone and never instead of it.  baseline_line / product ARE
+        # that ranking; min_cogging keeps the product ranking in its cost (_descent_cost);
+        # min_ripple is a ripple-only objective: no ranking there, so no cogging beside it.
+        # An efficiency floor is a limit, not a ranking, and does not make cogging allowed.
+        if str(self.objective or "") == "min_cogging":
+            # the product ranking is what keeps cogging from being the only objective: both weights
+            # must be finite and positive (zero would erase the ranking, negative would invert it)
+            for w in (self.w_eff, self.w_td):
+                if not (math.isfinite(float(w)) and float(w) > 0.0):
+                    raise ValueError("min_cogging keeps the torque / efficiency ranking: w_eff and w_td "
+                                     "must be finite and positive")
+        if str(self.objective or "") == "min_ripple" and float(self.cogging_max_nm) > 0.0:
+            raise ValueError("cogging is used only beside the torque / efficiency ranking "
+                             "(baseline_line, product or min_cogging), never with min_ripple")
+        return self
 
 
 class BaselineRequest(BaseModel):
@@ -4003,6 +4851,7 @@ class BaselineRequest(BaseModel):
     end_winding_factor: float = 0.0
     n_sectors: int = -1
     element_order: int = 2         # P2 by default — the baseline line must use the same basis as the descent
+    run_settings: Optional[RunSettingsIn] = None   # the Descent panel's resolved run settings: when present the ONLY source of steps, gap rows, mesh sizes, sectors, rotor eddy, element order
 
 
 def _msum(m: Dict[str, Any]) -> Dict[str, Any]:
@@ -4032,12 +4881,18 @@ def _msum(m: Dict[str, Any]) -> Dict[str, Any]:
         "THD_LL_pct":      m.get("THD_LL_pct"),      # line-to-line voltage THD (FOC)
         "Kt_Nm_per_Arms":  m.get("Kt_Nm_per_Arms"),
         "current_a":       m.get("current_a"),   # current the design was solved at
+        # the steps (as snapped) and gap rows (as used) the solver reports: the run's solved pair is stamped from these
+        "n_steps_per_period_solved": m.get("n_steps_per_period_solved"),
+        "gap_layers_per_side": m.get("gap_layers_per_side"),
         "cogging_sampling_purpose": m.get("cogging_sampling_purpose"),
         "cogging_raw_samples_per_cycle": m.get("cogging_raw_samples_per_cycle"),
         "cogging_cycles_per_electrical_period": m.get("cogging_cycles_per_electrical_period"),
         "cogging_sampling_final_quality_sufficient": m.get(
             "cogging_sampling_final_quality_sufficient"),
                                                  # (auto-adjusted to hit the target torque)
+        # The no-load cogging torque of an opt-in cogging run (absent otherwise).
+        **({k: m.get(k) for k in ("cogging_pp_Nm", "cogging_steps_per_period", "cogging_error")
+            if k in m} if "cogging_pp_Nm" in m else {}),
     }
 
 
@@ -4063,6 +4918,9 @@ def _pt(out: Dict[str, Any], kind: str):
             # of them can still be reconstructed instead of dropped).
             "mass": r.get("mass_total_kg"),
             "thd": r.get("THD_LL_pct"),      # line-to-line voltage THD (FOC quality)
+            # what the solver reported for this point (steps as snapped, gap rows as used): the run's solved pair
+            "n_steps_per_period_solved": r.get("n_steps_per_period_solved"),
+            "gap_layers_per_side": r.get("gap_layers_per_side"),
             # The columns the run's own table shows.  A cloud point used to carry
             # only what the 2-D scatter plots, so the table under it could not
             # say WHY a design scored well — losses, terminal voltage and current
@@ -4079,7 +4937,9 @@ def _pt(out: Dict[str, Any], kind: str):
             "sampling_quality": ("standard" if r.get("cogging_sampling_purpose")
                                  in _FINAL_OK_PURPOSES
                                  and r.get("cogging_sampling_final_quality_sufficient") is True
-                                 else "preliminary")}
+                                 else "preliminary"),
+            # Only in a run that measures cogging (absent otherwise: the point is unchanged).
+            **({"cogging_pp": r.get("cogging_pp_Nm")} if "cogging_pp_Nm" in r else {})}
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -4189,10 +5049,74 @@ _THD_PEN = {"lam": 0.0, "max": 5.0}   # >0 → _descent_cost penalises THD_LL_pc
 # one and the search still sees which way to go.  "mode" None/"" = the request's own objective.
 _RUN_LIMITS = {"mode": "", "eff_min": 0.0, "j_max": 0.0, "vll_max": 0.0}
 _HARD_LIMIT_COST = 1000.0
+# Opt-in cogging measurement of the run (same per-run-global pattern): steps 0 = not measured,
+# max 0 = no cap.  Set together with _RUN_LIMITS by begin_descent_state, cleared with it.
+_COG_LIMIT = {"max": 0.0, "steps": 0}
 
 
 def _reset_run_limits() -> None:
     _RUN_LIMITS.update(mode="", eff_min=0.0, j_max=0.0, vll_max=0.0)
+    _COG_LIMIT.update(max=0.0, steps=0)
+
+
+def _cogging_on() -> bool:
+    """The run measures each candidate's no-load cogging torque (cap or objective set)."""
+    return int(_COG_LIMIT["steps"]) > 0
+
+
+def _defined_cogging(m: Dict[str, Any]) -> Optional[float]:
+    """Finite measured cogging pk-pk [N*m], or None (missing / failed: never assumed met)."""
+    try:
+        value = float(m.get("cogging_pp_Nm"))
+    except (TypeError, ValueError):
+        return None
+    return value if math.isfinite(value) else None
+
+
+_COGGING_TEMP_C = 20.0     # owner rule: cogging is measured at 20 C
+_COGGING_RPM = 100.0       # no current, no eddy: the speed only sets the time axis
+
+
+def _attach_cogging(o: Dict[str, Any], dd: Dict[str, float], memo: Dict[tuple, Dict[str, Any]],
+                    lock, eval_kw: Dict[str, Any]) -> Dict[str, Any]:
+    """Add the candidate's no-load cogging torque to a successful load eval (opt-in run only).
+
+    One extra solve per GEOMETRY (memo: the target-torque rescale, the final re-solve and the
+    baseline reuse it), run in the caller's own worker, so it never adds a parallel process.  The
+    value is kept only at final sampling quality (>= 6 raw samples per cogging cycle); otherwise
+    ``cogging_pp_Nm`` is None and a cap or the objective treats the design as broken."""
+    if not _cogging_on() or not isinstance(o, dict) or not o.get("ok") \
+            or not isinstance(o.get("res"), dict):
+        return o
+    geo = {k: v for k, v in dd.items() if k != "gamma_deg"}
+    key = tuple(sorted((k, round(float(v), 6)) for k, v in geo.items()))
+    steps = int(_COG_LIMIT["steps"])
+    with lock:
+        rec = memo.get(key)
+    if rec is None:
+        c = _subprocess_eval(geo, 0.0, steps, _COGGING_TEMP_C, n_periods=1.0, gamma_deg=0.0,
+                             rotor_eddy=False, demag=False, magnet_temp_c=_COGGING_TEMP_C,
+                             rpm=_COGGING_RPM, ripple_pct_gate=False,
+                             sampling_purpose="cogging_quality", owner="descent", **eval_kw)
+        pp, err = None, None
+        if c.get("ok") and isinstance(c.get("res"), dict):
+            r = c["res"]
+            if r.get("cogging_sampling_final_quality_sufficient") is True:
+                pp = _defined_cogging({"cogging_pp_Nm": r.get("T_ripple_pp_Nm")})
+                if pp is None:
+                    err = "cogging solve gave no finite pk-pk torque"
+            else:
+                err = "cogging solve below final sampling quality"
+        else:
+            err = "cogging solve failed: %s" % c.get("error")
+        rec = {"pp": pp, "error": err}
+        with lock:
+            memo[key] = rec
+    o["res"]["cogging_pp_Nm"] = rec["pp"]
+    o["res"]["cogging_steps_per_period"] = steps
+    if rec["error"]:
+        o["res"]["cogging_error"] = rec["error"]
+    return o
 
 
 def _limit_violation(m: Dict[str, Any]) -> float:
@@ -4210,7 +5134,8 @@ def _limit_violation(m: Dict[str, Any]) -> float:
         return max(0.0, (limit - v) / limit) if below else max(0.0, (v - limit) / limit)
     return (_over("efficiency", _RUN_LIMITS["eff_min"], True)
             + _over("J_coil_A_per_mm2", _RUN_LIMITS["j_max"], False)
-            + _over("V_line_peak_V", _RUN_LIMITS["vll_max"], False))
+            + _over("V_line_peak_V", _RUN_LIMITS["vll_max"], False)
+            + _over("cogging_pp_Nm", _COG_LIMIT["max"], False))
 
 
 def _defined_ripple_pct(metrics: Dict[str, Any]) -> Optional[float]:
@@ -4302,6 +5227,24 @@ def _descent_cost(m: Dict[str, Any], base: Dict[str, Any],
         # An undefined ripple already carries its 1e6 penalty; it contributes no ripple term here.
         r = 0.0 if _rip is None else float(_rip)
         return (r / 100.0 + pen), -r / 100.0
+    if _RUN_LIMITS["mode"] == "min_cogging":
+        # Opt-in objective: the lowest no-load cogging torque, relative to the start design's
+        # (absolute N*m when the start has none).  A missing value is never a good design.
+        cog = _defined_cogging(m)
+        if cog is None:
+            pen += 1e6
+            cog = 0.0
+        ref = _defined_cogging(base) if isinstance(base, dict) else None
+        scale = ref if ref is not None and ref > 0.0 else 1.0
+        # Cogging is an EXTRA objective BESIDE the torque / efficiency ranking, never instead of
+        # it (owner 2026-11-22): the legacy product ranking (efficiency and torque per mass
+        # relative to the start design, the same F as the default fallback) stays in the cost.
+        eff = max(float(m.get("efficiency", 0.0) or 0.0), 1e-6)
+        td = max(float(m.get("torque_per_mass_Nm_kg", 0.0) or 0.0), 1e-6)
+        eff0 = max(float(base.get("efficiency", 1.0) or 1.0), 1e-6) if isinstance(base, dict) else 1.0
+        td0 = max(float(base.get("torque_per_mass_Nm_kg", 1.0) or 1.0), 1e-6) if isinstance(base, dict) else 1.0
+        F = ((eff / eff0) ** w_eff) * ((td / td0) ** w_td)
+        return (-F + cog / scale + pen), F - cog / scale
     bl = base.get("_bline") if isinstance(base, dict) else None
     if bl:
         td  = float(m.get("torque_per_mass_Nm_kg", 0.0) or 0.0)
@@ -4353,7 +5296,8 @@ def _point_as_metrics(pt: Dict[str, Any]) -> Dict[str, Any]:
     """The objective fields retained on each preliminary chart point."""
     return {"torque_per_mass_Nm_kg": pt.get("td"),
             "efficiency": pt.get("eff"), "T_ripple_pct": pt.get("ripple"),
-            "V_peak": pt.get("v_peak"), "THD_LL_pct": pt.get("thd")}
+            "V_peak": pt.get("v_peak"), "THD_LL_pct": pt.get("thd"),
+            **({"cogging_pp_Nm": pt.get("cogging_pp")} if "cogging_pp" in pt else {})}
 
 
 def _finalize_standard_shortlist(
@@ -4520,6 +5464,11 @@ def _publish_standard_final(result: Dict[str, Any], validation: Dict[str, Any],
     public["failed"] = validation.get("failed") or []
     public["dropped_count"] = len(public["failed"])
     result["screening_best"] = result.get("best")
+    with _descent_lock:
+        _stamp_src = dict(_descent_state)
+    _stamped = _descent_solved_stamp(_stamp_src, points)
+    if isinstance(_stamped, dict):
+        result["mesh_preset"] = _stamped
     result["final_validation"] = public
     certified = validation.get("status") == "certified"
     if certified:
@@ -4669,6 +5618,7 @@ def _mtpa_gamma_sweep(geom, ref_I, steps, coil_temp, mesh_size, min_size, n_sect
 
 
 @_optimizer_job("descent")
+@_run_coil_worker(_descent_rec)
 def _descent_worker(var_specs, op, ripple_max, w_eff, w_td, lam,
                     steps, coil_temp, mesh_size, min_size, max_iters, run_id,
                     n_sectors=-1, v_peak_limit=1e9, target_torque=0.0,
@@ -4715,6 +5665,14 @@ def _descent_worker(var_specs, op, ripple_max, w_eff, w_td, lam,
         _torque_tol = 0.02       # probe within ±2 % of target → accept, no 2nd solve
         warm = [I]               # warm-start probe current (last geometry's rated current)
 
+        _cog_memo: Dict[tuple, Dict[str, Any]] = {}     # opt-in cogging: one no-load solve per geometry
+        _cog_lock = threading.Lock()
+        _cog_kw = dict(mesh_size_mm=mesh_size, min_size_mm=min_size, n_sectors=n_sectors,
+                       pole_copy=pole_copy, torque_filter=torque_filter,
+                       end_winding_factor=end_winding, gap_layers=gap_layers,
+                       structured_gap=structured_gap, airgap_macro=airgap_macro,
+                       iron_template=iron_template, geo_mesh=geo_mesh, element_order=element_order)
+
         def _eval_at(d, cur, purpose="optimization"):
             o = _subprocess_eval(d, cur, steps, coil_temp, n_periods=1.0,
                                  gamma_deg=g, mesh_size_mm=mesh_size,
@@ -4737,7 +5695,7 @@ def _descent_worker(var_specs, op, ripple_max, w_eff, w_td, lam,
                 o["res"]["current_a"] = float(cur)   # record solved current in best
             if isinstance(o, dict):
                 o["overrides"] = dict(d)             # stamp design → chart click-to-apply
-            return o
+            return _attach_cogging(o, d, _cog_memo, _cog_lock, _cog_kw)
 
         def evalx(xx):
             # Target-torque: probe at the WARM-START current (the last geometry's
@@ -5089,6 +6047,7 @@ def _surrogate_seed_overrides(var_specs, ripple_max, min_n=20):
 
 
 @_optimizer_job("descent")
+@_run_coil_worker(_descent_rec)
 def _cmaes_worker(var_specs, op, ripple_max, w_eff, w_td, lam,
                   steps, coil_temp, mesh_size, min_size, max_iters, run_id,
                   n_sectors=-1, v_peak_limit=1e9, target_torque=0.0,
@@ -5127,6 +6086,14 @@ def _cmaes_worker(var_specs, op, ripple_max, w_eff, w_td, lam,
         _torque_tol = 0.02       # probe within ±2 % of target → accept, no 2nd solve
         warm = [I]               # warm-start probe current (shared starting guess)
 
+        _cog_memo: Dict[tuple, Dict[str, Any]] = {}     # opt-in cogging: one no-load solve per geometry
+        _cog_lock = threading.Lock()
+        _cog_kw = dict(mesh_size_mm=mesh_size, min_size_mm=min_size, n_sectors=n_sectors,
+                       pole_copy=pole_copy, torque_filter=torque_filter,
+                       end_winding_factor=end_winding, gap_layers=gap_layers,
+                       structured_gap=structured_gap, airgap_macro=airgap_macro,
+                       iron_template=iron_template, geo_mesh=geo_mesh, element_order=element_order)
+
         def _eval_at(dd, cur, purpose="optimization"):
             o = _subprocess_eval(dd, cur, steps, coil_temp, n_periods=1.0,
                                  gamma_deg=g, mesh_size_mm=mesh_size,
@@ -5149,7 +6116,7 @@ def _cmaes_worker(var_specs, op, ripple_max, w_eff, w_td, lam,
                 o["res"]["current_a"] = float(cur)
             if isinstance(o, dict):
                 o["overrides"] = dict(dd)            # stamp design → chart click-to-apply
-            return o
+            return _attach_cogging(o, dd, _cog_memo, _cog_lock, _cog_kw)
 
         def evalx(d):
             # Target-torque with warm-start + ±2 % band: probe at the warm-start
@@ -5491,7 +6458,12 @@ def prepare_descent(req: DescentRequest) -> Dict[str, Any]:
     ``dropped`` lists the requested variables that did not make it into
     ``var_specs`` and why (the route ignores it, as it always did; the runner
     refuses).  An empty ``var_specs`` is the caller's to refuse."""
-    req, _preset_rec = _with_preset(req)
+    if req.run_settings is not None:
+        _resolved = _resolve_run_settings(req.run_settings, "descent")
+        req = _apply_run_settings(req, _resolved)
+        _preset_rec = _run_settings_stamp(req.run_settings, _resolved)
+    else:
+        req, _preset_rec = _with_preset(req)
     cfg = get_config()
     schema = cfg.get("geometry_schema", {})
     wl = cfg.get("sweep_whitelist", None)
@@ -5620,9 +6592,12 @@ def prepare_descent(req: DescentRequest) -> Dict[str, Any]:
               str(req.objective or "baseline_line"),
               max(0.0, min(float(req.current_bump_pct), 100.0)),
               bool(req.structured_gap), bool(req.airgap_macro))
-    _lim = {"mode": ("min_ripple" if str(req.objective or "") == "min_ripple" else ""),
+    _obj = str(req.objective or "")
+    _lim = {"mode": (_obj if _obj in ("min_ripple", "min_cogging") else ""),
             "eff_min": float(req.efficiency_min_pct) / 100.0,
             "j_max": float(req.j_max_a_mm2), "vll_max": float(req.v_ll_peak_max_v)}
+    _cog = ({"max": float(req.cogging_max_nm), "steps": int(req.cogging_steps_per_period)}
+            if _obj == "min_cogging" or float(req.cogging_max_nm) > 0.0 else None)
     kwargs = {"iron_template": bool(getattr(req, "iron_template", True)),
                 "geo_mesh": bool(getattr(req, "geo_mesh", True)),
                 "element_order": int(getattr(req, "element_order", 2) or 2)}
@@ -5637,10 +6612,14 @@ def prepare_descent(req: DescentRequest) -> Dict[str, Any]:
     if _lim["mode"] or _lim["eff_min"] or _lim["j_max"] or _lim["vll_max"]:   # absent unless asked
         init_state["objective_limits"] = dict(_lim)
         response["objective_limits"] = dict(_lim)
+    if _cog:                                                                     # absent unless asked
+        init_state["cogging_limit"] = dict(_cog)
+        response["cogging_limit"] = dict(_cog)
     return {"var_specs": var_specs, "dropped": dropped, "worker": worker,
             "args": args, "kwargs": kwargs, "init_state": init_state,
             "ripple_pen0": _rp0, "thd_pen": (_thd_lam, _thd_max),
             "run_limits": _lim,
+            **({"cogging_limit": _cog} if _cog else {}),
             "response": response}
 
 
@@ -5654,6 +6633,7 @@ def begin_descent_state(plan: Dict[str, Any]) -> None:
     _RIPPLE_PEN_LAM["v0"] = plan["ripple_pen0"]
     _THD_PEN["lam"], _THD_PEN["max"] = plan["thd_pen"]
     _RUN_LIMITS.update(plan.get("run_limits") or {"mode": "", "eff_min": 0.0, "j_max": 0.0, "vll_max": 0.0})
+    _COG_LIMIT.update(plan.get("cogging_limit") or {"max": 0.0, "steps": 0})   # an older run's never stays
     with _descent_lock:
         _descent_external[0] = False   # this process owns the flag now
         _descent_state.update(plan["init_state"])
@@ -5688,12 +6668,16 @@ def descent_baseline(req: BaselineRequest):
     'current-only' trade-off line A–B, so the objective-space chart can draw it
     BEFORE a full optimization.  Runs synchronously (2 evals); returns the line +
     auto-weights via _make_bline (same as a descent computes internally)."""
+    _rs_rec = None
+    if req.run_settings is not None:        # the SAME resolve a Descent run does: the baseline is drawn with the run's settings
+        _resolved = _resolve_run_settings(req.run_settings, "descent")
+        req = _apply_run_settings(req, _resolved)
+        _rs_rec = _run_settings_stamp(req.run_settings, _resolved)
     I    = float(req.operating_point.current_a)
     g    = float(req.operating_point.gamma_deg)
     bump = max(0.0, min(float(req.current_bump_pct), 100.0))
     steps     = max(8, min(int(req.steps_per_period), 180))
-    mesh_size = max(1.0, min(float(req.mesh_size_mm), 12.0))
-    min_size  = max(0.1, min(float(req.min_size_mm), 3.0))
+    mesh_size, min_size, _ = _mesh_sizes(req, _rs_rec)
     gap       = max(1.0, min(_resolve_gap_layers(req.gap_layers)[0], 8.0))
     n_sectors = int(req.n_sectors)
 
@@ -5711,6 +6695,7 @@ def descent_baseline(req: BaselineRequest):
                                 element_order=int(getattr(req, "element_order", 2) or 2),
                                 sampling_purpose="optimization")
 
+    _ev = _with_run_coil(_ev, _rs_rec)       # the run's own wire cell (coil_rel) too, so the baseline is the run's baseline
     a = _ev(I)
     if not a.get("ok"):
         raise HTTPException(status_code=500, detail=f"baseline A eval failed: {a.get('error')}")
@@ -5720,6 +6705,20 @@ def descent_baseline(req: BaselineRequest):
     a["res"]["current_a"] = I
     b["res"]["current_a"] = I * (1.0 + bump / 100.0)
     return {"baseline_line": _make_bline(a["res"], b["res"], bump)}
+
+
+def _descent_solved_stamp(st: Dict[str, Any], points: Optional[list] = None):
+    """The run's settings stamp of a Descent / Auto run with the steps and gap rows the solver REPORTED for its evaluated
+    candidates (the final validations, which keep their own purpose, are not counted); the launch stamp when the run has no
+    stamp or no eval parameters (a legacy request)."""
+    rec = st.get("mesh_preset")
+    ep = st.get("eval_params") or {}
+    if not isinstance(rec, dict) or "steps_per_period" not in ep:
+        return rec
+    base = _sweep_settings_record(rec, int(ep["steps_per_period"]), float(ep.get("gap_layers") or 1.0))
+    pts = [p for p in (points if points is not None else (st.get("points") or []))
+           if isinstance(p, dict) and not str(p.get("kind") or "").startswith("final")]
+    return _stamp_solved(base, pts)
 
 
 def _with_pareto(st: Dict[str, Any]) -> Dict[str, Any]:
@@ -5752,7 +6751,10 @@ def descent_progress():
         # that is how it expires when the hosting process dies.
         if not _descent_state.get("running") or _descent_external[0]:
             _refresh_descent_state_from_disk()
-        return _json_sane(_with_pareto(dict(_descent_state)))
+        out = _with_pareto(dict(_descent_state))
+        if isinstance(out.get("mesh_preset"), dict):
+            out["mesh_preset"] = _descent_solved_stamp(out)
+        return _json_sane(out)
 
 
 @router.post("/descent/cancel")
@@ -5901,7 +6903,8 @@ def descent_validate_point(req: DescentValidateRequest):
                                 detail="A point of this run is already being re-checked")
         _descent_recheck_running[ws] = key
     try:
-        out = _subprocess_eval(sampling_purpose="cogging_quality", **args)
+        # the re-check solves at the wire cell the run used (its stored stamp), not at whatever the machine's block says now
+        out = _with_run_coil(_subprocess_eval, st.get("mesh_preset"))(sampling_purpose="cogging_quality", **args)
         good, reason = _standard_quality(out)
         if not good:
             raise HTTPException(status_code=422,
@@ -6785,7 +7788,7 @@ def _screen_groups(names, size: int = _SCREEN_GROUP) -> List[List[str]]:
 
 
 def _auto_assemble(max_ripple_pct: float, budget_evals: int = 0,
-                   mode: str = _AUTO_DEFAULT_MODE) -> Dict[str, Any]:
+                   mode: str = _AUTO_DEFAULT_MODE, run_settings=None) -> Dict[str, Any]:
     """Build the FULL optimization request from the standing conventions.
 
     Raises HTTPException(422) with an engineer-readable message when the input
@@ -6892,8 +7895,10 @@ def _auto_assemble(max_ripple_pct: float, budget_evals: int = 0,
     # they always screened at.  A count the user picked on the tab is obeyed.
     steps_src = str(sim.get("steps_per_period_source") or "").strip().lower()
     steps_tab = steps
+    # A tab that holds the eddy-run default only AS the default screens at the Optimization preset's own count (read from the
+    # stored preset, no constant); a count the user set (or a preset button set) is obeyed, never a hidden default.
     if steps_src == "eddy_default":
-        steps = float(OPT_SCREEN_STEPS_PER_PERIOD)
+        steps = float(_optimization_preset_steps(cfg.get("geometry") if isinstance(cfg, dict) else None))
     steps_pp = int(steps) if (steps and steps >= 8) else 36
     steps_pp = max(8, min(180, steps_pp))
     # Candidate evals carry sampling_purpose="optimization". Their
@@ -6959,6 +7964,19 @@ def _auto_assemble(max_ripple_pct: float, budget_evals: int = 0,
         "drive": str(sim.get("drive") or "current"),
         "pole_copy": None,
     }
+    # THE PANEL'S RUN SETTINGS (owner 2026-11-24): when the request carries them they are the ONLY source of the count, the gap
+    # rows, the mesh sizes, the sectors, rotor eddy and demag - the same resolver the panel's display used.
+    _rs_resolved = None
+    if run_settings is not None:
+        _rs_resolved = _resolve_run_settings(run_settings, "auto")
+        _st = _rs_resolved["settings"]
+        ev.update({"steps_per_period": int(_st["steps_per_period"]),
+                   "steps_per_period_requested": int(_st["steps_per_period"]),
+                   "steps_per_period_source": "run_settings",
+                   "mesh_size_mm": float(_st["mesh_size_mm"]), "min_size_mm": float(_st["min_size_mm"]),
+                   "gap_layers": float(_st["gap_layers"]),
+                   "n_sectors": (-1 if int(_st["n_sectors"]) <= 1 else int(_st["n_sectors"])),
+                   "rotor_eddy": bool(_st["rotor_eddy"]), "demag": bool(_st["demag"])})
 
     # ── VARIABLES: the whitelist, at the machine's own scale, UNBOXED ─────────
     stator_d = float(geo.get("stator_diameter", 0.0) or 0.0)
@@ -7081,6 +8099,7 @@ def _auto_assemble(max_ripple_pct: float, budget_evals: int = 0,
             "operating_point": {"current_a": I, "rpm": rpm, "gamma_deg": gamma,
                                 "connection": _conn, "n_parallel": _npar},
             "eval": ev,
+            **({"run_settings": _run_settings_stamp(run_settings, _rs_resolved)} if _rs_resolved else {}),
             "variables": variables,
             # searched-out by a manufacturing floor (optimization/manufacturing.py)
             "excluded_variables": excluded_vars,
@@ -7147,6 +8166,7 @@ def _auto_assemble(max_ripple_pct: float, budget_evals: int = 0,
         "operating_point": {"current_a": I, "rpm": rpm, "gamma_deg": gamma,
                                 "connection": _conn, "n_parallel": _npar},
         "eval": ev,
+        **({"run_settings": _run_settings_stamp(run_settings, _rs_resolved)} if _rs_resolved else {}),
         "variables": variables,
         # searched-out by a manufacturing floor (optimization/manufacturing.py)
         "excluded_variables": excluded_vars,
@@ -7167,6 +8187,7 @@ def _auto_assemble(max_ripple_pct: float, budget_evals: int = 0,
 
 
 @_optimizer_job("auto")
+@_run_coil_worker(lambda a, k: (a[0] if a else k.get("plan") or {}).get("run_settings"))
 def _auto_worker(plan: Dict[str, Any], run_id: str, bucket: str,
                  point_name: str) -> None:
     """CMA-ES over the whitelist in PHYSICAL units with a per-variable sigma.
@@ -7636,6 +8657,7 @@ def _auto_worker(plan: Dict[str, Any], run_id: str, bucket: str,
 
 
 @_optimizer_job("auto")
+@_run_coil_worker(lambda a, k: (a[0] if a else k.get("plan") or {}).get("run_settings"))
 def _screen_worker(plan: Dict[str, Any], run_id: str, bucket: str,
                    point_name: str) -> None:
     """Screening descent — the user's method, mechanised.  See the block comment
@@ -8359,6 +9381,7 @@ class AutoOptRequest(BaseModel):
     """The whole user-facing surface of a one-click optimization: ONE number —
     plus WHICH SEARCH runs it, because the two available searches answer
     different questions and only the engineer knows which one is being asked."""
+    run_settings: Optional[RunSettingsIn] = None   # the panel's resolved run settings (run_settings.py)
     max_ripple_pct: float
     # 'cmaes'  — global population search; explores, can change basin, needs
     #            O(N²) evals before its covariance means anything.
@@ -8391,7 +9414,7 @@ def auto_plan(req: AutoOptRequest):
     Project rule: a run says what it costs before it starts.  This is the
     pre-flight the Run button shows — the assembled operating point, objective,
     variables with their initial steps, and n_evals x measured s/eval."""
-    plan = _auto_assemble(req.max_ripple_pct, req.budget_evals, req.mode)
+    plan = _auto_assemble(req.max_ripple_pct, req.budget_evals, req.mode, req.run_settings)
     return {"plan": plan, "point_name": _auto_point_name(req)}
 
 
@@ -8407,7 +9430,7 @@ def auto_start(req: AutoOptRequest, request: Request):
             raise HTTPException(status_code=409,
                                 detail="an optimization is already running")
 
-    plan = _auto_assemble(req.max_ripple_pct, req.budget_evals, req.mode)
+    plan = _auto_assemble(req.max_ripple_pct, req.budget_evals, req.mode, req.run_settings)
     name = _auto_point_name(req)
     try:
         from motor_ai_sim.routes.saved_sims import bucket_for
@@ -8454,6 +9477,7 @@ def auto_start(req: AutoOptRequest, request: Request):
                 "geo_mesh": plan["eval"]["geo_mesh"],
                 "mesh_size_mm": plan["eval"]["mesh_size_mm"],
                 "min_size_mm": plan["eval"]["min_size_mm"]},
+            **({"mesh_preset": plan["run_settings"]} if plan.get("run_settings") else {}),
             "auto": {"max_ripple_pct": plan["ripple_max_pct"],
                      "objective": plan["objective"],
                      "mode": plan["mode"],

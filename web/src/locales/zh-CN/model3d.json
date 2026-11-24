@@ -117,5 +117,37 @@
     "backRight": "后右方"
   },
   "orthographic": "正交",
-  "perspective": "透视"
+  "perspective": "透视",
+  "project": {
+    "tab": "3D 模型",
+    "source": "模型来源",
+    "generated": "生成的",
+    "uploaded": "已上传",
+    "generatedTip": "项目所关联电机配置的 3D 模型，与 Configure 中显示的完全相同。",
+    "uploadedTip": "实际 CAD 的 STEP 文件（完整装配或用于客户壳体的简化集成模型）。首先打开最新的未归档文件。",
+    "upload": "上传 STEP",
+    "uploadTitle": "上传项目模型",
+    "pickFile": "选择 STEP 文件",
+    "revision": "版本",
+    "note": "变更内容",
+    "visible": "对客户可见",
+    "visibleShort": "客户",
+    "visibleTip": "关闭：只有 MOTRES 员工可见此模型。客户方须签署保密协议并完成账户验证后才能下载 STEP。",
+    "cancel": "取消",
+    "history": "版本记录",
+    "showArchived": "显示已归档",
+    "archived": "已归档",
+    "archive": "归档",
+    "restore": "恢复",
+    "file": "文件",
+    "date": "上传时间",
+    "frameless": "无框",
+    "framelessTip": "只显示定子、线圈、转子、磁钢和环（按零件名称识别）。仅改变显示，不修改模型；没有这些名称的模型没有此按钮。",
+    "otherParts": "其他零件",
+    "partNames": "零件名称",
+    "partNamesTip": "开启：客户可看到零件名称、结构树和“无框”按钮。请先检查名称：其中可能包含供应商名称和零件编号。",
+    "noUpload": "本项目尚未上传模型。",
+    "noLinkedMotor": "本项目尚未关联电机。",
+    "noLive": "没有当前模型；打开“显示已归档”即可恢复。"
+  }
 }

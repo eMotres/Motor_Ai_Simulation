@@ -716,6 +716,14 @@ def _registry_role(email: str, fallback: str = "user") -> str:
     (the `fallback`, which for a verified token is its own claim) and provision
     nothing."""
     if email and email in _ADMIN_EMAILS:
+        # the allowlist raises a tier, it never re-enables an account: a DISABLED record stays disabled (also on the raw Google path)
+        try:
+            from motor_ai_sim import users as _u
+            rec = _u._load().get(email.strip().lower())
+            if isinstance(rec, dict) and rec.get("disabled"):
+                return "__disabled__"
+        except Exception:                                   # noqa: BLE001 - an unreadable registry keeps the allowlist's answer
+            pass
         return "admin"
     try:
         from motor_ai_sim import users as _users
@@ -762,6 +770,9 @@ _reject_seen: dict[tuple, float] = {}
 #: (2026-10-04: one every 60 s filled the 200-entry auth-event ring with
 #: context-free rows), so it is recorded far less often.
 _REJECT_QUIET_ANON_S = 900.0
+
+
+_SIDLESS_QUIET_S = 3600.0
 
 
 def _should_report(key: tuple, quiet_s: float = _REJECT_QUIET_S) -> bool:
@@ -854,6 +865,11 @@ def resolve_user_detail(authorization: Optional[str], *, renew: bool = False,
             _report_reject("disabled", res.email, res.sid, ip, user_agent, path)
             return _out(None, "disabled", sid=res.sid, email=res.email)
         _sessions.touch(res.sid, ip=ip, user_agent=user_agent)
+        if not res.sid and _should_report(("sidless", res.email, ip), _SIDLESS_QUIET_S):
+            # a token that carries no session id is not in the registry and cannot be revoked there: record who still uses one
+            # (once per hour per account and address) so the list of live ones is known before their behaviour changes
+            _sessions.record_event("sidless", email=res.email, sid="", reason="no_session_id", ip=ip,
+                                   user_agent=user_agent, path=path)
         if res.renewed_token:
             _sessions.record_event("renew", email=res.email, sid=res.sid,
                                    reason="sliding", ip=ip,

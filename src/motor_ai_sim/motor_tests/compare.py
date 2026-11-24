@@ -213,7 +213,8 @@ EMF_ELASTICITY_RANGE = (0.0, 1.2)
 TEMP_STORED_POINT = "stored_point"        # (a) a stored no-load point within EMF_DIRECT_TEMP_K, compared directly
 TEMP_FITTED = "fitted"                    # (b) the elasticity fitted from this configuration's own no-load points
 TEMP_BR_SCALED = "br_scaled"              # (c) EMF taken proportional to Br: temperature-scaled (approximate)
-TEMP_NO_BENCH_T = "no_bench_temp"         # the bench row has no magnet temperature: nothing to bring it to
+TEMP_NO_BENCH_T = "no_bench_temp"         # the bench row has no magnet temperature: not comparable
+TEMP_NO_MODEL_T = "no_model_temp"         # no stored no-load point within EMF_DIRECT_TEMP_K of the bench temperature: not comparable
 
 
 def _emf_value(r: Dict[str, Any], key: str) -> Optional[float]:
@@ -265,26 +266,28 @@ def fit_emf_elasticity(refs: Sequence[Dict[str, Any]], br_points: Sequence[Tuple
 
 def emf_temperature_basis(rpm: float, refs: Sequence[Dict[str, Any]], br_points: Sequence[Tuple[float, float]],
                           test_temp_c: Optional[float]) -> Optional[Dict[str, Any]]:
-    """Which stored no-load point a bench free-run row at ``rpm`` and ``test_temp_c`` is compared with, and by what factor
-    its EMF is moved to the bench magnet temperature.  In order of preference:
+    """Which stored no-load point a bench free-run row at ``rpm`` and ``test_temp_c`` is compared with.
 
-    (a) ``stored_point``: a stored no-load point within ``EMF_DIRECT_TEMP_K`` of the bench temperature (the nearest in
-        temperature, then in speed) - compared directly, factor 1 (speed scaling only);
-    (b) ``fitted``: else, with two or more stored points of this configuration at different temperatures, the point nearest
-        in speed x (Br(test) / Br(point)) ** elasticity, the elasticity fitted from those points (``fit_emf_elasticity``);
-    (c) ``br_scaled``: else the point nearest in speed x Br(test) / Br(point) - EMF taken proportional to Br, which a
-        saturated rotor does not follow: temperature-scaled (approximate), and labelled so.
+    A row is comparable ONLY when the bench magnet temperature is known and a stored no-load point of this configuration
+    lies within ``EMF_DIRECT_TEMP_K`` of it (owner 2026-11-18, model-vs-bench investigation): ``stored_point``, the nearest
+    in temperature, then in speed, compared directly (speed scaling only, factor 1).  Anything else is NOT compared and is
+    said so, never scaled with Br or a fitted elasticity (10 K is 1.2 % of EMF; a guessed temperature moved the verdict):
 
-    A row without a bench temperature is ``no_bench_temp`` (the point nearest in speed, factor 1).  ``None`` = no stored
-    no-load point.  Returns ``{"ref", "factor", "basis", "model_temp_c", "br_ratio", "elasticity", "fit"}``."""
+    * ``no_bench_temp``: the bench row has no magnet temperature;
+    * ``no_model_temp``: no stored point (with a known magnet temperature) within 10 K of the bench temperature.
+
+    ``None`` = no stored no-load point at all.  Returns ``{"ref", "factor", "basis", "model_temp_c", "br_ratio",
+    "elasticity", "fit", "comparable", "reason"}``; for a row that is not comparable ``ref`` is the point nearest in speed
+    (for the wording only) and ``factor`` is 1.0 (it is not applied)."""
     near_speed = noload_reference(rpm, refs)
     if near_speed is None:
         return None
     t = num(test_temp_c)
-    base = {"elasticity": None, "fit": None}
+    base = {"elasticity": None, "fit": None, "br_ratio": 1.0, "factor": 1.0}
     if t is None:
-        return {**base, "ref": near_speed, "factor": 1.0, "basis": TEMP_NO_BENCH_T,
-                "model_temp_c": num(near_speed.get("magnet_temp_c")), "br_ratio": 1.0}
+        return {**base, "ref": near_speed, "basis": TEMP_NO_BENCH_T, "comparable": False,
+                "model_temp_c": num(near_speed.get("magnet_temp_c")),
+                "reason": "not comparable: magnet temperature unknown"}
     n = float(rpm)
     timed = [r for r in refs if num(r.get("rpm")) and num(r.get("magnet_temp_c")) is not None]
     close = [r for r in timed if abs(float(r["magnet_temp_c"]) - t) <= EMF_DIRECT_TEMP_K]
@@ -292,15 +295,13 @@ def emf_temperature_basis(rpm: float, refs: Sequence[Dict[str, Any]], br_points:
         best_dt = min(abs(float(r["magnet_temp_c"]) - t) for r in close)
         tied = [r for r in close if abs(float(r["magnet_temp_c"]) - t) <= best_dt + EMF_SAME_TEMP_K]
         ref = min(tied, key=lambda r: (abs(math.log(n / float(r["rpm"]))), abs(float(r["magnet_temp_c"]) - t)))
-        return {**base, "ref": ref, "factor": 1.0, "basis": TEMP_STORED_POINT,
-                "model_temp_c": float(ref["magnet_temp_c"]), "br_ratio": 1.0}
-    ratio = br_ratio(br_points, t, near_speed.get("magnet_temp_c"))
-    fit = fit_emf_elasticity(timed, br_points)
-    if fit and fit["accepted"] and num(near_speed.get("magnet_temp_c")) is not None:
-        return {"ref": near_speed, "factor": ratio ** fit["elasticity"], "basis": TEMP_FITTED, "model_temp_c": t,
-                "br_ratio": ratio, "elasticity": fit["elasticity"], "fit": fit}
-    return {"ref": near_speed, "factor": ratio, "basis": TEMP_BR_SCALED, "model_temp_c": t, "br_ratio": ratio,
-            "elasticity": None, "fit": fit}
+        return {**base, "ref": ref, "basis": TEMP_STORED_POINT, "comparable": True,
+                "model_temp_c": float(ref["magnet_temp_c"]), "reason": ""}
+    have = sorted({round(float(r["magnet_temp_c"])) for r in timed})
+    return {**base, "ref": near_speed, "basis": TEMP_NO_MODEL_T, "comparable": False,
+            "model_temp_c": num(near_speed.get("magnet_temp_c")),
+            "reason": ("not comparable: no model point at this temperature (bench %.0f C; stored no-load points at %s C)"
+                       % (t, ", ".join("%g" % x for x in have) if have else "unknown temperatures"))}
 
 
 def emf_model_at(rpm: float, ref: Dict[str, Any], ratio: float = 1.0) -> Dict[str, Optional[float]]:

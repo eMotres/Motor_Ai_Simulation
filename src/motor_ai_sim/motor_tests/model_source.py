@@ -204,8 +204,13 @@ def from_docs(die_doc: Dict[str, Any], cfg_doc: Dict[str, Any], stored_by_duty: 
         # the temperature the run was SOLVED at: its own stamp (magnet_temp_used_c, what no-load points store), else the
         # older spellings, else the card's quoted temperature (2026-11-04: reading only magnet_temp_c took the card's
         # 150 C for a point solved at 50 C and put the model EMF ~13 % high)
+        # Then the duty's own SAVED SETTINGS (``sim.magnetTempC`` in the mesh block the numbers were solved on).  The
+        # card's quoted temperature is a label, not a statement of what was solved (owner 2026-11-18, model-vs-bench
+        # investigation): a point with neither stays "unknown" and is not compared with a bench row.
         _mt = summary_magnet_temp_c(s)
-        mag_t = _mt if _mt is not None else mag.get("temp_c")
+        if _mt is None:
+            _mt = num((d.get("mesh") or {}).get("sim.magnetTempC")) if isinstance(d.get("mesh"), dict) else None
+        mag_t = _mt
         if magnet is None and card:
             magnet = mag
         temps = _temps(stored)

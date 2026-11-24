@@ -151,6 +151,7 @@ export function rowNote(row: CompareRow): RowNote | null {
   if (row.key === 'cogging_pkpk' && x.pending === true && row.measured === null) return { key: 'benchPending', params: {} };
   if (row.key === 'loss' && typeof x.unexplained_w === 'number') return { key: 'unexplained', params: { w: fmtValue(x.unexplained_w as number) } };
   if (row.key === 'no_bearings') return { key: 'noBearings', params: {} };
+  if (typeof x.not_comparable === 'string') return { key: x.not_comparable === 'no_bench_temp' ? 'notComparableNoBenchTemp' : 'notComparableNoModelTemp', params: {} };
   if (row.status === 'no_model') return { key: 'noModel', params: {} };
   if (x.high_freq === true && typeof x.freq_hz === 'number') return { key: 'freqFlag', params: { hz: x.freq_hz } };
   // an EMF row far from the others stays in the Kv / Kt slope and says so (the slope without it is the second group)

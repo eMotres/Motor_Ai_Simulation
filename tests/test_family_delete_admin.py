@@ -127,6 +127,9 @@ def env(tmp_path, monkeypatch):
     (shared / "dies" / SHADOW_DIE).mkdir()
     (shared / "dies" / SHADOW_DIE / "die.yaml").write_text(
         _die_doc(SHADOW_DIE), encoding="utf-8")
+    # one configuration, so the shared original is a listed die (an empty one is never listed)
+    (shared / "dies" / SHADOW_DIE / f"{CFG}.yaml").write_text(
+        _cfg_doc(SHADOW_DIE), encoding="utf-8")
 
     shutil.copy2(_ROOT / "config" / "motor_config.yaml", shared / "motor_config.yaml")
 
@@ -214,7 +217,8 @@ def test_admin_delete_of_a_shared_die_is_refused_and_points_at_retire(
             assert r.json().get("code") == "die.retire_required", r.text
             assert "Retire for all users" in r.json()["detail"]
             assert not W.is_tombstoned(die)
-            assert die in _tree_names(env["a"])
+            # an empty shared die is not listed at all (tests/test_tree_hides_empty_dies.py); not tombstoned = not hidden
+            assert (die in _tree_names(env["a"])) is (die != EMPTY_DIE)
 
 
 def test_admin_retires_a_shared_die_with_confirmation_and_restores_it(
@@ -284,7 +288,7 @@ def test_non_admin_cannot_delete_or_retire_a_shared_die(env, shared_is_read_only
     assert client.get(f"/api/family/die/{EMPTY_DIE}/audience",
                       headers=env["a"]).status_code == 403
     assert not W.is_tombstoned(EMPTY_DIE)
-    assert EMPTY_DIE in _tree_names(env["a"])
+    assert EMPTY_DIE not in _tree_names(env["a"])       # empty: never listed (test_tree_hides_empty_dies.py)
 
 
 # ── published layer: reversible trash-move, not unlink ───────────────────────

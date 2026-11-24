@@ -12,6 +12,7 @@ Dependencies:
 - OmegaConf (optional, for YAML config loading)
 """
 
+import math
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
@@ -178,9 +179,11 @@ def pocket_width(geo: Optional[Dict[str, Any]]) -> Optional[float]:
         from motor_ai_sim.winding import STRIP_GAP_FACTOR as _gf
         g = dict(geo or {})
         ww, wsx, ins = float(g["wire_width"]), float(g["wire_spacing_x"]), float(g["insulation_thickness"])
+        if not all(math.isfinite(v) for v in (ww, wsx, ins)):
+            return None                                     # inf / nan = missing (the web twin agrees)
         try:
-            n = max(1, int(round(float(g.get("wire_split") or 1))))
-        except (TypeError, ValueError):
+            n = max(1, int(round(float(g.get("wire_split") or 1))))   # round() is half-to-even
+        except (TypeError, ValueError, OverflowError):      # non-finite / unreadable split = one strip
             n = 1
         col = ww if n <= 1 else n * ww + (n - 1) * _gf * wsx
         return col + 2.0 * ins + wsx

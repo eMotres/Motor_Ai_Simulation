@@ -6767,6 +6767,8 @@ def descent_baseline(req: BaselineRequest):
         req = _apply_run_settings(req, _resolved)
         _rs_rec = _run_settings_stamp(req.run_settings, _resolved)
         req = req.model_copy(update={"magnet_temp_c": _effective_magnet_temp(req.magnet_temp_c, _resolved)})
+    elif req.magnet_temp_c is not None:     # without run settings: the same grade limit the scan and descent entry points apply
+        req = req.model_copy(update={"magnet_temp_c": _effective_magnet_temp(req.magnet_temp_c, None)})
     I    = float(req.operating_point.current_a)
     g    = float(req.operating_point.gamma_deg)
     bump = max(0.0, min(float(req.current_bump_pct), 100.0))

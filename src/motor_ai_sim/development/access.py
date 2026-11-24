@@ -48,6 +48,42 @@ def sees_prices(user: dict | None, project: dict) -> bool:
     return False
 
 
+def can_see_message(user: dict | None, project: dict, message: dict) -> bool:
+    """A project message marked ``price_restricted`` (owner 2026-11-22) is seen by whoever ``sees_prices`` lets through now: the one
+    central rule, no exception for the author (a revoked or demoted author loses it too).  Nobody else sees its text or its existence.
+    This judges the message itself; ``visible_messages`` also hides the replies of a hidden message."""
+    if not isinstance(message, dict) or not message.get("price_restricted"):
+        return True
+    return sees_prices(user, project)
+
+
+def visible_messages(user: dict | None, project: dict, messages: list) -> list:
+    """The messages ``user`` may see.  A reply (any depth) to a hidden message is hidden with it, whatever its own flag says."""
+    shown: list = []
+    hidden: set = set()
+    parent_of = {str(m.get("id")): str(m.get("reply_to") or "") for m in messages if isinstance(m, dict) and m.get("id")}
+    for m in messages:
+        if isinstance(m, dict) and m.get("id") and not can_see_message(user, project, m):
+            hidden.add(str(m["id"]))
+    changed = True
+    while changed:                                         # descendants of a hidden message are hidden
+        changed = False
+        for mid, parent in parent_of.items():
+            if parent and parent in hidden and mid not in hidden:
+                hidden.add(mid)
+                changed = True
+    for m in messages:
+        if not isinstance(m, dict) or str(m.get("id")) in hidden:
+            continue
+        shown.append(m)
+    return shown
+
+
+def may_restrict_messages(user: dict | None, project: dict) -> bool:
+    """Who may mark a message price-restricted: MOTRES staff and the project owner (``can_manage_prices``)."""
+    return can_manage_prices(user, project)
+
+
 def sees_prices_email(email: str, project: dict) -> bool:
     """``sees_prices`` for a RECIPIENT known only by address (digest, notifications): the account's global role is resolved from the
     user store, never derived from the project role.  An address with no (enabled) account is a pending invite or a stranger: False."""

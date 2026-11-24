@@ -53,11 +53,14 @@ class Group:
     members: list = field(default_factory=list)       # [(email, role)]
     active: bool = True
     path: Optional[str] = None      # the app path of the group's own page
+    #: project groups: the members who see the prices (owners and ``sees_prices`` members); a restricted message needs it
+    price_emails: frozenset = field(default_factory=frozenset)
 
-    def caps(self, role: str) -> frozenset:
-        """What a member of this role may see (see collect.INTERNAL / COSTS)."""
+    def caps(self, role: str, email: str = "") -> frozenset:
+        """What a member of this role may see (see collect.INTERNAL / COSTS / PRICES; the last is by member, so it needs ``email``)."""
         if self.kind == "project":
-            return frozenset({C.INTERNAL}) if role in ("owner", "engineer") else frozenset()
+            base = frozenset({C.INTERNAL}) if role in ("owner", "engineer") else frozenset()
+            return base | {C.PRICES} if str(email or "").strip().lower() in self.price_emails else base
         if role in ("owner", "engineer"):
             return frozenset({C.INTERNAL, C.COSTS})
         return frozenset({C.COSTS}) if self.record.get("share_costs_with_oem") else frozenset()
@@ -88,8 +91,11 @@ def _members(record: dict) -> list:
 def project_group(project: dict) -> Group:
     pid = str(project.get("id") or "")
     title = safe_text(project.get("title"), pid)
+    # by ACCOUNT identity, the one central rule (a factory account never, staff always; owner 2026-11-23), resolved at build AND at send
+    from motor_ai_sim.development import access as _access
+    prices = frozenset(e for e, _role in _members(project) if _access.sees_prices_email(e, project))
     return Group(DS.project_scope(pid), "project", project, title, title, _members(project),
-                 str(project.get("status") or "spec") != "closed", RP.project_path(pid))
+                 str(project.get("status") or "spec") != "closed", RP.project_path(pid), price_emails=prices)
 
 
 def production_group(production: dict) -> Group:
@@ -196,7 +202,7 @@ def common_caps(group: Group, recipients: list[dict]) -> frozenset:
     """The capabilities EVERY recipient has - the text may contain only what these allow."""
     caps: Optional[frozenset] = None
     for r in recipients:
-        c = group.caps(r["role"])
+        c = group.caps(r["role"], r.get("email") or "")
         caps = c if caps is None else caps & c
     return caps if caps is not None else frozenset()
 
@@ -462,7 +468,8 @@ def build_draft(group: Group, settings: dict, items: list, recipients: list[dict
                      key=lambda i: i.ts, reverse=True)
     if not visible:
         return None
-    shown, more = visible[:MAX_ITEMS], max(0, len(visible) - MAX_ITEMS)
+    shown, hidden_more = visible[:MAX_ITEMS], visible[MAX_ITEMS:]
+    more = len(hidden_more)
     bilingual = any(r["lang"] == "zh-CN" for r in recipients)
     text, body_html = compose(group, shown, more, start, end, bilingual)
     now = DS.iso()
@@ -480,7 +487,8 @@ def build_draft(group: Group, settings: dict, items: list, recipients: list[dict
                    **({"key": i.key} if i.kind == "revision" and i.key else {}),
                    "requires": sorted(i.requires), **({"motor": list(i.motor)} if i.motor else {}),
                    **({"group_en": i.group[0], "group_zh": i.group[1]} if i.group else {})} for i in shown],
-        "more": more, "recipients": recipients, "skipped": skipped,
+        "more": more, "more_requires": sorted(frozenset().union(*[i.requires for i in hidden_more])) if hidden_more else [],
+        "recipients": recipients, "skipped": skipped,
     }
     draft["content_hash"] = content_hash(draft)
     return draft

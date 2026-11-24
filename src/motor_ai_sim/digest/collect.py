@@ -31,6 +31,7 @@ from motor_ai_sim.digest import store as DS
 #: Capability names (see module docstring).
 INTERNAL = "internal"
 COSTS = "costs"
+PRICES = "prices"          # a price-restricted project message: only recipients who see the prices (owner 2026-11-22)
 
 EXCERPT = 90
 
@@ -79,6 +80,20 @@ class Item:
 
 
 # -- small helpers ---------------------------------------------------------------------------------------------------------
+
+def _restricted_thread_ids(rows: list) -> set:
+    """Ids of the price-restricted messages and of every reply (any depth) to one: the digest treats a reply to a hidden message as hidden."""
+    out = {str(m.get("id") or "") for m in rows if m.get("price_restricted")}
+    parent = {str(m.get("id") or ""): str(m.get("reply_to") or "") for m in rows}
+    grew = True
+    while grew:
+        grew = False
+        for mid, par in parent.items():
+            if par and par in out and mid not in out:
+                out.add(mid)
+                grew = True
+    return out
+
 
 def excerpt(text: Any, n: int = EXCERPT) -> str:
     s = re.sub(r"\s+", " ", str(text or "")).strip()
@@ -310,9 +325,9 @@ def collect_project(project: dict, start: float, end: float, *,
             if public:
                 items.append(Item("project", ts, "Project details updated (" + ", ".join(public) + ")",
                                   "项目信息已更新（" + ", ".join(public) + "）", RP.project_path(pid), frozenset(), key="project"))
-    for m in _read_jsonl(PS.path_for(pid) / "thread.jsonl"):
-        if m.get("kind") == "resolution":
-            continue
+    thread_rows = [m for m in _read_jsonl(PS.path_for(pid) / "thread.jsonl") if m.get("kind") != "resolution"]
+    restricted_ids = _restricted_thread_ids(thread_rows)
+    for m in thread_rows:
         ts = DS.parse_ts(m.get("created_at"))
         if not _in(ts, start, end):
             continue
@@ -320,7 +335,8 @@ def collect_project(project: dict, start: float, end: float, *,
         text = excerpt(m.get("text"))
         mid = str(m.get("id") or "")
         items.append(Item("message", ts, f"New message from {who_en}: {text}", f"{who_zh} 的新留言：{text}",
-                          RP.project_path(pid, "messages", item=mid) or RP.project_path(pid, "messages"), frozenset(), key=f"msg:{mid}"))
+                          RP.project_path(pid, "messages", item=mid) or RP.project_path(pid, "messages"),
+                          frozenset({PRICES}) if mid in restricted_ids else frozenset(), key=f"msg:{mid}"))
     # new computed points of the project's motors
     for link in links.values():
         die, config = str(link.get("die") or ""), str(link.get("config") or "")

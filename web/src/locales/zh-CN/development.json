@@ -602,6 +602,8 @@
   "email": "帐户电子邮件",
   "seesPrices": "可查看价格",
   "seesPricesTip": "价格受限：已共享的报价，以及标为价格受限的文档和消息，对该成员可见。项目所有者始终可见。",
+  "priceRestricted": "价格受限",
+  "priceRestrictedTip": "价格受限：此消息仅对项目所有者和可查看价格的成员可见。",
   "memberRole": {
     "customer": "客户",
     "engineer": "工程师",

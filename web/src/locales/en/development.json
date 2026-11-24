@@ -602,6 +602,8 @@
   "email": "Account email",
   "seesPrices": "Sees prices",
   "seesPricesTip": "Price - restricted: the shared quote, and the documents and messages marked price-restricted, are shown to this member. Project owners always see them.",
+  "priceRestricted": "Price - restricted",
+  "priceRestrictedTip": "Price - restricted: this message is shown only to project owners and to members who see prices.",
   "memberRole": {
     "customer": "Customer",
     "engineer": "Engineer",

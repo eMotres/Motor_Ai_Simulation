@@ -1149,3 +1149,87 @@ def test_the_digest_send_stamps_the_revision_and_the_reminders_count_from_it(d):
     fresh.pop("digest_sent")
     rows = RK.pending(DIE, CFG, prod, [fresh], got + 500 * 3600)
     assert rows and not any(r["alerted"] for r in rows)
+
+
+# -- price-restricted messages: recipients by account identity, overflow recheck (owner 2026-11-23) -------------------------------------
+
+def _restricted_world(d, *, public=25):
+    """BOB (customer) carries the price switch; one restricted message OLDER than ``public`` public ones, all inside the window."""
+    PS = d["PS"]
+
+    def grant(doc):
+        for m in doc["members"]:
+            if m["email"] == BOB:
+                m["sees_prices"] = True
+    PS.mutate_project(PID, grant)
+    PS.append_jsonl(PID, "thread.jsonl", {"id": "rx", "author_email": ANNA, "created_at": at(-80000), "price_restricted": True,
+                                          "text": "the contract price is 123 456 EUR"})
+    for n in range(public):
+        PS.append_jsonl(PID, "thread.jsonl", {"id": f"pub{n}", "author_email": BOB, "created_at": at(-200 - n), "text": f"public note {n}"})
+
+
+def test_overflow_count_is_rechecked_at_send_after_a_revoke(d):
+    _restricted_world(d)
+    run(d, scopes=[PSCOPE])
+    draft = draft_of(d, PSCOPE)
+    assert draft["more"] >= 1 and "prices" in draft["more_requires"]           # the hidden-in-overflow line is remembered
+    assert "123 456" not in json.dumps(draft)
+
+    def revoke(doc):
+        for m in doc["members"]:
+            m.pop("sees_prices", None)
+    d["PS"].mutate_project(PID, revoke)
+    res = go(d, draft["id"])
+    assert [m["To"] for m in d["delivered"]] == [ANNA]                          # BOB would learn "and N more": not mailed
+    assert {"email": BOB, "reason": "access_changed"} in res["skipped"]
+
+
+def test_a_factory_account_never_gets_the_restricted_line_even_flagged_or_owner(d):
+    from motor_ai_sim.digest import build as B
+    _restricted_world(d, public=1)
+    d["U"].update_user(BOB, role="oem")
+    group = B.project_group(d["PS"].get_project(PID))
+    assert "prices" not in group.caps("customer", BOB)                          # flagged, but a factory account
+    assert "prices" in group.caps("owner", ANNA)
+    def make_owner(doc):
+        for m in doc["members"]:
+            if m["email"] == BOB:
+                m["role"] = "owner"
+    d["PS"].mutate_project(PID, make_owner)
+    group = B.project_group(d["PS"].get_project(PID))
+    assert "prices" not in group.caps("owner", BOB)                             # an OEM project owner: still never
+    run(d, scopes=[PSCOPE])
+    draft = draft_of(d, PSCOPE)
+    assert "123 456" not in json.dumps(draft) and "prices" not in draft["caps"]
+
+
+def test_staff_member_and_unknown_address_by_identity(d):
+    from motor_ai_sim.digest import build as B
+    d["U"].update_user(BOB, role="engineer")
+    project = d["PS"].get_project(PID)
+    group = B.project_group(project)
+    assert "prices" in group.caps("customer", BOB)                              # MOTRES staff: always, whatever the project role
+    assert "prices" not in group.caps("customer", "nobody@example.com")
+
+
+def test_a_reply_to_a_restricted_message_is_a_restricted_digest_line(d):
+    from motor_ai_sim.digest import collect as C
+    d["PS"].append_jsonl(PID, "thread.jsonl", {"id": "rp", "author_email": ANNA, "created_at": at(-900), "price_restricted": True, "text": "root"})
+    d["PS"].append_jsonl(PID, "thread.jsonl", {"id": "rc", "author_email": BOB, "created_at": at(-800), "reply_to": "rp", "text": "child note"})
+    items = C.collect_project(d["PS"].get_project(PID), T0 - 7200, T0, results=d["results"])
+    child = next(i for i in items if i.key == "msg:rc")
+    assert child.requires == frozenset({"prices"})
+
+
+def test_an_earlier_schema_draft_with_overflow_and_no_requirements_is_refused_at_send(d):
+    from motor_ai_sim.digest import approval as AP
+    _restricted_world(d)
+    run(d, scopes=[PSCOPE])
+    draft = draft_of(d, PSCOPE)
+    assert draft["more"] >= 1
+    old = dict(draft)
+    old.pop("more_requires")                                                  # what a draft stored before this change looks like
+    d["DS"].save_draft(old)
+    with pytest.raises(AP.ApprovalError) as e:
+        go(d, draft["id"])
+    assert e.value.code == "stale" and d["delivered"] == []

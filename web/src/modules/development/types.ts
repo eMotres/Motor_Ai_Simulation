@@ -36,7 +36,7 @@ export interface SpecState { draft: Record<string, unknown>; revision: number; s
   /** the newest submitted version, its date, and whether the working draft still equals it (null = never submitted) */
   submitted?: { version: number; submitted_at?: string | null; unchanged: boolean } | null }
 export interface SpecSnapshot { version: number; schema_version?: number; schema?: DevelopmentSchema; author_display_name?: string; created_at?: string; spec?: Record<string, unknown>; draft?: Record<string, unknown> }
-export interface ProjectThreadMessage { id?: string; author_display_name?: string; created_at: string; text: string; field_ref?: string; row_id?: string; version?: number; revision?: number; resolved?: boolean; resolved_at?: string; resolved_by?: string; /** not read by the caller yet (server flag) */ unread?: boolean }
+export interface ProjectThreadMessage { id?: string; author_display_name?: string; created_at: string; text: string; field_ref?: string; row_id?: string; version?: number; revision?: number; resolved?: boolean; resolved_at?: string; resolved_by?: string; /** not read by the caller yet (server flag) */ unread?: boolean; /** only who sees the prices gets this message */ price_restricted?: boolean }
 export interface ResultProvenance {
   kind: 'estimate' | 'solve' | 'unknown'; source?: string; run_id?: string;
   revision?: string; input_fingerprint?: string; geometry_fingerprint?: string;

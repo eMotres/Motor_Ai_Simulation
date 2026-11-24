@@ -291,7 +291,7 @@ def delete_entry(sid: str) -> bool:
 
 
 #: bumped whenever the rule behind the list label changes: a sidecar written under an older rule is rebuilt (the save is not touched)
-SETTINGS_VERSION = 4
+SETTINGS_VERSION = 5
 
 
 def sweep_settings_of(result: Any, config: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
@@ -299,7 +299,7 @@ def sweep_settings_of(result: Any, config: Optional[Dict[str, Any]] = None) -> D
 
     A stamped sweep (``mesh_preset``) reads its label from the stamp: the preset's name only when nothing differs, ``custom``
     when anything does (or when the solve disagreed with the request, or the points disagree: ``mixed``).  ``sig`` is the
-    digest of the (steps, gap rows) pair ONLY, None when unknown, unverified by a solve, mixed or legacy: two sweeps rank together only when both digests are
+    digest of (steps, gap rows, preset version, wire cell), None when unknown, unverified by a solve, mixed or legacy: two sweeps rank together only when both digests are
     known and equal.  A sweep stored before the stamp is labelled from its stored request and has no digest."""
     r = result if isinstance(result, dict) else {}
     cfg = config if isinstance(config, dict) else {}
@@ -314,10 +314,13 @@ def sweep_settings_of(result: Any, config: Optional[Dict[str, Any]] = None) -> D
         verified = srcs.get("steps_per_period") == "solved" and srcs.get("gap_layers") == "solved"
         known = eff.get("steps_per_period") is not None and eff.get("gap_layers") is not None
         sig = None if (mixed or mp.get("solved_differs") or not verified or not known) else mp.get("sig")
+        if mp.get("sig_scope") != 2:        # a digest of steps and gap rows only (stored before the version and wire cell joined it): unknown
+            sig = None
         return {"preset": ("custom" if custom else mp.get("name")), "version": mp.get("version"), "custom": custom,
                 "mixed": mixed, "effective_source": mp.get("effective_source"),
                 "steps_per_period": eff.get("steps_per_period"), "gap_layers": eff.get("gap_layers"),
-                "sig": sig, "differs": mp.get("differs") or {}, "source": "preset", "v": SETTINGS_VERSION}
+                "sig": sig, "coil_rel": mp.get("coil_rel"), "differs": mp.get("differs") or {}, "source": "preset",
+                "v": SETTINGS_VERSION}
     return {"preset": None, "version": None, "custom": False, "mixed": False, "sig": None,
             "steps_per_period": cfg.get("steps_per_period") or r.get("steps_per_period"),
             "gap_layers": sp.get("gap_layers"), "source": "stored_request", "v": SETTINGS_VERSION}

@@ -6,6 +6,10 @@
  * solved points disagree.  `sig` is the digest of the (steps, gap rows) pair; it is null for a legacy sweep (stored before the
  * stamp), a mixed one, one whose solve disagreed with its request, one that no solve verified, or one with a null value.  Two
  * sweeps are ranked together only when BOTH digests are known and equal: unknown never matches anything.
+ *
+ * Since the Optimization preset moved its wire cell to 2h (preset version 2, owner 2026-11-24) the digest also covers the preset
+ * VERSION and the WIRE CELL (`coil_rel`) the run used; a stamp without them (`sig_scope` other than 2) has no digest, so a sweep
+ * stored under version 1 is never ranked with a version 2 one.  Stored sweeps are not rewritten.
  */
 export interface SweepSettings {
   preset: string | null;          // 'optimization' | 'simulation' | 'custom' | null (legacy: no stamp)
@@ -14,6 +18,8 @@ export interface SweepSettings {
   custom: boolean;
   mixed: boolean;
   sig: number | null;
+  presetVersion: number | null;
+  coilRel: number | null;
   source: 'preset' | 'stored_request';
 }
 
@@ -32,6 +38,7 @@ export function sweepSettingsOf(x: any): SweepSettings {
              steps: numOrNull(s.steps_per_period), gapLayers: numOrNull(s.gap_layers), custom, mixed,
              sig: s.source === 'preset' && !mixed && bothSolved && numOrNull(s.steps_per_period) !== null
                && numOrNull(s.gap_layers) !== null ? sigOrNull(s.sig) : null,
+             presetVersion: numOrNull(s.version), coilRel: numOrNull(s.coil_rel),
              source: s.source === 'preset' ? 'preset' : 'stored_request' };
   }
   const mp = x?.mesh_preset;
@@ -42,21 +49,27 @@ export function sweepSettingsOf(x: any): SweepSettings {
     const custom = mp.custom === true || mixed || mp.solved_differs === true;
     const verified = mp.effective_source?.steps_per_period === 'solved' && mp.effective_source?.gap_layers === 'solved';
     const sig = mixed || mp.solved_differs === true || !verified || numOrNull(eff.steps_per_period) === null
-      || numOrNull(eff.gap_layers) === null ? null : sigOrNull(mp.sig);
+      || numOrNull(eff.gap_layers) === null || mp.sig_scope !== 2 ? null : sigOrNull(mp.sig);
     return { preset: custom ? 'custom' : (typeof mp.name === 'string' ? mp.name : null),
-             steps: numOrNull(eff.steps_per_period), gapLayers: numOrNull(eff.gap_layers), custom, mixed, sig, source: 'preset' };
+             steps: numOrNull(eff.steps_per_period), gapLayers: numOrNull(eff.gap_layers), custom, mixed, sig,
+             presetVersion: numOrNull(mp.version), coilRel: numOrNull(mp.coil_rel), source: 'preset' };
   }
   return { preset: null, steps: numOrNull(x?.steps_per_period), gapLayers: numOrNull(x?.scan_params?.gap_layers),
-           custom: false, mixed: false, sig: null, source: 'stored_request' };
+           custom: false, mixed: false, sig: null,
+           presetVersion: null, coilRel: null, source: 'stored_request' };
 }
 
-/** "Optimization · 48 steps · 1 gap row", "custom · 108 steps · 2 gap rows", "mixed", or "108 steps · 1 gap row" (legacy). */
+/** "Optimization v2 · 48 steps · 1 gap row · wire 2h", "custom · 108 steps · 2 gap rows", "mixed", or "108 steps · 1 gap row" (legacy). */
 export function sweepSettingsLabel(s: SweepSettings, presetLabel?: string): string {
   if (s.mixed) return 'mixed';
   const parts: string[] = [];
-  if (s.preset) parts.push(s.preset === 'custom' ? 'custom' : (presetLabel ?? s.preset.charAt(0).toUpperCase() + s.preset.slice(1)));
+  if (s.preset) {
+    const nm = s.preset === 'custom' ? 'custom' : (presetLabel ?? s.preset.charAt(0).toUpperCase() + s.preset.slice(1));
+    parts.push(s.presetVersion !== null ? `${nm} v${s.presetVersion}` : nm);
+  }
   if (s.steps !== null) parts.push(`${s.steps} steps`);
   if (s.gapLayers !== null) parts.push(`${s.gapLayers} gap ${s.gapLayers === 1 ? 'row' : 'rows'}`);
+  if (s.coilRel !== null) parts.push(`wire ${s.coilRel}h`);
   return parts.join(' · ');
 }
 

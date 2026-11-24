@@ -3400,7 +3400,7 @@ def _run_settings_stamp(rs, resolved):
             "version": resolved["version"], "custom": resolved["custom"], "differs": resolved["differs"],
             "run_settings": {"preset": resolved["preset"], "overrides": resolved["overrides"]},
             "settings": resolved["settings"], "sources": resolved["sources"], "clamps": resolved["clamps"],
-            "sig": resolved["sig"]}
+            "sig": resolved["sig"], "sig_scope": resolved["sig_scope"], "coil_rel": resolved["coil_rel"]}
 
 
 @router.post("/run-settings/resolve")

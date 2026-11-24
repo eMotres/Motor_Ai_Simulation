@@ -3,7 +3,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { sweepSettingsOf, sweepSettingsLabel, sweepSettingsMismatch, sweepSettingsMetrics, sweepMetricsComparable, isSweepRow } from '../sweepSettings.ts';
 
-const stamp = (over = {}) => ({ mesh_preset: { name: 'optimization', custom: false, sig: 111,
+const stamp = (over = {}) => ({ mesh_preset: { name: 'optimization', custom: false, sig: 111, sig_scope: 2,
   effective: { steps_per_period: 48, gap_layers: 1 }, effective_source: { steps_per_period: 'solved', gap_layers: 'solved' }, ...over } });
 
 test('a stamped sweep is labelled by its preset and carries its digest', () => {
@@ -82,4 +82,19 @@ test('a list row needs BOTH numbers solved: requested sources never give an iden
   assert.equal(sweepSettingsOf(row({ steps_per_period: 'solved', gap_layers: 'requested' })).sig, null);
   assert.equal(sweepSettingsOf({ settings: { preset: 'optimization', source: 'preset', sig: 5, steps_per_period: 48, gap_layers: 1 } }).sig, null);
   assert.equal(sweepSettingsOf(stamp({ effective_source: { steps_per_period: 'solved', gap_layers: 'requested' } })).sig, null);
+});
+
+test('a stamp without the digest scope (stored before the preset version and wire cell joined it) has no digest', () => {
+  assert.equal(sweepSettingsOf(stamp({ sig_scope: undefined })).sig, null);
+  assert.equal(sweepSettingsOf(stamp({ sig_scope: 1 })).sig, null);
+  assert.equal(sweepSettingsMismatch(sweepSettingsOf(stamp({ sig_scope: undefined })), sweepSettingsOf(stamp())), true);
+});
+
+test('the preset version and the wire cell are in the label; different digests are a mismatch', () => {
+  const v2 = sweepSettingsOf(stamp({ version: 2, coil_rel: 2, sig: 333 }));
+  assert.equal(v2.presetVersion, 2); assert.equal(v2.coilRel, 2);
+  assert.equal(sweepSettingsLabel(v2, 'Optimization'), 'Optimization v2 \u00b7 48 steps \u00b7 1 gap row \u00b7 wire 2h');
+  const v1 = sweepSettingsOf(stamp({ version: 1, coil_rel: 1, sig: 222 }));
+  assert.equal(sweepSettingsMismatch(v1, v2), true);
+  assert.equal(sweepSettingsMismatch(v2, sweepSettingsOf(stamp({ version: 2, coil_rel: 2, sig: 333 }))), false);
 });

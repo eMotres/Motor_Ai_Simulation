@@ -401,3 +401,25 @@ def test_gap_rows_and_steps_are_whole_numbers():
                 RS.resolve("optimization", {key: bad}, cfg)
     assert RS.resolve("optimization", {"gap_layers": 2.0}, cfg)["settings"]["gap_layers"] == 2.0
     assert RS.resolve("optimization", {"gap_layers": 1}, cfg)["sig"] == RS.resolve("optimization", {}, cfg)["sig"]
+
+
+# ── the digest also covers the preset version and the wire cell (preset version 2, owner 2026-11-24) ──
+def test_the_digest_changes_with_the_preset_version_and_the_wire_cell():
+    assert RS.identity_sig(48, 1.0, 1, 1.0) != RS.identity_sig(48, 1.0, 2, 2.0)
+    assert RS.identity_sig(48, 1.0, 2, 2.0) != RS.identity_sig(48, 1.0, 2, 1.0)
+    assert RS.identity_sig(48, 1.0, 2, 2.0) == RS.identity_sig(48, 1.0, 2, 2)
+    cfg = _cfg()
+    a = RS.resolve("optimization", {}, cfg)
+    cfg2 = copy.deepcopy(cfg)
+    cfg2["mesh"] = {"component_mesh": {"coil_rel": 2}}
+    b = RS.resolve("optimization", {}, cfg2)
+    assert a["coil_rel"] == 1.0 and b["coil_rel"] == 2.0 and a["sig"] != b["sig"] and a["label"] == b["label"] == "optimization"
+    assert a["sig_scope"] == 2 and a["version"] == MP.version()
+
+
+def test_a_stored_sweep_without_the_digest_scope_is_unknown_and_never_ranked():
+    base = {"name": "optimization", "version": 1, "sig": 5, "effective": {"steps_per_period": 48, "gap_layers": 1.0},
+            "effective_source": {"steps_per_period": "solved", "gap_layers": "solved"}}
+    assert SS.sweep_settings_of({"mesh_preset": base})["sig"] is None
+    new = SS.sweep_settings_of({"mesh_preset": {**base, "version": 2, "sig_scope": 2, "coil_rel": 2.0}})
+    assert new["sig"] == 5 and new["version"] == 2 and new["coil_rel"] == 2.0

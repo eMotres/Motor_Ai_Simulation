@@ -10,7 +10,9 @@ or typed in the panel, and never come from another tab.  Every coercion of those
 own value outside the bounds, ...) happens HERE, so the display equals the run for them.  The label ("optimization" /
 "simulation" / "custom") and the digest (``sig``) are about that PAIR only.  The other settings (mesh sizes, sectors, rotor eddy,
 demag, and the keys the solver reads from the machine's stored block) are returned for display, each with its source, and are
-NOT part of the label or the digest: the complete run-settings identity is a follow-up."""
+NOT part of the label or the digest, EXCEPT the preset version and the wire cell (``coil_rel``, read from the machine's stored
+block, 1 when absent): they ride in the digest so that sweeps computed under different preset versions or wire cells are never
+ranked together.  The complete run-settings identity is a follow-up."""
 from __future__ import annotations
 
 import hashlib
@@ -58,9 +60,17 @@ def _same(a: Any, b: Any) -> bool:
     return MP._same(a, b)
 
 
-def identity_sig(steps: Any, gap_layers: Any) -> int:
-    """A numeric digest of the STEPS-AND-GAP identity (two sweeps are ranked together only when it is known and equal)."""
+#: the scope of the digest a stamp carries: 2 = steps, gap rows, preset version and wire cell (a sweep stamped before has no
+#: scope and is read as unknown, never ranked)
+SIG_SCOPE = 2
+
+
+def identity_sig(steps: Any, gap_layers: Any, preset_version: Any = None, coil_rel: Any = None) -> int:
+    """A numeric digest of the run identity: steps, gap rows, the preset version and the wire cell (``coil_rel``) the run used.
+    Two sweeps are ranked together only when it is known and equal.  Without the last two arguments it is the old pair digest."""
     body = [int(steps), round(float(gap_layers), 4)]
+    if preset_version is not None:
+        body += [int(preset_version), round(float(coil_rel if coil_rel is not None else 1.0), 4)]
     return int(hashlib.md5(json.dumps(body).encode()).hexdigest()[:12], 16)
 
 
@@ -160,7 +170,13 @@ def resolve(preset: Optional[str], overrides: Optional[Mapping[str, Any]], cfg: 
         if not same:
             differs[k] = {"preset": w, "current": cur}
     custom = bool(differs)
+    # the wire cell the run really uses is the machine's stored one (the keys above are read from the machine, not the preset)
+    try:
+        coil_rel_used = float((mach["component_mesh"] or {}).get("coil_rel", 1.0))
+    except (TypeError, ValueError):
+        coil_rel_used = 1.0
     return {"preset": name, "overrides": given, "label": "custom" if custom else name, "custom": custom,
             "preset_label": pv["label"], "differs": differs, "settings": settings, "sources": sources,
             "clamps": clamps, "version": MP.version(), "mode": mode,
-            "sig": identity_sig(settings["steps_per_period"], settings["gap_layers"])}
+            "coil_rel": coil_rel_used, "sig_scope": SIG_SCOPE,
+            "sig": identity_sig(settings["steps_per_period"], settings["gap_layers"], MP.version(), coil_rel_used)}

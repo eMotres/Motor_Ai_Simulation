@@ -258,7 +258,7 @@ interface MotorState {
                        objective?: string; currentBumpPct?: number;
                        ripplePenaltyLambda?: number;
                        thdPenaltyLambda?: number; thdMaxPct?: number;
-                       runSettings?: { preset: string; overrides: Record<string, unknown>; expect_sig?: number } }) => Promise<void>;
+                       runSettings?: { preset: string; overrides: Record<string, unknown>; expect_sig?: number; expect_token?: string } }) => Promise<void>;
   cancelDescent: () => Promise<void>;
   applyDescentBest: () => Promise<void>;
   applyDescentPoint: (pt: any) => Promise<void>;   // apply a USER-PICKED scatter point

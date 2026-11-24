@@ -2134,6 +2134,7 @@ class RunSettingsIn(BaseModel):
     preset: Optional[str] = "optimization"
     overrides: Dict[str, Any] = Field(default_factory=dict)
     expect_sig: Optional[int] = None
+    expect_token: Optional[str] = None   # the complete resolution token the panel showed (run_settings.resolution_token)
 
 
 class ScanRequest(BaseModel):
@@ -3440,6 +3441,10 @@ def _resolve_run_settings(rs, mode: str):
         out = _RS.resolve(rs.preset, rs.overrides, get_config(), mode)
     except _RS.RunSettingsError as exc:
         raise HTTPException(status_code=422, detail=str(exc))
+    if rs.expect_token is not None and str(rs.expect_token) != str(out["token"]):
+        raise HTTPException(status_code=409, detail=(
+            "the run settings changed since the panel showed them (the machine now resolves to other settings, e.g. the sectors); "
+            "the panel refreshes them, check them and press Run again"))
     if rs.expect_sig is not None and int(rs.expect_sig) != int(out["sig"]):
         raise HTTPException(status_code=409, detail=(
             "the run settings changed since the panel showed them (the steps per period or the gap rows differ now); "
@@ -3473,7 +3478,7 @@ def _run_settings_stamp(rs, resolved):
 def run_settings_resolve(rs: RunSettingsIn, mode: str = "sweep"):
     """The run settings for the loaded machine: the steps per period and gap rows the run receives (what the panel displays), and
     the other keys read-only with their source."""
-    return _resolve_run_settings(rs.model_copy(update={"expect_sig": None}), mode)
+    return _resolve_run_settings(rs.model_copy(update={"expect_sig": None, "expect_token": None}), mode)
 
 
 def _settings_class(*, steps, gap_layers, mesh_size_mm, min_size_mm, n_sectors, rotor_eddy, demag,

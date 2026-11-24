@@ -17,6 +17,7 @@ import {
 } from 'recharts';
 import { useMotorStore } from '../../stores/motorStore';
 import { useRunSettings } from '../../lib/useRunSettings';
+import { runSettingsBody } from '../../lib/runSettings';
 import RunSettingsBar from './RunSettingsBar';
 import { appliedSaveLine } from '../../lib/appliedAutoSave';
 
@@ -209,7 +210,7 @@ const AutoOptimizePanel: React.FC = () => {
       const r = await fetch(`${API}/api/optimization/auto`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ max_ripple_pct: maxRipple, mode,
-                               run_settings: { preset: rs.record.preset, overrides: rs.record.overrides, expect_sig: rs.resolved!.sig } }),
+                               run_settings: runSettingsBody(rs.record, rs.resolved!) }),
       });
       const j = await r.json().catch(() => null);
       if (!r.ok) { if (r.status === 409) rs.refresh(); throw new Error(j?.detail ?? `HTTP ${r.status}`); }

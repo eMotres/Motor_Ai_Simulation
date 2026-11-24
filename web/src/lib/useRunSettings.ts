@@ -36,7 +36,7 @@ export interface RunSettingsState {
 export function useRunSettings(mode: RunMode): RunSettingsState {
   const [tick, setTick] = useState(0);
   const ctx = useMemo(() => contextKey(), [tick]);   // eslint-disable-line react-hooks/exhaustive-deps
-  const [record, setRecord] = useState<RunRecord>(() => readView(recordScope(contextKey()), validRecord) ?? DEFAULT_RECORD);
+  const [record, setRecord] = useState<RunRecord>(() => readView(recordScope(contextKey()), r => validRecord(r, mode)) ?? DEFAULT_RECORD);
   const [held, setHeld] = useState<{ key: string; data: RunResolved } | null>(null);
   const [error, setError] = useState<string | null>(null);
   useEffect(() => {
@@ -45,11 +45,12 @@ export function useRunSettings(mode: RunMode): RunSettingsState {
     return () => { for (const e of EVENTS) window.removeEventListener(e, bump); };
   }, []);
   // another machine or duty: its own record (default Optimization); nothing is written
-  useEffect(() => { setRecord(readView(recordScope(ctx), validRecord) ?? DEFAULT_RECORD); }, [ctx]);
+  useEffect(() => { setRecord(readView(recordScope(ctx), r => validRecord(r, mode)) ?? DEFAULT_RECORD); }, [ctx]);   // eslint-disable-line react-hooks/exhaustive-deps
   const key = answerKey(ctx, mode, record);
   useEffect(() => {
     let live = true;
     setError(null);
+    setHeld(null);          // a refresh starts: the held answer is not valid until the new one arrives (Run and Draw baseline wait)
     fetch(`${API}/api/optimization/run-settings/resolve?mode=${mode}`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ preset: record.preset, overrides: record.overrides }), cache: 'no-store',

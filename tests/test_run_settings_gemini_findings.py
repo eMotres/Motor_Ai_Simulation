@@ -59,7 +59,7 @@ def test_finalist_note_names_the_cogging_quality_minimum_and_is_not_part_of_the_
     cfg = _cfg(12, 14)                      # lcm 84 / 7 pairs = 12 cycles -> 6 samples = 72 steps at least
     r = RS.resolve("optimization", {"steps_per_period": 48}, cfg, "descent")
     note = r["finalist_note"]
-    assert note == {"min_steps": 72, "run_steps": 48, "reason": "cogging_quality"}
+    assert note == {"min_steps": 72, "run_steps": 48, "reason": "cogging_quality_requirement"}
     assert r["settings"]["steps_per_period"] == 48            # the run keeps its own steps
     assert r["sig"] == RS.identity_sig(48, r["settings"]["gap_layers"], r["version"], r["coil_rel"])
     assert not any(c["key"] == "steps_per_period" for c in r["clamps"])
@@ -96,3 +96,37 @@ def test_baseline_runs_with_the_run_wire_cell(monkeypatch):
     O.descent_baseline(O.BaselineRequest(run_settings=O.RunSettingsIn(preset="simulation", overrides={"coil_rel": pick},
                                                                       expect_sig=resolved["sig"])))
     assert got == [pick] * 2 and O._RUN_COIL_REL.get() is None
+
+
+def test_finalist_note_is_a_requirement_not_a_promise():
+    r = RS.resolve("optimization", {"steps_per_period": 48, "gap_layers": 1}, _cfg(36, 14), "descent")
+    assert r["finalist_note"]["min_steps"] == 216 and r["finalist_note"]["run_steps"] == 48     # 252 / 7 cycles x 6
+    import json
+    for lang in ("en", "zh-CN"):
+        txt = json.loads((ROOT / ("web/src/locales/%s/simulation.json" % lang)).read_text(encoding="utf8"))["runSettingsFinalists"]
+        assert "{n}" in txt and "{run}" in txt
+    en = json.loads((ROOT / "web/src/locales/en/simulation.json").read_text(encoding="utf8"))["runSettingsFinalists"]
+    assert "are solved" not in en and "need" in en
+
+
+def test_token_changes_with_the_machine_while_the_digest_does_not():
+    a = RS.resolve("optimization", {}, _cfg(12, 14), "descent")
+    b = RS.resolve("optimization", {}, _cfg(24, 28), "descent")
+    assert a["settings"]["n_sectors"] != b["settings"]["n_sectors"] or a["token"] != b["token"]
+    assert a["token"] != b["token"]
+    assert a["token"] == RS.resolve("optimization", {}, _cfg(12, 14), "descent")["token"]
+    assert a["token"] != RS.resolve("optimization", {}, _cfg(12, 14), "sweep")["token"]
+
+
+def test_a_stale_token_is_refused_with_409_and_the_current_one_runs():
+    import pytest
+    from fastapi import HTTPException
+    cur = RS.resolve("optimization", {}, O.get_config(), "descent")
+    rs = O.RunSettingsIn(preset="optimization", overrides={}, expect_sig=cur["sig"], expect_token="stale")
+    with pytest.raises(HTTPException) as e:
+        O._resolve_run_settings(rs, "descent")
+    assert e.value.status_code == 409
+    ok = O._resolve_run_settings(rs.model_copy(update={"expect_token": cur["token"]}), "descent")
+    assert ok["token"] == cur["token"]
+    # the digest alone (an older client) still passes
+    O._resolve_run_settings(rs.model_copy(update={"expect_token": None}), "descent")

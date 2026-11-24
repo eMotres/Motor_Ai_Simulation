@@ -110,3 +110,23 @@ test('the wire-cell label exists in EN and zh-CN', () => {
     assert.ok(j.runSettingsWire, l);
   }
 });
+
+test('the run body carries the complete resolution token the panel showed', () => {
+  assert.deepEqual(runSettingsBody(choosePreset('simulation'), { sig: 7, token: 'abc' }), { preset: 'simulation', overrides: {}, expect_sig: 7, expect_token: 'abc' });
+  const auto = readFileSync(new URL('../../components/sweep/AutoOptimizePanel.tsx', import.meta.url), 'utf8');
+  assert.ok(auto.includes('runSettingsBody(rs.record, rs.resolved!)'));
+});
+
+test('a refresh invalidates the held answer (a geometry change cannot leave the old one usable)', () => {
+  const hook = readFileSync(new URL('../useRunSettings.ts', import.meta.url), 'utf8');
+  const before = hook.slice(hook.indexOf('let live = true;'), hook.indexOf("fetch(`${API}"));
+  assert.ok(before.includes('setHeld(null)'));
+  assert.ok(/'family-changed'/.test(hook) && /'sim-design-applied'/.test(hook));
+});
+
+test('the cleanup is mode-aware: a Descent panel drops demag, a Sweep panel keeps it', () => {
+  const rec = { preset: 'optimization', overrides: { demag: true, steps_per_period: 48 } };
+  assert.deepEqual(validRecord(rec, 'descent'), { preset: 'optimization', overrides: { steps_per_period: 48 } });
+  assert.deepEqual(validRecord(rec, 'sweep').overrides, { demag: true, steps_per_period: 48 });
+  assert.deepEqual(validRecord(rec).overrides, { demag: true, steps_per_period: 48 });
+});

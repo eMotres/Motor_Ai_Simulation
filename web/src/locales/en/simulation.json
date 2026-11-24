@@ -298,7 +298,7 @@
   "runSettingsOn": "on",
   "runSettingsOff": "off",
   "runSettingsAdjusted": "adjusted",
-  "runSettingsFinalists": "finalists are solved with at least {n} steps per period (cogging quality); the run itself uses {run}",
+  "runSettingsFinalists": "finalists need at least {n} steps per period (6 samples per cogging cycle); a finalist whose slip ring has no suitable divisor keeps the run's {run} and is flagged insufficient",
   "runSettingsMachine": "stored on the machine",
   "runSettingsHelp": "Steps per period, gap rows and the wire cell are exactly what this run uses: a preset button sets them (the run uses the preset's wire cell without changing the Mesh tab), typing in a field overrides it and the label reads custom (the label covers steps, gap rows and the wire cell). The other settings are shown read-only with where they come from. These run settings never change the Simulation or Mesh tab.",
   "runSettingsStale": "The run settings changed since they were shown. They are refreshed; check them and press Run again.",

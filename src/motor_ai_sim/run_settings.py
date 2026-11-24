@@ -68,6 +68,11 @@ def _same(a: Any, b: Any) -> bool:
 #: the scope of the digest a stamp carries: 2 = steps, gap rows, preset version and wire cell (a sweep stamped before has no
 #: scope and is read as unknown, never ranked)
 SIG_SCOPE = 2
+#: the scope of the digest of a CUSTOM run (3): every resolved setting that reaches the solver (mesh sizes, sectors, element order,
+#: the eddy / rotor eddy / demag switches, outer air, per-part sizes, the wire cell, steps, gap rows) plus the preset version.  A
+#: preset run keeps the scope-2 digest, so stored preset sweeps stay comparable; a reader that does not know scope 3 treats it as
+#: unknown (never ranked).
+SIG_SCOPE_FULL = 3
 
 
 def identity_sig(steps: Any, gap_layers: Any, preset_version: Any = None, coil_rel: Any = None) -> int:
@@ -77,6 +82,14 @@ def identity_sig(steps: Any, gap_layers: Any, preset_version: Any = None, coil_r
     if preset_version is not None:
         body += [int(preset_version), round(float(coil_rel if coil_rel is not None else 1.0), 4)]
     return int(hashlib.md5(json.dumps(body).encode()).hexdigest()[:12], 16)
+
+
+def full_sig(settings: Mapping[str, Any], preset_version: Any) -> int:
+    """The digest of a custom run: EVERY resolved setting the run uses (``settings`` is the resolver's dict) and the preset version.
+    Two custom runs rank together only when all of them are equal."""
+    body = {"v": int(preset_version) if preset_version is not None else None,
+            "s": {k: settings[k] for k in sorted(settings)}}
+    return int(hashlib.md5(json.dumps(body, sort_keys=True, default=str).encode()).hexdigest()[:12], 16)
 
 
 def _bound(key: str, x: float, mode: str, source: str, clamps: List[Dict[str, Any]]) -> float:
@@ -284,7 +297,8 @@ def resolve(preset: Optional[str], overrides: Optional[Mapping[str, Any]], cfg: 
             "clamps": clamps, "version": MP.version(), "mode": mode,
             "finalist_note": finalist_note(settings["steps_per_period"], geometry),
             "coil_rel": coil_rel_used, "coil_rel_stored": coil_rel_stored, "coil_rel_override": coil_rel_override,
-            "sig_scope": SIG_SCOPE,
-            "sig": identity_sig(settings["steps_per_period"], settings["gap_layers"], MP.version(), coil_rel_used)}
+            "sig_scope": SIG_SCOPE_FULL if custom else SIG_SCOPE,
+            "sig": (full_sig(settings, MP.version()) if custom else
+                    identity_sig(settings["steps_per_period"], settings["gap_layers"], MP.version(), coil_rel_used))}
     out["token"] = resolution_token(out, geometry)
     return out

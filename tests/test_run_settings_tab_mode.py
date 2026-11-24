@@ -52,7 +52,7 @@ def test_anything_else_is_custom_and_lists_the_differing_keys():
     assert r["settings"]["steps_per_period"] == 108 and r["sources"]["steps_per_period"] == "tab"
     # a mesh size that is not the preset's is a difference too (the legacy label looked at the pair only)
     m = RS.resolve("tab", _tab("optimization", cfg, mesh_size_mm=3.3), cfg)
-    assert m["label"] == "custom" and "mesh_size_mm" in m["differs"] and m["sig"] == RS.resolve("tab", _tab("optimization", cfg), cfg)["sig"]
+    assert m["label"] == "custom" and "mesh_size_mm" in m["differs"] and m["sig_scope"] == 3 and m["sig"] != RS.resolve("tab", _tab("optimization", cfg), cfg)["sig"]
 
 
 def test_no_silent_default_a_missing_value_is_refused():
@@ -144,3 +144,71 @@ def test_the_legacy_modes_are_unchanged():
     with pytest.raises(RS.RunSettingsError):
         RS.resolve("nope", {}, cfg)
     assert cfg == before
+
+
+# ── the digest of a custom run covers every resolved setting (sig scope 3); a preset run keeps the scope-2 digest ──
+from motor_ai_sim import sweep_saves as SS
+
+
+def _stamp_of(resolved):
+    """The settings the saved-sweeps reader gives for a run of this resolution whose solve verified every number."""
+    st = O._run_settings_stamp(None, resolved)
+    st.update({"effective": {"steps_per_period": resolved["settings"]["steps_per_period"],
+                             "gap_layers": resolved["settings"]["gap_layers"], "coil_rel": resolved["coil_rel"]},
+               "effective_source": {"steps_per_period": "solved", "gap_layers": "solved", "coil_rel": "solved"}})
+    return SS.sweep_settings_of({"mesh_preset": st})
+
+
+def test_a_preset_digest_is_byte_identical_to_before():
+    assert RS.identity_sig(48, 1.0) == 29124574465193           # the pair digest of before, pinned
+    cfg = _cfg()
+    for name in ("optimization", "simulation"):
+        r = RS.resolve(name, {}, cfg)
+        assert r["sig_scope"] == 2
+        assert r["sig"] == RS.identity_sig(r["settings"]["steps_per_period"], r["settings"]["gap_layers"], MP.version(), r["coil_rel"])
+    assert RS.resolve("tab", _tab("optimization", cfg), cfg)["sig_scope"] == 2          # a tab run that equals a preset is a preset run
+    assert RS.identity_sig(48, 1.0, 2, 2.0) == 122103711710627               # version 2, wire cell 2h, pinned
+
+
+def test_two_tab_runs_differing_only_in_mesh_size_have_different_digests_and_are_not_ranked():
+    cfg = _cfg()
+    a = RS.resolve("tab", _tab("optimization", cfg, mesh_size_mm=3.3), cfg)
+    b = RS.resolve("tab", _tab("optimization", cfg, mesh_size_mm=3.4), cfg)
+    c = RS.resolve("tab", _tab("optimization", cfg, mesh_size_mm=3.3), cfg)
+    assert a["custom"] and a["sig_scope"] == 3 and a["sig"] != b["sig"] and a["sig"] == c["sig"]
+    sa, sb, sc = _stamp_of(a), _stamp_of(b), _stamp_of(c)
+    assert sa["sig"] == sc["sig"] and sa["sig_scope"] == 3 and sa["sig"] is not None
+    assert sa["sig"] != sb["sig"]
+
+
+def test_every_resolved_setting_is_in_the_custom_digest():
+    cfg = _cfg()
+    base = RS.resolve("tab", _tab("optimization", cfg, steps_per_period=108), cfg)
+    for k, v in (("min_size_mm", 0.9), ("n_sectors", _numbers("optimization", cfg)["n_sectors"] + 1), ("rotor_eddy", False), ("demag", False), ("gap_layers", 2),
+                 ("coil_rel", 1.0), ("steps_per_period", 120)):
+        other = RS.resolve("tab", _tab("optimization", cfg, **{"steps_per_period": 108, k: v}), cfg)
+        assert other["sig"] != base["sig"], k
+    # the machine-sourced settings (outer air, per-part sizes, eddy) are part of it too
+    c2 = copy.deepcopy(cfg)
+    c2["mesh"] = {**dict(c2.get("mesh") or {}), "outer_air_factor": 1.7}
+    assert RS.resolve("tab", _tab("optimization", cfg, steps_per_period=108), c2)["sig"] != base["sig"]
+
+
+def test_a_preset_run_and_a_custom_run_with_the_presets_pair_and_cell_but_another_mesh_are_not_ranked():
+    cfg = _cfg()
+    preset = RS.resolve("optimization", {}, cfg)
+    custom = RS.resolve("tab", _tab("optimization", cfg, mesh_size_mm=3.3), cfg)
+    assert preset["settings"]["steps_per_period"] == custom["settings"]["steps_per_period"] and preset["coil_rel"] == custom["coil_rel"]
+    sp, sc = _stamp_of(preset), _stamp_of(custom)
+    assert sp["sig_scope"] == 2 and sc["sig_scope"] == 3 and sp["sig"] != sc["sig"]
+
+
+def test_an_unknown_scope_is_unknown_and_the_old_scope_keeps_its_meaning():
+    cfg = _cfg()
+    st = O._run_settings_stamp(None, RS.resolve("tab", _tab("optimization", cfg, mesh_size_mm=3.3), cfg))
+    st.update({"effective": {"steps_per_period": 48, "gap_layers": 1.0, "coil_rel": 2.0},
+               "effective_source": {"steps_per_period": "solved", "gap_layers": "solved", "coil_rel": "solved"}})
+    assert SS.sweep_settings_of({"mesh_preset": {**st, "sig_scope": 4}})["sig"] is None       # newer than this reader: fail closed
+    assert SS.sweep_settings_of({"mesh_preset": {**st, "sig_scope": None}})["sig"] is None
+    old = SS.sweep_settings_of({"mesh_preset": {**st, "sig_scope": 2, "sig": 77}})            # a stored scope-2 row stays as it was
+    assert old["sig"] == 77 and old["sig_scope"] == 2

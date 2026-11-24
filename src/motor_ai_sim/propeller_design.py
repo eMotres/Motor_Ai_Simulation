@@ -47,7 +47,8 @@ MFOIL_MACH_LIMIT = 0.7
 TORQUE_TOL = 0.01                                        # the torque limit may be exceeded by 1 % (search tolerance)
 FLIGHT_TORQUE_TOL = TORQUE_TOL                           # flight mode: torque within +-1 % of the limit at the rated rpm (reviews H4,
                                                          # 2026-11-22: one symmetric band, the same as the cap)
-F_POLAR_UNSUPPORTED = ("polar_alpha_gap", "polar_beyond_table")   # table flags: angles without a converged table solution
+F_POLAR_UNSUPPORTED = ("polar_alpha_gap", "polar_beyond_table", "re_outside_tables")   # review 2026-11-24 (8b): clamped Re too
+RPM_CAP_MIN_TORQUE = 0.9                                 # review 2026-11-24 (6b): share of the torque limit a capped design must still take   # table flags: angles without a converged table solution
 IN = 0.0254
 
 
@@ -251,8 +252,10 @@ def _stations(d: Design, vec: Dict[str, Any]):
     return R_mm, r_mm, chord(fr) * R_mm, twist(fr), r_mm / R_mm
 
 
-def candidate_to_propeller2(d: Design, vec: Dict[str, Any]) -> Dict[str, Any]:
-    """The candidate as a ``propeller-2`` dictionary, airfoil as manufactured.  Raises ``DesignError`` for a vector that cannot be built."""
+def candidate_to_propeller2(d: Design, vec: Dict[str, Any], thickness_scale: float = 1.0) -> Dict[str, Any]:
+    """The candidate as a ``propeller-2`` dictionary, airfoil as manufactured.  Raises ``DesignError`` for a vector that cannot be built.
+    ``thickness_scale`` multiplies every station's thickness ratio (the tolerance study's thickness case; review 2026-11-24, 9a: passed
+    explicitly instead of a patched module function)."""
     for n in variable_names(d):
         if n not in vec:
             raise DesignError("missing design variable %s" % n)
@@ -270,6 +273,8 @@ def candidate_to_propeller2(d: Design, vec: Dict[str, Any]) -> Dict[str, Any]:
         ms = af.manufactured_section(e.x, e.yu, e.yl, float(chord_mm[i]), d.manufacturing)
         st.append({"r_mm": round(float(r_mm[i]), 4), "chord_mm": round(float(chord_mm[i]), 4), "twist_deg": round(float(twist_deg[i]), 4),
                    "airfoil": aid, "thickness_rel": math.ceil(float(ms.made.t_c) * 1e6) / 1e6})        # rounded UP: never below a minimum
+        if thickness_scale != 1.0:
+            st[-1]["thickness_rel"] = st[-1]["thickness_rel"] * float(thickness_scale)
     D_mm = 2.0 * R_mm
     ident = {k: vec[k] for k in sorted(vec)}
     h = hashlib.sha1(json.dumps(ident, sort_keys=True, default=str).encode()).hexdigest()[:8]
@@ -286,8 +291,8 @@ def candidate_to_propeller2(d: Design, vec: Dict[str, Any]) -> Dict[str, Any]:
             "performance": {"data_quality": "geometry_only"}, "blade": blade}
 
 
-def build_propeller(d: Design, vec: Dict[str, Any]) -> pp.Propeller:
-    raw = candidate_to_propeller2(d, vec)
+def build_propeller(d: Design, vec: Dict[str, Any], thickness_scale: float = 1.0) -> pp.Propeller:
+    raw = candidate_to_propeller2(d, vec) if thickness_scale == 1.0 else candidate_to_propeller2(d, vec, thickness_scale)
     try:
         return pp._build(raw, "design:" + raw["id"])
     except pp.PropellerDataError as exc:
@@ -313,8 +318,12 @@ def check_candidate(d: Design, vec: Dict[str, Any]) -> List[Dict[str, Any]]:
         return out
     if not in_family(d, vec["diameter_in"]):
         viol("diameter_not_in_family", "diameter_in", vec["diameter_in"], family_diameters(d))
-    if int(vec["blades"]) not in d.blades_options:
-        viol("blades_not_offered", "blades", vec["blades"], d.blades_options)
+    bl = vec["blades"]                                   # review 2026-11-24 (6c): an exact whole number, never int(2.9) = 2
+    if isinstance(bl, bool) or not isinstance(bl, (int, float)) or not math.isfinite(bl) or not float(bl).is_integer() \
+            or int(bl) not in d.blades_options:
+        viol("blades_not_offered", "blades", bl, d.blades_options)
+    if out:                                              # the checks below need a valid diameter and blade count (10b: no ValueError)
+        return out
     for r in d.control:
         for kind, key in (("chord_R", "chord_over_R"), ("twist_deg", "twist_deg")):
             n = _cname(kind, r)
@@ -358,7 +367,7 @@ def _tip_mach(R_m: float, rpm: float, temp_c: float) -> float:
 
 
 def evaluate_candidate(d: Design, vec: Dict[str, Any], op_name: str, *, v_inf: float = 0.0, max_iter: int = 8,
-                       rtol: float = 2e-3, flight: bool = False) -> Dict[str, Any]:
+                       rtol: float = 2e-3, flight: bool = False, thickness_scale: float = 1.0) -> Dict[str, Any]:
     """Blade-element evaluation at the rpm where the propeller torque meets the motor's torque limit (search up to ``rpm_search_max``).
 
     Torque scales with rpm squared to first order, so the search is a few secant-like steps on ``n <- n sqrt(T_lim / T)``; if the cap is
@@ -377,19 +386,26 @@ def evaluate_candidate(d: Design, vec: Dict[str, Any], op_name: str, *, v_inf: f
     bad = check_candidate(d, vec)
     if bad:
         raise DesignError("invalid candidate: %s" % "; ".join("%s %s" % (b["rule"], b["name"]) for b in bad))
-    prop = build_propeller(d, vec)
+    prop = build_propeller(d, vec, thickness_scale)
     air = d.raw["air"]
     rho, temp = float(air["rho_kg_m3"]), float(air["temp_c"])
     flags = set()
     rpm = op.rated_rpm_ref
     res = None
     capped = False
-    for _ in range(0 if flight else max_iter):          # flight: no search, the rated rpm itself (review 2026-11-21 H4)
+    lo_r, hi_r = None, None                              # review 2026-11-24 (6a): bracket of the torque crossing (below / above the limit)
+    for _ in range(0 if flight else max(max_iter, 0) * 3):   # flight: no search, the rated rpm itself (review 2026-11-21 H4)
         res = pi.get_model("bemt-1").evaluate(pi.InflowRequest(
             propeller=prop, rpm=rpm, rho=rho, v_inf_ms=v_inf, r_min_m=0.0, r_max_m=op.motor_radius_mm / 1000.0, air_temp_c=temp))
-        if res.torque_Nm <= 0:
-            raise DesignError("the propeller absorbs no positive torque at %.0f rpm" % rpm)
-        new = rpm * math.sqrt(op.torque_limit_Nm / res.torque_Nm)
+        q = res.torque_Nm
+        if q < op.torque_limit_Nm:
+            lo_r = rpm if lo_r is None else max(lo_r, rpm)
+        else:
+            hi_r = rpm if hi_r is None else min(hi_r, rpm)
+        # secant-like step on Q ~ rpm^2; with oncoming air the torque can be <= 0 at a low rpm: step up instead of giving up
+        new = rpm * math.sqrt(op.torque_limit_Nm / q) if q > 0 else 2.0 * rpm
+        if lo_r is not None and hi_r is not None and not (lo_r < new < hi_r):
+            new = 0.5 * (lo_r + hi_r)                    # a step out of the bracket is replaced by bisection
         capped = new > op.rpm_search_max
         new = min(new, op.rpm_search_max)
         if abs(new - rpm) <= rtol * rpm:
@@ -398,7 +414,7 @@ def evaluate_candidate(d: Design, vec: Dict[str, Any], op_name: str, *, v_inf: f
         rpm = new
     res = pi.get_model("bemt-1").evaluate(pi.InflowRequest(
         propeller=prop, rpm=rpm, rho=rho, v_inf_ms=v_inf, r_min_m=0.0, r_max_m=op.motor_radius_mm / 1000.0, air_temp_c=temp))
-    if res.torque_Nm <= 0 and flight:
+    if res.torque_Nm <= 0:
         raise DesignError("the propeller absorbs no positive torque at %.0f rpm" % rpm)
     converged = abs(res.torque_Nm - op.torque_limit_Nm) <= 0.01 * op.torque_limit_Nm
     if capped and res.torque_Nm < op.torque_limit_Nm:
@@ -424,7 +440,9 @@ def evaluate_candidate(d: Design, vec: Dict[str, Any], op_name: str, *, v_inf: f
         constraints["torque_matches_rated"] = abs(torque_error) <= FLIGHT_TORQUE_TOL
     else:                                                # review 2026-11-22 H4: an unmatched torque search is not a design point
         constraints["rpm_search_converged"] = "rpm_search_not_converged" not in flags
-    p2 = candidate_to_propeller2(d, vec)
+        if "rpm_capped" in flags:                        # review 2026-11-24 (6b): a blade far below the torque limit at the cap is no design
+            constraints["torque_reached_at_cap"] = res.torque_Nm >= RPM_CAP_MIN_TORQUE * op.torque_limit_Nm
+    p2 = candidate_to_propeller2(d, vec) if thickness_scale == 1.0 else candidate_to_propeller2(d, vec, thickness_scale)
     ident = p2["id"]
     if polar_source(d) == "mfoil_table":
         if mach > MFOIL_MACH_LIMIT:                       # review H7: the tables are Mach 0 viscous solutions (PG only scales lift)

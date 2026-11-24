@@ -53,16 +53,21 @@ from motor_ai_sim.propeller_blade import BladeGeometry
 
 MODEL_BEMT = "bemt-1"
 
-MU_AIR_15C = 1.81e-5                 # Pa s
 GAMMA_AIR = 1.4
 HIGH_TIP_MACH = 0.6
 DEFAULT_THICKNESS = 0.08             # used (and flagged) where a station states none
 DEFAULT_N_ELEMENTS = 60
+MAX_N_ELEMENTS = 2000
 #: stall angle of the ESTIMATED flat-plate polar [deg] — an assumption, not data
 FLATPLATE_ALPHA_STALL_DEG = 12.0
 _PHI_SCAN = 200
 _PHI_LO, _PHI_HI = 1e-4, math.pi / 2.0 - 1e-4
 _F_MIN = 1e-6
+_W_PASSES = 8                        # review 2026-11-24 (3a): W, Re and the polar converged together
+_W_RTOL = 1e-6
+#: below this share of a requested air band covered by the modelled blade the result carries ``band_low_coverage:x`` (review 2026-11-24, 1b);
+#: the uncovered open part counts at the free-stream speed, so the value itself is already conservative
+BAND_MIN_COVERAGE = 0.5
 
 POLAR_DIR = Path(__file__).resolve().parents[2] / "config" / "propellers" / "_polars"
 MFOIL_POLAR_DIR = Path(__file__).resolve().parents[2] / "config" / "propellers" / "_polars_mfoil"   # viscous model tables (mfoil, MIT), 2026-11-19
@@ -175,10 +180,16 @@ def zero_lift_angle(x, yu, yl) -> float:
     return float(-np.sum(slope * np.diff(g)) / math.pi)
 
 
+#: lift ceiling of the ESTIMATED cambered-plate polar (review 2026-11-24 follow-up): 2 pi (alpha - alpha_0) to a 12 deg stall gives
+#: cl 1.77 (4412) / 2.0 (6412); cambered 4-6 % sections at Re 1e5-3e5 reach about 1.2-1.5 (Selig et al., Summary of Low-Speed Airfoil
+#: Data, vols 1-3, 1995-1997).  1.4 is an assumption inside that range, not data for a given airfoil.
+CAMBER_CL_MAX = 1.4
+
+
 class CamberedPlatePolar(FlatPlatePolar):
-    """ESTIMATED section polar with camber: the flat-plate model evaluated at alpha - alpha_0, alpha_0 from thin-airfoil
-    theory on the section's own camber line (``propeller_airfoil``: generated NACA 4-digit or a library file).  Lift
-    slope, drag and stall are still the generic flat-plate ones; only the zero-lift angle depends on the airfoil."""
+    """ESTIMATED section polar with camber: thin-airfoil lift 2 pi (alpha - alpha_0) to the generic stall angle, alpha_0 from thin-airfoil
+    theory on the section's own camber line (``propeller_airfoil``: generated NACA 4-digit or a library file).  Lift slope, drag and the
+    stall angle are the generic flat-plate ones; only the zero-lift angle depends on the airfoil."""
 
     estimated = True
 
@@ -196,9 +207,22 @@ class CamberedPlatePolar(FlatPlatePolar):
             self._a0[airfoil] = zero_lift_angle(e.x, e.yu, e.yl)
         return self._a0[airfoil]
 
-    def eval(self, airfoil: str, alpha, Re, mach, thickness):
-        cl, cd, flags = super().eval(airfoil, np.asarray(alpha, float) - self.alpha0(airfoil), Re, mach, thickness)
-        return cl, cd, set(flags) | {"camber_thin_airfoil"}
+    def _eval_half(self, airfoil, alpha, Re, mach, thickness):
+        # review 2026-11-24 (4c): the zero-lift shift moves the attached lift line only; stall stays at +-alpha_stall in the section's own
+        # alpha (shifting the whole flat plate by alpha_0 stalled a NACA 6412 at +5.8 deg).  Post-stall: Viterna from the stall point.
+        alpha, Re = np.broadcast_arrays(np.asarray(alpha, float), np.asarray(Re, float))
+        a0 = self.alpha0(airfoil)
+        cd0 = self.cd0(Re, thickness)
+        pre = np.abs(alpha) <= self.a_s
+        cl_pre = np.clip(2.0 * math.pi * (alpha - a0), -CAMBER_CL_MAX, CAMBER_CL_MAX)       # capped: no optimistic high-alpha lift
+        cl_pos, cd_pos = self._post(np.abs(alpha), cd0, min(2.0 * math.pi * (self.a_s - a0), CAMBER_CL_MAX))
+        cl_neg, cd_neg = self._post(np.abs(alpha), cd0, min(2.0 * math.pi * (self.a_s + a0), CAMBER_CL_MAX))
+        cl = np.where(pre, cl_pre, np.where(alpha > 0, cl_pos, -cl_neg))
+        cd = np.where(pre, cd0, np.where(alpha > 0, cd_pos, cd_neg))
+        fl = {"polar_estimated", "camber_thin_airfoil"}
+        if np.any(np.abs(2.0 * math.pi * (alpha - a0)) > CAMBER_CL_MAX) and np.any(pre):
+            fl.add("camber_cl_max_capped")
+        return cl, cd, fl
 
 
 class PrandtlGlauertPolar(PolarProvider):
@@ -211,13 +235,22 @@ class PrandtlGlauertPolar(PolarProvider):
         self.base = base
         self.estimated = True
 
+    #: review 2026-11-24 (8d): the correction is for attached flow; it is applied in full up to ATTACHED_DEG of |alpha| and faded linearly
+    #: to none at SEPARATED_DEG (continuous, so the momentum root search sees no jump); the flag says when the fade was used
+    ATTACHED_DEG, SEPARATED_DEG = 15.0, 25.0
+
     def eval(self, airfoil: str, alpha, Re, mach, thickness):
         cl, cd, flags = self.base.eval(airfoil, alpha, Re, mach, thickness)
         m = np.asarray(mach, float)
         flags = set(flags) | {"prandtl_glauert"}
         if np.any(m > self.M_CAP):
             flags.add("mach_above_prandtl_glauert")
-        return cl / np.sqrt(1.0 - np.minimum(m, self.M_CAP) ** 2), cd, flags
+        a = np.degrees(np.abs(np.asarray(alpha, float)))
+        w = np.clip((self.SEPARATED_DEG - a) / (self.SEPARATED_DEG - self.ATTACHED_DEG), 0.0, 1.0)
+        if np.any(w < 1.0):
+            flags.add("prandtl_glauert_faded_post_stall")
+        k = 1.0 / np.sqrt(1.0 - np.minimum(m, self.M_CAP) ** 2)
+        return cl * (1.0 + (k - 1.0) * w), cd, flags
 
 
 @dataclass(frozen=True)
@@ -305,8 +338,20 @@ class TablePolar(PolarProvider):
             cl, cd = np.where(hi, v_cl, cl), np.where(hi, v_cd, cd)
         lo = a < t.alpha[0]
         if np.any(lo):
-            v_cl, v_cd = _viterna(np.maximum(-a, -t.alpha[0]), float(-t.alpha[0]), float(-t.cl[0]), float(t.cd[0]), self.cdmax)
-            cl, cd = np.where(lo, -v_cl, cl), np.where(lo, v_cd, cd)
+            a_s, cl_s = float(t.alpha[0]), float(t.cl[0])
+            if cl_s > 0.0 and len(t.alpha) > 1:
+                # review 2026-11-24 (4b): the table ends before zero lift (cl > 0 at its first angle, e.g. naca4-6410 Re 4.5e5).  Extend the
+                # first segment's slope linearly to cl = 0 and start the mirrored Viterna branch there, so cl keeps falling below the table.
+                slope = (float(t.cl[1]) - cl_s) / (float(t.alpha[1]) - a_s)
+                a_z = a_s - cl_s / slope if slope > 0 else a_s
+                lin = (a >= a_z) & lo
+                cl = np.where(lin, cl_s + slope * (a - a_s), cl)
+                cd = np.where(lin, float(t.cd[0]), cd)
+                lo = a < a_z
+                a_s, cl_s = a_z, 0.0
+            if np.any(lo):
+                v_cl, v_cd = _viterna(np.maximum(-a, -a_s), -a_s, -cl_s, float(t.cd[0]), self.cdmax)
+                cl, cd = np.where(lo, -v_cl, cl), np.where(lo, v_cd, cd)
         return cl, cd
 
     @staticmethod
@@ -446,7 +491,10 @@ class _Ctx:
 
 
 def _state(phi, r, c, th, af, t, x: _Ctx):
-    """Everything at inflow angle(s) ``phi`` for one element: residual and the force/velocity quantities."""
+    """Everything at inflow angle(s) ``phi`` for one element: residual and the force/velocity quantities.
+
+    Momentum form (Glauert, Ning 2014): dT = 4 pi rho r F (V + u_a) u_a - the mass-flux factor is the blade-local V + u_a and F
+    carries the loss; the azimuthal mean through-flow of the annulus is V + F u_a, which ``solve`` returns as ``axial_mean``."""
     phi = np.asarray(phi, float)
     sphi, cphi = np.sin(phi), np.cos(phi)
     tphi = sphi / cphi
@@ -454,8 +502,8 @@ def _state(phi, r, c, th, af, t, x: _Ctx):
     sig = x.B * c / (8.0 * math.pi * r * F)
     W = np.full_like(phi, math.hypot(x.V, x.Om * r))
     flags: set = set()
-    for _ in range(2):                                     # Re (hence the polar) depends on W: two passes
-        Re = x.rho * W * c / x.mu
+    for _ in range(_W_PASSES):                             # Re (hence the polar) depends on W: iterate until W is stationary
+        Re = x.rho * W * c / x.mu                          # (review 2026-11-24, 3a: was two fixed passes; effect < 0.002 % on P1)
         cl, cd, fl = x.polar.eval(af, th - phi, Re, W / x.a_snd, t)
         flags |= fl
         cn = cl * cphi - cd * sphi
@@ -464,7 +512,13 @@ def _state(phi, r, c, th, af, t, x: _Ctx):
         Kt = sig * ct / sphi ** 2
         den = 1.0 + Kt * tphi
         Ut = np.where(den > 1e-6, x.Om * r / np.where(den > 1e-6, den, 1.0), np.nan)
-        W = np.abs(Ut) / cphi
+        W_new = np.abs(Ut) / cphi
+        done = bool(np.all(~np.isfinite(W_new) | (np.abs(W_new - W) <= _W_RTOL * np.maximum(np.abs(W), 1e-9))))
+        W = W_new
+        if done:
+            break
+    else:
+        flags.add("w_re_not_converged")                   # review 2026-11-24 follow-up: the 8 passes ran out (W and Re still moving)
     Ua = Ut * tphi
     return dict(phi=phi, F=F, Ka=Ka, Kt=Kt, Ua=Ua, Ut=Ut, W=W, Re=Re, cl=cl, cd=cd, cn=cn, ct=ct,
                 resid=(1.0 - Ka) * Ua - x.V, flags=flags)
@@ -520,7 +574,7 @@ class BemtResult:
     phi: np.ndarray
     alpha: np.ndarray
     reynolds: np.ndarray
-    u_axial: np.ndarray            # induced axial velocity at the disc
+    u_axial: np.ndarray            # induced axial velocity at the disc, local to the blade (vortex sheet)
     u_swirl: np.ndarray            # induced swirl at the disc
     axial_total: np.ndarray        # V + u_axial
     wake_axial: np.ndarray         # V + 2 u_axial (fully developed, no contraction modelled)
@@ -535,6 +589,10 @@ class BemtResult:
     polar_estimated: bool
     root_m: float
     tip_m: float
+    # review 2026-11-24 (1a): the azimuthal (annulus) means behind the disc - the momentum balance holds for F u_a, not u_a; these are the
+    # velocities a cooling or wake consumer must use.  The blade-local arrays above are unchanged.
+    axial_mean: Optional[np.ndarray] = None        # V + F u_a
+    wake_axial_mean: Optional[np.ndarray] = None   # V + 2 F u_a
 
 
 def solve(blade: BladeGeometry, blades: int, rpm: float, rho: float, v_inf: float = 0.0, *,
@@ -548,8 +606,8 @@ def solve(blade: BladeGeometry, blades: int, rpm: float, rho: float, v_inf: floa
         raise BemtError("rho must be positive")
     if not (v_inf >= 0 and math.isfinite(v_inf)):
         raise BemtError("v_inf must be >= 0 (propeller in thrust mode; a windmilling case is out of scope)")
-    if n_elements < 8:
-        raise BemtError("n_elements must be at least 8")
+    if not (isinstance(n_elements, int) and 8 <= n_elements <= MAX_N_ELEMENTS):    # review 2026-11-24 (10c): bounded work
+        raise BemtError("n_elements must be an integer 8..%d" % MAX_N_ELEMENTS)
     rm, dr, chord, th, thick, afs, gflags = element_grid(blade, n_elements)
     Om = rpm * 2.0 * math.pi / 60.0
     x = _Ctx(B=blades, rhub=blade.hub_radius_m, rtip=blade.tip_radius_m, Om=Om, V=float(v_inf), rho=float(rho),
@@ -563,7 +621,21 @@ def solve(blade: BladeGeometry, blades: int, rpm: float, rho: float, v_inf: floa
     for i in range(n):
         s, nroots = _solve_element(float(rm[i]), float(chord[i]), float(th[i]), afs[i], float(thick[i]), x)
         if s is None:
+            # review 2026-11-24 (3b): no momentum root.  The element is NOT summed as zero: its loads are the uninduced blade-element
+            # estimate (relative speed hypot(V, Om r), no induction), so e.g. a zero-twist tip in hover still carries its profile-drag torque.
+            # The element stays in ``unconverged`` and the result says so (flags unconverged_elements:n, uninduced_estimate:n).
             bad.append(i)
+            ph = math.atan2(x.V, Om * rm[i]) if x.V > 0 else 0.0
+            W0 = math.hypot(x.V, Om * rm[i])
+            Re0 = rho * W0 * chord[i] / x.mu
+            cl0, cd0, fl0 = polar.eval(afs[i], np.array([th[i] - ph]), np.array([Re0]), np.array([W0 / x.a_snd]), float(thick[i]))
+            flags |= set(fl0)
+            cl0, cd0 = float(np.asarray(cl0).ravel()[0]), float(np.asarray(cd0).ravel()[0])
+            q = 0.5 * rho * W0 * W0 * blades * chord[i]
+            out["phi"][i] = ph; out["alpha"][i] = th[i] - ph; out["Re"][i] = Re0; out["Ua"][i] = x.V; out["F"][i] = 1.0
+            out["cl"][i] = cl0; out["cd"][i] = cd0
+            out["dT"][i] = q * (cl0 * math.cos(ph) - cd0 * math.sin(ph))
+            out["dQ"][i] = q * (cl0 * math.sin(ph) + cd0 * math.cos(ph)) * rm[i]
             continue
         multi += 1 if nroots > 1 else 0
         flags |= s["flags"]
@@ -582,10 +654,16 @@ def solve(blade: BladeGeometry, blades: int, rpm: float, rho: float, v_inf: floa
         out["dQ"][i] = q * ctt * rm[i]
     if bad:
         flags.add("unconverged_elements:%d" % len(bad))
+        flags.add("uninduced_estimate:%d" % len(bad))
     if multi:
         flags.add("multiple_roots:%d" % multi)
     T = float(np.sum(out["dT"] * dr))
     Q = float(np.sum(out["dQ"] * dr))
+    if T < 0:
+        flags.add("negative_thrust")                     # review 2026-11-24 (3c): braking / windmilling, outside the propulsive model
+    wake_mean = x.V + 2.0 * out["F"] * out["ua"]
+    if np.any(wake_mean < 0):
+        flags.add("wake_reversal_not_modelled")          # review 2026-11-24 (3d): no high-induction (Buhl) branch in this model
     P = Q * Om
     n_rev = rpm / 60.0
     D = 2.0 * blade.tip_radius_m
@@ -602,7 +680,7 @@ def solve(blade: BladeGeometry, blades: int, rpm: float, rho: float, v_inf: floa
         axial_total=out["Ua"], wake_axial=x.V + 2.0 * out["ua"], wake_swirl=2.0 * out["ut"], loss_factor=out["F"],
         cl=out["cl"], cd=out["cd"], dT_dr=out["dT"], dQ_dr=out["dQ"], unconverged=bad,
         flags=tuple(sorted(flags)), polar_estimated=bool(polar.estimated), root_m=float(rm[0] - dr[0] / 2.0),
-        tip_m=blade.tip_radius_m)
+        tip_m=blade.tip_radius_m, axial_mean=x.V + out["F"] * out["ua"], wake_axial_mean=wake_mean)
 
 
 def om_tip_mach(Om: float, rtip: float, V: float, a: float) -> float:
@@ -653,7 +731,7 @@ def evaluate(prop: _pp.Propeller, rpm: float, rho: float = _pp.RHO_ISA, v_inf: f
         "operating_point": {"rpm": res.rpm, "rho_kg_m3": res.rho, "v_inf_ms": res.v_inf, "air_temp_c": float(temp_c)},
         "thrust_N": res.thrust_N, "torque_Nm": res.torque_Nm, "shaft_power_W": res.power_W,
         "ct": res.ct, "cp": res.cp, "J": res.J, "efficiency": res.efficiency, "figure_of_merit": res.figure_of_merit,
-        "profile": {"r_m": res.r_m.tolist(), "axial_total_ms": res.axial_total.tolist(),
+        "profile": {"r_m": res.r_m.tolist(), "axial_total_ms": res.axial_total.tolist(), "axial_mean_ms": res.axial_mean.tolist(),
                     "swirl_ms": res.u_swirl.tolist(), "wake_axial_ms": res.wake_axial.tolist(),
                     "wake_swirl_ms": res.wake_swirl.tolist()},
         "flags": list(res.flags), "polar_estimated": res.polar_estimated,
@@ -709,28 +787,45 @@ class BemtInflow:
         edges = np.concatenate([res.r_m - res.dr_m / 2.0, [res.r_m[-1] + res.dr_m[-1] / 2.0]])
         ok = np.ones(len(res.r_m), bool)
         ok[res.unconverged] = False
+        # review 2026-11-24 (1a): bands, air speed and wake carry the ANNULUS-MEAN axial speed V + F u_a (blade-local V + u_a over-states
+        # it where the hub / tip loss F is small); elements without a momentum solution give no band value.
         bands = tuple(_pi.Band(float(edges[i]), float(edges[i + 1]),
-                               float(res.axial_total[i]) if ok[i] else None,
+                               float(res.axial_mean[i]) if ok[i] else None,
                                float(res.u_swirl[i]) if ok[i] else None) for i in range(len(res.r_m)))
         flags = set(res.flags) | {"profile_at_disc", "no_wake_contraction"}
         lo = res.root_m if req.r_min_m is None else float(req.r_min_m)
         hi = res.tip_m if req.r_max_m is None else float(req.r_max_m)
         a_lo, a_hi = max(lo, res.root_m), min(hi, res.tip_m)
-        air = None
-        if a_hi > a_lo:
-            w = np.clip(np.minimum(edges[1:], a_hi) - np.maximum(edges[:-1], a_lo), 0.0, None) * res.r_m * ok
-            if w.sum() > 0:
-                air = float(np.sum(w * res.axial_total) / w.sum())
+        r_hub = float(prop.blade.hub_radius_m)
+        open_lo = max(lo, r_hub, 0.0)                      # the hub itself is solid: no air passes inside it
+        open_area = np.pi * (hi ** 2 - open_lo ** 2) if hi > open_lo else 0.0
+        if open_area > 0:
+            # review 2026-11-24 (1a, 1b): exact clipped annulus areas; the open part of the band that the blade model does not cover (the
+            # gap between hub and cut-out, failed elements) is taken at the free-stream speed V - no induced-flow credit - so a thin
+            # loaded sliver cannot stand for a band that is mostly unmodelled, and the value has no jump when the cut-out passes the band edge
+            e_lo, e_hi = np.maximum(edges[:-1], max(a_lo, open_lo)), np.minimum(edges[1:], a_hi)
+            w = np.where(e_hi > e_lo, np.pi * (e_hi ** 2 - e_lo ** 2), 0.0) * ok
+            covered = float(w.sum())
+            coverage = covered / open_area
+            air = float((np.sum(w * res.axial_mean) + (open_area - covered) * res.v_inf) / open_area)
             if lo < res.root_m - 1e-12:
                 flags.add("band_partly_inside_hub")
+            if coverage < BAND_MIN_COVERAGE:
+                flags.add("band_low_coverage:%.2f" % coverage)
         else:
+            air = None
             flags.add("band_inside_hub_not_modelled")
         area = np.pi * (edges[1:] ** 2 - edges[:-1] ** 2) * ok
-        wake = float(np.sum(area * res.wake_axial) / area.sum()) if area.sum() > 0 else 0.0
+        if area.sum() > 0:
+            wake = float(np.sum(area * res.wake_axial_mean) / area.sum())
+        else:                                              # review 2026-11-24 (11.6): no converged element is no wake, not a zero wake
+            raise _pi.InflowModelError("%s: no blade element converged at %.0f rpm" % (MODEL_BEMT, res.rpm))
         assumptions = ("blade-element momentum theory with Prandtl tip and hub loss, no wake contraction, no hub flow",
                        "polars: %s" % ("ESTIMATED flat-plate + Viterna model, not a measured airfoil" if res.polar_estimated
                                        else "tabulated section data, Viterna beyond the table"),
-                       "validation against measurements: not yet done (stage A3)")
+                       "validation: tests/test_propeller_validation_uiuc.py against UIUC wind-tunnel data (APC 11x5.5E, airfoil "
+                       "assumed); bias at J 0.2-0.35: mfoil tables CT -2 %, CP -7 %, efficiency +0.03; flat-plate model CT -38 %, "
+                       "CP -44 %, efficiency +0.06; static CT 20-30 % low with both - hover numbers are not usable")
         return _pi.AirField(
             model_id=MODEL_BEMT, propeller_id=prop.id, rpm=res.rpm, rho_kg_m3=res.rho, thrust_N=res.thrust_N,
             torque_Nm=res.torque_Nm, shaft_power_W=res.power_W, wake_velocity_ms=wake, air_speed_ms=air,

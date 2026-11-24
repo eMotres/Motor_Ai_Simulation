@@ -90,6 +90,7 @@ t('planform polygon is closed around the pitch axis and the profile keeps gaps a
 
 t('key flags keep a fixed order and drop the rest; formatting never prints NaN', () => {
   assert.deepEqual(P.keyFlags(['rpm_capped', 'x', 'root_flow_not_validated']), ['root_flow_not_validated', 'rpm_capped']);
+  assert.deepEqual(P.keyFlags(['unconverged_elements:3', 're_outside_tables', 'polar_viscous_model_mfoil']), ['unconverged_elements', 're_outside_tables']);
   assert.equal(P.fmt(null), '—');
   assert.equal(P.fmt(NaN), '—');
   assert.equal(P.fmt(1.2345, 1), '1.2');

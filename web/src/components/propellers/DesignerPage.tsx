@@ -20,7 +20,8 @@ export default function DesignerPage() {
   const [diameter, setDiameter] = useRememberedView<string>('propellers.designer.diameter', '10', oneOf(['10', '10.5', '11', '11.5', '12', '12.5', '13', '13.5', '14']));
   const [blades, setBlades] = useRememberedView<string>('propellers.designer.blades', '2', oneOf(['2', '3']));
   const [op, setOp] = useRememberedView<string>('propellers.designer.op', 'L12', oneOf(['L12', 'L20']));
-  const [polar, setPolar] = useRememberedView<string>('propellers.designer.polar', 'flatplate_model', oneOf(['flatplate_model', 'camber_model', 'mfoil_table']));
+  const [polar, setPolar] = useRememberedView<string>('propellers.designer.polar', 'mfoil_table',   // default since 2026-11-24 (owner); flat plate stays selectable
+    oneOf(['flatplate_model', 'camber_model', 'mfoil_table']));
   useEffect(() => { api.setPolarSource(polar === 'flatplate_model' ? null : polar); }, [polar]);
   const [family, setFamily] = useState<api.Family | null>(null);
   const [vector, setVector] = useState<Vector | null>(null);

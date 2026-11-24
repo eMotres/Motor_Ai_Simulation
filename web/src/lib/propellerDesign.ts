@@ -149,10 +149,15 @@ export function profileRows(p: EvalRecord['profile']): Array<{ r_mm: number; axi
 
 /** Flags worth a visible chip (all of them stay in the tooltip). */
 export const KEY_FLAGS = ['root_flow_not_validated', 'design_inputs_unconfirmed', 'manufacturing_limits_unconfirmed',
-  'airfoil_choice_not_resolved_by_polar', 'high_tip_mach', 'rpm_capped'] as const;
+  'airfoil_choice_not_resolved_by_polar', 'high_tip_mach', 'rpm_capped',
+  // the section model did not cover the point (2026-11-24, mfoil default): shown, never a silent fallback
+  'unconverged_elements', 'uninduced_estimate', 'w_re_not_converged', 'polar_alpha_gap', 'polar_beyond_table', 're_outside_tables',
+  'tip_mach_beyond_polar_model'] as const;
 
+/** The key flags present in ``flags``; a counted flag (``unconverged_elements:3``) matches by its name before the colon. */
 export function keyFlags(flags: readonly string[]): string[] {
-  return KEY_FLAGS.filter((f) => flags.includes(f));
+  const names = new Set(flags.map((f) => f.split(':')[0]));
+  return KEY_FLAGS.filter((f) => names.has(f));
 }
 
 export function fmt(v: number | null | undefined, digits = 2): string {

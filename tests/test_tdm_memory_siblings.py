@@ -160,3 +160,43 @@ def test_the_pool_env_names_the_siblings_only_inside_a_fan_out(monkeypatch):
         opt._EVAL_SIBLINGS.reset(tok)
     monkeypatch.setenv("SB_TDM_SIBLINGS", "9")        # a stray server value
     assert "SB_TDM_SIBLINGS" not in opt._eval_env_for(None)
+
+
+def _grow(monkeypatch, n_frames, per_gb, limit_gb, sibs, base_rss_gb=1.0):
+    """Build the frames one by one with an RSS that grows by one factor each,
+    calling the guard after every factor, as `_jac_all` does. Returns the
+    frame at which the guard stopped, or None when all were built."""
+    import types
+    monkeypatch.setenv("SB_TDM_SIBLINGS", str(sibs))
+    me = types.SimpleNamespace(N=n_frames, _mem_abort=None)
+    for k in range(1, n_frames + 1):
+        monkeypatch.setattr(
+            tp, "open", _fake_open(limit_gb, 500, base_rss_gb + k * per_gb),
+            raising=False)
+        try:
+            tp.TimePeriodicEddy._mem_guard(me, _Fac(int(per_gb * GB)))
+        except tp.TdmMemoryExceeded:
+            return k
+    # a second Newton pass refactors every frame: all are in the RSS already
+    for k in range(n_frames):
+        tp.TimePeriodicEddy._mem_guard(me, _Fac(int(per_gb * GB)))
+    return None
+
+
+def test_growing_rss_is_not_double_counted(monkeypatch):
+    # 48 x 0.08 GB, 1 GB base, 6 siblings in 48 GB: the finished eval holds
+    # 4.84 GB and fits its 6.8 GB share, so it must not be refused midway
+    assert _grow(monkeypatch, 48, 0.08, 48, 6) is None
+
+
+def test_eu_numbers_48_steps_stay_on_tdm_108_march(monkeypatch):
+    # EU worker limit 36 GB, 6 sweep workers = 6 GB each
+    assert _grow(monkeypatch, 48, 0.08, 36, 6) is None
+    assert _grow(monkeypatch, 108, 0.08, 36, 6) is not None
+
+
+def test_a_refused_eval_carries_the_memory_guard_code(monkeypatch):
+    """The refusal reaches the solver as TdmMemoryExceeded; the handler in
+    fem_transient_sliding_band maps it to code memory_guard (see the
+    coded-fallback test above)."""
+    assert _grow(monkeypatch, 108, 0.08, 36, 6) == 1

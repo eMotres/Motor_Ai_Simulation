@@ -766,12 +766,21 @@ class TimePeriodicEddy:
         per = fac.kept_bytes()
         if per <= 0:
             return
-        need = per * self.N
+        # The budget is "RSS-relative" (it already subtracts what this process
+        # holds), and the RSS holds every factor built so far. Charging all N
+        # factors again would count the built ones twice (a 48-frame eval that
+        # fits its share was refused at frame ~25). So only the factors NOT
+        # yet built are charged; the one just factored is in the RSS. The
+        # counter is capped at N and never reset: on the later Newton passes
+        # every factor is already in the RSS and nothing more is charged.
+        built = min(self.N, int(getattr(self, "_mem_built", 0)) + 1)
+        self._mem_built = built
+        need = per * (self.N - built)
         left = memory_budget_bytes()
         if left is not None and need > left:
             self._mem_abort = (
-                "tdm_memory: %d frame factors of %.2f GB need %.1f GB, %.1f GB left; "
-                "the orbit is marched instead" % (self.N, per / 2**30, need / 2**30,
+                "tdm_memory: %d frame factors of %.2f GB, %d still to build need %.1f GB, %.1f GB left; "
+                "the orbit is marched instead" % (self.N, per / 2**30, self.N - built, need / 2**30,
                                                   max(left, 0) / 2**30))
             raise TdmMemoryExceeded(self._mem_abort)
 

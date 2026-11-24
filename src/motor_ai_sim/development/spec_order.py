@@ -900,7 +900,7 @@ def _row(user: dict, project: dict, lang: str, *, detail: bool = False) -> dict:
     state = _draft_state(pid, lang, with_answers=detail)
     last = _last_submission(pid)
     try:
-        unread_count = len(unread.unread_ids(pid, _email(user)))
+        unread_count = len(unread.unread_ids(pid, _email(user), user=user, agent=True))   # MCP: never a restricted message
     except Exception:                                    # noqa: BLE001 - a badge never breaks the status
         unread_count = 0
     row = {"project_id": pid, "title": project.get("title", ""), "customer_org": project.get("customer_org", ""),

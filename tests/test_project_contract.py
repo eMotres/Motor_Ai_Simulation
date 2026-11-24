@@ -152,8 +152,7 @@ def doc(tmp_path):
 
 # ── who reads it ─────────────────────────────────────────────────────────────────────────────────────────────────────
 
-def test_owner_and_staff_read_it_other_members_and_outsiders_get_404(client, monkeypatch):
-    monkeypatch.delattr(access, "sees_prices", raising=False)          # before PR #800: owner and staff only
+def test_owner_and_staff_read_it_other_members_and_outsiders_get_404(client):
     assert client.get(URL, headers=hdr("t-owner")).status_code == 200
     assert client.get(URL, headers=hdr("t-staff")).status_code == 200
     assert client.get(URL, headers=hdr("t-member")).status_code == 404
@@ -161,21 +160,35 @@ def test_owner_and_staff_read_it_other_members_and_outsiders_get_404(client, mon
     assert client.get(URL).status_code == 401
 
 
-def test_the_sees_prices_switch_decides_for_members_once_it_exists(client, monkeypatch):
-    monkeypatch.setattr(access, "sees_prices", lambda user, project: user.get("email") in (OWNER, MEMBER), raising=False)
+def test_the_sees_prices_switch_decides_for_members(client):
+    """The member flag is the central rule's grant (PR #800): on, the member reads; off again, 404; staff always."""
+    def flag(p):
+        for m in p["members"]:
+            if m["email"] == MEMBER:
+                m["sees_prices"] = True
+    store.mutate_project("proj1", flag)
     assert client.get(URL, headers=hdr("t-member")).status_code == 200
-    monkeypatch.setattr(access, "sees_prices", lambda user, project: False, raising=False)
-    assert client.get(URL, headers=hdr("t-owner")).status_code == 404
+    def unflag(p):
+        for m in p["members"]:
+            m.pop("sees_prices", None)
+    store.mutate_project("proj1", unflag)
+    assert client.get(URL, headers=hdr("t-member")).status_code == 404
     assert client.get(URL, headers=hdr("t-staff")).status_code == 200            # staff always
 
 
+def test_may_read_is_the_central_rule(client):
+    project = store.get_project("proj1")
+    for who in ("t-owner", "t-member", "t-outsider", "t-staff", "t-oem"):
+        user = {"email": ROLES[who][0], "role": ROLES[who][1]}
+        assert PC.may_read(user, project) == access.sees_prices(user, project), who
+
+
 @pytest.mark.parametrize("membership", [None, "customer", "owner"])
-def test_a_factory_account_never_sees_the_contract(client, monkeypatch, membership):
-    monkeypatch.setattr(access, "sees_prices", lambda user, project: True, raising=False)      # even with prices switched on
+def test_a_factory_account_never_sees_the_contract(client, membership):
     fid = up(client, "agreement").json()["current"]["agreement"]
     if membership:
-        store.mutate_project("proj1", lambda p: p["members"].append({"email": FACTORY, "role": membership}))
-    assert client.get(URL, headers=hdr("t-oem")).status_code == 404
+        store.mutate_project("proj1", lambda p: p["members"].append({"email": FACTORY, "role": membership, "sees_prices": True}))
+    assert client.get(URL, headers=hdr("t-oem")).status_code == 404         # flag or owner role or not: identity first
     assert client.get(f"{URL}/files/{fid}/download", headers=hdr("t-oem")).status_code == 404
     assert up(client, "signed_customer", who="t-oem").status_code == 404
 
@@ -508,3 +521,33 @@ def test_the_byte_cap_holds_without_content_length(client, monkeypatch):
     two = client.post(URL + "/files", headers=hdr("t-staff"), data={"kind": "agreement", **{k: str(v) for k, v in s.items()}},
                       files=[("file", ("a.pdf", PDF)), ("more", ("b.pdf", PDF))])
     assert two.status_code == 400
+
+
+def test_a_controller_project_has_no_contract_for_anybody(client):
+    """Owner 2026-11-24 «убрать Contract у контроллеров пока»: every route answers the unknown-project 404 for every role (the tab
+    reads that answer); a motor project is unchanged."""
+    fid = up(client, "agreement").json()["current"]["agreement"]
+    unknown = client.get("/api/projects/nosuch/contract", headers=hdr("t-staff"))
+    store.mutate_project("proj1", lambda p: p.__setitem__("project_type", "controller"))
+    for who in ("t-owner", "t-member", "t-staff", "t-oem"):
+        r = client.get(URL, headers=hdr(who))
+        assert r.status_code == 404 and r.json() == unknown.json(), who
+        assert client.get(f"{URL}/files/{fid}/download", headers=hdr(who)).status_code == 404
+    assert up(client, "annex_a", at={"revision": 1, "terms_digest": "x"}).status_code == 404
+    project = store.get_project("proj1")
+    assert not PC.may_read({"email": STAFF, "role": "engineer"}, project)
+    def motor_again(p):
+        p.pop("project_type", None)                          # return nothing: a returned value would BE the document
+    store.mutate_project("proj1", motor_again)
+    assert client.get(URL, headers=hdr("t-owner")).status_code == 200
+
+
+
+def test_no_contract_line_reaches_the_members_digest_of_a_controller_project(client):
+    """The other readers of contract data (Astra #852): contract.json and its files are read only by project_contract (all its
+    routes 404 for a controller project); its audit rows reach only staff readers.  The members' digest maps no contract action."""
+    from motor_ai_sim.digest import collect
+    up(client, "agreement")
+    store.mutate_project("proj1", lambda p: p.__setitem__("project_type", "controller"))
+    items = collect.collect_project(store.get_project("proj1"), 0, 4e9)
+    assert not any("contract" in repr(i).lower() for i in items)

@@ -12,7 +12,7 @@ import { nsT } from '../../i18n/nsT';
 import { invertedRangeNames } from '../../lib/optVarRanges';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
-  Box, Typography, Button, LinearProgress, Divider, TextField,
+  Box, Typography, Button, LinearProgress, Divider,
   FormControl, InputLabel, Select, MenuItem, Chip, Tooltip as MuiTooltip,
 } from '@mui/material';
 import {
@@ -32,9 +32,9 @@ import { planLockedApply, refusedText, newDieNotice } from '../../lib/sweepApply
 import { releaseFamilyContext } from '../../lib/familyContext';
 import { setActiveDuty } from '../../lib/dutySettings';
 import { canWriteServer } from '../../lib/localAuth';
-import { storedGapLayers } from '../../lib/meshSettings';
-import { useRunPreset } from '../../lib/useRunPreset';
-import MeshPresetSelect from '../mesh/MeshPresetSelect';
+import { useRunSettings } from '../../lib/useRunSettings';
+import { runSettingsBody } from '../../lib/runSettings';
+import RunSettingsBar from './RunSettingsBar';
 import { sweepSettingsOf, sweepSettingsLabel, sweepSettingsMetrics } from '../../lib/sweepSettings';
 import { endWindingPin } from '../../lib/endWindingPin';
 import { coincidentGroups, coincidentOffsetPx } from '../../lib/coincidentPoints';
@@ -346,12 +346,9 @@ const SweepTooltip: React.FC<any> = ({ active, payload }) => {
 
 const SweepStudyPanel: React.FC = () => {
   const { sweepConfig, updateGeometryViaApi } = useMotorStore();
-  // The settings this run WILL send: the stored fields the request body below is built from (steps, gap rows, mesh).  A preset
-  // is a button (MeshPresetSelect) that sets all of them at once; changing any one afterwards reads "custom".  Run waits for
-  // the presets to resolve; a failed fetch shows its error with a retry.
-  const rp = useRunPreset('sweep');
-  const steps = readLS('sim.stepsPP', 24);   // single source: Simulation "Steps per electrical period"
-  const gapRows = readLS('mesh.gapLayers', 1);
+  // The run settings of THIS panel: a preset button plus overrides, resolved by the server; the panel shows that answer and
+  // the run request carries the same record.  Nothing here reads or writes the Simulation / Mesh tabs' ordinary-run settings.
+  const rs = useRunSettings('sweep');
   const [connectBy, setConnectBy] = useLS<'current_a' | 'gamma_deg'>('connectBy', 'current_a');
   const [withBaseline, setWithBaseline] = useLS<boolean>('withBaseline', false);
   const [coggingPp, setCoggingPp] = useLS<boolean>('coggingPp', false);   // opt-in: one no-load solve per geometry
@@ -636,7 +633,7 @@ const SweepStudyPanel: React.FC = () => {
     return true;
   };
   const run = async () => {
-    if (startingRef.current || running) return;
+    if (startingRef.current || running || !rs.ready || !rs.resolved) return;
     const inv = invertedRangeNames(sweepConfig.variations as never);
     if (inv.length) { setErr(tx('optRunBlockedInverted', { names: inv.join(', ') })); return; }
     startingRef.current = true; setAttachNote(null);
@@ -660,17 +657,15 @@ const SweepStudyPanel: React.FC = () => {
       const res = await fetch(`${API}/api/optimization/scan`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          variables: scanVars, operating_points: ops, steps_per_period: steps,
+          variables: scanVars, operating_points: ops,
+          run_settings: runSettingsBody(rs.record, rs.resolved!),
           ripple_max_pct: 100, max_geometries: Math.max(1, nGeom),
           // the un-varied current motor as an extra reference point — one more
           // full eval, off by default (user 2026-09-04: always stopped at 22/23)
           with_baseline: withBaseline,
           ...(coggingPp ? { cogging_pp: true } : {}),   // absent = the request it always was
-          mesh_size_mm: readLS('mesh.meshSize', 4), min_size_mm: readLS('mesh.minSize', 0.3),
           pole_copy: readBool('mesh.poleCopy', false), torque_filter: readBool('sim.torqueFilter', false),
-          n_sectors: Math.max(1, Math.round(readLS('mesh.nSectors', 1))),   // single source: Mesh tab (same as Simulation)
           // single source: the Mesh tab; absent = the machine's saved setting (backend)
-          ...(storedGapLayers() !== undefined ? { gap_layers: storedGapLayers() } : {}),
           structured_gap: readBool('mesh.structuredGap', false) || readBool('mesh.ironTemplate', true),   // single source: Mesh tab "Structured" — belt gap mesh (honest ripple, ¼ == full disk)
           airgap_macro: readBool('mesh.harmonicGap', false),   // Mesh tab "Harmonic gap" — step-independent RAW ripple (full + sectors)
           // P2 — the only basis. The sweep must rank designs on the SAME basis
@@ -683,11 +678,9 @@ const SweepStudyPanel: React.FC = () => {
           // each point's own built coil (owner 2026-10-30: the panel's coil number for
           // the current stack, pinned, gave 90 mm and 95 mm the same η and N·m/kg).
           end_winding_factor: endWindingPin(useMotorStore.getState().geometry).k,
-          rotor_eddy: readBool('sim.fieldLosses', true),   // single source: Simulation — field vs slab magnet eddy (drives eff)
           // Irreversible demagnetisation — single source: Simulation. It de-rates
           // Br, so a sweep without it ranks machines the Simulation tab is not
           // showing. Costs a whole extra period of frames per point.
-          demag: readBool('sim.demag', false),
           run_id: myRunId,
           // Consent to vary a DIE-DEFINING key under an active die (the
           // Optimize header's checkbox); without it the backend answers 422
@@ -698,6 +691,7 @@ const SweepStudyPanel: React.FC = () => {
       });
       if (!res.ok) {
         const body = (await res.text()).slice(0, 400);
+        if (res.status === 409 && body.includes('run settings changed')) { rs.refresh(); throw new Error(tx('runSettingsStale')); }
         if (isScanAlreadyRunning(res.status, body) && await attachToRunning()) return;
         throw new Error(`HTTP ${res.status}: ${body}`);
       }
@@ -1217,19 +1211,7 @@ const SweepStudyPanel: React.FC = () => {
       </Box>
 
       <Box sx={{ display: 'flex', gap: 1, alignItems: 'center', mb: 1 }}>
-        <MeshPresetSelect dense />
-        <MuiTooltip title={<span style={{ whiteSpace: 'pre-line' }}>{tx('sweepPresetTip')}{rp.diff.length
-          ? '\n' + rp.diff.map(d => `${d.key}: ${String(d.current)} (${tx('sweepPresetOptimizationHolds')} ${String(d.preset)})`).join('\n') : ''}</span>}>
-          <TextField label={tx('sweepPresetField')} size="small" disabled error={!!rp.error}
-            value={rp.ready ? `${rp.choice === 'custom' ? tx('meshPresetCustom') : (rp.set?.presets.find(q => q.name === rp.choice)?.label ?? rp.choice)} \u00b7 ${steps} ${tx('sweepStepsUnit')} \u00b7 ${gapRows} ${tx('sweepGapRowsUnit')}` : ''}
-            inputProps={{ style: { fontSize: 12, padding: '5px 8px' } }} sx={{ width: 300 }} />
-        </MuiTooltip>
-        {rp.error && (
-          <Typography sx={{ fontSize: 11, color: '#fca5a5' }} role="alert">
-            {tx('sweepPresetError')} <Button size="small" onClick={rp.retry}
-              sx={{ textTransform: 'none', fontSize: 11, minWidth: 0 }}>{tx('sweepPresetRetry')}</Button>
-          </Typography>
-        )}
+        <RunSettingsBar rs={rs} />
         <FormControl size="small" sx={{ minWidth: 150 }}>
           <InputLabel sx={{ fontSize: 12 }}>connect along</InputLabel>
           <Select label="connect along" value={connectBy} onChange={e => setConnectBy(e.target.value as any)}
@@ -1272,7 +1254,7 @@ const SweepStudyPanel: React.FC = () => {
 
       <Box sx={{ display: 'flex', gap: 1, alignItems: 'center', mb: 1 }}>
         {!running ? (
-          <Button size="small" variant="contained" onClick={run} disabled={nPts < 1 || !rp.ready}
+          <Button size="small" variant="contained" onClick={run} disabled={nPts < 1 || !rs.ready}
             sx={{ textTransform: 'none', fontWeight: 700 }}>
             Run sweep ({nPts})
           </Button>

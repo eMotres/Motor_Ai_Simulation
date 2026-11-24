@@ -30,7 +30,8 @@ interface SavedRow {
   n_done?: number | null;
   n_planned?: number | null;
   /** What the sweep ran with: its preset stamp, or its stored request for a sweep saved before the stamp. */
-  settings?: { preset: string | null; steps_per_period: number | null; gap_layers: number | null; source: string };
+  settings?: { preset: string | null; steps_per_period: number | null; gap_layers: number | null; source: string;
+    custom?: boolean; mixed?: boolean; sig?: number | null };
 }
 
 /** "7/8 · stopped" - how far the run got, when the save knows. */

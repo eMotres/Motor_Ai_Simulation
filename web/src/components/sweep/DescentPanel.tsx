@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { useRunPreset } from '../../lib/useRunPreset';
-import MeshPresetSelect from '../mesh/MeshPresetSelect';
+import { useRunSettings } from '../../lib/useRunSettings';
+import { runSettingsBody } from '../../lib/runSettings';
+import RunSettingsBar from './RunSettingsBar';
 import { whenVisible } from '../../lib/pageVisible';
 import {
   Box, Typography, Button, TextField, Tooltip, Divider, Chip,
@@ -87,7 +88,8 @@ const Group: React.FC<{ label: string; children: React.ReactNode }> = ({ label, 
 );
 
 const DescentPanel: React.FC<{ chartsOnly?: boolean }> = ({ chartsOnly = false }) => {
-  useRunPreset('optimization');   // no choice made yet for this machine: the Optimization preset is applied once (owner 2026-11-24)
+  // the run settings of THIS panel (preset button + overrides, resolved by the server); the ordinary-run settings are never touched
+  const rs = useRunSettings('descent');
   const {
     sweepConfig, connectedToApi, parameterSchema, materials,
     updateRippleThreshold,
@@ -220,12 +222,8 @@ const DescentPanel: React.FC<{ chartsOnly?: boolean }> = ({ chartsOnly = false }
   // efficiency^w_eff · (T/mass)^w_td.
   const [objective, setObjective] = useState<'baseline_line' | 'product'>('baseline_line');
   const [currentBump, setCurrentBump] = useState(10);   // 2nd baseline current = I·(1+pct/100)
-  // FEM frames/period = the Simulation tab's "Steps per period" (single source) —
-  // so the optimizer evaluates ripple at the SAME resolution you simulate at.
-  const [steps] = useState(() => {
-    try { return Math.max(8, Math.min(180, Number(JSON.parse(localStorage.getItem('sim.stepsPP') ?? '72')) || 72)); }
-    catch { return 72; }
-  });
+  // FEM frames/period and every other solve setting: the run settings above (server-resolved), the SAME the run receives.
+  const steps = rs.resolved?.settings.steps_per_period ?? 0;
   const [applied, setApplied] = useState(false);
   // Algorithm: CMA-ES (derivative-free, noise-robust, default) vs the original
   // finite-difference gradient descent.
@@ -233,10 +231,7 @@ const DescentPanel: React.FC<{ chartsOnly?: boolean }> = ({ chartsOnly = false }
   // FEM symmetry = the Mesh tab's sector count (single source) — the optimizer
   // builds the disk EXACTLY like Simulation does, so optimizer ripple ==
   // Simulation ripple (no opt↔Sim mismatch).  Set it on the Mesh tab; read-only here.
-  const nSectors = (() => {
-    try { return Math.max(1, Math.round(Number(JSON.parse(localStorage.getItem('mesh.nSectors') ?? '1')) || 1)); }
-    catch { return 4; }
-  })();
+  const nSectors = Math.max(1, Number(rs.resolved?.settings.n_sectors ?? 1));
   // Box-walking: keep re-centering the ±deviation window on the optimum until
   // every variable settles inside its window (or hits a physical limit).
   // Default ON (per Vadim): a variable pinned at its window edge auto-extends /
@@ -492,17 +487,20 @@ const DescentPanel: React.FC<{ chartsOnly?: boolean }> = ({ chartsOnly = false }
   // on its own (the tab can be closed — the live mirror reattaches). runDescent
   // resolves when the whole sequence finishes.
   const launch = async () => {
+    if (!rs.ready || !rs.resolved) return;
     setApplied(false);
     setLastOptSnapshot(optInputs);   // snapshot the inputs this run launches with
     localRun.current = true;
     try {
       await runDescent({ rippleMax, maxIters, wEff, wTd, steps, algorithm, nSectors,
+                         runSettings: runSettingsBody(rs.record, rs.resolved!),
                          targetTorque: 0, vPeakLimit: 1e9, optimizeGamma: false,   // fixed Simulation current, no voltage limit
                          autoExpand: autoWalk, maxRounds, surrogateSeed,
                          objective, currentBumpPct: currentBump,
                          ripplePenaltyLambda: rippleLam,
                          thdPenaltyLambda: thdLam, thdMaxPct: thdMax });
     } finally {
+      rs.refresh();   // a refused run (settings changed) shows the current answer next
       localRun.current = false;
     }
   };
@@ -542,7 +540,7 @@ const DescentPanel: React.FC<{ chartsOnly?: boolean }> = ({ chartsOnly = false }
           skipped; the data sections below read the same store the auto run
           writes, so they visualise auto runs too. */}
       {!chartsOnly && (<>
-      <Box sx={{ mb: 1 }}><MeshPresetSelect dense /></Box>
+      <RunSettingsBar rs={rs} />
       {/* ── Header: title + Run ── */}
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1.5 }}>
         <TrendingDownIcon sx={{ fontSize: 18 }} />
@@ -556,7 +554,7 @@ const DescentPanel: React.FC<{ chartsOnly?: boolean }> = ({ chartsOnly = false }
           </Button>
         ) : (
           <Button variant="contained" size="small" startIcon={<PlayArrowIcon />}
-            disabled={activeVars.length === 0 || !connectedToApi}
+            disabled={activeVars.length === 0 || !connectedToApi || !rs.ready}
             onClick={launch}>
             Run descent
           </Button>
@@ -585,8 +583,8 @@ const DescentPanel: React.FC<{ chartsOnly?: boolean }> = ({ chartsOnly = false }
               inputProps={{ min: 1, max: 40, style: { fontSize: 11, padding: '3px 6px', width: 40 } }}
               InputLabelProps={{ sx: { fontSize: 10 } }} />
           </Tooltip>
-          <Tooltip title="FEM frames per electrical period — taken from the Simulation tab (Steps per period), single source. Read-only here so the optimizer evaluates ripple at the resolution you simulate at." placement="top">
-            <TextField label="steps/T (sim)" type="number" size="small" value={steps} disabled
+          <Tooltip title="FEM frames per electrical period — from the run settings above (edit them there)." placement="top">
+            <TextField label="steps/T" type="number" size="small" value={steps} disabled
               inputProps={{ style: { fontSize: 11, padding: '3px 6px', width: 40 } }}
               InputLabelProps={{ sx: { fontSize: 10 } }} />
           </Tooltip>

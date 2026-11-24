@@ -143,3 +143,148 @@ def test_the_descent_request_is_not_rewritten():
     body = dict(variables=[{"name": "tooth_width", "min": 0.0, "max": 0.0}], steps_per_period=108, gap_layers=2)
     ep = O.prepare_descent(O.DescentRequest(**body))["init_state"]["eval_params"]
     assert ep["steps_per_period"] == 108 and ep["gap_layers"] == 2
+
+
+# ── run settings: ONE resolver for the display and the run (owner 2026-11-24) ─────────────────────────────────
+import copy
+
+import pytest
+from fastapi import HTTPException
+
+from motor_ai_sim import run_settings as RS
+
+
+def _cfg():
+    c = copy.deepcopy(O.get_config())
+    c["mesh"] = {}                      # nothing stored on the machine: the machine-read keys equal the preset's defaults
+    c.setdefault("simulation", {})["eddy"] = True
+    return c
+
+
+def test_the_optimization_preset_resolves_to_its_own_values_and_reads_as_that_preset():
+    cfg = _cfg()
+    r = RS.resolve("optimization", {}, cfg)
+    v = MP.resolve("optimization", dict(cfg["geometry"]))["values"]
+    assert r["label"] == "optimization" and r["custom"] is False and r["differs"] == {}
+    st = r["settings"]
+    assert (st["steps_per_period"], st["gap_layers"], st["rotor_eddy"], st["demag"], st["hi_fidelity"]) == (
+        v["n_steps_per_period"], v["gap_layers"], v["rotor_eddy"], v["demag"], False)
+    assert st["mesh_size_mm"] == v["mesh_size_mm"] and st["n_sectors"] == v["n_sectors"]
+
+
+def test_an_override_makes_it_custom_and_names_every_difference():
+    r = RS.resolve("optimization", {"steps_per_period": 108, "gap_layers": 2}, _cfg())
+    assert r["label"] == "custom" and set(r["differs"]) == {"steps_per_period", "gap_layers"}
+    assert r["settings"]["steps_per_period"] == 108 and r["sources"]["steps_per_period"] == "override"
+
+
+def test_the_simulation_preset_and_more_steps_than_it_asks_for():
+    cfg = _cfg()
+    sim = RS.resolve("simulation", {}, cfg)
+    assert sim["label"] == "simulation" and sim["settings"]["gap_layers"] == 2.0
+    more = RS.resolve("simulation", {"steps_per_period": sim["settings"]["steps_per_period"] + 12}, cfg)
+    assert more["label"] == "simulation"
+
+
+def test_validation_clamps_report_their_reason_and_unknown_keys_are_refused():
+    r = RS.resolve("optimization", {"gap_layers": 5, "mesh_size_mm": 50}, _cfg())
+    assert r["settings"]["gap_layers"] == 2.0 and r["settings"]["mesh_size_mm"] == 12.0
+    assert {c["key"] for c in r["clamps"]} == {"gap_layers", "mesh_size_mm"} and all(c["reason"] for c in r["clamps"])
+    hi = RS.resolve("optimization", {"hi_fidelity": True}, _cfg())
+    assert any("hi_fidelity" in c["reason"] for c in hi["clamps"]) and hi["custom"]
+    for bad in ({"outer_air_factor": 1.3}, {"eddy": False}, {"nope": 1}, {"steps_per_period": "x"}):
+        with pytest.raises(RS.RunSettingsError):
+            RS.resolve("optimization", bad, _cfg())
+    with pytest.raises(RS.RunSettingsError):
+        RS.resolve("descent_preset", {}, _cfg())
+    with pytest.raises(RS.RunSettingsError):               # the descent evals read demag from the stored Simulation block
+        RS.resolve("optimization", {"demag": False}, _cfg(), "descent")
+
+
+def test_what_the_machine_stores_counts_in_the_label():
+    cfg = _cfg()
+    cfg["mesh"] = {"outer_air_factor": 1.5}
+    r = RS.resolve("optimization", {}, cfg)
+    assert r["custom"] and "outer_air_factor" in r["differs"] and r["sources"]["outer_air_factor"] == "machine"
+
+
+def test_display_equals_run_for_a_sweep(monkeypatch):
+    cfg = _cfg()
+    monkeypatch.setattr(O, "get_config", lambda *a, **k: cfg)
+    for rec in ({"preset": "optimization", "overrides": {}},
+                {"preset": "simulation", "overrides": {}},
+                {"preset": "optimization", "overrides": {"steps_per_period": 108, "gap_layers": 2, "demag": False,
+                                                          "rotor_eddy": False, "n_sectors": 2, "hi_fidelity": True}}):
+        shown = RS.resolve(rec["preset"], rec["overrides"], cfg)
+        plan = O.prepare_scan(_req(run_settings={**rec, "expect_sig": shown["sig"]}, steps_per_period=7, gap_layers=1,
+                                   mesh_size_mm=9.0, rotor_eddy=not shown["settings"]["rotor_eddy"]))
+        a, st = plan["args"], shown["settings"]
+        assert (a[2], a[13], a[15], a[16], a[22]) == (st["steps_per_period"], st["gap_layers"], st["rotor_eddy"],
+                                                      st["hi_fidelity"], st["demag"])
+        assert a[8] == st["mesh_size_mm"] and a[12] == (-1 if st["n_sectors"] <= 1 else st["n_sectors"])
+        assert plan["response"]["mesh_preset"]["sig"] == shown["sig"]
+        assert plan["response"]["mesh_preset"]["name"] == shown["label"]
+
+
+def test_display_equals_run_for_a_descent_and_an_auto_plan(monkeypatch):
+    cfg = _cfg()
+    monkeypatch.setattr(O, "get_config", lambda *a, **k: cfg)
+    rec = {"preset": "simulation", "overrides": {"steps_per_period": 120}}
+    shown = RS.resolve(rec["preset"], rec["overrides"], cfg, "descent")
+    d = O.prepare_descent(O.DescentRequest(variables=[{"name": "tooth_width", "min": 0.0, "max": 0.0}],
+                                           run_settings=rec, steps_per_period=24))
+    ep, st = d["init_state"]["eval_params"], shown["settings"]
+    assert (ep["steps_per_period"], ep["gap_layers"], ep["rotor_eddy"], ep["mesh_size_mm"]) == (
+        st["steps_per_period"], st["gap_layers"], st["rotor_eddy"], st["mesh_size_mm"])
+    assert d["response"]["mesh_preset"]["sig"] == shown["sig"]
+
+
+def test_a_changed_setting_since_the_display_is_refused_not_run():
+    cfg = _cfg()
+    shown = RS.resolve("optimization", {}, cfg)
+    with pytest.raises(HTTPException) as ei:
+        O._resolve_run_settings(O.RunSettingsIn(preset="optimization", overrides={"steps_per_period": 96},
+                                                expect_sig=shown["sig"]), "sweep")
+    assert ei.value.status_code == 409 and "run settings changed" in ei.value.detail
+
+
+def test_the_resolve_endpoint_answers_with_the_complete_settings():
+    out = O.run_settings_resolve(O.RunSettingsIn(preset="optimization", overrides={"steps_per_period": 108}), "sweep")
+    assert out["label"] == "custom" and out["settings"]["steps_per_period"] == 108
+    for k in ("mesh_size_mm", "min_size_mm", "n_sectors", "element_order", "eddy", "rotor_eddy", "demag", "hi_fidelity",
+              "outer_air_factor", "component_mesh"):
+        assert k in out["settings"], k
+    with pytest.raises(HTTPException) as ei:
+        O.run_settings_resolve(O.RunSettingsIn(preset="nope"), "sweep")
+    assert ei.value.status_code == 422
+
+
+def test_opening_the_resolver_changes_nothing_on_the_server():
+    cfg = _cfg()
+    before = copy.deepcopy(cfg)
+    RS.resolve("simulation", {"steps_per_period": 120}, cfg)
+    assert cfg == before
+
+
+def test_mixed_solved_counts_are_mixed_custom_and_carry_no_digest():
+    rec = O._sweep_settings_record({"name": "optimization", "custom": False, "sig": 99}, 48, 1.0)
+    pts = [{"fem": True, "feasible": True, "n_steps_per_period_solved": 48, "gap_layers_per_side": 1.0},
+           {"fem": True, "feasible": True, "n_steps_per_period_solved": 52, "gap_layers_per_side": 1.0}]
+    m = O._stamp_solved(rec, pts)
+    assert m["mixed"] is True and m["name"] == "custom" and m["sig"] is None
+    assert m["effective"]["steps_per_period"] is None and m["effective_source"]["steps_per_period"] == "mixed"
+    s = SS.sweep_settings_of({"mesh_preset": m})
+    assert s["mixed"] is True and s["preset"] == "custom" and s["sig"] is None
+    # only some points report: mixed, never presented as solved
+    part = O._stamp_solved(rec, [pts[0], {"fem": True, "feasible": True}])
+    assert part["effective_source"]["steps_per_period"] == "mixed"
+    # all agree and equal the request: solved, digest kept
+    ok = O._stamp_solved(rec, [pts[0], dict(pts[0])])
+    assert ok["effective_source"]["steps_per_period"] == "solved" and ok["sig"] == 99 and not ok.get("custom")
+
+
+def test_a_legacy_stored_sweep_has_no_digest_so_it_never_compares():
+    s = SS.sweep_settings_of({"steps_per_period": 108, "scan_params": {"gap_layers": 1.0}})
+    assert s["sig"] is None and s["source"] == "stored_request"
+    assert SS.sweep_settings_of({"mesh_preset": {"name": "optimization", "sig": 5,
+            "effective": {"steps_per_period": 48, "gap_layers": 1.0}, "solved_differs": True}})["sig"] is None

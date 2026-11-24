@@ -2049,11 +2049,21 @@ def refine_cancel(run_id: str = ""):
 # the variables (sweep → grid, optimize → linspace), capped, and each geometry
 # is evaluated at both operating currents in parallel isolated subprocesses.
 # ─────────────────────────────────────────────────────────────────────────────
+class RunSettingsIn(BaseModel):
+    """The run settings of an optimisation panel (``run_settings.py``): a preset button and the overrides typed after it.
+    The route resolves them with the SAME function the panel's display uses; ``expect_sig`` is the digest the panel showed,
+    a different one is refused (409) rather than run with settings the user did not see."""
+    preset: Optional[str] = "optimization"
+    overrides: Dict[str, Any] = Field(default_factory=dict)
+    expect_sig: Optional[int] = None
+
+
 class ScanRequest(BaseModel):
     variables: List[OptVariable] = Field(default_factory=list)
     operating_points: List[OptOperating] = Field(default_factory=lambda: [OptOperating()])
     steps_per_period: int = 6              # FEM frames per electrical period
     preset: Optional[str] = None           # "optimization" | "simulation" (mesh_presets.py): fills the settings the request does not state; opt-in
+    run_settings: Optional[RunSettingsIn] = None   # the panel's resolved run settings: when present they are the ONLY source of the settings below
     ripple_max_pct: float = 100.0
     max_geometries: int = 24               # cap on enumerated geometries
     coil_temp_c: Optional[float] = None   # None = the Simulation tab's (`_sim_coil_temp_c`)
@@ -3294,6 +3304,47 @@ def _optimization_preset_steps(geometry=None) -> int:
         raise HTTPException(status_code=422, detail="the Optimization preset cannot be resolved: %s" % exc)
 
 
+def _resolve_run_settings(rs, mode: str):
+    """The complete effective settings of a run from the panel's ``{preset, overrides}`` (``run_settings.resolve``), for the loaded
+    machine.  A bad record is a 422; a record whose digest differs from the one the panel displayed is a 409."""
+    from motor_ai_sim import run_settings as _RS
+    try:
+        out = _RS.resolve(rs.preset, rs.overrides, get_config(), mode)
+    except _RS.RunSettingsError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    if rs.expect_sig is not None and int(rs.expect_sig) != int(out["sig"]):
+        raise HTTPException(status_code=409, detail=(
+            "the run settings changed since the panel showed them (the machine's stored settings or the preset); "
+            "the panel refreshes them, check them and press Run again"))
+    return out
+
+
+def _apply_run_settings(req, resolved):
+    """The request with every setting the run takes from the resolved record (nothing is read from another tab)."""
+    st = resolved["settings"]
+    fields = type(req).model_fields
+    upd = {"steps_per_period": int(st["steps_per_period"]), "gap_layers": float(st["gap_layers"]),
+           "mesh_size_mm": float(st["mesh_size_mm"]), "min_size_mm": float(st["min_size_mm"]),
+           "n_sectors": int(st["n_sectors"]), "rotor_eddy": bool(st["rotor_eddy"]), "demag": bool(st["demag"]),
+           "hi_fidelity": bool(st["hi_fidelity"]), "element_order": int(st["element_order"])}
+    return req.model_copy(update={k: v for k, v in upd.items() if k in fields})
+
+
+def _run_settings_stamp(rs, resolved):
+    """The record a run stores about its settings: the label, what differs, the full resolved settings and the digest."""
+    return {"name": resolved["label"], "label": resolved["preset_label"] if not resolved["custom"] else "custom",
+            "version": resolved["version"], "custom": resolved["custom"], "differs": resolved["differs"],
+            "run_settings": {"preset": resolved["preset"], "overrides": resolved["overrides"]},
+            "settings": resolved["settings"], "sources": resolved["sources"], "clamps": resolved["clamps"],
+            "sig": resolved["sig"]}
+
+
+@router.post("/run-settings/resolve")
+def run_settings_resolve(rs: RunSettingsIn, mode: str = "sweep"):
+    """The complete effective settings of a run for the loaded machine: what the panel displays and what the run receives."""
+    return _resolve_run_settings(rs.model_copy(update={"expect_sig": None}), mode)
+
+
 def _settings_class(*, steps, gap_layers, mesh_size_mm, min_size_mm, n_sectors, rotor_eddy, demag,
                     preset_rec=None, geometry=None) -> Dict[str, Any]:
     """Which preset the settings of a run equal ("optimization" / "simulation"), or "custom" with what differs from the
@@ -3333,9 +3384,9 @@ def _settings_class(*, steps, gap_layers, mesh_size_mm, min_size_mm, n_sectors, 
 
 
 def _sweep_settings_record(preset_rec, steps, gap_layers, cls=None):
-    """What a Sweep stores about its own settings: whether they equal a preset or are custom, and the steps and gap rows it
-    ASKED for (``requested``); ``effective`` starts equal and is replaced by what the solver reports once points are solved
-    (``_stamp_solved``)."""
+    """What a Sweep stores about its own settings: the label (a preset, or custom with what differs), the steps and gap rows it
+    ASKED for (``requested``) and ``effective`` with a source per field (``requested`` until points are solved,
+    ``_stamp_solved`` then replaces it by what the solver reports)."""
     rec = dict(preset_rec or {})
     if cls:
         rec.update({k: v for k, v in cls.items() if k in ("name", "label", "version", "custom", "differs")})
@@ -3343,49 +3394,49 @@ def _sweep_settings_record(preset_rec, steps, gap_layers, cls=None):
             rec["name"] = "custom"
     rec["requested"] = {"steps_per_period": int(steps), "gap_layers": float(gap_layers)}
     rec["effective"] = dict(rec["requested"])
-    rec["effective_source"] = "requested"
+    rec["effective_source"] = {"steps_per_period": "requested", "gap_layers": "requested"}
     return rec
 
 
 def _stamp_solved(rec, points):
-    """The sweep's preset record with ``effective`` taken from the SOLVED points (``n_steps_per_period_solved`` as snapped,
-    ``gap_layers_per_side`` as used).  A point that carries neither (a point served from an older cache entry) is not
-    counted; with none reporting, the record says ``effective_source: requested`` (the solve returned nothing).  A solve
-    that differs from the request makes the record ``custom``: it is never called Optimization then."""
+    """The sweep's settings record with ``effective`` taken from the SOLVED points, per field and marked ``solved`` /
+    ``requested`` / ``mixed``: ``solved`` only when EVERY point reports the field and they agree; ``requested`` when none
+    reports it (the solve returned nothing); ``mixed`` (value None) when the points disagree or only some report.  A solved
+    value that differs from the request, or a mixed one, makes the record ``custom`` (name ``custom``, no digest): it is
+    never called by a preset's name and is never ranked against other sweeps."""
     if not rec:
         return rec
     rec = dict(rec)
-    req_eff = dict(rec.get("requested") or rec.get("effective") or {})
-    steps, gaps, n_rep = set(), set(), 0
-    for p in points:
-        if not isinstance(p, dict) or p.get("fem") is False or not p.get("feasible", True):
-            continue
-        st, gl = p.get("n_steps_per_period_solved"), p.get("gap_layers_per_side")
-        if st is None and gl is None:
-            continue
-        n_rep += 1
-        if st is not None:
-            steps.add(int(st))
-        if gl is not None:
-            gaps.add(round(float(gl), 4))
-    rec["n_points_reporting"] = n_rep
-    if not n_rep:
-        rec["effective_source"] = "requested"
-        return rec
-    eff = dict(req_eff)
-    if len(steps) == 1:
-        eff["steps_per_period"] = next(iter(steps))
-    if len(gaps) == 1:
-        eff["gap_layers"] = next(iter(gaps))
-    rec["effective"] = eff
-    rec["effective_source"] = "solved"
-    rec["solved"] = {"steps_per_period": sorted(steps), "gap_layers": sorted(gaps)}
-    differs = (len(steps) > 1 or len(gaps) > 1
-               or any(int(x) != int(req_eff.get("steps_per_period", x)) for x in steps)
-               or any(abs(float(x) - float(req_eff.get("gap_layers", x))) > 1e-9 for x in gaps))
+    req_eff = dict(rec.get("requested") or {})
+    pts = [p for p in points if isinstance(p, dict) and p.get("fem") is not False and p.get("feasible", True)]
+    eff, src = dict(req_eff), {}
+    spec = (("steps_per_period", "n_steps_per_period_solved", int), ("gap_layers", "gap_layers_per_side",
+                                                                     lambda x: round(float(x), 4)))
+    mixed = differs = False
+    n_rep = 0
+    for field, key, conv in spec:
+        vals = [conv(p[key]) for p in pts if p.get(key) is not None]
+        n_rep = max(n_rep, len(vals))
+        if not vals:
+            src[field] = "requested"
+        elif len(vals) == len(pts) and len(set(vals)) == 1:
+            src[field] = "solved"
+            eff[field] = vals[0]
+            want = req_eff.get(field)
+            if want is not None and abs(float(vals[0]) - float(want)) > 1e-9:
+                differs = True
+        else:
+            src[field] = "mixed"
+            eff[field] = None
+            mixed = True
+    rec["effective"], rec["effective_source"], rec["n_points_reporting"] = eff, src, n_rep
     if differs:
-        rec["custom"] = True
         rec["solved_differs"] = True
+    if mixed:
+        rec["mixed"] = True
+    if differs or mixed:
+        rec["custom"], rec["name"], rec["label"] = True, "custom", "custom"
+        rec["sig"] = None
     return rec
 
 
@@ -3413,7 +3464,14 @@ def prepare_scan(req: ScanRequest) -> Dict[str, Any]:
     Shared by ``scan_designs`` and the headless runner.  ``dropped`` lists the
     requested variables the whitelist left out (the route ignores it, as it
     always did, and answers 400 only when none is left; the runner refuses)."""
-    req, _preset_rec = _with_preset(req)
+    _rs_stamp = None
+    if req.run_settings is not None:
+        _resolved = _resolve_run_settings(req.run_settings, "sweep")
+        req = _apply_run_settings(req, _resolved)
+        _rs_stamp = _run_settings_stamp(req.run_settings, _resolved)
+        _preset_rec = {"name": _resolved["preset"], "label": _resolved["preset_label"], "version": _resolved["version"]}
+    else:
+        req, _preset_rec = _with_preset(req)
     wl = get_config().get("sweep_whitelist", None)
     allowed = set(wl or [])
     variables = [{"name": v.name, "min": float(v.min), "max": float(v.max),
@@ -3524,9 +3582,10 @@ def prepare_scan(req: ScanRequest) -> Dict[str, Any]:
                       efficiency_min_pct=float(req.efficiency_min_pct),
                       torque_min_nm=float(req.torque_min_nm))
     _sweep_rec = _sweep_settings_record(
-        _preset_rec, steps, gap_layers,
-        _settings_class(steps=steps, gap_layers=gap_layers, mesh_size_mm=mesh_size, min_size_mm=min_size,
-                        n_sectors=int(req.n_sectors), rotor_eddy=rotor_eddy, demag=demag))
+        _rs_stamp or _preset_rec, steps, gap_layers,
+        None if _rs_stamp else _settings_class(
+            steps=steps, gap_layers=gap_layers, mesh_size_mm=mesh_size, min_size_mm=min_size,
+            n_sectors=int(req.n_sectors), rotor_eddy=rotor_eddy, demag=demag))
     kwargs["mesh_preset"] = _sweep_rec
     init_state["mesh_preset"] = _sweep_rec
     response = {"started": True, "mesh_preset": _sweep_rec, "gap_layers": gap_layers,
@@ -4493,6 +4552,7 @@ class DescentRequest(BaseModel):
     w_td: float = 1.0                 # weight on torque-density ratio
     penalty_lambda: float = 1.0       # ripple-violation penalty
     max_iters: int = 8
+    run_settings: Optional[RunSettingsIn] = None   # the panel's resolved run settings: when present they are the ONLY source of steps, gap rows, mesh, sectors, rotor eddy
     steps_per_period: int = 24        # FEM frames/period (higher → cleaner ripple gradient)
     preset: Optional[str] = None      # "optimization" | "simulation" (mesh_presets.py): fills the settings the request does not state; opt-in
     coil_temp_c: Optional[float] = None   # None = the Simulation tab's (`_sim_coil_temp_c`)
@@ -6235,7 +6295,12 @@ def prepare_descent(req: DescentRequest) -> Dict[str, Any]:
     ``dropped`` lists the requested variables that did not make it into
     ``var_specs`` and why (the route ignores it, as it always did; the runner
     refuses).  An empty ``var_specs`` is the caller's to refuse."""
-    req, _preset_rec = _with_preset(req)
+    if req.run_settings is not None:
+        _resolved = _resolve_run_settings(req.run_settings, "descent")
+        req = _apply_run_settings(req, _resolved)
+        _preset_rec = _run_settings_stamp(req.run_settings, _resolved)
+    else:
+        req, _preset_rec = _with_preset(req)
     cfg = get_config()
     schema = cfg.get("geometry_schema", {})
     wl = cfg.get("sweep_whitelist", None)
@@ -7537,7 +7602,7 @@ def _screen_groups(names, size: int = _SCREEN_GROUP) -> List[List[str]]:
 
 
 def _auto_assemble(max_ripple_pct: float, budget_evals: int = 0,
-                   mode: str = _AUTO_DEFAULT_MODE) -> Dict[str, Any]:
+                   mode: str = _AUTO_DEFAULT_MODE, run_settings=None) -> Dict[str, Any]:
     """Build the FULL optimization request from the standing conventions.
 
     Raises HTTPException(422) with an engineer-readable message when the input
@@ -7713,6 +7778,19 @@ def _auto_assemble(max_ripple_pct: float, budget_evals: int = 0,
         "drive": str(sim.get("drive") or "current"),
         "pole_copy": None,
     }
+    # THE PANEL'S RUN SETTINGS (owner 2026-11-24): when the request carries them they are the ONLY source of the count, the gap
+    # rows, the mesh sizes, the sectors, rotor eddy and demag - the same resolver the panel's display used.
+    _rs_resolved = None
+    if run_settings is not None:
+        _rs_resolved = _resolve_run_settings(run_settings, "auto")
+        _st = _rs_resolved["settings"]
+        ev.update({"steps_per_period": int(_st["steps_per_period"]),
+                   "steps_per_period_requested": int(_st["steps_per_period"]),
+                   "steps_per_period_source": "run_settings",
+                   "mesh_size_mm": float(_st["mesh_size_mm"]), "min_size_mm": float(_st["min_size_mm"]),
+                   "gap_layers": float(_st["gap_layers"]),
+                   "n_sectors": (-1 if int(_st["n_sectors"]) <= 1 else int(_st["n_sectors"])),
+                   "rotor_eddy": bool(_st["rotor_eddy"]), "demag": bool(_st["demag"])})
 
     # ── VARIABLES: the whitelist, at the machine's own scale, UNBOXED ─────────
     stator_d = float(geo.get("stator_diameter", 0.0) or 0.0)
@@ -7901,6 +7979,7 @@ def _auto_assemble(max_ripple_pct: float, budget_evals: int = 0,
         "operating_point": {"current_a": I, "rpm": rpm, "gamma_deg": gamma,
                                 "connection": _conn, "n_parallel": _npar},
         "eval": ev,
+        **({"run_settings": _run_settings_stamp(run_settings, _rs_resolved)} if _rs_resolved else {}),
         "variables": variables,
         # searched-out by a manufacturing floor (optimization/manufacturing.py)
         "excluded_variables": excluded_vars,
@@ -9113,6 +9192,7 @@ class AutoOptRequest(BaseModel):
     """The whole user-facing surface of a one-click optimization: ONE number —
     plus WHICH SEARCH runs it, because the two available searches answer
     different questions and only the engineer knows which one is being asked."""
+    run_settings: Optional[RunSettingsIn] = None   # the panel's resolved run settings (run_settings.py)
     max_ripple_pct: float
     # 'cmaes'  — global population search; explores, can change basin, needs
     #            O(N²) evals before its covariance means anything.
@@ -9145,7 +9225,7 @@ def auto_plan(req: AutoOptRequest):
     Project rule: a run says what it costs before it starts.  This is the
     pre-flight the Run button shows — the assembled operating point, objective,
     variables with their initial steps, and n_evals x measured s/eval."""
-    plan = _auto_assemble(req.max_ripple_pct, req.budget_evals, req.mode)
+    plan = _auto_assemble(req.max_ripple_pct, req.budget_evals, req.mode, req.run_settings)
     return {"plan": plan, "point_name": _auto_point_name(req)}
 
 
@@ -9161,7 +9241,7 @@ def auto_start(req: AutoOptRequest, request: Request):
             raise HTTPException(status_code=409,
                                 detail="an optimization is already running")
 
-    plan = _auto_assemble(req.max_ripple_pct, req.budget_evals, req.mode)
+    plan = _auto_assemble(req.max_ripple_pct, req.budget_evals, req.mode, req.run_settings)
     name = _auto_point_name(req)
     try:
         from motor_ai_sim.routes.saved_sims import bucket_for
@@ -9208,6 +9288,7 @@ def auto_start(req: AutoOptRequest, request: Request):
                 "geo_mesh": plan["eval"]["geo_mesh"],
                 "mesh_size_mm": plan["eval"]["mesh_size_mm"],
                 "min_size_mm": plan["eval"]["min_size_mm"]},
+            **({"mesh_preset": plan["run_settings"]} if plan.get("run_settings") else {}),
             "auto": {"max_ripple_pct": plan["ripple_max_pct"],
                      "objective": plan["objective"],
                      "mode": plan["mode"],

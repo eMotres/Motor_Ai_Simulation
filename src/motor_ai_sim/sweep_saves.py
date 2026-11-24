@@ -291,22 +291,27 @@ def delete_entry(sid: str) -> bool:
 
 
 def sweep_settings_of(result: Any, config: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-    """The settings a stored sweep RAN with, for its label: the preset record the run stamped (``mesh_preset``), or, for a
-    sweep stored before that stamp existed, its own stored request (``steps_per_period``, ``scan_params.gap_layers``).
+    """The settings a stored sweep RAN with, for its label.  ONE helper for the result, the saved list, Apply and Compare.
 
-    ``{"preset": name | None, "version", "steps_per_period", "gap_layers", "source": "preset" | "stored_request"}``."""
+    A stamped sweep (``mesh_preset``) reads its label from the stamp: the preset's name only when nothing differs, ``custom``
+    when anything does (or when the solve disagreed with the request, or the points disagree: ``mixed``).  ``sig`` is the
+    digest of the COMPLETE settings, None when unknown, mixed or legacy: two sweeps compare only when both digests are
+    known and equal.  A sweep stored before the stamp is labelled from its stored request and has no digest."""
     r = result if isinstance(result, dict) else {}
     cfg = config if isinstance(config, dict) else {}
     mp = r.get("mesh_preset") if isinstance(r.get("mesh_preset"), dict) else None
     sp = r.get("scan_params") if isinstance(r.get("scan_params"), dict) else {}
-    if mp and isinstance(mp.get("effective"), dict) and mp["effective"].get("steps_per_period") is not None:
+    if mp and isinstance(mp.get("effective"), dict) and "steps_per_period" in mp["effective"]:
         eff = mp["effective"]
-        custom = bool(mp.get("custom"))
+        mixed = bool(mp.get("mixed")) or any(v == "mixed" for v in (mp.get("effective_source") or {}).values()
+                                              if isinstance(mp.get("effective_source"), dict))
+        custom = bool(mp.get("custom")) or mixed or bool(mp.get("solved_differs"))
+        sig = None if (mixed or mp.get("solved_differs")) else mp.get("sig")
         return {"preset": ("custom" if custom else mp.get("name")), "version": mp.get("version"), "custom": custom,
-                "effective_source": mp.get("effective_source"),
+                "mixed": mixed, "effective_source": mp.get("effective_source"),
                 "steps_per_period": eff.get("steps_per_period"), "gap_layers": eff.get("gap_layers"),
-                "source": "preset"}
-    return {"preset": None, "version": None, "custom": False,
+                "sig": sig, "differs": mp.get("differs") or {}, "source": "preset"}
+    return {"preset": None, "version": None, "custom": False, "mixed": False, "sig": None,
             "steps_per_period": cfg.get("steps_per_period") or r.get("steps_per_period"),
             "gap_layers": sp.get("gap_layers"), "source": "stored_request"}
 

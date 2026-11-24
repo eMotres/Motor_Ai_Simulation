@@ -1,37 +1,52 @@
 /**
- * What a sweep RAN with (owner 2026-11-23: optimisation runs on the Optimization preset).
+ * What a sweep RAN with: ONE reader for the result on screen, the saved-sweeps list, Apply and Compare (owner 2026-11-24).
  *
- * A new sweep stamps its preset and the effective steps / gap rows (`mesh_preset.effective`); a sweep stored before that
- * stamp is labelled from its own stored request, so a 108-step sweep and a 48-step sweep are never mixed silently.
+ * The label is recomputed from the stamp (`mesh_preset`, written by the server from the SOLVED points): a preset's name only
+ * when nothing differs, `custom` when anything does, `mixed` when the solved points disagree.  `sig` is the digest of the
+ * COMPLETE settings; it is null for a legacy sweep (stored before the stamp), a mixed one, or one whose solve disagreed with
+ * its request.  Two sweeps are compared only when BOTH digests are known and equal: unknown never matches anything.
  */
 export interface SweepSettings {
-  preset: string | null;
+  preset: string | null;          // 'optimization' | 'simulation' | 'custom' | null (legacy: no stamp)
   steps: number | null;
   gapLayers: number | null;
+  custom: boolean;
+  mixed: boolean;
+  sig: number | null;
   source: 'preset' | 'stored_request';
 }
 
 const numOrNull = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) ? v : null);
+const sigOrNull = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) && v > 0 ? v : null);
 
-/** The settings of a list row (`settings` from the server) or of a result carrying `mesh_preset` / `steps_per_period`. */
+/** The settings of a list row (`settings` from the server), or of a result carrying `mesh_preset` / `steps_per_period`. */
 export function sweepSettingsOf(x: any): SweepSettings {
   const s = x?.settings;
   if (s && typeof s === 'object') {
-    return { preset: typeof s.preset === 'string' ? s.preset : null, steps: numOrNull(s.steps_per_period),
-             gapLayers: numOrNull(s.gap_layers), source: s.source === 'preset' ? 'preset' : 'stored_request' };
+    const mixed = s.mixed === true;
+    const custom = s.custom === true || mixed;
+    return { preset: s.source === 'preset' ? (custom ? 'custom' : (typeof s.preset === 'string' ? s.preset : null)) : null,
+             steps: numOrNull(s.steps_per_period), gapLayers: numOrNull(s.gap_layers), custom, mixed,
+             sig: s.source === 'preset' && !mixed ? sigOrNull(s.sig) : null,
+             source: s.source === 'preset' ? 'preset' : 'stored_request' };
   }
   const mp = x?.mesh_preset;
   const eff = mp?.effective;
-  if (eff && numOrNull(eff.steps_per_period) !== null) {
-    return { preset: typeof mp.name === 'string' ? mp.name : null, steps: numOrNull(eff.steps_per_period),
-             gapLayers: numOrNull(eff.gap_layers), source: 'preset' };
+  if (eff && typeof eff === 'object' && 'steps_per_period' in eff) {
+    const srcs = mp.effective_source && typeof mp.effective_source === 'object' ? Object.values(mp.effective_source) : [];
+    const mixed = mp.mixed === true || srcs.includes('mixed');
+    const custom = mp.custom === true || mixed || mp.solved_differs === true;
+    const sig = mixed || mp.solved_differs === true ? null : sigOrNull(mp.sig);
+    return { preset: custom ? 'custom' : (typeof mp.name === 'string' ? mp.name : null),
+             steps: numOrNull(eff.steps_per_period), gapLayers: numOrNull(eff.gap_layers), custom, mixed, sig, source: 'preset' };
   }
   return { preset: null, steps: numOrNull(x?.steps_per_period), gapLayers: numOrNull(x?.scan_params?.gap_layers),
-           source: 'stored_request' };
+           custom: false, mixed: false, sig: null, source: 'stored_request' };
 }
 
-/** "Optimization · 48 steps · 1 gap row", or "108 steps · 1 gap row" for a sweep without a preset stamp. */
+/** "Optimization · 48 steps · 1 gap row", "custom · 108 steps · 2 gap rows", "mixed", or "108 steps · 1 gap row" (legacy). */
 export function sweepSettingsLabel(s: SweepSettings, presetLabel?: string): string {
+  if (s.mixed) return 'mixed';
   const parts: string[] = [];
   if (s.preset) parts.push(s.preset === 'custom' ? 'custom' : (presetLabel ?? s.preset.charAt(0).toUpperCase() + s.preset.slice(1)));
   if (s.steps !== null) parts.push(`${s.steps} steps`);
@@ -39,32 +54,27 @@ export function sweepSettingsLabel(s: SweepSettings, presetLabel?: string): stri
   return parts.join(' · ');
 }
 
-/** True when two sweeps ran at different steps or gap rows (an unknown value never matches a known one). */
+/** Two sweeps are the same settings only when BOTH digests are known and equal (fail closed on unknown / legacy / mixed). */
 export function sweepSettingsMismatch(a: SweepSettings, b: SweepSettings): boolean {
-  return a.steps !== b.steps || a.gapLayers !== b.gapLayers;
+  return a.sig === null || b.sig === null || a.sig !== b.sig;
 }
 
-/** 1 = Optimization preset, 2 = Simulation preset, 0 = custom or no preset stamp (a sweep stored before the stamp). */
-export const sweepPresetCode = (s: SweepSettings): number =>
-  (s.preset === 'optimization' ? 1 : s.preset === 'simulation' ? 2 : 0);
-
-/** Numbers-only provenance that rides with an applied sweep point into the saved metrics (and so into Compare). */
+/** Numbers-only provenance that rides with an applied sweep point into the saved metrics (and so into Compare):
+ *  the sweep origin always, the digest only when known (a mixed / legacy / disagreeing sweep never carries one). */
 export function sweepSettingsMetrics(s: SweepSettings): Record<string, number> {
-  const m: Record<string, number> = { sweep_preset_code: sweepPresetCode(s) };
-  if (s.steps !== null) m.sweep_steps = s.steps;
-  if (s.gapLayers !== null) m.sweep_gap_layers = s.gapLayers;
+  const m: Record<string, number> = { sweep_origin: 1 };
+  if (s.sig !== null) m.sweep_sig = s.sig;
+  if (s.steps !== null && !s.mixed) m.sweep_steps = s.steps;
+  if (s.gapLayers !== null && !s.mixed) m.sweep_gap_layers = s.gapLayers;
   return m;
 }
 
-/** Saved results compare only when every one that carries sweep settings carries KNOWN, equal ones (steps, gap rows,
- *  preset). A row without them is not a sweep row and is ignored; a sweep row with an unknown value matches nothing. */
+/** Saved results compare only when every sweep-origin row carries a valid, equal digest.  A row without the sweep origin is
+ *  not a sweep row and is ignored; a sweep row with a null / zero / non-numeric digest makes the whole set not comparable. */
 export function sweepMetricsComparable(rows: Array<Record<string, unknown> | undefined | null>): boolean {
-  const have = rows.filter(r => r && ('sweep_steps' in r || 'sweep_gap_layers' in r || 'sweep_preset_code' in r));
+  const have = rows.filter(r => r && Number((r as any).sweep_origin) === 1);
   if (have.length < 2) return true;
-  const keys = have.map(r => {
-    const st = Number((r as any).sweep_steps), gl = Number((r as any).sweep_gap_layers), pc = Number((r as any).sweep_preset_code);
-    if (![st, gl, pc].every(Number.isFinite)) return null;
-    return `${st}|${gl}|${pc}`;
-  });
-  return !keys.includes(null) && new Set(keys).size === 1;
+  const sigs = have.map(r => (r as any).sweep_sig);
+  if (sigs.some(v => typeof v !== 'number' || !Number.isFinite(v) || v <= 0)) return false;
+  return new Set(sigs as number[]).size === 1;
 }

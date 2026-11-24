@@ -111,7 +111,7 @@ def test_internal_documents_are_hidden_from_customers(client):
     owner = client.get("/api/projects/ciano/documents", headers=hdr("t-owner")).json()
     assert [d["id"] for d in owner["documents"]] == [public["id"]] and owner["can_edit"] is True and owner["is_staff"] is False
     assert client.get("/api/projects/ciano/documents/%s/download" % secret["id"], headers=hdr("t-owner")).status_code == 404
-    assert client.patch("/api/projects/ciano/documents/%s" % secret["id"], headers=hdr("t-owner"), json={"internal": False}).status_code == 403
+    assert client.patch("/api/projects/ciano/documents/%s" % secret["id"], headers=hdr("t-owner"), json={"internal": False}).status_code == 404     # hidden from the customer side: like an unknown id
     assert client.patch("/api/projects/ciano/documents/%s" % public["id"], headers=hdr("t-owner"), json={"internal": True}).status_code == 403
     assert upload(client, name="mine.step", internal="true").json()["internal"] is False
     public2 = [d["id"] for d in client.get("/api/projects/ciano/documents", headers=hdr("t-customer")).json()["documents"] if d["name"] == "mine.step"]
@@ -129,11 +129,11 @@ def test_patch_internal_folder_revision_with_audit(client, tmp_path):
     r = client.patch(url, headers=hdr("t-admin"), json={"internal": True, "folder": "bom", "revision": "C"})
     assert r.status_code == 200 and (r.json()["internal"], r.json()["folder"], r.json()["revision"]) == (True, "bom", "C")
     assert client.get("/api/projects/ciano/documents", headers=hdr("t-customer")).json()["documents"] == []
-    assert client.patch(url, headers=hdr("t-owner"), json={"folder": "nope"}).status_code == 422
+    assert client.patch(url, headers=hdr("t-owner"), json={"folder": "nope"}).status_code == 404     # the document is internal now: hidden, like an unknown id
     assert client.patch(url, headers=hdr("t-admin"), json={"internal": "yes"}).status_code == 422
-    assert client.patch(url, headers=hdr("t-owner"), json={"revision": "r" * 41}).status_code == 422
-    assert client.patch(url, headers=hdr("t-owner"), json={}).status_code == 422
-    assert client.patch(url, headers=hdr("t-customer"), json={"internal": False}).status_code == 403
+    assert client.patch(url, headers=hdr("t-owner"), json={"revision": "r" * 41}).status_code == 404
+    assert client.patch(url, headers=hdr("t-owner"), json={}).status_code == 404
+    assert client.patch(url, headers=hdr("t-customer"), json={"internal": False}).status_code == 404
     assert client.patch("/api/projects/ciano/documents/doc-missing", headers=hdr("t-admin"), json={"internal": False}).status_code == 404
     assert "document.update" in audit_actions(tmp_path)
 

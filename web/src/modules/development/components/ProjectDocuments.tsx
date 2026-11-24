@@ -34,6 +34,9 @@ export default function ProjectDocuments({ projectId, language, t, onCoverChange
   const [canEdit, setCanEdit] = useState(false);
   // the INTERNAL switch is MOTRES staff's: a customer-side owner uploads and archives, but never sees or ticks it
   const [showInternal, setShowInternal] = useState(false);   // the server says who is MOTRES staff: a customer never marks or sees internal
+  const [canRestrict, setCanRestrict] = useState(false);   // staff and the project owner mark a document price-restricted
+  // chosen BEFORE the upload and sent with it, so a file with prices is never listed to everybody, not even for a moment
+  const [restrictUploads, setRestrictUploads] = useState(false);
   const [showArchived, setShowArchived] = useState(false);
   const [filter, setFilter] = useState<DocumentFolder | 'all'>('all');
   const [toggled, setToggled] = useState<Record<string, boolean>>({});   // revision group -> explicit open/closed; reset per project
@@ -54,6 +57,7 @@ export default function ProjectDocuments({ projectId, language, t, onCoverChange
       setDocs(list.documents);
       setCanEdit(list.can_edit);
       setShowInternal(!!list.is_staff);
+      setCanRestrict(!!list.can_restrict);
       const version = list.cover_version ?? null;
       if (version !== coverVersion.current) { coverVersion.current = version; onCoverChange?.(version); }
     } catch (e) { if (projectRef.current === id) setError(msg(e)); }
@@ -68,7 +72,7 @@ export default function ProjectDocuments({ projectId, language, t, onCoverChange
     for (const file of files) {
       if (file.size > MAX_DOCUMENT_BYTES) { setError(t('documents.tooLarge', { name: file.name })); continue; }
       setBusy(t('documents.uploading', { name: file.name }));
-      try { await developmentApi.uploadDocument(id, file, filter === 'all' ? {} : { folder: filter }); }
+      try { await developmentApi.uploadDocument(id, file, { ...(filter === 'all' ? {} : { folder: filter }), priceRestricted: canRestrict && restrictUploads }); }
       catch (e) { setError(`${file.name}: ${msg(e)}`); }
     }
     setBusy('');
@@ -123,11 +127,12 @@ export default function ProjectDocuments({ projectId, language, t, onCoverChange
     <TableCell>{d.uploader || t('documents.member')}</TableCell>
     <TableCell sx={{ whiteSpace: 'nowrap' }}>{dateOf(d.uploaded_at)}</TableCell>
     {showInternal && <TableCell><Switch size="small" checked={d.internal} onChange={(e) => void patch(d, { internal: e.target.checked })} inputProps={{ 'aria-label': t('documents.colInternal') }} /></TableCell>}
+    {canRestrict && <TableCell><Switch size="small" checked={!!d.price_restricted} onChange={(e) => void patch(d, { price_restricted: e.target.checked })} inputProps={{ 'aria-label': t('documents.colPriceRestricted') }} /></TableCell>}
     <TableCell align="right" sx={{ whiteSpace: 'nowrap' }}>
       <Tooltip title={t('documents.download')}><IconButton size="small" aria-label={t('documents.download')} onClick={() => void run(() => downloadProjectDocument(projectId, d))}><DownloadIcon fontSize="small" /></IconButton></Tooltip>
       {canEdit && !d.archived && (d.is_cover
         ? <Tooltip title={t('documents.coverClear')}><IconButton size="small" color="primary" aria-label={t('documents.coverClear')} onClick={() => void clearCover()}><StarIcon fontSize="small" /></IconButton></Tooltip>
-        : (!d.internal && isCoverImage(d.name)) && <Tooltip title={t('documents.coverSet')}><IconButton size="small" aria-label={t('documents.coverSet')} onClick={() => void setCover(d.id)}><StarBorderIcon fontSize="small" /></IconButton></Tooltip>)}
+        : (!d.internal && !d.price_restricted && isCoverImage(d.name)) && <Tooltip title={t('documents.coverSet')}><IconButton size="small" aria-label={t('documents.coverSet')} onClick={() => void setCover(d.id)}><StarBorderIcon fontSize="small" /></IconButton></Tooltip>)}
       {canEdit && (d.archived
         ? <Tooltip title={t('documents.restore')}><IconButton size="small" aria-label={t('documents.restore')} onClick={() => void patch(d, { archived: false })}><UnarchiveOutlinedIcon fontSize="small" /></IconButton></Tooltip>
         : <Tooltip title={t('documents.archive')}><IconButton size="small" aria-label={t('documents.archive')} onClick={() => void run(async () => { await developmentApi.archiveDocument(projectId, d.id); await load(); })}><ArchiveOutlinedIcon fontSize="small" /></IconButton></Tooltip>)}
@@ -145,6 +150,11 @@ export default function ProjectDocuments({ projectId, language, t, onCoverChange
         <input ref={fileInput} type="file" multiple hidden onChange={(e) => { void uploadFiles(Array.from(e.target.files ?? [])); e.target.value = ''; }} />
         <Button size="small" startIcon={<UploadFileIcon />} disabled={!!busy} onClick={() => fileInput.current?.click()}>{t('documents.upload')}</Button>
         <input ref={coverInput} type="file" accept="image/png,image/jpeg,image/webp" hidden onChange={(e) => { void uploadCover(e.target.files?.[0]); e.target.value = ''; }} />
+        {canRestrict && <Box sx={{ display: 'flex', alignItems: 'center' }}>
+          <Switch size="small" checked={restrictUploads} onChange={(e) => setRestrictUploads(e.target.checked)} inputProps={{ 'aria-label': t('documents.colPriceRestricted') }} />
+          <Typography sx={{ fontSize: 12, color: 'var(--text-2)' }}>{t('documents.colPriceRestricted')}</Typography>
+          <HelpTip title={t('documents.priceRestrictedTip')} />
+        </Box>}
         <Tooltip title={t('documents.coverTip')}><span><Button size="small" startIcon={<ImageOutlinedIcon />} disabled={!!busy} onClick={() => coverInput.current?.click()}>{t('documents.coverUpload')}</Button></span></Tooltip>
       </>}
       <Button size="small" startIcon={<DownloadIcon />} disabled={!docs.length} onClick={() => void run(() => downloadProjectDocumentsZip(projectId))}>{t('documents.zipAll')}</Button>
@@ -171,6 +181,7 @@ export default function ProjectDocuments({ projectId, language, t, onCoverChange
           <TableCell>{t('documents.colRevision')}</TableCell><TableCell align="right">{t('documents.colSize')}</TableCell>
           <TableCell>{t('documents.colUploader')}</TableCell><TableCell>{t('documents.colDate')}</TableCell>
           {showInternal && <TableCell><Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>{t('documents.colInternal')}<HelpTip title={t('documents.internalTip')} /></Box></TableCell>}
+          {canRestrict && <TableCell><Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>{t('documents.colPriceRestricted')}<HelpTip title={t('documents.priceRestrictedTip')} /></Box></TableCell>}
           <TableCell />
         </TableRow></TableHead>
         <TableBody>
@@ -179,7 +190,7 @@ export default function ProjectDocuments({ projectId, language, t, onCoverChange
             const label = g.key || t('documents.noRevision');
             return <React.Fragment key={`rev:${g.key}`}>
               <TableRow>
-                <TableCell colSpan={showInternal ? 8 : 7} sx={{ p: 0, bgcolor: 'var(--panel)' }}>
+                <TableCell colSpan={7 + (showInternal ? 1 : 0) + (canRestrict ? 1 : 0)} sx={{ p: 0, bgcolor: 'var(--panel)' }}>
                   <Tooltip title={t('documents.revisionGroupTip')}>
                     <Box component="button" type="button" data-testid="documents-revision-group" aria-expanded={open}
                       onClick={() => setToggled((m) => ({ ...m, [g.key]: !open }))}
@@ -194,7 +205,7 @@ export default function ProjectDocuments({ projectId, language, t, onCoverChange
               {open && g.docs.map(renderRow)}
             </React.Fragment>;
           })}
-          {!shown.length && <TableRow><TableCell colSpan={showInternal ? 8 : 7}>
+          {!shown.length && <TableRow><TableCell colSpan={7 + (showInternal ? 1 : 0) + (canRestrict ? 1 : 0)}>
             <Stack alignItems="center" sx={{ py: 3, color: 'var(--text-3)' }}>
               <Typography sx={{ fontSize: 13 }}>{canEdit ? t('documents.dropHere') : t('documents.empty')}</Typography>
             </Stack>

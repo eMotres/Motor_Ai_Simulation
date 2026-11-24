@@ -51,7 +51,8 @@ export function productionLinkPath(link: ProductionLink): string | null {
     q.push(`ids=${link.ids.join(',')}`);
   }
   const path = `/production/${encodeURIComponent(link.die)}/${encodeURIComponent(link.config)}/documents`;
-  return q.length ? `${path}?${q.join('&')}` : path;
+  const out = q.length ? `${path}?${q.join('&')}` : path;
+  return out.length > MAX_LEN ? null : out;      // never BUILD a link the parsers (and the server's return path) would refuse
 }
 
 /** The full URL to copy. */

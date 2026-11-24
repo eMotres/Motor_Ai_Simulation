@@ -9,11 +9,13 @@ import { productionLinkPath } from '../../lib/productionLink';
 
 export interface PageAddressInput {
   die: string; config: string; tab: string; stepSel: string | null; hasEntryLink: boolean;
-  link?: { since?: string; ids?: string[] } | null; initialTab?: string; itemId?: string;
+  link?: { since?: string; ids?: string[]; invalidIds?: true } | null; initialTab?: string; itemId?: string;
 }
 
 export function pageAddress(i: PageAddressInput): string | null | 'ROOT' {
   if (i.tab === 'assembly' && i.stepSel) return appLinkPath({ kind: 'production', die: i.die, config: i.config, tab: 'assembly', item: i.stepSel });
+  // a link whose ids= list is invalid: the RAW address stays (a reload shows the same notice, never a silently plain list)
+  if (i.hasEntryLink && i.tab === 'documents' && i.link?.invalidIds) return null;
   if (i.hasEntryLink && i.tab === 'documents') return productionLinkPath({ die: i.die, config: i.config, since: i.link?.since, ids: i.link?.ids });
   if (!i.hasEntryLink && i.initialTab && i.tab === i.initialTab) {
     return appLinkPath({ kind: 'production', die: i.die, config: i.config, tab: i.initialTab as never, ...(i.itemId && i.initialTab !== 'assembly' ? { item: i.itemId } : {}) });

@@ -1037,7 +1037,7 @@ def _process_step_images(die: str, config: str, user: dict, production: dict,
             part = part_by_id.get(part_id) or {}
             for drawing in part.get("drawing_files", []) or []:
                 if (isinstance(drawing, dict) and drawing.get("kind") == "png" and
-                        not str(drawing.get("name") or "").startswith("[superseded") and
+                        not models.is_superseded({"name": drawing.get("name")}) and
                         str(drawing.get("file_id") or "") not in document_file_ids and
                         str(drawing.get("file_id") or "") not in superseded_file_ids):
                     part_value = part.get("name")
@@ -1522,7 +1522,7 @@ def _part_files(die: str, config: str, user: dict, production: dict, list_name: 
             if not fid or fid in found or fid in sup_ids or not _file_download_allowed(fid, die, config, user, production, blocked):
                 return
             nm = str(name or _original_name(die, config, fid) or "")
-            if nm.startswith("[superseded"):
+            if models.is_superseded({"name": nm}):
                 return
             kind = forced or _VIEW_KIND.get(PurePosixPath(nm.lower()).suffix)
             if kind is None or store.read_uploaded_file(die, config, fid) is None:

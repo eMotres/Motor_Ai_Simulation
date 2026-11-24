@@ -200,6 +200,18 @@ const PA = await import('../pageAddress.ts').catch(() => null);
   assert.equal(PA.pageAddress({ die: 'd', config: 'c', hasEntryLink: false, tab: 'changes', stepSel: 's2', initialTab: 'changes', itemId: 'r1' }), '/production/d/c/changes?item=r1');
 });
 
+(PA ? test : test.skip)('an invalid ids= link keeps its raw address (the effect does not rewrite it to the plain list)', () => {
+  const inv = { die: 'd', config: 'c', hasEntryLink: true, tab: 'documents', stepSel: null, link: { invalidIds: true } };
+  assert.equal(PA.pageAddress(inv), null);
+  assert.equal(PA.pageAddress({ ...inv, link: { ids: ['doc_a'] } }), '/production/d/c/documents?ids=doc_a');
+});
+
+t('a link over the 280-character cap is not built', () => {
+  const ids = Array.from({ length: 20 }, (_, i) => `doc_${String(i).padStart(2, '0')}Ab3-dE5_gH7jK9mN`);
+  assert.equal(PL.productionLinkPath({ die: 'd', config: 'c', ids }), null);
+  assert.ok(PL.productionLinkPath({ die: 'd', config: 'c', ids: ids.slice(0, 4) }));
+});
+
 t('the step document limit equals the server limit', () => {
   const py = fs.readFileSync(new URL('../../../../../src/motor_ai_sim/production/process_steps.py', import.meta.url), 'utf8');
   assert.match(py, new RegExp(`\\.get\\("documents"\\) or \\[\\]\\) if str\\(x\\)\\.strip\\(\\)\\]\\[:${D.STEP_DOCS_MAX}\\]`));

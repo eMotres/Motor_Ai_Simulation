@@ -156,15 +156,16 @@ from fastapi import HTTPException
 from motor_ai_sim import run_settings as RS
 
 
-def _cfg():
+def _cfg(coil_rel=2):
     c = copy.deepcopy(O.get_config())
-    c["mesh"] = {}                      # nothing stored on the machine: the machine-read keys equal the preset's defaults
+    # the machine's stored wire cell: 2h = the Optimization preset's (a stored wire cell that is not the preset's makes the run custom)
+    c["mesh"] = {"component_mesh": {"coil_rel": coil_rel}} if coil_rel else {}
     c.setdefault("simulation", {})["eddy"] = True
     return c
 
 
 def test_the_simulation_preset_and_more_steps_than_it_asks_for():
-    cfg = _cfg()
+    cfg = _cfg(coil_rel=1)              # the Simulation preset's wire cell
     sim = RS.resolve("simulation", {}, cfg)
     assert sim["label"] == "simulation" and sim["settings"]["gap_layers"] == 2.0
     more = RS.resolve("simulation", {"steps_per_period": sim["settings"]["steps_per_period"] + 12}, cfg)
@@ -265,7 +266,7 @@ def test_the_preset_resolves_and_the_label_is_about_steps_and_gap_rows_only():
     assert other["label"] == "optimization" and other["sig"] == r["sig"]
     assert other["sources"]["demag"] == "override" and r["sources"]["eddy"] == "machine"
     cfg2 = copy.deepcopy(cfg)
-    cfg2["mesh"] = {"outer_air_factor": 1.9, "component_mesh": {"shaft": 0.1}}
+    cfg2["mesh"] = {"outer_air_factor": 1.9, "component_mesh": {"shaft": 0.1, "coil_rel": 2}}
     assert RS.resolve("optimization", {}, cfg2)["label"] == "optimization"
     custom = RS.resolve("optimization", {"steps_per_period": 108, "gap_layers": 2}, cfg)
     assert custom["label"] == "custom" and set(custom["differs"]) == {"steps_per_period", "gap_layers"}
@@ -401,3 +402,39 @@ def test_gap_rows_and_steps_are_whole_numbers():
                 RS.resolve("optimization", {key: bad}, cfg)
     assert RS.resolve("optimization", {"gap_layers": 2.0}, cfg)["settings"]["gap_layers"] == 2.0
     assert RS.resolve("optimization", {"gap_layers": 1}, cfg)["sig"] == RS.resolve("optimization", {}, cfg)["sig"]
+
+
+# ── the digest also covers the preset version and the wire cell (preset version 2, owner 2026-11-24) ──
+def test_the_digest_changes_with_the_preset_version_and_the_wire_cell():
+    assert RS.identity_sig(48, 1.0, 1, 1.0) != RS.identity_sig(48, 1.0, 2, 2.0)
+    assert RS.identity_sig(48, 1.0, 2, 2.0) != RS.identity_sig(48, 1.0, 2, 1.0)
+    assert RS.identity_sig(48, 1.0, 2, 2.0) == RS.identity_sig(48, 1.0, 2, 2)
+    cfg = _cfg()
+    a = RS.resolve("optimization", {}, cfg)
+    cfg2 = _cfg(coil_rel=1)
+    b = RS.resolve("optimization", {}, cfg2)
+    # the run uses the PRESET's wire cell whatever the stored block says: same label, same digest, a per-run override when they differ
+    assert a["coil_rel"] == 2.0 and b["coil_rel"] == 2.0 and a["sig"] == b["sig"]
+    assert a["label"] == b["label"] == "optimization" and a["differs"] == b["differs"] == {}
+    assert a["coil_rel_override"] is None and b["coil_rel_override"] == 2.0 and b["coil_rel_stored"] == 1.0
+    assert b["sources"]["coil_rel"] == "preset"
+    # only an explicit override of the cell makes the run custom, and the digest records the cell the run used
+    c = RS.resolve("optimization", {"coil_rel": 1}, cfg)
+    assert c["label"] == "custom" and c["differs"]["coil_rel"] == {"preset": 2.0, "current": 1.0} and c["sig"] != a["sig"]
+    assert c["coil_rel_override"] == 1.0 and c["sources"]["coil_rel"] == "override"
+    with pytest.raises(RS.RunSettingsError):
+        RS.resolve("optimization", {"coil_rel": 3}, cfg)
+    # the Simulation preset is 1h: on a stored-2h machine the run is at 1h (a per-run override), still the preset
+    sim = RS.resolve("simulation", {}, cfg)
+    assert sim["label"] == "simulation" and sim["coil_rel"] == 1.0 and sim["coil_rel_override"] == 1.0
+    assert RS.resolve("simulation", {}, _cfg(coil_rel=1))["coil_rel_override"] is None
+    assert a["sig_scope"] == 2 and a["version"] == MP.version()
+
+
+def test_a_stored_sweep_without_the_digest_scope_is_unknown_and_never_ranked():
+    base = {"name": "optimization", "version": 1, "sig": 5, "effective": {"steps_per_period": 48, "gap_layers": 1.0},
+            "effective_source": {"steps_per_period": "solved", "gap_layers": "solved"}}
+    assert SS.sweep_settings_of({"mesh_preset": base})["sig"] is None
+    new = SS.sweep_settings_of({"mesh_preset": {**base, "version": 2, "sig_scope": 2, "coil_rel": 2.0}})
+    assert new["sig"] == 5 and new["version"] == 2 and new["coil_rel"] == 2.0 and new["sig_scope"] == 2
+    assert SS.sweep_settings_of({"mesh_preset": base})["sig_scope"] is None

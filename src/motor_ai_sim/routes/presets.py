@@ -1126,6 +1126,7 @@ def _applied_metrics(raw: Optional[dict]) -> dict:
         ("cogging_demag_at_load", ("cogging_demag_at_load",)), ("cogging_sig", ("cogging_sig",)),
         # the settings the sweep point was SOLVED with (Compare refuses to rank sweeps computed at different ones)
         ("sweep_origin", ("sweep_origin",)), ("sweep_sig", ("sweep_sig",)),
+        ("sweep_sig_scope", ("sweep_sig_scope",)),
         ("sweep_steps", ("sweep_steps",)), ("sweep_gap_layers", ("sweep_gap_layers",)),
     ):
         v = _pick(*names)

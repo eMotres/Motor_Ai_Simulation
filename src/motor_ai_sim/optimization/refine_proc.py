@@ -151,6 +151,28 @@ def _eff_magnet_temp_c(magnet_temp_c):
         return None
 
 
+def _component_mesh_for_run(cfg) -> Dict[str, Any]:
+    """The machine's stored per-part mesh block, with the wire cell (``coil_rel``) of THIS run when the run carries one
+    (``MOTRES_RUN_COIL_REL``, set by the route for a preset run whose wire cell is not the stored one; the stored settings are
+    not written).  Absent or unreadable = the stored block, exactly as before."""
+    cm = dict((cfg.get("mesh", {}) or {}).get("component_mesh") or {})
+    raw = os.environ.get("MOTRES_RUN_COIL_REL")
+    if raw:
+        try:
+            v = float(raw)
+        except ValueError:
+            v = 0.0
+        if v > 0.0:
+            cm["coil_rel"] = v
+    return cm
+
+
+def _coil_rel_solved(cfg) -> float:
+    from motor_ai_sim.simulation.geo_mesh import snap_coil_rel
+    v = snap_coil_rel(_component_mesh_for_run(cfg).get("coil_rel"))
+    return float(v) if v > 0.0 else 1.0
+
+
 def run_one(overrides: Dict[str, float], current_a: float, steps: int,
             coil_temp_c: float, n_periods: float = 1.0,
             gamma_deg: float = 0.0, mesh_size_mm: float = 4.0,
@@ -390,7 +412,7 @@ def run_one(overrides: Dict[str, float], current_a: float, steps: int,
         "v_phase_peak": (0.0 if no_load else float(_sim.get("v_phase_peak", 0.0) or 0.0)),
         "v_delta_deg": (0.0 if no_load else float(_sim.get("v_delta_deg", 0.0) or 0.0)),
         "demag": bool(_demag),   # per-element irreversible demag (doubles the frames)
-        "component_mesh": json.dumps(cfg.get("mesh", {}).get("component_mesh") or {}),
+        "component_mesh": json.dumps(_component_mesh_for_run(cfg)),
         "sliding_band": True, "fresh": True, "geo": json.dumps(overrides),
     })
     _fs_cand._OPT_CANDIDATE.reset(_cand_tok)
@@ -678,6 +700,8 @@ def run_one(overrides: Dict[str, float], current_a: float, steps: int,
         # ripple, and the winner's final re-solve applies the gap rule).
         "torque_method": d.get("torque_method"),
         "gap_layers_per_side": d.get("gap_layers_effective"),
+        # the wire cell the mesher was given (snapped to its rungs; 1h when the block carries none): the sweep stamps from this
+        "coil_rel_solved": _coil_rel_solved(cfg),
         # what the solver REALLY used (it snaps the step count to whole mesh nodes and raises the gap rows for some
         # options): the provenance a sweep stamps comes from these, not from the request
         "n_steps_per_period_solved": d.get("n_steps_per_period"),

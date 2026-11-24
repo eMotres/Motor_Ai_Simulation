@@ -752,8 +752,13 @@ const ComparePanel: React.FC = () => {
   // The Δ% row and its column maxima follow the same rule as the ranking: a sweep point whose steps-and-gap identity is unknown /
   // mixed / different (or that sits beside an ordinary run) gets no delta and does not set a maximum.
   const selSweepMixed = !sweepMetricsComparable(selected.map(s => s.results as any));
+  // Cogging pp follows its own rule (known, equal settings) over the SAME selected rows as the colours of the comparison table.
+  const selCoggingMixed = !coggingComparable(selected
+    .filter(s => Number.isFinite(storedNumber((s.results as any)?.cogging_pp_Nm)))
+    .map(s => storedNumber((s.results as any)?.cogging_sig)));
   const comparisonPercentValue = (r: ResultCol, s: SavedSim): number => {
     if (r.text) return NaN;
+    if (selCoggingMixed && colId(r).endsWith('cogging_pp_Nm')) return NaN;
     if (selSweepMixed && isSweepRow(s.results as any)) return NaN;
     const raw = resultVal(r, s);
     if (!Number.isFinite(raw)) return NaN;
@@ -768,6 +773,10 @@ const ComparePanel: React.FC = () => {
   // `colId`, not on `key`: the EM summary and the mechanical block both carry an
   // `rpm`, and one extent shared between them would colour the hottest against
   // the fastest.
+  // The result columns for ONE scope of rows: the ranking (extents), the colour suppression and the mixed-sweep / cogging /
+  // mixed-basis rules all read the SAME set of rows.  The library table passes the whole library; the comparison table passes the
+  // SELECTED rows, so its colours and its delta row refer to one set (the rows on screen).
+  const buildResultModelColumns = (scope: SavedSim[], hasFullBasis: Map<string, boolean>): SharedComparisonColumn<SavedSim>[] => {
   const resultModelColumns: SharedComparisonColumn<SavedSim>[] = resultCols.map(r => ({ key: `r:${colId(r)}`, label: r.label, unit: r.unit, kind: 'result', better: r.better,
     value: s => r.text ? resultText(r, s) : resultVal(r, s), rankValues: rows => extentVals(r, rows),
     tolerance: 1e-9, noColor: s => {
@@ -775,7 +784,7 @@ const ComparePanel: React.FC = () => {
       const raw = resultVal(r, s);
       if (!Number.isFinite(raw)) return false;
       const activeOnly = !!r.activeBasis?.(resultSrc(r, s));
-      return shouldSuppressMixedBasisColor(raw, activeOnly, libraryHasFullBasis.get(colId(r)) ?? false);
+      return shouldSuppressMixedBasisColor(raw, activeOnly, hasFullBasis.get(colId(r)) ?? false);
     },
     cellSx: () => r.text ? { maxWidth: 170, overflow: 'hidden', textOverflow: 'ellipsis' } : {},
     cellColor: s => r.text && resultText(r, s) === '—' ? 'var(--line)' : undefined,
@@ -786,7 +795,7 @@ const ComparePanel: React.FC = () => {
   // temperature, mesh, gap, sectors, basis, eddy, build, materials); a value that is not final is labelled
   // "ranking only" wherever it is shown, and the full-strength basis is stated whenever demag was on at load.
   const cgNum = (s: SavedSim, k: string) => storedNumber((s.results as any)?.[k]);
-  const coggingHave = sims.filter(s => Number.isFinite(cgNum(s, 'cogging_pp_Nm')));
+  const coggingHave = scope.filter(s => Number.isFinite(cgNum(s, 'cogging_pp_Nm')));
   const coggingMixed = !coggingComparable(coggingHave.map(s => cgNum(s, 'cogging_sig')));
   resultModelColumns.forEach((c, i) => {
     if (!c.key.endsWith(':cogging_pp_Nm')) return;
@@ -809,7 +818,7 @@ const ComparePanel: React.FC = () => {
   // A sweep point (screening resolution) is ranked only against sweep points whose steps-and-gap identity is KNOWN and equal:
   // a 108-step and a 48-step sweep, an unknown / mixed / legacy sweep, or a sweep point beside an ordinary run are never ranked
   // together.  Those rows lose colour and ranking (with the reason in the hover text); ordinary rows still rank each other.
-  const sweepMixed = !sweepMetricsComparable(sims.map(s => s.results as any));
+  const sweepMixed = !sweepMetricsComparable(scope.map(s => s.results as any));
   if (sweepMixed) {
     resultModelColumns.forEach((c, i) => {
       if (c.key.endsWith(':cogging_pp_Nm')) return;
@@ -821,6 +830,10 @@ const ComparePanel: React.FC = () => {
       };
     });
   }
+  return resultModelColumns;
+  };
+  const resultModelColumns = buildResultModelColumns(sims, libraryHasFullBasis);
+  const selectedResultModelColumns = buildResultModelColumns(selected, selectedHasFullBasis);
   const selectedComparisonModel = buildComparisonModel(selected, paramModelColumns, valEq);
   const libraryComparisonModel = buildComparisonModel(sims, resultModelColumns, valEq);
   const diffKeys = selectedComparisonModel.differingInputKeys.map(k => k.slice(2)).sort((a, b) => {
@@ -846,6 +859,7 @@ const ComparePanel: React.FC = () => {
   // name can't collide).
   const colMax: Record<string, number> = {};
   resultCols.forEach(r => {
+    if (selCoggingMixed && colId(r).endsWith('cogging_pp_Nm')) return;
     const ns = extentVals(r, selSweepMixed ? selected.filter(s => !isSweepRow(s.results as any)) : selected);
     if (ns.length) colMax[`r:${colId(r)}`] = Math.max(...ns);
   });
@@ -1159,7 +1173,7 @@ const ComparePanel: React.FC = () => {
           {selected.length < 2 ? (
             <Alert severity="info" sx={{ fontSize: 12 }}>Tick at least two rows above to compare them.</Alert>
           ) : (
-            <SharedComparisonTable rows={selected} columns={[...resultModelColumns, ...displayCols.map(k => ({ key: `p:${k}`, label: paramLabel(k), unit: paramUnit(k), kind: 'input' as const, value: (s: SavedSim) => s.params?.[k], format: (_v: unknown, s: SavedSim) => paramFmt(k, s.params?.[k]) }))]} rowKey={s => s.id} rowLabel={s => s.name} labelHeader="Simulation" sameValue={valEq} showAllInputs visibleKeys={[...resultCols.map(r => `r:${colId(r)}`), ...displayCols.map(k => `p:${k}`)]} tableSx={{ borderCollapse: 'collapse', width: '100%' }} headerCellSx={TH} labelHeaderSx={{ left: 0, zIndex: 3, position: 'sticky' }} bodyCellSx={TD} inputHeaderColor={HDR_DIFF} resultHeaderColor={HDR_RESULT} unitGap={unitGap} overflow="visible" renderLabelCell={s => <NameCell s={s} sticky />} renderCell={(s, c) => c.format?.(c.value(s), s)} renderSupplementaryRows={(s) => <Box component="tr" key={`${s.id}-pct`}><Box component="td" sx={{ ...TD, textAlign: 'right', position: 'sticky', left: 0, bgcolor: 'var(--panel-2)', zIndex: 1, color: 'var(--text-4)', fontSize: 9.5 }}>Δ% from max</Box>{resultCols.map(r => <PctCell key={`p-${colId(r)}`} v={comparisonPercentValue(r, s)} max={r.text ? undefined : colMax[`r:${colId(r)}`]} />)}{displayCols.map(k => <PctCell key={`p-${k}`} v={Number(s.params?.[k])} max={colMax[`p:${k}`]} />)}</Box>} renderAfterRows={diffKeys.length === 0 && <Box component="tr"><Box component="td" colSpan={1 + resultCols.length + displayCols.length} sx={{ ...TD, textAlign: 'left', color: 'var(--text-3)' }}>Selected runs have identical inputs — only the results differ.</Box></Box>} />
+            <SharedComparisonTable rows={selected} columns={[...selectedResultModelColumns, ...displayCols.map(k => ({ key: `p:${k}`, label: paramLabel(k), unit: paramUnit(k), kind: 'input' as const, value: (s: SavedSim) => s.params?.[k], format: (_v: unknown, s: SavedSim) => paramFmt(k, s.params?.[k]) }))]} rowKey={s => s.id} rowLabel={s => s.name} labelHeader="Simulation" sameValue={valEq} showAllInputs visibleKeys={[...resultCols.map(r => `r:${colId(r)}`), ...displayCols.map(k => `p:${k}`)]} tableSx={{ borderCollapse: 'collapse', width: '100%' }} headerCellSx={TH} labelHeaderSx={{ left: 0, zIndex: 3, position: 'sticky' }} bodyCellSx={TD} inputHeaderColor={HDR_DIFF} resultHeaderColor={HDR_RESULT} unitGap={unitGap} overflow="visible" renderLabelCell={s => <NameCell s={s} sticky />} renderCell={(s, c) => c.format?.(c.value(s), s)} renderSupplementaryRows={(s) => <Box component="tr" key={`${s.id}-pct`}><Box component="td" sx={{ ...TD, textAlign: 'right', position: 'sticky', left: 0, bgcolor: 'var(--panel-2)', zIndex: 1, color: 'var(--text-4)', fontSize: 9.5 }}>Δ% from max</Box>{resultCols.map(r => <PctCell key={`p-${colId(r)}`} v={comparisonPercentValue(r, s)} max={r.text ? undefined : colMax[`r:${colId(r)}`]} />)}{displayCols.map(k => <PctCell key={`p-${k}`} v={Number(s.params?.[k])} max={colMax[`p:${k}`]} />)}</Box>} renderAfterRows={diffKeys.length === 0 && <Box component="tr"><Box component="td" colSpan={1 + resultCols.length + displayCols.length} sx={{ ...TD, textAlign: 'left', color: 'var(--text-3)' }}>Selected runs have identical inputs — only the results differ.</Box></Box>} />
           )}
         </Box>
       </Box>

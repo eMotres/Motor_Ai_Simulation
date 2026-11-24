@@ -61,7 +61,7 @@ def test_finalist_note_names_the_cogging_quality_minimum_and_is_not_part_of_the_
     note = r["finalist_note"]
     assert note == {"min_steps": 72, "run_steps": 48, "reason": "cogging_quality"}
     assert r["settings"]["steps_per_period"] == 48            # the run keeps its own steps
-    assert r["sig"] == RS.identity_sig(48, r["settings"]["gap_layers"])
+    assert r["sig"] == RS.identity_sig(48, r["settings"]["gap_layers"], r["version"], r["coil_rel"])
     assert not any(c["key"] == "steps_per_period" for c in r["clamps"])
     again = RS.resolve("optimization", {"steps_per_period": 48}, cfg, "descent")
     assert again["sig"] == r["sig"]
@@ -83,3 +83,16 @@ def test_web_override_keys_match_the_resolver():
     for keys in RS._OVERRIDABLE.values():
         server |= set(keys)
     assert got == server
+
+
+def test_baseline_runs_with_the_run_wire_cell(monkeypatch):
+    from motor_ai_sim import mesh_presets as MP
+    got = []
+    monkeypatch.setattr(O, "_subprocess_eval", lambda *a, **k: got.append(O._RUN_COIL_REL.get()) or {"ok": True, "res": {}})
+    monkeypatch.setattr(O, "_make_bline", lambda a, b, bump: {})
+    stored = RS.resolve("simulation", {}, O.get_config(), "descent")["coil_rel_stored"]
+    pick = next(c for c in MP.COIL_REL_CHOICES if abs(c - stored) > 1e-9)
+    resolved = RS.resolve("simulation", {"coil_rel": pick}, O.get_config(), "descent")
+    O.descent_baseline(O.BaselineRequest(run_settings=O.RunSettingsIn(preset="simulation", overrides={"coil_rel": pick},
+                                                                      expect_sig=resolved["sig"])))
+    assert got == [pick] * 2 and O._RUN_COIL_REL.get() is None

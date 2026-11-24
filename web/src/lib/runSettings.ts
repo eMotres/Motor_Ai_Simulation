@@ -27,7 +27,7 @@ export const recordScope = (ctx: string): string => `runSettings.${ctx}`;
  * The override keys the resolver accepts (the union over the three modes of `_OVERRIDABLE` in `src/motor_ai_sim/run_settings.py`;
  * the server answers 422 for any other key).  The two lists are kept equal by `tests/test_run_settings_gemini_findings.py`.
  */
-export const OVERRIDE_KEYS_NUMBER = ['steps_per_period', 'gap_layers', 'mesh_size_mm', 'min_size_mm', 'n_sectors'] as const;
+export const OVERRIDE_KEYS_NUMBER = ['steps_per_period', 'gap_layers', 'mesh_size_mm', 'min_size_mm', 'n_sectors', 'coil_rel'] as const;
 export const OVERRIDE_KEYS_BOOLEAN = ['rotor_eddy', 'demag'] as const;
 
 /** Validator of a stored record: a known preset and the overrides the resolver accepts (finite number / boolean by key); an

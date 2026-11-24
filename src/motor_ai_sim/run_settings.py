@@ -10,7 +10,9 @@ or typed in the panel, and never come from another tab.  Every coercion of those
 own value outside the bounds, ...) happens HERE, so the display equals the run for them.  The label ("optimization" /
 "simulation" / "custom") and the digest (``sig``) are about that PAIR only.  The other settings (mesh sizes, sectors, rotor eddy,
 demag, and the keys the solver reads from the machine's stored block) are returned for display, each with its source, and are
-NOT part of the label or the digest: the complete run-settings identity is a follow-up."""
+NOT part of the label or the digest, EXCEPT the preset version and the wire cell (``coil_rel``, read from the machine's stored
+block, 1 when absent): they ride in the digest so that sweeps computed under different preset versions or wire cells are never
+ranked together.  The complete run-settings identity is a follow-up."""
 from __future__ import annotations
 
 import hashlib
@@ -23,9 +25,9 @@ from motor_ai_sim import mesh_presets as MP
 PRESETS = ("optimization", "simulation")
 #: settings the run request carries (and a user may override), by mode
 _OVERRIDABLE = {
-    "sweep": ("steps_per_period", "gap_layers", "mesh_size_mm", "min_size_mm", "n_sectors", "rotor_eddy", "demag"),
-    "descent": ("steps_per_period", "gap_layers", "mesh_size_mm", "min_size_mm", "n_sectors", "rotor_eddy"),
-    "auto": ("steps_per_period", "gap_layers", "mesh_size_mm", "min_size_mm", "n_sectors", "rotor_eddy", "demag"),
+    "sweep": ("steps_per_period", "gap_layers", "mesh_size_mm", "min_size_mm", "n_sectors", "rotor_eddy", "demag", "coil_rel"),
+    "descent": ("steps_per_period", "gap_layers", "mesh_size_mm", "min_size_mm", "n_sectors", "rotor_eddy", "coil_rel"),
+    "auto": ("steps_per_period", "gap_layers", "mesh_size_mm", "min_size_mm", "n_sectors", "rotor_eddy", "demag", "coil_rel"),
 }
 _MACHINE_KEYS = ("eddy", "outer_air_factor", "component_mesh")
 _BOUNDS = {"steps_per_period": (4, 180), "gap_layers": (1.0, 2.0), "mesh_size_mm": (0.02, 12.0),
@@ -58,9 +60,17 @@ def _same(a: Any, b: Any) -> bool:
     return MP._same(a, b)
 
 
-def identity_sig(steps: Any, gap_layers: Any) -> int:
-    """A numeric digest of the STEPS-AND-GAP identity (two sweeps are ranked together only when it is known and equal)."""
+#: the scope of the digest a stamp carries: 2 = steps, gap rows, preset version and wire cell (a sweep stamped before has no
+#: scope and is read as unknown, never ranked)
+SIG_SCOPE = 2
+
+
+def identity_sig(steps: Any, gap_layers: Any, preset_version: Any = None, coil_rel: Any = None) -> int:
+    """A numeric digest of the run identity: steps, gap rows, the preset version and the wire cell (``coil_rel``) the run used.
+    Two sweeps are ranked together only when it is known and equal.  Without the last two arguments it is the old pair digest."""
     body = [int(steps), round(float(gap_layers), 4)]
+    if preset_version is not None:
+        body += [int(preset_version), round(float(coil_rel if coil_rel is not None else 1.0), 4)]
     return int(hashlib.md5(json.dumps(body).encode()).hexdigest()[:12], 16)
 
 
@@ -118,7 +128,8 @@ def resolve(preset: Optional[str], overrides: Optional[Mapping[str, Any]], cfg: 
     mach = _machine_values(cfg)
     base = {"steps_per_period": int(v["n_steps_per_period"]), "gap_layers": float(v["gap_layers"]),
             "mesh_size_mm": float(v["mesh_size_mm"]), "min_size_mm": float(v["min_size_mm"]),
-            "n_sectors": int(v["n_sectors"]), "element_order": int(v["element_order"]),
+            "n_sectors": int(v["n_sectors"]), "coil_rel": float((v.get("component_mesh") or {}).get("coil_rel", 1.0)),
+            "element_order": int(v["element_order"]),
             "rotor_eddy": bool(v["rotor_eddy"]), "demag": bool(v["demag"]), "hi_fidelity": False}
     settings: Dict[str, Any] = dict(base)
     sources = {k: "preset" for k in base}
@@ -140,6 +151,11 @@ def resolve(preset: Optional[str], overrides: Optional[Mapping[str, Any]], cfg: 
             if not isinstance(raw, bool):
                 raise RunSettingsError("%s must be true or false, got %r" % (k, raw))
             settings[k] = raw
+        elif k == "coil_rel":
+            x = _num(k, raw)
+            if not any(abs(x - c) < 1e-9 for c in MP.COIL_REL_CHOICES):
+                raise RunSettingsError("coil_rel must be one of %s, got %r" % (list(MP.COIL_REL_CHOICES), raw))
+            settings[k] = x
         elif k == "n_sectors":
             n = _num(k, raw)
             if n != int(n) or n < 1 or n > 64:
@@ -165,7 +181,7 @@ def resolve(preset: Optional[str], overrides: Optional[Mapping[str, Any]], cfg: 
         settings["demag"], sources["demag"] = mach["demag_cfg"], "machine"
     settings["eddy"], sources["eddy"] = mach["eddy"], "machine"
     settings["outer_air_factor"], sources["outer_air_factor"] = mach["outer_air_factor"], "machine"
-    settings["component_mesh"], sources["component_mesh"] = mach["component_mesh"], "machine"
+    settings["component_mesh"], sources["component_mesh"] = mach["component_mesh"], "machine"   # the stored block; coil_rel above is the run's
     # The solver solves a full-ring request on the machine's natural symmetry sector (P2); sectors do not change the steps or the
     # gap rows, but the effective number is shown, with the reason.
     if int(settings["n_sectors"]) <= 1:
@@ -182,9 +198,23 @@ def resolve(preset: Optional[str], overrides: Optional[Mapping[str, Any]], cfg: 
         same = (cur >= float(w) - 1e-9) if (k == "steps_per_period" and name == "simulation") else _same(cur, w)
         if not same:
             differs[k] = {"preset": w, "current": cur}
+    # THE WIRE CELL OF THE RUN is the preset's (or the user's override), whatever the machine's stored Mesh block says: when it differs
+    # from the stored one the run carries it as a per-run override (``coil_rel_override``) and the stored block is never written.
+    # Only an explicit override of the cell makes the run custom.
+    try:
+        coil_rel_stored = float((mach["component_mesh"] or {}).get("coil_rel", 1.0))
+    except (TypeError, ValueError):
+        coil_rel_stored = 1.0
+    coil_rel_used = float(settings["coil_rel"])
+    coil_rel_preset = float(base["coil_rel"])
+    if not _same(coil_rel_used, coil_rel_preset):
+        differs["coil_rel"] = {"preset": coil_rel_preset, "current": coil_rel_used}
+    coil_rel_override = None if _same(coil_rel_used, coil_rel_stored) else coil_rel_used
     custom = bool(differs)
     return {"preset": name, "overrides": given, "label": "custom" if custom else name, "custom": custom,
             "preset_label": pv["label"], "differs": differs, "settings": settings, "sources": sources,
             "clamps": clamps, "version": MP.version(), "mode": mode,
             "finalist_note": finalist_note(settings["steps_per_period"], geometry),
-            "sig": identity_sig(settings["steps_per_period"], settings["gap_layers"])}
+            "coil_rel": coil_rel_used, "coil_rel_stored": coil_rel_stored, "coil_rel_override": coil_rel_override,
+            "sig_scope": SIG_SCOPE,
+            "sig": identity_sig(settings["steps_per_period"], settings["gap_layers"], MP.version(), coil_rel_used)}

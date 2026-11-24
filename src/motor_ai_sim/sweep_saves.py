@@ -39,6 +39,9 @@ import logging
 import os
 import re
 import shutil
+import tempfile
+import time
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -248,11 +251,48 @@ def write_entry(entry: Dict[str, Any]) -> Path:
     """Atomic write (tmp + replace): a crash mid-write never leaves half a save."""
     p = safe_path(str(entry["id"]))
     p.parent.mkdir(parents=True, exist_ok=True)
-    tmp = p.with_suffix(".json.tmp")
-    tmp.write_text(json.dumps(entry, default=float), encoding="utf-8")
-    os.replace(tmp, p)
+    _atomic_write(p, json.dumps(entry, default=float))
     _write_meta(p, entry)
     return p
+
+
+def _atomic_write(target: Path, text: str) -> None:
+    """Write `text` to a UNIQUE temporary file beside `target`, then rename it over
+    the target: concurrent writers never share a temporary name, and a reader sees
+    either the old file or the whole new one, never a half-written one.
+
+    EXISTING target: the temporary file is private (``mkstemp``: 0600) while the content is written, then gets the target's
+    mode (``fchmod``) BEFORE the rename; if the target cannot be read or the mode cannot be applied the replacement is
+    ABORTED (old file stays, temporary file removed, error raised).  Owner / group are copied best effort.
+    NEW target: the temporary file is created with ``os.open(..., 0o666)`` so the kernel applies the umask exactly as for a
+    plainly written file (no computed mode; the process umask is never read or changed)."""
+    try:
+        st = os.stat(target)
+    except FileNotFoundError:
+        st = None
+    if st is None:
+        name = str(target.with_name(f"{target.stem}.{uuid.uuid4().hex}.tmp"))
+        fd = os.open(name, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o666)
+    else:
+        fd, name = tempfile.mkstemp(prefix=target.stem + ".", suffix=".tmp", dir=str(target.parent))
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(text)
+            fh.flush()
+            if st is not None:
+                os.fchmod(fh.fileno(), st.st_mode & 0o7777)
+                if hasattr(os, "fchown"):
+                    try:
+                        os.fchown(fh.fileno(), st.st_uid, st.st_gid)
+                    except OSError:
+                        pass
+        os.replace(name, target)
+    except BaseException:
+        try:
+            os.unlink(name)
+        except OSError:
+            pass
+        raise
 
 
 def _meta_path(p: Path) -> Path:
@@ -263,10 +303,7 @@ def _write_meta(p: Path, entry: Dict[str, Any]) -> None:
     """The list row beside the save.  Best effort: a missing sidecar is rebuilt
     from the save the next time the list is read."""
     try:
-        mp = _meta_path(p)
-        tmp = mp.with_suffix(".meta.tmp")
-        tmp.write_text(json.dumps(meta(entry), default=float), encoding="utf-8")
-        os.replace(tmp, mp)
+        _atomic_write(_meta_path(p), json.dumps(meta(entry), default=float))
     except Exception as e:                               # noqa: BLE001
         log.debug("sweep save meta not written: %s", e)
 
@@ -291,7 +328,7 @@ def delete_entry(sid: str) -> bool:
 
 
 #: bumped whenever the rule behind the list label changes: a sidecar written under an older rule is rebuilt (the save is not touched)
-SETTINGS_VERSION = 4
+SETTINGS_VERSION = 5
 
 
 def sweep_settings_of(result: Any, config: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
@@ -299,7 +336,7 @@ def sweep_settings_of(result: Any, config: Optional[Dict[str, Any]] = None) -> D
 
     A stamped sweep (``mesh_preset``) reads its label from the stamp: the preset's name only when nothing differs, ``custom``
     when anything does (or when the solve disagreed with the request, or the points disagree: ``mixed``).  ``sig`` is the
-    digest of the (steps, gap rows) pair ONLY, None when unknown, unverified by a solve, mixed or legacy: two sweeps rank together only when both digests are
+    digest of (steps, gap rows, preset version, wire cell), None when unknown, unverified by a solve, mixed or legacy: two sweeps rank together only when both digests are
     known and equal.  A sweep stored before the stamp is labelled from its stored request and has no digest."""
     r = result if isinstance(result, dict) else {}
     cfg = config if isinstance(config, dict) else {}
@@ -312,12 +349,17 @@ def sweep_settings_of(result: Any, config: Optional[Dict[str, Any]] = None) -> D
         custom = bool(mp.get("custom")) or mixed or bool(mp.get("solved_differs"))
         srcs = mp.get("effective_source") if isinstance(mp.get("effective_source"), dict) else {}
         verified = srcs.get("steps_per_period") == "solved" and srcs.get("gap_layers") == "solved"
+        if "coil_rel" in srcs and srcs.get("coil_rel") != "solved":     # the wire cell must be verified by the solve too
+            verified = False
         known = eff.get("steps_per_period") is not None and eff.get("gap_layers") is not None
         sig = None if (mixed or mp.get("solved_differs") or not verified or not known) else mp.get("sig")
+        if mp.get("sig_scope") != 2:        # a digest of steps and gap rows only (stored before the version and wire cell joined it): unknown
+            sig = None
         return {"preset": ("custom" if custom else mp.get("name")), "version": mp.get("version"), "custom": custom,
                 "mixed": mixed, "effective_source": mp.get("effective_source"),
                 "steps_per_period": eff.get("steps_per_period"), "gap_layers": eff.get("gap_layers"),
-                "sig": sig, "differs": mp.get("differs") or {}, "source": "preset", "v": SETTINGS_VERSION}
+                "sig": sig, "sig_scope": (2 if sig is not None else None), "coil_rel": (eff.get("coil_rel") if eff.get("coil_rel") is not None else mp.get("coil_rel")), "differs": mp.get("differs") or {}, "source": "preset",
+                "v": SETTINGS_VERSION}
     return {"preset": None, "version": None, "custom": False, "mixed": False, "sig": None,
             "steps_per_period": cfg.get("steps_per_period") or r.get("steps_per_period"),
             "gap_layers": sp.get("gap_layers"), "source": "stored_request", "v": SETTINGS_VERSION}
@@ -362,8 +404,9 @@ def list_entries() -> List[Dict[str, Any]]:
     if not d.is_dir():
         return []
     out: List[Dict[str, Any]] = []
+    budget = _RebuildBudget()
     for f in d.glob("*.json"):
-        row = _read_meta_row(f)
+        row = _read_meta_row(f, budget)
         if row is not None:
             out.append(row)
     out.sort(key=_when_key, reverse=True)
@@ -380,7 +423,59 @@ def _when_key(row: Dict[str, Any]) -> float:
         return 0.0
 
 
-def _read_meta_row(f: Path) -> Optional[Dict[str, Any]]:
+# One-time migration bound: a listing rebuilds at most this many sidecars and spends at most this long on it; the rest
+# are rebuilt by the following listings.  Until then a row is listed with UNKNOWN settings (never a stale label).
+REBUILD_MAX_PER_LISTING = 200
+REBUILD_SECONDS_PER_LISTING = 2.0
+
+
+class _RebuildBudget:
+    """How many sidecars (and how much time) one listing may spend on parsing saves."""
+
+    def __init__(self, max_n: Optional[int] = None, seconds: Optional[float] = None) -> None:
+        self.left = REBUILD_MAX_PER_LISTING if max_n is None else max_n
+        self.seconds = REBUILD_SECONDS_PER_LISTING if seconds is None else seconds
+        self.deadline: Optional[float] = None
+
+    def take(self) -> bool:
+        """Admit one rebuild.  The clock starts at the FIRST stale sidecar, not at the start of the listing, so a slow scan of
+        current sidecars can never starve the stale ones: every listing admits at least one rebuild.  The time limit is an
+        ADMISSION deadline (no new rebuild after it), not a hard bound: a rebuild admitted just before it runs to its end."""
+        now = time.monotonic()
+        if self.deadline is None:
+            self.deadline = now + self.seconds
+            if self.left <= 0:
+                return False
+        elif self.left <= 0 or now > self.deadline:
+            return False
+        self.left -= 1
+        return True
+
+
+def _pending_row(f: Path, mp: Path) -> Dict[str, Any]:
+    """The list row of a save whose sidecar is not rebuilt yet (budget spent): the old sidecar's fields when it is readable,
+    else the bare identity; the settings are UNKNOWN (no signature), never an out-of-date label."""
+    row: Dict[str, Any] = {}
+    try:
+        old = json.loads(mp.read_text(encoding="utf-8"))
+        if isinstance(old, dict) and old.get("id") == f.stem:
+            row = dict(old)
+    except Exception:                                    # noqa: BLE001
+        pass
+    if not row:
+        try:
+            made = datetime.fromtimestamp(f.stat().st_mtime, tz=timezone.utc).isoformat()
+        except OSError:
+            made = ""
+        row = {"id": f.stem, "name": f.stem, "created_at": made, "machine": unattributed()}
+    row.setdefault("auto", False)
+    row["settings"] = {"preset": None, "version": None, "custom": False, "mixed": False, "sig": None,
+                       "steps_per_period": None, "gap_layers": None, "source": "pending_rebuild", "v": 0}
+    row["steps_per_period"] = None
+    return row
+
+
+def _read_meta_row(f: Path, budget: Optional[_RebuildBudget] = None) -> Optional[Dict[str, Any]]:
     """The list row of one save: its sidecar when that is current, else parsed
     from the save (and the sidecar written) - a save is never edited in place,
     so a sidecar newer than its save is right.  A sidecar written before the
@@ -394,6 +489,8 @@ def _read_meta_row(f: Path) -> Optional[Dict[str, Any]]:
                 return row
     except Exception:                                    # noqa: BLE001
         pass
+    if budget is not None and not budget.take():
+        return _pending_row(f, mp)
     try:
         entry = json.loads(f.read_text(encoding="utf-8"))
     except Exception:                                    # noqa: BLE001

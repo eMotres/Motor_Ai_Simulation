@@ -103,3 +103,10 @@ test('the Draw baseline body carries the resolved steps and gap rows and the rec
   const fn = src.slice(src.indexOf('computeBaselineLine: async'), src.indexOf('cancelDescent: async'));
   assert.ok(fn.includes('baselineBody(') && !/storedGapLayers|mesh\.meshSize|mesh\.minSize|sim\.fieldLosses/.test(fn));
 });
+
+test('the wire-cell label exists in EN and zh-CN', () => {
+  for (const l of ['en', 'zh-CN']) {
+    const j = JSON.parse(readFileSync(new URL(`../../locales/${l}/simulation.json`, import.meta.url), 'utf8'));
+    assert.ok(j.runSettingsWire, l);
+  }
+});

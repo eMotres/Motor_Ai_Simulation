@@ -3,7 +3,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { sweepSettingsOf, sweepSettingsLabel, sweepSettingsMismatch, sweepSettingsMetrics, sweepMetricsComparable, isSweepRow } from '../sweepSettings.ts';
 
-const stamp = (over = {}) => ({ mesh_preset: { name: 'optimization', custom: false, sig: 111,
+const stamp = (over = {}) => ({ mesh_preset: { name: 'optimization', custom: false, sig: 111, sig_scope: 2,
   effective: { steps_per_period: 48, gap_layers: 1 }, effective_source: { steps_per_period: 'solved', gap_layers: 'solved' }, ...over } });
 
 test('a stamped sweep is labelled by its preset and carries its digest', () => {
@@ -29,7 +29,7 @@ test('a legacy sweep is labelled by its stored request and has no digest', () =>
 });
 
 test('a server list row is read the same way', () => {
-  const s = sweepSettingsOf({ settings: { preset: 'custom', custom: true, steps_per_period: 108, gap_layers: 2, source: 'preset', sig: 5,
+  const s = sweepSettingsOf({ settings: { preset: 'custom', custom: true, steps_per_period: 108, gap_layers: 2, source: 'preset', sig: 5, sig_scope: 2,
     effective_source: { steps_per_period: 'solved', gap_layers: 'solved' } } });
   assert.equal(s.preset, 'custom'); assert.equal(s.sig, 5);
 });
@@ -76,10 +76,49 @@ test('Compare rejects unknown sweep rows BEFORE the count shortcut: a lone unkno
 });
 
 test('a list row needs BOTH numbers solved: requested sources never give an identity', () => {
-  const row = (es) => ({ settings: { preset: 'optimization', source: 'preset', sig: 5, steps_per_period: 48, gap_layers: 1, effective_source: es } });
+  const row = (es) => ({ settings: { preset: 'optimization', source: 'preset', sig: 5, sig_scope: 2, steps_per_period: 48, gap_layers: 1, effective_source: es } });
   assert.equal(sweepSettingsOf(row({ steps_per_period: 'solved', gap_layers: 'solved' })).sig, 5);
   assert.equal(sweepSettingsOf(row({ steps_per_period: 'requested', gap_layers: 'requested' })).sig, null);
   assert.equal(sweepSettingsOf(row({ steps_per_period: 'solved', gap_layers: 'requested' })).sig, null);
   assert.equal(sweepSettingsOf({ settings: { preset: 'optimization', source: 'preset', sig: 5, steps_per_period: 48, gap_layers: 1 } }).sig, null);
   assert.equal(sweepSettingsOf(stamp({ effective_source: { steps_per_period: 'solved', gap_layers: 'requested' } })).sig, null);
+});
+
+test('a stamp without the digest scope (stored before the preset version and wire cell joined it) has no digest', () => {
+  assert.equal(sweepSettingsOf(stamp({ sig_scope: undefined })).sig, null);
+  assert.equal(sweepSettingsOf(stamp({ sig_scope: 1 })).sig, null);
+  assert.equal(sweepSettingsMismatch(sweepSettingsOf(stamp({ sig_scope: undefined })), sweepSettingsOf(stamp())), true);
+});
+
+test('the preset version and the wire cell are in the label; different digests are a mismatch', () => {
+  const v2 = sweepSettingsOf(stamp({ version: 2, coil_rel: 2, sig: 333 }));
+  assert.equal(v2.presetVersion, 2); assert.equal(v2.coilRel, 2);
+  assert.equal(sweepSettingsLabel(v2, 'Optimization'), 'Optimization v2 \u00b7 48 steps \u00b7 1 gap row \u00b7 wire 2h');
+  const v1 = sweepSettingsOf(stamp({ version: 1, coil_rel: 1, sig: 222 }));
+  assert.equal(sweepSettingsMismatch(v1, v2), true);
+  assert.equal(sweepSettingsMismatch(v2, sweepSettingsOf(stamp({ version: 2, coil_rel: 2, sig: 333 }))), false);
+});
+
+test('an applied row stores the digest scope; Compare ranks only rows that carry it (a row stored before has an unknown identity)', () => {
+  const m = sweepSettingsMetrics(sweepSettingsOf(stamp({ sig: 333 })));
+  assert.equal(m.sweep_sig, 333); assert.equal(m.sweep_sig_scope, 2);
+  assert.equal(sweepMetricsComparable([m, { ...m }]), true);
+  const old = { sweep_origin: 1, sweep_sig: 333 };            // applied before the scope existed
+  assert.equal(sweepMetricsComparable([old, { ...old }]), false);
+  assert.equal(sweepMetricsComparable([m, old]), false);
+});
+
+test('a list row without the digest scope has no digest (fail closed in the reader)', () => {
+  const row = (scope) => ({ settings: { preset: 'optimization', source: 'preset', sig: 5, sig_scope: scope, steps_per_period: 48, gap_layers: 1,
+    effective_source: { steps_per_period: 'solved', gap_layers: 'solved' } } });
+  assert.equal(sweepSettingsOf(row(2)).sig, 5);
+  assert.equal(sweepSettingsOf(row(undefined)).sig, null);
+  assert.equal(sweepSettingsOf(row(1)).sig, null);
+});
+
+test('a stamp that names the wire cell has a digest only when the solve verified the cell too', () => {
+  const es = (c) => ({ steps_per_period: 'solved', gap_layers: 'solved', coil_rel: c });
+  assert.equal(sweepSettingsOf(stamp({ effective: { steps_per_period: 48, gap_layers: 1, coil_rel: 2 }, effective_source: es('solved') })).sig, 111);
+  assert.equal(sweepSettingsOf(stamp({ effective: { steps_per_period: 48, gap_layers: 1, coil_rel: 2 }, effective_source: es('requested') })).sig, null);
+  assert.equal(sweepSettingsOf(stamp({ effective: { steps_per_period: 48, gap_layers: 1, coil_rel: 2 }, effective_source: es('solved') })).coilRel, 2);
 });

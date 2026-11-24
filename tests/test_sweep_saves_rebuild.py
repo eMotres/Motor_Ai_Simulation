@@ -185,3 +185,21 @@ def test_a_failing_mode_change_aborts_the_replacement(tmp_path, monkeypatch):
     with pytest.raises(PermissionError):
         ss._atomic_write(t, "new")
     assert t.read_text() == "old" and [p.name for p in tmp_path.iterdir()] == ["q.json"]
+
+
+def test_no_umask_call_and_a_new_file_gets_the_plain_write_mode(tmp_path, monkeypatch):
+    import os
+
+    plain = tmp_path / "plain.txt"
+    plain.write_text("p")
+
+    def boom(*a, **k):
+        raise AssertionError("os.umask must not be called")
+
+    monkeypatch.setattr(ss.os, "umask", boom)
+    new = tmp_path / "n.json"
+    ss._atomic_write(new, "n")
+    assert new.read_text() == "n" and (new.stat().st_mode & 0o777) == (plain.stat().st_mode & 0o777)
+    ss._atomic_write(new, "m")
+    assert new.read_text() == "m"
+    assert [p.name for p in tmp_path.iterdir() if p.suffix == ".tmp"] == []

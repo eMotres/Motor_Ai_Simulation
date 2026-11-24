@@ -41,6 +41,7 @@ import re
 import shutil
 import tempfile
 import time
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -255,43 +256,31 @@ def write_entry(entry: Dict[str, Any]) -> Path:
     return p
 
 
-def _umask() -> int:
-    """The process umask without the set-and-restore race when the platform shows it."""
-    try:
-        for line in Path("/proc/self/status").read_text().splitlines():
-            if line.startswith("Umask:"):
-                return int(line.split()[1], 8)
-    except (OSError, ValueError, IndexError):
-        pass
-    m = os.umask(0o077)
-    os.umask(m)
-    return m
-
-
 def _atomic_write(target: Path, text: str) -> None:
     """Write `text` to a UNIQUE temporary file beside `target`, then rename it over
     the target: concurrent writers never share a temporary name, and a reader sees
     either the old file or the whole new one, never a half-written one.
 
-    The temporary file stays private (``mkstemp``: 0600) while the content is written.  The final mode is applied BEFORE
-    the rename: an existing target keeps its own mode (if that cannot be read or applied the replacement is ABORTED, the old
-    file stays, the temporary file is removed and the error is raised); a new file gets 0666 minus the umask, as the plain
-    write gave.  Owner / group are copied best effort and never widen access."""
-    fd, name = tempfile.mkstemp(prefix=target.stem + ".", suffix=".tmp", dir=str(target.parent))
+    EXISTING target: the temporary file is private (``mkstemp``: 0600) while the content is written, then gets the target's
+    mode (``fchmod``) BEFORE the rename; if the target cannot be read or the mode cannot be applied the replacement is
+    ABORTED (old file stays, temporary file removed, error raised).  Owner / group are copied best effort.
+    NEW target: the temporary file is created with ``os.open(..., 0o666)`` so the kernel applies the umask exactly as for a
+    plainly written file (no computed mode; the process umask is never read or changed)."""
+    try:
+        st = os.stat(target)
+    except FileNotFoundError:
+        st = None
+    if st is None:
+        name = str(target.with_name(f"{target.stem}.{uuid.uuid4().hex}.tmp"))
+        fd = os.open(name, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o666)
+    else:
+        fd, name = tempfile.mkstemp(prefix=target.stem + ".", suffix=".tmp", dir=str(target.parent))
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as fh:
             fh.write(text)
             fh.flush()
-            try:
-                st = os.stat(target)
-            except FileNotFoundError:
-                st = None
-            if st is None:
-                if hasattr(os, "fchmod"):
-                    os.fchmod(fh.fileno(), 0o666 & ~_umask())
-            else:
-                if hasattr(os, "fchmod"):
-                    os.fchmod(fh.fileno(), st.st_mode & 0o7777)
+            if st is not None:
+                os.fchmod(fh.fileno(), st.st_mode & 0o7777)
                 if hasattr(os, "fchown"):
                     try:
                         os.fchown(fh.fileno(), st.st_uid, st.st_gid)

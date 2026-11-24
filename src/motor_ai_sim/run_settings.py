@@ -88,6 +88,41 @@ def _bound(key: str, x: float, mode: str, source: str, clamps: List[Dict[str, An
     return used
 
 
+def finalist_note(steps: int, geometry: Mapping[str, Any]) -> Optional[Dict[str, Any]]:
+    """The REQUIREMENT a finalist is held to, when the run's steps are below it (sampling purpose ``cogging_quality``).
+
+    A finalist (winner validation, Apply check, on-demand re-check) needs at least six raw samples per cogging cycle: the solver's
+    own policy (``fem_solver_2d._cogging_frame_policy``) gives that minimum.  Whether a finalist reaches it depends on its slip ring
+    (the solver raises the steps only to an existing divisor of the ring and otherwise keeps the run's count, recorded as
+    insufficient), which this function does not know; so it states the requirement, never the count a solve will use.  It is a NOTE,
+    not part of the label or the digest.  ``None`` when the run's steps already reach the requirement, or when the machine's counts
+    are not known."""
+    try:
+        from motor_ai_sim.simulation.fem_solver_2d import _cogging_frame_policy
+        slots = int(round(float(geometry.get("num_slots") or 0)))
+        poles = int(round(float(geometry.get("num_poles") or 0)))
+        if slots <= 0 or poles <= 0 or poles % 2:
+            return None
+        pol = _cogging_frame_policy(slots, poles, poles // 2, int(steps), int(steps), sampling_purpose="cogging_quality")
+    except Exception:       # noqa: BLE001 - a display note must never break the resolve
+        return None
+    need = int(pol["min_required_steps_per_period"])
+    if need <= int(steps):
+        return None
+    return {"min_steps": need, "run_steps": int(steps), "reason": "cogging_quality_requirement"}
+
+
+def resolution_token(out: Mapping[str, Any], geometry: Mapping[str, Any]) -> str:
+    """A COMPLETE token of one resolution (separate from the comparison digest ``sig``): the mode, the record, every setting the run
+    uses with its source, the preset version and the machine's slot / pole counts.  A run or a baseline that carries the token the
+    panel showed is refused (409) when the machine resolves to anything else now (e.g. sectors 2 -> 4 after a geometry change, which
+    keeps the digest)."""
+    body = {"mode": out["mode"], "preset": out["preset"], "overrides": out["overrides"], "settings": out["settings"],
+            "sources": out["sources"], "version": out["version"],
+            "slots": geometry.get("num_slots"), "poles": geometry.get("num_poles")}
+    return hashlib.md5(json.dumps(body, sort_keys=True, default=str).encode()).hexdigest()
+
+
 def resolve(preset: Optional[str], overrides: Optional[Mapping[str, Any]], cfg: Mapping[str, Any],
             mode: str = "sweep") -> Dict[str, Any]:
     """The complete effective settings of one run, the label and every difference from the preset, the clamps applied."""
@@ -188,9 +223,12 @@ def resolve(preset: Optional[str], overrides: Optional[Mapping[str, Any]], cfg: 
         differs["coil_rel"] = {"preset": coil_rel_preset, "current": coil_rel_used}
     coil_rel_override = None if _same(coil_rel_used, coil_rel_stored) else coil_rel_used
     custom = bool(differs)
-    return {"preset": name, "overrides": given, "label": "custom" if custom else name, "custom": custom,
+    out = {"preset": name, "overrides": given, "label": "custom" if custom else name, "custom": custom,
             "preset_label": pv["label"], "differs": differs, "settings": settings, "sources": sources,
             "clamps": clamps, "version": MP.version(), "mode": mode,
+            "finalist_note": finalist_note(settings["steps_per_period"], geometry),
             "coil_rel": coil_rel_used, "coil_rel_stored": coil_rel_stored, "coil_rel_override": coil_rel_override,
             "sig_scope": SIG_SCOPE,
             "sig": identity_sig(settings["steps_per_period"], settings["gap_layers"], MP.version(), coil_rel_used)}
+    out["token"] = resolution_token(out, geometry)
+    return out

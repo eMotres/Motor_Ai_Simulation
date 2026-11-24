@@ -2,7 +2,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { DEFAULT_RECORD, validRecord, choosePreset, withOverride, withoutOverride, answerKey, runSettingsBody } from '../runSettings.ts';
+import { DEFAULT_RECORD, validRecord, choosePreset, withOverride, withoutOverride, answerKey, runSettingsBody, baselineBody, forMode } from '../runSettings.ts';
 
 test('the default record is the Optimization preset with no overrides', () => {
   assert.deepEqual(DEFAULT_RECORD, { preset: 'optimization', overrides: {} });
@@ -84,9 +84,61 @@ test('the gap-rows field takes whole numbers only', () => {
   assert.ok(src.includes('Number.isInteger'));
 });
 
+test('an old stored record drops hi_fidelity and any key the resolver does not accept, keeps the accepted ones', () => {
+  const v = validRecord({ preset: 'optimization', overrides: { hi_fidelity: false, steps_per_period: 96, gap_layers: 2, demag: true, rotor_eddy: false, mesh_size_mm: 1.5, min_size_mm: 0.2, n_sectors: 2, element_order: 2, junk: 1 } });
+  assert.deepEqual(v, { preset: 'optimization', overrides: { steps_per_period: 96, gap_layers: 2, demag: true, rotor_eddy: false, mesh_size_mm: 1.5, min_size_mm: 0.2, n_sectors: 2 } });
+  assert.deepEqual(validRecord({ preset: 'simulation', overrides: { hi_fidelity: true } }), { preset: 'simulation', overrides: {} });
+  // the wrong type for a key is dropped too (the resolver refuses a number for a switch and the reverse)
+  assert.deepEqual(validRecord({ preset: 'simulation', overrides: { rotor_eddy: 1, steps_per_period: true } }), { preset: 'simulation', overrides: {} });
+});
+
+test('the Draw baseline body carries the resolved steps and gap rows and the record, nothing from the stored Mesh tab', () => {
+  const shown = { sig: 5, settings: { steps_per_period: 96, gap_layers: 2, n_sectors: 2, mesh_size_mm: 1, min_size_mm: 0.1 } };
+  const b = baselineBody({ operating_point: { current_a: 10 }, current_bump_pct: 10 }, choosePreset('simulation'), shown);
+  assert.equal(b.steps_per_period, 96);
+  assert.equal(b.gap_layers, 2);
+  assert.equal(b.n_sectors, 2);
+  assert.deepEqual(b.run_settings, { preset: 'simulation', overrides: {}, expect_sig: 5 });
+  const src = readFileSync(new URL('../../stores/motorStore.ts', import.meta.url), 'utf8');
+  const fn = src.slice(src.indexOf('computeBaselineLine: async'), src.indexOf('cancelDescent: async'));
+  assert.ok(fn.includes('baselineBody(') && !/storedGapLayers|mesh\.meshSize|mesh\.minSize|sim\.fieldLosses/.test(fn));
+});
+
 test('the wire-cell label exists in EN and zh-CN', () => {
   for (const l of ['en', 'zh-CN']) {
     const j = JSON.parse(readFileSync(new URL(`../../locales/${l}/simulation.json`, import.meta.url), 'utf8'));
     assert.ok(j.runSettingsWire, l);
   }
+});
+
+test('the run body carries the complete resolution token the panel showed', () => {
+  assert.deepEqual(runSettingsBody(choosePreset('simulation'), { sig: 7, token: 'abc' }), { preset: 'simulation', overrides: {}, expect_sig: 7, expect_token: 'abc' });
+  const auto = readFileSync(new URL('../../components/sweep/AutoOptimizePanel.tsx', import.meta.url), 'utf8');
+  assert.ok(auto.includes('runSettingsBody(rs.record, rs.resolved!)'));
+});
+
+test('a refresh invalidates the held answer (a geometry change cannot leave the old one usable)', () => {
+  const hook = readFileSync(new URL('../useRunSettings.ts', import.meta.url), 'utf8');
+  const before = hook.slice(hook.indexOf('let live = true;'), hook.indexOf("fetch(`${API}"));
+  assert.ok(before.includes('setHeld(null)'));
+  assert.ok(/'family-changed'/.test(hook) && /'sim-design-applied'/.test(hook));
+});
+
+test('the request of a mode omits what its resolver refuses; the stored record keeps it (Sweep demag false, edit Descent steps, reopen Sweep)', () => {
+  const stored = { preset: 'optimization', overrides: { demag: false, steps_per_period: 48 } };
+  assert.deepEqual(validRecord(stored), stored);                                            // the stored record is not mode-filtered
+  assert.deepEqual(forMode(stored, 'descent').overrides, { steps_per_period: 48 });         // a Descent request carries no demag
+  const edited = withOverride(validRecord(stored), 'steps_per_period', 96);                 // an edit in the Descent panel saves the FULL record
+  const reopened = validRecord(JSON.parse(JSON.stringify(edited)));                         // reopen Sweep
+  assert.deepEqual(forMode(reopened, 'sweep').overrides, { demag: false, steps_per_period: 96 });
+  const hook = readFileSync(new URL('../useRunSettings.ts', import.meta.url), 'utf8');
+  assert.ok(hook.includes('forMode(record, mode)') && hook.includes('record: req') && !/validRecord\(r, mode\)/.test(hook));
+});
+
+test('a refused baseline (409) refreshes the held answer', () => {
+  const store = readFileSync(new URL('../../stores/motorStore.ts', import.meta.url), 'utf8');
+  const fn = store.slice(store.indexOf('computeBaselineLine: async'), store.indexOf('cancelDescent: async'));
+  assert.ok(fn.includes('res.status === 409') && fn.includes('return { stale }'));
+  const panel = readFileSync(new URL('../../components/sweep/DescentPanel.tsx', import.meta.url), 'utf8');
+  assert.ok(/computeBaselineLine\([^]*?\)\.then\(r => \{ if \(r\.stale\) rs\.refresh\(\); \}\)/.test(panel));
 });

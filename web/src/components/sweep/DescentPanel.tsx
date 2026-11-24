@@ -644,8 +644,8 @@ const DescentPanel: React.FC<{ chartsOnly?: boolean }> = ({ chartsOnly = false }
               <Tooltip title="Run the 2 baseline sims now (at I and +X% I) and draw the current-only line on the chart below — see the reference before launching the full optimization." placement="top">
                 <span>
                   <Button size="small" variant="outlined"
-                    onClick={() => computeBaselineLine({ currentBumpPct: currentBump, steps, nSectors })}
-                    disabled={!connectedToApi || baselineBusy || descentRunning}
+                    onClick={() => { if (rs.ready && rs.resolved) void computeBaselineLine({ currentBumpPct: currentBump, record: rs.record, resolved: rs.resolved }).then(r => { if (r.stale) rs.refresh(); }); }}
+                    disabled={!connectedToApi || !rs.ready || baselineBusy || descentRunning}
                     startIcon={baselineBusy ? <CircularProgress size={12} color="inherit" /> : undefined}
                     sx={{ textTransform: 'none', fontSize: 10, height: 26 }}>
                     {baselineBusy ? 'Computing…' : 'Draw baseline'}

@@ -65,12 +65,39 @@ def _summary(d: dict) -> dict:
 
 # -- settings --------------------------------------------------------------------------------------------------------------------
 
-def _settings_view(group: B.Group, *, can_edit: bool) -> dict:
+def _needs_staff(item: dict) -> bool:
+    return "staff" in (item.get("requires") or [])
+
+
+def _hidden_from(d: dict) -> bool:
+    """A draft whose every line is staff-only: for a caller who is not staff it does not exist (no id, no time, no count)."""
+    items = d.get("items") or []
+    return bool(items) and all(_needs_staff(i) for i in items) and (not int(d.get("more") or 0) or "staff" in (d.get("more_requires") or []))
+
+
+def _viewer_summary(d: dict, staff: bool) -> dict:
+    out = _summary(d)
+    if not staff:
+        shown = [i for i in d.get("items") or [] if not _needs_staff(i)]
+        out["items"] = len(shown) + (0 if "staff" in (d.get("more_requires") or []) else int(d.get("more") or 0))
+    return out
+
+
+def _settings_view(group: B.Group, *, can_edit: bool, staff: bool = True) -> dict:
+    """``staff=False`` (a project owner who is not MOTRES staff): a draft that is only staff-only lines is not shown at all and the
+    counts leave the staff-only lines out, so the metadata does not reveal an internal message."""
     s = DS.get_settings(group.scope)
     recipients, skipped = B.resolve_recipients(group, s)
     state = DS.get_state(group.scope)
     pending = DS.load_draft(state["draft_id"]) if state.get("draft_id") else None
+    if pending and not staff and _hidden_from(pending):
+        pending = None
     sent = [r for r in DS.read_log(group.scope) if r.get("event") == "sent"]
+    if not staff:
+        def internal_only(row):
+            d = DS.load_draft(row.get("draft_id")) if row.get("draft_id") else None
+            return bool(d) and _hidden_from(d)
+        sent = [r for r in sent if not internal_only(r)]
     return {
         "scope": group.scope, "title": group.title_en, "mode": s["mode"], "frequency": s["frequency"], "recipients": s["recipients"],
         "chosen": s["chosen"], "optouts": s["optouts"], "updated_at": s.get("updated_at"), "updated_by": s.get("updated_by"),
@@ -78,7 +105,7 @@ def _settings_view(group: B.Group, *, can_edit: bool) -> dict:
         "members": [{"email": e, "role": r, "opted_out": e in s["optouts"]} for e, r in group.members],
         "will_receive": [{"email": r["email"], "role": r["role"], "lang": r["lang"]} for r in recipients],
         "not_receiving": skipped,
-        "pending": _summary(pending) if pending and pending.get("status") in DS.OPEN_STATUSES else None,
+        "pending": _viewer_summary(pending, staff) if pending and pending.get("status") in DS.OPEN_STATUSES else None,
         "last_sent": sent[-1]["ts"] if sent else None,
     }
 
@@ -105,25 +132,27 @@ def _production_manager(request: Request, die: str, config: str) -> tuple[dict, 
     return user, B.production_group(rec)
 
 
-async def _apply(request: Request, group: B.Group, user: dict) -> dict:
+async def _apply(request: Request, group: B.Group, user: dict, staff: bool = True) -> dict:
     try:
         body = await request.json()
         DS.set_settings(group.scope, DS.validate_settings_update(body), by=_email(user))
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc))
-    return _settings_view(group, can_edit=True)
+    return _settings_view(group, can_edit=True, staff=staff)
 
 
 @router.get("/settings/project/{project_id}")
 def get_project_settings(request: Request, project_id: str):
-    _, group = _project_manager(request, project_id)
-    return _settings_view(group, can_edit=True)
+    from motor_ai_sim.development import access as DA
+    user, group = _project_manager(request, project_id)
+    return _settings_view(group, can_edit=True, staff=DA.is_staff(user))
 
 
 @router.put("/settings/project/{project_id}")
 async def put_project_settings(request: Request, project_id: str):
+    from motor_ai_sim.development import access as DA
     user, group = _project_manager(request, project_id)
-    return await _apply(request, group, user)
+    return await _apply(request, group, user, DA.is_staff(user))
 
 
 @router.get("/settings/production/{die}/{config}")

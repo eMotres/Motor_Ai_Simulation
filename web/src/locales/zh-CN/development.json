@@ -610,8 +610,11 @@
   "config": "配置",
   "internalMessage": "内部",
   "internalMessageTip": "内部：仅 MOTRES 员工可见，绝不向客户方显示或发送邮件。",
+  "audience": "接收对象",
+  "audienceEveryone": "项目中的所有人",
+  "audienceTip": "选择谁能收到此消息：项目中的所有人，或仅 MOTRES 员工（内部）。",
+  "audienceRequired": "请先选择接收对象：项目中的所有人，或内部（仅员工）。",
   "internalSwitch": "内部（仅员工）",
-  "internalSwitchTip": "内部（仅员工）：此消息仅 MOTRES 员工可见，绝不向客户或工厂账号显示或发送邮件。",
   "field": {
     "missionProfileRow": "任务剖面行 {row}",
     "phase": "阶段",

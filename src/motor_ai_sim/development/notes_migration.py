@@ -19,6 +19,7 @@ import hashlib
 import json
 from datetime import datetime, timezone
 
+from motor_ai_sim import json_store
 from motor_ai_sim.development import store, thread_audit
 
 BACKUP = "internal_notes_backup.json"
@@ -76,12 +77,15 @@ def apply() -> list[dict]:
     out = []
     for row in plan():
         pid = row["project"]
+        if row["state"] == "done":
+            thread_audit.flush(pid)                         # a crash between the append and the flush left the intent pending: settle it
+            out.append(row)
+            continue
         if row["state"] != "migrate":
             out.append(row)
             continue
         project = store.get_project(pid) or {}
         text = _text(project)
-        _backup(pid, text)
         mid = message_id(pid)
         owner = str(project.get("owner_engineer") or "").strip().lower()
         stamp = str(project.get("updated_at") or project.get("created_at") or datetime.now(timezone.utc).isoformat())
@@ -91,8 +95,10 @@ def apply() -> list[dict]:
                                                                                  "migrated_from": "project_notes"})
         intent["id"] = "intent-" + mid                      # stable: the audit row is written once, whatever the run count
         message["audit_intent"] = intent
-        if mid not in _existing_ids(pid):                   # re-checked: a concurrent or interrupted run
-            store.append_jsonl(pid, "thread.jsonl", message)
+        with json_store.lock_for(store._file(pid, "internal_notes_migration.lock")):   # one run at a time: check and append together
+            _backup(pid, text)                              # inside the lock too: the temp file is shared
+            if mid not in _existing_ids(pid):
+                store.append_jsonl(pid, "thread.jsonl", message)   # message, marker (its id) and audit intent commit in this one append
         thread_audit.flush(pid)
         out.append({**row, "state": "migrated"})
     return out

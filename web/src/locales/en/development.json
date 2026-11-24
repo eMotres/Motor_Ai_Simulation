@@ -610,8 +610,11 @@
   "config": "Configuration",
   "internalMessage": "Internal",
   "internalMessageTip": "Internal: visible to MOTRES staff only. Never shown or e-mailed to the customer side.",
+  "audience": "Audience",
+  "audienceEveryone": "Everyone in the project",
+  "audienceTip": "Choose who receives this message: everyone in the project, or MOTRES staff only (internal).",
+  "audienceRequired": "Choose the audience first: everyone in the project, or Internal (staff only).",
   "internalSwitch": "Internal (staff only)",
-  "internalSwitchTip": "Internal (staff only): this message is visible to MOTRES staff only, never shown or e-mailed to customers or factory accounts.",
   "field": {
     "missionProfileRow": "Mission row {row}",
     "phase": "Phase",

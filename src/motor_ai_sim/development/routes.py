@@ -163,7 +163,7 @@ def _summary(project: dict, user: dict) -> dict:
     projection["timeline_ready"] = timeline_ready(user, project)
     projection["completeness"] = models.completeness(draft.get("draft", {}))
     projection["spec_submitted"] = _spec_submitted(project["id"])
-    if access.is_engineer(user):         # the legacy internal notes field (kept as the migration backup; the page shows them as thread messages) are MOTRES staff's: a customer who owns the project never gets them (owner 2026-11-06)
+    if access.is_staff(user):            # the legacy internal notes field (kept as the migration backup; the page shows them as thread messages) are MOTRES staff's: a customer who owns the project never gets them (owner 2026-11-06)
         projection["notes"] = project.get("notes", "")
     # Only expose the current caller's member record to customers.
     if not access.is_engineer(user):
@@ -648,7 +648,7 @@ async def update_project(request: Request, project_id: str):
                                                           str(body["status"]))):
         # the stage of a project is MOTRES staff's; a customer owner may only close his own open project (owner 2026-11-06)
         raise HTTPException(status_code=403, detail="Engineer access required for status changes")
-    if "notes" in body and not access.is_engineer(user):
+    if "notes" in body and not access.is_staff(user):
         raise HTTPException(status_code=403, detail="Engineer access required for notes")
     if "owner_engineer" in body and not access.is_engineer(user):
         raise HTTPException(status_code=403, detail="Admin or engineer access required")

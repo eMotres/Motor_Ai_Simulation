@@ -1233,3 +1233,78 @@ def test_an_earlier_schema_draft_with_overflow_and_no_requirements_is_refused_at
     with pytest.raises(AP.ApprovalError) as e:
         go(d, draft["id"])
     assert e.value.code == "stale" and d["delivered"] == []
+
+
+# -- staff-only (internal) messages: by ACCOUNT, intersected over every recipient, rechecked at send (owner 2026-11-24) -----------------------
+
+def _internal_world(d, *, public=0, staff=(ANNA, BOB)):
+    for who in staff:
+        d["U"].update_user(who, role="engineer")
+    d["PS"].append_jsonl(PID, "thread.jsonl", {"id": "ix", "author_email": ANNA, "created_at": at(-80000), "staff_only": True,
+                                               "text": "internal: margin can drop to 4 percent"})
+    for n in range(public):
+        d["PS"].append_jsonl(PID, "thread.jsonl", {"id": f"pub{n}", "author_email": BOB, "created_at": at(-200 - n), "text": f"public note {n}"})
+
+
+def test_a_mixed_list_gets_no_internal_line_at_all(d):
+    _internal_world(d, staff=(BOB,))                                           # ANNA stays a plain project owner
+    run(d, scopes=[PSCOPE])
+    draft = draft_of(d, PSCOPE)
+    assert "margin can drop" not in json.dumps(draft) and "staff" not in draft["caps"]
+    go(d, draft["id"])
+    assert d["delivered"] and all("margin can drop" not in m.as_string() for m in d["delivered"])
+
+
+def test_an_all_staff_list_gets_the_internal_line_and_a_demotion_before_send_skips_the_demoted(d):
+    _internal_world(d)
+    run(d, scopes=[PSCOPE])
+    draft = draft_of(d, PSCOPE)
+    assert "margin can drop" in json.dumps(draft) and "staff" in draft["caps"]
+    d["U"].update_user(ANNA, role="user")                                      # demoted after the draft was made
+    res = go(d, draft["id"])
+    assert [m["To"] for m in d["delivered"]] == [BOB]
+    assert {"email": ANNA, "reason": "access_changed"} in res["skipped"]
+
+
+def test_an_internal_only_overflow_count_is_rechecked_at_send(d):
+    _internal_world(d, public=25)
+    run(d, scopes=[PSCOPE])
+    draft = draft_of(d, PSCOPE)
+    assert draft["more"] >= 1 and "staff" in draft["more_requires"]            # the hidden-in-overflow line is remembered
+    d["U"].update_user(ANNA, role="user")
+    res = go(d, draft["id"])
+    assert [m["To"] for m in d["delivered"]] == [BOB]                          # ANNA would learn "and N more": not mailed
+    assert {"email": ANNA, "reason": "access_changed"} in res["skipped"]
+
+
+def test_a_disabled_staff_account_is_skipped_at_send(d):
+    _internal_world(d)
+    run(d, scopes=[PSCOPE])
+    draft = draft_of(d, PSCOPE)
+    d["U"].update_user(ANNA, disabled=True)
+    res = go(d, draft["id"])
+    assert ANNA not in [m["To"] for m in d["delivered"]]
+    assert any(s["email"] == ANNA for s in res["skipped"])
+
+
+def test_the_digest_settings_of_a_project_owner_do_not_reveal_an_internal_only_draft(d):
+    from motor_ai_sim.development import access as DA
+    _internal_world(d, staff=(BOB,))
+    # an internal-only draft for the staff member (ANNA, the project owner, is not staff)
+    d["PS"].append_jsonl(PID, "thread.jsonl", {"id": "iy", "author_email": BOB, "created_at": at(-100), "staff_only": True, "text": "only for staff"})
+    from motor_ai_sim.digest import build as B
+    group = B.project_group(d["PS"].get_project(PID))
+    staff_only = {"id": "d-00000000000000a1", "scope": PSCOPE, "status": "pending", "items": [{"kind": "message", "requires": ["staff"], "en": "x"}],
+                  "more": 0, "recipients": [{"email": BOB}], "created_at": at(-50), "updated_at": at(-50), "revision": 1}
+    mixed = dict(staff_only, id="d-00000000000000a2", items=staff_only["items"] + [{"kind": "message", "requires": [], "en": "y"}])
+    from motor_ai_sim.digest import routes as DR
+    for draft, owner_sees in ((staff_only, False), (mixed, True)):
+        d["DS"].save_draft(draft)
+        d["DS"].set_state(PSCOPE, draft_id=draft["id"])
+        view_owner = DR._settings_view(group, can_edit=True, staff=False)
+        view_staff = DR._settings_view(group, can_edit=True, staff=True)
+        assert (view_owner["pending"] is not None) is owner_sees
+        assert view_staff["pending"] is not None
+        if owner_sees:
+            assert view_owner["pending"]["items"] == 1 and view_staff["pending"]["items"] == len(draft["items"])
+    assert not DA.is_staff({"email": ANNA, "role": "user"})

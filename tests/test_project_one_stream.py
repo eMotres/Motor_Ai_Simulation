@@ -18,7 +18,9 @@ from motor_ai_sim.routes.messages import router as messages_router
 
 OWNER, ENGR, CUST, SEES, ADMIN, GENG, OEMO, OUTSIDER = (f"{n}@example.test" for n in
                                                           ("owner", "engr", "cust", "sees", "admin", "geng", "oemowner", "outsider"))
-ROLES = {OEMO: "oem", OWNER: "user", ENGR: "user", CUST: "user", SEES: "user", ADMIN: "admin", GENG: "engineer", OUTSIDER: "user"}
+GHOST, DEMOTED, OFF, OEMADMIN = (f"{n}@example.test" for n in ("ghost", "demoted", "off", "oemadmin"))
+#: what the CALLER dict claims (the session role) ...
+ROLES = {GHOST: "admin", DEMOTED: "engineer", OFF: "engineer", OEMADMIN: "admin", OEMO: "oem", OWNER: "user", ENGR: "user", CUST: "user", SEES: "user", ADMIN: "admin", GENG: "engineer", OUTSIDER: "user"}
 SECRET = "internal: we may drop the margin to 4 percent"
 PRICE = "the contract price is 123 456 EUR"
 NO_ONE = None
@@ -33,7 +35,9 @@ def env(tmp_path, monkeypatch):
     monkeypatch.setattr(auth, "resolve_user", lambda token: {"email": current["email"], "role": ROLES[current["email"]]} if current["email"] else None)
     monkeypatch.setattr(auth, "caller_identity", lambda token: {"id": current["email"]})
     from motor_ai_sim import users as _users
-    monkeypatch.setattr(_users, "get_user", lambda e: {"email": e, "role": ROLES.get(e, "user")} if e in ROLES else None)
+    #: ... and what the ACCOUNT says: no account at all (GHOST), a plain user (DEMOTED), a disabled one (OFF), a factory one (OEMADMIN)
+    accounts = {**{e: r for e, r in ROLES.items() if e not in (GHOST, DEMOTED, OFF, OEMADMIN)}, DEMOTED: "user", OFF: "engineer", OEMADMIN: "oem"}
+    monkeypatch.setattr(_users, "get_user", lambda e: ({"email": e, "role": accounts[e], "disabled": e == OFF}) if e in accounts else None)
     app = FastAPI()
     for r in (dev_router, messages_router):
         app.include_router(r)
@@ -244,8 +248,9 @@ def test_the_notification_recipients_skip_non_staff_for_an_internal_message(env)
     assert OWNER in routes.notification_recipients(project, {})
 
 
-def test_the_owner_report_labels_an_internal_message_and_never_calls_it_customer(env):
-    from motor_ai_sim.owner_report import sources
+def test_the_owner_report_labels_an_internal_message_and_never_calls_it_customer(env, monkeypatch):
+    from motor_ai_sim.owner_report import send, sources
+    monkeypatch.setattr(send, "recipients", lambda: [ADMIN])
     post(env, ADMIN, SECRET, staff_only=True)
     post(env, CUST, "customer question")
     t = time.time()
@@ -310,3 +315,118 @@ def test_migration_skips_empty_notes_and_sends_nothing(env, monkeypatch):
     _set_notes("x")
     M.apply()
     assert called == []
+
+
+# -- one account resolution for read AND create (Astra P1 a) --------------------------------------------------------------------------
+
+LYING = (GHOST, DEMOTED, OFF, OEMADMIN)
+
+
+def test_a_caller_that_only_claims_staff_is_not_staff_for_read_create_notes_and_by_address(env):
+    from motor_ai_sim.development import access
+    post(env, ADMIN, SECRET, staff_only=True)
+    for who in LYING:
+        assert not access.is_staff({"email": who, "role": ROLES[who]}), who
+        assert not access.is_staff_email(who), who
+        r = env(who).get("/api/projects/alpha/thread")
+        assert SECRET not in r.text, who                                     # read
+        assert post(env, who, "x", staff_only=True).status_code == 403, who   # create
+        assert env(who).get("/api/projects/alpha").json().get("can_post_internal") is False, who
+        assert "notes" not in env(who).get("/api/projects/alpha").json(), who  # the legacy notes read path: same function
+        assert env(who).get("/api/messages/unread").json()["projects"].get("alpha", 0) in (0, 1)
+    assert access.is_staff({"email": ADMIN, "role": "admin"})
+
+
+def test_the_legacy_notes_patch_follows_the_same_staff_rule(env):
+    assert env(OEMADMIN).patch("/api/projects/alpha", json={"notes": "x"}).status_code in (403, 404)
+    assert env(ADMIN).patch("/api/projects/alpha", json={"notes": "x"}).status_code == 200
+
+
+# -- hidden ids and demotion (Astra 2) -------------------------------------------------------------------------------------------------
+
+def test_after_a_demotion_the_hidden_read_cursor_id_does_not_leak_or_break_the_counts(env, monkeypatch):
+    from motor_ai_sim import users as _users
+    post(env, OWNER, "public")
+    mid = post(env, GENG, SECRET, staff_only=True).json()["id"]
+    assert env(GENG).post("/api/projects/alpha/thread/read", json={"up_to": mid}).status_code == 200
+    real = _users.get_user
+    monkeypatch.setattr(_users, "get_user", lambda e: {**real(e), "role": "user"} if e == GENG else real(e))
+    monkeypatch.setattr(auth, "resolve_user", lambda token: {"email": GENG, "role": "user"})
+    r = env(GENG).get("/api/projects/alpha/thread")
+    assert r.status_code == 200 and SECRET not in r.text and mid not in r.text
+    assert env(GENG).post("/api/projects/alpha/thread/read", json={"up_to": mid}).status_code == 404
+    assert env(GENG).post("/api/projects/alpha/thread/read", json={}).status_code == 200      # no up_to: newest VISIBLE
+    assert env(GENG).get("/api/messages/unread").json()["total_projects"] == 0
+
+
+def test_a_resolution_and_a_reply_reference_never_name_a_hidden_message(env):
+    mid = post(env, ADMIN, SECRET, staff_only=True).json()["id"]
+    assert env(ADMIN).post(f"/api/projects/alpha/thread/{mid}/resolve", json={"resolved": True}).status_code == 200
+    reply = post(env, ADMIN, "inner", reply_to=mid).json()["id"]
+    for who in (OWNER, ENGR, CUST, OEMO):
+        body = env(who).get("/api/projects/alpha/thread").text
+        assert mid not in body and reply not in body and "resolved_at" not in body, who
+
+
+# -- the owner report goes only to enabled staff accounts (Astra P1 b) ---------------------------------------------------------------
+
+def _report_lines():
+    from motor_ai_sim.owner_report import sources
+    t = time.time()
+    return [ln for b in sources._fmt_projects(t - 3600, t + 3600) for ln in b.lines]
+
+
+def test_the_owner_report_shows_internal_lines_only_when_every_recipient_is_enabled_staff(env, monkeypatch):
+    from motor_ai_sim.owner_report import send
+    mid = post(env, ADMIN, SECRET, staff_only=True).json()["id"]
+    env(ADMIN).post(f"/api/projects/alpha/thread/{mid}/resolve", json={"resolved": True})
+    post(env, CUST, "customer question")
+    for recipients, shown in (([ADMIN], True), ([ADMIN, GENG], True), ([ADMIN, OWNER], False), ([GHOST], False), ([OFF], False),
+                              ([OEMADMIN], False), ([ADMIN, "nobody@example.test"], False)):
+        monkeypatch.setattr(send, "recipients", lambda r=recipients: list(r))
+        lines = _report_lines()
+        text = " ".join(ln.text for ln in lines)
+        assert (SECRET in text) is shown, recipients
+        assert ("customer question" in text), recipients
+        if not shown:
+            assert mid not in text and not any("thread" in ln.text and "reopened" in ln.text for ln in lines), recipients
+
+
+# -- the migration survives a crash and a concurrent run (Astra P2 f) ----------------------------------------------------------------
+
+def test_migration_crash_between_append_and_flush_is_settled_on_retry(env, monkeypatch):
+    from motor_ai_sim.development import notes_migration as M, thread_audit
+    _set_notes("n1")
+    with monkeypatch.context() as crash:
+        crash.setattr(thread_audit, "flush", lambda pid: (_ for _ in ()).throw(RuntimeError("crash")))
+        with pytest.raises(RuntimeError):
+            M.apply()
+    assert M.plan()[0]["state"] == "done"                                        # appended, intent still pending in the record
+    audit = dev_store._file("alpha", "audit.jsonl")
+    assert not (audit.is_file() and M.message_id("alpha") in audit.read_text())      # the audit row is still pending
+    M.apply()                                                                    # the retry flushes the existing intent
+    rows = [x for x in dev_store._file("alpha", "audit.jsonl").read_text().splitlines() if M.message_id("alpha") in x]
+    assert len(rows) == 1
+    M.apply()
+    assert len([x for x in dev_store._file("alpha", "audit.jsonl").read_text().splitlines() if M.message_id("alpha") in x]) == 1
+    assert len(dev_store._file("alpha", "thread.jsonl").read_text().splitlines()) == 1
+
+
+def test_two_concurrent_migrations_append_one_message(env):
+    import threading
+    from motor_ai_sim.development import notes_migration as M
+    _set_notes("n2")
+    barrier = threading.Barrier(4)
+    errors = []
+
+    def worker():
+        try:
+            barrier.wait()
+            M.apply()
+        except Exception as exc:                                                # noqa: BLE001
+            errors.append(exc)
+    threads = [threading.Thread(target=worker) for _ in range(4)]
+    [t.start() for t in threads]
+    [t.join() for t in threads]
+    assert not errors
+    assert len(dev_store._file("alpha", "thread.jsonl").read_text().splitlines()) == 1

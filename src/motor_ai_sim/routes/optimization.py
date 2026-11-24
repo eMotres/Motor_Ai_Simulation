@@ -1135,7 +1135,11 @@ def _run_coil_worker(get_rec):
                 rec = get_rec(a, k)
             except Exception:                    # noqa: BLE001 - no record, no override
                 rec = None
-            return _with_run_coil(fn, rec)(*a, **k)
+            tok = _RUN_COIL_REL.set(_run_coil_of(rec))     # unconditional, None included: a nested unstamped worker must not inherit the outer cell
+            try:
+                return fn(*a, **k)
+            finally:
+                _RUN_COIL_REL.reset(tok)
         return _w
     return deco
 

@@ -435,6 +435,7 @@ def test_a_stored_sweep_without_the_digest_scope_is_unknown_and_never_ranked():
     base = {"name": "optimization", "version": 1, "sig": 5, "effective": {"steps_per_period": 48, "gap_layers": 1.0},
             "effective_source": {"steps_per_period": "solved", "gap_layers": "solved"}}
     assert SS.sweep_settings_of({"mesh_preset": base})["sig"] is None
-    new = SS.sweep_settings_of({"mesh_preset": {**base, "version": 2, "sig_scope": 2, "coil_rel": 2.0}})
+    solved3 = {"steps_per_period": "solved", "gap_layers": "solved", "coil_rel": "solved"}
+    new = SS.sweep_settings_of({"mesh_preset": {**base, "version": 2, "sig_scope": 2, "coil_rel": 2.0, "effective_source": solved3}})
     assert new["sig"] == 5 and new["version"] == 2 and new["coil_rel"] == 2.0 and new["sig_scope"] == 2
     assert SS.sweep_settings_of({"mesh_preset": base})["sig_scope"] is None

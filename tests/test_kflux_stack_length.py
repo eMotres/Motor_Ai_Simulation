@@ -115,3 +115,28 @@ def test_without_a_2d_leg_rows_keep_k_flux_self(stubbed):
         assert r["k_flux"] == ks
         assert "ratio_3d_mid_over_2d" not in r
     assert pp["k_flux"] == TABLE[REF_MM][1]
+
+
+def test_new_table_carries_the_method_marker(stubbed):
+    pp = _run()
+    assert pp["version"] == EE.PASSPORT_VERSION == "static3d-stageA-2"
+    assert pp["k_flux_vs_L_method"] == EE.K_FLUX_VS_L_OWN_MID == "own_mid_ratio"
+    b1, ks = TABLE[REF_MM]
+    assert pp["k_flux_self"] == ks          # reference values untouched
+    assert pp["k_flux"] == ks * (b1 / B1_2D)
+    assert _run(do_2d=False)["k_flux_vs_L_method"] == EE.K_FLUX_VS_L_SELF
+    assert "k_flux_vs_L_method" in EE.SCHEMA["fields"]
+
+
+def test_adopted_entry_and_region_mirror_keep_the_marker(stubbed):
+    from motor_ai_sim.regions import catalog_manifest as CM
+    from motor_ai_sim.routes import static3d as S
+    pp = _run()
+    pp["machine"]["stator_od_mm"] = 80.0
+    _fp, e = S.adopt_entry(pp)
+    assert e["k_flux_vs_L_method"] == "own_mid_ratio"
+    assert e["k_flux_vs_L"]["8.0"] == pytest.approx(0.88702, abs=5e-5)
+    assert e["k_flux"] == pp["k_flux"]
+    out = CM.clean_passport(e, {})
+    assert out["k_flux_vs_L_method"] == "own_mid_ratio"
+    assert out["k_flux_vs_L"] == e["k_flux_vs_L"]

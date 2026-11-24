@@ -7,12 +7,28 @@ Gerber / drill / pick-and-place zips, BOM, 3-D STEP models, PDF drawings, images
               ``<project>/documents/files/<file_id>``, never held in memory; up to ``models.DOCUMENT_MAX_BYTES`` (200 MB);
 * list        every project member; a document marked ``internal`` is listed for MOTRES staff only, one marked ``price_restricted``
               ("Price - restricted", owner 2026-11-22) for staff, project owners and members with ``sees_prices`` (never an MCP agent),
-              an archived one for those who may edit;
+              an archived one for MOTRES staff only (owner 2026-11-24: never listed for or downloadable by the customer side,
+              whatever its project role; until then a customer-side owner / engineer also listed, downloaded and restored them);
 * download    every project member (same visibility); each download - and the archive - is written to the traced download log
               (``model3d.log_download``) and to the project audit;
 * patch       ``internal`` / ``price_restricted`` / ``folder`` / ``revision`` (and ``archived: false`` to restore);
 * delete      archives the document (hidden), the file and its audit rows stay;
-* documents.zip  the files visible to the caller in one streamed ZIP.
+* documents.zip  ``?revision=<label>``: ONE release group, the visible documents of that label (owner 2026-11-24, after an
+              assembler got every board revision in one archive); without ``revision``: every group, MOTRES staff only;
+* releases    one group per project is the CURRENT release (``release``, below); the other labelled groups are "superseded":
+              listed, readable, but a customer-side member gets no ZIP of them.
+
+Releases (owner 2026-11-24).  The groups are the ``revision`` labels.  The current release is a STORED choice
+(``project.json`` ``documents_release``: revision, set_by, set_at; set by the project owner / engineer or staff with PUT
+``/documents/release``); while none is stored, or the stored label has no document the caller can see, it is DERIVED: the
+labelled group with the newest upload among the caller's visible documents.  Documents without a label form their own group:
+in a project with no labels at all it is the current release; in a project with labels it is the "general documents" group,
+never superseded and never inside a labelled release's ZIP (its own ZIP is ``?revision=``).  Everything is computed from the rows the
+caller may see (``_visible``), so a release ZIP holds exactly what the list shows and a label that matches only hidden
+documents answers 404 like an unknown one.  Consequence, on purpose: while no release is STORED, two members can see different current
+groups (the newest upload may be price-restricted or internal: a member without that right sees the newest group HE can see);
+nothing leaks, and the stored choice of the owner / engineer (the UI offers it on every superseded group) makes it one group
+for everybody who can see it.
 
 Every change writes a project audit row (``document.*``); the owner's daily report lists them.
 """
@@ -46,6 +62,10 @@ MAX_ZIP_BYTES = 1024 * 1024 * 1024
 MAX_ZIP_FILES = 2000
 _CHUNK = 1024 * 1024
 _REVISION_MAX = 40
+#: A customer-side member may download a single document of a SUPERSEDED release (shown and logged as superseded).  The owner
+#: was asked on 2026-11-24 whether superseded documents are view-only; set False to refuse those downloads (403) for everyone
+#: but MOTRES staff.  The ZIP of a superseded release is refused for the customer side either way.
+SUPERSEDED_SINGLE_DOWNLOAD = True
 #: already compressed - stored, not deflated again
 _STORED_EXT = {".zip", ".7z", ".gz", ".tgz", ".rar", ".png", ".jpg", ".jpeg", ".gif", ".webp", ".pdf", ".xlsx", ".docx", ".3mf"}
 
@@ -171,17 +191,129 @@ def _log_download(request: Request, user: dict, project_id: str, *, kind: str, f
         raise HTTPException(status_code=503, detail="Download log unavailable; try again later.")
 
 
+# ── releases ─────────────────────────────────────────────────────────────────
+
+def _label(row: dict) -> str:
+    return str(row.get("revision") or "").strip()
+
+
+def releases(project: dict, rows: list[dict]) -> dict:
+    """``{"current": label | None, "groups": [{revision, current, superseded, count, latest_upload}], "stored": bool}`` for the
+    rows ONE caller may see (archived rows are never part of a release).  Order: the current release, the unlabelled group, then
+    the superseded groups newest first."""
+    live = [r for r in rows if not r.get("archived")]
+    latest: dict[str, str] = {}
+    count: dict[str, int] = {}
+    for r in live:
+        key = _label(r)
+        count[key] = count.get(key, 0) + 1
+        latest[key] = max(latest.get(key, ""), str(r.get("uploaded_at") or ""))
+    labelled = [k for k in count if k]
+    chosen = project.get("documents_release") if isinstance(project.get("documents_release"), dict) else {}
+    stored = chosen.get("revision") if isinstance(chosen.get("revision"), str) else None
+    if labelled:
+        current = stored if stored in labelled else max(labelled, key=lambda k: (latest[k], k))
+    else:
+        current = "" if count else None
+    order = ([current] if current is not None else []) + ([""] if "" in count and current != "" else [])
+    order += sorted((k for k in labelled if k != current), key=lambda k: (latest[k], k), reverse=True)
+    groups = [{"revision": k, "current": k == current, "superseded": bool(labelled) and k != "" and k != current,
+               "count": count[k], "latest_upload": latest[k]} for k in order]
+    return {"current": current, "groups": groups, "stored": bool(labelled) and stored == current}
+
+
+def _superseded(project: dict, rows: list[dict], label: str) -> bool:
+    info = releases(project, rows)
+    return any(g["revision"] == label and g["superseded"] for g in info["groups"])
+
+
+def _cleared_note(project_id: str, staff: bool, prices: bool) -> str | None:
+    """The editors' note that the chosen release no longer exists: its LABEL for a caller who could see a document of that group
+    (the caller's internal / price rules applied, the archived state set aside), else ``""`` - the generic notice, so a pin on a
+    group the caller never saw does not name it (Astra #852 round 2).  ``None``: no note."""
+    note = (store.get_project(project_id) or {}).get("documents_release_cleared")
+    label = note.get("revision") if isinstance(note, dict) else None
+    if not isinstance(label, str):
+        return None
+    rows = [{"internal": bool(f.get("internal")), "price_restricted": bool(f.get("price_restricted"))}
+            for f in (note.get("rows") or []) if isinstance(f, dict)]
+    return label if _visible(rows, staff, prices=prices) else ""
+
+
+def _release_check(project_id: str, user: dict, reason: str, moved: dict | None = None) -> None:
+    """After a document is archived or relabelled: a STORED release whose label has no live document any more is cleared (an
+    audit row, and a note the editors see: "the chosen release no longer exists"), so the old string cannot re-activate when a
+    document of that label comes back later.  Judged on ALL documents, not on one caller's view."""
+    project = store.get_project(project_id) or {}
+    chosen = project.get("documents_release") if isinstance(project.get("documents_release"), dict) else None
+    if not chosen:
+        return
+    docs = store.load_documents(project_id)
+    live = {_label(r) for r in docs if not r.get("archived")}
+    if chosen.get("revision") in live:
+        return
+    # who could see that group: the flags of the documents that carried the label (archived ones, and a relabelled one)
+    carried = [r for r in docs if _label(r) == chosen.get("revision")] + ([moved] if moved else [])
+    flags = [{"internal": bool(r.get("internal")), "price_restricted": bool(r.get("price_restricted"))} for r in carried]
+    now = datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds")
+
+    def edit(doc: dict) -> None:
+        cur = doc.get("documents_release")
+        if isinstance(cur, dict) and cur.get("revision") == chosen.get("revision"):
+            doc.pop("documents_release", None)
+            doc["documents_release_cleared"] = {"revision": chosen.get("revision"), "at": now, "by": _email(user), "reason": reason,
+                                                "rows": flags}
+        # NB: return nothing - json_store.mutate_json takes a returned value as the new document
+    store.mutate_project(project_id, edit)
+    store.append_audit(project_id, _email(user), "documents.release_cleared", "document", "",
+                       {"revision": chosen.get("revision"), "reason": reason})
+
+
+@router.put("/{project_id}/documents/release")
+def set_release(request: Request, project_id: str, body: dict):
+    """Choose the current release: ``{"revision": "<label>"}``, or ``{"revision": null}`` for the derived default (the newest)."""
+    user, project, role, staff = _context(request, project_id, edit=True)
+    if not _can_edit(user, role):
+        raise HTTPException(status_code=403, detail="Only the project owner, its engineer or staff choose the current release")
+    value = body.get("revision") if isinstance(body, dict) else None
+    rows = _visible(store.load_documents(project_id), staff, prices=_prices(user, project, staff))
+    if value is not None:
+        if not isinstance(value, str) or not value.strip():
+            raise HTTPException(status_code=422, detail="revision: a label of the documents, or null")
+        value = value.strip()
+        if value not in {_label(r) for r in rows if not r.get("archived")}:
+            raise HTTPException(status_code=404, detail="Release not found")
+    now = datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds")
+
+    def edit(doc: dict) -> None:
+        doc.pop("documents_release_cleared", None)          # a new choice answers the note
+        if value is None:
+            doc.pop("documents_release", None)
+        else:
+            doc["documents_release"] = {"revision": value, "set_by": _email(user), "set_at": now}
+        # NB: return nothing - json_store.mutate_json takes a returned value as the new document
+    project = store.mutate_project(project_id, edit)
+    store.append_audit(project_id, _email(user), "documents.release", "document", "", {"revision": value})
+    return releases(project, rows)
+
+
 # ── list / upload / patch / archive ───────────────────────────────────────────
 
 @router.get("/{project_id}/documents")
 def list_documents(request: Request, project_id: str, archived: bool = False):
     user, project, role, staff = _context(request, project_id)
     can_edit = _can_edit(user, role)
-    rows = _visible(store.load_documents(project_id), staff, include_archived=bool(archived and can_edit),
+    rows = _visible(store.load_documents(project_id), staff, include_archived=bool(archived and staff),
                     prices=_prices(user, project, staff))
     cover = (store.get_project(project_id) or {}).get("cover")
     cover = cover if isinstance(cover, dict) else {}
-    return {"documents": [dict(_public(r, staff), is_cover=bool(cover) and r.get("id") == cover.get("document_id")) for r in rows],
+    info = releases(store.get_project(project_id) or project, rows)
+    old = {g["revision"] for g in info["groups"] if g["superseded"]}
+    return {"documents": [dict(_public(r, staff), is_cover=bool(cover) and r.get("id") == cover.get("document_id"),
+                               superseded=_label(r) in old and not r.get("archived")) for r in rows],
+            "releases": info["groups"], "current_release": info["current"], "release_stored": info["stored"],
+            "release_cleared": _cleared_note(project_id, staff, _prices(user, project, staff)) if can_edit else None,
+            "superseded_download": SUPERSEDED_SINGLE_DOWNLOAD or staff,
             "folders": list(models.DOCUMENT_FOLDERS), "can_edit": can_edit, "is_staff": staff, "max_bytes": models.DOCUMENT_MAX_BYTES,
             "cover_version": cover.get("version"), "can_restrict": _can_restrict(user, project)}
 
@@ -300,8 +432,10 @@ async def patch_document(request: Request, project_id: str, doc_id: str):
 
     def apply(doc: dict) -> None:
         for row in doc.setdefault("documents", []):
-            if row.get("id") == doc_id and _visible([row], staff_flag, True, prices):      # a row this caller cannot list is "not found"
+            if row.get("id") == doc_id and _visible([row], staff_flag, staff_flag, prices):   # a row this caller cannot list is "not found"
                 before = {k: row.get(k) for k in changes}
+                # the flags BEFORE this change: who could see the group a relabel leaves (the cleared-release note, Astra #852 r3)
+                found["original"] = {"internal": bool(row.get("internal")), "price_restricted": bool(row.get("price_restricted"))}
                 row.update(changes)
                 if changes.get("archived") is False:
                     row["archived_at"] = None
@@ -324,6 +458,8 @@ async def patch_document(request: Request, project_id: str, doc_id: str):
             clear_cover(project_id, user, doc_id, "document marked price-restricted")
     finally:
         _flush(project_id)
+    if "revision" in (found.get("changed") or {}):
+        _release_check(project_id, user, "its documents were relabelled", moved=found["original"])
     return _public(found["row"], staff_flag)
 
 
@@ -331,7 +467,7 @@ def _require_row_then_editor(user: dict, project_id: str, doc_id: str, role: str
     """404 for a document this caller cannot list - exactly the answer for an unknown id (no existence oracle) - and only then 403
     for a member who sees it but may not edit."""
     can_edit = _can_edit(user, role)
-    _find(project_id, doc_id, staff, include_archived=can_edit, prices=prices)
+    _find(project_id, doc_id, staff, include_archived=staff, prices=prices)        # an archived row: staff only
     if not can_edit:
         raise HTTPException(status_code=403, detail="Project engineer access required")
 
@@ -346,7 +482,7 @@ def archive_document(request: Request, project_id: str, doc_id: str):
 
     def apply(doc: dict) -> None:
         for row in doc.setdefault("documents", []):
-            if row.get("id") == doc_id and _visible([row], staff_flag, True, prices):      # a row this caller cannot list is "not found"
+            if row.get("id") == doc_id and _visible([row], staff_flag, staff_flag, prices):   # a row this caller cannot list is "not found"
                 found["was"] = bool(row.get("archived"))
                 if not row.get("archived"):
                     row["archived"] = True
@@ -364,6 +500,7 @@ def archive_document(request: Request, project_id: str, doc_id: str):
             clear_cover(project_id, user, doc_id, "document archived")
         finally:
             _flush(project_id)
+        _release_check(project_id, user, "its last document was archived")
     return _public(found["row"], staff_flag)
 
 
@@ -373,14 +510,18 @@ def archive_document(request: Request, project_id: str, doc_id: str):
 def download_document(request: Request, project_id: str, doc_id: str):
     """One document, streamed from disk.  Staff may also fetch an archived one."""
     user, project, role, staff = _context(request, project_id)
-    row = _find(project_id, doc_id, staff, include_archived=_can_edit(user, role), prices=_prices(user, project, staff))
+    row = _find(project_id, doc_id, staff, include_archived=staff, prices=_prices(user, project, staff))
+    superseded = not row.get("archived") and _superseded(
+        project, _visible(store.load_documents(project_id), staff, prices=_prices(user, project, staff)), _label(row))
+    if superseded and not staff and not SUPERSEDED_SINGLE_DOWNLOAD:
+        raise HTTPException(status_code=403, detail="This document belongs to a superseded release: view only")
     path = store.read_document_file(project_id, str(row.get("file_id") or ""))
     if path is None:
         raise HTTPException(status_code=404, detail="File not found")
     name = str(row.get("name") or row.get("file_id"))
     _log_download(request, user, project_id, kind="project_document", file=name, source_file=str(row.get("file_id")),
                   sha256=str(row.get("sha256") or ""), size=int(row.get("size") or path.stat().st_size))
-    _audit(project_id, user, "document.download", row)
+    _audit(project_id, user, "document.download", row, {"superseded": True} if superseded else None)
     return FileResponse(path, media_type="application/octet-stream", filename=name,
                         headers={"Cache-Control": "no-store", "X-Content-Type-Options": "nosniff"})
 
@@ -408,11 +549,22 @@ def _zip_names(rows: list[dict]) -> list[tuple[dict, str]]:
 
 
 @router.get("/{project_id}/documents.zip")
-def download_documents_zip(request: Request, project_id: str):
-    """All documents visible to the caller in one ZIP (folders kicad / fabrication / bom / 3d / docs + MANIFEST.txt)."""
+def download_documents_zip(request: Request, project_id: str, revision: str | None = None):
+    """One release (``revision=<label>``; ``revision=`` = the unlabelled group) or, for MOTRES staff only, every group, in one ZIP
+    (folders kicad / fabrication / bom / 3d / docs + MANIFEST.txt).  A customer-side member gets the current release only."""
     from motor_ai_sim.production.routes import _TempFileStreamingResponse
     user, project, _role, staff = _context(request, project_id)
     rows = _visible(store.load_documents(project_id), staff, prices=_prices(user, project, staff))
+    label = None if revision is None else revision.strip()
+    if label is None:
+        if not staff:
+            raise HTTPException(status_code=403, detail="Download the current release; the archive of every group is for MOTRES staff")
+    else:
+        if label not in {_label(r) for r in rows}:
+            raise HTTPException(status_code=404, detail="Release not found")      # also a label of hidden documents only
+        if not staff and _superseded(store.get_project(project_id) or project, rows, label):
+            raise HTTPException(status_code=403, detail="This release is superseded: its documents are for viewing")
+        rows = [r for r in rows if _label(r) == label]
     present = []
     missing = []
     total = 0
@@ -423,6 +575,10 @@ def download_documents_zip(request: Request, project_id: str):
             continue
         total += path.stat().st_size
         present.append((row, path))
+    if label is not None and missing:
+        # a release is a build package: never an incomplete one (Astra #852)
+        raise HTTPException(status_code=409, detail="Release %s is incomplete: %s not available on the server; ask MOTRES to "
+                            "re-upload them" % (label or "(no revision)", ", ".join(str(r.get("name")) for r in missing)))
     if len(present) > MAX_ZIP_FILES or total > MAX_ZIP_BYTES:
         raise HTTPException(status_code=413, detail="The documents exceed the %d MB archive limit; download them one by one."
                             % (MAX_ZIP_BYTES // (1024 * 1024)))
@@ -434,6 +590,8 @@ def download_documents_zip(request: Request, project_id: str):
         os.close(fd)
         manifest = ["Project documents: %s" % (project.get("title") or project_id), "Generated (UTC): %s" % now.isoformat(timespec="seconds"),
                     "Files included: %d" % len(present), "", "path | revision | size | sha256 | uploaded"]
+        if label is not None:
+            manifest.insert(1, "Release: %s" % (label or "(no revision)"))
         with zipfile.ZipFile(temp_path, "w", allowZip64=True) as archive:
             for row, path in present:
                 arcname = names[id(row)]
@@ -450,12 +608,16 @@ def download_documents_zip(request: Request, project_id: str):
                 digest.update(block)
         size = temp_path.stat().st_size
         filename = "%s_documents.zip" % (re.sub(r"[^A-Za-z0-9_.-]+", "_", project_id).strip("._-") or "project")
+        if label:
+            filename = "%s_%s_documents.zip" % (re.sub(r"[^A-Za-z0-9_.-]+", "_", project_id).strip("._-") or "project",
+                                                re.sub(r"[^A-Za-z0-9_.-]+", "_", label).strip("._-") or "release")
         _log_download(request, user, project_id, kind="project_documents_zip", file=filename, source_file=None,
                       sha256=digest.hexdigest(), size=size)
     except BaseException:
         temp_path.unlink(missing_ok=True)
         raise
-    store.append_audit(project_id, _email(user), "documents.zip", "document", "", {"files": len(present), "bytes": size})
+    store.append_audit(project_id, _email(user), "documents.zip", "document", "",
+                       {"files": len(present), "bytes": size, **({} if label is None else {"revision": label})})
 
     def stream() -> Iterator[bytes]:
         try:

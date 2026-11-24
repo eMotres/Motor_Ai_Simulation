@@ -595,6 +595,89 @@ def _move_shadows(store: Path, pred: str, retired: str, dry_run: bool) -> List[s
     return moved
 
 
+def _plan_paths(store: Path, m: Dict[str, Any]) -> Tuple[List[Path], List[Path]]:
+    """(files, directories) the switch may rewrite, move, delete or create entries in: every file the inventory names, the
+    two dies' folders and histories, every non-shared layer copy of either, the ledgers / saved simulations / sweeps / last
+    scans of every layer, the cached answers, the identity and registry stores; their parent directories."""
+    pred, succ = m["pred"], m["succ"]
+    inv = json.loads(Path(m["inventory_path"]).read_text(encoding="utf-8")) if m.get("inventory_path") else {"files": []}
+    files = {store / f["file"] for f in inv["files"]}
+    dies = store / "shared" / "dies"
+    roots = [dies / pred, dies / succ, dies / ".history" / pred, dies / ".history" / succ]
+    for r in _layer_roots(store):
+        roots += [r / "dies" / pred, r / "dies" / ".history" / pred]
+    for r in roots:
+        if r.is_dir():
+            files |= {f for f in r.rglob("*") if f.is_file()}
+    for pat in (".duty_results.json", "saved_simulations.json", "optimization_saves/*.json", ".last_scan.json"):
+        files |= set(_lglob(store, pat))
+    files |= set((store / "shared" / ".answers").rglob("*.json"))
+    files |= {store / "shared" / ".duty_results.json", store / "identity" / "users.json", store / "identity" / "admin_audit.jsonl"}
+    files |= set((store / "shared" / "object_registry").glob("*.json"))
+    files = {f for f in files if f.exists()}
+    dirs = {f.parent for f in files} | {dies, store / "shared", store / "identity", store / "shared" / "object_registry"}
+    dirs |= {r / "dies" for r in _layer_roots(store) if (r / "dies" / pred).is_dir()}
+    dirs |= {d for r in roots if r.is_dir() for d in [r, *r.rglob("*")] if d.is_dir()}
+    return sorted(files), sorted(d for d in dirs if d.exists())
+
+
+def permission_problems(store: Path, m: Dict[str, Any]) -> Dict[str, List[str]]:
+    """What the running uid cannot do on the plan's paths: ``refuse`` (not readable, a read-only file it does not own, a
+    directory it cannot write) and ``readonly_owned`` (a read-only file it owns: writable after ``chmod u+w``)."""
+    import os
+    import stat
+    uid = os.geteuid()
+    files, dirs = _plan_paths(store, m)
+    refuse, fix = [], []
+    for f in files:
+        st = f.lstat()
+        rel = str(f.relative_to(store))
+        if not os.access(f, os.R_OK):
+            refuse.append(f"{rel}: not readable (owner {st.st_uid}, mode {stat.filemode(st.st_mode)})")
+        elif not os.access(f, os.W_OK):
+            (fix if st.st_uid == uid else refuse).append(
+                f"{rel}: read-only (owner {st.st_uid}, mode {stat.filemode(st.st_mode)})")
+    for d in dirs:
+        if not os.access(d, os.W_OK | os.X_OK):
+            st = d.stat()
+            refuse.append(f"{d.relative_to(store)}/: directory not writable (owner {st.st_uid}, mode {stat.filemode(st.st_mode)})")
+    return {"refuse": refuse, "readonly_owned": fix, "uid": [str(uid)], "files_checked": [str(len(files))],
+            "dirs_checked": [str(len(dirs))]}
+
+
+def _make_writable(store: Path, rels: List[str]) -> List[Dict[str, Any]]:
+    """chmod u+w on each read-only file the switch may rewrite; the original modes are returned (and restored afterwards)."""
+    import os
+    import stat
+    out = []
+    for line in rels:
+        rel = line.split(": read-only", 1)[0]
+        p = store / rel
+        mode = stat.S_IMODE(p.stat().st_mode)
+        os.chmod(p, mode | stat.S_IWUSR)
+        out.append({"file": rel, "mode": oct(mode)})
+    return out
+
+
+def _restore_modes(store: Path, made: List[Dict[str, Any]], m: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Put back each original mode, at the file's path after the switch (a moved file is found under its new name)."""
+    import os
+    pred, succ, retired = m["pred"], m["succ"], m["retired"]
+    done = []
+    for e in made:
+        rel = e["file"]
+        cands = [rel]
+        for a, b in ((f"/dies/{pred}/", f"/dies/{retired}/"), (f"/.history/{pred}/", f"/.history/{retired}/"),
+                     (f"/dies/{succ}/", f"/dies/{pred}/"), (f"/.history/{succ}/", f"/.history/{pred}/")):
+            if a in "/" + rel:
+                cands.append(("/" + rel).replace(a, b, 1)[1:])
+        hit = next((c for c in cands if (store / c).exists()), None)
+        if hit:
+            os.chmod(store / hit, int(e["mode"], 8))
+        done.append({**e, "restored_at": hit})
+    return done
+
+
 def _relabel_last_scans(store: Path, pred: str, succ: str, retired: str, aside_map: Dict[str, str]) -> List[str]:
     """``.last_scan.json`` (the last sweep a user ran) names the machine it ran on: the predecessor's -> the retired name, the
     successor's moved-aside working copy -> its aside name under the predecessor's name."""
@@ -757,8 +840,32 @@ def switch(store: Path, m: Dict[str, Any], *, dry_run: bool, actor: str) -> Dict
     log: List[Dict[str, Any]] = []
     F._IN_PLACE_PARENT.set(str(dies))          # every write lands in the store's shared catalog, never in a process workspace
     refusals = preflight(store, m)
+    perms = permission_problems(store, m)
+    refusals += [f"permission: {x}" for x in perms["refuse"]]
+    if perms["readonly_owned"] and not m.get("chmod_readonly"):
+        refusals += [f"permission: {x} (pass --chmod-readonly to make it writable for the switch and restore its mode)"
+                     for x in perms["readonly_owned"]]
     if refusals:
-        return {"refused": refusals}
+        return {"refused": refusals, "permissions": perms}
+    made: List[Dict[str, Any]] = []
+    if not dry_run and perms["readonly_owned"]:
+        made = _make_writable(store, perms["readonly_owned"])
+    try:
+        out = _switch_steps(store, m, dry_run=dry_run, actor=actor, F=F, CA=CA, CM=CM, DRN=DRN, WS=WS)
+    finally:
+        if made:
+            restored = _restore_modes(store, made, m)
+    out["permissions"] = perms
+    if made:
+        out["chmod_restored"] = restored
+    return out
+
+
+def _switch_steps(store: Path, m: Dict[str, Any], *, dry_run: bool, actor: str, F, CA, CM, DRN, WS) -> Dict[str, Any]:
+    pred, succ, retired, date = m["pred"], m["succ"], m["retired"], m["date"]
+    dies = store / "shared" / "dies"
+    cont = [c["config"] for c in m["continuing"]]
+    log: List[Dict[str, Any]] = []
     # 1. pocket clearance (a parameter; None = the successor's sheet as stored)
     if m.get("pocket_clearance_slot", {}).get("value") is not None:
         v = float(m["pocket_clearance_slot"]["value"])
@@ -876,15 +983,24 @@ def _diff_paths(a: Any, b: Any, path: str = "$", out: Optional[List[str]] = None
     return out
 
 
+UNREADABLE: Dict[str, List[str]] = {}
+
+
 def _hashes(root: Path) -> Dict[str, str]:
+    """sha256 of every regular file; a file the running uid cannot read is skipped and listed in ``UNREADABLE``."""
     import hashlib
     out = {}
+    skipped = UNREADABLE.setdefault(str(root), [])
     for p in root.rglob("*"):
         if p.is_file() and not p.is_symlink():
             h = hashlib.sha256()
-            with open(p, "rb") as f:
-                for chunk in iter(lambda: f.read(1 << 20), b""):
-                    h.update(chunk)
+            try:
+                with open(p, "rb") as f:
+                    for chunk in iter(lambda: f.read(1 << 20), b""):
+                        h.update(chunk)
+            except PermissionError:
+                skipped.append(str(p.relative_to(root)))
+                continue
             out[str(p.relative_to(root))] = h.hexdigest()
     return out
 
@@ -1102,6 +1218,11 @@ def check(before: Path, after: Path, m: Dict[str, Any], rep: Dict[str, Any]) -> 
     out_of = sorted(t for t in touched if outside(t) and not explained(t))
     res["explained_outside_the_inventory"] = {"ok": True, "files": sorted(t for t in touched if outside(t) and explained(t))}
     res["nothing_outside_the_manifest"] = {"ok": not out_of, "files": out_of[:60], "count": len(out_of)}
+    named_all = {f["file"] for f in json.loads(Path(m["inventory_path"]).read_text())["files"]}
+    unread = sorted(set(UNREADABLE.get(str(before), [])) | set(UNREADABLE.get(str(after), [])))
+    touched_unread = [u for u in unread if u in named_all or u.startswith(("shared/dies/", "identity/dies/"))]
+    res["unreadable_files"] = {"ok": not touched_unread, "skipped_not_in_plan": [u for u in unread if u not in touched_unread],
+                               "in_plan": touched_unread}
     res["ok"] = all(v["ok"] for v in res.values() if isinstance(v, dict))
     return res
 
@@ -1275,6 +1396,9 @@ def main(argv: List[str] | None = None) -> int:
         sp.add_argument("--date", required=True)
         sp.add_argument("--actor", default="sheet switch (offline)")
         sp.add_argument("--pocket", type=float, default=None)
+        sp.add_argument("--inventory", required=True, type=Path)
+        sp.add_argument("--chmod-readonly", action="store_true",
+                        help="read-only files the switch must rewrite and the running uid owns: chmod u+w, restore the mode")
         sp.add_argument("--out", required=True, type=Path)
     ck = sub.add_parser("check")
     ck.add_argument("--before", required=True, type=Path)
@@ -1336,10 +1460,25 @@ def main(argv: List[str] | None = None) -> int:
         m["date"] = a.date
         if a.pocket is not None:
             m["pocket_clearance_slot"]["value"] = a.pocket
-        r = switch(a.store, m, dry_run=a.cmd == "dry-run", actor=a.actor)
+        m["inventory_path"] = str(a.inventory)
+        m["chmod_readonly"] = bool(a.chmod_readonly)
+        try:
+            r = switch(a.store, m, dry_run=a.cmd == "dry-run", actor=a.actor)
+        except BaseException as exc:                        # noqa: BLE001 - after the preflight: something was written
+            import traceback
+            traceback.print_exc()
+            if a.cmd == "apply":
+                a.out.write_text(json.dumps({"partial": True, "error": repr(exc)}, indent=1), encoding="utf-8")
+                print("PARTIAL: the switch stopped after it had started writing - restore the backup")
+                return 3
+            raise
         a.out.write_text(json.dumps(r, indent=1, ensure_ascii=False, default=str), encoding="utf-8")
         print(json.dumps(r, ensure_ascii=False, default=str)[:4000])
-        return 1 if r.get("refused") else 0
+        if r.get("refused"):
+            print("REFUSED: nothing was written")
+            return 1
+        print("DRY RUN: nothing was written" if a.cmd == "dry-run" else "APPLIED")
+        return 0
     if a.cmd == "manifest":
         for k in (a.keep_nested or []):
             NEVER_NESTED.pop(tuple(k.split(".", 1)), None)

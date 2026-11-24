@@ -209,7 +209,7 @@ def _action(rel: str, pred: str, succ: str, cont: set, stays: set, aside: set) -
         if len(parts) > 3 and parts[3] == "snapshots":
             return "retargeted to the retired name and marked 'previous sheet' (numbers kept)", "a project snapshot of the previous sheet"
         if parts[-1] == "project.json":
-            return "continuing links keep 'CILN28/<cfg>' (= the successor's copy); others follow to the retired name", "links-only move"
+            return "continuing links keep '<die>/<cfg>' (= the successor's copy); others follow to the retired name", "links-only move"
         return "left", "project history / thread / audit"
     if parts[:2] == ["shared", "object_registry"]:
         if parts[-1].startswith("config_archive"):
@@ -222,7 +222,7 @@ def _action(rel: str, pred: str, succ: str, cont: set, stays: set, aside: set) -
     if parts[0] == "workspaces":
         return "left", "a user's own working state (presets, panel settings, datasets) naming the old machine"
     if parts[:2] in (["shared", "cad"], ["shared", "production"], ["shared", "motor_tests"]):
-        return "left", "belongs to CILN28 proto (the built G2), untouched"
+        return "left", "belongs to another die (a built prototype), untouched"
     return "left", "unclassified - review"
 
 
@@ -593,7 +593,7 @@ def switch(store: Path, m: Dict[str, Any], *, dry_run: bool, actor: str) -> Dict
                 log.append({"step": "links", "config": cfg, "changes": ctx.changes})
         finally:
             CM._rewrite_snapshot = keep
-        # 6. the registry: the successor and its copies get their OWN items (a backfill would resolve "CILN28/<cfg>" through
+        # 6. the registry: the successor and its copies get their OWN items (a backfill would resolve "<die>/<cfg>" through
         #    the retired item's alias); the retired die and its continuing items drop those aliases; project links follow
         log.append({"step": "registry", **_registry(pred, retired, cont, list(aside_map.values()), [p["project"] for p in m["projects"]])})
         # 7. the retired die: admin-only

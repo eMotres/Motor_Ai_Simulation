@@ -595,7 +595,8 @@ def health_check():
         from motor_ai_sim.routes.optimization import cogging_identity_status as _cis
         _cog = _cis()
     except Exception as _e:                                 # noqa: BLE001
-        _cog = {"ok": False, "reason": str(_e)[:200]}
+        logging.getLogger(__name__).error("cogging identity status failed: %s", _e)
+        _cog = {"ok": False, "reason": "error"}
     return {
         "status": "healthy",
         "cogging_identity": _cog,

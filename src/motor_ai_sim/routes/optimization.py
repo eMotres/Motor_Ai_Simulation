@@ -2266,6 +2266,14 @@ COGGING_BASIS = "no_load_full_strength"
 COGGING_BASIS_TEXT = "no-load, full-strength magnets (demagnetisation at load not applied)"
 
 
+class _CogIdentityError(RuntimeError):
+    """A cogging identity failure with a FIXED public reason code (build_unknown,
+    material_not_assigned, material_library_unreadable); the message is for the server log only."""
+    def __init__(self, code: str, msg: str):
+        super().__init__(msg)
+        self.code = code
+
+
 def _cogging_identity() -> Dict[str, Any]:
     """The build and material identity a stored Cogging pp value stands on; RAISES when either is not
     really known (fail closed: no cache, no value).  Build = a real code version (not "unknown",
@@ -2275,7 +2283,7 @@ def _cogging_identity() -> Dict[str, Any]:
     stamp = dict(_dr.solver_stamp() or {})
     cv = str(stamp.get("code_version") or "")
     if not cv or cv == "unknown":
-        raise RuntimeError("the solver build is not identified (no code version)")
+        raise _CogIdentityError("build_unknown", "the solver build is not identified (no code version)")
     from motor_ai_sim.config import get_material_assignments
     from motor_ai_sim import materials as _ml
     from motor_ai_sim.material_context import get_request_materials
@@ -2293,7 +2301,7 @@ def _cogging_identity() -> Dict[str, Any]:
         name = asg.get(part) or _ml_default.get(part)
         if not name:
             if part in ("stator_core", "magnet"):
-                raise RuntimeError("no %s material is assigned" % part)
+                raise _CogIdentityError("material_not_assigned", "no %s material is assigned" % part)
             continue
         name = str(name)
         if name in ov_props and isinstance(ov_props[name], dict) and ov_props[name]:
@@ -2302,7 +2310,7 @@ def _cogging_identity() -> Dict[str, Any]:
             obj = _ml.resolve_assigned(part, name)        # raises when the library / overlay lacks it
             props = _dc.asdict(obj) if _dc.is_dataclass(obj) else dict(vars(obj))
         if not props:
-            raise RuntimeError("the %s card %r resolved to no content" % (part, name))
+            raise _CogIdentityError("material_library_unreadable", "the %s card %r resolved to no content" % (part, name))
         cards[part] = [name, props]
     digest = _hl.md5(json.dumps(cards, sort_keys=True, default=str).encode()).hexdigest()[:16]
     return {"build": cv, "image": stamp.get("image"), "materials": digest}
@@ -2321,8 +2329,15 @@ def cogging_identity_status(max_age_s: float = 60.0) -> Dict[str, Any]:
     try:
         _cogging_identity()
         v: Dict[str, Any] = {"ok": True, "reason": None}
+    except _CogIdentityError as e:
+        v = {"ok": False, "reason": e.code}
+        logging.getLogger(__name__).error("cogging identity unavailable (%s): %s", e.code, e)
+    except (OSError, KeyError, ValueError) as e:            # library / card missing or unparsable
+        v = {"ok": False, "reason": "material_library_unreadable"}
+        logging.getLogger(__name__).error("cogging identity unavailable: %s", e, exc_info=True)
     except Exception as e:                                  # noqa: BLE001
-        v = {"ok": False, "reason": str(e)[:200]}
+        v = {"ok": False, "reason": "error"}
+        logging.getLogger(__name__).error("cogging identity unavailable: %s", e, exc_info=True)
     _COG_STATUS["t"], _COG_STATUS["v"] = now, v
     return dict(v)
 

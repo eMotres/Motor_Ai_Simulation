@@ -25,9 +25,13 @@ from motor_ai_sim import workspace as W
 def _fresh_code_version_cache():
     """``code_version()`` caches on first use; each test may want a different
     monkeypatched answer, so drop the cache before and after."""
+    # an inherited build id (a container) would win over the stubbed sources
+    mp = pytest.MonkeyPatch()
+    mp.delenv("MOTRES_BUILD_ID", raising=False)
     RH._reset_code_version_cache_for_tests()
     yield
     RH._reset_code_version_cache_for_tests()
+    mp.undo()
 
 
 def _ws(tmp_path: Path, ws_id: str = "ws1") -> W.Workspace:
@@ -228,7 +232,7 @@ def test_code_version_follows_health_build_env(monkeypatch):
 
 
 def test_code_version_unknown_stays_failclosed(monkeypatch):
-    for v in ("", "dev", "latest"):
+    for v in ("", "dev", "latest", "unknown", "not-a-commit", "abc12", "g" * 12):
         monkeypatch.setenv("MOTRES_BUILD_ID", v)
         monkeypatch.setattr(RH, "_from_deployed_commit_marker", lambda: None)
         monkeypatch.setattr(RH, "_from_git_head", lambda: None)
@@ -241,18 +245,74 @@ def test_health_reports_cogging_identity(monkeypatch):
     from fastapi.testclient import TestClient
     from motor_ai_sim import api
     from motor_ai_sim.routes import optimization as O
-    monkeypatch.setenv("MOTRES_BUILD_ID", "abc123")
-    monkeypatch.setattr(O, "_cogging_identity", lambda: {"build": "abc123"})
+    monkeypatch.setenv("MOTRES_BUILD_ID", "abc1234")
+    monkeypatch.setattr(O, "_cogging_identity", lambda: {"build": "abc1234"})
     O._COG_STATUS["v"] = None
     body = TestClient(api.app).get("/api/health").json()
-    assert body["build"] == "abc123"
+    assert body["build"] == "abc1234"
     assert body["cogging_identity"] == {"ok": True, "reason": None}
 
-    def boom():
-        raise RuntimeError("the solver build is not identified (no code version)")
-    monkeypatch.setattr(O, "_cogging_identity", boom)
+    O._COG_STATUS["v"] = None
+
+
+def test_marker_and_git_must_be_commit_ids(monkeypatch, tmp_path):
+    assert RH._valid_commit_id("dev") is None and RH._valid_commit_id("") is None
+    assert RH._valid_commit_id(" ABCDEF1 ") == "abcdef1"
+    assert RH._valid_commit_id("a" * 41) is None
+    # a marker holding "dev" is skipped
+    fake = tmp_path / "a" / "b" / "run_history.py"
+    fake.parent.mkdir(parents=True)
+    fake.write_text("")
+    (tmp_path / "a" / ".deployed_commit").write_text("dev\n")
+    monkeypatch.setattr(RH, "__file__", str(fake))
+    assert RH._from_deployed_commit_marker() is None
+    (tmp_path / "a" / ".deployed_commit").write_text("deadbeef1\n")
+    assert RH._from_deployed_commit_marker() == "deadbeef1"
+
+
+def test_unknown_is_never_cached(monkeypatch):
+    monkeypatch.setattr(RH, "_from_deployed_commit_marker", lambda: None)
+    monkeypatch.setattr(RH, "_from_git_head", lambda: None)
+    assert RH.code_version() == "unknown"
+    monkeypatch.setenv("MOTRES_BUILD_ID", "cafe1234")
+    assert RH.code_version() == "cafe1234"          # found once a source appears
+
+
+def test_real_cogging_identity_chain_and_sanitized_failure(monkeypatch, tmp_path):
+    """Health through the REAL _cogging_identity: known build + readable cards = ok; a failure
+    exposes only a fixed code, never a path or exception text."""
+    from fastapi.testclient import TestClient
+    from motor_ai_sim import api
+    from motor_ai_sim.routes import optimization as O
+    import motor_ai_sim.config as cfgm
+    import motor_ai_sim.materials as ml
+    monkeypatch.setenv("MOTRES_BUILD_ID", "abc1234")
+    monkeypatch.setattr(cfgm, "get_material_assignments",
+                        lambda: {"magnet": "M1", "stator_core": "S1"})
+    def card_of(part, name):
+        c = type("C", (), {})()
+        c.name = name
+        return c
+    monkeypatch.setattr(ml, "resolve_assigned", card_of)
     O._COG_STATUS["v"] = None
     body = TestClient(api.app).get("/api/health").json()
-    assert body["cogging_identity"]["ok"] is False
-    assert "not identified" in body["cogging_identity"]["reason"]
+    assert body["cogging_identity"] == {"ok": True, "reason": None}
+
+    secret = str(tmp_path / "secret_dir" / "lib.json")
+
+    def gone(part, name):
+        raise FileNotFoundError("cannot open " + secret)
+    monkeypatch.setattr(ml, "resolve_assigned", gone)
+    O._COG_STATUS["v"] = None
+    r = TestClient(api.app).get("/api/health")
+    assert r.json()["cogging_identity"] == {"ok": False, "reason": "material_library_unreadable"}
+    assert "secret_dir" not in r.text and "cannot open" not in r.text
+
+    monkeypatch.delenv("MOTRES_BUILD_ID")
+    monkeypatch.setattr(RH, "_from_deployed_commit_marker", lambda: None)
+    monkeypatch.setattr(RH, "_from_git_head", lambda: None)
+    RH._reset_code_version_cache_for_tests()
+    O._COG_STATUS["v"] = None
+    r = TestClient(api.app).get("/api/health")
+    assert r.json()["cogging_identity"] == {"ok": False, "reason": "build_unknown"}
     O._COG_STATUS["v"] = None

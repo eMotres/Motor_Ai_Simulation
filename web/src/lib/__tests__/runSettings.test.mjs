@@ -83,3 +83,10 @@ test('the gap-rows field takes whole numbers only', () => {
   const src = readFileSync(new URL('../../components/sweep/RunSettingsBar.tsx', import.meta.url), 'utf8');
   assert.ok(src.includes('Number.isInteger'));
 });
+
+test('the wire-cell label exists in EN and zh-CN', () => {
+  for (const l of ['en', 'zh-CN']) {
+    const j = JSON.parse(readFileSync(new URL(`../../locales/${l}/simulation.json`, import.meta.url), 'utf8'));
+    assert.ok(j.runSettingsWire, l);
+  }
+});

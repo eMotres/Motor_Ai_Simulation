@@ -1149,3 +1149,266 @@ def test_the_digest_send_stamps_the_revision_and_the_reminders_count_from_it(d):
     fresh.pop("digest_sent")
     rows = RK.pending(DIE, CFG, prod, [fresh], got + 500 * 3600)
     assert rows and not any(r["alerted"] for r in rows)
+
+
+# -- price-restricted messages: recipients by account identity, overflow recheck (owner 2026-11-23) -------------------------------------
+
+def _restricted_world(d, *, public=25):
+    """BOB (customer) carries the price switch; one restricted message OLDER than ``public`` public ones, all inside the window."""
+    PS = d["PS"]
+
+    def grant(doc):
+        for m in doc["members"]:
+            if m["email"] == BOB:
+                m["sees_prices"] = True
+    PS.mutate_project(PID, grant)
+    PS.append_jsonl(PID, "thread.jsonl", {"id": "rx", "author_email": ANNA, "created_at": at(-80000), "price_restricted": True,
+                                          "text": "the contract price is 123 456 EUR"})
+    for n in range(public):
+        PS.append_jsonl(PID, "thread.jsonl", {"id": f"pub{n}", "author_email": BOB, "created_at": at(-200 - n), "text": f"public note {n}"})
+
+
+def test_overflow_count_is_rechecked_at_send_after_a_revoke(d):
+    _restricted_world(d)
+    run(d, scopes=[PSCOPE])
+    draft = draft_of(d, PSCOPE)
+    assert draft["more"] >= 1 and "prices" in draft["more_requires"]           # the hidden-in-overflow line is remembered
+    assert "123 456" not in json.dumps(draft)
+
+    def revoke(doc):
+        for m in doc["members"]:
+            m.pop("sees_prices", None)
+    d["PS"].mutate_project(PID, revoke)
+    res = go(d, draft["id"])
+    assert [m["To"] for m in d["delivered"]] == [ANNA]                          # BOB would learn "and N more": not mailed
+    assert {"email": BOB, "reason": "access_changed"} in res["skipped"]
+
+
+def test_a_factory_account_never_gets_the_restricted_line_even_flagged_or_owner(d):
+    from motor_ai_sim.digest import build as B
+    _restricted_world(d, public=1)
+    d["U"].update_user(BOB, role="oem")
+    group = B.project_group(d["PS"].get_project(PID))
+    assert "prices" not in group.caps("customer", BOB)                          # flagged, but a factory account
+    assert "prices" in group.caps("owner", ANNA)
+    def make_owner(doc):
+        for m in doc["members"]:
+            if m["email"] == BOB:
+                m["role"] = "owner"
+    d["PS"].mutate_project(PID, make_owner)
+    group = B.project_group(d["PS"].get_project(PID))
+    assert "prices" not in group.caps("owner", BOB)                             # an OEM project owner: still never
+    run(d, scopes=[PSCOPE])
+    draft = draft_of(d, PSCOPE)
+    assert "123 456" not in json.dumps(draft) and "prices" not in draft["caps"]
+
+
+def test_staff_member_and_unknown_address_by_identity(d):
+    from motor_ai_sim.digest import build as B
+    d["U"].update_user(BOB, role="engineer")
+    project = d["PS"].get_project(PID)
+    group = B.project_group(project)
+    assert "prices" in group.caps("customer", BOB)                              # MOTRES staff: always, whatever the project role
+    assert "prices" not in group.caps("customer", "nobody@example.com")
+
+
+def test_a_reply_to_a_restricted_message_is_a_restricted_digest_line(d):
+    from motor_ai_sim.digest import collect as C
+    d["PS"].append_jsonl(PID, "thread.jsonl", {"id": "rp", "author_email": ANNA, "created_at": at(-900), "price_restricted": True, "text": "root"})
+    d["PS"].append_jsonl(PID, "thread.jsonl", {"id": "rc", "author_email": BOB, "created_at": at(-800), "reply_to": "rp", "text": "child note"})
+    items = C.collect_project(d["PS"].get_project(PID), T0 - 7200, T0, results=d["results"])
+    child = next(i for i in items if i.key == "msg:rc")
+    assert child.requires == frozenset({"prices"})
+
+
+def test_an_earlier_schema_draft_with_overflow_and_no_requirements_is_refused_at_send(d):
+    from motor_ai_sim.digest import approval as AP
+    _restricted_world(d)
+    run(d, scopes=[PSCOPE])
+    draft = draft_of(d, PSCOPE)
+    assert draft["more"] >= 1
+    old = dict(draft)
+    old.pop("more_requires")                                                  # what a draft stored before this change looks like
+    d["DS"].save_draft(old)
+    with pytest.raises(AP.ApprovalError) as e:
+        go(d, draft["id"])
+    assert e.value.code == "stale" and d["delivered"] == []
+
+
+# -- staff-only (internal) messages: by ACCOUNT, intersected over every recipient, rechecked at send (owner 2026-11-24) -----------------------
+
+def _internal_world(d, *, public=0, staff=(ANNA, BOB)):
+    for who in staff:
+        d["U"].update_user(who, role="engineer")
+    d["PS"].append_jsonl(PID, "thread.jsonl", {"id": "ix", "author_email": ANNA, "created_at": at(-80000), "staff_only": True,
+                                               "text": "internal: margin can drop to 4 percent"})
+    for n in range(public):
+        d["PS"].append_jsonl(PID, "thread.jsonl", {"id": f"pub{n}", "author_email": BOB, "created_at": at(-200 - n), "text": f"public note {n}"})
+
+
+def test_a_mixed_list_gets_no_internal_line_at_all(d):
+    _internal_world(d, staff=(BOB,))                                           # ANNA stays a plain project owner
+    run(d, scopes=[PSCOPE])
+    draft = draft_of(d, PSCOPE)
+    assert "margin can drop" not in json.dumps(draft) and "staff" not in draft["caps"]
+    go(d, draft["id"])
+    assert d["delivered"] and all("margin can drop" not in m.as_string() for m in d["delivered"])
+
+
+def test_an_all_staff_list_gets_the_internal_line_and_a_demotion_before_send_skips_the_demoted(d):
+    _internal_world(d)
+    run(d, scopes=[PSCOPE])
+    draft = draft_of(d, PSCOPE)
+    assert "margin can drop" in json.dumps(draft) and "staff" in draft["caps"]
+    d["U"].update_user(ANNA, role="user")                                      # demoted after the draft was made
+    res = go(d, draft["id"])
+    assert [m["To"] for m in d["delivered"]] == [BOB]
+    assert {"email": ANNA, "reason": "access_changed"} in res["skipped"]
+
+
+def test_an_internal_only_overflow_count_is_rechecked_at_send(d):
+    _internal_world(d, public=25)
+    run(d, scopes=[PSCOPE])
+    draft = draft_of(d, PSCOPE)
+    assert draft["more"] >= 1 and "staff" in draft["more_requires"]            # the hidden-in-overflow line is remembered
+    d["U"].update_user(ANNA, role="user")
+    res = go(d, draft["id"])
+    assert [m["To"] for m in d["delivered"]] == [BOB]                          # ANNA would learn "and N more": not mailed
+    assert {"email": ANNA, "reason": "access_changed"} in res["skipped"]
+
+
+def test_a_disabled_staff_account_is_skipped_at_send(d):
+    _internal_world(d)
+    run(d, scopes=[PSCOPE])
+    draft = draft_of(d, PSCOPE)
+    d["U"].update_user(ANNA, disabled=True)
+    res = go(d, draft["id"])
+    assert ANNA not in [m["To"] for m in d["delivered"]]
+    assert any(s["email"] == ANNA for s in res["skipped"])
+
+
+def _settings_pending(d, public, internal_newer, internal_older=0):
+    """Build the draft for an all-staff list from ``public`` public lines and the given internal ones, store it, and return what a project
+    owner who is NOT staff (staff=False) and what staff are told in the digest settings."""
+    from motor_ai_sim.digest import build as B, collect as C, routes as DR
+    d["U"].update_user(BOB, role="engineer")
+    thread = d["PS"].path_for(PID) / "thread.jsonl"
+    thread.unlink(missing_ok=True)
+    for n in range(public):
+        d["PS"].append_jsonl(PID, "thread.jsonl", {"id": f"p{n}", "author_email": ANNA, "created_at": at(-2000 - n), "text": f"public {n}"})
+    for n in range(internal_newer):
+        d["PS"].append_jsonl(PID, "thread.jsonl", {"id": f"in{n}", "author_email": BOB, "created_at": at(-100 - n), "staff_only": True, "text": f"internal {n}"})
+    for n in range(internal_older):
+        d["PS"].append_jsonl(PID, "thread.jsonl", {"id": f"io{n}", "author_email": BOB, "created_at": at(-9000 - n), "staff_only": True, "text": f"old internal {n}"})
+    project = d["PS"].get_project(PID)
+    group = B.project_group(project)
+    items = C.collect_project(project, T0 - 86400, T0, results=lambda die, cfg: {})
+    draft = B.build_draft(group, {"mode": "daily"}, items, [{"email": BOB, "role": "customer", "name": "B", "lang": "en"}], [], T0 - 86400, T0)
+    d["DS"].save_draft(draft)
+    d["DS"].set_state(PSCOPE, draft_id=draft["id"])
+    owner = DR._settings_view(group, can_edit=True, staff=False)["pending"]
+    staff = DR._settings_view(group, can_edit=True, staff=True)["pending"]
+    return owner, staff
+
+
+def test_the_settings_totals_do_not_change_when_one_internal_line_joins_the_overflow(d):
+    base_owner, _ = _settings_pending(d, public=22, internal_newer=0)
+    n = base_owner["items"]                                                     # the 22 public lines plus the world's own lines: past the cut of 20
+    assert n >= 22
+    for internal in (1, 3):
+        owner, staff = _settings_pending(d, public=22, internal_newer=0, internal_older=internal)
+        assert owner["items"] == n, internal                                  # the same answer as if the internal lines did not exist
+        owner2, staff2 = _settings_pending(d, public=22, internal_newer=internal)
+        assert owner2["items"] == n, internal                                 # newer internal lines push public ones into the overflow
+        assert staff2["items"] == n + internal                                # staff still see everything
+
+
+def test_a_public_containing_draft_never_disappears_when_internal_lines_crowd_it_out(d):
+    quiet, _ = _settings_pending(d, public=1, internal_newer=0)
+    owner, staff = _settings_pending(d, public=1, internal_newer=25)            # the public lines fall into the overflow
+    assert owner is not None and owner["items"] == quiet["items"]
+    assert staff["items"] == quiet["items"] + 25
+
+
+def _legacy(d, draft):
+    """A draft as stored before the public fields existed."""
+    for k in [k for k in draft if k.startswith("public_")]:
+        draft.pop(k)
+    return draft
+
+
+def test_a_legacy_draft_is_withheld_from_a_non_staff_caller_pending_and_sent_and_a_later_motor_grant_changes_nothing(d):
+    """A draft stored without the public fields is answered exactly as "no draft" for a non-staff caller (no rebuild at read), also after a
+    recipient is LATER granted a motor that makes more of the current activity visible."""
+    from motor_ai_sim.digest import build as B, collect as C, routes as DR
+    d["U"].update_user(BOB, role="engineer")
+    d["U"].set_motor_grants(BOB, all_motors=False, dies=[], configs=[])        # at build time the recipient cannot open the project's motors
+    group = B.project_group(d["PS"].get_project(PID))
+    items = C.collect_project(d["PS"].get_project(PID), T0 - 86400, T0, results=d["results"])
+    draft = _legacy(d, B.build_draft(group, {"mode": "daily"}, items, [{"email": BOB, "role": "customer", "name": "B", "lang": "en"}], [], T0 - 86400, T0))
+    draft["status"] = "sent"
+    d["DS"].save_draft(draft)
+    d["DS"].append_log({"event": "sent", "scope": PSCOPE, "draft_id": draft["id"], "by": ADMIN, "sent": 1, "failed": 0, "skipped": 0})
+    pending = dict(draft, id="d-00000000000000d1", status="pending")
+    d["DS"].save_draft(pending)
+    d["DS"].set_state(PSCOPE, draft_id=pending["id"])
+
+    def owner():
+        view = DR._settings_view(group, can_edit=True, staff=False)
+        return view["pending"], view["last_sent"]
+    assert owner() == (None, None)
+    d["U"].set_motor_grants(BOB, all_motors=True, dies=[], configs=["CIANO28 85/L12", "CIANO28 85/T9"])    # a LATER grant to the recipient
+    assert owner() == (None, None)                                                                            # still nothing
+    staff = DR._settings_view(group, can_edit=True, staff=True)
+    assert staff["pending"] is not None and staff["last_sent"] is not None
+    assert "public_hash" not in d["DS"].load_draft(pending["id"])                                             # a read stores nothing
+
+
+def test_a_legacy_draft_whose_aggregate_would_leak_is_withheld_when_the_source_is_gone(d):
+    from motor_ai_sim.digest import build as B, routes as DR
+    group = B.project_group(d["PS"].get_project(PID))
+    legacy = {"id": "d-00000000000000b1", "scope": PSCOPE, "status": "pending", "kind": "project", "title": "t", "caps": ["internal"],
+              "period": {"start": at(-86400), "end": at(0)}, "items": [{"requires": ["staff"]}] * 3, "more": 9, "more_requires": ["staff"],
+              "recipients": [{"email": BOB}], "created_at": at(-50), "updated_at": at(-50), "revision": 4}
+    d["DS"].save_draft(legacy)
+    d["DS"].set_state(PSCOPE, draft_id=legacy["id"])
+    d["PS"].path_for(PID).joinpath("thread.jsonl").unlink(missing_ok=True)
+    d["PS"].path_for(PID).joinpath("audit.jsonl").unlink(missing_ok=True)       # the source activity is gone
+    view = DR._settings_view(group, can_edit=True, staff=False)
+    assert view["pending"] is None                                              # not the aggregate 12, not revision 4
+    assert DR._settings_view(group, can_edit=True, staff=True)["pending"]["items"] == 12
+
+
+def test_last_sent_skips_a_legacy_sent_draft_that_cannot_be_shown_publicly(d):
+    from motor_ai_sim.digest import build as B, routes as DR
+    group = B.project_group(d["PS"].get_project(PID))
+    legacy = {"id": "d-00000000000000c1", "scope": PSCOPE, "status": "sent", "kind": "project", "caps": ["internal"],
+              "period": {"start": at(-86400 * 30), "end": at(-86400 * 29)}, "items": [{"requires": ["staff"]}], "more": 0,
+              "recipients": [{"email": BOB}], "created_at": at(-86400 * 29), "updated_at": at(-86400 * 29)}
+    d["DS"].save_draft(legacy)
+    d["DS"].append_log({"event": "sent", "scope": PSCOPE, "draft_id": legacy["id"], "by": ADMIN, "sent": 1, "failed": 0, "skipped": 0})
+    assert DR._settings_view(group, can_edit=True, staff=False)["last_sent"] is None
+    assert DR._settings_view(group, can_edit=True, staff=True)["last_sent"] is not None
+
+
+def test_the_public_revision_sequence_moves_only_with_public_changes(d):
+    """Two hidden supersessions (aggregate revision 2) and then a public edit: the non-staff reader sees public revision 1, never 3."""
+    from motor_ai_sim.digest import build as B, collect as C
+    d["U"].update_user(BOB, role="engineer")
+    group = B.project_group(d["PS"].get_project(PID))
+    rec = [{"email": BOB, "role": "customer", "name": "B", "lang": "en"}]
+
+    def make(existing, revision):
+        items = C.collect_project(d["PS"].get_project(PID), T0 - 86400, T0, results=lambda die, cfg: {})
+        return B.build_draft(group, {"mode": "daily"}, items, rec, [], T0 - 86400, T0, existing=existing, revision=revision)
+    first = make(None, 0)
+    d["PS"].append_jsonl(PID, "thread.jsonl", {"id": "h1", "author_email": BOB, "created_at": at(-70), "staff_only": True, "text": "internal 1"})
+    second = make(first, 1)
+    d["PS"].append_jsonl(PID, "thread.jsonl", {"id": "h2", "author_email": BOB, "created_at": at(-60), "staff_only": True, "text": "internal 2"})
+    third = make(second, 2)
+    assert third["revision"] == 2 and (third["public_revision"], third["public_id"]) == (first["public_revision"], first["public_id"]) == (0, first["public_id"])
+    d["PS"].append_jsonl(PID, "thread.jsonl", {"id": "pp", "author_email": ANNA, "created_at": at(-40), "text": "a public edit"})
+    fourth = make(third, 3)
+    assert fourth["revision"] == 3 and fourth["public_revision"] == 1                  # the aggregate 3 is never shown
+    assert fourth["public_id"] != third["public_id"] and fourth["public_id"] != fourth["id"]
+

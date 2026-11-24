@@ -362,43 +362,100 @@ def save_document_stream(project_id: str, file_id: str, chunks, limit: int) -> t
 # ── project cover image: cover.webp (small thumbnail) + project.json "cover" {document_id, version, set_by, set_at} ──
 
 def cover_file(project_id: str) -> Path:
+    """The LEGACY single cover file (before per-version storage); only read as a fallback for a cover stored that way."""
     return _file(project_id, "cover.webp")
 
 
-def read_cover(project_id: str) -> Path | None:
-    path = cover_file(project_id)
+def cover_version_file(project_id: str, version: str) -> Path:
+    return _file(project_id, "covers/%s.webp" % version)
+
+
+def _remove_cover_version(project_id: str, version: str | None) -> None:
+    """Delete ONE retired thumbnail version (and the unused legacy single file); call only AFTER the pointer change committed."""
+    if version and re.fullmatch(r"[0-9a-f]{4,64}", version):
+        cover_version_file(project_id, version).unlink(missing_ok=True)
+    cover_file(project_id).unlink(missing_ok=True)
+
+
+def cover_path(project_id: str, cover: dict | None) -> Path | None:
+    """The file of the version the GIVEN pointer names (the caller validated that same pointer): never another file, and no
+    fallback to the legacy ``cover.webp`` (a file nobody can vouch for is not served)."""
+    version = str(cover.get("version") or "") if isinstance(cover, dict) else ""
+    if not re.fullmatch(r"[0-9a-f]{4,64}", version):
+        return None
+    path = cover_version_file(project_id, version)
     return path if path.is_file() else None
 
 
-def set_cover(project_id: str, thumbnail: bytes, document_id: str, actor: str) -> dict:
-    """Write the thumbnail and point the project at it; the returned ``version`` changes with every cover (cache key)."""
+def read_cover(project_id: str) -> Path | None:
+    project = get_project(project_id)
+    return cover_path(project_id, project.get("cover") if isinstance(project, dict) else None)
+
+
+def flush_project_audit(project_id: str) -> None:
+    """Write the audit events committed WITH a project.json change (cover set / clear); best effort: a failing append leaves them
+    pending for the next flush and never blocks or undoes the change."""
+    from motor_ai_sim.development.project_uploads import flush_events
+    try:
+        flush_events(project_id, "project.json")
+    except Exception as exc:                                # noqa: BLE001
+        import logging
+        logging.getLogger(__name__).error("project %s: audit rows left pending (%s)", project_id, exc)
+
+
+def set_cover(project_id: str, thumbnail: bytes, document_id: str, actor: str, audit: dict | None = None) -> dict:
+    """Store the thumbnail as its OWN immutable file (``covers/<version>.webp``), then switch the project's pointer (and queue the audit
+    event) in one committed mutation.  A failing commit leaves the previous pointer and its bytes untouched and removes the new file;
+    superseded files are removed only after the commit."""
     import secrets
     from datetime import datetime, timezone
     ensure_writable()
-    path = cover_file(project_id)
+    version = secrets.token_hex(8)
+    path = cover_version_file(project_id, version)
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_name("cover.webp.tmp")
+    tmp = path.with_name(version + ".tmp")
     tmp.write_bytes(thumbnail)
     os.replace(tmp, path)
-    cover = {"document_id": document_id, "version": secrets.token_hex(4), "set_by": actor.lower(),
+    cover = {"document_id": document_id, "version": version, "set_by": actor.lower(),
              "set_at": datetime.now(timezone.utc).isoformat()}
-    mutate_project(project_id, lambda project: project.__setitem__("cover", cover))
+
+    retired: dict = {}
+
+    def apply(project: dict) -> None:
+        old = project.get("cover")
+        retired["version"] = str(old.get("version") or "") if isinstance(old, dict) else None
+        project["cover"] = cover
+        if audit is not None:
+            from motor_ai_sim.development.project_uploads import queue_event
+            queue_event(project, actor.lower(), "cover.set", "project", project_id, audit)
+
+    try:
+        mutate_project(project_id, apply)
+    except BaseException:
+        path.unlink(missing_ok=True)
+        raise
+    _remove_cover_version(project_id, retired.get("version"))      # only the version this switch retired
     return cover
 
 
-def clear_cover(project_id: str, only_document_id: str | None = None) -> bool:
-    """Remove the cover (when ``only_document_id`` is given: only if that document is the cover).  True when one was removed."""
+def clear_cover(project_id: str, only_document_id: str | None = None, audit: tuple[str, str] | None = None) -> bool:
+    """Remove the cover (when ``only_document_id`` is given: only if that document is the cover).  True when one was removed.
+    ``audit`` = (actor email, reason): the ``cover.clear`` event is committed with the removal (``flush_project_audit`` writes it)."""
     removed: dict = {}
 
     def apply(project: dict) -> None:
         cover = project.get("cover")
         if isinstance(cover, dict) and (only_document_id is None or cover.get("document_id") == only_document_id):
+            removed["version"] = str(cover.get("version") or "")
             project.pop("cover", None)
             removed["yes"] = True
+            if audit is not None:
+                from motor_ai_sim.development.project_uploads import queue_event
+                queue_event(project, audit[0].lower(), "cover.clear", "project", project_id, {"reason": audit[1]})
 
     mutate_project(project_id, apply)
     if removed:
-        cover_file(project_id).unlink(missing_ok=True)
+        _remove_cover_version(project_id, removed.get("version"))      # only what this clearing retired: a concurrent PUT keeps its file
     return bool(removed)
 
 

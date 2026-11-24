@@ -46,25 +46,38 @@ def make_thumbnail(path) -> bytes:
         raise ValueError("The file is not a readable PNG, JPEG or WebP image")
 
 
+def _cover_allowed(row: dict | None) -> bool:
+    """The cover is shown to the WHOLE project, so a document that is price-restricted, internal or archived (or gone) never is one."""
+    return bool(row) and not (row.get("price_restricted") or row.get("internal") or row.get("archived"))
+
+
 @router.get("/{project_id}/cover")
 def get_cover(request: Request, project_id: str):
-    documents._context(request, project_id)
-    path = store.read_cover(project_id)
+    _user, project, _role, _staff = documents._context(request, project_id)
+    cover = project.get("cover")
+    doc_id = cover.get("document_id") if isinstance(cover, dict) else None
+    row = next((r for r in store.load_documents(project_id) if r.get("id") == doc_id), None) if doc_id else None
+    # enforced on every read, whatever happened to the stored cover (a failed clearing, a race): the source document decides
+    if not _cover_allowed(row):
+        raise HTTPException(status_code=404, detail="No cover image")
+    path = store.cover_path(project_id, cover)          # the SAME pointer that was validated above, never a second read
     if path is None:
         raise HTTPException(status_code=404, detail="No cover image")
-    return FileResponse(path, media_type="image/webp", headers={"Cache-Control": "private, max-age=86400",
+    return FileResponse(path, media_type="image/webp", headers={"Cache-Control": "no-store",
                                                                 "X-Content-Type-Options": "nosniff"})
 
 
 @router.put("/{project_id}/cover")
 async def set_cover(request: Request, project_id: str):
     """``{"document_id": ...}``: make that document the cover."""
-    user, _project, _role, staff = documents._context(request, project_id, edit=True)
+    user, project, _role, staff = documents._context(request, project_id, edit=True)
     body = await request.json()
     doc_id = body.get("document_id") if isinstance(body, dict) else None
     if not isinstance(doc_id, str) or not doc_id:
         raise HTTPException(status_code=422, detail="document_id expected")
-    row = documents._find(project_id, doc_id, staff)
+    row = documents._find(project_id, doc_id, staff, prices=documents._prices(user, project, staff))
+    if row.get("price_restricted"):
+        raise HTTPException(status_code=422, detail="A price-restricted document cannot be the cover (the whole project sees it)")
     if row.get("internal"):
         raise HTTPException(status_code=422, detail="An internal document cannot be the cover (the whole project sees it)")
     path = store.read_document_file(project_id, str(row.get("file_id") or ""))
@@ -74,15 +87,34 @@ async def set_cover(request: Request, project_id: str):
         thumbnail = await run_in_threadpool(make_thumbnail, path)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc))
-    cover = store.set_cover(project_id, thumbnail, doc_id, documents._email(user))
-    store.append_audit(project_id, documents._email(user), "cover.set", "project", project_id,
-                       {"document_id": doc_id, "name": row.get("name")})
+    actor = documents._email(user)
+
+    def publish() -> dict | None:
+        """Re-read the source document UNDER the documents lock and publish only if it is still allowed: a PATCH that restricts it
+        while the thumbnail was being made either commits first (refused here) or after (its cover clearing removes this one)."""
+        out: dict = {}
+
+        def apply(doc: dict) -> None:
+            for current in doc.get("documents") or []:
+                if isinstance(current, dict) and current.get("id") == doc_id:
+                    if _cover_allowed(current) and current.get("file_id") == row.get("file_id"):
+                        out["cover"] = store.set_cover(project_id, thumbnail, doc_id, actor,
+                                                       audit={"document_id": doc_id, "name": current.get("name")})
+                    return
+
+        store.mutate_json(project_id, store.DOCUMENTS_JSON, apply, default={"documents": []})
+        return out.get("cover")
+
+    cover = await run_in_threadpool(publish)
+    if cover is None:
+        raise HTTPException(status_code=409, detail="The document changed while the cover was being made; it cannot be the cover")
+    store.flush_project_audit(project_id)
     return {"document_id": doc_id, "cover_version": cover["version"]}
 
 
 @router.delete("/{project_id}/cover")
 def clear_cover(request: Request, project_id: str):
     user, _project, _role, _staff = documents._context(request, project_id, edit=True)
-    if store.clear_cover(project_id):
-        store.append_audit(project_id, documents._email(user), "cover.clear", "project", project_id, {})
+    store.clear_cover(project_id, audit=(documents._email(user), "cover removed"))
+    store.flush_project_audit(project_id)
     return {"cover_version": None}

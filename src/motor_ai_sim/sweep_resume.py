@@ -228,6 +228,13 @@ def _enqueue_resume_sweep(ws_dir: str, journal) -> None:
         "with_baseline": req_body.get("with_baseline", False),
         "mesh_preset": req_body.get("mesh_preset"),
     }
+    if req_body.get("cogging_pp"):       # opt-in Cogging pp: a resume keeps it (absent otherwise)
+        worker_kwargs.update(
+            cogging_pp=True, cogging_max_nm=req_body.get("cogging_max_nm", 0.0),
+            efficiency_min_pct=req_body.get("efficiency_min_pct", 0.0),
+            torque_min_nm=req_body.get("torque_min_nm", 0.0))
+        if req_body.get("magnet_temp_c") is not None:
+            worker_kwargs["magnet_temp_c"] = req_body["magnet_temp_c"]
 
     log.info("resuming sweep %s: %d of %d points already done",
              run_id, len(journal.done_points), journal.total_points)

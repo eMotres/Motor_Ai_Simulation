@@ -42,6 +42,8 @@ import {
 } from '../../lib/sweepRestore';
 import type { RestoreVerdict } from '../../lib/sweepRestore';
 import SavedSweeps from './SavedSweeps';
+import { groupFailures, geometryGroupText } from '../../lib/sweepFailures';
+import { coggingOf, coggingText, coggingMetrics, coggingTip } from '../../lib/coggingPp';
 
 const tx = nsT('simulation');
 const API = import.meta.env.VITE_API_URL ?? 'http://localhost:8001';
@@ -112,7 +114,8 @@ const OP_VARS = new Set(['current_a', 'gamma_deg']);
 // core = P_fe; copper winding is split into Cu DC (I²R, INCLUDES the end-windings via
 // k_end → grows with tooth_width) and Cu AC (proximity/eddy in the strands); solid =
 // P_mag + P_shaft (eddy in solid conductors).
-interface SweepTableCol { id: string; label: string; get: (r: any) => number; fmt: (v: number) => string; vcol?: boolean }
+interface SweepTableCol { id: string; label: string; get: (r: any) => number; fmt: (v: number) => string; vcol?: boolean;
+  fmtRow?: (r: any) => string; titleRow?: (r: any) => string | undefined }
 const SweepTable: React.FC<{ points: any[]; rpm: number; vdcFactor?: number; selectedPk?: string; onPick?: (r: any) => void }> =
   ({ points, rpm, vdcFactor, selectedPk, onPick }) => {
   const vdcF = vdcFactor || (1 / Math.sqrt(3));   // V_dc = V_peak / mod_factor (SVPWM → ×√3)
@@ -155,6 +158,8 @@ const SweepTable: React.FC<{ points: any[]; rpm: number; vdcFactor?: number; sel
         k3d,
         rpm: p.rpm,   // absent today (refine result omits it) — kept for when it lands
         ripple: Number(p.T_ripple_pct) || 0, mass, td,
+        // Cogging pp (opt-in no-load solve of the geometry); absent = not measured
+        cp: coggingOf(p),
         pd,
         ploss, core: Number(p.P_fe_W) || 0,
         stranded: Number(p.P_cu_W) || 0,
@@ -184,6 +189,12 @@ const SweepTable: React.FC<{ points: any[]; rpm: number; vdcFactor?: number; sel
       { id: 'eff', label: 'η %', get: r => r.eff, fmt: v => v.toFixed(2) },
       { id: 'Vdc', label: 'V_dc (V)', get: r => r.Vpk / vdcF, fmt: v => v.toFixed(0) },
       { id: 'ripple', label: 'ripple %', get: r => r.ripple, fmt: v => v.toFixed(2) },
+      ...(rows.some(r => r.cp.asked) ? [{
+        id: 'cogging', label: tx('coggingPpCol') + ' (N·m)',
+        get: (r: any) => (r.cp.value === undefined ? 1e9 : r.cp.value),
+        fmt: (v: number) => (v >= 1e9 ? '-' : String(v)),
+        fmtRow: (r: any) => coggingText(r.cp, tx('coggingPpRanking')),
+        titleRow: (r: any) => coggingTip(r.cp, tx) }] : []),
       { id: 'mass', label: 'active mass (kg)', get: r => r.mass, fmt: v => v.toFixed(3) },
       { id: 'td', label: 'N·m/kg (active)', get: r => r.td, fmt: v => v.toFixed(2) },
       { id: 'pd', label: 'kW/kg', get: r => r.pd, fmt: v => v.toFixed(3) },
@@ -257,8 +268,8 @@ const SweepTable: React.FC<{ points: any[]; rpm: number; vdcFactor?: number; sel
               <tr key={i} onClick={() => onPick && onPick(r)}
                 style={{ background: sel ? 'var(--line-accent)' : (i % 2 ? 'var(--panel-2)' : 'var(--line-soft)'), cursor: onPick ? 'pointer' : 'default' }}>
                 {cols.map(c => (
-                  <td key={c.id} style={{ padding: '3px 7px', textAlign: 'right', whiteSpace: 'nowrap', color: 'var(--text-0)', borderBottom: '1px solid var(--line-soft)' }}>
-                    {c.fmt(c.get(r))}
+                  <td key={c.id} title={c.titleRow ? c.titleRow(r) : undefined} style={{ padding: '3px 7px', textAlign: 'right', whiteSpace: 'nowrap', color: 'var(--text-0)', borderBottom: '1px solid var(--line-soft)' }}>
+                    {c.fmtRow ? c.fmtRow(r) : c.fmt(c.get(r))}
                   </td>))}
               </tr>); })}
           </tbody>
@@ -300,6 +311,12 @@ const SweepTooltip: React.FC<any> = ({ active, payload }) => {
       <div style={{ color: '#a855f7', marginTop: 3 }}>η = {d.y.toFixed(2)} %</div>
       <div style={{ color: '#3b82f6' }}>{d.x.toFixed(2)} N·m/kg</div>
       <div style={{ color: 'var(--text-2)' }}>T = {d.T?.toFixed?.(1)} N·m · ripple {d.ripple?.toFixed?.(1)} %</div>
+      {d.cp?.asked && (
+        <div style={{ color: 'var(--text-2)' }}
+             title={coggingTip(d.cp, tx)}>
+          {tx('coggingPpCol')} {coggingText(d.cp, tx('coggingPpRanking'))}{d.cp.value === undefined ? '' : ' N·m'}
+        </div>
+      )}
       {d.kEnd != null && (
         <div style={{ color: 'var(--text-3)' }}>
           k_end {Number(d.kEnd).toFixed(3)} — {d.kEndSource === 'typed' ? 'typed in Simulation' : "this point's coil"}
@@ -340,6 +357,7 @@ const SweepStudyPanel: React.FC = () => {
   }, []);
   const [connectBy, setConnectBy] = useLS<'current_a' | 'gamma_deg'>('connectBy', 'current_a');
   const [withBaseline, setWithBaseline] = useLS<boolean>('withBaseline', false);
+  const [coggingPp, setCoggingPp] = useLS<boolean>('coggingPp', false);   // opt-in: one no-load solve per geometry
   const [selected, setSelected] = useState<any>(null);   // hand-picked best point
   const [applyMsg, setApplyMsg] = useState<string | null>(null);
   const [applying, setApplying] = useState(false);
@@ -650,6 +668,7 @@ const SweepStudyPanel: React.FC = () => {
           // the un-varied current motor as an extra reference point — one more
           // full eval, off by default (user 2026-09-04: always stopped at 22/23)
           with_baseline: withBaseline,
+          ...(coggingPp ? { cogging_pp: true } : {}),   // absent = the request it always was
           mesh_size_mm: readLS('mesh.meshSize', 4), min_size_mm: readLS('mesh.minSize', 0.3),
           pole_copy: readBool('mesh.poleCopy', false), torque_filter: readBool('sim.torqueFilter', false),
           n_sectors: Math.max(1, Math.round(readLS('mesh.nSectors', 1))),   // single source: Mesh tab (same as Simulation)
@@ -733,6 +752,7 @@ const SweepStudyPanel: React.FC = () => {
                          (p.efficiency ?? 0) * 100, Number(p.P_loss_total_W) || 0);
       const row = { x: s3.td, y: s3.eff,
                      I: cur, g: gam, gi, ripple: p.T_ripple_pct, T: s3.T,
+                     cp: coggingOf(p),
                      apply_eligible: p.apply_eligible === true,
                      geom_id: p.geom_id, op_index: p.op_index,
                     overrides: p.overrides || {}, _c: byCurrent ? cur : gam,
@@ -846,7 +866,7 @@ const SweepStudyPanel: React.FC = () => {
     const hint = reason === 'tdm_mesh_not_periodic'
       ? ' The magnet eddy-current method needs identical poles: Mesh tab -> Pole/slot mesh = Periodic, or turn Template iron on.'
       : '';
-    return { n: failed.length, total: pts.length, culprits, reason, full, hint };
+    return { n: failed.length, total: pts.length, culprits, reason, full, hint, groups: groupFailures(pts, tx) };
   }, [result]);
 
   // ── UNSETTLED EDDY TRANSIENT (user's 90-point sweep, 2026-09-07) ─────────
@@ -1008,6 +1028,7 @@ const SweepStudyPanel: React.FC = () => {
         Number(v.P_loss_total_W) || 0);
       p = { ...p, overrides: v.overrides, I: v.current_a,
         g: v.gamma_deg, rpm: v.rpm, T: s3.T, ripple: v.T_ripple_pct,
+        cp: coggingOf(v),
         eff: s3.eff, mass, td: s3.td, Vpk: s3.Vpk,
         V_line_peak_V: s3.Vl, KV_rpm_per_V_line: s3.KV,
         P_mech_W: s3.P * 1000, power_per_mass_W_kg: s3.pd * 1000,
@@ -1150,6 +1171,7 @@ const SweepStudyPanel: React.FC = () => {
         operatingPoint: { current_a: Number(p.I), gamma_deg: Number(p.g),
                           rpm: Number(p.rpm) },
         metrics: { T_avg_Nm: p.T, T_ripple_pct: p.ripple, efficiency: p.eff,
+                   ...(p.cp ? coggingMetrics(p.cp) : {}),
                    torque_per_mass: p.td, mass_total_kg: p.mass,
                    raw_samples_per_cogging_cycle: p.rawSamplesPerCycle },
         overrides: p.overrides || {},
@@ -1232,6 +1254,11 @@ const SweepStudyPanel: React.FC = () => {
             style={{ cursor: 'pointer', color: 'var(--text-3)', whiteSpace: 'nowrap' }}>
             <input type="checkbox" checked={withBaseline} onChange={e => setWithBaseline(e.target.checked)}
               style={{ verticalAlign: 'middle', marginLeft: 6 }} /> baseline point (preliminary 3×)
+          </label>
+          {' '}
+          <label title={tx('coggingPpTip')} style={{ cursor: 'pointer', color: 'var(--text-3)', whiteSpace: 'nowrap' }}>
+            <input type="checkbox" checked={coggingPp} onChange={e => setCoggingPp(e.target.checked)}
+              style={{ verticalAlign: 'middle', marginLeft: 6 }} /> {tx('coggingPpCol')}
           </label>
         </Typography>
       </Box>
@@ -1405,30 +1432,34 @@ const SweepStudyPanel: React.FC = () => {
                       border: '1px solid var(--panel)', bgcolor: 'transparent' }} />
             )}
           </Box>
-          {buildFails && (
-            <Typography sx={{ fontSize: 11, color: '#fbbf24', mb: 0.5, lineHeight: 1.4 }}>
-              ⚠ {buildFails.n} of {buildFails.total} design{buildFails.n === 1 ? '' : 's'}{' '}
-              {/^timeout/i.test(buildFails.reason)
+          {buildFails && buildFails.groups.map(g => (
+            <Typography key={`${g.cls}|${g.key}`} sx={{ fontSize: 11, color: '#fbbf24', mb: 0.5, lineHeight: 1.4 }}>
+              ⚠ {g.n} of {buildFails.total} design{g.n === 1 ? '' : 's'}{' '}
+              {g.cls === 'geometry'
+                // The cause is NAMED, grouped by its class; the raw first reason (with the overlap pairs)
+                // stays in the tooltip.
+                ? <span title={g.full}>{`— ${geometryGroupText(g, tx)} — ${tx('sweepFailSkipped')}.`}</span>
+                : g.cls === 'timeout'
                 ? 'ran out of time — the eval budget was reached before the solve finished. '
                   + 'These settings (steps/period, demag, coupled eddy, mesh size) cost far more '
                   + 'per point than a plain sweep; lower them or expect long runs.'
-                : /non-physical/i.test(buildFails.reason)
+                : g.cls === 'nonphysical'
                   // The geometry built and solved fine — the RESULT was rejected
                   // (η = 0, absurd Nm/kg …). Blaming the build sent the user
                   // hunting a geometry problem when the operating point was the
                   // culprit (seen live: a generator sweep at γ≈0, i.e. the
                   // zero-torque angle — every point honestly measured η = 0).
-                  ? `solved but the result was rejected (${buildFails.reason}) — `
+                  ? `solved but the result was rejected (${g.reason}) — `
                     + 'skipped. The geometry is fine; check the operating point '
                     + '(γ near the zero-torque angle, current far off the machine) '
                     + 'or the mode (γ counts from the q-axis in BOTH modes — '
                     + 'generator adds its 180° internally).'
-                  : <span title={buildFails.full}>{`couldn’t be built${buildFails.reason ? ` (${buildFails.reason})` : ' (invalid geometry)'} — skipped.${buildFails.hint}`}</span>}
-              {buildFails.culprits.length
-                ? ` Always fails at: ${buildFails.culprits.join('; ')} — narrow that range.`
+                  : <span title={g.full}>{`couldn’t be built${g.reason ? ` (${g.reason})` : ' (invalid geometry)'} — skipped.${g.hint}`}</span>}
+              {g.cls !== 'geometry' && g.culprits
+                ? ` Always fails at: ${g.culprits} — narrow that range.`
                 : ''}
             </Typography>
-          )}
+          ))}
           {/* ONE LINE + tooltip (project rule: no text walls).  Hollow markers
               on the chart, ✗ in the table's `eddy` column, the number here. */}
           {unsettled && (
@@ -1520,6 +1551,11 @@ const SweepStudyPanel: React.FC = () => {
                     to print it raw ("I = 49.4975 A") next to a card reading
                     "70 A peak" for the SAME point (2026-09-19). */}
                 Picked: <strong>I = {formatCurrent(Number(selected.I) || 0, readCurrentUnit())} · γ = {selected.g}°</strong> → η {selected.y?.toFixed?.(2)} % · {selected.x?.toFixed?.(2)} N·m/kg · T {selected.T?.toFixed?.(2)} N·m · ripple {selected.ripple?.toFixed?.(1)} %
+                {selected.cp?.asked && (
+                  <span title={coggingTip(selected.cp, tx)}>
+                    {' '}· {tx('coggingPpCol')} {coggingText(selected.cp, tx('coggingPpRanking'))}{selected.cp.value === undefined ? '' : ' N·m'}
+                  </span>
+                )}
               </Typography>
               <Typography sx={{ fontSize: 10.5, color: '#93c5fd', mt: 0.25, wordBreak: 'break-word' }}>
                 geometry: {Object.keys(selected.overrides || {}).length

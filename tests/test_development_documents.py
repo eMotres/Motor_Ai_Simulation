@@ -192,28 +192,34 @@ def test_zip_holds_only_visible_files_in_folders(client, tmp_path):
     assert client.get("/api/projects/ciano/documents.zip").status_code == 401
     assert client.get("/api/projects/ciano/documents.zip", headers=hdr("t-outsider")).status_code == 404
 
-    def names(who):
-        r = client.get("/api/projects/ciano/documents.zip", headers=hdr(who))
+    def names(who, query=""):
+        r = client.get("/api/projects/ciano/documents.zip" + query, headers=hdr(who))
         assert r.status_code == 200 and r.headers["content-type"] == "application/zip"
         z = zipfile.ZipFile(io.BytesIO(r.content))
         assert z.testzip() is None
         return z, sorted(z.namelist())
 
-    z, listed = names("t-customer")
-    assert listed == ["MANIFEST.txt", "bom/bom (2).csv", "bom/bom.csv", "kicad/board.kicad_pro"]
+    # releases (owner 2026-11-24): the customer side downloads ONE group; the archive of every group is MOTRES staff's
+    assert client.get("/api/projects/ciano/documents.zip", headers=hdr("t-customer")).status_code == 403
+    _z, release = names("t-customer", "?revision=A")
+    assert release == ["MANIFEST.txt", "bom/bom.csv"]
+    z, listed = names("t-customer", "?revision=")                                   # the unlabelled (general) documents
+    assert listed == ["MANIFEST.txt", "bom/bom.csv", "kicad/board.kicad_pro"]
     assert z.read("kicad/board.kicad_pro") == b"kicad" and a["sha256"] in z.read("MANIFEST.txt").decode()
     assert "@" not in z.read("MANIFEST.txt").decode()
     _z, staff = names("t-admin")
     assert "3d/hidden.step" in staff and "docs/archived.pdf" not in staff
+    assert "bom/bom (2).csv" in staff and "kicad/board.kicad_pro" in staff               # every group, as before
     log = [json.loads(x) for x in (tmp_path / "downloads.jsonl").read_text(encoding="utf-8").splitlines()]
-    assert [row["kind"] for row in log] == ["project_documents_zip", "project_documents_zip"]
+    assert [row["kind"] for row in log] == ["project_documents_zip"] * 3
     assert "documents.zip" in audit_actions(tmp_path)
 
 
 def test_zip_over_the_limit_is_refused(client, monkeypatch):
     upload(client, name="a.pdf", data=b"x" * 50)
     monkeypatch.setattr(documents, "MAX_ZIP_BYTES", 10)
-    assert client.get("/api/projects/ciano/documents.zip", headers=hdr("t-owner")).status_code == 413
+    assert client.get("/api/projects/ciano/documents.zip?revision=", headers=hdr("t-owner")).status_code == 413
+    assert client.get("/api/projects/ciano/documents.zip", headers=hdr("t-admin")).status_code == 413
 
 
 def test_project_storage_cap(client, monkeypatch):

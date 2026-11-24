@@ -95,7 +95,12 @@ def _staff(user: dict) -> bool:
 
 def may_read(user: dict, project: dict) -> bool:
     """The Contract section's price rule is the ONE central rule, ``access.sees_prices`` (identity first: never a factory account or
-    an agent, always MOTRES staff, else a project owner or a member with the flag)."""
+    an agent, always MOTRES staff, else a project owner or a member with the flag).  A CONTROLLER project has no Contract section
+    for anybody, staff included (owner 2026-11-24: «убрать Contract у контроллеров пока»): every route answers the unknown-project
+    404 and the tab, which reads that answer, is not shown; motor projects are unchanged."""
+    from motor_ai_sim.development import project_type
+    if project_type.of(project) == project_type.CONTROLLER:
+        return False
     return access.sees_prices(user, project)
 
 

@@ -91,6 +91,8 @@ export const developmentApi = {
   patchDocument: (id: string, docId: string, v: Partial<Pick<ProjectDocument, 'internal' | 'price_restricted' | 'folder' | 'revision'>> | { archived: false }) =>
     call<ProjectDocument>('PATCH', `${p(id)}/documents/${enc(docId)}`, v),
   archiveDocument: (id: string, docId: string) => call<ProjectDocument>('DELETE', `${p(id)}/documents/${enc(docId)}`),
+  /** Choose the current release (a revision label), or null for the default (the newest group). */
+  setDocumentRelease: (id: string, revision: string | null) => call<{ current: string | null }>('PUT', `${p(id)}/documents/release`, { revision }),
   /** Make an image of the project's documents the cover (the server makes the thumbnail) / remove the cover. */
   setCover: (id: string, documentId: string) => call<{ document_id: string; cover_version: string }>('PUT', `${p(id)}/cover`, { document_id: documentId }),
   clearCover: (id: string) => call<{ cover_version: null }>('DELETE', `${p(id)}/cover`),
@@ -173,8 +175,10 @@ async function saveResponse(r: Response, fallbackName: string): Promise<void> {
 export const downloadProjectDocument = async (id: string, doc: Pick<ProjectDocument, 'id' | 'name'>): Promise<void> =>
   saveResponse(await fetch(`${API}${p(id)}/documents/${enc(doc.id)}/download`), doc.name);
 
-export const downloadProjectDocumentsZip = async (id: string): Promise<void> =>
-  saveResponse(await fetch(`${API}${p(id)}/documents.zip`), `${id}_documents.zip`);
+/** One release (`revision`: its label, '' = the unlabelled documents) or, without it, every group (MOTRES staff only). */
+export const downloadProjectDocumentsZip = async (id: string, revision?: string): Promise<void> =>
+  saveResponse(await fetch(`${API}${p(id)}/documents.zip${revision === undefined ? '' : `?revision=${encodeURIComponent(revision)}`}`),
+    revision ? `${id}_${revision}_documents.zip` : `${id}_documents.zip`);
 
 const coverCache = new Map<string, Promise<string>>();
 /** The cover thumbnail as an object URL (the session header is added by the global fetch, so a plain <img src> would 401).

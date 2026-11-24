@@ -70,7 +70,7 @@ def test_who_sees_the_restricted_document(client, docs, who):
     _open, secret = docs
     assert ids(client, who) == {"open.pdf", SECRET}
     assert client.get("/api/projects/p1/documents/%s/download" % secret["id"], headers=hdr(who)).status_code == 200
-    z = zipfile.ZipFile(io.BytesIO(client.get("/api/projects/p1/documents.zip", headers=hdr(who)).content))
+    z = zipfile.ZipFile(io.BytesIO(client.get("/api/projects/p1/documents.zip?revision=", headers=hdr(who)).content))
     assert any(SECRET in n for n in z.namelist()) and SECRET in z.read("MANIFEST.txt").decode()
 
 
@@ -81,7 +81,7 @@ def test_who_does_not_see_it_anywhere(client, docs, who):
     assert client.get("/api/projects/p1/documents/%s/download" % secret["id"], headers=hdr(who)).status_code == 404
     assert client.patch("/api/projects/p1/documents/%s" % secret["id"], headers=hdr(who), json={"revision": "X"}).status_code in (403, 404)
     assert client.delete("/api/projects/p1/documents/%s" % secret["id"], headers=hdr(who)).status_code in (403, 404)
-    z = zipfile.ZipFile(io.BytesIO(client.get("/api/projects/p1/documents.zip", headers=hdr(who)).content))
+    z = zipfile.ZipFile(io.BytesIO(client.get("/api/projects/p1/documents.zip?revision=", headers=hdr(who)).content))
     assert not any(SECRET in n for n in z.namelist()) and SECRET not in z.read("MANIFEST.txt").decode()
     assert client.get("/api/projects/p1/documents/%s/download" % secret["id"], headers=hdr("out")).status_code in (403, 404)
 

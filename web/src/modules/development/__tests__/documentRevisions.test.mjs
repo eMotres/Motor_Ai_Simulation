@@ -47,3 +47,39 @@ test('unlabelled files on top do not close the newest named revision', () => {
   assert.equal(isGroupOpen(g, 'R05', {}), false);
   assert.equal(isGroupOpen(g, 'R06', { R06: false }), false);
 });
+
+// ── releases (owner 2026-11-24) ────────────────────────────────────────────
+import { orderByRelease, isReleaseGroupOpen } from '../documentRevisions.ts';
+
+const rel = (revision, current, superseded) => ({ revision, current, superseded, count: 1, latest_upload: '' });
+
+test('groups follow the release order of the server: current, general, superseded newest first', () => {
+  const groups = groupByRevision([d(1, 'A'), d(2, ''), d(3, 'C'), d(4, 'B'), d(5, 'A')]);
+  const out = orderByRelease(groups, [rel('B', true, false), rel('', false, false), rel('C', false, true), rel('A', false, true)]);
+  assert.deepEqual(out.map((g) => [g.key, g.current, g.superseded]), [['B', true, false], ['', false, false], ['C', false, true], ['A', false, true]]);
+  assert.deepEqual(out[3].docs.map((x) => x.id), [1, 5]);
+});
+
+test('a group the server does not list (archived only) goes last and is neither current nor superseded', () => {
+  const out = orderByRelease(groupByRevision([d(1, 'OLD'), d(2, 'B')]), [rel('B', true, false)]);
+  assert.deepEqual(out.map((g) => [g.key, g.current, g.superseded]), [['B', true, false], ['OLD', false, false]]);
+});
+
+test('without release information the first-appearance order stays', () => {
+  assert.deepEqual(orderByRelease(groupByRevision([d(1, 'X'), d(2, 'Y')]), undefined).map((g) => g.key), ['X', 'Y']);
+});
+
+test('the current release and the general documents are open, a superseded group is closed until the user opens it', () => {
+  assert.equal(isReleaseGroupOpen({ key: 'B', current: true, superseded: false }, {}), true);
+  assert.equal(isReleaseGroupOpen({ key: '', current: false, superseded: false }, {}), true);
+  assert.equal(isReleaseGroupOpen({ key: 'A', current: false, superseded: true }, {}), false);
+  assert.equal(isReleaseGroupOpen({ key: 'A', current: false, superseded: true }, { A: true }), true);
+  assert.equal(isReleaseGroupOpen({ key: 'B', current: true, superseded: false }, { B: false }), false);
+});
+
+test('the release strings exist in EN and ZH', () => {
+  for (const lang of ['en', 'zh-CN']) {
+    const s = locale(lang).documents;
+    for (const k of ['releaseZip', 'releaseZipTip', 'allGroupsZip', 'moreDownloads', 'currentRelease', 'currentReleaseTip', 'superseded', 'supersededTip', 'makeCurrent', 'makeCurrentTip', 'releaseDefault', 'supersededConfirmTitle', 'supersededConfirm', 'supersededViewOnly', 'downloadAnyway', 'cancel', 'generalDocuments']) assert.ok(s[k], `${lang} documents.${k}`);
+  }
+});

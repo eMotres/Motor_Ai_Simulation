@@ -12,7 +12,19 @@ Gerber / drill / pick-and-place zips, BOM, 3-D STEP models, PDF drawings, images
               (``model3d.log_download``) and to the project audit;
 * patch       ``internal`` / ``price_restricted`` / ``folder`` / ``revision`` (and ``archived: false`` to restore);
 * delete      archives the document (hidden), the file and its audit rows stay;
-* documents.zip  the files visible to the caller in one streamed ZIP.
+* documents.zip  ``?revision=<label>``: ONE release group, the visible documents of that label (owner 2026-11-24, after an
+              assembler got every board revision in one archive); without ``revision``: every group, MOTRES staff only;
+* releases    one group per project is the CURRENT release (``release``, below); the other labelled groups are "superseded":
+              listed, readable, but a customer-side member gets no ZIP of them.
+
+Releases (owner 2026-11-24).  The groups are the ``revision`` labels.  The current release is a STORED choice
+(``project.json`` ``documents_release``: revision, set_by, set_at; set by the project owner / engineer or staff with PUT
+``/documents/release``); while none is stored, or the stored label has no document the caller can see, it is DERIVED: the
+labelled group with the newest upload among the caller's visible documents.  Documents without a label form their own group:
+in a project with no labels at all it is the current release; in a project with labels it is the "general documents" group,
+never superseded and never inside a labelled release's ZIP (its own ZIP is ``?revision=``).  Everything is computed from the rows the
+caller may see (``_visible``), so a release ZIP holds exactly what the list shows and a label that matches only hidden
+documents answers 404 like an unknown one.
 
 Every change writes a project audit row (``document.*``); the owner's daily report lists them.
 """
@@ -46,6 +58,10 @@ MAX_ZIP_BYTES = 1024 * 1024 * 1024
 MAX_ZIP_FILES = 2000
 _CHUNK = 1024 * 1024
 _REVISION_MAX = 40
+#: A customer-side member may download a single document of a SUPERSEDED release (shown and logged as superseded).  The owner
+#: was asked on 2026-11-24 whether superseded documents are view-only; set False to refuse those downloads (403) for everyone
+#: but MOTRES staff.  The ZIP of a superseded release is refused for the customer side either way.
+SUPERSEDED_SINGLE_DOWNLOAD = True
 #: already compressed - stored, not deflated again
 _STORED_EXT = {".zip", ".7z", ".gz", ".tgz", ".rar", ".png", ".jpg", ".jpeg", ".gif", ".webp", ".pdf", ".xlsx", ".docx", ".3mf"}
 
@@ -171,6 +187,69 @@ def _log_download(request: Request, user: dict, project_id: str, *, kind: str, f
         raise HTTPException(status_code=503, detail="Download log unavailable; try again later.")
 
 
+# ── releases ─────────────────────────────────────────────────────────────────
+
+def _label(row: dict) -> str:
+    return str(row.get("revision") or "").strip()
+
+
+def releases(project: dict, rows: list[dict]) -> dict:
+    """``{"current": label | None, "groups": [{revision, current, superseded, count, latest_upload}], "stored": bool}`` for the
+    rows ONE caller may see (archived rows are never part of a release).  Order: the current release, the unlabelled group, then
+    the superseded groups newest first."""
+    live = [r for r in rows if not r.get("archived")]
+    latest: dict[str, str] = {}
+    count: dict[str, int] = {}
+    for r in live:
+        key = _label(r)
+        count[key] = count.get(key, 0) + 1
+        latest[key] = max(latest.get(key, ""), str(r.get("uploaded_at") or ""))
+    labelled = [k for k in count if k]
+    chosen = project.get("documents_release") if isinstance(project.get("documents_release"), dict) else {}
+    stored = chosen.get("revision") if isinstance(chosen.get("revision"), str) else None
+    if labelled:
+        current = stored if stored in labelled else max(labelled, key=lambda k: (latest[k], k))
+    else:
+        current = "" if count else None
+    order = ([current] if current is not None else []) + ([""] if "" in count and current != "" else [])
+    order += sorted((k for k in labelled if k != current), key=lambda k: (latest[k], k), reverse=True)
+    groups = [{"revision": k, "current": k == current, "superseded": bool(labelled) and k != "" and k != current,
+               "count": count[k], "latest_upload": latest[k]} for k in order]
+    return {"current": current, "groups": groups, "stored": bool(labelled) and stored == current}
+
+
+def _superseded(project: dict, rows: list[dict], label: str) -> bool:
+    info = releases(project, rows)
+    return any(g["revision"] == label and g["superseded"] for g in info["groups"])
+
+
+@router.put("/{project_id}/documents/release")
+def set_release(request: Request, project_id: str, body: dict):
+    """Choose the current release: ``{"revision": "<label>"}``, or ``{"revision": null}`` for the derived default (the newest)."""
+    user, project, role, staff = _context(request, project_id, edit=True)
+    if not _can_edit(user, role):
+        raise HTTPException(status_code=403, detail="Only the project owner, its engineer or staff choose the current release")
+    value = body.get("revision") if isinstance(body, dict) else None
+    rows = _visible(store.load_documents(project_id), staff, prices=_prices(user, project, staff))
+    if value is not None:
+        if not isinstance(value, str) or not value.strip():
+            raise HTTPException(status_code=422, detail="revision: a label of the documents, or null")
+        value = value.strip()
+        if value not in {_label(r) for r in rows if not r.get("archived")}:
+            raise HTTPException(status_code=404, detail="Release not found")
+    now = datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds")
+
+    def edit(doc: dict) -> None:
+        if value is None:
+            doc.pop("documents_release", None)
+        else:
+            doc["documents_release"] = {"revision": value, "set_by": _email(user), "set_at": now}
+        # NB: return nothing - json_store.mutate_json takes a returned value as the new document
+    project = store.mutate_project(project_id, edit)
+    store.append_audit(project_id, _email(user), "documents.release", "document", "", {"revision": value})
+    return releases(project, rows)
+
+
 # ── list / upload / patch / archive ───────────────────────────────────────────
 
 @router.get("/{project_id}/documents")
@@ -181,7 +260,12 @@ def list_documents(request: Request, project_id: str, archived: bool = False):
                     prices=_prices(user, project, staff))
     cover = (store.get_project(project_id) or {}).get("cover")
     cover = cover if isinstance(cover, dict) else {}
-    return {"documents": [dict(_public(r, staff), is_cover=bool(cover) and r.get("id") == cover.get("document_id")) for r in rows],
+    info = releases(store.get_project(project_id) or project, rows)
+    old = {g["revision"] for g in info["groups"] if g["superseded"]}
+    return {"documents": [dict(_public(r, staff), is_cover=bool(cover) and r.get("id") == cover.get("document_id"),
+                               superseded=_label(r) in old and not r.get("archived")) for r in rows],
+            "releases": info["groups"], "current_release": info["current"], "release_stored": info["stored"],
+            "superseded_download": SUPERSEDED_SINGLE_DOWNLOAD or staff,
             "folders": list(models.DOCUMENT_FOLDERS), "can_edit": can_edit, "is_staff": staff, "max_bytes": models.DOCUMENT_MAX_BYTES,
             "cover_version": cover.get("version"), "can_restrict": _can_restrict(user, project)}
 
@@ -374,13 +458,17 @@ def download_document(request: Request, project_id: str, doc_id: str):
     """One document, streamed from disk.  Staff may also fetch an archived one."""
     user, project, role, staff = _context(request, project_id)
     row = _find(project_id, doc_id, staff, include_archived=_can_edit(user, role), prices=_prices(user, project, staff))
+    superseded = not row.get("archived") and _superseded(
+        project, _visible(store.load_documents(project_id), staff, prices=_prices(user, project, staff)), _label(row))
+    if superseded and not staff and not SUPERSEDED_SINGLE_DOWNLOAD:
+        raise HTTPException(status_code=403, detail="This document belongs to a superseded release: view only")
     path = store.read_document_file(project_id, str(row.get("file_id") or ""))
     if path is None:
         raise HTTPException(status_code=404, detail="File not found")
     name = str(row.get("name") or row.get("file_id"))
     _log_download(request, user, project_id, kind="project_document", file=name, source_file=str(row.get("file_id")),
                   sha256=str(row.get("sha256") or ""), size=int(row.get("size") or path.stat().st_size))
-    _audit(project_id, user, "document.download", row)
+    _audit(project_id, user, "document.download", row, {"superseded": True} if superseded else None)
     return FileResponse(path, media_type="application/octet-stream", filename=name,
                         headers={"Cache-Control": "no-store", "X-Content-Type-Options": "nosniff"})
 
@@ -408,11 +496,22 @@ def _zip_names(rows: list[dict]) -> list[tuple[dict, str]]:
 
 
 @router.get("/{project_id}/documents.zip")
-def download_documents_zip(request: Request, project_id: str):
-    """All documents visible to the caller in one ZIP (folders kicad / fabrication / bom / 3d / docs + MANIFEST.txt)."""
+def download_documents_zip(request: Request, project_id: str, revision: str | None = None):
+    """One release (``revision=<label>``; ``revision=`` = the unlabelled group) or, for MOTRES staff only, every group, in one ZIP
+    (folders kicad / fabrication / bom / 3d / docs + MANIFEST.txt).  A customer-side member gets the current release only."""
     from motor_ai_sim.production.routes import _TempFileStreamingResponse
     user, project, _role, staff = _context(request, project_id)
     rows = _visible(store.load_documents(project_id), staff, prices=_prices(user, project, staff))
+    label = None if revision is None else revision.strip()
+    if label is None:
+        if not staff:
+            raise HTTPException(status_code=403, detail="Download the current release; the archive of every group is for MOTRES staff")
+    else:
+        if label not in {_label(r) for r in rows}:
+            raise HTTPException(status_code=404, detail="Release not found")      # also a label of hidden documents only
+        if not staff and _superseded(store.get_project(project_id) or project, rows, label):
+            raise HTTPException(status_code=403, detail="This release is superseded: its documents are for viewing")
+        rows = [r for r in rows if _label(r) == label]
     present = []
     missing = []
     total = 0
@@ -434,6 +533,8 @@ def download_documents_zip(request: Request, project_id: str):
         os.close(fd)
         manifest = ["Project documents: %s" % (project.get("title") or project_id), "Generated (UTC): %s" % now.isoformat(timespec="seconds"),
                     "Files included: %d" % len(present), "", "path | revision | size | sha256 | uploaded"]
+        if label is not None:
+            manifest.insert(1, "Release: %s" % (label or "(no revision)"))
         with zipfile.ZipFile(temp_path, "w", allowZip64=True) as archive:
             for row, path in present:
                 arcname = names[id(row)]
@@ -450,12 +551,16 @@ def download_documents_zip(request: Request, project_id: str):
                 digest.update(block)
         size = temp_path.stat().st_size
         filename = "%s_documents.zip" % (re.sub(r"[^A-Za-z0-9_.-]+", "_", project_id).strip("._-") or "project")
+        if label:
+            filename = "%s_%s_documents.zip" % (re.sub(r"[^A-Za-z0-9_.-]+", "_", project_id).strip("._-") or "project",
+                                                re.sub(r"[^A-Za-z0-9_.-]+", "_", label).strip("._-") or "release")
         _log_download(request, user, project_id, kind="project_documents_zip", file=filename, source_file=None,
                       sha256=digest.hexdigest(), size=size)
     except BaseException:
         temp_path.unlink(missing_ok=True)
         raise
-    store.append_audit(project_id, _email(user), "documents.zip", "document", "", {"files": len(present), "bytes": size})
+    store.append_audit(project_id, _email(user), "documents.zip", "document", "",
+                       {"files": len(present), "bytes": size, **({} if label is None else {"revision": label})})
 
     def stream() -> Iterator[bytes]:
         try:

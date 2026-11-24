@@ -354,12 +354,13 @@ def sweep_settings_of(result: Any, config: Optional[Dict[str, Any]] = None) -> D
             verified = False
         known = eff.get("steps_per_period") is not None and eff.get("gap_layers") is not None
         sig = None if (mixed or mp.get("solved_differs") or not verified or not known) else mp.get("sig")
-        if mp.get("sig_scope") != 2:        # a digest of steps and gap rows only (stored before the version and wire cell joined it): unknown
-            sig = None
+        scope = mp.get("sig_scope")
+        if scope not in (2, 3):             # 2 = preset digest (steps, gap rows, version, wire cell), 3 = custom digest (every resolved
+            sig = None                      # setting); a stamp without a known scope (stored before, or newer) is unknown: fail closed
         return {"preset": ("custom" if custom else mp.get("name")), "version": mp.get("version"), "custom": custom,
                 "mixed": mixed, "effective_source": mp.get("effective_source"),
                 "steps_per_period": eff.get("steps_per_period"), "gap_layers": eff.get("gap_layers"),
-                "sig": sig, "sig_scope": (2 if sig is not None else None), "coil_rel": (eff.get("coil_rel") if eff.get("coil_rel") is not None else mp.get("coil_rel")), "differs": mp.get("differs") or {}, "source": "preset",
+                "sig": sig, "sig_scope": (scope if sig is not None else None), "coil_rel": (eff.get("coil_rel") if eff.get("coil_rel") is not None else mp.get("coil_rel")), "differs": mp.get("differs") or {}, "source": "preset",
                 "v": SETTINGS_VERSION}
     return {"preset": None, "version": None, "custom": False, "mixed": False, "sig": None,
             "steps_per_period": cfg.get("steps_per_period") or r.get("steps_per_period"),

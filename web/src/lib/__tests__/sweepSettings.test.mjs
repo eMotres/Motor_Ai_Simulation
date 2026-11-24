@@ -134,3 +134,20 @@ test('a stamp that names the wire cell but has no solved cell has no digest (lis
   assert.equal(sweepSettingsOf(row({ ...two, coil_rel: 'solved' }, 2)).sig, 5);
   assert.equal(sweepSettingsOf(row(two, undefined)).sig, 5);
 });
+
+test('scope 3 is a custom run\'s digest over every resolved setting; scopes never mix and an unknown scope is unknown', () => {
+  const solved = { effective_source: { steps_per_period: 'solved', gap_layers: 'solved' } };
+  const c3 = sweepSettingsOf(stamp({ custom: true, name: 'custom', sig: 444, sig_scope: 3, ...solved }));
+  const p2 = sweepSettingsOf(stamp({ sig: 444, ...solved }));
+  assert.equal(c3.sig, 444); assert.equal(c3.sigScope, 3); assert.equal(p2.sigScope, 2);
+  assert.equal(sweepSettingsMismatch(c3, p2), true);                                   // same number, different scope: never the same settings
+  assert.equal(sweepSettingsMismatch(c3, sweepSettingsOf(stamp({ custom: true, name: 'custom', sig: 444, sig_scope: 3, ...solved }))), false);
+  assert.equal(sweepSettingsOf(stamp({ sig: 444, sig_scope: 4, ...solved })).sig, null);   // newer than this reader
+  assert.equal(sweepSettingsOf(stamp({ sig: 444, sig_scope: 4, ...solved })).sigScope, null);
+  const m3 = sweepSettingsMetrics(c3);
+  assert.equal(m3.sweep_sig_scope, 3);
+  const m2 = sweepSettingsMetrics(p2);
+  assert.equal(sweepMetricsComparable([m3, { ...m3 }]), true);
+  assert.equal(sweepMetricsComparable([m3, { ...m2, sweep_sig: m3.sweep_sig }]), false);   // equal numbers, scopes 3 and 2
+  assert.equal(sweepMetricsComparable([{ ...m3, sweep_sig_scope: 4 }, { ...m3, sweep_sig_scope: 4 }]), false);
+});

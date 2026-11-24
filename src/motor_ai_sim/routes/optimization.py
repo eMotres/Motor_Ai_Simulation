@@ -2135,7 +2135,7 @@ class RunSettingsIn(BaseModel):
     """The run settings of an optimisation panel (``run_settings.py``): a preset button and the overrides typed after it.
     The route resolves them with the SAME function the panel's display uses; ``expect_sig`` is the digest the panel showed,
     a different one is refused (409) rather than run with settings the user did not see."""
-    preset: Optional[str] = "optimization"
+    preset: Optional[str] = "optimization"   # "optimization" | "simulation" | "tab": a tab request carries the visible Mesh / Simulation values in ``overrides`` and is labelled by match (run_settings.TAB_REQUIRED)
     overrides: Dict[str, Any] = Field(default_factory=dict)
     expect_sig: Optional[int] = None
     expect_token: Optional[str] = None   # the complete resolution token the panel showed (run_settings.resolution_token)
@@ -3617,7 +3617,7 @@ def prepare_scan(req: ScanRequest) -> Dict[str, Any]:
         _resolved = _resolve_run_settings(req.run_settings, "sweep")
         req = _apply_run_settings(req, _resolved)
         _rs_stamp = _run_settings_stamp(req.run_settings, _resolved)
-        _preset_rec = {"name": _resolved["preset"], "label": _resolved["preset_label"], "version": _resolved["version"]}
+        _preset_rec = {"name": _resolved.get("record_name", _resolved["preset"]), "label": _resolved["preset_label"], "version": _resolved["version"]}
     else:
         req, _preset_rec = _with_preset(req)
     wl = get_config().get("sweep_whitelist", None)

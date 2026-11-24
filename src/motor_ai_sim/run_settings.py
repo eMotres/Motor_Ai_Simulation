@@ -23,6 +23,17 @@ from typing import Any, Dict, List, Mapping, Optional
 from motor_ai_sim import mesh_presets as MP
 
 PRESETS = ("optimization", "simulation")
+#: the third input mode (owner 2026-11-24, one place for the settings): the request carries the VISIBLE values of the Mesh /
+#: Simulation tabs as ``overrides``; nothing is taken from a preset, the label is found by MATCH against the two presets
+TAB = "tab"
+#: the values a ``tab`` request must carry (a missing one is refused: no silent default)
+TAB_REQUIRED = ("steps_per_period", "gap_layers", "mesh_size_mm", "min_size_mm", "n_sectors", "coil_rel", "rotor_eddy", "demag")
+
+
+def tab_required(mode: str) -> tuple:
+    """The values a ``tab`` request of ``mode`` must carry: a Descent run reads the demag switch from the machine's stored
+    Simulation block, so it is neither required nor accepted there."""
+    return tuple(k for k in TAB_REQUIRED if not (k == "demag" and mode == "descent"))
 #: settings the run request carries (and a user may override), by mode
 _OVERRIDABLE = {
     "sweep": ("steps_per_period", "gap_layers", "mesh_size_mm", "min_size_mm", "n_sectors", "rotor_eddy", "demag", "coil_rel"),
@@ -63,6 +74,15 @@ def _same(a: Any, b: Any) -> bool:
 #: the scope of the digest a stamp carries: 2 = steps, gap rows, preset version and wire cell (a sweep stamped before has no
 #: scope and is read as unknown, never ranked)
 SIG_SCOPE = 2
+#: the scope of the digest of a CUSTOM run (3): every resolved setting that reaches the solver (mesh sizes, sectors, element order,
+#: the eddy / rotor eddy / demag switches, outer air, per-part sizes, the wire cell, steps, gap rows) plus the preset version.  A
+#: preset run keeps the scope-2 digest, so stored preset sweeps stay comparable; a reader that does not know scope 3 treats it as
+#: unknown (never ranked).
+SIG_SCOPE_FULL = 3
+# WHAT SCOPE 3 CERTIFIES: the run's REQUESTED settings.  The solve check (``_stamp_solved``) verifies only what the solver reports
+# back per point: the steps, the gap rows and the wire cell.  The mesh sizes, sectors and the rotor eddy / demag switches are echoed
+# from the request by the eval (``refine_proc``: ``mesh_size_mm`` / ``min_size_mm`` / ``n_sectors``), not solved values; the digest
+# separates runs that asked for different ones, it does not prove what the mesher produced.
 
 
 def identity_sig(steps: Any, gap_layers: Any, preset_version: Any = None, coil_rel: Any = None) -> int:
@@ -72,6 +92,14 @@ def identity_sig(steps: Any, gap_layers: Any, preset_version: Any = None, coil_r
     if preset_version is not None:
         body += [int(preset_version), round(float(coil_rel if coil_rel is not None else 1.0), 4)]
     return int(hashlib.md5(json.dumps(body).encode()).hexdigest()[:12], 16)
+
+
+def full_sig(settings: Mapping[str, Any], preset_version: Any) -> int:
+    """The digest of a custom run: EVERY resolved setting the run uses (``settings`` is the resolver's dict) and the preset version.
+    Two custom runs rank together only when all of them are equal."""
+    body = {"v": int(preset_version) if preset_version is not None else None,
+            "s": {k: settings[k] for k in sorted(settings)}}
+    return int(hashlib.md5(json.dumps(body, sort_keys=True, default=str).encode()).hexdigest()[:12], 16)
 
 
 def _bound(key: str, x: float, mode: str, source: str, clamps: List[Dict[str, Any]]) -> float:
@@ -123,34 +151,86 @@ def resolution_token(out: Mapping[str, Any], geometry: Mapping[str, Any]) -> str
     return hashlib.md5(json.dumps(body, sort_keys=True, default=str).encode()).hexdigest()
 
 
+#: the settings a ``tab`` request is matched on (the demag of a Descent run is the machine's, so it is not matched there)
+_MATCH_KEYS = ("steps_per_period", "gap_layers", "mesh_size_mm", "min_size_mm", "n_sectors", "coil_rel", "rotor_eddy", "demag")
+
+
+def _preset_numbers(pv: Mapping[str, Any]) -> Dict[str, Any]:
+    try:
+        v = pv["values"]
+        return {"steps_per_period": int(v["n_steps_per_period"]), "gap_layers": float(v["gap_layers"]),
+                "mesh_size_mm": float(v["mesh_size_mm"]), "min_size_mm": float(v["min_size_mm"]),
+                "n_sectors": int(v["n_sectors"]), "coil_rel": float((v.get("component_mesh") or {}).get("coil_rel", 1.0)),
+                "rotor_eddy": bool(v["rotor_eddy"]), "demag": bool(v["demag"])}
+    except (KeyError, TypeError, ValueError) as exc:
+        raise RunSettingsError("a preset lacks a value a tab run is matched on (%s)" % (exc,))
+
+
+def _match_tab(settings: Mapping[str, Any], geometry: Mapping[str, Any], mode: str, opt_pv: Mapping[str, Any],
+               opt_base: Mapping[str, Any]):
+    """``(matched, reference label, differs)`` of a ``tab`` request: the preset whose numbers the visible values equal
+    (Optimization first), else ``None`` with the keys that differ from the Optimization preset (the reference of a new sweep).  The Simulation preset reads "that many steps or more" (owner 2026-11-17: 96 or more), decided HERE so
+    the panel never repeats the rule."""
+    keys = [k for k in _MATCH_KEYS if not (k == "demag" and mode == "descent")]
+    cands = [("optimization", opt_pv["label"], _preset_numbers(opt_pv))]
+    try:
+        sim_pv = MP.resolve("simulation", geometry)
+        cands.append(("simulation", sim_pv["label"], _preset_numbers(sim_pv)))
+    except MP.PresetError:
+        pass                                # the Simulation preset cannot be resolved for this machine: it cannot match
+    first = None
+    for pname, plabel, nums in cands:
+        diff: Dict[str, Any] = {}
+        for k in keys:
+            cur, w = settings[k], nums[k]
+            same = (float(cur) >= float(w) - 1e-9) if (k == "steps_per_period" and pname == "simulation") else _same(cur, w)
+            if not same:
+                diff[k] = {"preset": w, "current": cur}
+        if not diff:
+            return pname, plabel, {}
+        if first is None:
+            first = (pname, plabel, diff)
+    return None, first[1], first[2]
+
+
 def resolve(preset: Optional[str], overrides: Optional[Mapping[str, Any]], cfg: Mapping[str, Any],
             mode: str = "sweep") -> Dict[str, Any]:
     """The complete effective settings of one run, the label and every difference from the preset, the clamps applied."""
     name = str(preset or "optimization").strip().lower()
-    if name not in PRESETS:
-        raise RunSettingsError("unknown preset %r; the presets are %s" % (preset, ", ".join(PRESETS)))
+    tab = name == TAB
+    if name not in PRESETS and not tab:
+        raise RunSettingsError("unknown preset %r; the presets are %s, %s" % (preset, ", ".join(PRESETS), TAB))
+    if tab:
+        need = tab_required(mode)
+        missing = [k for k in need if k not in dict(overrides or {})]
+        if missing:
+            raise RunSettingsError("a tab request must carry %s; missing %s" % (", ".join(need), ", ".join(missing)))
     if mode not in _OVERRIDABLE:
         raise RunSettingsError("unknown run mode %r" % (mode,))
     geometry = dict(cfg.get("geometry") or {})
     try:
-        pv = MP.resolve(name, geometry)
+        pv = MP.resolve("optimization" if tab else name, geometry)
     except MP.PresetError as exc:
         raise RunSettingsError("the %s preset cannot be resolved for this machine: %s" % (name, exc))
     v = pv["values"]
     mach = _machine_values(cfg)
-    base = {"steps_per_period": int(v["n_steps_per_period"]), "gap_layers": float(v["gap_layers"]),
-            "mesh_size_mm": float(v["mesh_size_mm"]), "min_size_mm": float(v["min_size_mm"]),
-            "n_sectors": int(v["n_sectors"]), "coil_rel": float((v.get("component_mesh") or {}).get("coil_rel", 1.0)),
-            "element_order": int(v["element_order"]),
-            "rotor_eddy": bool(v["rotor_eddy"]), "demag": bool(v["demag"]), "hi_fidelity": False}
+    try:
+        base = {"steps_per_period": int(v["n_steps_per_period"]), "gap_layers": float(v["gap_layers"]),
+                "mesh_size_mm": float(v["mesh_size_mm"]), "min_size_mm": float(v["min_size_mm"]),
+                "n_sectors": int(v["n_sectors"]), "coil_rel": float((v.get("component_mesh") or {}).get("coil_rel", 1.0)),
+                "element_order": int(v["element_order"]),
+                "rotor_eddy": bool(v["rotor_eddy"]), "demag": bool(v["demag"]), "hi_fidelity": False}
+    except (KeyError, TypeError, ValueError) as exc:
+        raise RunSettingsError("the %s preset lacks a value this run needs (%s)" % (name, exc))
     settings: Dict[str, Any] = dict(base)
     sources = {k: "preset" for k in base}
     clamps: List[Dict[str, Any]] = []
     nominal = {"steps_per_period": base["steps_per_period"], "gap_layers": base["gap_layers"]}
     # the preset's own value is bounded like a typed one (e.g. 324 steps on a 36-slot / 10-pole machine): the run gets the
     # bounded number and the label reads custom, because it is no longer the preset's number
-    settings["steps_per_period"] = _bound("steps_per_period", float(base["steps_per_period"]), mode, "preset", clamps)
-    settings["gap_layers"] = _bound("gap_layers", float(base["gap_layers"]), mode, "preset", clamps)
+    if not tab:             # a tab request takes every value from the request: the preset base is a scaffold, not a source
+        settings["steps_per_period"] = _bound("steps_per_period", float(base["steps_per_period"]), mode, "preset", clamps)
+        settings["gap_layers"] = _bound("gap_layers", float(base["gap_layers"]), mode, "preset", clamps)
     given: Dict[str, Any] = {}
     allowed = _OVERRIDABLE[mode]
     for k, raw in dict(overrides or {}).items():
@@ -188,9 +268,12 @@ def resolve(preset: Optional[str], overrides: Optional[Mapping[str, Any]], cfg: 
                     clamps.append({"key": k, "requested": x, "used": used, "source": "override",
                                    "reason": "outside %g..%g" % (lo, hi)})
             settings[k] = used
-        sources[k] = "override"
+        sources[k] = "tab" if tab else "override"
     if mode == "descent":                     # the descent evals read demag from the stored Simulation block
         settings["demag"], sources["demag"] = mach["demag_cfg"], "machine"
+    if tab:     # nothing of a tab run comes from a preset: what the tab did not give is the solver's fixed basis (P2, no hi-fidelity bundle)
+        for k in ("element_order", "hi_fidelity"):
+            sources[k] = "fixed"
     settings["eddy"], sources["eddy"] = mach["eddy"], "machine"
     settings["outer_air_factor"], sources["outer_air_factor"] = mach["outer_air_factor"], "machine"
     settings["component_mesh"], sources["component_mesh"] = mach["component_mesh"], "machine"   # the stored block; coil_rel above is the run's
@@ -205,7 +288,9 @@ def resolve(preset: Optional[str], overrides: Optional[Mapping[str, Any]], cfg: 
             settings["n_sectors"] = sym
     # THE LABEL IS ABOUT THE PAIR (steps, gap rows) ONLY: what differs from the chosen preset's own numbers
     differs: Dict[str, Any] = {}
-    for k in ("steps_per_period", "gap_layers"):
+    matched: Optional[str] = None
+    ref_label = pv["label"]
+    for k in (() if tab else ("steps_per_period", "gap_layers")):
         cur, w = settings[k], nominal[k]
         same = (cur >= float(w) - 1e-9) if (k == "steps_per_period" and name == "simulation") else _same(cur, w)
         if not same:
@@ -219,16 +304,21 @@ def resolve(preset: Optional[str], overrides: Optional[Mapping[str, Any]], cfg: 
         coil_rel_stored = 1.0
     coil_rel_used = float(settings["coil_rel"])
     coil_rel_preset = float(base["coil_rel"])
-    if not _same(coil_rel_used, coil_rel_preset):
+    if tab:
+        matched, ref_label, differs = _match_tab(settings, geometry, mode, pv, base)
+    elif not _same(coil_rel_used, coil_rel_preset):
         differs["coil_rel"] = {"preset": coil_rel_preset, "current": coil_rel_used}
     coil_rel_override = None if _same(coil_rel_used, coil_rel_stored) else coil_rel_used
-    custom = bool(differs)
-    out = {"preset": name, "overrides": given, "label": "custom" if custom else name, "custom": custom,
-            "preset_label": pv["label"], "differs": differs, "settings": settings, "sources": sources,
+    custom = bool(differs) if not tab else matched is None
+    label = ("custom" if custom else (matched if tab else name))
+    out = {"preset": name, "overrides": given, "label": label, "custom": custom,
+            "preset_label": ref_label, "matched": matched,
+            "record_name": label if tab else name, "differs": differs, "settings": settings, "sources": sources,
             "clamps": clamps, "version": MP.version(), "mode": mode,
             "finalist_note": finalist_note(settings["steps_per_period"], geometry),
             "coil_rel": coil_rel_used, "coil_rel_stored": coil_rel_stored, "coil_rel_override": coil_rel_override,
-            "sig_scope": SIG_SCOPE,
-            "sig": identity_sig(settings["steps_per_period"], settings["gap_layers"], MP.version(), coil_rel_used)}
+            "sig_scope": SIG_SCOPE_FULL if custom else SIG_SCOPE,
+            "sig": (full_sig(settings, MP.version()) if custom else
+                    identity_sig(settings["steps_per_period"], settings["gap_layers"], MP.version(), coil_rel_used))}
     out["token"] = resolution_token(out, geometry)
     return out

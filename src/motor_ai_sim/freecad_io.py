@@ -420,7 +420,8 @@ def write_parameters_csv(rows: List[Tuple[str, Any, str, str]]) -> bytes:
     w = csv.writer(buf, lineterminator="\n")
     w.writerow(list(CSV_HEADER))
     for name, value, unit, desc in rows:
-        w.writerow([name, value, unit, desc])
+        from motor_ai_sim.spreadsheet_text import csv_safe_row
+        w.writerow(csv_safe_row([name, value, unit, desc]))
     return buf.getvalue().encode("utf-8")
 
 

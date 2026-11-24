@@ -2245,6 +2245,8 @@ def build_datasheet(*, die: str, cfg: str, die_doc: Dict[str, Any],
     ws2.cell(row=r2, column=1, value="Duty").font = Font(bold=True)
     for i, d in enumerate(duties):
         c = ws2.cell(row=r2, column=2 + i, value=str(d.get("name") or ""))
+        from motor_ai_sim.spreadsheet_text import force_text_cell
+        force_text_cell(c)                      # a duty name is user text on a sheet that also carries real formulas
         c.font = Font(bold=True)
         c.alignment = right
     r2 += 1

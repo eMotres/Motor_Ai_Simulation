@@ -3,7 +3,7 @@
  *
  * One small record per machine and duty, `{preset, overrides}`, kept apart from the ordinary-run settings of the Simulation and
  * Mesh tabs: nothing here reads or writes those.  The SERVER resolves the record (POST /api/optimization/run-settings/resolve)
- * into the complete settings the solver receives; the panel shows exactly that answer and the run request carries the same
+ * into the settings the run receives (steps per period and gap rows are what the run uses; the rest is shown read-only); the panel shows exactly that answer and the run request carries the same
  * record plus the digest it showed (`expect_sig`).  Pure functions here, the hook is in useRunSettings.ts.
  */
 export type RunPresetName = 'optimization' | 'simulation';

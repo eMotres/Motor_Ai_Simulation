@@ -299,6 +299,14 @@
   "runSettingsOff": "关",
   "runSettingsAdjusted": "已调整",
   "runSettingsMachine": "取自电机已存设置",
-  "runSettingsHelp": "点击预设一次设置本次运行的全部设置；之后修改步数或气隙层数则显示为自定义。这些设置仅属于本次运行，不会改变仿真或网格标签页。此处显示的即为求解器收到的设置。",
-  "runSettingsStale": "运行设置在显示后发生了变化，已刷新；请检查后再次点击运行。"
+  "runSettingsHelp": "每周期步数和气隙层数即为本次运行实际使用的值：预设按钮同时设置两者，在输入框中键入则覆盖并显示为自定义（标签仅针对这两个数）。其他设置以只读方式显示并注明来源。这些运行设置不会改变仿真或网格标签页。",
+  "runSettingsStale": "运行设置在显示后发生了变化，已刷新；请检查后再次点击运行。",
+  "runSettingsPresetWord": "预设",
+  "runSettingsEddy": "涡流",
+  "runSettingsOuterAir": "外部空气",
+  "runSettingsComponent": "部件尺寸",
+  "runSettingsOrder": "单元阶次",
+  "runSettingsSrcPreset": "预设",
+  "runSettingsSrcMachine": "电机",
+  "runSettingsSrcTyped": "手动"
 }

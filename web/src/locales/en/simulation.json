@@ -299,6 +299,14 @@
   "runSettingsOff": "off",
   "runSettingsAdjusted": "adjusted",
   "runSettingsMachine": "stored on the machine",
-  "runSettingsHelp": "A preset button sets every setting of this run at once; change steps or gap rows afterwards and it reads custom. These settings belong to this run only: they never change the Simulation or Mesh tab. What is shown here is what the solver receives.",
-  "runSettingsStale": "The run settings changed since they were shown. They are refreshed; check them and press Run again."
+  "runSettingsHelp": "Steps per period and gap rows are exactly what this run uses: a preset button sets both, typing in a field overrides it and the label reads custom (the label is about these two numbers only). The other settings are shown read-only with where they come from. These run settings never change the Simulation or Mesh tab.",
+  "runSettingsStale": "The run settings changed since they were shown. They are refreshed; check them and press Run again.",
+  "runSettingsPresetWord": "preset",
+  "runSettingsEddy": "eddy",
+  "runSettingsOuterAir": "outer air",
+  "runSettingsComponent": "part sizes",
+  "runSettingsOrder": "element order",
+  "runSettingsSrcPreset": "preset",
+  "runSettingsSrcMachine": "machine",
+  "runSettingsSrcTyped": "typed"
 }

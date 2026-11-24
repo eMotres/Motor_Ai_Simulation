@@ -1,13 +1,16 @@
-"""The settings of an optimisation run (Sweep, Descent, Auto), resolved in ONE place (owner 2026-11-24).
+"""The steps per period and the gap rows of an optimisation run (Sweep, Descent, Auto), resolved in ONE place (owner 2026-11-24).
 
-A panel keeps a small record ``{preset, overrides}`` per machine.  The server turns it into the COMPLETE effective settings the
-solver receives (``resolve``); the panel displays exactly that answer and the run request carries the same record, which the
-route resolves with the same function.  A preset is a button (``optimization`` / ``simulation``); an override is any single
-setting the user changed afterwards (the label then reads ``custom`` and lists what differs).
+A panel keeps a small record ``{preset, overrides}`` per machine.  The server turns it into the settings the run receives
+(``resolve``); the panel displays exactly that answer and the run request carries the same record, which the route resolves
+with the same function.  A preset is a button (``optimization`` / ``simulation``); an override is a setting the user typed
+afterwards.
 
-Keys the run request cannot carry (the coupled-eddy switch, the outer-air factor and the per-part mesh sizes are read by the
-solver from the machine's stored Mesh / Simulation block) are reported with their ACTUAL values and source ``machine``; they
-count in the label, so a machine whose stored block differs from a preset never reads as that preset."""
+WHAT THIS GUARANTEES: the STEPS PER PERIOD and the GAP ROWS of the run are what the panel shows, are chosen by the preset button
+or typed in the panel, and never come from another tab.  Every coercion of those two numbers (bounds of the mode, the preset's
+own value outside the bounds, ...) happens HERE, so the display equals the run for them.  The label ("optimization" /
+"simulation" / "custom") and the digest (``sig``) are about that PAIR only.  The other settings (mesh sizes, sectors, rotor eddy,
+demag, and the keys the solver reads from the machine's stored block) are returned for display, each with its source, and are
+NOT part of the label or the digest: the complete run-settings identity is a follow-up."""
 from __future__ import annotations
 
 import hashlib
@@ -20,14 +23,15 @@ from motor_ai_sim import mesh_presets as MP
 PRESETS = ("optimization", "simulation")
 #: settings the run request carries (and a user may override), by mode
 _OVERRIDABLE = {
-    "sweep": ("steps_per_period", "gap_layers", "mesh_size_mm", "min_size_mm", "n_sectors", "rotor_eddy", "demag",
-              "hi_fidelity"),
+    "sweep": ("steps_per_period", "gap_layers", "mesh_size_mm", "min_size_mm", "n_sectors", "rotor_eddy", "demag"),
     "descent": ("steps_per_period", "gap_layers", "mesh_size_mm", "min_size_mm", "n_sectors", "rotor_eddy"),
     "auto": ("steps_per_period", "gap_layers", "mesh_size_mm", "min_size_mm", "n_sectors", "rotor_eddy", "demag"),
 }
 _MACHINE_KEYS = ("eddy", "outer_air_factor", "component_mesh")
 _BOUNDS = {"steps_per_period": (4, 180), "gap_layers": (1.0, 2.0), "mesh_size_mm": (0.02, 12.0),
            "min_size_mm": (0.002, 3.0)}
+#: the lowest step count each run kind accepts (the descent / auto plans keep 8 frames or more)
+_MIN_STEPS = {"sweep": 4, "descent": 8, "auto": 8}
 
 
 class RunSettingsError(ValueError):
@@ -54,12 +58,24 @@ def _same(a: Any, b: Any) -> bool:
     return MP._same(a, b)
 
 
-def identity_sig(settings: Mapping[str, Any]) -> int:
-    """A numeric digest of the COMPLETE settings (two results compare only when it is known and equal)."""
-    keys = ("steps_per_period", "gap_layers", "mesh_size_mm", "min_size_mm", "n_sectors", "element_order", "eddy",
-            "rotor_eddy", "demag", "hi_fidelity", "outer_air_factor", "component_mesh")
-    body = {k: settings.get(k) for k in keys}
-    return int(hashlib.md5(json.dumps(body, sort_keys=True, default=str).encode()).hexdigest()[:12], 16)
+def identity_sig(steps: Any, gap_layers: Any) -> int:
+    """A numeric digest of the STEPS-AND-GAP identity (two sweeps are ranked together only when it is known and equal)."""
+    body = [int(steps), round(float(gap_layers), 4)]
+    return int(hashlib.md5(json.dumps(body).encode()).hexdigest()[:12], 16)
+
+
+def _bound(key: str, x: float, mode: str, source: str, clamps: List[Dict[str, Any]]) -> float:
+    lo, hi = _BOUNDS[key]
+    if key == "steps_per_period":
+        lo = _MIN_STEPS[mode]
+    used = min(max(x, lo), hi)
+    if key == "steps_per_period":
+        used = int(round(used))
+    if used != x:
+        clamps.append({"key": key, "requested": x, "used": used, "source": source,
+                       "reason": "outside %g..%g for a %s run" % (lo, hi, mode)
+                       + (" (gap rows never above 2)" if key == "gap_layers" and x > 2 else "")})
+    return used
 
 
 def resolve(preset: Optional[str], overrides: Optional[Mapping[str, Any]], cfg: Mapping[str, Any],
@@ -84,6 +100,11 @@ def resolve(preset: Optional[str], overrides: Optional[Mapping[str, Any]], cfg: 
     settings: Dict[str, Any] = dict(base)
     sources = {k: "preset" for k in base}
     clamps: List[Dict[str, Any]] = []
+    nominal = {"steps_per_period": base["steps_per_period"], "gap_layers": base["gap_layers"]}
+    # the preset's own value is bounded like a typed one (e.g. 324 steps on a 36-slot / 10-pole machine): the run gets the
+    # bounded number and the label reads custom, because it is no longer the preset's number
+    settings["steps_per_period"] = _bound("steps_per_period", float(base["steps_per_period"]), mode, "preset", clamps)
+    settings["gap_layers"] = _bound("gap_layers", float(base["gap_layers"]), mode, "preset", clamps)
     given: Dict[str, Any] = {}
     allowed = _OVERRIDABLE[mode]
     for k, raw in dict(overrides or {}).items():
@@ -103,14 +124,14 @@ def resolve(preset: Optional[str], overrides: Optional[Mapping[str, Any]], cfg: 
             settings[k] = int(n)
         else:
             x = _num(k, raw)
-            lo, hi = _BOUNDS[k]
-            used = min(max(x, lo), hi)
-            if k == "steps_per_period":
-                used = int(round(used))
-            if used != x:
-                clamps.append({"key": k, "requested": x, "used": used,
-                               "reason": "outside %g..%g" % (lo, hi)
-                               + (" (gap rows never above 2)" if k == "gap_layers" and x > 2 else "")})
+            if k in ("steps_per_period", "gap_layers"):
+                used = _bound(k, x, mode, "override", clamps)
+            else:
+                lo, hi = _BOUNDS[k]
+                used = min(max(x, lo), hi)
+                if used != x:
+                    clamps.append({"key": k, "requested": x, "used": used, "source": "override",
+                                   "reason": "outside %g..%g" % (lo, hi)})
             settings[k] = used
         sources[k] = "override"
     if mode == "descent":                     # the descent evals read demag from the stored Simulation block
@@ -118,26 +139,24 @@ def resolve(preset: Optional[str], overrides: Optional[Mapping[str, Any]], cfg: 
     settings["eddy"], sources["eddy"] = mach["eddy"], "machine"
     settings["outer_air_factor"], sources["outer_air_factor"] = mach["outer_air_factor"], "machine"
     settings["component_mesh"], sources["component_mesh"] = mach["component_mesh"], "machine"
-    if settings["hi_fidelity"]:
-        clamps.append({"key": "gap_layers", "requested": settings["gap_layers"],
-                       "used": max(4.0, settings["gap_layers"]),
-                       "reason": "hi_fidelity raises the gap rows to 4 or more in the solver"})
-    # what differs from the chosen preset: every key the solver receives
+    # The solver solves a full-ring request on the machine's natural symmetry sector (P2); sectors do not change the steps or the
+    # gap rows, but the effective number is shown, with the reason.
+    if int(settings["n_sectors"]) <= 1:
+        sym = max(1, math.gcd(int(round(float(geometry.get("num_slots", 1) or 1))),
+                              int(round(float(geometry.get("num_poles", 1) or 1)))))
+        if sym >= 2:
+            clamps.append({"key": "n_sectors", "requested": int(settings["n_sectors"]), "used": sym, "source": sources["n_sectors"],
+                           "reason": "a full ring is solved on the natural symmetry sector (it changes neither the steps nor the gap rows)"})
+            settings["n_sectors"] = sym
+    # THE LABEL IS ABOUT THE PAIR (steps, gap rows) ONLY: what differs from the chosen preset's own numbers
     differs: Dict[str, Any] = {}
-    for k, w in base.items():
-        cur = settings[k]
+    for k in ("steps_per_period", "gap_layers"):
+        cur, w = settings[k], nominal[k]
         same = (cur >= float(w) - 1e-9) if (k == "steps_per_period" and name == "simulation") else _same(cur, w)
         if not same:
             differs[k] = {"preset": w, "current": cur}
-    pm = pv["values"]
-    if not _same(settings["outer_air_factor"], pm["outer_air_factor"]) and "outer_air_factor" in (cfg.get("mesh") or {}):
-        differs["outer_air_factor"] = {"preset": pm["outer_air_factor"], "current": settings["outer_air_factor"]}
-    for ck, cv in settings["component_mesh"].items():           # a part size the machine does not store is the default
-        if ck in pm["component_mesh"] and not _same(cv, pm["component_mesh"][ck]):
-            differs["component_mesh.%s" % ck] = {"preset": pm["component_mesh"][ck], "current": cv}
-    if bool(pm.get("eddy", True)) != settings["eddy"]:
-        differs["eddy"] = {"preset": bool(pm.get("eddy", True)), "current": settings["eddy"]}
     custom = bool(differs)
     return {"preset": name, "overrides": given, "label": "custom" if custom else name, "custom": custom,
             "preset_label": pv["label"], "differs": differs, "settings": settings, "sources": sources,
-            "clamps": clamps, "version": MP.version(), "mode": mode, "sig": identity_sig(settings)}
+            "clamps": clamps, "version": MP.version(), "mode": mode,
+            "sig": identity_sig(settings["steps_per_period"], settings["gap_layers"])}

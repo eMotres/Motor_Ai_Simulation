@@ -54,3 +54,20 @@ test('the run request of each panel carries run_settings and is gated on a held 
   const auto = readFileSync(new URL('components/sweep/AutoOptimizePanel.tsx', root), 'utf8');
   assert.ok(auto.includes('run_settings:') && auto.includes('!rs.ready'));
 });
+
+test('applying a descent / auto result leaves the ordinary-run fidelity alone: no steps, gap rows, sectors or mesh sizes are restored', () => {
+  const src = readFileSync(new URL('../../stores/motorStore.ts', import.meta.url), 'utf8');
+  const a = src.indexOf('function restoreDescentEvalParams');
+  const body = src.slice(a, src.indexOf('\n}\n', a));
+  for (const key of ['sim.stepsPP', 'mesh.gapLayers', 'mesh.meshSize', 'mesh.minSize', 'mesh.nSectors']) {
+    assert.ok(!body.includes(key), key);
+  }
+  assert.ok(body.includes("'descent-eval-params'") && body.includes('steps_per_period: _s'));   // the live event is stripped too
+});
+
+test('no UI string or comment claims a complete-settings identity or a stale-display guard for more than steps and gap rows', () => {
+  const root = new URL('../../', import.meta.url);
+  for (const f of ['locales/en/simulation.json', 'lib/sweepSettings.ts', 'lib/runSettings.ts', 'components/sweep/RunSettingsBar.tsx']) {
+    assert.ok(!/full settings|complete settings|COMPLETE settings/i.test(readFileSync(new URL(f, root), 'utf8')), f);
+  }
+});

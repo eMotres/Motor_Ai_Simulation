@@ -1,10 +1,11 @@
 /**
  * What a sweep RAN with: ONE reader for the result on screen, the saved-sweeps list, Apply and Compare (owner 2026-11-24).
  *
- * The label is recomputed from the stamp (`mesh_preset`, written by the server from the SOLVED points): a preset's name only
- * when nothing differs, `custom` when anything does, `mixed` when the solved points disagree.  `sig` is the digest of the
- * COMPLETE settings; it is null for a legacy sweep (stored before the stamp), a mixed one, or one whose solve disagreed with
- * its request.  Two sweeps are compared only when BOTH digests are known and equal: unknown never matches anything.
+ * Scope: the STEPS PER PERIOD and the GAP ROWS only.  The label is recomputed from the stamp (`mesh_preset`, written by the server
+ * from the SOLVED points): a preset's name only when that pair equals the preset's, `custom` when it does not, `mixed` when the
+ * solved points disagree.  `sig` is the digest of the (steps, gap rows) pair; it is null for a legacy sweep (stored before the
+ * stamp), a mixed one, one whose solve disagreed with its request, one that no solve verified, or one with a null value.  Two
+ * sweeps are ranked together only when BOTH digests are known and equal: unknown never matches anything.
  */
 export interface SweepSettings {
   preset: string | null;          // 'optimization' | 'simulation' | 'custom' | null (legacy: no stamp)
@@ -27,7 +28,8 @@ export function sweepSettingsOf(x: any): SweepSettings {
     const custom = s.custom === true || mixed;
     return { preset: s.source === 'preset' ? (custom ? 'custom' : (typeof s.preset === 'string' ? s.preset : null)) : null,
              steps: numOrNull(s.steps_per_period), gapLayers: numOrNull(s.gap_layers), custom, mixed,
-             sig: s.source === 'preset' && !mixed ? sigOrNull(s.sig) : null,
+             sig: s.source === 'preset' && !mixed && numOrNull(s.steps_per_period) !== null && numOrNull(s.gap_layers) !== null
+               ? sigOrNull(s.sig) : null,
              source: s.source === 'preset' ? 'preset' : 'stored_request' };
   }
   const mp = x?.mesh_preset;
@@ -36,7 +38,9 @@ export function sweepSettingsOf(x: any): SweepSettings {
     const srcs = mp.effective_source && typeof mp.effective_source === 'object' ? Object.values(mp.effective_source) : [];
     const mixed = mp.mixed === true || srcs.includes('mixed');
     const custom = mp.custom === true || mixed || mp.solved_differs === true;
-    const sig = mixed || mp.solved_differs === true ? null : sigOrNull(mp.sig);
+    const verified = srcs.includes('solved');
+    const sig = mixed || mp.solved_differs === true || !verified || numOrNull(eff.steps_per_period) === null
+      || numOrNull(eff.gap_layers) === null ? null : sigOrNull(mp.sig);
     return { preset: custom ? 'custom' : (typeof mp.name === 'string' ? mp.name : null),
              steps: numOrNull(eff.steps_per_period), gapLayers: numOrNull(eff.gap_layers), custom, mixed, sig, source: 'preset' };
   }
@@ -69,12 +73,21 @@ export function sweepSettingsMetrics(s: SweepSettings): Record<string, number> {
   return m;
 }
 
-/** Saved results compare only when every sweep-origin row carries a valid, equal digest.  A row without the sweep origin is
- *  not a sweep row and is ignored; a sweep row with a null / zero / non-numeric digest makes the whole set not comparable. */
+/** A saved row came from a sweep point: the origin mark of this change, or (a legacy applied point) the sweep-only metric
+ *  `raw_samples_per_cogging_cycle` that only the sweep's Apply wrote. */
+export const isSweepRow = (r: Record<string, unknown> | undefined | null): boolean =>
+  !!r && (Number((r as any).sweep_origin) === 1 || Number.isFinite(Number((r as any).raw_samples_per_cogging_cycle)) &&
+          (r as any).raw_samples_per_cogging_cycle !== null && (r as any).raw_samples_per_cogging_cycle !== undefined);
+
+/** Saved results are ranked together only when the steps-and-gap identity is KNOWN and equal.  Checked BEFORE any count
+ *  shortcut: one sweep row with a null / zero / non-numeric digest (unknown, mixed, legacy) is not comparable with anything, a
+ *  sweep row beside an ordinary (non-sweep) row is not either, and two sweep rows need equal digests. */
 export function sweepMetricsComparable(rows: Array<Record<string, unknown> | undefined | null>): boolean {
-  const have = rows.filter(r => r && Number((r as any).sweep_origin) === 1);
-  if (have.length < 2) return true;
-  const sigs = have.map(r => (r as any).sweep_sig);
+  const valid = rows.filter(r => !!r);
+  const sweep = valid.filter(isSweepRow);
+  if (!sweep.length) return true;
+  if (sweep.length !== valid.length) return false;
+  const sigs = sweep.map(r => (r as any).sweep_sig);
   if (sigs.some(v => typeof v !== 'number' || !Number.isFinite(v) || v <= 0)) return false;
   return new Set(sigs as number[]).size === 1;
 }

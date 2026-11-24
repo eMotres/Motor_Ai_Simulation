@@ -295,7 +295,7 @@ def sweep_settings_of(result: Any, config: Optional[Dict[str, Any]] = None) -> D
 
     A stamped sweep (``mesh_preset``) reads its label from the stamp: the preset's name only when nothing differs, ``custom``
     when anything does (or when the solve disagreed with the request, or the points disagree: ``mixed``).  ``sig`` is the
-    digest of the COMPLETE settings, None when unknown, mixed or legacy: two sweeps compare only when both digests are
+    digest of the (steps, gap rows) pair ONLY, None when unknown, unverified by a solve, mixed or legacy: two sweeps rank together only when both digests are
     known and equal.  A sweep stored before the stamp is labelled from its stored request and has no digest."""
     r = result if isinstance(result, dict) else {}
     cfg = config if isinstance(config, dict) else {}
@@ -306,7 +306,10 @@ def sweep_settings_of(result: Any, config: Optional[Dict[str, Any]] = None) -> D
         mixed = bool(mp.get("mixed")) or any(v == "mixed" for v in (mp.get("effective_source") or {}).values()
                                               if isinstance(mp.get("effective_source"), dict))
         custom = bool(mp.get("custom")) or mixed or bool(mp.get("solved_differs"))
-        sig = None if (mixed or mp.get("solved_differs")) else mp.get("sig")
+        srcs = mp.get("effective_source") if isinstance(mp.get("effective_source"), dict) else {}
+        verified = any(v == "solved" for v in srcs.values())
+        known = eff.get("steps_per_period") is not None and eff.get("gap_layers") is not None
+        sig = None if (mixed or mp.get("solved_differs") or not verified or not known) else mp.get("sig")
         return {"preset": ("custom" if custom else mp.get("name")), "version": mp.get("version"), "custom": custom,
                 "mixed": mixed, "effective_source": mp.get("effective_source"),
                 "steps_per_period": eff.get("steps_per_period"), "gap_layers": eff.get("gap_layers"),
@@ -376,12 +379,13 @@ def _when_key(row: Dict[str, Any]) -> float:
 def _read_meta_row(f: Path) -> Optional[Dict[str, Any]]:
     """The list row of one save: its sidecar when that is current, else parsed
     from the save (and the sidecar written) - a save is never edited in place,
-    so a sidecar newer than its save is right."""
+    so a sidecar newer than its save is right.  A sidecar written before the
+    settings label existed is rebuilt (the sidecar only; the save is not touched)."""
     mp = _meta_path(f)
     try:
         if mp.exists() and mp.stat().st_mtime >= f.stat().st_mtime:
             row = json.loads(mp.read_text(encoding="utf-8"))
-            if isinstance(row, dict) and row.get("id") == f.stem and "auto" in row:
+            if isinstance(row, dict) and row.get("id") == f.stem and "auto" in row and "settings" in row:
                 return row
     except Exception:                                    # noqa: BLE001
         pass

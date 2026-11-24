@@ -3305,8 +3305,8 @@ def _optimization_preset_steps(geometry=None) -> int:
 
 
 def _resolve_run_settings(rs, mode: str):
-    """The complete effective settings of a run from the panel's ``{preset, overrides}`` (``run_settings.resolve``), for the loaded
-    machine.  A bad record is a 422; a record whose digest differs from the one the panel displayed is a 409."""
+    """The run settings from the panel's ``{preset, overrides}`` (``run_settings.resolve``), for the loaded machine: steps per
+    period and gap rows are what the run uses, the other keys are shown read-only.  A bad record is a 422; a record whose digest differs from the one the panel displayed is a 409."""
     from motor_ai_sim import run_settings as _RS
     try:
         out = _RS.resolve(rs.preset, rs.overrides, get_config(), mode)
@@ -3314,13 +3314,13 @@ def _resolve_run_settings(rs, mode: str):
         raise HTTPException(status_code=422, detail=str(exc))
     if rs.expect_sig is not None and int(rs.expect_sig) != int(out["sig"]):
         raise HTTPException(status_code=409, detail=(
-            "the run settings changed since the panel showed them (the machine's stored settings or the preset); "
+            "the run settings changed since the panel showed them (the steps per period or the gap rows differ now); "
             "the panel refreshes them, check them and press Run again"))
     return out
 
 
 def _apply_run_settings(req, resolved):
-    """The request with every setting the run takes from the resolved record (nothing is read from another tab)."""
+    """The request with the settings the run takes from the resolved record (steps and gap rows are never read from another tab)."""
     st = resolved["settings"]
     fields = type(req).model_fields
     upd = {"steps_per_period": int(st["steps_per_period"]), "gap_layers": float(st["gap_layers"]),
@@ -3331,7 +3331,8 @@ def _apply_run_settings(req, resolved):
 
 
 def _run_settings_stamp(rs, resolved):
-    """The record a run stores about its settings: the label, what differs, the full resolved settings and the digest."""
+    """The record a run stores about its settings: the label (about steps and gap rows only), what differs, the resolved settings
+    shown read-only and the steps-and-gap digest."""
     return {"name": resolved["label"], "label": resolved["preset_label"] if not resolved["custom"] else "custom",
             "version": resolved["version"], "custom": resolved["custom"], "differs": resolved["differs"],
             "run_settings": {"preset": resolved["preset"], "overrides": resolved["overrides"]},
@@ -3341,7 +3342,8 @@ def _run_settings_stamp(rs, resolved):
 
 @router.post("/run-settings/resolve")
 def run_settings_resolve(rs: RunSettingsIn, mode: str = "sweep"):
-    """The complete effective settings of a run for the loaded machine: what the panel displays and what the run receives."""
+    """The run settings for the loaded machine: the steps per period and gap rows the run receives (what the panel displays), and
+    the other keys read-only with their source."""
     return _resolve_run_settings(rs.model_copy(update={"expect_sig": None}), mode)
 
 
@@ -3430,6 +3432,8 @@ def _stamp_solved(rec, points):
             eff[field] = None
             mixed = True
     rec["effective"], rec["effective_source"], rec["n_points_reporting"] = eff, src, n_rep
+    if not any(v == "solved" for v in src.values()):
+        rec["sig"] = None           # nothing was verified by the solve: the identity is unknown, never the requested one
     if differs:
         rec["solved_differs"] = True
     if mixed:

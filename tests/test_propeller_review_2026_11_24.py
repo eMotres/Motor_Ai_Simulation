@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import json
 import math
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -161,6 +162,60 @@ def test_4c_cambered_plate_stalls_at_the_generic_angle_not_shifted_by_alpha0():
     a0 = cp.alpha0("naca4-6412")
     assert cl[0] == pytest.approx(2 * math.pi * (math.radians(2.0) - a0))
     assert max(cl) == pytest.approx(pb.CAMBER_CL_MAX) and "camber_cl_max_capped" in fl    # follow-up: no optimistic 2.0
+    assert "camber_cl_max_literature" in fl                           # no tables given: the literature ceiling, and it says so
+
+
+def _table(af, re, alpha_deg, cl, gaps=()):
+    a = np.radians(alpha_deg)
+    return pb.PolarTable(af, re, a, np.asarray(cl, float), np.full(len(a), 0.02), "test", tuple(np.radians(gaps)))
+
+
+def test_followup2_camber_ceiling_is_the_sections_own_from_the_mfoil_tables():
+    """Follow-up 2 of #865: with tables for the section the lift ceiling is the table's cl max at that Re (log-Re interpolation),
+    not the literature 1.4; a gap-bridged angle does not count, and a ceiling on the last tabulated angle is flagged."""
+    al = [-8, -4, 0, 4, 8, 12, 14, 16]
+    t1 = _table("naca4-6412", 1e5, al, [-0.5, -0.1, 0.5, 0.9, 1.2, 1.25, 1.1, 1.0])
+    t2 = _table("naca4-6412", 4e5, al, [-0.6, -0.1, 0.6, 1.0, 1.4, 1.55, 1.5, 1.3])
+    cp = pb.CamberedPlatePolar(cl_max_tables=pb.TablePolar([t1, t2]))
+    hi, lo, f = cp.cl_limits("naca4-6412", np.array([1e5, 2e5, 4e5, 1e6]))
+    w = math.log(2e5 / 1e5) / math.log(4e5 / 1e5)
+    assert hi[0] == pytest.approx(1.25) and hi[2] == pytest.approx(1.55) and hi[1] == pytest.approx(1.25 + w * 0.30)
+    assert hi[3] == pytest.approx(1.55) and "camber_cl_max_re_clamped" in f and "camber_cl_max_from_mfoil" in f
+    assert lo[0] == pytest.approx(0.5) and lo[2] == pytest.approx(0.6)
+    cl, _, fl = cp.eval("naca4-6412", np.radians([2.0, 11.0]), np.array([1e5, 1e5]), np.array([0.1, 0.1]), 0.12)
+    assert cl[1] == pytest.approx(1.25) and "camber_cl_max_capped" in fl and "camber_cl_max_literature" not in fl
+    # an airfoil without tables keeps the literature ceiling
+    _, _, f2 = cp.cl_limits("naca4-2412", np.array([2e5]))
+    assert f2 == {"camber_cl_max_literature"}
+    # a gap-bridged angle is not a ceiling; a ceiling on the last row means the stall is not resolved
+    tg = _table("x", 2e5, [0, 4, 8, 10, 12], [0.4, 0.8, 1.2, 1.9, 1.3], gaps=(10,))
+    assert pb.table_cl_limits(tg)[0] == pytest.approx(1.3) and pb.table_cl_limits(tg)[2] is False
+    te = _table("y", 2e5, [0, 4, 8, 12], [0.4, 0.8, 1.2, 1.3])
+    assert pb.table_cl_limits(te)[2] is False
+    _, _, f3 = pb.CamberedPlatePolar(cl_max_tables=pb.TablePolar([te, _table("y", 4e5, [0, 4, 8, 12], [0.4, 0.8, 1.2, 1.3])])).cl_limits("y", np.array([3e5]))
+    assert "camber_cl_max_table_end" in f3
+
+
+def test_followup2_camber_model_reads_the_shipped_mfoil_tables():
+    tp = pb._mfoil_tables(pb.MFOIL_POLAR_DIR)
+    assert tp is not None and "naca4-4412" in tp.airfoils()
+    cp = pb.CamberedPlatePolar(cl_max_tables=tp)
+    hi, _, f = cp.cl_limits("naca4-4412", np.array([1e5, 3e5]))
+    assert "camber_cl_max_from_mfoil" in f and 0.8 < hi[0] < 1.8 and 0.8 < hi[1] < 1.8
+    assert pb._mfoil_tables(Path("/nonexistent-mfoil")) is None
+
+
+def test_followup3_w_re_not_converged_is_a_failed_constraint(monkeypatch):
+    """Follow-up 3 of #865: elements whose W / Re / polar did not settle within the passes make the point infeasible."""
+    d = pd.load_design()
+    vec = pd.seed_vector(d, 10, 2)
+    monkeypatch.setattr(pb, "_W_PASSES", 1)                            # one pass never confirms a settled W
+    rec = pd.evaluate_candidate(d, vec, "L12")
+    assert "w_re_not_converged" in rec["flags"] and rec["constraints"]["w_re_converged"] is False
+    assert rec["constraints_met"] is False
+    monkeypatch.setattr(pb, "_W_PASSES", 8)
+    rec = pd.evaluate_candidate(d, vec, "L12")
+    assert rec["constraints"]["w_re_converged"] is True
 
 
 def test_8d_prandtl_glauert_is_faded_out_past_the_attached_range():

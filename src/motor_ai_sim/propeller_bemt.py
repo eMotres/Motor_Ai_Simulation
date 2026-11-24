@@ -184,8 +184,20 @@ def zero_lift_angle(x, yu, yl) -> float:
 
 #: lift ceiling of the ESTIMATED cambered-plate polar (review 2026-11-24 follow-up): 2 pi (alpha - alpha_0) to a 12 deg stall gives
 #: cl 1.77 (4412) / 2.0 (6412); cambered 4-6 % sections at Re 1e5-3e5 reach about 1.2-1.5 (Selig et al., Summary of Low-Speed Airfoil
-#: Data, vols 1-3, 1995-1997).  1.4 is an assumption inside that range, not data for a given airfoil.
+#: Data, vols 1-3, 1995-1997).  1.4 is an assumption inside that range, not data for a given airfoil: it is used only where the mfoil
+#: tables have no section (flag ``camber_cl_max_literature``); otherwise the ceiling is the section's own (follow-up 2 of #865).
 CAMBER_CL_MAX = 1.4
+
+
+def table_cl_limits(t: PolarTable) -> Tuple[float, float, bool]:
+    """(highest cl, |lowest cl|, stall resolved) of one table over its converged angles (bridged gap intervals left out).  ``stall
+    resolved`` is False when the highest lift sits on the last tabulated angle: the true ceiling is then at least that value."""
+    keep = np.ones(len(t.alpha), bool)
+    for lo, hi in TablePolar.gap_intervals(t):
+        keep &= ~((t.alpha > lo) & (t.alpha < hi))
+    cl, a = t.cl[keep], t.alpha[keep]
+    i = int(np.argmax(cl))
+    return float(cl[i]), float(max(-float(np.min(cl)), 0.0)), i < len(cl) - 1
 
 
 class CamberedPlatePolar(FlatPlatePolar):
@@ -195,9 +207,33 @@ class CamberedPlatePolar(FlatPlatePolar):
 
     estimated = True
 
-    def __init__(self, aspect_ratio: float = 8.0, alpha_stall_deg: float = FLATPLATE_ALPHA_STALL_DEG):
+    def __init__(self, aspect_ratio: float = 8.0, alpha_stall_deg: float = FLATPLATE_ALPHA_STALL_DEG,
+                 cl_max_tables: Optional["TablePolar"] = None):
         super().__init__(aspect_ratio, alpha_stall_deg)
         self._a0: Dict[str, float] = {}
+        #: per airfoil: (log Re, cl max, |cl min|, stall resolved) from the mfoil tables (follow-up 2 of #865); None = literature cap only
+        self._lim: Dict[str, Tuple[np.ndarray, np.ndarray, np.ndarray, bool]] = {}
+        for af, tabs in (cl_max_tables._by.items() if cl_max_tables is not None else ()):
+            rows = [(math.log(t.re),) + table_cl_limits(t) for t in tabs]
+            self._lim[af] = (np.array([r[0] for r in rows]), np.array([r[1] for r in rows]), np.array([r[2] for r in rows]),
+                             all(r[3] for r in rows))
+
+    def cl_limits(self, airfoil: str, Re) -> Tuple[np.ndarray, np.ndarray, set]:
+        """Positive and negative lift ceilings at ``Re`` (log-Re interpolation of the section's mfoil tables, clamped at their ends) and
+        the flags saying where they came from; without a table for the section the literature value ``CAMBER_CL_MAX`` on both sides."""
+        Re = np.asarray(Re, float)
+        lim = self._lim.get(airfoil)
+        if lim is None:
+            c = np.full(Re.shape, CAMBER_CL_MAX)
+            return c, c, {"camber_cl_max_literature"}
+        lr, hi, lo, resolved = lim
+        x = np.log(np.maximum(Re, 1.0))
+        f = {"camber_cl_max_from_mfoil"}
+        if np.any(x < lr[0]) or np.any(x > lr[-1]):
+            f.add("camber_cl_max_re_clamped")
+        if not resolved:
+            f.add("camber_cl_max_table_end")
+        return np.interp(x, lr, hi), np.interp(x, lr, lo), f
 
     def alpha0(self, airfoil: str) -> float:
         if airfoil not in self._a0:
@@ -216,14 +252,18 @@ class CamberedPlatePolar(FlatPlatePolar):
         a0 = self.alpha0(airfoil)
         cd0 = self.cd0(Re, thickness)
         pre = np.abs(alpha) <= self.a_s
-        cl_pre = np.clip(2.0 * math.pi * (alpha - a0), -CAMBER_CL_MAX, CAMBER_CL_MAX)       # capped: no optimistic high-alpha lift
-        cl_pos, cd_pos = self._post(np.abs(alpha), cd0, min(2.0 * math.pi * (self.a_s - a0), CAMBER_CL_MAX))
-        cl_neg, cd_neg = self._post(np.abs(alpha), cd0, min(2.0 * math.pi * (self.a_s + a0), CAMBER_CL_MAX))
+        c_hi, c_lo, fl_lim = self.cl_limits(airfoil, Re)                                 # capped: no optimistic high-alpha lift
+        lin = 2.0 * math.pi * (alpha - a0)
+        cl_pre = np.clip(lin, -c_lo, c_hi)
+        cl_pos, cd_pos = self._post(np.abs(alpha), cd0, np.minimum(2.0 * math.pi * (self.a_s - a0), c_hi))
+        cl_neg, cd_neg = self._post(np.abs(alpha), cd0, np.minimum(2.0 * math.pi * (self.a_s + a0), c_lo))
         cl = np.where(pre, cl_pre, np.where(alpha > 0, cl_pos, -cl_neg))
         cd = np.where(pre, cd0, np.where(alpha > 0, cd_pos, cd_neg))
         fl = {"polar_estimated", "camber_thin_airfoil"}
-        if np.any(np.abs(2.0 * math.pi * (alpha - a0)) > CAMBER_CL_MAX) and np.any(pre):
+        capped = pre & ((lin > c_hi) | (lin < -c_lo))
+        if np.any(capped):
             fl.add("camber_cl_max_capped")
+            fl |= fl_lim
         return cl, cd, fl
 
 
@@ -693,6 +733,22 @@ def om_tip_mach(Om: float, rtip: float, V: float, a: float) -> float:
 # The inflow model (registered as "bemt-1") and helpers for the catalogue
 # ---------------------------------------------------------------------------
 
+_MFOIL_CACHE: Dict[str, "TablePolar"] = {}
+
+
+def _mfoil_tables(root: Path) -> Optional["TablePolar"]:
+    """The mfoil tables under ``root`` (read once per folder), or None when the folder has none: the cambered plate then keeps the
+    literature lift ceiling and says so."""
+    key = str(Path(root).resolve())
+    if key not in _MFOIL_CACHE:
+        try:
+            _MFOIL_CACHE[key] = TablePolar.from_dir(Path(root))
+        except BemtError:
+            _MFOIL_CACHE[key] = TablePolar([])
+    tp = _MFOIL_CACHE[key]
+    return tp if tp.airfoils() else None
+
+
 def polar_for(prop: _pp.Propeller, polar_dir: Optional[Path] = None) -> PolarProvider:
     """The polar provider a propeller-2 entry asks for (``blade.polars.source``, wrapped by ``blade.polars.compressibility``)."""
     base = _polar_base(prop, polar_dir)
@@ -708,7 +764,7 @@ def _polar_base(prop: _pp.Propeller, polar_dir: Optional[Path] = None) -> PolarP
     if src == "flatplate_model":
         return FlatPlatePolar(ar)
     if src == "camber_model":
-        return CamberedPlatePolar(ar)
+        return CamberedPlatePolar(ar, cl_max_tables=_mfoil_tables(polar_dir or MFOIL_POLAR_DIR))
     if src in ("xfoil_table", "measured", "mfoil_table"):
         root = polar_dir or (MFOIL_POLAR_DIR if src == "mfoil_table" else POLAR_DIR)
         tp = TablePolar.from_dir(root, ar)

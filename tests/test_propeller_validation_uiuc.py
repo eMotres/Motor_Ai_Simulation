@@ -46,8 +46,9 @@ The kernel changes of the same review moved the point at J 0.263 by less than 0.
 error is caught.
 
 THIS IS A REGRESSION PIN OF THE KNOWN BIAS, NOT AN ACCURACY GATE: the bands sit around today's error.  Normal CI has no data and skips the
-test; it is meant to run for real in a scheduled us1 job (proposed: ``propeller-validation``, weekly and on every propeller PR, with
-``$PROPELLER_UIUC_DIR`` set, where a failure is reported loudly, never skipped).
+test.  It runs for real in the scheduled us1 job ``scripts/propeller_validation_job.sh`` (weekly, and by hand before a propeller
+merge), which sets ``$PROPELLER_UIUC_DIR`` and ``PROPELLER_UIUC_REQUIRED=1``: there a missing data file fails instead of skipping, and
+any failure leaves an alert file and a non-zero exit.
 
 The pinned numbers are the honest state of the model, not a target: a change that moves any of them outside its band must say why
 (better polars move the static row towards zero; that is wanted, and the band is then tightened in the same change).
@@ -67,8 +68,16 @@ from motor_ai_sim import propeller_design as pd
 
 DATA = Path(os.environ.get("PROPELLER_UIUC_DIR", "/nonexistent-uiuc"))
 FILES = ("apce_11x5.5_geom.txt", "apce_11x5.5_kt0471_6002.txt", "apce_11x5.5_kt0472_6000.txt", "apce_11x5.5_static_kt0467.txt")
-pytestmark = pytest.mark.skipif(not all((DATA / f).is_file() for f in FILES),
+#: set by the scheduled run (``scripts/propeller_validation_job.sh``): missing data is then a FAILURE, never a skip
+REQUIRED = os.environ.get("PROPELLER_UIUC_REQUIRED", "").strip() not in ("", "0")
+_MISSING = [f for f in FILES if not (DATA / f).is_file()]
+pytestmark = pytest.mark.skipif(bool(_MISSING) and not REQUIRED,
                                 reason="UIUC data not present (set PROPELLER_UIUC_DIR; not redistributable, see the docstring)")
+
+
+def test_uiuc_data_present_when_required():
+    """The scheduled run sets PROPELLER_UIUC_REQUIRED=1: there an absent data file fails loudly instead of skipping the pin."""
+    assert not _MISSING, "PROPELLER_UIUC_REQUIRED is set but %s lacks %s" % (DATA, ", ".join(_MISSING))
 
 R = 11 * 0.0254 / 2.0
 J_BAND = (0.2, 0.35)

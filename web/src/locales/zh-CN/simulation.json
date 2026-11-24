@@ -315,5 +315,9 @@
   "runSettingsReasonRipple": "纹波等级：{cycles} 个齿槽周期 x {samples}",
   "runSettingsReasonEddy": "涡流默认值",
   "runSettingsSrcTab": "标签页",
-  "runSettingsSrcFixed": "固定"
+  "runSettingsSrcFixed": "固定",
+  "sweepShownResult": "显示的结果：",
+  "runSettingsReasonRippleUnrecorded": "纹波等级，{cycles} 个齿槽周期 x {samples}；来源未记录",
+  "runSettingsReasonUser": "在仿真标签页中设置",
+  "runSettingsReasonUnrecorded": "来源未记录"
 }

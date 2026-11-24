@@ -41,8 +41,10 @@ const RunSettingsBar: React.FC<{ rs: RunSettingsState; dense?: boolean }> = ({ r
   const diff = r ? Object.entries(r.differs).map(([k, d]) => `${k}: ${String(d.current)} (${r.preset_label} ${String(d.preset)})`) : [];
   const fin = r?.finalist_note ? [tx('runSettingsFinalists', { n: r.finalist_note.min_steps, run: r.finalist_note.run_steps })] : [];
   const why = r && st ? stepsReason(Number(st.steps_per_period), rs.stepsSource, Number(r.geometry?.num_slots), Number(r.geometry?.num_poles)) : null;
-  const reason = why ? (why.kind === 'ripple_grade'
-    ? tx('runSettingsReasonRipple', { cycles: why.cycles, samples: why.samples }) : tx('runSettingsReasonEddy')) : null;
+  const reason = why && r && r.label !== 'optimization' ? tx({
+    ripple_grade: 'runSettingsReasonRipple', ripple_grade_unrecorded: 'runSettingsReasonRippleUnrecorded', eddy_default: 'runSettingsReasonEddy',
+    user: 'runSettingsReasonUser', unrecorded: 'runSettingsReasonUnrecorded',
+  }[why.kind], { cycles: 'cycles' in why ? why.cycles : 0, samples: 'samples' in why ? why.samples : 0 }) : null;
   const warn = !!r && notOptimization(r);
   const text = r ? lineText(r, {
     preset: (label, version) => tx('runSettingsPresetLine', { label, version }), custom: tx('runSettingsCustom'),

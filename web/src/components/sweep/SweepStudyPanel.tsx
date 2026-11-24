@@ -1228,7 +1228,7 @@ const SweepStudyPanel: React.FC = () => {
           {result && (
             <span title={tx('sweepResultSettingsTip')}
               style={{ marginLeft: 8, color: 'var(--text-3)', cursor: 'help' }}>
-              · {sweepSettingsLabel(sweepSettingsOf(result))}
+              · {tx('sweepShownResult')} {sweepSettingsLabel(sweepSettingsOf(result))}
             </span>
           )}
           {/* The 3-D end-effect view, same switch and factor as the Simulation

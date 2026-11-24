@@ -121,8 +121,8 @@ test('the line is ONE sentence from the server answer; the warning follows the l
 test('why the steps are what they are: the Simulation tab\'s own rule, from the same helpers', () => {
   const r = stepsReason(108, 'eddy_default', 24, 28);          // 12 cogging cycles x 9
   assert.deepEqual(r, { kind: 'ripple_grade', steps: 108, cycles: 12, samples: 9 });
-  assert.equal(stepsReason(108, 'user', 24, 28), null);          // a count the user picked has no rule behind it
-  assert.equal(stepsReason(96, 'eddy_default', 24, 28), null);   // not the default of this machine
+  assert.deepEqual(stepsReason(108, 'user', 24, 28), { kind: 'user', steps: 108 });          // a count the user picked says so
+  assert.deepEqual(stepsReason(96, 'eddy_default', 24, 28), { kind: 'unrecorded', steps: 96 });   // not the default of this machine: no rule to name
   assert.deepEqual(stepsReason(72, 'eddy_default', 6, 4), { kind: 'eddy_default', steps: 72 });
 });
 
@@ -219,4 +219,26 @@ test('a refused baseline (409) refreshes the held answer', () => {
   assert.ok(fn.includes('res.status === 409') && fn.includes('return { stale }'));
   const panel = readFileSync(new URL('../../components/sweep/DescentPanel.tsx', import.meta.url), 'utf8');
   assert.ok(/computeBaselineLine\([^]*?\)\.then\(r => \{ if \(r\.stale\) rs\.refresh\(\); \}\)/.test(panel));
+});
+
+test('a catalogue-style state (no stepsSource recorded) still gives a reason: derived from the machine, or "source not recorded"', () => {
+  const cat = { ...stored, 'sim.stepsPP': '108' };                          // no sim.stepsSource key at all
+  assert.equal(readStepsSource(store(cat)), null);
+  assert.deepEqual(stepsReason(108, readStepsSource(store(cat)), 24, 28),
+    { kind: 'ripple_grade_unrecorded', steps: 108, cycles: 12, samples: 9 });   // equals the machine's ripple grade
+  assert.deepEqual(stepsReason(100, null, 24, 28), { kind: 'unrecorded', steps: 100 });
+  assert.deepEqual(stepsReason(72, null, 6, 4), { kind: 'unrecorded', steps: 72 });   // the grade is the eddy default here: no cycles claim
+  assert.deepEqual(stepsReason(108, '', 24, 28).kind, 'ripple_grade_unrecorded');
+  assert.equal(stepsReason(0, null, 24, 28), null);
+  const bar = read('components/sweep/RunSettingsBar.tsx');
+  assert.ok(bar.includes("r.label !== 'optimization'") && bar.includes('runSettingsReasonUnrecorded') && bar.includes('runSettingsReasonUser'));
+  for (const l of ['en', 'zh-CN']) {
+    const j = JSON.parse(read(`locales/${l}/simulation.json`));
+    for (const k of ['runSettingsReasonRippleUnrecorded', 'runSettingsReasonUser', 'runSettingsReasonUnrecorded', 'sweepShownResult']) assert.ok(j[k], `${l} ${k}`);
+  }
+});
+
+test('the label of the result on screen says it is the SHOWN result, not the settings of the next run', () => {
+  const sweep = read('components/sweep/SweepStudyPanel.tsx');
+  assert.ok(sweep.includes("tx('sweepShownResult')") && sweep.indexOf("tx('sweepShownResult')") < sweep.indexOf('sweepSettingsLabel(sweepSettingsOf(result))'));
 });

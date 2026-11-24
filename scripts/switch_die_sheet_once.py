@@ -375,15 +375,10 @@ def preflight(store: Path, m: Dict[str, Any]) -> List[str]:
 
 def _snapshot_access_only(retired: str, continuing: set):
     """Replaces ``config_move._rewrite_snapshot`` during the link move: a project snapshot keeps its machine (the retired die,
-    the previous sheet's numbers) and is marked; only its ACCESS scope follows the configuration, so the members keep it."""
+    the previous sheet's numbers) AND its access scope (the two must agree: development/routes._catalog_origin fails closed for a
+    non-admin otherwise) and is marked ``previous_sheet``; the members keep it through their grants on the retired die."""
     def rewrite(ctx, snap):
         n = 0
-        scope = snap.get("access_scope") if isinstance(snap, dict) else None
-        if (isinstance(scope, dict) and scope.get("kind") == "catalog"
-                and ctx.is_pair(scope.get("die"), scope.get("config"))):
-            ctx.retarget(scope)
-            scope["grant_key"] = ctx.new_key
-            n += 1
         machine = snap.get("machine") if isinstance(snap, dict) else None
         if (isinstance(machine, dict) and machine.get("die_name") == retired and machine.get("config_name") in continuing
                 and not snap.get("previous_sheet")):
@@ -460,6 +455,42 @@ def _drop_cached_answers(store: Path, pred: str, dry_run: bool) -> List[str]:
             if not dry_run:
                 f.unlink()
     return hits
+
+
+def _grants_additive(pred: str, retired: str, cont: List[str]) -> Dict[str, Any]:
+    """Accounts keep every grant on the retired die (its snapshots and old configurations stay theirs) and get the same on the
+    successor: a die-level grant on the retired die adds one on the successor, a config grant on a continuing configuration adds
+    the successor's copy (its ``sources`` entry copied).  Nothing is removed."""
+    from motor_ai_sim import json_store, users
+    out: Dict[str, Any] = {"accounts": 0, "added": 0}
+
+    def edit(doc: Any) -> None:
+        table = doc.get("users") if isinstance(doc.get("users"), dict) else doc
+        for rec in table.values():
+            mot = rec.get("motors") if isinstance(rec, dict) else None
+            if not isinstance(mot, dict):
+                continue
+            n = 0
+            dies_ = mot.get("dies")
+            if isinstance(dies_, list) and retired in dies_ and pred not in dies_:
+                dies_.append(pred)
+                n += 1
+            cfgs = mot.get("configs")
+            if isinstance(cfgs, list):
+                for c in cont:
+                    if f"{retired}/{c}" in cfgs and f"{pred}/{c}" not in cfgs:
+                        cfgs.append(f"{pred}/{c}")
+                        src = mot.get("sources")
+                        if isinstance(src, dict) and f"{retired}/{c}" in src:
+                            src[f"{pred}/{c}"] = src[f"{retired}/{c}"]
+                        n += 1
+            if n:
+                out["accounts"] += 1
+                out["added"] += n
+        # NB: return nothing - json_store.mutate_json takes a returned value as the new document
+    with users._LOCK:
+        json_store.mutate_json(users._USERS_FILE, edit, default={})
+    return out
 
 
 def _registry(pred: str, retired: str, cont: List[str], aside: List[str], projects: List[str]) -> Dict[str, Any]:
@@ -588,18 +619,18 @@ def switch(store: Path, m: Dict[str, Any], *, dry_run: bool, actor: str) -> Dict
                              dry_run=False, copy=False, glob_scope=True, ws_roots=CM.workspace_roots(F, True), actor=actor)
                 ctx.backup_dir = store / "shared" / ".config_moves" / f"{date} sheet switch {retired}~{cfg}"
                 ctx.backup_dir.mkdir(parents=True, exist_ok=True)
-                for step in (CM.step_grants, CM.step_projects, CM.step_cost_estimates, CM.step_display_state):
+                for step in (CM.step_projects, CM.step_cost_estimates, CM.step_display_state):
                     step(ctx)
                 log.append({"step": "links", "config": cfg, "changes": ctx.changes})
         finally:
             CM._rewrite_snapshot = keep
+        log.append({"step": "grants", **_grants_additive(pred, retired, cont)})
         # 6. the registry: the successor and its copies get their OWN items (a backfill would resolve "<die>/<cfg>" through
         #    the retired item's alias); the retired die and its continuing items drop those aliases; project links follow
         log.append({"step": "registry", **_registry(pred, retired, cont, list(aside_map.values()), [p["project"] for p in m["projects"]])})
-        # 7. the retired die: admin-only
-        if not WS.is_tombstoned(retired):
-            WS.add_tombstone(retired, actor)
-        log.append({"step": "retire", "die": retired})
+        # 7. the retired die is NOT tombstoned: its access stays as it was, so every project member keeps the snapshots and
+        #    old configurations he could open before (the current motors of the projects are the successor's copies)
+        log.append({"step": "retire", "die": retired, "tombstone": False})
     return {"refused": [], "dry_run": dry_run, "log": log}
 
 
@@ -745,7 +776,7 @@ def check(before: Path, after: Path, m: Dict[str, Any], rep: Dict[str, Any]) -> 
             if (f"{pred}/{c}" in ks or f"{pred}/*" in ks) and not (f"{pred}/{c}" in ga.get(u, set()) or f"{pred}/*" in ga.get(u, set()))]
     res["grants_kept"] = {"ok": not lost, "lost": lost}
     # (5) nothing outside the manifest was touched
-    named = {f["file"] for f in json.loads((before.parent / "out" / "inventory.json").read_text())["files"]}
+    named = {f["file"] for f in json.loads(Path(m["inventory_path"]).read_text())["files"]}
     def outside(path: str) -> bool:
         return (path not in named and not path.startswith(f"shared/dies/{pred}/") and not path.startswith(f"shared/dies/{retired}/")
                 and not path.startswith(f"shared/dies/{succ}/") and "/.config_moves/" not in "/" + path
@@ -767,6 +798,92 @@ def check(before: Path, after: Path, m: Dict[str, Any], rep: Dict[str, Any]) -> 
     res["nothing_outside_the_manifest"] = {"ok": not out_of, "files": out_of[:60], "count": len(out_of)}
     res["ok"] = all(v["ok"] for v in res.values() if isinstance(v, dict))
     return res
+
+
+def visibility(store: Path) -> Dict[str, Any]:
+    """Which project snapshot each project member can open, decided by the application's own snapshot visibility
+    (development/routes ``_catalog_origin`` + ``_snapshot_catalog_visible``) with the member's grants from the store."""
+    _point_at(store)
+    from motor_ai_sim import motor_access
+    from motor_ai_sim.development import routes as DR
+    from motor_ai_sim.development import store as PS
+    F = _fam()
+    users_doc = json.loads((store / "identity" / "users.json").read_text(encoding="utf-8"))
+    table = users_doc.get("users") if isinstance(users_doc.get("users"), dict) else users_doc
+    acc_of = lambda auth: motor_access.access_for_email(str(auth or ""))     # noqa: E731 - auth header = the e-mail here
+    motor_access.catalog_access = acc_of
+    F.catalog_access = acc_of
+
+    class Req:
+        def __init__(self, email):
+            self.headers = {"authorization": email}
+    rows = []
+    for project in PS.list_projects():
+        pid = str(project.get("id") or "")
+        snaps = PS.list_snapshots(pid) if PS.valid_id(pid) else []
+        named = [x for x in snaps if "CILN28" in json.dumps(x.get("machine", {}).get("die_name", ""))]
+        if not named:
+            continue
+        for mem in project.get("members") or []:
+            email = str(mem.get("email") or "").lower()
+            user = dict(table.get(email) or {}, email=email)
+            for item in named:
+                machine = item.get("machine") if isinstance(item.get("machine"), dict) else {}
+                try:
+                    origin = DR._catalog_origin(machine, item.get("access_scope"),
+                                                allow_unresolved_claim=str(user.get("role") or "").lower() == "admin")
+                    ok = DR._snapshot_catalog_visible(Req(email), user, origin)
+                except Exception as exc:                    # noqa: BLE001
+                    ok = f"error {exc!r}"
+                rows.append({"project": pid, "member": f"{email[:3]}... ({user.get('role')}, {mem.get('role')})",
+                             "snapshot": item.get("id"), "machine": f"{machine.get('die_name')}/{machine.get('config_name')}",
+                             "visible": ok})
+    catalog = {}
+    dies = store / "shared" / "dies"
+    names = [n for n in ("CILN28", "CILN28 sheet 1", "CILN28 vadim 2") if (dies / n / "die.yaml").is_file()]
+    for email in table:
+        acc = motor_access.access_for_email(email)
+        seen = []
+        for d in names:
+            if not motor_access.may_see_die(acc, d):
+                continue
+            for f in sorted((dies / d).glob("*.yaml")):
+                if f.name != "die.yaml" and motor_access.may_see_config(acc, d, f.stem):
+                    seen.append(f"{d}/{f.stem}")
+        if seen:
+            catalog[email] = seen
+    return {"rows": rows, "catalog": catalog}
+
+
+def visibility_diff(before: Dict[str, Any], after: Dict[str, Any], m: Dict[str, Any]) -> Dict[str, Any]:
+    """Rule (coordinator 2026-11-24): after the switch every member opens everything he opened before (the predecessor's
+    entries under the retired name, the successor's under the predecessor's name, the moved-aside copy under its new name)
+    plus the new copies of the continuing motors he could open before; nothing else."""
+    pred, succ, retired, date = m["pred"], m["succ"], m["retired"], m.get("date", "")
+    cont = {c["config"] for c in m["continuing"]}
+    aside = {c["config"]: c["successor_own"]["moved_aside_as"].format(date=date) for c in m["continuing"] if c.get("successor_own")}
+
+    def mapped(key: str) -> str:
+        die, cfg = key.split("/", 1)
+        if die == pred:
+            return f"{retired}/{cfg}"
+        if die == succ:
+            return f"{pred}/{aside.get(cfg, cfg)}"
+        return key
+    lost, gained = [], []
+    for email in sorted(set(before["catalog"]) | set(after["catalog"])):
+        b = {mapped(k) for k in before["catalog"].get(email, [])}
+        allowed_new = {f"{pred}/{k.split('/', 1)[1]}" for k in before["catalog"].get(email, [])
+                       if k.split("/", 1)[0] == pred and k.split("/", 1)[1] in cont}
+        a = set(after["catalog"].get(email, []))
+        who = f"{email[:3]}..."
+        lost += [f"{who} {k}" for k in sorted(b - a)]
+        gained += [f"{who} {k}" for k in sorted(a - b - allowed_new)]
+    sb = {(r["project"], r["member"], r["snapshot"]) for r in before["rows"] if r["visible"] is True}
+    sa = {(r["project"], r["member"], r["snapshot"]) for r in after["rows"] if r["visible"] is True}
+    return {"ok": not lost and not gained and not (sb - sa), "catalog_lost": lost, "catalog_gained": gained,
+            "snapshots_lost": sorted(map(list, sb - sa)), "snapshots_gained": sorted(map(list, sa - sb)),
+            "snapshots_visible_before": len(sb), "snapshots_visible_after": len(sa)}
 
 
 def main(argv: List[str] | None = None) -> int:
@@ -798,10 +915,33 @@ def main(argv: List[str] | None = None) -> int:
     ck.add_argument("--before", required=True, type=Path)
     ck.add_argument("--after", required=True, type=Path)
     ck.add_argument("--manifest", required=True, type=Path)
+    ck.add_argument("--inventory", required=True, type=Path)
     ck.add_argument("--out", required=True, type=Path)
+    vs = sub.add_parser("visibility")
+    vs.add_argument("--store", required=True, type=Path)
+    vs.add_argument("--out", required=True, type=Path)
+    vd = sub.add_parser("visibility-diff")
+    vd.add_argument("--before", required=True, type=Path)
+    vd.add_argument("--after", required=True, type=Path)
+    vd.add_argument("--manifest", required=True, type=Path)
+    vd.add_argument("--date", required=True)
+    vd.add_argument("--out", required=True, type=Path)
     a = ap.parse_args(argv)
+    if a.cmd == "visibility-diff":
+        m = json.loads(a.manifest.read_text(encoding="utf-8"))
+        m["date"] = a.date
+        r = visibility_diff(json.loads(a.before.read_text()), json.loads(a.after.read_text()), m)
+        a.out.write_text(json.dumps(r, indent=1, ensure_ascii=False), encoding="utf-8")
+        print(json.dumps({k: (v if not isinstance(v, list) else v[:20]) for k, v in r.items()}, indent=1, ensure_ascii=False))
+        return 0 if r["ok"] else 1
+    if a.cmd == "visibility":
+        r = visibility(a.store)
+        a.out.write_text(json.dumps(r, indent=1, ensure_ascii=False, default=str), encoding="utf-8")
+        print(len(r["rows"]), "rows;", sum(1 for x in r["rows"] if x["visible"] is True), "visible")
+        return 0
     if a.cmd == "check":
         m = json.loads(a.manifest.read_text(encoding="utf-8"))
+        m["inventory_path"] = str(a.inventory)
         rep = report(a.before, a.after)
         res = check(a.before, a.after, m, rep)
         a.out.write_text(json.dumps({"report": rep, "check": res}, indent=1, ensure_ascii=False), encoding="utf-8")

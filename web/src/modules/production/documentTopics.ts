@@ -26,10 +26,19 @@ const PACKAGING = /(?<![a-z])(packag|label|carton|sticker|pallet|barcode)|(?<![a
 const TESTS = /(?<![a-z])(test|measure|inspection|calibrat|protocol|hipot)|测试|检验|测量|试验/i;
 const PROCESS = /(?<![a-z])(process|procedure|instruction|sop|sequence)|工艺|装配流程|作业指导/i;
 
-/** Replaced by a newer file (a published revision) or archived by hand under the older `[superseded ...` name. */
+/** THE superseded rule (server mirror: `models.is_superseded`).  A file is superseded when
+ *   1. its `status` field says `superseded` (the field is authoritative: it wins over whatever the name looks like), or
+ *   2. its name carries the legacy hand-archive marker: the text `[superseded` in any letter case at the very start of the name,
+ *      followed by `]` or a space (`[superseded] a.pdf`, `[SUPERSEDED 2026-10] a.pdf`).  `[supersededness] a.pdf`, a marker in the
+ *      middle of a name or after a leading space do not match. */
+const LEGACY_MARKER = /^\[superseded[\] ]/i;
 export function isSupersededDoc(d: Pick<DocumentRec, 'status' | 'name'>): boolean {
-  return d.status === 'superseded' || String(d.name ?? '').startsWith('[superseded');
+  if (d.status === 'superseded') return true;
+  return LEGACY_MARKER.test(String(d.name ?? ''));
 }
+
+/** The server keeps at most this many document ids in one step (`process_steps.py`); the step dialog refuses more instead of dropping. */
+export const STEP_DOCS_MAX = 40;
 
 export const isDocumentTopic = (v: unknown): v is DocumentTopic => typeof v === 'string' && (DOCUMENT_TOPICS as readonly string[]).includes(v);
 

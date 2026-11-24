@@ -295,7 +295,8 @@
     "editSections": "编辑工艺章节",
     "hideSections": "收起章节",
     "stepDocsPick": "文件",
-    "stepDocsPickTip": "除零件图纸外，此步骤显示的文件。"
+    "stepDocsPickTip": "除零件图纸外，此步骤显示的文件。",
+    "stepDocsTooMany": "此步骤引用的文件超过上限 {max} 个（当前 {n} 个）。请先移除一些再保存。"
   },
   "access": {
     "none": "您不在此生产项目中。",
@@ -367,7 +368,8 @@
       "general": "其他所有文件。",
       "superseded": "已被新文件取代。仅供参考，请勿据此制造。",
       "select": "此文件所属的主题。自动：根据零件、装配步骤和文件类型判断。"
-    }
+    },
+    "linkInvalid": "此链接无效：文件列表为空、过长或格式错误。"
   },
   "unread": {
     "tip": "{count} 条未读消息",

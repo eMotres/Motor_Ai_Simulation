@@ -153,7 +153,13 @@ const DocumentsPanel: React.FC<{
           <HelpTip title={t('docs.copyTip')} />
         </Box>
       )}
-      {link && (link.since || link.ids?.length) && (
+      {link?.invalidIds && (
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1.25, flexWrap: 'wrap' }}>
+          <Typography role="alert" data-testid="docs-link-invalid" sx={{ fontSize: 12.5, color: '#f87171' }}>{t('docs.linkInvalid')}</Typography>
+          <Button size="small" sx={{ textTransform: 'none', fontSize: 11 }} onClick={() => onLinkChange?.(null)}>{t('docs.showAll')}</Button>
+        </Box>
+      )}
+      {link && !link.invalidIds && (link.since || link.ids?.length) && (
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1.25, flexWrap: 'wrap' }}>
           <Typography sx={{ fontSize: 12.5, color: 'var(--text-2)' }}>
             {view.narrowed ? t('docs.selected', { n: view.shown.length }) : t('docs.newSince', { date: link.since, n: view.newIds.size })}
@@ -162,7 +168,7 @@ const DocumentsPanel: React.FC<{
             {view.narrowed ? t('docs.showAll') : t('docs.clear')}</Button>
         </Box>
       )}
-      {documents.length === 0 ? <Typography sx={{ fontSize: 13, color: 'var(--text-4)' }}>{t('docs.none')}</Typography> : (
+      {link?.invalidIds ? null : documents.length === 0 ? <Typography sx={{ fontSize: 13, color: 'var(--text-4)' }}>{t('docs.none')}</Typography> : (
         <>
           <TextField size="small" value={query} onChange={(e) => setQuery(e.target.value)} placeholder={t('docs.search')}
             inputProps={{ 'aria-label': t('docs.search'), 'data-testid': 'docs-search' }} sx={{ mb: 1.25, width: { xs: '100%', sm: 320 } }}

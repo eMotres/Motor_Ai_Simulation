@@ -40,10 +40,19 @@ t('parse refuses foreign, hostile and malformed addresses', () => {
     ['/', ''], ['/production', ''], ['/production/a/b', ''], ['/production/a/b/parts', ''], ['/admin', ''],
     ['//evil.com/production/a/b/documents', ''], ['/production/../x/documents', ''], ['/production/a%2Fb/c/documents', ''],
     ['/production/a%5Cb/c/documents', ''], ['/production/%ZZ/c/documents', ''], ['/production/a/b/documents\n', ''],
-    ['/production/a/b/documents', '?since=yesterday'], ['/production/a/b/documents', '?ids=a//b'],
-    ['/production/a/b/documents', '?ids='.concat(Array.from({ length: 60 }, (_, i) => `d${i}`).join(','))],
+    ['/production/a/b/documents', '?since=yesterday'],
     ['/production/' + 'a'.repeat(90) + '/b/documents', ''],
   ]) assert.equal(L.parseProductionLink(p, q), null, `${p}${q}`);
+});
+
+t('a broken ids= list is an explicit invalid selection, never the full list', () => {
+  for (const q of ['?ids=a//b', '?ids=', '?ids=,,', '?ids=' + Array.from({ length: 60 }, (_, i) => `d${i}`).join(','),
+    '?ids=' + Array.from({ length: 14 }, (_, i) => `doc_${String(i).padStart(2, '0')}Ab3-dE5_gH7jK9mN`).join(',')]) {
+    const l = L.parseProductionLink('/production/a/b/documents', q);
+    assert.deepEqual(l, { die: 'a', config: 'b', invalidIds: true }, q);
+    const v = L.documentsForLink([{ id: 'x' }, { id: 'y' }], l);
+    assert.deepEqual(v.shown, []); assert.equal(v.narrowed, true);
+  }
 });
 
 t('the sign-up return path is the canonical link path or nothing', () => {

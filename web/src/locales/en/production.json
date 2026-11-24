@@ -295,7 +295,8 @@
     "editSections": "Edit process sections",
     "hideSections": "Hide sections",
     "stepDocsPick": "Documents",
-    "stepDocsPickTip": "Files shown in this step besides the drawings of its parts."
+    "stepDocsPickTip": "Files shown in this step besides the drawings of its parts.",
+    "stepDocsTooMany": "This step names more documents than the limit of {max} ({n}). Remove some before saving."
   },
   "access": {
     "none": "You are not on this production.",
@@ -367,7 +368,8 @@
       "general": "Everything else.",
       "superseded": "Replaced by a newer file. Kept for reference; do not build to them.",
       "select": "The topic this file is listed under. Auto picks it from the part, the assembly steps and the file type."
-    }
+    },
+    "linkInvalid": "This link is not valid: its document list is empty, too long or malformed."
   },
   "unread": {
     "tip": "{count} unread messages",

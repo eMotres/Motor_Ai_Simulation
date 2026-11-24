@@ -1200,7 +1200,7 @@ async def patch_document(request: Request, die: str, config: str, doc_id: str):
     body = await request.json()
     if not isinstance(body, dict) or not any(k in body for k in ("internal", "section", "group", "cert_status", "topic")):
         raise HTTPException(status_code=400, detail="internal, section, group, cert_status or topic expected")
-    if body.get("topic") not in (None, "", *models.DOCUMENT_TOPICS):
+    if "topic" in body and body["topic"] is not None and body["topic"] not in models.DOCUMENT_TOPICS:     # null clears; "" is refused
         raise HTTPException(status_code=422, detail="topic: %s or null expected" % " | ".join(models.DOCUMENT_TOPICS))
     if "internal" in body and not isinstance(body.get("internal"), bool):
         raise HTTPException(status_code=400, detail="internal: true | false expected")

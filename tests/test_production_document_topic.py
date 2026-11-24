@@ -43,8 +43,17 @@ def test_a_bad_topic_is_refused_and_the_factory_cannot_set_one(prod_env):
     c = prod_env["client"]
     d = _upload(prod_env, "engineer", {"internal": "false"}).json()
     url = "%s/%s" % (BASE, d["id"])
-    for bad in ("superseded", "Tooling", "nonsense", ["tooling"], 7):
+    for bad in ("superseded", "Tooling", "nonsense", ["tooling"], 7, ""):
         assert c.patch(url, headers=prod_env["engineer"], json={"topic": bad}).status_code == 422
     assert c.patch(url, headers=prod_env["oem_nda"], json={"topic": "tooling"}).status_code in (403, 404)
     assert "topic" not in {k for x in c.get(BASE, headers=prod_env["engineer"]).json()["documents"] for k in x}
     assert models.DOCUMENT_TOPICS[0] == "process" and "superseded" not in models.DOCUMENT_TOPICS
+
+
+def test_the_one_superseded_rule_status_wins_and_the_marker_is_exact():
+    sup = models.is_superseded
+    assert sup({"name": "a.pdf", "status": "superseded"})
+    assert sup({"name": "[superseded] a.pdf"}) and sup({"name": "[SUPERSEDED] x"}) and sup({"name": "[superseded x"})
+    assert not sup({"name": "[supersededness] current.pdf"})
+    assert not sup({"name": " [superseded] a.pdf"}) and not sup({"name": "a [superseded].pdf"}) and not sup({"name": "[superseded"})
+    assert not sup({"name": "a.pdf"}) and not sup(None)

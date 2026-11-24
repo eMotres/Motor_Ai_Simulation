@@ -18,7 +18,7 @@ import { useTranslation } from 'react-i18next';
 import { useContentLang } from './BilingualText';
 import { displayText, extOf, IMAGE_EXT, stepModelFamilies } from '../helpers';
 import { downloadFile, fileObjectUrl, openFileInNewWindow, productionApi } from '../api';
-import { isSupersededDoc, stepDocsOf } from '../documentTopics';
+import { isSupersededDoc, STEP_DOCS_MAX, stepDocsOf } from '../documentTopics';
 import type { AssemblyStep, Bilingual, DocumentRec, Part, ProcessSection, ProdCtx } from '../types';
 import { UnifiedViewer, type PartGroup } from '../../viewer3d';
 
@@ -85,6 +85,8 @@ const StepDialog: React.FC<{ open: boolean; step: AssemblyStep | null; steps: As
   // the documents this step may name: current files of the Documents tab (no step picture, no certification file, nothing superseded)
   const pickable = documents.filter((x) => !x.step_id && x.section !== 'certification' && !isSupersededDoc(x));
   const pickedDocs = (d.documents ?? []).filter((x) => pickable.some((p) => p.id === x));
+  // the server keeps at most STEP_DOCS_MAX ids per step: say so instead of letting the last ones vanish on save
+  const tooMany = (d.documents ?? []).length > STEP_DOCS_MAX;
   return (
     <Dialog open={open} onClose={onClose} maxWidth="sm" fullWidth>
       <DialogTitle sx={{ fontSize: 15 }}>{t('process.editStep', 'Step')} {d.n}</DialogTitle>
@@ -109,10 +111,13 @@ const StepDialog: React.FC<{ open: boolean; step: AssemblyStep | null; steps: As
           onChange={(e) => {
             const chosen = (typeof e.target.value === 'string' ? e.target.value.split(',') : e.target.value) as string[];
             // a link to a file that is not offered here (superseded, removed) is kept as it is
-            set({ documents: [...(d.documents ?? []).filter((x) => !pickable.some((p) => p.id === x)), ...chosen] });
+            // (when that would pass the server's limit, the dead links go first: a superseded file is not shown in a step anyway)
+            const kept = (d.documents ?? []).filter((x) => !pickable.some((p) => p.id === x));
+            set({ documents: kept.length + chosen.length > STEP_DOCS_MAX ? chosen : [...kept, ...chosen] });
           }}>
           {pickable.map((x) => <MenuItem key={x.id} value={x.id}>{x.name}</MenuItem>)}
         </TextField>
+        {tooMany && <Typography role="alert" data-testid="step-docs-too-many" sx={{ fontSize: 12, color: '#f87171' }}>{t('process.stepDocsTooMany', { max: STEP_DOCS_MAX, n: (d.documents ?? []).length })}</Typography>}
         {/* the process sections this step shows and the process document prints under it (empty = by title keywords) */}
         <TextField select size="small" label={t('process.stepSectionsPick', 'Process sections')} SelectProps={{ multiple: true }}
           value={(d.sections ?? []).filter((x) => sections.some((s) => s.id === x))}
@@ -126,7 +131,7 @@ const StepDialog: React.FC<{ open: boolean; step: AssemblyStep | null; steps: As
       </DialogContent>
       <DialogActions>
         <Button onClick={onClose} sx={{ textTransform: 'none' }}>{t('cancel')}</Button>
-        <Button variant="contained" onClick={() => onSave(d)} sx={{ textTransform: 'none' }}>{t('save')}</Button>
+        <Button variant="contained" disabled={tooMany} onClick={() => onSave(d)} sx={{ textTransform: 'none' }}>{t('save')}</Button>
       </DialogActions>
     </Dialog>
   );
@@ -168,6 +173,8 @@ const StepModel3D: React.FC<{ ctx: ProdCtx; steps: AssemblyStep[]; step: Assembl
 
 /** One posted picture as a thumbnail (the file needs the session header, so it is fetched as a blob). */
 const StepThumb: React.FC<{ ctx: ProdCtx; doc: DocumentRec; onError: (e: string) => void }> = ({ ctx, doc, onError }) => {
+  const { t } = useTranslation('production');
+  const old = isSupersededDoc(doc);      // an old picture is marked, not shown as current
   const [url, setUrl] = useState<string | null>(null);
   useEffect(() => {
     let dead = false; let u: string | null = null;
@@ -179,7 +186,9 @@ const StepThumb: React.FC<{ ctx: ProdCtx; doc: DocumentRec; onError: (e: string)
     <Box title={`${doc.name} · ${doc.uploader_email} · ${doc.uploaded_at.slice(0, 16).replace('T', ' ')}`}
       onClick={() => void openFileInNewWindow(ctx.die, ctx.config, doc.file_id, ext === 'jpeg' ? 'jpg' : ext).catch((e) => onError(String(e)))}
       sx={{ width: 112, height: 84, borderRadius: 1, overflow: 'hidden', border: '1px solid var(--line-soft)', cursor: 'zoom-in',
-            bgcolor: 'var(--panel)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+            bgcolor: 'var(--panel)', display: 'flex', alignItems: 'center', justifyContent: 'center', position: 'relative', opacity: old ? 0.6 : 1 }}>
+      {old && <Chip size="small" color="warning" data-testid="step-photo-superseded" label={t('docs.superseded')} title={t('docs.supersededTip')}
+        sx={{ position: 'absolute', top: 2, left: 2, height: 16, fontSize: 9.5, zIndex: 1 }} />}
       {url ? <img src={url} alt={doc.name} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
         : <Typography sx={{ fontSize: 10, color: 'var(--text-4)' }}>…</Typography>}
     </Box>

@@ -31,6 +31,8 @@ export interface ProductionLink {
   since?: string;
   /** show only these document ids */
   ids?: string[];
+  /** the link carried an `ids` list that is empty, too long or malformed: the page says so and shows NO documents (never the full list) */
+  invalidIds?: true;
 }
 
 export function validDay(v: string): boolean {
@@ -60,7 +62,7 @@ export function productionLinkUrl(origin: string, link: ProductionLink): string 
 
 /** Parse the address bar (`pathname` + `search`); null when it is not a valid production documents link. */
 export function parseProductionLink(pathname: string, search = ''): ProductionLink | null {
-  if (typeof pathname !== 'string' || typeof search !== 'string' || pathname.length + knownQueryLength(search, ['since', 'ids']) > MAX_LEN) return null;
+  if (typeof pathname !== 'string' || typeof search !== 'string' || pathname.length + knownQueryLength(search, ['since']) > MAX_LEN) return null;
   if (/[\u0000-\u001f\u007f\\]/.test(pathname)) return null;
   const m = /^\/production\/([^/]+)\/([^/]+)\/documents\/?$/.exec(pathname);
   if (!m) return null;
@@ -72,10 +74,10 @@ export function parseProductionLink(pathname: string, search = ''): ProductionLi
   const since = q.get('since');
   if (since) { if (!validDay(since)) return null; out.since = since; }
   const ids = q.get('ids');
-  if (ids) {
+  if (ids !== null) {
     const list = ids.split(',').filter(Boolean);
-    if (!list.length || list.length > MAX_LINK_IDS || !list.every((i) => ID.test(i))) return null;
-    out.ids = list;
+    if (!list.length || list.length > MAX_LINK_IDS || !list.every((i) => ID.test(i)) || pathname.length + ids.length + 5 > MAX_LEN) out.invalidIds = true;
+    else out.ids = list;
   }
   return out;
 }
@@ -96,8 +98,9 @@ export function isNewDocument(uploadedAt: string | undefined | null, since: stri
 /** What the documents view lists for a link: `ids` narrows the list (unknown / not visible ids simply do not match), `since`
  *  only marks. */
 export function documentsForLink<T extends { id: string; uploaded_at?: string }>(
-  docs: T[], link: Pick<ProductionLink, 'since' | 'ids'> | null | undefined,
+  docs: T[], link: Pick<ProductionLink, 'since' | 'ids' | 'invalidIds'> | null | undefined,
 ): { shown: T[]; newIds: Set<string>; narrowed: boolean } {
+  if (link?.invalidIds) return { shown: [], newIds: new Set(), narrowed: true };      // a broken selection never widens into the full list
   const newIds = new Set(docs.filter((d) => isNewDocument(d.uploaded_at, link?.since)).map((d) => d.id));
   const narrowed = !!link?.ids?.length;
   const shown = narrowed ? docs.filter((d) => link!.ids!.includes(d.id)) : docs;

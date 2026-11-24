@@ -25,8 +25,9 @@ import { canAckRole, canEditRole, displayText, legacyTab, plainDocuments, produc
 import { OPEN_PRODUCTION_EVENT, type OpenProductionDetail } from '../../../lib/openProduction';
 import { shortTitle } from '../../../lib/stripContext.ts';
 import { useTabContextStore } from '../../../stores/tabContextStore';
-import { isProductionLinkPath, parseProductionLink, productionLinkPath, type ProductionLink } from '../../../lib/productionLink';
-import { appLinkPath, isAppLinkPath, parseAppLink } from '../../../lib/appLink';
+import { pageAddress } from '../pageAddress';
+import { isProductionLinkPath, parseProductionLink, type ProductionLink } from '../../../lib/productionLink';
+import { isAppLinkPath, parseAppLink } from '../../../lib/appLink';
 import { useHistoryLevel } from '../../../lib/historyLevels';
 import { useUIStore } from '../../../stores/uiStore';
 import DigestSettings from '../../../components/digest/DigestSettings';
@@ -105,19 +106,10 @@ const ProductionPage: React.FC<{ die: string; config: string; onBack: () => void
   // Documents view or the link's filter returns the bar to the app root.
   useEffect(() => {
     try {
-      if (!linkProp && tab === 'assembly' && stepSel) {
-        const p = appLinkPath({ kind: 'production', die, config, tab: 'assembly', item: stepSel });
-        if (p && p !== window.location.pathname + window.location.search) window.history.replaceState(window.history.state, '', p);
-      } else if (linkProp && tab === 'documents') {
-        const p = productionLinkPath({ die, config, since: link?.since, ids: link?.ids });
-        if (p && p !== window.location.pathname + window.location.search) window.history.replaceState(window.history.state, '', p);
-      } else if (!linkProp && initialTab && tab === initialTab) {
-        // entered by a link to this tab: the bar keeps that link (reload / copy from the bar both work)
-        const p = appLinkPath({ kind: 'production', die, config, tab: initialTab, ...(itemId && initialTab !== 'assembly' ? { item: itemId } : {}) });
-        if (p && p !== window.location.pathname + window.location.search) window.history.replaceState(window.history.state, '', p);
-      } else if (isProductionLinkPath(window.location.pathname) || isAppLinkPath(window.location.pathname)) {
-        window.history.replaceState(window.history.state, '', '/');
-      }
+      const want = pageAddress({ die, config, tab, stepSel, hasEntryLink: !!linkProp, link, initialTab, itemId });
+      if (want === 'ROOT') {
+        if (isProductionLinkPath(window.location.pathname) || isAppLinkPath(window.location.pathname)) window.history.replaceState(window.history.state, '', '/');
+      } else if (want && want !== window.location.pathname + window.location.search) window.history.replaceState(window.history.state, '', want);
     } catch { /* no history API */ }
   }, [linkProp, tab, link, die, config, initialTab, itemId, stepSel]);
   const [loading, setLoading] = useState(true);

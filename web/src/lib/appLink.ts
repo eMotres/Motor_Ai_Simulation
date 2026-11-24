@@ -22,7 +22,7 @@ export type ProjectViewId = (typeof PROJECT_VIEWS)[number];
 
 export type AppLink =
   | { kind: 'new'; zh: boolean; handoff?: string }
-  | { kind: 'production'; die: string; config: string; tab?: ProductionTabId; item?: string; since?: string; ids?: string[] }
+  | { kind: 'production'; die: string; config: string; tab?: ProductionTabId; item?: string; since?: string; ids?: string[]; invalidIds?: true }
   | { kind: 'project'; id: string; view?: ProjectViewId; die?: string; config?: string; item?: string };
 
 const SEG = /^[A-Za-z0-9][A-Za-z0-9 ._-]{0,79}$/;
@@ -35,7 +35,7 @@ const goodName = (s: string) => SEG.test(s) && !s.includes('..');
 
 /** Parse the address bar (`pathname` + `search`); null when it is not an app link.  Unknown query keys (`signin`, `verify`, ...) are ignored. */
 export function parseAppLink(pathname: string, search = ''): AppLink | null {
-  if (typeof pathname !== 'string' || typeof search !== 'string' || pathname.length + knownQueryLength(search, ['item', 'since', 'ids', 'die', 'config', 'new', 'handoff']) > MAX_LEN) return null;
+  if (typeof pathname !== 'string' || typeof search !== 'string' || pathname.length + knownQueryLength(search, ['item', 'since', 'die', 'config', 'new', 'handoff']) > MAX_LEN) return null;
   if (/[\u0000-\u001f\u007f\\]/.test(pathname + search) || pathname.startsWith('//')) return null;
   const q = new URLSearchParams(search);
   const item = q.get('item');
@@ -58,7 +58,7 @@ export function parseAppLink(pathname: string, search = ''): AppLink | null {
       const link = parseProductionLink(pathname, search);
       if (!link) return null;
       return { kind: 'production', die: link.die, config: link.config, tab: 'documents', ...(link.since ? { since: link.since } : {}),
-        ...(link.ids ? { ids: link.ids } : {}), ...(item ? { item } : {}) };
+        ...(link.ids ? { ids: link.ids } : {}), ...(link.invalidIds ? { invalidIds: true as const } : {}), ...(item ? { item } : {}) };
     }
     if (q.has('since') || q.has('ids')) return null;                // those belong to the documents tab only
     let die: string; let config: string;

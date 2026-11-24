@@ -21,6 +21,13 @@ t('superseded: status OR a name that starts with [superseded - one rule', () => 
   assert.equal(D.isSupersededDoc({ name: '[superseded 2026-10] a.pdf' }), true);
   assert.equal(D.isSupersededDoc({ name: 'a.pdf' }), false);
   assert.equal(D.isSupersededDoc({ name: 'a [superseded].pdf' }), false);
+  // the ONE documented rule: status wins; the marker is '[superseded' (any case) at the start, then ']' or a space
+  assert.equal(D.isSupersededDoc({ name: '[supersededness] current.pdf' }), false);
+  assert.equal(D.isSupersededDoc({ name: '[SUPERSEDED] x' }), true);
+  assert.equal(D.isSupersededDoc({ name: '[superseded x' }), true);
+  assert.equal(D.isSupersededDoc({ name: '[superseded' }), false);
+  assert.equal(D.isSupersededDoc({ name: ' [superseded] x' }), false);
+  assert.equal(D.isSupersededDoc({ name: 'normal.pdf', status: 'superseded' }), true);
 });
 
 t('BUG: a superseded file linked through a part is no longer shown in the step (status and name rule alike)', () => {
@@ -169,5 +176,31 @@ t('REPRODUCED: a link with tracking keys appended was refused as a whole (length
   }
   // the cap still holds for what the parser reads
   const longIds = Array.from({ length: 14 }, (_, i) => `doc_${String(i).padStart(2, '0')}Ab3-dE5_gH7jK9mN`).join(',');
-  assert.equal(PL.parseProductionLink(base, `?ids=${longIds}`), null);
+  assert.deepEqual(PL.parseProductionLink(base, `?ids=${longIds}`), { die: 'CIANO14 40 new', config: 'L12', invalidIds: true });
+});
+
+t('a broken ids= list shows no documents (the page says the link is not valid), also through the app link', () => {
+  const base = '/production/CIANO14%2040%20new/L12/documents';
+  for (const s of ['?ids=', '?ids=bad//id']) {
+    const a = AL.parseAppLink(base, s);
+    assert.equal(a.invalidIds, true); assert.equal(a.ids, undefined);
+    assert.deepEqual(PL.documentsForLink([{ id: 'x' }], PL.parseProductionLink(base, s)).shown, []);
+  }
+});
+
+// -- the address after a click ----------------------------------------------------------------------------------------------------
+const PA = await import('../pageAddress.ts').catch(() => null);
+(PA ? test : test.skip)('BUG: a click on a step chip after entry through documents?ids= keeps the step in the address (item param)', () => {
+  const entered = { die: 'CIANO14 40 new', config: 'L12', hasEntryLink: true, link: { ids: ['doc_a'] }, stepSel: null };
+  assert.equal(PA.pageAddress({ ...entered, tab: 'documents' }), '/production/CIANO14%2040%20new/L12/documents?ids=doc_a');
+  assert.equal(PA.pageAddress({ ...entered, tab: 'assembly', stepSel: 's5' }), '/production/CIANO14%2040%20new/L12/assembly?item=s5');
+  assert.equal(PA.pageAddress({ ...entered, tab: 'assembly', stepSel: null }), 'ROOT');
+  // entered by a tab link: the step replaces the entry item
+  assert.equal(PA.pageAddress({ die: 'd', config: 'c', hasEntryLink: false, tab: 'assembly', stepSel: 's2', initialTab: 'assembly', itemId: 's1' }), '/production/d/c/assembly?item=s2');
+  assert.equal(PA.pageAddress({ die: 'd', config: 'c', hasEntryLink: false, tab: 'changes', stepSel: 's2', initialTab: 'changes', itemId: 'r1' }), '/production/d/c/changes?item=r1');
+});
+
+t('the step document limit equals the server limit', () => {
+  const py = fs.readFileSync(new URL('../../../../../src/motor_ai_sim/production/process_steps.py', import.meta.url), 'utf8');
+  assert.match(py, new RegExp(`\\.get\\("documents"\\) or \\[\\]\\) if str\\(x\\)\\.strip\\(\\)\\]\\[:${D.STEP_DOCS_MAX}\\]`));
 });

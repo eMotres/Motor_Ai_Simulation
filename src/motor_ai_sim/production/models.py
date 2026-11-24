@@ -813,9 +813,18 @@ def file_version(name: str) -> Optional[str]:
     return m.group(1) if m else None
 
 
+#: The legacy hand-archive marker: ``[superseded`` in any letter case at the very start of the name, then ``]`` or a space
+#: (web mirror: documentTopics.ts ``isSupersededDoc``).  ``[supersededness] a.pdf`` is a normal name.
+_LEGACY_SUPERSEDED = re.compile(r"^\[superseded[\] ]", re.IGNORECASE)
+
+
 def is_superseded(doc: Any) -> bool:
     """A document replaced in a published revision (``status: superseded``) or archived by hand under the older "[superseded ..." name."""
-    return isinstance(doc, dict) and (doc.get("status") == "superseded" or str(doc.get("name") or doc.get("filename") or "").startswith("[superseded"))
+    if not isinstance(doc, dict):
+        return False
+    if doc.get("status") == "superseded":          # the field is authoritative
+        return True
+    return bool(_LEGACY_SUPERSEDED.match(str(doc.get("name") or doc.get("filename") or "")))
 
 
 def bilingual_has_text(c: Any) -> bool:

@@ -85,11 +85,17 @@ class SectorSolve:
 
 
 
+_KFLUX_FAILED_LABEL = "2-D check failed: k_flux is applied as stored (k_flux_self x mid-plane/2-D ratio); k_flux_self is the 3-D-only alternative"
+
+
 def k_flux_basis_label(two_d):
     """Short honest label of how ``k_flux`` was formed, read from the 2-D agreement ``verdict`` (not from
     ``k_flux_usable``, which is also True for a check that was NOT CHECKED).  PASS -> "2-D check passed";
     NOT CHECKED -> the agreement was not checked; FAIL / INVALID -> failed; no verdict (older passports) -> the
-    ``k_flux_usable`` flag as before; no 2-D block at all -> self-normalised."""
+    ``k_flux_usable`` flag as before; no 2-D block at all -> self-normalised.
+
+    FAIL / INVALID: the stored ``k_flux`` is k_flux_self x the mid-plane ratio and every reader still applies it, so the
+    label says what is applied (not "use k_flux_self"); which factor to apply on a failed check is #871's decision."""
     if two_d is None:
         return "self-normalised (2-D check not run; k_flux = k_flux_self)"
     v = str(two_d.get("verdict") or "").strip().upper()
@@ -98,8 +104,8 @@ def k_flux_basis_label(two_d):
     if v == "NOT CHECKED":
         return "2-D agreement not checked (single length): k_flux = k_flux_self"
     if v in ("FAIL", "INVALID"):
-        return "2-D check failed: use k_flux_self"
-    return "2-D check passed" if two_d.get("k_flux_usable") else "2-D check failed: use k_flux_self"
+        return _KFLUX_FAILED_LABEL
+    return "2-D check passed" if two_d.get("k_flux_usable") else _KFLUX_FAILED_LABEL
 
 
 def _regions_for(tm, section: MotorSection, linear_iron: bool = False,

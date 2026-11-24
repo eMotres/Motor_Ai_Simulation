@@ -112,27 +112,54 @@ def pack_from_spec(b: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
     }
 
 
-def _k_end(pp: Dict[str, Any]) -> float:
-    """3-D end-effect factor of the passport: the SAME `end3d.k_flux` every other reader applies (checked against
-    `end3d_factors.FACTOR_BAND`); the per-length table is used only when the passport carries no scalar (1.0 when the
-    machine has no Stage-A measurement - the honest 2-D answer).  It used to read the table first, so one machine
-    had two factors (0.938 from the table, 0.965 from the scalar)."""
-    from motor_ai_sim.end3d_factors import accepted_factor, k_flux_table
+def k_end_info(pp: Dict[str, Any]) -> "tuple[float, Optional[str]]":
+    """``(k, flag)``: the 3-D end-effect factor of the passport at its own length ``L0_mm``, and the short stale flag
+    (``end3d_factors.STALE_KL_FLAG``) when a stored per-length table was refused as written before the 2026-11-24 fix.
+
+    - the scalar ``k_flux`` is the factor at the passport's own ``stack_mm``: used when ``L0_mm`` is within 5 % of it;
+    - otherwise a MARKED table (``k_flux_vs_L_method``, #869) is the right per-length answer: interpolated at ``L0_mm``
+      (clamped to its span);
+    - a stale table (no marker) lends only its reference row: the scalar is used (with the flag), or, with no scalar,
+      that row at ``L0_mm`` (with the flag); with nothing usable the answer is 1.0 WITH the flag when a stale table was
+      there (never a silent 1.0), without a flag only when the machine has no Stage-A measurement at all."""
+    from motor_ai_sim.end3d_factors import STALE_KL_FLAG, accepted_factor, k_flux_table
     e3 = pp.get("end3d") or {}
-    k = accepted_factor(e3.get("k_flux"), "k_flux")
-    if k is not None:
-        return k
-    m = k_flux_table(e3)[0]  # a stale multi-row table (no marker) lends only its reference row
-    if m:
-        pts = sorted((float(a), float(b)) for a, b in m.items())
+    try:
         L0 = float(pp.get("L0_mm") or 0.0)
-        if pts:
-            xs = [q[0] for q in pts]
-            ys = [q[1] for q in pts]
-            k = accepted_factor(_clamp_interp(xs, ys, L0), "k_flux_vs_L")
-            if k is not None:
-                return k
-    return 1.0
+    except (TypeError, ValueError):
+        L0 = 0.0
+    try:
+        own = float(e3.get("stack_mm") or 0.0)
+    except (TypeError, ValueError):
+        own = 0.0
+    scalar = accepted_factor(e3.get("k_flux"), "k_flux")
+    table, stale = k_flux_table(e3)
+    if scalar is not None and own > 0 and L0 > 0 and abs(L0 - own) <= 0.05 * L0:
+        return scalar, None
+
+    def _at_L0():
+        pts = sorted((float(a), float(b)) for a, b in table.items())
+        k = _clamp_interp([q[0] for q in pts], [q[1] for q in pts], L0) if (pts and L0 > 0) else None
+        return accepted_factor(k, "k_flux_vs_L")
+
+    if table and not stale:
+        k = _at_L0()
+        if k is not None:
+            return k, None
+    flag = STALE_KL_FLAG if stale else None
+    if scalar is not None:
+        return scalar, flag
+    if table:
+        k = _at_L0()
+        if k is not None:
+            return k, flag
+    return 1.0, flag
+
+
+def _k_end(pp: Dict[str, Any]) -> float:
+    """3-D end-effect factor of the passport (see :func:`k_end_info`; 1.0 when the machine has no Stage-A measurement -
+    the honest 2-D answer)."""
+    return k_end_info(pp)[0]
 
 
 def machine_point(pp: Dict[str, Any], I: float, rpm: float, *,
@@ -149,7 +176,7 @@ def machine_point(pp: Dict[str, Any], I: float, rpm: float, *,
     I0 = float(pp.get("I0_A") or 0.0)
     rpm0 = float(pp.get("rpm0") or 0.0)
     R0 = float(pp.get("R0_ohm") or 0.0)
-    k3 = _k_end(pp)
+    k3, _k_flag = k_end_info(pp)
     # the TORQUE carries the measured k_T when the passport has one, else the
     # flux factor (owner 2026-09-30; twin of motorScaling.ts); the EMF below
     # keeps the flux factor.
@@ -219,6 +246,8 @@ def machine_point(pp: Dict[str, Any], I: float, rpm: float, *,
         "P_loss_W": P_cu + P_fe + P_mag + d_cu + d_fe + d_mag,
         "V1_peak_V": Vemf + Vdrop,
         "dP_mag_W": d_mag, "dP_fe_W": d_fe, "dP_cu_ac_W": d_cu,
+        # 1.0 only when the passport's k(L) table is from before the 2026-11-24 fix and was refused (see k_end_info)
+        **({"k_end_stale": 1.0} if _k_flag else {}),
     }
 
 

@@ -7790,12 +7790,16 @@ def _end3d_lookup(geo_fp: Optional[str], geo: Optional[dict] = None,
         near = min(curve, key=lambda q: abs(q[0] - stack))
         v, k = store[near[2]], near[2]
         span = (curve[0][0], curve[-1][0])
+        # a torque factor stored on the source passport belongs to ITS length: enrich re-derives k_T under the length rule
+        v = {kk: vv for kk, vv in v.items()
+             if kk not in ("k_T", "k_T_source", "k_T_inherited", "k_T_note", "k_torque", "torque_basis")}
         return _e3_enrich({**v, "k_flux": float(kf), "k_flux_passport": v.get("k_flux"), "inherited": True,
-                "inherited_from": k, "inherited_stack_basis": basis,
+                "inherited_from": k, "inherited_stack_basis": basis, "inherited_for_stack_mm": float(stack),
                 "inherited_curve": {"span_mm": [span[0], span[1]], "points": len(curve)},
                 "inherited_note": (
-                    f"coefficient of EARLIER geometries of this machine "
-                    f"({desc}) at the stack length {stack:g} mm "
+                    f"coefficient taken from OTHER geometries of the machine class {desc} (same slots, poles and stator "
+                    f"OD only; magnet, air gap, materials, temperature and die are NOT compared) "
+                    f"at the stack length {stack:g} mm "
                     + ("(a measured length, within %d %%)" % int(_END3D_STACK_TOL * 100) if basis == "point"
                        else "(interpolated on this machine's length curve, measured %g-%g mm)" % span)
                     + " — the current geometry has no Stage A passport yet; recompute "

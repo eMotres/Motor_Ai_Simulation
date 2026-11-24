@@ -102,10 +102,8 @@ def test_unknown_stack_is_not_a_license_to_borrow(env):
 
 
 def test_stage_a_without_the_2d_check_is_marked_self_normalised():
-    import inspect
-    from motor_ai_sim.simulation.static3d import end_effect
-    src = inspect.getsource(end_effect)
-    assert "self-normalised (2-D check not run" in src
+    from motor_ai_sim.simulation.static3d.end_effect import k_flux_basis_label
+    assert k_flux_basis_label(None) == "self-normalised (2-D check not run; k_flux = k_flux_self)"
 
 
 def test_adopt_entry_carries_the_basis():
@@ -117,15 +115,110 @@ def test_adopt_entry_carries_the_basis():
     assert "k_flux_basis" not in adopt_entry(sa)[1]
 
 
-def test_charge_analytic_reads_the_scalar_factor_like_every_other_reader():
-    from motor_ai_sim.charge_analytic import _k_end
-    assert _k_end({"end3d": {"k_flux": 0.965, "k_flux_vs_L": {"12": 0.938, "40": 0.95}}, "L0_mm": 12}) == 0.965
-    marked = {"k_flux_vs_L": {"12": 0.938, "40": 0.95}, "k_flux_vs_L_method": "own_mid_ratio"}
-    assert _k_end({"end3d": dict(marked), "L0_mm": 12}) == 0.938
-    # a multi-row table without the marker is stale: no scalar and no reference row -> the honest 2-D answer
-    assert _k_end({"end3d": {"k_flux_vs_L": {"12": 0.938, "40": 0.95}}, "L0_mm": 12}) == 1.0
-    assert _k_end({"end3d": {"k_flux": 7.0}}) == 1.0
-    assert _k_end({}) == 1.0
+def test_charge_analytic_k_end_follows_the_passport_length():
+    from motor_ai_sim.charge_analytic import k_end_info, _k_end
+    from motor_ai_sim.end3d_factors import STALE_KL_FLAG
+    # a CONSISTENT marked passport: the scalar is the table's row at its own stack_mm
+    tbl = {"12": 0.938, "40": 0.965, "80": 0.975}
+    e3 = {"k_flux": 0.965, "stack_mm": 40, "k_flux_vs_L": tbl, "k_flux_vs_L_method": "own_mid_ratio"}
+    assert k_end_info({"end3d": e3, "L0_mm": 40}) == (0.965, None)             # at its own length: the scalar
+    assert k_end_info({"end3d": e3, "L0_mm": 41}) == (0.965, None)             # within 5 %
+    k, flag = k_end_info({"end3d": e3, "L0_mm": 12})                           # another length: the marked table
+    assert k == 0.938 and flag is None
+    k, _ = k_end_info({"end3d": e3, "L0_mm": 60})
+    assert k == pytest.approx(0.97)
+    assert _k_end({"end3d": e3, "L0_mm": 12}) == 0.938
+    # a stale table (no marker): scalar with the flag; its rows are not read
+    stale = {"k_flux": 0.965, "stack_mm": 40, "k_flux_vs_L": tbl}
+    assert k_end_info({"end3d": stale, "L0_mm": 12}) == (0.965, STALE_KL_FLAG)
+    # stale, no scalar, no stack_mm: not a silent 1.0 - the flag says so
+    assert k_end_info({"end3d": {"k_flux_vs_L": tbl}, "L0_mm": 12}) == (1.0, STALE_KL_FLAG)
+    # no measurement at all: the honest 2-D answer, no flag
+    assert k_end_info({}) == (1.0, None)
+    assert k_end_info({"end3d": {"k_flux": 7.0}}) == (1.0, None)
+
+
+def test_machine_point_flags_a_refused_stale_table():
+    from motor_ai_sim.charge_analytic import machine_point
+    pp = {"I0_A": 10.0, "rpm0": 1000.0, "R0_ohm": 0.1, "T0_Nm": 1.0, "Vemf0_peak_V": 10.0, "L0_mm": 12,
+          "end3d": {"k_flux_vs_L": {"12": 0.938, "40": 0.95}}}
+    assert machine_point(pp, 5.0, 1000.0).get("k_end_stale") == 1.0
+    pp["end3d"]["k_flux_vs_L_method"] = "own_mid_ratio"
+    assert "k_end_stale" not in machine_point(pp, 5.0, 1000.0)
+
+
+def test_a_stale_table_without_stack_mm_lends_one_row_or_none():
+    stale = {"40": 0.9461, "65": 0.9462, "170": 0.9463}
+    assert S._end3d_rec_points({"k_flux": 0.9461, "k_flux_vs_L": stale}) == [(40.0, 0.9461)]   # the row equal to the scalar
+    assert S._end3d_rec_points({"k_flux": 0.90, "k_flux_vs_L": stale}) == []                  # none identified
+
+
+def test_the_torque_factor_of_another_length_is_not_lent(env, monkeypatch):
+    from motor_ai_sim import end3d_factors as F
+    monkeypatch.setattr(F, "_records", lambda: [
+        {"fingerprint": "g200", "k_T": 0.91, "slots": 24, "poles": 28, "od_mm": 200.0, "stack_mm": 200.0, "source": "Stage D"}])
+    env["store"] = {"g200": _rec(0.9896, stack=200.0), "g40": _rec(0.946, stack=40.0)}
+    env["stack"] = 120.0                                  # between the two measured lengths: the curve
+    r = S._end3d_lookup("new", {})
+    assert r["inherited_stack_basis"] == "curve"
+    assert r.get("k_T") is None and r["torque_basis"] != "measured"       # k_T of the 200 mm stack is not lent
+    assert F.torque_factor(r)[0] == pytest.approx(r["k_flux"])
+    # at the length the k_T was measured at (within 5 %): lent, flagged inherited
+    env["stack"] = 201.0
+    r = S._end3d_lookup("new", {})
+    assert r["k_T"] == 0.91 and r["k_T_inherited"] is True
+    # the measured k_T of an exact passport is untouched (no stack rule for the machine's own passport)
+    env["store"]["new"] = _rec(0.95, stack=60.0)
+    monkeypatch.setattr(F, "_records", lambda: [
+        {"fingerprint": "new", "k_T": 0.9, "slots": 24, "poles": 28, "od_mm": 200.0, "stack_mm": 60.0, "source": "Stage D"}])
+    r = S._end3d_lookup("new", {})
+    assert r["k_T"] == 0.9 and not r.get("k_T_inherited")
+
+
+def test_the_lent_note_names_what_is_not_compared(env):
+    env["store"] = {"a": _rec(0.946, stack=40.0), "b": _rec(0.99, stack=200.0)}
+    env["stack"] = 120.0
+    note = S._end3d_lookup("new", {})["inherited_note"]
+    for w in ("magnet", "air gap", "materials", "temperature", "die"):
+        assert w in note
+
+
+def test_the_failed_label_says_what_is_applied():
+    from motor_ai_sim.simulation.static3d.end_effect import k_flux_basis_label as lab
+    assert "applied as stored" in lab({"verdict": "FAIL"}) and "use k_flux_self" not in lab({"verdict": "FAIL"})
+
+
+def test_family_payload_says_why_a_passport_was_not_lent(tmp_path, monkeypatch):
+    import yaml
+    from fastapi.testclient import TestClient
+    from motor_ai_sim.api import app
+    from motor_ai_sim import auth
+    from motor_ai_sim import users as U
+    from motor_ai_sim.routes import family as fam
+    root = tmp_path / "dies"
+    (root / "TD").mkdir(parents=True)
+    (root / "TD" / "die.yaml").write_text(yaml.safe_dump({
+        "name": "TD", "locked": False, "created": "2026-09-22T10:00:00",
+        "geometry": {"num_slots": 24, "num_poles": 28, "stator_diameter": 200.0, "motor_length": 300.0}}), encoding="utf-8")
+    (root / "TD" / "C1.yaml").write_text(yaml.safe_dump({
+        "name": "C1", "die": "TD", "role": "motor", "geometry_overrides": {"motor_length": 300.0},
+        "winding": {"connection": "star"},
+        "duties": [{"name": "d", "mode": "motor", "current_arms": 10.0, "rpm": 100.0,
+                    "summary": {"T_em_avg_Nm": 5.0, "end3d": None}}]}), encoding="utf-8")
+    monkeypatch.setattr(fam, "_DIES_DIR", root)
+    monkeypatch.setattr(end3d_store, "load", lambda: {"x": _rec(0.95, stack=40.0), "y": _rec(0.99, stack=200.0)})
+    monkeypatch.setattr(S, "_machine_desc", lambda geo=None: DESC)
+    uf = tmp_path / "users.json"
+    monkeypatch.setattr(U, "_USERS_FILE", uf)
+    monkeypatch.setenv("AUTH_SECRET", "test-secret-not-the-real-one")
+    monkeypatch.setattr(auth, "_ADMIN_EMAILS", {"admin@example.com"})
+    monkeypatch.setattr(auth, "AUTH_ENFORCE", False)
+    U.create_user("admin@example.com", "password-admin", role="admin", name="Admin")
+    h = {"Authorization": f"Bearer {U.issue_token('admin@example.com')}"}
+    r = TestClient(app).get("/api/family/payload/TD/C1", headers=h, params={"duty": "d"})
+    assert r.status_code == 200, r.text
+    summ = r.json()["duty"]["summary"]
+    assert summ["end3d"] is None and "outside the measured span" in summ["end3d_note"]
 
 
 def test_dry_list_old_and_new_on_a_tiny_catalog(tmp_path, monkeypatch):

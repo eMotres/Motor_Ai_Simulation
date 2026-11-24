@@ -197,7 +197,7 @@ def test_access_tiers_the_designer_is_a_solve_the_catalogue_stays_open():
 def test_polar_source_is_selectable_per_request_and_defaults_to_the_flat_plate():
     c = client()
     fam = c.get(B + "/family", params={"diameter_in": 10, "blades": 3}).json()
-    assert fam["polar_source"] == "flatplate_model" and fam["polar_sources"] == ["flatplate_model", "camber_model"]
+    assert fam["polar_source"] == "flatplate_model" and fam["polar_sources"] == ["flatplate_model", "camber_model", "mfoil_table"]
     body = {"vector": seed(10, 3), "op": "L12"}
     flat = c.post(B + "/evaluate", json=body).json()
     same = c.post(B + "/evaluate", json=dict(body, polar_source=None)).json()

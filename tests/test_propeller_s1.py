@@ -41,6 +41,7 @@ def _model(**over):
                             "cu_ac": [[0.02 * (i / 10.0) ** 2 * (n / 1000.0) for i in CUR] for n in RPM],
                             "rotor_eddy": [[0.01 * (n / 1000.0) ** 2 * (i / 10.0) for i in CUR] for n in RPM]}},
         "mech_W": {"rpm": RPM, "W": [0.01 * n / 1000.0 for n in RPM]},
+        "loss_groups_zero": ["fe_rotor"],               # the synthetic motor has no rotor iron loss (declared, review H10)
         "limits": {"I_max_A": 60.0, "rpm_max": 12000.0, "winding_C": 200.0, "magnet_C": 150.0},
         "thermal_geom": {"statorOD_mm": 40.0, "stackLength_mm": 15.0, "numSlots": 12, "slotHeight_mm": 6.0,
                          "slotWidth_mm": 2.8, "insulation_mm": 0.06, "coreThickness_mm": 2.0,
@@ -1083,3 +1084,27 @@ def test_the_continuous_line_sits_at_the_rated_winding_and_a_caller_limit_still_
     hi = _run(m, prop, winding_limit_c=200.0, magnet_limit_c=400.0)
     assert hi["limits"]["winding_C"] == pytest.approx(200.0)
     assert hi["limit"]["rpm"] > r["limit"]["rpm"]
+
+
+def test_an_undeclared_missing_loss_group_refuses_the_point_a_declared_one_does_not(tmp_path):
+    # pre-merge review 2026-11-22 H10: an absent group is not 0 W unless the model says so
+    m = _model()
+    del m["grid"]["loss_W"]["rotor_eddy"]
+    m = s1.validate_model(m)
+    assert s1.losses(m, 3000.0, 20.0, 50.0)["missing_loss_groups"] == ["rotor_eddy"]
+    row = s1.solve_point(m, _prop(tmp_path), 3000.0, ambient_c=25.0, rho=1.2, lims=s1.limits_of(m))
+    assert row["binding"] == "loss_data" and "rotor_eddy" in row["losses_unavailable"] and not row["ok"]
+    declared = s1.validate_model({**m, "loss_groups": {"rotor_eddy": {"status": "lumped", "note": "inside fe_stator"}}})
+    assert s1.losses(declared, 3000.0, 20.0, 50.0)["missing_loss_groups"] == []
+    assert s1.solve_point(declared, _prop(tmp_path), 3000.0, ambient_c=25.0, rho=1.2, lims=s1.limits_of(declared))["binding"] != "loss_data"
+
+
+def test_loss_group_declarations_are_validated():
+    m = _model()
+    for bad in ({"loss_groups": {"rotor_eddy": {"status": "maybe"}}},          # unknown status
+                {"loss_groups": {"fe_rotor": {"status": "grid"}}},             # says grid, the grid has none
+                {"loss_groups": {"cu_ac": {"status": "omitted"}}},             # a motor loss group cannot be omitted
+                {"loss_groups_zero": ["fe_stator"]},                           # declared zero but in the grid
+                {"loss_groups_zero": ["steel"]}):                              # unknown group
+        with pytest.raises(s1.S1Error):
+            s1.validate_model({**m, **bad})

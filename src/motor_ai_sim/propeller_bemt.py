@@ -65,6 +65,7 @@ _PHI_LO, _PHI_HI = 1e-4, math.pi / 2.0 - 1e-4
 _F_MIN = 1e-6
 
 POLAR_DIR = Path(__file__).resolve().parents[2] / "config" / "propellers" / "_polars"
+MFOIL_POLAR_DIR = Path(__file__).resolve().parents[2] / "config" / "propellers" / "_polars_mfoil"   # viscous model tables (mfoil, MIT), 2026-11-19
 
 
 class BemtError(_pi.InflowModelError):
@@ -200,6 +201,25 @@ class CamberedPlatePolar(FlatPlatePolar):
         return cl, cd, set(flags) | {"camber_thin_airfoil"}
 
 
+class PrandtlGlauertPolar(PolarProvider):
+    """Wraps a polar: lift scaled by 1 / sqrt(1 - M^2) at the element Mach number (opt-in, 2026-11-20).  The correction is held at
+    ``M_CAP`` above it (flag ``mach_above_prandtl_glauert``); drag is left as tabulated (no wave drag)."""
+
+    M_CAP = 0.75
+
+    def __init__(self, base: PolarProvider):
+        self.base = base
+        self.estimated = True
+
+    def eval(self, airfoil: str, alpha, Re, mach, thickness):
+        cl, cd, flags = self.base.eval(airfoil, alpha, Re, mach, thickness)
+        m = np.asarray(mach, float)
+        flags = set(flags) | {"prandtl_glauert"}
+        if np.any(m > self.M_CAP):
+            flags.add("mach_above_prandtl_glauert")
+        return cl / np.sqrt(1.0 - np.minimum(m, self.M_CAP) ** 2), cd, flags
+
+
 @dataclass(frozen=True)
 class PolarTable:
     airfoil: str
@@ -208,6 +228,7 @@ class PolarTable:
     cl: np.ndarray
     cd: np.ndarray
     source: str
+    gaps: Tuple[float, ...] = ()     # rad; failed solutions bridged by interpolation (``# kept:`` header of a generated table)
 
 
 def load_polar_csv(path: Path) -> PolarTable:
@@ -246,7 +267,12 @@ def load_polar_csv(path: Path) -> PolarTable:
     re = float(meta["re"])
     if not re > 0:
         raise BemtError(f"{where}: re must be positive")
-    return PolarTable(meta["airfoil"], re, a, np.array([r[1] for r in rows]), np.array([r[2] for r in rows]), meta["source"])
+    gaps: Tuple[float, ...] = ()
+    kept = meta.get("kept", "")
+    if "interpolation):" in kept:                       # review 2026-11-21 H5: keep the failed angles, do not lose them
+        txt = kept.split("interpolation):", 1)[1].split(";", 1)[0]
+        gaps = tuple(float(g) * math.pi / 180.0 for g in txt.split() if g.lstrip("-").replace(".", "", 1).isdigit())
+    return PolarTable(meta["airfoil"], re, a, np.array([r[1] for r in rows]), np.array([r[2] for r in rows]), meta["source"], gaps)
 
 
 class TablePolar(PolarProvider):
@@ -283,6 +309,29 @@ class TablePolar(PolarProvider):
             cl, cd = np.where(lo, -v_cl, cl), np.where(lo, v_cd, cd)
         return cl, cd
 
+    @staticmethod
+    def gap_intervals(t: PolarTable) -> List[Tuple[float, float]]:
+        """The open alpha intervals (rad) bridged by interpolation across a failed solution: from the converged angle below each failed
+        angle to the converged angle above it (review 2026-11-22 H5: the whole bridge is unsupported, not only the failed angle)."""
+        out = []
+        for g in t.gaps:
+            below, above = t.alpha[t.alpha < g], t.alpha[t.alpha > g]
+            if len(below) and len(above):
+                out.append((float(below[-1]), float(above[0])))
+        return out
+
+    def _table_flags(self, tabs, a) -> set:
+        """``polar_alpha_gap`` when an angle falls inside a bridged interval of a table in use (``gap_intervals``);
+        ``polar_beyond_table`` when it lies outside the converged range (the Viterna extension, not a computed stall)."""
+        f = set()
+        aa = np.ravel(a)
+        for t in tabs:
+            if any(np.any((aa > lo) & (aa < hi)) for lo, hi in self.gap_intervals(t)):
+                f.add("polar_alpha_gap")
+            if np.any(aa > t.alpha[-1]) or np.any(aa < t.alpha[0]):
+                f.add("polar_beyond_table")
+        return f
+
     def _eval_half(self, airfoil, alpha, Re, mach, thickness):
         tabs = self._by.get(airfoil)
         if not tabs:
@@ -292,7 +341,7 @@ class TablePolar(PolarProvider):
         if len(tabs) == 1:
             cl, cd = self._one(tabs[0], a)
             flags.add("single_re_table")
-            return cl, cd, flags
+            return cl, cd, flags | self._table_flags(tabs, a)
         logs = np.log([t.re for t in tabs])
         x = np.log(np.maximum(np.asarray(Re, float), 1.0))
         if np.any(x < logs[0]) or np.any(x > logs[-1]):
@@ -304,6 +353,7 @@ class TablePolar(PolarProvider):
         cd = np.empty(a.shape)
         for k in np.unique(j):
             m = j == k
+            flags |= self._table_flags((tabs[k], tabs[k + 1]), a[m])
             c1, d1 = self._one(tabs[k], a[m])
             c2, d2 = self._one(tabs[k + 1], a[m])
             w = (x[m] - logs[k]) / (logs[k + 1] - logs[k])
@@ -564,7 +614,14 @@ def om_tip_mach(Om: float, rtip: float, V: float, a: float) -> float:
 # ---------------------------------------------------------------------------
 
 def polar_for(prop: _pp.Propeller, polar_dir: Optional[Path] = None) -> PolarProvider:
-    """The polar provider a propeller-2 entry asks for (``blade.polars.source``)."""
+    """The polar provider a propeller-2 entry asks for (``blade.polars.source``, wrapped by ``blade.polars.compressibility``)."""
+    base = _polar_base(prop, polar_dir)
+    if getattr(prop.blade, "polars_compressibility", None) == "prandtl_glauert":
+        return PrandtlGlauertPolar(base)
+    return base
+
+
+def _polar_base(prop: _pp.Propeller, polar_dir: Optional[Path] = None) -> PolarProvider:
     b = prop.blade
     src = b.polars_source or "flatplate_model"
     ar = max((b.tip_radius_m - b.root_cutout_m) / max(float(np.mean([s.chord_m for s in b.stations])), 1e-9), 1.0)
@@ -572,11 +629,14 @@ def polar_for(prop: _pp.Propeller, polar_dir: Optional[Path] = None) -> PolarPro
         return FlatPlatePolar(ar)
     if src == "camber_model":
         return CamberedPlatePolar(ar)
-    if src in ("xfoil_table", "measured"):
-        tp = TablePolar.from_dir(polar_dir or POLAR_DIR, ar)
+    if src in ("xfoil_table", "measured", "mfoil_table"):
+        root = polar_dir or (MFOIL_POLAR_DIR if src == "mfoil_table" else POLAR_DIR)
+        tp = TablePolar.from_dir(root, ar)
         missing = sorted({s.airfoil for s in b.stations} - set(tp.airfoils()))
         if missing:
-            raise BemtError("no polar table for airfoil(s) %s under %s" % (", ".join(missing), polar_dir or POLAR_DIR))
+            raise BemtError("no polar table for airfoil(s) %s under %s" % (", ".join(missing), root))
+        if src == "mfoil_table":
+            tp.estimated = True                            # a viscous model (panel + integral boundary layer), not a measurement
         return tp
     raise BemtError("polar source %r is not available in this build (this stage ships the table / Viterna "
                     "providers only; a trained-surrogate provider needs its weights' licence verified first)" % src)

@@ -246,7 +246,55 @@ def root_stress(propeller2: Dict[str, Any], rpm: float, material: Any, loads: Op
     sections = blade_sections(propeller2)
     if loads is None:
         loads = bemt_blade_loads(propeller2, rmax, rho_air, v_inf)
+    radii = sorted(float(x["r_m"]) for x in sections)
+    bad = load_problems(loads, radii[0], radii[-1])    # reviews 2026-11-21/22 H1: a failed or partial load is not a zero load
+    if bad:                                            # refused before any integration: no safety factor from an incomplete load
+        mat = get_material(material)
+        return {"rpm_check": rmax, "rpm_design": float(rpm), "rpm_max_assumed": assumed, "safety_factor": None,
+                "required_factor": SAFETY_FACTOR, "passes": False, "load_valid": False, "load_problems": bad,
+                "load_flags": list(loads.get("flags") or []), "material": {"name": mat.get("name"), "source": mat["source"]},
+                "validated": False, "basis": BASIS}
     out = root_stress_from_sections(sections, rmax, material, loads, rpm_design=float(rpm), rpm_max_assumed=assumed)
     if loads.get("flags"):
         out["load_flags"] = list(loads["flags"])
+    out["load_valid"] = True
     return out
+
+
+LOAD_MIN_SPAN_COVERAGE = 0.8      # the load points must reach over >= 80 % of the root-to-tip span ...
+LOAD_MAX_SPAN_STEP = 0.25         # ... with no step between neighbouring points above 25 % of it
+
+
+def load_problems(loads: Dict[str, Any], r_root: Optional[float] = None, r_tip: Optional[float] = None) -> List[str]:
+    """Reasons the spanwise loads cannot be used for a strength check (empty list = usable): unconverged blade elements, missing,
+    non-numeric or non-finite arrays, arrays of different length, radii not strictly increasing, and - when the blade's root and tip
+    radii are given - load points that do not cover the span (``LOAD_MIN_SPAN_COVERAGE``, ``LOAD_MAX_SPAN_STEP``)."""
+    bad = [str(f) for f in (loads.get("flags") or []) if str(f).startswith("unconverged_elements")]
+    arr: Dict[str, np.ndarray] = {}
+    for k in ("r_m", "dT_dr_N_per_m", "dQ_dr_Nm_per_m"):
+        v = loads.get(k)
+        try:
+            a = np.asarray([] if v is None else v, dtype=float).ravel()
+        except (TypeError, ValueError):
+            bad.append("not_numeric:%s" % k)
+            continue
+        if a.size == 0 or not np.all(np.isfinite(a)):
+            bad.append("nonfinite_or_empty:%s" % k)
+        arr[k] = a
+    if len(arr) < 3 or any(b.startswith(("not_numeric", "nonfinite")) for b in bad):
+        return bad
+    r = arr["r_m"]
+    if not (len(r) == len(arr["dT_dr_N_per_m"]) == len(arr["dQ_dr_Nm_per_m"])):
+        return bad + ["length_mismatch"]
+    if len(r) < 2:
+        return bad + ["fewer_than_two_points"]
+    if not np.all(np.diff(r) > 0):
+        return bad + ["radii_not_increasing"]
+    if r_root is not None and r_tip is not None and r_tip > r_root:
+        span = r_tip - r_root
+        inside = r[(r >= r_root - 1e-12) & (r <= r_tip + 1e-12)]
+        cov = (inside[-1] - inside[0]) / span if len(inside) >= 2 else 0.0
+        steps = np.diff(np.concatenate([[r_root], inside, [r_tip]])) if len(inside) else np.array([span])
+        if cov < LOAD_MIN_SPAN_COVERAGE or float(np.max(steps)) > LOAD_MAX_SPAN_STEP * span:
+            bad.append("span_not_covered:%.2f" % cov)
+    return bad

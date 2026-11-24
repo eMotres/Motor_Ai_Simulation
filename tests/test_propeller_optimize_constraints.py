@@ -40,7 +40,7 @@ class FakeStructure:
         def rs(p2, rpm, material, *a, **k):
             if outer.fail:
                 raise ps.StructureError("no section")
-            return {"safety_factor": 6.0 - 20.0 * p2["_chord"], "overspeed_assumption": "x"}
+            return {"safety_factor": 6.0 - 20.0 * p2["_chord"], "overspeed_assumption": "x", "load_valid": True}
         ps.root_stress, pd.candidate_to_propeller2 = rs, c2p
         return self
 
@@ -98,5 +98,19 @@ def test_bad_inputs_are_refused_with_a_name():
         run(structure_material="unobtainium")
     with pytest.raises(po.OptimizeError, match="needs structure_material"):
         run(min_safety_factor=3.0)
-    with pytest.raises(po.OptimizeError, match="between 1 and 10"):
-        run(structure_material="pa6_gf30", min_safety_factor=0.5)
+    for low in (0.5, 1.0, 2.9):                               # owner rule SF 3; no lower setting (pre-merge review 2026-11-22, H2)
+        with pytest.raises(po.OptimizeError, match="between 3 and 10"):
+            run(structure_material="pa6_gf30", min_safety_factor=low)
+
+
+def test_a_structure_result_without_valid_loads_is_infeasible():
+    # pre-merge review 2026-11-22 H1: a check that does not say its loads were valid is not accepted
+    class NoLoadFlag(FakeStructure):
+        def __enter__(self):
+            super().__enter__()
+            fake = ps.root_stress
+            ps.root_stress = lambda *a, **k: {k2: v for k2, v in fake(*a, **k).items() if k2 != "load_valid"}
+            return self
+    with NoLoadFlag():
+        out = run(seed=7, structure_material="pa6_gf30")
+    assert out["front"] == [] and all(e["violation"] >= 1.0 for e in out["evaluations"] if e["note"] != "duplicate")

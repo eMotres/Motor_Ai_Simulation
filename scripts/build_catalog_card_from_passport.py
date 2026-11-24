@@ -134,10 +134,19 @@ def build_block(full: Dict[str, Any], static: Dict[str, Any]) -> Dict[str, Any]:
     out["speed"] = {"rpm": rpms, "Pfe_W": grid["Pfe_W"][ri], "Pmag_W": grid["Pmag_W"][ri]}
 
     # -- 3-D end effect (Stage A, own stack) ----------------------------------
-    k = float(full["stage2_3d"]["k_psi"]["value"])
+    kp = full["stage2_3d"]["k_psi"]
+    k = float(kp["value"])
+    # the applied factor AND the real k_flux beside it, with the verdict that chose (end3d_verdict); a full
+    # passport written before 2026-11-24 has no basis: then the old text, which was true for that machine
+    basis = kp.get("basis")
     out["end3d"] = {"k_flux": k, "k_flux_vs_L": None,
-                    "fidelity": "Stage A k_flux_self at the own stack (2-D check failed, raw k_flux not used)",
+                    "fidelity": ("Stage A at the own stack, applied %s (2-D check %s)" % (basis, kp.get("verdict"))
+                                 if basis else
+                                 "Stage A k_flux_self at the own stack (2-D check failed, raw k_flux not used)"),
                     "k_T": float(full["stage2_3d"]["k_T"]["value"])}
+    if basis:
+        out["end3d"].update({"k_flux_basis": basis, "k_flux_raw": kp.get("k_flux"),
+                             "k_flux_self": kp.get("k_flux_self"), "k_flux_verdict": kp.get("verdict")})
     out["pwm"] = None
     out["source_note"] = (
         "assembled from the full passport %s (no solve): 20 degC - T0, Vemf0, R0, Ld/Lq, torque curve "

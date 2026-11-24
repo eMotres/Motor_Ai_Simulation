@@ -115,7 +115,7 @@ const EM_LABEL = 14;                                     // the panel label, sub
 const textW = (s, em) => [...s].reduce((w, ch) => w + (/[\u3000-\u9fff\uff00-\uffef]/.test(ch) ? 1 : 0.62) * em, 0);
 const rowNeeds = (lang) => {
   const tabs = locale(lang).tabs;
-  const order = ['specification', 'motors', 'messages', 'documents', 'production', 'notes', 'timeline', 'quote', 'cost'];
+  const order = ['specification', 'motors', 'messages', 'documents', 'production', 'timeline', 'quote', 'cost'];
   const tabsW = order.reduce((w, id) => w + textW(tabs[id], EM_TAB) + 20, 0) + 36;    // px 1.25 each side; unread chip + margin
   const backW = textW(locale(lang).back, EM_TAB) + 18 + 8 - 4 + 20 + 2 + 12;           // icon, its margins, padding, border, mr 1.5
   return textW(commonLocale(lang).tabs.development, EM_LABEL) + 8 + backW + tabsW;

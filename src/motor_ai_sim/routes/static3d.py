@@ -1119,6 +1119,8 @@ def adopt_entry(sa: Dict[str, Any], note: str = "") -> Tuple[str, Dict[str, Any]
         "machine": "%ds/%dp OD %g" % (slots, poles, od),
         "stack_mm": m.get("stack_mm"),
         "k_flux_vs_L": curve or None,
+        # how the per-length rows were formed (end_effect.K_FLUX_VS_L_*); absent on a result from before the 2026-11-24 fix
+        **({"k_flux_vs_L_method": str(sa["k_flux_vs_L_method"])} if curve and sa.get("k_flux_vs_L_method") else {}),
         "materials": m.get("materials"),
         "mesh": {kk: md.get(kk) for kk in ("h_gap_mm", 'h_solid_mm', "mesh_rule", "box_z_mm", "iron_stack_kf")
                  if kk in md} or None,

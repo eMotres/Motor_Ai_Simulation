@@ -22,7 +22,7 @@ def _geo(ww, wsx, ins, split=None):
 
 
 def _slot_diffs(a, b):
-    return [d for d in fam.die_shape_diffs(a, b) if d["key"] == "slot_width"]
+    return [d for d in fam.die_shape_diffs(a, b) if d["key"] == "pocket_width"]
 
 
 def test_same_built_pocket_with_another_spacing_split_is_the_same_lamination():

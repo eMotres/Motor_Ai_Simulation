@@ -224,6 +224,11 @@ def test_default_descent_kwargs_are_unchanged():
     assert plan["kwargs"]["mtpa_run_settings"] is True
 
 
+def _worker_kwargs(plan):
+    """The plan's optional worker kwargs, without the always-present settings stamp."""
+    return {k: v for k, v in plan["kwargs"].items() if k != "mesh_preset"}
+
+
 def _sweep_body(**kw):
     """Six points next to the config's own design (the pre-solve geometry
     fence must pass all of them, or nothing is evaluated)."""
@@ -300,8 +305,8 @@ def test_sweep_magnet_temperature_is_opt_in():
     assert O._scan_pins(630.9, None) == {"rpm": 630.9}
     assert O._scan_pins(None, None) is None
     assert O._scan_pins(630.9, 20.0) == {"rpm": 630.9, "magnet_temp_c": 20.0}
-    assert O.prepare_scan(O.ScanRequest(**_sweep_body()))["kwargs"] == {}
-    assert O.prepare_scan(O.ScanRequest(**_sweep_body(magnet_temp_c=20)))["kwargs"] == {"magnet_temp_c": 20.0}
+    assert _worker_kwargs(O.prepare_scan(O.ScanRequest(**_sweep_body()))) == {}
+    assert _worker_kwargs(O.prepare_scan(O.ScanRequest(**_sweep_body(magnet_temp_c=20)))) == {"magnet_temp_c": 20.0}
     seen = []
 
     def fn(ov, cur, *a, **kw):
@@ -335,7 +340,7 @@ def test_cogging_screen_is_opt_in():
     assert O._scan_pins(630.9, 20.0, True) == {"rpm": 630.9, "magnet_temp_c": 20.0, "cogging_screen": True}
     assert O._scan_pins(630.9, 20.0) == {"rpm": 630.9, "magnet_temp_c": 20.0}
     assert "cogging_screen" not in O.prepare_scan(O.ScanRequest(**_sweep_body()))["kwargs"]
-    assert O.prepare_scan(O.ScanRequest(**_sweep_body(cogging_screen=True)))["kwargs"] == {"cogging_screen": True}
+    assert _worker_kwargs(O.prepare_scan(O.ScanRequest(**_sweep_body(cogging_screen=True)))) == {"cogging_screen": True}
     seen = []
 
     def fn(ov, cur, *a, **kw):

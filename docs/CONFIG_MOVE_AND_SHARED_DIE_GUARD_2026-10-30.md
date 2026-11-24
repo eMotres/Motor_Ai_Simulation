@@ -125,3 +125,6 @@ configuration and duty names) when the refusal names the die (`web/src/lib/build
 
 Tests: `tests/test_die_shared_snapshot_guard.py`, `tests/test_config_move.py`, `tests/test_duty_save_lamination_move.py`,
 `web/src/lib/__tests__/buildClash.test.mjs`.
+
+
+Note 2026-11-24: the die-diff entry that this document calls "slot_width" now carries the BUILT coil pocket under the key `pocket_width` (column + 2 liner + 1 spacing; `motor_geometry.pocket_width`). The stored `slot_width` (the wire pitch, one spacing wider) is unchanged. Old stored diffs and clients keyed `slot_width` are still read.

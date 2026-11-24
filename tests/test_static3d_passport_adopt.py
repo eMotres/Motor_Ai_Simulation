@@ -67,3 +67,14 @@ def test_every_account_reads_the_shared_passport_and_its_own_wins(tmp_path, monk
     assert got["fp1"]["k_flux"] == 0.95 and got["fp2"]["k_flux"] == 0.97
     monkeypatch.setattr(end3d_store, "workspace_path", lambda: tmp_path / "missing.json")
     assert end3d_store.load()["fp2"]["k_flux"] == 0.96
+
+
+def test_a_result_from_before_the_marker_stays_without_it():
+    """A Stage A result written before the per-length fix has no k_flux_vs_L_method: the entry does not invent one
+    (its rows used the reference length's ratio), and a marked result passes the marker through."""
+    _fp, e = S.adopt_entry(_sa())
+    assert "k_flux_vs_L_method" not in e
+    _fp, e2 = S.adopt_entry(_sa(k_flux_vs_L_method="own_mid_ratio"))
+    assert e2["k_flux_vs_L_method"] == "own_mid_ratio"
+    assert {k: v for k, v in e2.items() if k not in ("k_flux_vs_L_method", "adopted_utc")} == \
+        {k: v for k, v in e.items() if k != "adopted_utc"}

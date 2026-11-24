@@ -39,6 +39,34 @@ export function rippleGradeSteps(numSlots: number, numPoles: number): number {
     RIPPLE_SAMPLES_PER_COGGING_CYCLE * coggingCyclesPerPeriod(numSlots, numPoles));
 }
 
+/** WHY the count is what it is.  The Simulation tab's OWN rule when it set the count (`stepsSource` 'eddy_default' and the count equals the
+ *  machine's default): the ripple grade (9 samples per cogging cycle) when it raised the count above the eddy default, else the eddy
+ *  default itself.  A count the user picked says so.  A machine loaded from the catalogue has no recorded source: the reason is
+ *  derived from what is known (the count equals the machine's ripple grade) and says that the source is not recorded; any other count
+ *  without a source reads `unrecorded`.  Never `null` for a positive count: the line never shows steps without a reason.  Uses the
+ *  same helpers as the tab, so the rule is not stated twice. */
+export type StepsReason =
+  | { kind: 'ripple_grade'; steps: number; cycles: number; samples: number }
+  | { kind: 'ripple_grade_unrecorded'; steps: number; cycles: number; samples: number }
+  | { kind: 'eddy_default'; steps: number }
+  | { kind: 'user'; steps: number }
+  | { kind: 'unrecorded'; steps: number };
+
+export function stepsReason(steps: number, source: unknown, numSlots: number, numPoles: number): StepsReason | null {
+  if (!(steps > 0)) return null;
+  const cycles = coggingCyclesPerPeriod(numSlots, numPoles);
+  const grade = rippleGradeSteps(numSlots, numPoles);
+  const raised = RIPPLE_SAMPLES_PER_COGGING_CYCLE * cycles > EDDY_DEFAULT_STEPS;
+  if (source === 'user') return { kind: 'user', steps };
+  if (source === 'eddy_default' && steps === grade) {
+    return raised ? { kind: 'ripple_grade', steps, cycles, samples: RIPPLE_SAMPLES_PER_COGGING_CYCLE } : { kind: 'eddy_default', steps };
+  }
+  if (source !== 'eddy_default' && cycles > 0 && steps === grade && raised) {
+    return { kind: 'ripple_grade_unrecorded', steps, cycles, samples: RIPPLE_SAMPLES_PER_COGGING_CYCLE };
+  }
+  return { kind: 'unrecorded', steps };
+}
+
 /** The tab's factory defaults before 2026-09-26.  A count equal to one of them
  *  with no record of who set it is the old default, not a choice. */
 export const LEGACY_DEFAULT_STEPS: readonly number[] = [36, 40];

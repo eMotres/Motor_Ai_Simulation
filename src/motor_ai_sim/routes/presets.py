@@ -1118,6 +1118,16 @@ def _applied_metrics(raw: Optional[dict]) -> dict:
         ("torque_per_mass", ("torque_per_mass", "torque_per_mass_Nm_kg", "td")),
         ("V_line_peak_V", ("V_line_peak_V", "v_line_peak_v")),
         ("P_mech_W", ("P_mech_W", "P_mech_avg_W")),
+        # opt-in Sweep "Cogging pp" and the settings it was measured with (Compare ranks only equal ones)
+        ("cogging_pp_Nm", ("cogging_pp_Nm",)), ("cogging_final", ("cogging_final",)),
+        ("cogging_steps", ("cogging_steps",)), ("cogging_temp_c", ("cogging_temp_c",)),
+        ("cogging_mesh_mm", ("cogging_mesh_mm",)), ("cogging_gap_layers", ("cogging_gap_layers",)),
+        ("cogging_sectors", ("cogging_sectors",)), ("cogging_basis_code", ("cogging_basis_code",)),
+        ("cogging_demag_at_load", ("cogging_demag_at_load",)), ("cogging_sig", ("cogging_sig",)),
+        # the settings the sweep point was SOLVED with (Compare refuses to rank sweeps computed at different ones)
+        ("sweep_origin", ("sweep_origin",)), ("sweep_sig", ("sweep_sig",)),
+        ("sweep_sig_scope", ("sweep_sig_scope",)),
+        ("sweep_steps", ("sweep_steps",)), ("sweep_gap_layers", ("sweep_gap_layers",)),
     ):
         v = _pick(*names)
         if v is not None:

@@ -394,6 +394,10 @@ SELF_GATED = {           # routes whose natural "missing" answer is not a 404: g
     ("POST", "/api/family/config/{die}/{cfg}/move"),
     # the safe rename: the same admin-only 403 before any name resolves, tested below
     ("POST", "/api/family/config/{die}/{cfg}/rename"),
+    # the configuration archive: verified admins only, 403 for everybody else before any name resolves
+    # (routes/config_archive.py, tests/test_config_archive.py::test_only_a_verified_admin)
+    ("GET", "/api/config-archive/{die}/{cfg}"), ("POST", "/api/config-archive/{die}/{cfg}/archive"),
+    ("POST", "/api/config-archive/{die}/{cfg}/restore"),
     # a project motor's read-only routes: project membership, then the ordinary configuration gate in
     # development.motors; the same 404 for a hidden motor and a missing one, tested below
     ("GET", "/api/projects/{project_id}/motors/sim"), ("GET", "/api/projects/{project_id}/motors/sim/run"),

@@ -1,7 +1,7 @@
 /** Documents tab of a development project (owner 2026-11-01): the production package - KiCad projects, fabrication zips,
  *  BOM, 3-D models, drawings.  Upload button + drag & drop; staff set category / revision / internal and archive. */
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { Alert, Box, Button, Chip, IconButton, MenuItem, Paper, Select, Stack, Switch, Table, TableBody, TableCell, TableHead, TableRow, TextField, Tooltip, Typography } from '@mui/material';
+import { Alert, Box, Button, Chip, Dialog, DialogActions, DialogContent, DialogTitle, IconButton, Menu, MenuItem, Paper, Select, Stack, Switch, Table, TableBody, TableCell, TableHead, TableRow, TextField, Tooltip, Typography } from '@mui/material';
 import UploadFileIcon from '@mui/icons-material/UploadFile';
 import DownloadIcon from '@mui/icons-material/Download';
 import ArchiveOutlinedIcon from '@mui/icons-material/ArchiveOutlined';
@@ -11,11 +11,12 @@ import ChevronRightIcon from '@mui/icons-material/ChevronRight';
 import StarIcon from '@mui/icons-material/Star';
 import StarBorderIcon from '@mui/icons-material/StarBorder';
 import ImageOutlinedIcon from '@mui/icons-material/ImageOutlined';
+import MoreVertIcon from '@mui/icons-material/MoreVert';
 import HelpTip from '../../../components/common/HelpTip';
 import { NARROW } from '../../../lib/narrowLayout';
 import { developmentApi, downloadProjectDocument, downloadProjectDocumentsZip } from '../api';
-import type { DocumentFolder, ProjectDocument } from '../types';
-import { groupByRevision, isGroupOpen } from '../documentRevisions';
+import type { DocumentFolder, DocumentRelease, ProjectDocument } from '../types';
+import { groupByRevision, isReleaseGroupOpen, orderByRelease } from '../documentRevisions';
 import { formatBytes, isCoverImage, MAX_DOCUMENT_BYTES } from '../documentsModel';
 
 const FOLDERS: DocumentFolder[] = ['kicad', 'fabrication', 'bom', '3d', 'docs'];
@@ -34,11 +35,24 @@ export default function ProjectDocuments({ projectId, language, t, onCoverChange
   const [canEdit, setCanEdit] = useState(false);
   // the INTERNAL switch is MOTRES staff's: a customer-side owner uploads and archives, but never sees or ticks it
   const [showInternal, setShowInternal] = useState(false);   // the server says who is MOTRES staff: a customer never marks or sees internal
+  const [canRestrict, setCanRestrict] = useState(false);   // staff and the project owner mark a document price-restricted
+  // chosen BEFORE the upload and sent with it, so a file with prices is never listed to everybody, not even for a moment
+  const [restrictUploads, setRestrictUploads] = useState(false);
   const [showArchived, setShowArchived] = useState(false);
   const [filter, setFilter] = useState<DocumentFolder | 'all'>('all');
   const [toggled, setToggled] = useState<Record<string, boolean>>({});   // revision group -> explicit open/closed; reset per project
+  // releases (owner 2026-11-24): the server says which group is current and which are superseded, from what THIS caller sees
+  const [releases, setReleases] = useState<DocumentRelease[]>([]);
+  const [currentRelease, setCurrentRelease] = useState<string | null>(null);
+  const [releaseStored, setReleaseStored] = useState(false);
+  const [releaseCleared, setReleaseCleared] = useState<string | null>(null);   // the chosen release lost its documents (editors only)
+  const [supersededDownload, setSupersededDownload] = useState(true);
+  const [moreAnchor, setMoreAnchor] = useState<HTMLElement | null>(null);
+  const [confirmDoc, setConfirmDoc] = useState<ProjectDocument | null>(null);   // a superseded document asked for: confirm first
+  const [confirmArchive, setConfirmArchive] = useState<ProjectDocument | null>(null);   // customer side: archived = restorable by staff only
   const [busy, setBusy] = useState('');
   const [error, setError] = useState('');
+  const [loaded, setLoaded] = useState(false);      // the empty state only after a load finished (a failed load shows the error)
   const [dragging, setDragging] = useState(false);
   const fileInput = useRef<HTMLInputElement>(null);
   const coverInput = useRef<HTMLInputElement>(null);
@@ -52,13 +66,20 @@ export default function ProjectDocuments({ projectId, language, t, onCoverChange
       const list = await developmentApi.documents(id, showArchived);
       if (projectRef.current !== id) return;
       setDocs(list.documents);
+      setLoaded(true);
       setCanEdit(list.can_edit);
       setShowInternal(!!list.is_staff);
+      setCanRestrict(!!list.can_restrict);
+      setReleases(list.releases ?? []);
+      setCurrentRelease(list.current_release ?? null);
+      setReleaseStored(!!list.release_stored);
+      setReleaseCleared(list.release_cleared ?? null);
+      setSupersededDownload(list.superseded_download !== false);
       const version = list.cover_version ?? null;
       if (version !== coverVersion.current) { coverVersion.current = version; onCoverChange?.(version); }
     } catch (e) { if (projectRef.current === id) setError(msg(e)); }
   }, [projectId, showArchived]);
-  useEffect(() => { setDocs([]); setError(''); void load(); }, [load]);
+  useEffect(() => { setDocs([]); setError(''); setLoaded(false); void load(); }, [load]);
   useEffect(() => { setToggled({}); }, [projectId]);
 
   const uploadFiles = async (files: File[]) => {
@@ -68,7 +89,7 @@ export default function ProjectDocuments({ projectId, language, t, onCoverChange
     for (const file of files) {
       if (file.size > MAX_DOCUMENT_BYTES) { setError(t('documents.tooLarge', { name: file.name })); continue; }
       setBusy(t('documents.uploading', { name: file.name }));
-      try { await developmentApi.uploadDocument(id, file, filter === 'all' ? {} : { folder: filter }); }
+      try { await developmentApi.uploadDocument(id, file, { ...(filter === 'all' ? {} : { folder: filter }), priceRestricted: canRestrict && restrictUploads }); }
       catch (e) { setError(`${file.name}: ${msg(e)}`); }
     }
     setBusy('');
@@ -100,16 +121,21 @@ export default function ProjectDocuments({ projectId, language, t, onCoverChange
   const run = async (action: () => Promise<unknown>) => { setError(''); try { await action(); } catch (e) { setError(msg(e)); } };
 
   const shown = docs.filter((d) => filter === 'all' || d.folder === filter);
-  const groups = groupByRevision(shown);
+  const groups = orderByRelease(groupByRevision(shown), releases);
+  const labelled = releases.some((r) => r.revision);
+  const setRelease = (revision: string | null) => void run(async () => { await developmentApi.setDocumentRelease(projectId, revision); await load(); });
+  const archiveNow = (d: ProjectDocument) => run(async () => { await developmentApi.archiveDocument(projectId, d.id); await load(); });
+  const download = (d: ProjectDocument) => { if (d.superseded) setConfirmDoc(d); else void run(() => downloadProjectDocument(projectId, d)); };
   const dateOf = (iso: string) => { const d = new Date(iso); return Number.isNaN(d.getTime()) ? '' : d.toLocaleDateString(language); };
   const onDrop = (e: React.DragEvent) => {
     e.preventDefault(); setDragging(false);
     void uploadFiles(Array.from(e.dataTransfer.files));
   };
 
-  const renderRow = (d: ProjectDocument) => <TableRow key={d.id} hover sx={d.archived ? { opacity: 0.55 } : undefined}>
+  const renderRow = (d: ProjectDocument) => <TableRow key={d.id} hover sx={d.archived || d.superseded ? { opacity: 0.5 } : undefined}>
     <TableCell sx={{ maxWidth: 320, overflowWrap: 'anywhere' }}>
       {d.name}{d.archived && <Chip size="small" label={t('documents.archived')} sx={{ ml: 0.5, height: 16, fontSize: 10 }} />}
+      {d.superseded && <Tooltip title={t('documents.supersededTip')}><Chip size="small" label={t('documents.superseded')} sx={{ ml: 0.5, height: 16, fontSize: 10 }} /></Tooltip>}
     </TableCell>
     <TableCell>{canEdit
       ? <Select size="small" variant="standard" value={d.folder} onChange={(e) => void patch(d, { folder: e.target.value as DocumentFolder })} sx={{ fontSize: 12.5 }}>
@@ -123,14 +149,17 @@ export default function ProjectDocuments({ projectId, language, t, onCoverChange
     <TableCell>{d.uploader || t('documents.member')}</TableCell>
     <TableCell sx={{ whiteSpace: 'nowrap' }}>{dateOf(d.uploaded_at)}</TableCell>
     {showInternal && <TableCell><Switch size="small" checked={d.internal} onChange={(e) => void patch(d, { internal: e.target.checked })} inputProps={{ 'aria-label': t('documents.colInternal') }} /></TableCell>}
+    {canRestrict && <TableCell><Switch size="small" checked={!!d.price_restricted} onChange={(e) => void patch(d, { price_restricted: e.target.checked })} inputProps={{ 'aria-label': t('documents.colPriceRestricted') }} /></TableCell>}
     <TableCell align="right" sx={{ whiteSpace: 'nowrap' }}>
-      <Tooltip title={t('documents.download')}><IconButton size="small" aria-label={t('documents.download')} onClick={() => void run(() => downloadProjectDocument(projectId, d))}><DownloadIcon fontSize="small" /></IconButton></Tooltip>
+      {d.superseded && !supersededDownload
+        ? <Tooltip title={t('documents.supersededViewOnly')}><span><IconButton size="small" disabled aria-label={t('documents.supersededViewOnly')}><DownloadIcon fontSize="small" /></IconButton></span></Tooltip>
+        : <Tooltip title={t('documents.download')}><IconButton size="small" aria-label={t('documents.download')} onClick={() => download(d)}><DownloadIcon fontSize="small" /></IconButton></Tooltip>}
       {canEdit && !d.archived && (d.is_cover
         ? <Tooltip title={t('documents.coverClear')}><IconButton size="small" color="primary" aria-label={t('documents.coverClear')} onClick={() => void clearCover()}><StarIcon fontSize="small" /></IconButton></Tooltip>
-        : (!d.internal && isCoverImage(d.name)) && <Tooltip title={t('documents.coverSet')}><IconButton size="small" aria-label={t('documents.coverSet')} onClick={() => void setCover(d.id)}><StarBorderIcon fontSize="small" /></IconButton></Tooltip>)}
+        : (!d.internal && !d.price_restricted && isCoverImage(d.name)) && <Tooltip title={t('documents.coverSet')}><IconButton size="small" aria-label={t('documents.coverSet')} onClick={() => void setCover(d.id)}><StarBorderIcon fontSize="small" /></IconButton></Tooltip>)}
       {canEdit && (d.archived
         ? <Tooltip title={t('documents.restore')}><IconButton size="small" aria-label={t('documents.restore')} onClick={() => void patch(d, { archived: false })}><UnarchiveOutlinedIcon fontSize="small" /></IconButton></Tooltip>
-        : <Tooltip title={t('documents.archive')}><IconButton size="small" aria-label={t('documents.archive')} onClick={() => void run(async () => { await developmentApi.archiveDocument(projectId, d.id); await load(); })}><ArchiveOutlinedIcon fontSize="small" /></IconButton></Tooltip>)}
+        : <Tooltip title={t('documents.archive')}><IconButton size="small" aria-label={t('documents.archive')} onClick={() => { if (showInternal) void archiveNow(d); else setConfirmArchive(d); }}><ArchiveOutlinedIcon fontSize="small" /></IconButton></Tooltip>)}
     </TableCell>
   </TableRow>;
 
@@ -145,14 +174,29 @@ export default function ProjectDocuments({ projectId, language, t, onCoverChange
         <input ref={fileInput} type="file" multiple hidden onChange={(e) => { void uploadFiles(Array.from(e.target.files ?? [])); e.target.value = ''; }} />
         <Button size="small" startIcon={<UploadFileIcon />} disabled={!!busy} onClick={() => fileInput.current?.click()}>{t('documents.upload')}</Button>
         <input ref={coverInput} type="file" accept="image/png,image/jpeg,image/webp" hidden onChange={(e) => { void uploadCover(e.target.files?.[0]); e.target.value = ''; }} />
+        {canRestrict && <Box sx={{ display: 'flex', alignItems: 'center' }}>
+          <Switch size="small" checked={restrictUploads} onChange={(e) => setRestrictUploads(e.target.checked)} inputProps={{ 'aria-label': t('documents.colPriceRestricted') }} />
+          <Typography sx={{ fontSize: 12, color: 'var(--text-2)' }}>{t('documents.colPriceRestricted')}</Typography>
+          <HelpTip title={t('documents.priceRestrictedTip')} />
+        </Box>}
         <Tooltip title={t('documents.coverTip')}><span><Button size="small" startIcon={<ImageOutlinedIcon />} disabled={!!busy} onClick={() => coverInput.current?.click()}>{t('documents.coverUpload')}</Button></span></Tooltip>
       </>}
-      <Button size="small" startIcon={<DownloadIcon />} disabled={!docs.length} onClick={() => void run(() => downloadProjectDocumentsZip(projectId))}>{t('documents.zipAll')}</Button>
+      {currentRelease !== null && <Tooltip title={t('documents.releaseZipTip')}><span><Button size="small" startIcon={<DownloadIcon />} data-testid="documents-release-zip"
+        onClick={() => void run(() => downloadProjectDocumentsZip(projectId, currentRelease))}>{t('documents.releaseZip', { release: currentRelease || t('documents.generalDocuments') })}</Button></span></Tooltip>}
+      {canEdit && labelled && currentRelease && (releaseStored
+        ? <Tooltip title={t('documents.currentReleaseTip')}><Button size="small" data-testid="documents-release-reset" onClick={() => setRelease(null)}>{t('documents.releaseDefault')}</Button></Tooltip>
+        : <Tooltip title={t('documents.pinCurrentTip')}><Button size="small" data-testid="documents-release-pin" onClick={() => setRelease(currentRelease)}>{t('documents.pinCurrent', { release: currentRelease })}</Button></Tooltip>)}
+      {showInternal && <>
+        <Tooltip title={t('documents.moreDownloads')}><IconButton size="small" aria-label={t('documents.moreDownloads')} disabled={!docs.length} onClick={(e) => setMoreAnchor(e.currentTarget)}><MoreVertIcon fontSize="small" /></IconButton></Tooltip>
+        <Menu anchorEl={moreAnchor} open={!!moreAnchor} onClose={() => setMoreAnchor(null)}>
+          <MenuItem data-testid="documents-all-groups-zip" onClick={() => { setMoreAnchor(null); void run(() => downloadProjectDocumentsZip(projectId)); }}>{t('documents.allGroupsZip')}</MenuItem>
+        </Menu>
+      </>}
       <Box sx={{ display: 'flex', gap: 0.5, flexWrap: 'wrap' }}>
         {(['all', ...FOLDERS] as const).map((f) => <Chip key={f} size="small" clickable color={filter === f ? 'primary' : 'default'}
           label={f === 'all' ? t('documents.all') : t(`documents.folders.${f}`)} onClick={() => setFilter(f)} />)}
       </Box>
-      {canEdit && <Box sx={{ display: 'flex', alignItems: 'center', ml: 'auto' }}>
+      {showInternal && <Box sx={{ display: 'flex', alignItems: 'center', ml: 'auto' }}>
         <Switch size="small" checked={showArchived} onChange={(e) => setShowArchived(e.target.checked)} inputProps={{ 'aria-label': t('documents.showArchived') }} />
         <Typography sx={{ fontSize: 12, color: 'var(--text-2)' }}>{t('documents.showArchived')}</Typography>
         <HelpTip title={t('documents.archiveTip')} />
@@ -160,6 +204,8 @@ export default function ProjectDocuments({ projectId, language, t, onCoverChange
     </Box>
     {busy && <Typography sx={{ fontSize: 12, color: 'var(--text-2)', mb: 1 }}>{busy}</Typography>}
     {error && <Alert severity="error" onClose={() => setError('')} sx={{ mb: 1 }}>{error}</Alert>}
+    {canEdit && releaseCleared !== null && <Alert severity="info" data-testid="documents-release-cleared" sx={{ mb: 1 }}>{releaseCleared
+      ? t('documents.releaseCleared', { release: releaseCleared }) : t('documents.releaseClearedGeneric')}</Alert>}
     <Paper sx={{ bgcolor: 'var(--panel-2)', border: '1px solid var(--line-soft)', borderRadius: 1.5, overflow: 'auto' }}>
       <Table size="small" sx={{
         [NARROW]: { minWidth: 760 },
@@ -171,37 +217,62 @@ export default function ProjectDocuments({ projectId, language, t, onCoverChange
           <TableCell>{t('documents.colRevision')}</TableCell><TableCell align="right">{t('documents.colSize')}</TableCell>
           <TableCell>{t('documents.colUploader')}</TableCell><TableCell>{t('documents.colDate')}</TableCell>
           {showInternal && <TableCell><Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>{t('documents.colInternal')}<HelpTip title={t('documents.internalTip')} /></Box></TableCell>}
+          {canRestrict && <TableCell><Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>{t('documents.colPriceRestricted')}<HelpTip title={t('documents.priceRestrictedTip')} /></Box></TableCell>}
           <TableCell />
         </TableRow></TableHead>
         <TableBody>
           {groups.length < 2 ? shown.map(renderRow) : groups.map((g) => {
-            const open = isGroupOpen(groups, g.key, toggled);
-            const label = g.key || t('documents.noRevision');
+            const open = isReleaseGroupOpen(g, toggled);
+            const label = g.key || t(labelled ? 'documents.generalDocuments' : 'documents.noRevision');
             return <React.Fragment key={`rev:${g.key}`}>
               <TableRow>
-                <TableCell colSpan={showInternal ? 8 : 7} sx={{ p: 0, bgcolor: 'var(--panel)' }}>
-                  <Tooltip title={t('documents.revisionGroupTip')}>
-                    <Box component="button" type="button" data-testid="documents-revision-group" aria-expanded={open}
-                      onClick={() => setToggled((m) => ({ ...m, [g.key]: !open }))}
-                      sx={{ display: 'flex', alignItems: 'center', gap: 0.75, width: '100%', px: 1, py: 0.75, border: 0, bgcolor: 'transparent', color: 'inherit', font: 'inherit', fontWeight: 700, textAlign: 'left', cursor: 'pointer' }}>
-                      {open ? <ExpandMoreIcon fontSize="small" /> : <ChevronRightIcon fontSize="small" />}
-                      <span>{label}</span>
-                      <Chip size="small" label={g.docs.length} sx={{ height: 16, fontSize: 10 }} />
-                    </Box>
-                  </Tooltip>
+                <TableCell colSpan={7 + (showInternal ? 1 : 0) + (canRestrict ? 1 : 0)} sx={{ p: 0, bgcolor: 'var(--panel)' }}>
+                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75, pr: 1, opacity: g.superseded ? 0.5 : 1 }}>
+                    <Tooltip title={t('documents.revisionGroupTip')}>
+                      <Box component="button" type="button" data-testid="documents-revision-group" aria-expanded={open}
+                        onClick={() => setToggled((m) => ({ ...m, [g.key]: !open }))}
+                        sx={{ display: 'flex', alignItems: 'center', gap: 0.75, flex: 1, px: 1, py: 0.75, border: 0, bgcolor: 'transparent', color: 'inherit', font: 'inherit', fontWeight: 700, textAlign: 'left', cursor: 'pointer' }}>
+                        {open ? <ExpandMoreIcon fontSize="small" /> : <ChevronRightIcon fontSize="small" />}
+                        <span>{label}</span>
+                        <Chip size="small" label={g.docs.length} sx={{ height: 16, fontSize: 10 }} />
+                      </Box>
+                    </Tooltip>
+                    {g.current && labelled && <Tooltip title={t('documents.currentReleaseTip')}><Chip size="small" color="primary" data-testid="documents-current-release" label={t('documents.currentRelease')} sx={{ height: 18, fontSize: 10.5 }} /></Tooltip>}
+                    {g.superseded && <Tooltip title={t('documents.supersededTip')}><Chip size="small" label={t('documents.superseded')} sx={{ height: 18, fontSize: 10.5 }} /></Tooltip>}
+                    {g.superseded && canEdit && <Tooltip title={t('documents.makeCurrentTip')}><Button size="small" data-testid="documents-make-current" onClick={() => setRelease(g.key)} sx={{ fontSize: 11 }}>{t('documents.makeCurrent')}</Button></Tooltip>}
+                  </Box>
                 </TableCell>
               </TableRow>
               {open && g.docs.map(renderRow)}
             </React.Fragment>;
           })}
-          {!shown.length && <TableRow><TableCell colSpan={showInternal ? 8 : 7}>
+          {!shown.length && <TableRow><TableCell colSpan={7 + (showInternal ? 1 : 0) + (canRestrict ? 1 : 0)}>
             <Stack alignItems="center" sx={{ py: 3, color: 'var(--text-3)' }}>
-              <Typography sx={{ fontSize: 13 }}>{canEdit ? t('documents.dropHere') : t('documents.empty')}</Typography>
+              {!loaded
+                ? (!error && <Typography data-testid="documents-loading" sx={{ fontSize: 13 }}>{t('documents.loading')}</Typography>)
+                : <Typography sx={{ fontSize: 13 }}>{canEdit ? t('documents.dropHere') : t('documents.empty')}</Typography>}
             </Stack>
           </TableCell></TableRow>}
         </TableBody>
       </Table>
     </Paper>
+    <Dialog open={!!confirmArchive} onClose={() => setConfirmArchive(null)} maxWidth="xs" fullWidth>
+      <DialogTitle>{t('documents.archiveConfirmTitle')}</DialogTitle>
+      <DialogContent><Typography sx={{ fontSize: 13 }}>{confirmArchive && t('documents.archiveConfirm', { name: confirmArchive.name })}</Typography></DialogContent>
+      <DialogActions>
+        <Button onClick={() => setConfirmArchive(null)}>{t('documents.cancel')}</Button>
+        <Button color="warning" data-testid="documents-archive-confirm" onClick={() => { const d = confirmArchive; setConfirmArchive(null); if (d) void archiveNow(d); }}>{t('documents.archive')}</Button>
+      </DialogActions>
+    </Dialog>
+    <Dialog open={!!confirmDoc} onClose={() => setConfirmDoc(null)} maxWidth="xs" fullWidth>
+      <DialogTitle>{t('documents.supersededConfirmTitle')}</DialogTitle>
+      <DialogContent><Typography sx={{ fontSize: 13 }}>{confirmDoc && t('documents.supersededConfirm', {
+        name: confirmDoc.name, release: confirmDoc.revision, current: currentRelease || t('documents.generalDocuments') })}</Typography></DialogContent>
+      <DialogActions>
+        <Button onClick={() => setConfirmDoc(null)}>{t('documents.cancel')}</Button>
+        <Button color="warning" onClick={() => { const d = confirmDoc; setConfirmDoc(null); if (d) void run(() => downloadProjectDocument(projectId, d)); }}>{t('documents.downloadAnyway')}</Button>
+      </DialogActions>
+    </Dialog>
   </Box>;
 }
 

@@ -13,6 +13,7 @@ import BomTable from './BomTable';
 import ChangesPanel from './ChangesPanel';
 import DiscussionPanel from './DiscussionPanel';
 import CertificationPanel from './CertificationPanel';
+import ChecklistPanel from './ChecklistPanel';
 import DocumentsPanel from './DocumentsPanel';
 import ProductionListPage from './ProductionListPage';
 import LegacyProposals from './LegacyProposals';
@@ -24,8 +25,9 @@ import { canAckRole, canEditRole, displayText, legacyTab, plainDocuments, produc
 import { OPEN_PRODUCTION_EVENT, type OpenProductionDetail } from '../../../lib/openProduction';
 import { shortTitle } from '../../../lib/stripContext.ts';
 import { useTabContextStore } from '../../../stores/tabContextStore';
-import { isProductionLinkPath, parseProductionLink, productionLinkPath, type ProductionLink } from '../../../lib/productionLink';
-import { appLinkPath, isAppLinkPath, parseAppLink } from '../../../lib/appLink';
+import { pageAddress } from '../pageAddress';
+import { isProductionLinkPath, parseProductionLink, type ProductionLink } from '../../../lib/productionLink';
+import { isAppLinkPath, parseAppLink } from '../../../lib/appLink';
 import { useHistoryLevel } from '../../../lib/historyLevels';
 import { useUIStore } from '../../../stores/uiStore';
 import DigestSettings from '../../../components/digest/DigestSettings';
@@ -43,7 +45,7 @@ import type {
 // 'process' merged into the Assembly tab (owner 2026-10-18): the graph on top, the process document below it
 // 'tests' (owner 2026-10-26): bench tests of this configuration against the simulation (modules/tests)
 // 'proposals' (owner 2026-11-15) is gone: Discussion and Changes stay.  An old link or remembered tab 'proposals' opens Discussion (see legacyTab).
-const TABS = ['bom', 'tooling', 'assembly', 'timeline', 'documents', 'certification', 'tests', 'discussion', 'changes'] as const;
+const TABS = ['bom', 'tooling', 'assembly', 'timeline', 'documents', 'certification', 'checklist', 'tests', 'discussion', 'changes'] as const;
 type TabId = typeof TABS[number];
 
 // Where the user stopped (owner 2026-10-18): the open production and its sub-tab survive a page reload.  Browser
@@ -96,22 +98,20 @@ const ProductionPage: React.FC<{ die: string; config: string; onBack: () => void
     return k && (TABS as readonly string[]).includes(k) ? (k as TabId) : 'bom';
   });
   const setTab = (v: TabId) => { setTabState(v); writeStore(TAB_KEY(die, config), v); };
+  // The selected assembly step: from the link (/production/<die>/<config>/assembly?item=<step id>), a click on a step chip in Documents,
+  // or a click on the graph.  While the Assembly tab shows one, the address bar carries its link, so a reload and a copy both keep it.
+  const [stepSel, setStepSel] = useState<string | null>(() => (!linkProp && initialTab === 'assembly' && itemId ? itemId : null));
+  const openStep = (id: string) => { setStepSel(id); setTab('assembly'); };
   // While the page was entered by a link its address stays that link (reload / copy from the bar both work); leaving the
   // Documents view or the link's filter returns the bar to the app root.
   useEffect(() => {
     try {
-      if (linkProp && tab === 'documents') {
-        const p = productionLinkPath({ die, config, since: link?.since, ids: link?.ids });
-        if (p && p !== window.location.pathname + window.location.search) window.history.replaceState(window.history.state, '', p);
-      } else if (!linkProp && initialTab && tab === initialTab) {
-        // entered by a link to this tab: the bar keeps that link (reload / copy from the bar both work)
-        const p = appLinkPath({ kind: 'production', die, config, tab: initialTab, ...(itemId ? { item: itemId } : {}) });
-        if (p && p !== window.location.pathname + window.location.search) window.history.replaceState(window.history.state, '', p);
-      } else if (isProductionLinkPath(window.location.pathname) || isAppLinkPath(window.location.pathname)) {
-        window.history.replaceState(window.history.state, '', '/');
-      }
+      const want = pageAddress({ die, config, tab, stepSel, hasEntryLink: !!linkProp, link, initialTab, itemId });
+      if (want === 'ROOT') {
+        if (isProductionLinkPath(window.location.pathname) || isAppLinkPath(window.location.pathname)) window.history.replaceState(window.history.state, '', '/');
+      } else if (want && want !== window.location.pathname + window.location.search) window.history.replaceState(window.history.state, '', want);
     } catch { /* no history API */ }
-  }, [linkProp, tab, link, die, config, initialTab, itemId]);
+  }, [linkProp, tab, link, die, config, initialTab, itemId, stepSel]);
   const [loading, setLoading] = useState(true);
   const [nda, setNda] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -169,6 +169,7 @@ const ProductionPage: React.FC<{ die: string; config: string; onBack: () => void
   }), [die, config, role, email, ui, reload, prod?.product_type]);
   // the separate tooling / fixtures order list (owner 2026-10-19): same table, ?list=tooling
   const toolingCtx = useMemo(() => ({ ...ctx, list: 'tooling' as const }), [ctx]);
+  const toolingPartIds = useMemo(() => data.toolingBom.map((r) => r.part_id), [data.toolingBom]);
   const visibleTabs = visibleProductionTabs(TABS, role, data.toolingBom.length);
   const toAck = prod ? unackedRevisions(data.revisions, email).length : 0;
 
@@ -261,10 +262,12 @@ const ProductionPage: React.FC<{ die: string; config: string; onBack: () => void
               <ToolingFiles ctx={toolingCtx} rows={data.toolingBom} parts={data.parts} />
             </>
           )}
-          {tab === 'assembly' && <AssemblyProcess ctx={ctx} parts={data.parts} sections={data.process} documents={data.documents} />}
+          {tab === 'assembly' && <AssemblyProcess ctx={ctx} parts={data.parts} sections={data.process} documents={data.documents} stepId={stepSel} onStepChange={setStepSel} />}
           {tab === 'timeline' && <TimelineView ctx={ctx} prod={prod} />}
-          {tab === 'documents' && <DocumentsPanel documents={plainDocuments(data.documents)} parts={data.parts} ctx={ctx} sections={data.process} link={link} onLinkChange={setLink} unackedFiles={unackedFiles(data.revisions, ctx.email)} />}
+          {tab === 'documents' && <DocumentsPanel documents={plainDocuments(data.documents)} parts={data.parts} ctx={ctx} sections={data.process} link={link} onLinkChange={setLink} unackedFiles={unackedFiles(data.revisions, ctx.email)}
+            toolingPartIds={toolingPartIds} onOpenStep={openStep} />}
           {tab === 'certification' && <CertificationPanel documents={data.documents} ctx={ctx} />}
+          {tab === 'checklist' && <ChecklistPanel ctx={ctx} documents={data.documents} />}
           {tab === 'tests' && <TestsPanel die={die} config={config} source={{ kind: 'production' }}
             onOpenDocument={(fileId, name) => { void downloadFile(die, config, fileId, name).catch((e) => setErr(String(e))); }}
             onLoadDocument={(fileId, onProgress) => fetchFileBlob(die, config, fileId, onProgress)} />}

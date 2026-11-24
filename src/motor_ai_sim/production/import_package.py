@@ -580,17 +580,26 @@ def import_package(package_path: Path, die: str, config: str,
         "acknowledgements": [],
     })
 
-    # Save everything
-    store.save_file(die, config, "production.json", production)
-    store.save_file(die, config, "parts.json", {"parts": parts})
-    store.save_file(die, config, "bom.json", {"rows": bom_rows})
-    if not (store.path_for(die, config) / "costs.json").is_file():
-        store.save_file(die, config, "costs.json", {"rows": [], "extras": [], "margin_pct": 0.0})
-    store.save_file(die, config, "process.json", {"sections": process_sections})
-    store.save_file(die, config, "documents.json", {"documents": []})
-    store.save_file(die, config, "threads.json", {"threads": []})
-    store.save_file(die, config, "proposals.json", {"proposals": []})
-    store.save_file(die, config, "revisions.json", {"revisions": [revision]})
+    # Save everything - through the configuration archive's admission: an archived configuration gets no Production record
+    from motor_ai_sim import config_archive as _CA
+    try:
+        _admit = _CA.admission(die, config)
+        _admit.__enter__()
+    except _CA.Archived as exc:
+        raise ValueError(str(exc)) from exc
+    try:
+        store.save_file(die, config, "production.json", production)
+        store.save_file(die, config, "parts.json", {"parts": parts})
+        store.save_file(die, config, "bom.json", {"rows": bom_rows})
+        if not (store.path_for(die, config) / "costs.json").is_file():
+            store.save_file(die, config, "costs.json", {"rows": [], "extras": [], "margin_pct": 0.0})
+        store.save_file(die, config, "process.json", {"sections": process_sections})
+        store.save_file(die, config, "documents.json", {"documents": []})
+        store.save_file(die, config, "threads.json", {"threads": []})
+        store.save_file(die, config, "proposals.json", {"proposals": []})
+        store.save_file(die, config, "revisions.json", {"revisions": [revision]})
+    finally:
+        _admit.__exit__(None, None, None)
 
     store.append_audit(
         die, config,

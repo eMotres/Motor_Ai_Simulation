@@ -69,17 +69,24 @@ def _needs_staff(item: dict) -> bool:
     return "staff" in (item.get("requires") or [])
 
 
+def _public_total(d: dict) -> int:
+    """The number of lines of the draft that need no staff access, counted over ALL lines before the cut (``public_total``).  A draft
+    stored before that field existed is answered from what it holds, and a staff-only overflow it cannot count is not guessed."""
+    if isinstance(d.get("public_total"), int):
+        return d["public_total"]
+    shown = sum(1 for i in d.get("items") or [] if not _needs_staff(i))
+    return shown + (0 if "staff" in (d.get("more_requires") or []) else int(d.get("more") or 0))
+
+
 def _hidden_from(d: dict) -> bool:
-    """A draft whose every line is staff-only: for a caller who is not staff it does not exist (no id, no time, no count)."""
-    items = d.get("items") or []
-    return bool(items) and all(_needs_staff(i) for i in items) and (not int(d.get("more") or 0) or "staff" in (d.get("more_requires") or []))
+    """For a caller who is not staff the draft is judged from its PUBLIC lines only: none = it does not exist for him."""
+    return _public_total(d) == 0
 
 
 def _viewer_summary(d: dict, staff: bool) -> dict:
     out = _summary(d)
     if not staff:
-        shown = [i for i in d.get("items") or [] if not _needs_staff(i)]
-        out["items"] = len(shown) + (0 if "staff" in (d.get("more_requires") or []) else int(d.get("more") or 0))
+        out["items"] = _public_total(d)                    # the same number whatever staff-only lines exist, shown or in the overflow
     return out
 
 

@@ -610,6 +610,7 @@
   "config": "Configuration",
   "internalMessage": "Internal",
   "internalMessageTip": "Internal: visible to MOTRES staff only. Never shown or e-mailed to the customer side.",
+  "answerNote": "Answer this note",
   "audience": "Audience",
   "audienceEveryone": "Everyone in the project",
   "audienceTip": "Choose who receives this message: everyone in the project, or MOTRES staff only (internal).",

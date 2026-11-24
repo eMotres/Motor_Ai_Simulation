@@ -495,6 +495,9 @@ def build_draft(group: Group, settings: dict, items: list, recipients: list[dict
                    **({"key": i.key} if i.kind == "revision" and i.key else {}),
                    "requires": sorted(i.requires), **({"motor": list(i.motor)} if i.motor else {}),
                    **({"group_en": i.group[0], "group_zh": i.group[1]} if i.group else {})} for i in shown],
+        #: how many of ALL the visible lines (before the cut at MAX_ITEMS) need no staff access: what a non-staff reader of the digest
+        #: settings is told, as if the staff-only lines did not exist
+        "public_total": sum(1 for i in visible if "staff" not in i.requires),
         "more": more, "more_requires": sorted(frozenset().union(*[i.requires for i in hidden_more])) if hidden_more else [],
         "recipients": recipients, "skipped": skipped,
     }

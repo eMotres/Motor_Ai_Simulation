@@ -1287,24 +1287,55 @@ def test_a_disabled_staff_account_is_skipped_at_send(d):
     assert any(s["email"] == ANNA for s in res["skipped"])
 
 
-def test_the_digest_settings_of_a_project_owner_do_not_reveal_an_internal_only_draft(d):
-    from motor_ai_sim.development import access as DA
-    _internal_world(d, staff=(BOB,))
-    # an internal-only draft for the staff member (ANNA, the project owner, is not staff)
-    d["PS"].append_jsonl(PID, "thread.jsonl", {"id": "iy", "author_email": BOB, "created_at": at(-100), "staff_only": True, "text": "only for staff"})
-    from motor_ai_sim.digest import build as B
-    group = B.project_group(d["PS"].get_project(PID))
-    staff_only = {"id": "d-00000000000000a1", "scope": PSCOPE, "status": "pending", "items": [{"kind": "message", "requires": ["staff"], "en": "x"}],
-                  "more": 0, "recipients": [{"email": BOB}], "created_at": at(-50), "updated_at": at(-50), "revision": 1}
-    mixed = dict(staff_only, id="d-00000000000000a2", items=staff_only["items"] + [{"kind": "message", "requires": [], "en": "y"}])
+def _settings_pending(d, public, internal_newer, internal_older=0):
+    """Build the draft for an all-staff list from ``public`` public lines and the given internal ones, store it, and return what a project
+    owner who is NOT staff (staff=False) and what staff are told in the digest settings."""
+    from motor_ai_sim.digest import build as B, collect as C, routes as DR
+    d["U"].update_user(BOB, role="engineer")
+    thread = d["PS"].path_for(PID) / "thread.jsonl"
+    thread.unlink(missing_ok=True)
+    for n in range(public):
+        d["PS"].append_jsonl(PID, "thread.jsonl", {"id": f"p{n}", "author_email": ANNA, "created_at": at(-2000 - n), "text": f"public {n}"})
+    for n in range(internal_newer):
+        d["PS"].append_jsonl(PID, "thread.jsonl", {"id": f"in{n}", "author_email": BOB, "created_at": at(-100 - n), "staff_only": True, "text": f"internal {n}"})
+    for n in range(internal_older):
+        d["PS"].append_jsonl(PID, "thread.jsonl", {"id": f"io{n}", "author_email": BOB, "created_at": at(-9000 - n), "staff_only": True, "text": f"old internal {n}"})
+    project = d["PS"].get_project(PID)
+    group = B.project_group(project)
+    items = C.collect_project(project, T0 - 86400, T0, results=lambda die, cfg: {})
+    draft = B.build_draft(group, {"mode": "daily"}, items, [{"email": BOB, "role": "customer", "name": "B", "lang": "en"}], [], T0 - 86400, T0)
+    d["DS"].save_draft(draft)
+    d["DS"].set_state(PSCOPE, draft_id=draft["id"])
+    owner = DR._settings_view(group, can_edit=True, staff=False)["pending"]
+    staff = DR._settings_view(group, can_edit=True, staff=True)["pending"]
+    return owner, staff
+
+
+def test_the_settings_totals_do_not_change_when_one_internal_line_joins_the_overflow(d):
+    base_owner, _ = _settings_pending(d, public=22, internal_newer=0)
+    n = base_owner["items"]                                                     # the 22 public lines plus the world's own lines: past the cut of 20
+    assert n >= 22
+    for internal in (1, 3):
+        owner, staff = _settings_pending(d, public=22, internal_newer=0, internal_older=internal)
+        assert owner["items"] == n, internal                                  # the same answer as if the internal lines did not exist
+        owner2, staff2 = _settings_pending(d, public=22, internal_newer=internal)
+        assert owner2["items"] == n, internal                                 # newer internal lines push public ones into the overflow
+        assert staff2["items"] == n + internal                                # staff still see everything
+
+
+def test_a_public_containing_draft_never_disappears_when_internal_lines_crowd_it_out(d):
+    quiet, _ = _settings_pending(d, public=1, internal_newer=0)
+    owner, staff = _settings_pending(d, public=1, internal_newer=25)            # the public lines fall into the overflow
+    assert owner is not None and owner["items"] == quiet["items"]
+    assert staff["items"] == quiet["items"] + 25
     from motor_ai_sim.digest import routes as DR
-    for draft, owner_sees in ((staff_only, False), (mixed, True)):
-        d["DS"].save_draft(draft)
-        d["DS"].set_state(PSCOPE, draft_id=draft["id"])
-        view_owner = DR._settings_view(group, can_edit=True, staff=False)
-        view_staff = DR._settings_view(group, can_edit=True, staff=True)
-        assert (view_owner["pending"] is not None) is owner_sees
-        assert view_staff["pending"] is not None
-        if owner_sees:
-            assert view_owner["pending"]["items"] == 1 and view_staff["pending"]["items"] == len(draft["items"])
-    assert not DA.is_staff({"email": ANNA, "role": "user"})
+    assert DR._hidden_from({"items": [{"requires": ["staff"]}], "public_total": 0, "more": 4, "more_requires": ["staff"]})   # nothing public: no draft for the owner
+    assert not DR._hidden_from({"items": [{"requires": ["staff"]}], "public_total": 1, "more": 4, "more_requires": ["staff"]})
+
+
+def test_an_older_draft_without_the_public_total_is_answered_from_what_it_holds(d):
+    from motor_ai_sim.digest import routes as DR
+    draft = {"items": [{"requires": ["staff"]}, {"requires": []}], "more": 3, "more_requires": ["staff"]}
+    assert DR._public_total(draft) == 1
+    assert DR._public_total({"items": [{"requires": []}], "more": 2, "more_requires": []}) == 3
+    assert DR._public_total({"items": [{"requires": []}], "public_total": 7, "more": 2}) == 7

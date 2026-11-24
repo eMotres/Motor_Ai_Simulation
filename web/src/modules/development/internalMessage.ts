@@ -32,3 +32,15 @@ export interface AudienceChoice { project: string; identity: string; value: Audi
 export function choiceFor(state: AudienceChoice | null, project: string, identity: string): Audience | null {
   return state && state.project === project && state.identity === identity ? state.value : null;
 }
+
+/** A stored choice survives only inside the project and identity it was made for: on ANY transition it is DROPPED (not masked), so
+ *  going A -> B -> A or X -> Y -> X never brings an old choice back. */
+export function reconcileChoice(state: AudienceChoice | null, project: string, identity: string): AudienceChoice | null {
+  return state && state.project === project && state.identity === identity ? state : null;
+}
+
+/** What an answer in the review dialog sends: the EXPLICIT note the user chose to answer (never "the last note") and the audience.
+ *  An answer to an internal note is internal whatever was chosen; no target = a new top-level note. */
+export function replyPayload(target: Pick<ProjectThreadMessage, 'id' | 'staff_only'> | null | undefined, canPostInternal: boolean, chosen: Audience | null): { reply_to?: string; staff_only: boolean } {
+  return { ...(target?.id ? { reply_to: target.id } : {}), staff_only: isInternal(canPostInternal, chosen, target) };
+}

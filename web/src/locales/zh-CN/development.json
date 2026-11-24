@@ -610,6 +610,7 @@
   "config": "配置",
   "internalMessage": "内部",
   "internalMessageTip": "内部：仅 MOTRES 员工可见，绝不向客户方显示或发送邮件。",
+  "answerNote": "回复此备注",
   "audience": "接收对象",
   "audienceEveryone": "项目中的所有人",
   "audienceTip": "选择谁能收到此消息：项目中的所有人，或仅 MOTRES 员工（内部）。",

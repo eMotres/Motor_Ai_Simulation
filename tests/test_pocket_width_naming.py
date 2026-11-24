@@ -57,3 +57,34 @@ def test_the_mismatch_warning_keeps_its_code_and_numbers():
     w = fam.config_slot_mismatch("D", "C", GEO, {"wire_spacing_x": 0.2})
     assert w["code"] == "slot_width_differs_from_die"
     assert w["die_slot_mm"] == 7.5 and w["config_slot_mm"] == pytest.approx(7.6)
+
+
+def test_python_and_web_agree_on_the_shared_cases():
+    """tests/fixtures/pocket_width_cases.json is also read by web/src/lib/__tests__/pocketWidth.test.mjs."""
+    import json
+    from pathlib import Path
+    from motor_ai_sim.winding import STRIP_GAP_FACTOR
+    fx = json.loads((Path(__file__).parent / "fixtures" / "pocket_width_cases.json").read_text(encoding="utf-8"))
+    assert STRIP_GAP_FACTOR == fx["strip_gap_factor"]
+    for c in fx["cases"]:
+        v = mg.pocket_width(c["geo"])
+        if c["expected"] is None:
+            assert v is None, c["name"]
+        else:
+            assert v == pytest.approx(c["expected"], abs=fx["tolerance"]), c["name"]
+
+
+def test_non_finite_inputs_are_missing_and_a_non_finite_split_is_one_strip():
+    g = {"wire_width": 7.0, "wire_spacing_x": 0.1, "insulation_thickness": 0.2}
+    assert mg.pocket_width(dict(g, wire_width=float("inf"))) is None
+    assert mg.pocket_width(dict(g, insulation_thickness=float("nan"))) is None
+    assert mg.pocket_width(dict(g, wire_split=float("inf"))) == pytest.approx(7.5)
+    assert mg.pocket_width(dict(g, wire_split=float("nan"))) == pytest.approx(7.5)
+
+
+def test_no_die_diff_branch_emits_the_stored_slot_width():
+    """Only the built-pocket branch names a slot-ish key; the generic input loop skips the stored (derived) slot_width."""
+    out = fam.die_shape_diffs(dict(GEO, slot_width=7.6), dict(GEO, slot_width=9.9))
+    assert out == []
+    out = fam.die_shape_diffs(GEO, dict(GEO, wire_width=7.5, slot_width=9.9))
+    assert "slot_width" not in [x["key"] for x in out]

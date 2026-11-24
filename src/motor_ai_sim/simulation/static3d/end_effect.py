@@ -687,8 +687,20 @@ def run_stage_a(geo_override: Optional[dict] = None,
                 "linear_iron=True at a ladder of mu_r: a residual that grows "
                 "with mu_r and vanishes with no iron is the total scalar "
                 "potential's cancellation, not a magnet error.")
+    # Each stack length is divided by the 2D fundamental through ITS OWN
+    # mid-plane value: k_flux(L) = <B1>_L / B1_2D = k_flux_self(L) * B1_mid(L) / B1_2D.
+    # The mid-plane deficit against 2D is itself a stack-length effect (it
+    # vanishes in the long-stack limit), so the reference length's ratio must
+    # not be carried to the other lengths: that held k_flux nearly flat in L
+    # and read short stacks several per cent high.  The reference row is the
+    # same float division as ``ratio`` above, so it is bit-identical to the
+    # passport's k_flux.  Without a 2D leg the row keeps k_flux_self (x 1.0).
     for row in curve:
-        row["k_flux"] = row["k_flux_self"] * ratio
+        if two_d is not None:
+            row["ratio_3d_mid_over_2d"] = row["B1_mid_T"] / two_d["B1_T"]
+            row["k_flux"] = row["k_flux_self"] * row["ratio_3d_mid_over_2d"]
+        else:
+            row["k_flux"] = row["k_flux_self"] * ratio
 
     passport = dict(
         version=PASSPORT_VERSION,

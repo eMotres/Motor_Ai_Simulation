@@ -279,8 +279,7 @@ def refuse_magnet_temperature(O, mode_body: Dict[str, Any], machine_sim: Dict[st
     from motor_ai_sim.simulation.fem_solver_2d import _run_magnet_temp_c
     card = _run_magnet_temp_c(None)
     if card is None or abs(float(card) - float(want)) > 1e-6:
-        hint = (" (set 'magnet_temp_c' in the sweep body)" if mode == "sweep"
-                else " (Descent has no magnet_temp_c field yet)")
+        hint = " (set 'magnet_temp_c' in the %s body)" % ("sweep" if mode == "sweep" else "descent")
         raise Refused(f"machine.simulation.magnet_temp_c {want} but the evals would solve "
                       f"the magnet card at {card}" + hint)
 

@@ -52,6 +52,7 @@ export default function ProjectDocuments({ projectId, language, t, onCoverChange
   const [confirmArchive, setConfirmArchive] = useState<ProjectDocument | null>(null);   // customer side: archived = restorable by staff only
   const [busy, setBusy] = useState('');
   const [error, setError] = useState('');
+  const [loaded, setLoaded] = useState(false);      // the empty state only after a load finished (a failed load shows the error)
   const [dragging, setDragging] = useState(false);
   const fileInput = useRef<HTMLInputElement>(null);
   const coverInput = useRef<HTMLInputElement>(null);
@@ -65,6 +66,7 @@ export default function ProjectDocuments({ projectId, language, t, onCoverChange
       const list = await developmentApi.documents(id, showArchived);
       if (projectRef.current !== id) return;
       setDocs(list.documents);
+      setLoaded(true);
       setCanEdit(list.can_edit);
       setShowInternal(!!list.is_staff);
       setCanRestrict(!!list.can_restrict);
@@ -77,7 +79,7 @@ export default function ProjectDocuments({ projectId, language, t, onCoverChange
       if (version !== coverVersion.current) { coverVersion.current = version; onCoverChange?.(version); }
     } catch (e) { if (projectRef.current === id) setError(msg(e)); }
   }, [projectId, showArchived]);
-  useEffect(() => { setDocs([]); setError(''); void load(); }, [load]);
+  useEffect(() => { setDocs([]); setError(''); setLoaded(false); void load(); }, [load]);
   useEffect(() => { setToggled({}); }, [projectId]);
 
   const uploadFiles = async (files: File[]) => {
@@ -246,7 +248,9 @@ export default function ProjectDocuments({ projectId, language, t, onCoverChange
           })}
           {!shown.length && <TableRow><TableCell colSpan={7 + (showInternal ? 1 : 0) + (canRestrict ? 1 : 0)}>
             <Stack alignItems="center" sx={{ py: 3, color: 'var(--text-3)' }}>
-              <Typography sx={{ fontSize: 13 }}>{canEdit ? t('documents.dropHere') : t('documents.empty')}</Typography>
+              {!loaded
+                ? (!error && <Typography data-testid="documents-loading" sx={{ fontSize: 13 }}>{t('documents.loading')}</Typography>)
+                : <Typography sx={{ fontSize: 13 }}>{canEdit ? t('documents.dropHere') : t('documents.empty')}</Typography>}
             </Stack>
           </TableCell></TableRow>}
         </TableBody>

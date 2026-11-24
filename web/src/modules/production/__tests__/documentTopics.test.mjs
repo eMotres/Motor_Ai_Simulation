@@ -216,3 +216,24 @@ t('the step document limit equals the server limit', () => {
   const py = fs.readFileSync(new URL('../../../../../src/motor_ai_sim/production/process_steps.py', import.meta.url), 'utf8');
   assert.match(py, new RegExp(`\\.get\\("documents"\\) or \\[\\]\\) if str\\(x\\)\\.strip\\(\\)\\]\\[:${D.STEP_DOCS_MAX}\\]`));
 });
+
+t('REAL DATA 2026-11-24: names that the first rules misfiled', () => {
+  const c = ctxOf();
+  const topic = (name, extra) => D.topicOf(doc(name, extra), c);
+  assert.equal(topic('production_package_v1.3_CIANO14_40_2026-10-19.docx'), 'process');          // "package" is not packaging
+  assert.equal(topic('production_package_v1.3_CIANO14_40_2026-10-19.pdf'), 'process');
+  assert.equal(topic('backemf_scope_3130rpm_2026-11-02.png'), 'tests');                           // a measurement, not a photo
+  assert.equal(topic('backemf_scope_3130rpm_2026-11-02.jpg'), 'tests');
+  assert.equal(topic('assembly_stator_FR5_ring_01.jpg', { part_id: 'p_stator' }), 'process');      // linked to a part, still an assembly picture
+  assert.equal(topic('assembly_shaft_front_holder_01.jpg', { part_id: 'p_shaft' }), 'process');
+  assert.equal(topic('magnet_layout_v2.pdf'), 'process');
+  assert.equal(topic('magnet_layout_test_v2.pdf'), 'process');                                    // the layout rule goes before the test rule
+  // unchanged: a plain part drawing, real packaging files, tooling
+  assert.equal(topic('stator_FR5.pdf', { part_id: 'p_stator' }), 'drawings');
+  assert.equal(topic('shaft_front_holder.jpg', { part_id: 'p_shaft' }), 'drawings');
+  assert.equal(topic('packaging_label_A.pdf'), 'packaging');
+  assert.equal(topic('carton_drawing.pdf'), 'packaging');
+  assert.equal(topic('label_layout.pdf'), 'packaging');                                            // only magnet/winding/coil/stator/rotor layouts are assembly
+  assert.equal(topic('assembly_jig.jpg', { part_id: 'p_jig' }), 'tooling');                        // a tooling part wins
+  assert.equal(topic('microscope_notes.txt'), 'general');
+});

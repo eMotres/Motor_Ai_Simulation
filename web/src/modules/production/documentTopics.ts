@@ -23,7 +23,10 @@ const CAD = ['step', 'stp', 'iges', 'igs', 'stl', 'dxf', 'dwg', 'svg', 'glb', 'x
 const extOfName = (name: string): string => (name.split('.').pop() || '').toLowerCase();
 // whole-word starts: "latest" is not a test, "x_label_v2" is a label
 const PACKAGING = /(?<![a-z])(packag|label|carton|sticker|pallet|barcode)|(?<![a-z])box(?![a-z])|包装|标签|贴纸|纸箱/i;
-const TESTS = /(?<![a-z])(test|measure|inspection|calibrat|protocol|hipot)|测试|检验|测量|试验/i;
+const TESTS = /(?<![a-z])(test|measure|inspection|calibrat|protocol|hipot|backemf|back-emf|scope)|测试|检验|测量|试验/i;
+// names of assembly material (real data 2026-11-24): `assembly_*` pictures, the `production_package*` data package, and a magnet / winding /
+// coil / stator / rotor `*_layout` sheet.  They are Process & assembly even when they are linked to a part, and `package` here is not packaging.
+const ASSEMBLY_NAME = /^(assembly[_ -]|production[_ -]package)|(?<![a-z])(magnet|winding|coil|stator|rotor)[_ -]?layout/i;
 const PROCESS = /(?<![a-z])(process|procedure|instruction|sop|sequence)|工艺|装配流程|作业指导/i;
 
 /** THE superseded rule (server mirror: `models.is_superseded`).  A file is superseded when
@@ -82,7 +85,8 @@ const partText = (ctx: TopicContext, d: DocumentRec): string => {
 };
 
 /** The topic a document is filed under, WITHOUT the superseded group (see `groupOf`): the stored `topic` first, else derived from what
- *  is known, in this order: a step picture -> Photos; a part of the tooling list -> Tooling; packaging / label by the part's or the
+ *  is known, in this order: a step picture -> Photos; a part of the tooling list -> Tooling; an assembly-material name (`assembly_*`,
+ *  `production_package*`, `*_layout`) -> Process; packaging / label by the part's or the
  *  file's name -> Packaging; named by a check step, or a test / measurement name -> Tests; named by an operation step -> Process;
  *  a CAD / drawing file type -> Drawings; a picture -> Drawings when it belongs to a part, else Photos; a PDF of a part -> Drawings;
  *  a process-like name -> Process; else General. */
@@ -92,6 +96,7 @@ export function topicOf(d: DocumentRec, ctx: TopicContext): DocumentTopic {
   const ext = extOfName(d.name);
   if (d.step_id) return 'photos';
   if (d.part_id && ctx.toolingPartIds.has(d.part_id)) return 'tooling';
+  if (ASSEMBLY_NAME.test(d.name)) return 'process';
   if (PACKAGING.test(partText(ctx, d)) || PACKAGING.test(d.name)) return 'packaging';
   const kinds = ctx.namedBy.get(d.id);
   if (kinds?.has('check') || TESTS.test(d.name)) return 'tests';

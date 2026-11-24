@@ -299,7 +299,7 @@ def build_bom(dump, inputs):
                 turns, ww, wh, ins, length),
             cu_g + en_g, "CAD coil solid; winding %s" % (w.get("connection", "?")),
             "total conductor length %.2f m for %d coils; copper %.2f g (rho %.0f, %s) + enamel %.2f g (polyimide %.0f kg/m3); "
-            "simulation lists %d coils/phase (coil sides), CAD has %d coils of %d turns (single-layer, 2 per phase); "
+            "simulation lists %d coils per phase, CAD has %d coils of %d turns (single-layer, 2 per phase); "
             "length = coil volume / (%.1f x %.1f); lead trimming, insulation of joints, lead ends: to be specified" % (
                 length * n_coils / 1000.0, n_coils, cu_g * n_coils, rho_cu, cu_src, en_g * n_coils, rho_en,
                 _n_cpp, n_coils, turns, ww, wh),

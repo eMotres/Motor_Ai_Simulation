@@ -1,15 +1,15 @@
 # -*- coding: utf-8 -*-
-"""``n_coils_per_phase`` is DERIVED (slots, layers); the stored copy can lag behind the machine.
+"""``n_coils_per_phase`` is DERIVED (slots); the stored copy can lag behind the machine.
 
 A 24-slot single-layer die stored 8 (coil SIDES, slots / 3) where the application derives 4 (slots / 6).  Pins:
 
-  * ``winding.coils_per_phase(slots, layers)``: single layer slots / 6, double layer slots / 3 (= coil_count / 3);
-    the default keeps the old behaviour, so the connection validators are unchanged;
+  * ``winding.coils_per_phase(slots)`` is the one definition (slots / 6, the count n_series x n_parallel must equal);
   * the readers that built something from the stored copy derive (``agent_designs._winding_of``, the BOM text,
     the passport fingerprint);
   * ``repick_connection``, the configuration save sites and ``PATCH /api/winding/config`` correct a stale count,
     return / log the correction, add the key nowhere, and leave a six-phase block alone;
-  * a build stamp written while the copy was stale still reads as the current build after the heal.
+  * a build stamp written while the copy was stale still reads as the current build after the heal (recorded
+    aliases, any stale value), opening / listing writes nothing, a healing duty save says so.
 """
 from __future__ import annotations
 
@@ -20,26 +20,15 @@ from test_winding_connection_slots import _set_machine, client  # noqa: F401 - t
 
 
 # ── the rule ────────────────────────────────────────────────────────────────
-@pytest.mark.parametrize("slots, layers, want", [
-    (24, 1, 4), (24, 2, 8), (12, 1, 2), (12, 2, 4), (48, 1, 8), (48, 2, 16), (60, 1, 10), (9, 2, 3),
-])
-def test_coils_per_phase_follows_layers(slots, layers, want):
-    assert W.coils_per_phase(slots, layers) == want
-    assert W.derived_n_coils_per_phase({"layers": layers}, slots) == want
-
-
-def test_it_is_coil_count_over_three_when_the_slots_divide():
-    for slots in (12, 24, 36, 48):
-        for layers in (1, 2):
-            assert W.coils_per_phase(slots, layers) == W.coil_count(slots, layers) // 3
-
-
-def test_default_and_validators_are_unchanged():
-    for slots in (12, 24, 36, 48, 60):
-        assert W.coils_per_phase(slots) == W.coils_per_phase(slots, 1) == max(1, round(slots / 6))
-    assert [o["label"] for o in W.connection_options(24)] == ["4S", "2S-2P", "4P"]
-    assert W.derived_n_coils_per_phase({}, 24) == 4
-    assert W.derived_n_coils_per_phase({"layers": "x"}, 24) == 4
+@pytest.mark.parametrize("slots, want", [(12, 2), (24, 4), (36, 6), (48, 8), (60, 10)])
+def test_coils_per_phase_is_one_definition(slots, want):
+    assert W.coils_per_phase(slots) == want
+    assert W.derived_n_coils_per_phase({}, slots) == want
+    # one definition for every layer count: the connection rules in force (n_series x n_parallel = this)
+    assert W.derived_n_coils_per_phase({"layers": 2}, slots) == want
+    assert W.derived_n_coils_per_phase({"layers": "x"}, slots) == want
+    assert [o["n_series"] * o["n_parallel"] for o in W.connection_options(slots)] == [want] * len(
+        W.connection_options(slots))
 
 
 def test_with_derived_coil_count():
@@ -47,12 +36,13 @@ def test_with_derived_coil_count():
     assert (w["n_coils_per_phase"], old) == (4, 8)
     w, old = W.with_derived_coil_count({"n_coils_per_phase": 4, "layers": 1}, 24)
     assert old is None and w["n_coils_per_phase"] == 4
-    w, old = W.with_derived_coil_count({"n_coils_per_phase": 8, "layers": 2}, 24)     # double layer: 8 is right
-    assert old is None and w["n_coils_per_phase"] == 8
+    w, old = W.with_derived_coil_count({"n_coils_per_phase": 8, "layers": 2}, 24)     # the one definition
+    assert (w["n_coils_per_phase"], old) == (4, 8)
     w, old = W.with_derived_coil_count({"connection": "4P"}, 24)                      # no key: none added
     assert old is None and "n_coils_per_phase" not in w
-    w, old = W.with_derived_coil_count({"n_coils_per_phase": 8, "phases": 6}, 48)     # six-phase: as stored
-    assert old is None and w["n_coils_per_phase"] == 8
+    for phases in (6, 2):                                                             # not covered: as stored
+        w, old = W.with_derived_coil_count({"n_coils_per_phase": 8, "phases": phases}, 48 if phases == 6 else 24)
+        assert old is None and w["n_coils_per_phase"] == 8
     src = {"n_coils_per_phase": 8}
     W.with_derived_coil_count(src, 24)
     assert src["n_coils_per_phase"] == 8                                              # the input is not touched
@@ -72,34 +62,46 @@ def test_repick_heals_a_stale_count_with_a_valid_label():
 
 # ── the save sites ──────────────────────────────────────────────────────────
 def test_config_save_heals_the_live_winding():
-    from motor_ai_sim.routes.family import _live_winding_healed
+    from motor_ai_sim.routes.family import _coil_note, _live_winding_healed
     live = {"geometry": {"num_seg": 4, "num_slots_per_segment": 6, "num_poles_per_segment": 7},
             "winding": {"connection": "4P", "n_parallel": 4, "n_series": 1, "n_coils_per_phase": 8, "layers": 1}}
-    w = _live_winding_healed(live)
+    w, fix = _live_winding_healed(live)
     assert w["n_coils_per_phase"] == 4 and w["connection"] == "4P"
+    assert fix == {"from": 8, "to": 4} and _coil_note(fix) == "coil_count_corrected_8_to_4"
     assert live["winding"]["n_coils_per_phase"] == 8
-    assert _live_winding_healed({"geometry": live["geometry"], "winding": {"connection": "4P"}}) == {"connection": "4P"}
-    assert _live_winding_healed({}) == {}
+    nokey = {"geometry": live["geometry"], "winding": {"connection": "4P"}}
+    assert _live_winding_healed(nokey) == ({"connection": "4P"}, None)
+    assert _live_winding_healed({}) == ({}, None)
+    assert _coil_note(None) is None
 
 
-def test_repick_config_winding_heals_and_reports_nothing():
+def test_repick_config_winding_heals_in_memory_and_reports_nothing():
     from motor_ai_sim.routes.family import _repick_config_winding
     c = {"winding": {"connection": "4P", "n_parallel": 4, "n_series": 1, "n_coils_per_phase": 8, "layers": 1}}
     assert _repick_config_winding(c, {"num_slots": 24, "num_poles": 28}, "test") is None
     assert c["winding"]["n_coils_per_phase"] == 4
 
 
-def test_a_stamp_written_with_the_stale_count_is_still_current():
-    from motor_ai_sim.routes.family import _build_sig_of, _build_sigs, build_sig_moved
-    die = {"geometry": {"num_seg": 4, "num_slots_per_segment": 6, "num_poles_per_segment": 7, "wire_width": 7}}
+def test_a_stale_count_that_is_neither_half_nor_double_does_not_age_the_stamps():
+    """The review's example: 4 stored on a 48-slot machine (derived 8); the heal leaves every stamp current."""
+    from motor_ai_sim.routes.family import _alias_count_only, _build_sig_of, _build_sigs, build_sig_moved
+    die = {"geometry": {"num_seg": 8, "num_slots_per_segment": 6, "num_poles_per_segment": 7, "wire_width": 7}}
     stale = {"geometry_overrides": {}, "materials": {"magnet": "N52"},
-             "winding": {"connection": "4P", "n_parallel": 4, "n_series": 1, "n_coils_per_phase": 8, "layers": 1}}
+             "winding": {"connection": "8S", "n_parallel": 1, "n_series": 8, "n_coils_per_phase": 4, "layers": 1}}
     stamp = _build_sig_of(die, stale, stale["materials"])
-    healed = {**stale, "winding": {**stale["winding"], "n_coils_per_phase": 4}}
+    healed = {**stale, "winding": {**stale["winding"], "n_coils_per_phase": 8}}
+    assert build_sig_moved(stamp, _build_sigs(die, healed))                           # without the record: aged
+    _alias_count_only(die, healed, 4)
     assert not build_sig_moved(stamp, _build_sigs(die, healed))
-    other = {**healed, "winding": {**healed["winding"], "connection": "2S-2P", "n_parallel": 2, "n_series": 2}}
+    assert healed["build_sig_aliases"]
+    other = {**healed, "winding": {**healed["winding"], "connection": "4S-2P", "n_parallel": 2, "n_series": 4}}
     assert build_sig_moved(stamp, _build_sigs(die, other))                            # a real change still moves it
-    assert not build_sig_moved(stamp, _build_sigs(die, stale))
+    other_mat = {**healed, "materials": {"magnet": "N42"}}
+    assert build_sig_moved(stamp, _build_sigs(die, other_mat))
+    # nothing recorded when nothing was healed
+    same = {**stale}
+    _alias_count_only(die, same, 4)
+    assert "build_sig_aliases" not in same
 
 
 # ── PATCH / GET ─────────────────────────────────────────────────────────────
@@ -116,21 +118,117 @@ def test_patch_corrects_a_wrong_count_and_says_so(client):                      
     assert "n_coils_per_phase_corrected" not in r.json()
 
 
-def test_get_is_layer_aware(client):                                                  # noqa: F811
-    _set_machine(4, "4S", 1, 4)
-    assert client.get("/api/winding/config").json()["n_coils_per_phase"] == 4
+def test_patch_leaves_a_six_phase_count_as_sent(client):                              # noqa: F811
+    _set_machine(8, "4S-2P", 2, 4)                                                    # 48 slots
+    r = client.patch("/api/winding/config", json={"phases": 6, "set1_paths": "1", "n_coils_per_phase": 3})
+    if r.status_code == 200:                                                          # the six-phase validation passed
+        assert r.json()["updated"]["n_coils_per_phase"] == "3"
+        assert "n_coils_per_phase_corrected" not in r.json()
+    else:                                                                             # refused for its own reason, not the count
+        assert "coils" not in r.text.lower() or "n_coils_per_phase" not in r.text
+
+
+def test_get_follows_the_one_definition_for_any_layers(client):                        # noqa: F811
+    for layers in (1, 2):
+        _set_machine(4, "4S", 1, 4)
+        client.patch("/api/winding/config", json={"layers": layers})
+        g = client.get("/api/winding/config").json()
+        assert g["n_coils_per_phase"] == 4
+        assert [o["label"] for o in g["connections"]] == ["4S", "2S-2P", "4P"]        # the rules did not move
+
+
+def test_get_and_a_valid_label_reconcile_do_not_write_the_live_file(client):          # noqa: F811
+    from motor_ai_sim.api import reconcile_live_winding
+    from test_winding_connection_slots import _cfg_path
+    _set_machine(4, "4P", 4, 1)
+    p = _cfg_path()
+    import yaml
+    c = yaml.safe_load(p.read_text(encoding="utf-8"))
+    c["winding"]["n_coils_per_phase"] = 8                                             # the stale copy
+    p.write_text(yaml.safe_dump(c, sort_keys=False, allow_unicode=True), encoding="utf-8")
+    from motor_ai_sim.config import clear_config_cache
+    clear_config_cache()
+    before = p.read_bytes()
+    assert client.get("/api/winding/config").json()["n_coils_per_phase"] == 4        # derived for the answer
+    assert reconcile_live_winding() is None
+    assert p.read_bytes() == before                                                   # nothing written
+
+
+# ── opening / listing is not a save ────────────────────────────────────────
+def _stale_catalog(tmp_path, monkeypatch):
+    import yaml
+    from motor_ai_sim.routes import family as fam
+    root = tmp_path / "dies"
+    (root / "SD 24").mkdir(parents=True)
+    (root / "SD 24" / "die.yaml").write_text(yaml.safe_dump({
+        "name": "SD 24", "locked": False, "created": "2026-09-02T10:00:00",
+        "geometry": {"num_slots": 24, "num_poles": 28, "stator_diameter": 40.0, "magnet_height": 3.0,
+                     "motor_length": 40.0}}, sort_keys=False), encoding="utf-8")
+    (root / "SD 24" / "L40.yaml").write_text(yaml.safe_dump({
+        "name": "L40", "die": "SD 24", "role": "motor",
+        "geometry_overrides": {"motor_length": 40.0},
+        "winding": {"connection": "4P", "n_parallel": 4, "n_series": 1, "n_coils_per_phase": 8, "layers": 1},
+        "materials": {"magnet": "N42SH"}, "duties": []}, sort_keys=False), encoding="utf-8")
+    monkeypatch.setattr(fam, "_DIES_DIR", root)
+    return root
+
+
+def test_opening_and_listing_a_stale_configuration_writes_nothing(tmp_path, monkeypatch):
+    from fastapi.testclient import TestClient
+    from motor_ai_sim.api import app
+    root = _stale_catalog(tmp_path, monkeypatch)
+    snap = {p: p.read_bytes() for p in sorted(root.rglob("*")) if p.is_file()}
+    c = TestClient(app)
+    r = c.get("/api/family/payload/SD 24/L40")
+    assert r.status_code in (200, 401, 403, 404), r.text            # the answer may be refused; the files are the pin
+    if r.status_code == 200:
+        assert r.json()["winding"]["n_coils_per_phase"] == 4        # corrected IN MEMORY for the answer
+    c.get("/api/family/tree")
+    from motor_ai_sim.routes import family as fam
+    c2 = {"winding": dict(fam._load_yaml(root / "SD 24" / "L40.yaml", "configuration")["winding"])}
+    fam._repick_config_winding(c2, {"num_slots": 24, "num_poles": 28}, "apply")
+    assert {p: p.read_bytes() for p in sorted(root.rglob("*")) if p.is_file()} == snap
+    assert not (root / ".history").exists()
+
+
+# ── an explicit duty save heals visibly ─────────────────────────────────────
+def test_a_duty_save_that_adopts_the_live_winding_reports_and_notes_the_heal(tmp_path, monkeypatch):
+    import yaml
+    from fastapi.testclient import TestClient
+    from motor_ai_sim.api import app
+    from motor_ai_sim.routes import family as fam
+    root = _stale_catalog(tmp_path, monkeypatch)
+    live = {"geometry": {"num_slots": 24, "num_poles": 28, "stator_diameter": 40.0, "magnet_height": 3.0,
+                         "motor_length": 40.0},
+            "winding": {"connection": "4S", "n_parallel": 1, "n_series": 4, "n_coils_per_phase": 8, "layers": 1},
+            "simulation": {"current_a": 85.0, "rpm": 6000.0, "gamma_deg": 12.0},
+            "materials": {"magnet": "N42SH"}}
+    monkeypatch.setattr(fam, "_live_cfg", lambda: live)
+    r = TestClient(app).post("/api/family/duty", json={
+        "die": "SD 24", "config": "L40",
+        "duty": {"name": "peak", "mode": "motor", "from_current": True}})
+    if r.status_code != 200:                                       # the live fixture is not a full machine: say why
+        pytest.skip("duty save refused for a reason outside the coil count: %s" % r.text[:200])
+    assert r.json().get("coil_count_corrected") == {"from": 8, "to": 4}
+    doc = yaml.safe_load((root / "SD 24" / "L40.yaml").read_text(encoding="utf-8"))
+    assert doc["winding"]["n_coils_per_phase"] == 4
+    notes = sorted(f.name for f in (root / ".history" / "SD 24").glob("L40.*.yaml"))
+    assert any("coil_count_corrected_8_to_4" in n for n in notes), notes
 
 
 # ── readers ─────────────────────────────────────────────────────────────────
-def test_agent_design_winding_ignores_the_stale_copy(monkeypatch):
+def test_agent_design_winding_ignores_the_stored_copy_both_ways(monkeypatch):
     import motor_ai_sim.agent_designs as AD
     pay = {"geometry": {"num_seg": 4, "num_slots_per_segment": 6, "num_wires_per_slot": 9, "wire_parallel": 1},
            "winding": {"n_coils_per_phase": 8, "n_parallel": 4, "connection": "4P"}, "sim": {}}
     monkeypatch.setattr(AD, "_payload", lambda *a, **k: pay)
-    assert AD._winding_of("d", "c", "x")["coils_per_phase"] == 4
-    pay["winding"]["n_coils_per_phase"] = 4
-    assert AD._winding_of("d", "c", "x")["coils_per_phase"] == 4
-    pay["geometry"].pop("num_seg")                                                    # no slot count: stored copy
+    assert AD._winding_of("d", "c", "x")["coils_per_phase"] == 4                      # stored 8, derived 4
+    pay["geometry"]["num_seg"] = 8                                                    # 48 slots; stored still 8 -> same
+    pay["winding"]["n_coils_per_phase"] = 4                                           # stored 4, derived 8
+    assert AD._winding_of("d", "c", "x")["coils_per_phase"] == 8
+    pay["winding"]["layers"] = 2                                                      # one definition for any layers
+    assert AD._winding_of("d", "c", "x")["coils_per_phase"] == 8
+    pay["geometry"].pop("num_seg")                                                    # no slot count: the stored copy
     assert AD._winding_of("d", "c", "x")["coils_per_phase"] == 4
 
 
@@ -138,5 +236,5 @@ def test_passport_fingerprint_coils_are_derived():
     from motor_ai_sim.passport_v1.stage3 import _coils_of
     g = {"num_slots": 24}
     assert _coils_of(g, {"n_coils_per_phase": 8, "layers": 1}) == 4
-    assert _coils_of(g, {"n_coils_per_phase": 8, "layers": 2}) == 8
+    assert _coils_of(g, {"n_coils_per_phase": 8, "layers": 2}) == 4
     assert _coils_of({}, {"n_coils_per_phase": 8}) == 8

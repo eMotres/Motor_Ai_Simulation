@@ -1306,9 +1306,6 @@ def reconcile_live_winding() -> Optional[str]:
                     logging.getLogger("motor_ai_sim.winding").info(
                         "winding: connection label %r normalised to %r (same machine)",
                         w.get("connection"), fixed["connection"])
-                # a stale coil count (copied from another machine) is healed here too
-                if fixed.get("n_coils_per_phase") != w.get("n_coils_per_phase"):
-                    _write_winding_updates({"n_coils_per_phase": str(int(fixed["n_coils_per_phase"]))})
                 return None
             _write_winding_updates({
                 "connection": f'"{fixed["connection"]}"',
@@ -1365,7 +1362,7 @@ def get_winding_config():
         "connections":        _winding_connections(num_slots),
         # DERIVED from the live slot count (the stored value is a copy that
         # did not follow segment changes); the stored one rides beside it.
-        "n_coils_per_phase":  _coils_per_phase(num_slots, _layers_of(w)),
+        "n_coils_per_phase":  _coils_per_phase(num_slots),
         "n_coils_per_phase_stored": n_coils,
         "connection_valid":   _conn_error(_conn_label(n_series, n_parallel),
                                           num_slots) is None,
@@ -1413,14 +1410,6 @@ def _six_phase_view(w: dict) -> dict:
 from motor_ai_sim.winding import parse_connection as _parse_connection  # noqa: E402
 from motor_ai_sim.winding import (coils_per_phase as _coils_per_phase,  # noqa: E402
                                   connection_error as _conn_error)
-
-
-def _layers_of(w) -> int:
-    """``layers`` of a winding block (1 when absent or unreadable)."""
-    try:
-        return int(float((w or {}).get("layers") or 1))
-    except (TypeError, ValueError):
-        return 1
 
 
 def _write_winding_updates(updates: dict) -> None:
@@ -1537,18 +1526,26 @@ def _apply_winding_patch(patch: WindingConfigPatch) -> dict:
         updates["n_parallel"]  = str(n_par)
         updates["n_series"]    = str(n_ser)
     if patch.n_coils_per_phase is not None:
-        # The count is DERIVED (slots, layers): a value that differs is corrected to the derived one, logged, and
-        # the correction is returned in the response (never stored as sent).
+        # The count is DERIVED from the slots: a differing value on a 3-phase winding is corrected to the derived
+        # one, logged, and the correction is returned in the response.  A winding of another phase layout (six-phase)
+        # is not covered by the formula: its value is stored as sent.
         _ns_c, _ = _current_winding_layout()
-        _lay_c = int(patch.layers) if patch.layers is not None else _layers_of(get_config().get("winding"))
-        _want_c = _coils_per_phase(_ns_c, _lay_c)
-        if int(patch.n_coils_per_phase) != _want_c:
-            _coil_fix = {"requested": int(patch.n_coils_per_phase), "stored": _want_c,
-                         "reason": f"{_ns_c} slots, {_lay_c} layer(s) give {_want_c} coils per phase"}
-            logging.getLogger("motor_ai_sim.winding").warning(
-                "winding: n_coils_per_phase %s corrected to the derived %s (%s)",
-                patch.n_coils_per_phase, _want_c, _coil_fix["reason"])
-        updates["n_coils_per_phase"] = str(_want_c)
+        _ph_c = patch.phases if patch.phases is not None else (get_config().get("winding") or {}).get("phases")
+        _val_c = int(patch.n_coils_per_phase)
+        try:
+            _three = int(float(_ph_c or 3)) == 3
+        except (TypeError, ValueError):
+            _three = False
+        if _three:
+            _want_c = _coils_per_phase(_ns_c)
+            if _val_c != _want_c:
+                _coil_fix = {"requested": _val_c, "stored": _want_c,
+                             "reason": f"{_ns_c} slots give {_want_c} coils per phase"}
+                logging.getLogger("motor_ai_sim.winding").warning(
+                    "winding: n_coils_per_phase %s corrected to the derived %s (%s)",
+                    _val_c, _want_c, _coil_fix["reason"])
+                _val_c = _want_c
+        updates["n_coils_per_phase"] = str(_val_c)
     if patch.layers is not None:
         if int(patch.layers) not in (1, 2):
             raise HTTPException(status_code=400, detail="layers must be 1 or 2")

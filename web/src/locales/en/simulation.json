@@ -284,7 +284,6 @@
   "sweepPresetError": "The run settings could not be resolved, so the run cannot start.",
   "sweepPresetRetry": "Retry",
   "sweepMixedSettings": "These results were computed at different steps per period or gap rows (or one is not on the Optimization preset); they are not ranked against each other.",
-  "runSettingsCustom": "custom",
   "runSettingsMesh": "mesh",
   "runSettingsSectors": "sectors",
   "runSettingsFullRing": "full ring",
@@ -308,7 +307,6 @@
   "runSettingsGapOne": "{n} gap row",
   "runSettingsGapMany": "{n} gap rows",
   "runSettingsWireN": "wire cell {n}h",
-  "runSettingsSetInMesh": "set in Mesh",
   "runSettingsChangeInMesh": "Change in Mesh",
   "runSettingsNotOptimization": "not the Optimization preset",
   "runSettingsUnknown": "unknown: {what} not set in the Mesh / Simulation tab, Run is disabled",
@@ -319,5 +317,12 @@
   "sweepShownResult": "Shown result:",
   "runSettingsReasonRippleUnrecorded": "the ripple grade, {cycles} cogging cycles x {samples}; source not recorded",
   "runSettingsReasonUser": "set in the Simulation tab",
-  "runSettingsReasonUnrecorded": "source not recorded"
+  "runSettingsReasonUnrecorded": "source not recorded",
+  "runSettingsFromSim": "Simulation tab",
+  "runSettingsFromMesh": "Mesh",
+  "runSettingsKeySteps": "steps",
+  "runSettingsKeyGap": "gap rows",
+  "runSettingsKeyMinMesh": "min mesh size",
+  "runSettingsKeyWire": "wire cell",
+  "runSettingsDiff": "{name} {current} (preset {preset})"
 }

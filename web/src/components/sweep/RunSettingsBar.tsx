@@ -5,7 +5,7 @@
  * = warning colour AND the words.  A value the tabs do not hold = "unknown" and Run is disabled.
  */
 import React from 'react';
-import { Box, Button, Chip, Tooltip, Typography } from '@mui/material';
+import { Box, Button, Tooltip, Typography } from '@mui/material';
 import { nsT } from '../../i18n/nsT';
 import { useUIStore } from '../../stores/uiStore';
 import { stepsReason } from '../../lib/eddySteps';
@@ -46,22 +46,30 @@ const RunSettingsBar: React.FC<{ rs: RunSettingsState; dense?: boolean }> = ({ r
     user: 'runSettingsReasonUser', unrecorded: 'runSettingsReasonUnrecorded',
   }[why.kind], { cycles: 'cycles' in why ? why.cycles : 0, samples: 'samples' in why ? why.samples : 0 }) : null;
   const warn = !!r && notOptimization(r);
+  const onOff = (b: unknown) => (b ? tx('runSettingsOn') : tx('runSettingsOff'));
+  const KEY_NAME: Record<string, string> = {
+    steps_per_period: 'runSettingsKeySteps', gap_layers: 'runSettingsKeyGap', mesh_size_mm: 'runSettingsMesh', min_size_mm: 'runSettingsKeyMinMesh',
+    n_sectors: 'runSettingsSectors', coil_rel: 'runSettingsKeyWire', rotor_eddy: 'runSettingsRotorEddy', demag: 'runSettingsDemag',
+  };
+  const val = (k: string, v: unknown) => (k === 'rotor_eddy' || k === 'demag' ? onOff(v) : k === 'coil_rel' ? `${String(v)}h`
+    : k === 'mesh_size_mm' || k === 'min_size_mm' ? `${String(v)} mm` : String(v));
   const text = r ? lineText(r, {
-    preset: (label, version) => tx('runSettingsPresetLine', { label, version }), custom: tx('runSettingsCustom'),
+    preset: (label, version) => tx('runSettingsPresetLine', { label, version }),
     steps: n => tx('runSettingsStepsN', { n }), gap: n => tx(n === 1 ? 'runSettingsGapOne' : 'runSettingsGapMany', { n }),
-    wire: n => tx('runSettingsWireN', { n }),
+    wire: n => tx('runSettingsWireN', { n }), fromSim: tx('runSettingsFromSim'), fromMesh: tx('runSettingsFromMesh'),
+    notOptimization: tx('runSettingsNotOptimization'),
+    diff: (k, cur, pre) => tx('runSettingsDiff', { name: KEY_NAME[k] ? tx(KEY_NAME[k]) : k, current: val(k, cur), preset: val(k, pre) }),
   }) : '';
   const unknown = !rs.request && rs.missing.length > 0;
   return (
     <Tooltip placement="top" title={<span style={{ whiteSpace: 'pre-line' }}>
-      {[tx('runSettingsHelp'), ...(st ? [describeSettings(st, r?.sources)] : []), ...diff, ...clamps, ...fin].join('\n')}</span>}>
+      {[tx('runSettingsHelp'), ...(reason ? [`${tx('runSettingsKeySteps')}: ${reason}`] : []), ...(st ? [describeSettings(st, r?.sources)] : []), ...diff, ...clamps, ...fin].join('\n')}</span>}>
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75, flexWrap: 'wrap', mb: 1 }}>
         {r && st && (
           <Typography data-testid="run-settings-line" sx={{ fontSize: dense ? 11.5 : 12.5, color: warn ? '#fbbf24' : 'var(--text-2)' }}>
-            {text}{reason ? ` (${reason})` : ''}{clamps.length ? ` · ${tx('runSettingsAdjusted')}` : ''} · {tx('runSettingsSetInMesh')}
+            {text}{clamps.length ? ` · ${tx('runSettingsAdjusted')}` : ''}
           </Typography>
         )}
-        {warn && <Chip size="small" color="warning" label={tx('runSettingsNotOptimization')} sx={{ height: 20, fontSize: 10.5 }} />}
         {unknown && (
           <Typography sx={{ fontSize: 11.5, color: '#fbbf24' }} role="alert">
             {tx('runSettingsUnknown', { what: rs.missing.join(', ') })}

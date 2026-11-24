@@ -85,16 +85,32 @@ export const baselineBody = (
 /** Run is allowed only while the held answer belongs to the current machine, duty, mode and values. */
 export const answerKey = (ctx: string, mode: RunMode, r: RunRequest | null): string => `${ctx}|${mode}|${JSON.stringify(r ? r.overrides : null)}`;
 
-/** The one sentence of the line, from the SERVER answer: "Optimization preset v2 · 48 steps · 1 gap row · wire cell 2h" or
- *  "custom: 108 steps, 1 gap row, wire cell 1h".  Words come from the caller (translated). */
-export function lineText(
-  r: RunResolved,
-  w: { preset: (label: string, version: number) => string; custom: string; steps: (n: number) => string;
-       gap: (n: number) => string; wire: (n: number) => string },
-): string {
+/** The words of the line, translated by the caller. */
+export interface LineWords {
+  preset: (label: string, version: number) => string;
+  steps: (n: number) => string; gap: (n: number) => string; wire: (n: number) => string;
+  /** where a value is set: the Simulation tab (steps), the Mesh tab (gap rows, wire cell) */
+  fromSim: string; fromMesh: string;
+  /** "not the Optimization preset" */
+  notOptimization: string;
+  /** one differing value: its name, its value, the preset's value */
+  diff: (key: string, current: unknown, preset: unknown) => string;
+}
+
+/** The one line, from the SERVER answer.  Each value names its own source once; a run that is not the Optimization preset says so
+ *  and names every value that breaks it:
+ *  "Optimization preset v2 \u00b7 48 steps (Simulation tab), 1 gap row (Mesh), wire cell 2h (Mesh)" or
+ *  "108 steps (Simulation tab), 1 gap row (Mesh), wire cell 2h (Mesh) \u00b7 not the Optimization preset: steps 108 (preset 48)".
+ *  (The server lists the differences from the Optimization preset; a run that equals the Simulation preset has none, and only says
+ *  that it is not the Optimization preset.) */
+export function lineText(r: RunResolved, w: LineWords): string {
   const st = r.settings;
-  const parts = [w.steps(Number(st.steps_per_period)), w.gap(Number(st.gap_layers)), w.wire(Number(st.coil_rel ?? 1))];
-  return r.custom ? `${w.custom}: ${parts.join(', ')}` : `${w.preset(r.preset_label, r.version)} · ${parts.join(' · ')}`;
+  const values = [`${w.steps(Number(st.steps_per_period))} (${w.fromSim})`, `${w.gap(Number(st.gap_layers))} (${w.fromMesh})`,
+                  `${w.wire(Number(st.coil_rel ?? 1))} (${w.fromMesh})`].join(', ');
+  const head = r.custom ? values : `${w.preset(r.preset_label, r.version)} \u00b7 ${values}`;
+  if (!notOptimization(r)) return head;
+  const names = Object.entries(r.differs).map(([k, d]) => w.diff(k, d.current, d.preset));
+  return `${head} \u00b7 ${w.notOptimization}${names.length ? `: ${names.join(', ')}` : ''}`;
 }
 
 /** The line is a warning unless the run is the Optimization preset (colour AND the word). */

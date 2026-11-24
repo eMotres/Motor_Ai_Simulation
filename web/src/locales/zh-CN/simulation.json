@@ -284,7 +284,6 @@
   "sweepPresetError": "无法解析运行设置，因此无法开始运行。",
   "sweepPresetRetry": "重试",
   "sweepMixedSettings": "这些结果的每周期步数或气隙层数不同（或其中之一未使用“优化”预设）；它们之间不进行排名。",
-  "runSettingsCustom": "自定义",
   "runSettingsMesh": "网格",
   "runSettingsSectors": "扇区",
   "runSettingsFullRing": "整圈",
@@ -308,7 +307,6 @@
   "runSettingsGapOne": "{n} 层气隙",
   "runSettingsGapMany": "{n} 层气隙",
   "runSettingsWireN": "线单元 {n}h",
-  "runSettingsSetInMesh": "在网格中设置",
   "runSettingsChangeInMesh": "在网格中更改",
   "runSettingsNotOptimization": "不是优化预设",
   "runSettingsUnknown": "未知：网格/仿真标签页未设置 {what}，运行已禁用",
@@ -319,5 +317,12 @@
   "sweepShownResult": "显示的结果：",
   "runSettingsReasonRippleUnrecorded": "纹波等级，{cycles} 个齿槽周期 x {samples}；来源未记录",
   "runSettingsReasonUser": "在仿真标签页中设置",
-  "runSettingsReasonUnrecorded": "来源未记录"
+  "runSettingsReasonUnrecorded": "来源未记录",
+  "runSettingsFromSim": "仿真标签页",
+  "runSettingsFromMesh": "网格",
+  "runSettingsKeySteps": "步数",
+  "runSettingsKeyGap": "气隙层数",
+  "runSettingsKeyMinMesh": "最小网格尺寸",
+  "runSettingsKeyWire": "线单元",
+  "runSettingsDiff": "{name} {current}（预设 {preset}）"
 }

@@ -188,3 +188,17 @@ def test_a_project_without_labels_has_one_current_release(client):
     assert cust["current_release"] == "" and [(g["revision"], g["superseded"]) for g in cust["releases"]] == [("", False)]
     names, _m, _d = zip_names(client, "cust", "?revision=")
     assert len(names) == 3
+
+
+def test_a_label_whose_only_documents_are_archived_does_not_exist(client, board):
+    """An archived document's label never makes a release exist: the ZIP's rows are the visible, non-archived ones."""
+    old = up(client, "old.pdf", "R0", at="2026-08-01T00:00:00")
+    client.delete("/api/projects/p1/documents/%s" % old["id"], headers=hdr("owner"))
+    for who in ("cust", "owner", "admin"):
+        r = client.get("/api/projects/p1/documents.zip?revision=R0", headers=hdr(who))
+        assert r.status_code == 404 and r.json() == {"detail": "Release not found"}, who
+    assert all(g["revision"] != "R0" for g in listing(client, "owner")["releases"])
+    archived_list = client.get("/api/projects/p1/documents?archived=true", headers=hdr("owner")).json()
+    assert any(d["name"] == "old.pdf" for d in archived_list["documents"])            # an editor still lists it (archived view)
+    assert all(g["revision"] != "R0" for g in archived_list["releases"])
+    assert client.put("/api/projects/p1/documents/release", headers=hdr("owner"), json={"revision": "R0"}).status_code == 404

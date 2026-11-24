@@ -333,7 +333,7 @@
     "allGroupsZip": "All groups (ZIP), staff",
     "moreDownloads": "More downloads",
     "currentRelease": "Current release",
-    "currentReleaseTip": "The release to build from. Until the project owner, its engineer or MOTRES staff chooses one, it is the group with the newest upload",
+    "currentReleaseTip": "Until the project owner, its engineer or MOTRES staff chooses the current release (Make current), it is the newest release you can see; choose one so that every member works from the same release",
     "superseded": "superseded",
     "supersededTip": "An older release: kept for viewing only, not for building",
     "makeCurrent": "Make current",

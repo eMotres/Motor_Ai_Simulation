@@ -24,7 +24,10 @@ labelled group with the newest upload among the caller's visible documents.  Doc
 in a project with no labels at all it is the current release; in a project with labels it is the "general documents" group,
 never superseded and never inside a labelled release's ZIP (its own ZIP is ``?revision=``).  Everything is computed from the rows the
 caller may see (``_visible``), so a release ZIP holds exactly what the list shows and a label that matches only hidden
-documents answers 404 like an unknown one.
+documents answers 404 like an unknown one.  Consequence, on purpose: while no release is STORED, two members can see different current
+groups (the newest upload may be price-restricted or internal: a member without that right sees the newest group HE can see);
+nothing leaks, and the stored choice of the owner / engineer (the UI offers it on every superseded group) makes it one group
+for everybody who can see it.
 
 Every change writes a project audit row (``document.*``); the owner's daily report lists them.
 """

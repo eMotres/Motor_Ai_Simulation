@@ -333,7 +333,7 @@
     "allGroupsZip": "全部分组（压缩包），仅限员工",
     "moreDownloads": "更多下载",
     "currentRelease": "当前版本",
-    "currentReleaseTip": "用于生产的版本。在项目所有者、项目工程师或公司员工选定之前，默认为最新上传的分组",
+    "currentReleaseTip": "在项目所有者、项目工程师或公司员工选定当前版本（设为当前）之前，默认为您可见的最新版本；请选定一个版本，使所有成员使用同一版本",
     "superseded": "已被取代",
     "supersededTip": "旧版本：仅供查看，不用于生产",
     "makeCurrent": "设为当前",

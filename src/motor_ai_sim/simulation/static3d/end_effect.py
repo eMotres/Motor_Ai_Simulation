@@ -336,8 +336,8 @@ def spill_profile(ss: SectorSolve, n_in: int = 33, n_out: int = 8,
 
     amp, pha = airgap_B1(ss, z, n_theta=n_theta)
     B1_mid = float(amp[0])
-    if B1_mid <= 0:
-        raise RuntimeError("mid-plane gap fundamental is zero — no field")
+    if not B1_mid > 0:          # also refuses NaN
+        raise RuntimeError("mid-plane gap fundamental is zero or not a number — no field")
     prof = amp / B1_mid
     inside = z <= zh + 1e-12
     k = float(_trapz(amp[inside], z[inside]) / (zh * B1_mid))
@@ -505,6 +505,19 @@ def run_stage_a(geo_override: Optional[dict] = None,
     no remesh noise anywhere in the k_flux(L) curve.
     """
     t_all = time.perf_counter()
+    # The sweep's factors, checked before any solve.  The reference length
+    # (factor 1.0) is ALWAYS solved — it is step [1] — so when a caller leaves
+    # it out of l_factors its row is appended at the END of the curve (no extra
+    # solve; callers that read curve[0] still get their own first factor): a
+    # per-length table without its reference row could not be anchored to the
+    # passport's own k_flux.
+    l_factors = [float(f) for f in l_factors]
+    bad = [f for f in l_factors if not (math.isfinite(f) and f > 0.0)]
+    if bad:
+        raise ValueError("l_factors must be finite and positive stack-length "
+                         "factors (1.0 = the reference stack); got %r" % (bad,))
+    if not any(abs(f - 1.0) < 1e-12 for f in l_factors):
+        l_factors.append(1.0)
     section = load_motor_section(geo_override=geo_override, n_sectors=n_sectors)
     if verbose:
         print(section.summary(), flush=True)
@@ -636,6 +649,10 @@ def run_stage_a(geo_override: Optional[dict] = None,
     # module does not control — putting it first once cost an hour of wall time
     # in front of work that did not depend on it.
     two_d = None
+    # the 2D fundamental the k_flux rows divide by; None = no usable 2D leg (not
+    # run, or its fundamental is zero / not a number: then every k_flux is the
+    # self-normalised k_flux_self, as without a 2D leg, and two_d says why)
+    b1_2d = None
     if do_2d:
         from .ref2d import (solve_2d_reference_converged,
                             solve_2d_reference_on_section_mesh)
@@ -673,16 +690,35 @@ def run_stage_a(geo_override: Optional[dict] = None,
                                "constitutive residual ~0.8, 3 % violation of an "
                                "exact anti-periodicity, 3 % band over sweep "
                                "counts; kept for the before/after only")),
-                     ratio_3d_mid_over_2d=prof["B1_mid_T"] / r2.B1_T)
+                     ratio_3d_mid_over_2d=None)
+        try:
+            _b2 = float(r2.B1_T)
+        except (TypeError, ValueError):
+            _b2 = float("nan")
+        if math.isfinite(_b2) and _b2 > 0.0:
+            b1_2d = r2.B1_T
+            two_d["ratio_3d_mid_over_2d"] = prof["B1_mid_T"] / r2.B1_T
         if verbose:
-            print(f"    2D B1 = {r2.B1_T:.5f} T (converged, resid "
-                  f"{r2.picard_residual:.1e}, {r2.picard_sweeps} sweeps; "
-                  f"shipped relaxation says {r2s.B1_T:.5f} T), "
-                  f"3D mid / 2D = {two_d['ratio_3d_mid_over_2d']:.4f}",
-                  flush=True)
-    ratio = two_d["ratio_3d_mid_over_2d"] if two_d else 1.0
+            if b1_2d is not None:
+                print(f"    2D B1 = {r2.B1_T:.5f} T (converged, resid "
+                      f"{r2.picard_residual:.1e}, {r2.picard_sweeps} sweeps; "
+                      f"shipped relaxation says {r2s.B1_T:.5f} T), "
+                      f"3D mid / 2D = {two_d['ratio_3d_mid_over_2d']:.4f}",
+                      flush=True)
+            else:
+                print(f"    2D B1 = {r2.B1_T!r} T: zero or not a number, no "
+                      "3D mid / 2D ratio formed (k_flux = k_flux_self)", flush=True)
+    ratio = two_d["ratio_3d_mid_over_2d"] if b1_2d is not None else 1.0
     k_vs2d = k_self * ratio
-    if two_d is not None:
+    if two_d is not None and b1_2d is None:
+        two_d["agreement_tolerance"] = 0.02
+        two_d["verdict"] = "INVALID"
+        two_d["k_flux_usable"] = False
+        two_d["warning"] = (
+            "the 2D reference fundamental is zero or not a number (B1 = %r T): "
+            "no 3D-mid / 2D ratio is formed, k_flux = k_flux_self and every "
+            "stack-length row is self-normalised" % (r2.B1_T,))
+    elif two_d is not None:
         # The consistency check is only passed if the two models agree at the
         # mid-plane.  When they do not, k_flux (which multiplies a 2D result by
         # a number derived from BOTH models) inherits the disagreement, and
@@ -712,8 +748,8 @@ def run_stage_a(geo_override: Optional[dict] = None,
     # same float division as ``ratio`` above, so it is bit-identical to the
     # passport's k_flux.  Without a 2D leg the row keeps k_flux_self (x 1.0).
     for row in curve:
-        if two_d is not None:
-            row["ratio_3d_mid_over_2d"] = row["B1_mid_T"] / two_d["B1_T"]
+        if b1_2d is not None:
+            row["ratio_3d_mid_over_2d"] = row["B1_mid_T"] / b1_2d
             row["k_flux"] = row["k_flux_self"] * row["ratio_3d_mid_over_2d"]
         else:
             row["k_flux"] = row["k_flux_self"] * ratio
@@ -768,7 +804,7 @@ def run_stage_a(geo_override: Optional[dict] = None,
         two_d=two_d,
         demag=demag,
         l_stack_curve=curve,
-        k_flux_vs_L_method=(K_FLUX_VS_L_OWN_MID if two_d is not None
+        k_flux_vs_L_method=(K_FLUX_VS_L_OWN_MID if b1_2d is not None
                             else K_FLUX_VS_L_SELF),
         bracket=bracket,
         solves=solves,

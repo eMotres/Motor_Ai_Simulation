@@ -16,6 +16,7 @@ import {
   ResponsiveContainer, ReferenceLine, ScatterChart, Scatter,
 } from 'recharts';
 import { useMotorStore } from '../../stores/motorStore';
+import { useRunPreset } from '../../lib/useRunPreset';
 import MeshPresetSelect from '../mesh/MeshPresetSelect';
 import { appliedSaveLine } from '../../lib/appliedAutoSave';
 
@@ -88,6 +89,7 @@ type Plan = {
 };
 
 const AutoOptimizePanel: React.FC = () => {
+  useRunPreset('optimization');   // no choice made yet for this machine: the Optimization preset is applied once (owner 2026-11-24)
   const { connectedToApi, descentState, loadLastDescent, applyDescentBest, cancelDescent,
           appliedSave, verifyAndApplyDescentPoint } = useMotorStore();
   const [verifying, setVerifying] = useState(false);
@@ -323,7 +325,7 @@ const AutoOptimizePanel: React.FC = () => {
           </Typography>
         )}
 
-        <Box sx={{ mt: 1.25 }}><MeshPresetSelect dense readOnly /></Box>
+        <Box sx={{ mt: 1.25 }}><MeshPresetSelect dense /></Box>
         {plan && !running && (
           <Box sx={{ mt: 1.25, display: 'flex', gap: 0.75, flexWrap: 'wrap', alignItems: 'center' }}>
             <Chip size="small" variant="outlined" sx={{ height: 22, fontSize: 10.5 }}
@@ -336,12 +338,13 @@ const AutoOptimizePanel: React.FC = () => {
               label={`obj: above baseline · ripple ≤ ${fmt(plan.ripple_max_pct, 1)}% (λ ${plan.ripple_penalty_lambda})`} />
             <Chip size="small" variant="outlined" sx={{ height: 22, fontSize: 10.5 }}
               label={`P2 · ${plan.eval.steps_per_period} steps/T · ${plan.eval.n_sectors <= 0 ? 'full ring' : `1/${plan.eval.n_sectors}`}`} />
-            {plan.eval.steps_per_period_source === 'optimization_preset' && (
+            {plan.eval.steps_per_period_source === 'optimizer' && (
               <Tooltip placement="top" title={
-                `An optimisation runs on the Optimization preset: ${plan.eval.steps_per_period} steps per electrical period `
-                + `and ${plan.eval.gap_layers} gap row(s), whatever the Simulation tab holds (${plan.eval.steps_per_period_tab ?? 'none'}).`}>
+                `The Simulation tab holds its eddy-run default (${plan.eval.steps_per_period_tab} steps/period), `
+                + `not a count you chose, so screening uses the Optimization preset's ${plan.eval.steps_per_period}. `
+                + 'Press a preset above, or set the count on the Simulation tab, to choose it yourself.'}>
                 <Chip size="small" variant="outlined" sx={{ height: 22, fontSize: 10.5 }}
-                  label={`Optimization preset (tab: ${plan.eval.steps_per_period_tab ?? '-'})`} />
+                  label={`screening ${plan.eval.steps_per_period} (tab default ${plan.eval.steps_per_period_tab} not used)`} />
               </Tooltip>
             )}
             {plan.eval.steps_per_period_requested

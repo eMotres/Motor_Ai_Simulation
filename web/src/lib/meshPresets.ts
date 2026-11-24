@@ -19,7 +19,7 @@ export interface ResolvedPreset {
   error?: string;
   values?: {
     n_steps_per_period: number; gap_layers: number; mesh_size_mm: number; min_size_mm: number;
-    outer_air_factor: number; n_sectors: number; demag: boolean;
+    outer_air_factor: number; n_sectors: number; demag: boolean; rotor_eddy: boolean; eddy?: boolean;
     component_mesh: Record<string, number>;
   };
   cogging_steps_per_period?: number;
@@ -32,7 +32,7 @@ export interface PresetSet { version: number; presets: ResolvedPreset[] }
 /** What the panels hold right now, by the request names. */
 export interface CurrentSettings {
   steps?: number; gap_layers?: number; mesh_size_mm?: number; min_size_mm?: number;
-  outer_air_factor?: number; n_sectors?: number; demag?: boolean;
+  outer_air_factor?: number; n_sectors?: number; demag?: boolean; rotor_eddy?: boolean;
   component_mesh: Record<string, number>;
 }
 
@@ -60,6 +60,7 @@ export function matchPreset(cur: CurrentSettings, set: PresetSet | null): Preset
         || !close(cur.min_size_mm, v.min_size_mm) || !close(cur.outer_air_factor, v.outer_air_factor)
         || cur.n_sectors !== v.n_sectors) continue;
     if (cur.demag !== undefined && cur.demag !== v.demag) continue;
+    if (cur.rotor_eddy !== undefined && cur.rotor_eddy !== v.rotor_eddy) continue;
     const pm = v.component_mesh;
     const keys = ['stator', 'rotor', 'magnet', 'outer'] as const;
     if (!keys.every(k => close(cur.component_mesh[k], pm[k]))) continue;
@@ -91,11 +92,37 @@ export function readCurrentSettings(): CurrentSettings {
     const raw = localStorage.getItem('sim.demag');
     if (raw != null) demag = Boolean(JSON.parse(raw));
   } catch { /* keep undefined */ }
+  let rotor_eddy: boolean | undefined;
+  try {
+    const raw = localStorage.getItem('sim.fieldLosses');
+    if (raw != null) rotor_eddy = Boolean(JSON.parse(raw));
+  } catch { /* keep undefined */ }
   return {
+    rotor_eddy,
     steps: num('sim.stepsPP'), gap_layers: num('mesh.gapLayers'), mesh_size_mm: num('mesh.meshSize'),
     min_size_mm: num('mesh.minSize'), outer_air_factor: num('mesh.outerAir'), n_sectors: num('mesh.nSectors'),
     demag, component_mesh: comp,
   };
+}
+
+export interface PresetDiff { key: string; preset: number | boolean; current: number | boolean | undefined }
+
+/** What differs between the stored settings (the ones the next run is built from) and a preset: the list behind "custom". */
+export function presetDiff(cur: CurrentSettings, p: ResolvedPreset | undefined): PresetDiff[] {
+  const v = p?.values;
+  if (!v) return [];
+  const out: PresetDiff[] = [];
+  const num = (key: string, a: number | undefined, b: number, ge = false) => {
+    if (ge ? !(a !== undefined && a >= b - 1e-9) : !close(a, b)) out.push({ key, preset: b, current: a });
+  };
+  num('steps_per_period', cur.steps, v.n_steps_per_period, p?.name === 'simulation');
+  num('gap_layers', cur.gap_layers, v.gap_layers);
+  num('mesh_size_mm', cur.mesh_size_mm, v.mesh_size_mm);
+  num('min_size_mm', cur.min_size_mm, v.min_size_mm);
+  if (cur.n_sectors !== v.n_sectors) out.push({ key: 'n_sectors', preset: v.n_sectors, current: cur.n_sectors });
+  if (cur.demag !== undefined && cur.demag !== v.demag) out.push({ key: 'demag', preset: v.demag, current: cur.demag });
+  if (cur.rotor_eddy !== undefined && cur.rotor_eddy !== v.rotor_eddy) out.push({ key: 'rotor_eddy', preset: v.rotor_eddy, current: cur.rotor_eddy });
+  return out;
 }
 
 export async function fetchMeshPresets(): Promise<PresetSet> {
@@ -131,7 +158,7 @@ export async function applyPreset(p: ResolvedPreset, cogging = false): Promise<b
   if (wireCell(v.component_mesh) !== 1) comp.coil_rel = wireCell(v.component_mesh);   // 1 = "no key"
   put('mesh.componentMesh', comp);
   put('sim.stepsPP', stepsOf(p, cogging)); put('sim.stepsSource', 'user');
-  put('sim.demag', v.demag);
+  put('sim.demag', v.demag); put('sim.fieldLosses', v.rotor_eddy);
   if (canWriteServer()) {
     try {
       await fetch(`${API}/api/mesh/config`, {

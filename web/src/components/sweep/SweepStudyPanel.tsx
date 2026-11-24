@@ -32,7 +32,9 @@ import { planLockedApply, refusedText, newDieNotice } from '../../lib/sweepApply
 import { releaseFamilyContext } from '../../lib/familyContext';
 import { setActiveDuty } from '../../lib/dutySettings';
 import { canWriteServer } from '../../lib/localAuth';
-import { fetchMeshPresets } from '../../lib/meshPresets';
+import { storedGapLayers } from '../../lib/meshSettings';
+import { useRunPreset } from '../../lib/useRunPreset';
+import MeshPresetSelect from '../mesh/MeshPresetSelect';
 import { sweepSettingsOf, sweepSettingsLabel, sweepSettingsMetrics } from '../../lib/sweepSettings';
 import { endWindingPin } from '../../lib/endWindingPin';
 import { coincidentGroups, coincidentOffsetPx } from '../../lib/coincidentPoints';
@@ -344,30 +346,12 @@ const SweepTooltip: React.FC<any> = ({ active, payload }) => {
 
 const SweepStudyPanel: React.FC = () => {
   const { sweepConfig, updateGeometryViaApi } = useMotorStore();
-  // A sweep runs the Optimization preset: the server reads its steps and gap rows from the stored preset and ignores any
-  // count sent here.  The panel shows what the run will use (GET /api/mesh/presets), never the Simulation tab's count.
-  // Run is enabled only once these are resolved for the loaded machine; a failed fetch shows its error with a retry, and the
-  // settings are fetched again when another machine is loaded.
-  const [optPreset, setOptPreset] = useState<{ label: string; steps: number; gap: number } | null>(null);
-  const [presetErr, setPresetErr] = useState<string | null>(null);
-  const [presetTry, setPresetTry] = useState(0);
-  useEffect(() => {
-    let live = true;
-    setOptPreset(null); setPresetErr(null);
-    fetchMeshPresets().then(set => {
-      const p = set.presets.find(q => q.name === 'optimization');
-      if (!live) return;
-      if (p?.values) setOptPreset({ label: p.label, steps: p.values.n_steps_per_period, gap: p.values.gap_layers });
-      else setPresetErr(p?.error || 'no values');
-    }).catch(e => { if (live) setPresetErr(String(e?.message ?? e)); });
-    return () => { live = false; };
-  }, [presetTry]);
-  useEffect(() => {
-    const again = () => setPresetTry(n => n + 1);
-    window.addEventListener('family-changed', again);
-    window.addEventListener('sim-design-applied', again);
-    return () => { window.removeEventListener('family-changed', again); window.removeEventListener('sim-design-applied', again); };
-  }, []);
+  // The settings this run WILL send: the stored fields the request body below is built from (steps, gap rows, mesh).  A preset
+  // is a button (MeshPresetSelect) that sets all of them at once; changing any one afterwards reads "custom".  Run waits for
+  // the presets to resolve; a failed fetch shows its error with a retry.
+  const rp = useRunPreset('sweep');
+  const steps = readLS('sim.stepsPP', 24);   // single source: Simulation "Steps per electrical period"
+  const gapRows = readLS('mesh.gapLayers', 1);
   const [connectBy, setConnectBy] = useLS<'current_a' | 'gamma_deg'>('connectBy', 'current_a');
   const [withBaseline, setWithBaseline] = useLS<boolean>('withBaseline', false);
   const [coggingPp, setCoggingPp] = useLS<boolean>('coggingPp', false);   // opt-in: one no-load solve per geometry
@@ -676,7 +660,7 @@ const SweepStudyPanel: React.FC = () => {
       const res = await fetch(`${API}/api/optimization/scan`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          variables: scanVars, operating_points: ops, preset: 'optimization',   // steps and gap rows come from the preset (server side)
+          variables: scanVars, operating_points: ops, steps_per_period: steps,
           ripple_max_pct: 100, max_geometries: Math.max(1, nGeom),
           // the un-varied current motor as an extra reference point — one more
           // full eval, off by default (user 2026-09-04: always stopped at 22/23)
@@ -686,6 +670,7 @@ const SweepStudyPanel: React.FC = () => {
           pole_copy: readBool('mesh.poleCopy', false), torque_filter: readBool('sim.torqueFilter', false),
           n_sectors: Math.max(1, Math.round(readLS('mesh.nSectors', 1))),   // single source: Mesh tab (same as Simulation)
           // single source: the Mesh tab; absent = the machine's saved setting (backend)
+          ...(storedGapLayers() !== undefined ? { gap_layers: storedGapLayers() } : {}),
           structured_gap: readBool('mesh.structuredGap', false) || readBool('mesh.ironTemplate', true),   // single source: Mesh tab "Structured" — belt gap mesh (honest ripple, ¼ == full disk)
           airgap_macro: readBool('mesh.harmonicGap', false),   // Mesh tab "Harmonic gap" — step-independent RAW ripple (full + sectors)
           // P2 — the only basis. The sweep must rank designs on the SAME basis
@@ -1232,15 +1217,16 @@ const SweepStudyPanel: React.FC = () => {
       </Box>
 
       <Box sx={{ display: 'flex', gap: 1, alignItems: 'center', mb: 1 }}>
-        <MuiTooltip title={tx('sweepPresetTip')}>
-          <TextField label={tx('sweepPresetField')} size="small" disabled
-            value={optPreset ? sweepSettingsLabel({ preset: 'optimization', steps: optPreset.steps, gapLayers: optPreset.gap, source: 'preset' }, optPreset.label) : ''}
-            error={!!presetErr}
-            inputProps={{ style: { fontSize: 12, padding: '5px 8px' } }} sx={{ width: 290 }} />
+        <MeshPresetSelect dense />
+        <MuiTooltip title={<span style={{ whiteSpace: 'pre-line' }}>{tx('sweepPresetTip')}{rp.diff.length
+          ? '\n' + rp.diff.map(d => `${d.key}: ${String(d.current)} (${tx('sweepPresetOptimizationHolds')} ${String(d.preset)})`).join('\n') : ''}</span>}>
+          <TextField label={tx('sweepPresetField')} size="small" disabled error={!!rp.error}
+            value={rp.ready ? `${rp.choice === 'custom' ? tx('meshPresetCustom') : (rp.set?.presets.find(q => q.name === rp.choice)?.label ?? rp.choice)} \u00b7 ${steps} ${tx('sweepStepsUnit')} \u00b7 ${gapRows} ${tx('sweepGapRowsUnit')}` : ''}
+            inputProps={{ style: { fontSize: 12, padding: '5px 8px' } }} sx={{ width: 300 }} />
         </MuiTooltip>
-        {presetErr && (
+        {rp.error && (
           <Typography sx={{ fontSize: 11, color: '#fca5a5' }} role="alert">
-            {tx('sweepPresetError')} <Button size="small" onClick={() => setPresetTry(n => n + 1)}
+            {tx('sweepPresetError')} <Button size="small" onClick={rp.retry}
               sx={{ textTransform: 'none', fontSize: 11, minWidth: 0 }}>{tx('sweepPresetRetry')}</Button>
           </Typography>
         )}
@@ -1258,7 +1244,7 @@ const SweepStudyPanel: React.FC = () => {
           {result && (
             <span title={tx('sweepResultSettingsTip')}
               style={{ marginLeft: 8, color: 'var(--text-3)', cursor: 'help' }}>
-              · {sweepSettingsLabel(sweepSettingsOf(result), optPreset?.label)}
+              · {sweepSettingsLabel(sweepSettingsOf(result))}
             </span>
           )}
           {/* The 3-D end-effect view, same switch and factor as the Simulation
@@ -1286,7 +1272,7 @@ const SweepStudyPanel: React.FC = () => {
 
       <Box sx={{ display: 'flex', gap: 1, alignItems: 'center', mb: 1 }}>
         {!running ? (
-          <Button size="small" variant="contained" onClick={run} disabled={nPts < 1 || !optPreset}
+          <Button size="small" variant="contained" onClick={run} disabled={nPts < 1 || !rp.ready}
             sx={{ textTransform: 'none', fontWeight: 700 }}>
             Run sweep ({nPts})
           </Button>

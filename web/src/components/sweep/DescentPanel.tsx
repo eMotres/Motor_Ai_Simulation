@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { useRunPreset } from '../../lib/useRunPreset';
 import MeshPresetSelect from '../mesh/MeshPresetSelect';
 import { whenVisible } from '../../lib/pageVisible';
 import {
@@ -86,6 +87,7 @@ const Group: React.FC<{ label: string; children: React.ReactNode }> = ({ label, 
 );
 
 const DescentPanel: React.FC<{ chartsOnly?: boolean }> = ({ chartsOnly = false }) => {
+  useRunPreset('optimization');   // no choice made yet for this machine: the Optimization preset is applied once (owner 2026-11-24)
   const {
     sweepConfig, connectedToApi, parameterSchema, materials,
     updateRippleThreshold,
@@ -540,7 +542,7 @@ const DescentPanel: React.FC<{ chartsOnly?: boolean }> = ({ chartsOnly = false }
           skipped; the data sections below read the same store the auto run
           writes, so they visualise auto runs too. */}
       {!chartsOnly && (<>
-      <Box sx={{ mb: 1 }}><MeshPresetSelect dense readOnly /></Box>
+      <Box sx={{ mb: 1 }}><MeshPresetSelect dense /></Box>
       {/* ── Header: title + Run ── */}
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1.5 }}>
         <TrendingDownIcon sx={{ fontSize: 18 }} />

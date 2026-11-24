@@ -140,19 +140,16 @@ class TestOptimizerScreening:
         from motor_ai_sim import mesh_presets as MP
         assert ev["steps_per_period"] == O._optimization_preset_steps() == MP.steps_for(
             "optimization", dict(O.get_config().get("geometry") or {}))
-        assert ev["steps_per_period_source"] == "optimization_preset"
+        assert ev["steps_per_period_source"] == "optimizer"
         assert ev["steps_per_period_tab"] == 72
 
-    @pytest.mark.parametrize("src", ["user", None, "preset", "eddy_default"])
-    @pytest.mark.parametrize("asked", [24, 72, 96, 108])
-    def test_an_optimisation_runs_the_preset_whatever_the_tab_holds(self, monkeypatch, src, asked):
-        from motor_ai_sim.routes import optimization as O
-        ev = self._plan_with(monkeypatch, steps_per_period=asked, steps_per_period_source=src)
-        vals = O._optimization_preset_values()
-        assert ev["steps_per_period"] == vals["n_steps_per_period"]
-        assert ev["gap_layers"] == vals["gap_layers"]
-        assert ev["steps_per_period_source"] == "optimization_preset"
-        assert ev["steps_per_period_tab"] == asked
+    @pytest.mark.parametrize("src", ["user", None])
+    @pytest.mark.parametrize("asked", [24, 72, 96])
+    def test_a_count_the_user_picked_is_obeyed(self, monkeypatch, src, asked):
+        ev = self._plan_with(monkeypatch, steps_per_period=asked,
+                             steps_per_period_source=src)
+        assert ev["steps_per_period"] == asked
+        assert ev["steps_per_period_source"] == "simulation_tab"
 
 
 class TestConfigPatch:

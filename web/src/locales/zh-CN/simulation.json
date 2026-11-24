@@ -261,8 +261,8 @@
   "meshPresetFullRing": "整圈",
   "meshPresetWireCell": "线单元",
   "meshPresetOpenMesh": "请在“网格”标签页切换预设",
-  "sweepPresetField": "预设",
-  "sweepPresetTip": "扫描始终使用“优化”预设：每电周期步数、气隙层数、网格尺寸、扇区、转子涡流和退磁均取自已存储的预设，与仿真和网格标签页中的数值无关。",
+  "sweepPresetField": "运行设置",
+  "sweepPresetTip": "本次扫描将使用的设置，与发送请求时读取的字段相同。点击预设可一次设置全部；修改其中任一项则显示为自定义。",
   "sweepResultSettingsTip": "该结果计算时使用的预设、每电周期步数和气隙层数。在此标签出现之前保存的扫描显示其已存储请求中的设置。",
   "coggingPpCol": "齿槽转矩峰峰值",
   "coggingPpTip": "为每个几何增加齿槽转矩峰峰值（N·m）：每个几何多做一次空载（I = 0）计算，其所有电流共用，磁钢温度、步数和网格与负载点相同。负载点不会被替换。48 步的数值仅用于排序。",
@@ -285,5 +285,8 @@
   "sweepFailSkipped": "已跳过，未求解",
   "sweepPresetError": "无法读取“优化”预设，因此无法开始扫描。",
   "sweepPresetRetry": "重试",
-  "sweepMixedSettings": "这些结果的每周期步数或气隙层数不同（或其中之一未使用“优化”预设）；它们之间不进行排名。"
+  "sweepMixedSettings": "这些结果的每周期步数或气隙层数不同（或其中之一未使用“优化”预设）；它们之间不进行排名。",
+  "sweepPresetOptimizationHolds": "优化预设",
+  "sweepStepsUnit": "步",
+  "sweepGapRowsUnit": "气隙层"
 }

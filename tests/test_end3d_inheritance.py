@@ -221,38 +221,84 @@ def test_family_payload_says_why_a_passport_was_not_lent(tmp_path, monkeypatch):
     assert summ["end3d"] is None and "outside the measured span" in summ["end3d_note"]
 
 
-def test_dry_list_old_and_new_on_a_tiny_catalog(tmp_path, monkeypatch):
+def _base_src_with_legacy_lookup(tmp_path):
+    """A 'base' source tree: the real package by symlinks, except routes/simulation.py whose lookup picks the newest passport
+    of the machine at any length (the pre-#764 rule)."""
+    import os
+    from pathlib import Path
+    src = Path(S.__file__).resolve().parents[2]                      # .../src
+    root = tmp_path / "base_src"
+    pkg = root / "motor_ai_sim"
+    (pkg / "routes").mkdir(parents=True)
+    for e in (src / "motor_ai_sim").iterdir():
+        if e.name != "routes":
+            os.symlink(e, pkg / e.name)
+    for e in (src / "motor_ai_sim" / "routes").iterdir():
+        if e.name != "simulation.py":
+            os.symlink(e, pkg / "routes" / e.name)
+    txt = (src / "motor_ai_sim" / "routes" / "simulation.py").read_text(encoding="utf-8")
+    marker = "        stack = _geo_stack_mm(geo)\n        _when = "
+    assert marker in txt
+    txt = txt.replace(marker, "        stack = _geo_stack_mm(geo)\n"
+                      "        _nk, _nv = max(cands, key=lambda kv: str(kv[1].get('adopted_utc') or kv[1].get('generated_utc') or ''))\n"
+                      "        stack = float(_nv.get('stack_mm') or stack)\n        _when = ", 1)
+    (pkg / "routes" / "simulation.py").write_text(txt, encoding="utf-8")
+    return root
+
+
+def test_dry_list_base_lookup_against_pr_lookup_on_a_tiny_catalog(tmp_path):
     import json
+    import subprocess
+    import sys
+    from pathlib import Path
+    scr = Path(__file__).resolve().parents[1] / "scripts" / "end3d_inheritance_dry_list.py"
+    # a real die the way the catalog stores it: explicit counts, no segment keys
+    d = tmp_path / "dies" / "DIE"
+    d.mkdir(parents=True)
+    (d / "die.yaml").write_text("geometry: {num_slots: 24, num_poles: 28, stator_diameter: 200.0}\n", encoding="utf-8")
+    for L in (40, 150):
+        (d / f"L{L}.yaml").write_text("geometry_overrides: {motor_length: %s.0}\n" % L, encoding="utf-8")
+    from motor_ai_sim.config import get_config
+    from motor_ai_sim.simulation.geometry_2d import merge_geo_override
+    desc = S._machine_desc(merge_geo_override(dict(get_config()["geometry"]), {"num_slots": 24, "num_poles": 28, "stator_diameter": 200.0}))
+    assert desc == "24s/28p OD 200", desc
+    st = tmp_path / "store.json"
+    st.write_text(json.dumps({"x": _rec(0.9896, stack=200.0, desc=desc),
+                              "y": _rec(0.946, stack=60.0, desc=desc, when="2026-10-01T00:00:00Z")}), encoding="utf-8")
+    base = _base_src_with_legacy_lookup(tmp_path)
+    out = tmp_path / "o.json"
+    cp = subprocess.run([sys.executable, str(scr), "--root", str(tmp_path / "dies"), "--store", str(st),
+                         "--base-src", str(base), "--pr-src", str(Path(S.__file__).resolve().parents[2]),
+                         "--json", str(out)], capture_output=True, text=True)
+    assert cp.returncode == 0, cp.stderr[-2000:]
+    rep = json.loads(out.read_text())
+    rows = {r["config"]: r for r in rep["rows"]}
+    assert rep["configs_checked"] == 2 and not rep["errors"], rep
+    # L40: the old pick was the newest passport (60 mm, 0.946); 40 mm is below the span 60-200: no factor now
+    assert rows["L40"]["changed"] and rows["L40"]["k_flux_old"] == 0.946 and rows["L40"]["k_flux_new"] is None
+    # L150: interpolated on the 60..200 curve, not lent from the 60 mm passport
+    assert rows["L150"]["changed"] and rows["L150"]["k_flux_old"] == 0.946
+    assert rows["L150"]["k_flux_new"] == pytest.approx(0.946 + (0.9896 - 0.946) * 90.0 / 140.0)
+    assert rows["L150"]["new_basis"] == "curve" and rows["L150"]["length_ratio"] is not None
+    assert "passports in the store (2)" in cp.stdout and "L150" in cp.stdout
+
+
+def test_dry_list_compare_lists_a_k_T_cut_and_honours_the_threshold_and_all():
     import sys
     from pathlib import Path
     sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
     import end3d_inheritance_dry_list as D
-    from motor_ai_sim.config import get_config
-    g = get_config()["geometry"]
-    ov = {"motor_length": 40.0}
-    d = tmp_path / "dies" / "DIE"
-    d.mkdir(parents=True)
-    (d / "die.yaml").write_text("geometry: {}\n", encoding="utf-8")
-    (d / "L40.yaml").write_text("geometry_overrides: {motor_length: 40.0}\n", encoding="utf-8")
-    desc = S._machine_desc(ov)
-    st = tmp_path / "store.json"
-    st.write_text(json.dumps({"x": _rec(0.9896, stack=200.0, desc=desc),
-                              "y": _rec(0.946, stack=60.0, desc=desc, when="2026-10-01T00:00:00Z")}), encoding="utf-8")
-    rep = D.run(tmp_path / "dies", st)
-    assert rep["configs_checked"] == 1 and not rep["errors"], rep
-    (row,) = rep["changed"]
-    # the newest passport (60 mm) was the old pick; the 40 mm stack is within 5 % of nothing and below the span 60-200
-    assert row["new"] is None and row["kind"] == "inherited -> no 3-D factor" and "60-200" in row["new_basis"]
-    st.write_text(json.dumps({"x": _rec(0.9896, stack=200.0, desc=desc),
-                              "y": _rec(0.946, stack=40.0, desc=desc, when="2026-10-01T00:00:00Z")}), encoding="utf-8")
-    rep = D.run(tmp_path / "dies", st)
-    assert rep["changed"] == []                       # L40 is a measured length: same factor as before
-    # a customer L150 on the same two-point curve (40 .. 200): interpolated, not lent from the newest passport
-    (d / "L150.yaml").write_text("geometry_overrides: {motor_length: 150.0}\n", encoding="utf-8")
-    rep = D.run(tmp_path / "dies", st)
-    (row,) = rep["changed"]
-    assert row["config"] == "L150" and row["old"] == 0.946
-    assert row["new"] == pytest.approx(0.946 + (0.9896 - 0.946) * 110.0 / 160.0) and row["new_basis"] == "curve"
+    def row(kf, kt):
+        return {"die": "D", "config": "C", "stack_mm": 60.0, "own": False, "machine": "m", "k_flux": kf, "k_T": kt,
+                "from_key": "k", "from_stack_mm": 40.0, "basis": "curve", "note": None}
+    same = D.compare({"rows": [row(0.95, 0.9)]}, {"rows": [row(0.95, 0.9)]}, 0.0005)
+    assert not same[0]["changed"]
+    cut = D.compare({"rows": [row(0.95, 0.9)]}, {"rows": [row(0.95, None)]}, 0.0005)     # k_T no longer lent
+    assert cut[0]["changed"] and cut[0]["k_T_new"] is None
+    small = D.compare({"rows": [row(0.95, 0.9)]}, {"rows": [row(0.9503, 0.9)]}, 0.0005)
+    assert not small[0]["changed"]
+    big = D.compare({"rows": [row(0.95, 0.9)]}, {"rows": [row(0.9503, 0.9)]}, 0.0001)
+    assert big[0]["changed"] and big[0]["k_flux_diff"] == pytest.approx(0.0003)
 
 
 def test_k_flux_basis_label_reads_the_verdict_not_the_usable_flag():

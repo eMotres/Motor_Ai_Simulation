@@ -35,7 +35,6 @@ from motor_ai_sim import auth_email as E
 from motor_ai_sim import mailing
 from motor_ai_sim.digest import approval as AP
 from motor_ai_sim.digest import build as B
-from motor_ai_sim.digest import collect as C
 from motor_ai_sim.digest import store as DS
 from motor_ai_sim.production.access import require_signed_in
 
@@ -71,37 +70,17 @@ def _needs_staff(item: dict) -> bool:
 
 
 def _public_meta(group: B.Group, d: dict) -> Optional[dict]:
-    """What a reader who may not see staff-only lines is told about draft ``d``: ``{total, id, revision, created_at, updated_at}``,
-    computed from the PUBLIC lines only, or None when there is nothing public (or nothing can be established).
+    """What a reader who may not see staff-only lines is told about draft ``d``: ``{total, id, revision, created_at, updated_at}`` from the
+    PUBLIC fields stored by ``build_draft``, or None (answered exactly as "no draft") when there is nothing public.
 
-    A draft with the public fields (``public_hash`` ...) answers from them.  A LEGACY draft (stored before them) is BACKFILLED AT READ,
-    nothing is written: its public lines are rebuilt from the authoritative project activity of the draft's own period through the
-    same collector and visibility rules as ``build_draft``, restricted to lines without staff access; id and revision are derived from
-    the period alone, the times from the public lines.  If the source cannot be read, the metadata is WITHHELD (None), never
-    guessed from the draft's aggregates."""
+    A LEGACY draft (stored before those fields) is WITHHELD, pending and sent history alike: it is not rebuilt at read, because the
+    current activity and the current motor access could show MORE than the draft showed when it was built; and its own aggregates
+    (counts, revision, times) are never used.  A draft built from now on carries the fields."""
     if d.get("public_hash") and all(d.get(k) is not None for k in ("public_total", "public_id", "public_revision", "public_created_at", "public_updated_at")):
         total = int(d["public_total"])
         return {"total": total, "id": d["public_id"], "revision": d["public_revision"], "created_at": d["public_created_at"],
                 "updated_at": d["public_updated_at"]} if total > 0 else None
-    try:
-        if group.kind != "project":
-            return None
-        period = d.get("period") or {}
-        start, end = DS.parse_ts(period.get("start")), DS.parse_ts(period.get("end"))
-        if start is None or end is None or not isinstance(group.record, dict) or not group.record.get("id"):
-            return None
-        caps = frozenset(d.get("caps") or []) - {"staff"}
-        emails = [str(r.get("email") or "") for r in d.get("recipients") or [] if isinstance(r, dict)]
-        items = C.collect_project(group.record, start, end)
-        seen = B.motors_visible_to_all(items, emails)
-        public = sorted((i for i in items if "staff" not in i.requires and i.requires <= caps and (not i.motor or seen.get(tuple(i.motor), False))),
-                        key=lambda i: i.ts)
-    except Exception:                                      # noqa: BLE001 - the source is gone or unreadable: withhold
-        return None
-    if not public:
-        return None
-    return {"total": len(public), "id": DS.draft_id_for(group.scope, DS.iso(start), 0), "revision": 0,
-            "created_at": DS.iso(public[0].ts), "updated_at": DS.iso(public[-1].ts)}
+    return None
 
 
 def _viewer_summary(group: B.Group, d: dict, staff: bool) -> Optional[dict]:

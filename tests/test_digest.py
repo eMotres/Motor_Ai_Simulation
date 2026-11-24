@@ -1337,32 +1337,31 @@ def _legacy(d, draft):
     return draft
 
 
-def test_a_legacy_draft_is_backfilled_at_read_from_the_public_lines_and_nothing_is_written(d):
+def test_a_legacy_draft_is_withheld_from_a_non_staff_caller_pending_and_sent_and_a_later_motor_grant_changes_nothing(d):
+    """A draft stored without the public fields is answered exactly as "no draft" for a non-staff caller (no rebuild at read), also after a
+    recipient is LATER granted a motor that makes more of the current activity visible."""
     from motor_ai_sim.digest import build as B, collect as C, routes as DR
     d["U"].update_user(BOB, role="engineer")
-    for n in range(22):
-        d["PS"].append_jsonl(PID, "thread.jsonl", {"id": f"p{n}", "author_email": ANNA, "created_at": at(-2000 - n), "text": f"public {n}"})
-    project = d["PS"].get_project(PID)
-    group = B.project_group(project)
-    rec = [{"email": BOB, "role": "customer", "name": "B", "lang": "en"}]
+    d["U"].set_motor_grants(BOB, all_motors=False, dies=[], configs=[])        # at build time the recipient cannot open the project's motors
+    group = B.project_group(d["PS"].get_project(PID))
+    items = C.collect_project(d["PS"].get_project(PID), T0 - 86400, T0, results=d["results"])
+    draft = _legacy(d, B.build_draft(group, {"mode": "daily"}, items, [{"email": BOB, "role": "customer", "name": "B", "lang": "en"}], [], T0 - 86400, T0))
+    draft["status"] = "sent"
+    d["DS"].save_draft(draft)
+    d["DS"].append_log({"event": "sent", "scope": PSCOPE, "draft_id": draft["id"], "by": ADMIN, "sent": 1, "failed": 0, "skipped": 0})
+    pending = dict(draft, id="d-00000000000000d1", status="pending")
+    d["DS"].save_draft(pending)
+    d["DS"].set_state(PSCOPE, draft_id=pending["id"])
 
-    def legacy_draft(extra_internal):
-        for n in range(extra_internal):
-            d["PS"].append_jsonl(PID, "thread.jsonl", {"id": f"in{n}{extra_internal}", "author_email": BOB, "created_at": at(-50 - n), "staff_only": True, "text": "internal"})
-        items = C.collect_project(d["PS"].get_project(PID), T0 - 86400, T0, results=lambda die, cfg: {})
-        draft = _legacy(d, B.build_draft(group, {"mode": "daily"}, items, rec, [], T0 - 86400, T0))
-        d["DS"].save_draft(draft)
-        d["DS"].set_state(PSCOPE, draft_id=draft["id"])
-        return draft
-    legacy_draft(0)
-    plain = DR._settings_view(group, can_edit=True, staff=False)["pending"]
-    stored = json.dumps(d["DS"].load_draft(d["DS"].get_state(PSCOPE)["draft_id"]), sort_keys=True)
-    legacy_draft(5)                                                             # internal lines in the overflow of the legacy draft
-    again = DR._settings_view(group, can_edit=True, staff=False)["pending"]
-    assert again["items"] == plain["items"] >= 22                               # the aggregate (more_requires, counts) is never used
-    assert (again["id"], again["revision"], again["created_at"], again["updated_at"]) == (plain["id"], plain["revision"], plain["created_at"], plain["updated_at"])
-    assert again["revision"] == 0 and "public_hash" not in d["DS"].load_draft(d["DS"].get_state(PSCOPE)["draft_id"])   # nothing was stored by a read
-    assert stored != json.dumps(d["DS"].load_draft(d["DS"].get_state(PSCOPE)["draft_id"]), sort_keys=True)
+    def owner():
+        view = DR._settings_view(group, can_edit=True, staff=False)
+        return view["pending"], view["last_sent"]
+    assert owner() == (None, None)
+    d["U"].set_motor_grants(BOB, all_motors=True, dies=[], configs=["CIANO28 85/L12", "CIANO28 85/T9"])    # a LATER grant to the recipient
+    assert owner() == (None, None)                                                                            # still nothing
+    staff = DR._settings_view(group, can_edit=True, staff=True)
+    assert staff["pending"] is not None and staff["last_sent"] is not None
+    assert "public_hash" not in d["DS"].load_draft(pending["id"])                                             # a read stores nothing
 
 
 def test_a_legacy_draft_whose_aggregate_would_leak_is_withheld_when_the_source_is_gone(d):
@@ -1377,8 +1376,6 @@ def test_a_legacy_draft_whose_aggregate_would_leak_is_withheld_when_the_source_i
     d["PS"].path_for(PID).joinpath("audit.jsonl").unlink(missing_ok=True)       # the source activity is gone
     view = DR._settings_view(group, can_edit=True, staff=False)
     assert view["pending"] is None                                              # not the aggregate 12, not revision 4
-    broken = dict(group.record, id=None)
-    assert DR._public_meta(B.Group(group.scope, "project", broken, "t", "t"), legacy) is None
     assert DR._settings_view(group, can_edit=True, staff=True)["pending"]["items"] == 12
 
 

@@ -199,6 +199,43 @@ def _table(v: Any, n_rpm: int, n_i: int, name: str) -> List[List[Optional[float]
     return [[_num(x) for x in r] for r in v]
 
 
+#: ``loss_groups.<group>.status`` values that declare a group absent from the grid on purpose (pre-merge review 2026-11-22, H10):
+#: ``lumped`` = contained in another group, ``per drive`` = from the drive's own grid (0 for a sine drive), ``zero`` /
+#: ``not_applicable`` = physically none.  ``grid`` means the grid has it; ``omitted`` is only allowed for ``mech``.
+LOSS_ABSENT_OK = ("lumped", "per drive", "zero", "not_applicable")
+LOSS_STATUSES = ("grid", "omitted") + LOSS_ABSENT_OK
+
+
+def _check_loss_declarations(raw: Mapping[str, Any], grid: Mapping[str, Any]) -> None:
+    """Validate ``loss_groups`` / ``loss_groups_zero``: known groups and statuses, and no declaration that contradicts the grid."""
+    decl = raw.get("loss_groups") or {}
+    if not isinstance(decl, Mapping):
+        raise S1Error("model: loss_groups must be a mapping")
+    for k, d in decl.items():
+        st = (d or {}).get("status") if isinstance(d, Mapping) else None
+        if k not in LOSS_GROUPS + ("mech",) or st not in LOSS_STATUSES:
+            raise S1Error("model: loss_groups.%s: unknown group or status %r (use %s)" % (k, st, ", ".join(LOSS_STATUSES)))
+        if st == "grid" and k in LOSS_GROUPS and k not in grid["loss_W"]:
+            raise S1Error("model: loss_groups.%s says 'grid' but grid.loss_W has no %s" % (k, k))
+        if st == "omitted" and k != "mech":
+            raise S1Error("model: loss_groups.%s: a motor loss group cannot be 'omitted'; give it, or declare it %s" % (k, "/".join(LOSS_ABSENT_OK)))
+    zero = raw.get("loss_groups_zero") or ()
+    if isinstance(zero, (str, bytes)) or not all(z in LOSS_GROUPS for z in zero):
+        raise S1Error("model: loss_groups_zero must list groups of %s" % (LOSS_GROUPS,))
+    both = [z for z in zero if z in grid["loss_W"]]
+    if both:
+        raise S1Error("model: loss_groups_zero lists %s, which the grid has" % ", ".join(both))
+
+
+def _absent_ok(m: Mapping[str, Any], k: str) -> bool:
+    """True when the model declares the absent loss group on purpose (see ``LOSS_ABSENT_OK``); ``pwm_extra`` is a drive term and is
+    always allowed absent from the motor grid (0 for a sine drive)."""
+    if k == "pwm_extra" or k in (m.get("loss_groups_zero") or ()):
+        return True
+    d = (m.get("loss_groups") or {}).get(k)
+    return isinstance(d, Mapping) and d.get("status") in LOSS_ABSENT_OK
+
+
 def validate_model(raw: Mapping[str, Any]) -> Dict[str, Any]:
     """Check a model dict and return a normalised copy (``S1Error`` on anything wrong)."""
     if not isinstance(raw, Mapping) or raw.get("schema") not in SCHEMAS:
@@ -229,6 +266,7 @@ def validate_model(raw: Mapping[str, Any]) -> Dict[str, Any]:
     if g.get("gamma_deg") is not None:
         grid["gamma_deg"] = _table(g.get("gamma_deg"), len(rpm), len(cur), "grid.gamma_deg")
     m["grid"] = grid
+    _check_loss_declarations(raw, grid)
     m["drives"] = {str(k): _drive_of(d, str(k)) for k, d in (raw.get("drives") or {}).items()}
     if raw.get("sine_controller") is not None:
         m["sine_controller"] = _controller_block(raw.get("sine_controller"), "sine_controller")
@@ -248,8 +286,10 @@ def validate_model(raw: Mapping[str, Any]) -> Dict[str, Any]:
         m["battery"] = dict(bat)
     mech = raw.get("mech_W") or {}
     if mech:
-        m["mech_W"] = {"rpm": _axis(mech.get("rpm"), "mech_W.rpm"),
-                       "W": [_num(x) or 0.0 for x in (mech.get("W") or [])]}
+        ws = [_num(x) for x in (mech.get("W") or [])]
+        if any(x is None for x in ws):                  # review 2026-11-21 H10: a missing sample is not 0 W
+            raise S1Error("model: mech_W.W must be numbers")
+        m["mech_W"] = {"rpm": _axis(mech.get("rpm"), "mech_W.rpm"), "W": ws}
         if len(m["mech_W"]["W"]) != len(m["mech_W"]["rpm"]):
             raise S1Error("model: mech_W.W must match mech_W.rpm")
     ctrl = raw.get("controller")
@@ -629,8 +669,8 @@ def losses(m: Mapping[str, Any], rpm: float, I: float, t_winding_c: float,
     A group the grid HAS but cannot give at this point (a null cell) is listed in
     ``unavailable`` (the caller refuses the point; its 0 here is a placeholder, not
     a loss).  The drive's PWM extra loss comes from the drive's own grid; where
-    that grid has no value it is listed in ``drive_unavailable`` and counted 0
-    (flagged).  ``below_loss_grid_speed`` / ``_current``: a value read below the
+    that grid has no value it is listed in ``drive_unavailable`` AND in
+    ``unavailable`` (refused; review 2026-11-24).  ``below_loss_grid_speed`` / ``_current``: a value read below the
     grid's first speed / first feasible current (extrapolated)."""
     g = m["grid"]
     r = resistance(m, t_winding_c)
@@ -638,10 +678,13 @@ def losses(m: Mapping[str, Any], rpm: float, I: float, t_winding_c: float,
     below_n = below_i = False
     unavailable: List[str] = []
     drive_unavailable: List[str] = []
+    missing: List[str] = []
     for k in LOSS_GROUPS:
         t = g["loss_W"].get(k)
         if t is None:
             out[k] = 0.0
+            if not _absent_ok(m, k):
+                missing.append(k)                       # review H10: absent and not declared -> the caller refuses the point
             continue
         v, bn, bi = grid_eval(g["rpm"], g["I_A"], t, rpm, I, kind="loss", floors=g.get("I_floor_A"))
         below_n, below_i = below_n or bn, below_i or bi
@@ -651,8 +694,9 @@ def losses(m: Mapping[str, Any], rpm: float, I: float, t_winding_c: float,
     pw = (drive or {}).get("pwm_extra_W")
     if g["loss_W"].get("pwm_extra") is None and pw is not None:
         v, _, _ = grid_eval(drive["rpm"], drive["I_A"], pw, rpm, I, kind="loss")
-        if v is None:
+        if v is None:                                     # review 2026-11-24 (7b): a missing PWM loss refuses the point, it is not 0 W
             drive_unavailable.append("pwm_extra")
+            unavailable.append("pwm_extra")
         out["pwm_extra"] = 0.0 if v is None else v
     # resistance-limited eddy in the conductors goes with the conductivity
     out["cu_ac"] *= resistance(m, float(m["R_temp_C"])) / r
@@ -664,6 +708,7 @@ def losses(m: Mapping[str, Any], rpm: float, I: float, t_winding_c: float,
     out["below_loss_grid_current"] = below_i
     out["below_loss_grid"] = below_n or below_i
     out["unavailable"] = unavailable
+    out["missing_loss_groups"] = missing
     out["drive_unavailable"] = drive_unavailable
     return out
 
@@ -1039,11 +1084,14 @@ def voltage_check(m: Mapping[str, Any], drive: Mapping[str, Any], rpm: float, I:
     if i_hint is not None and I < i_hint <= cap:
         # warm start (the fixed point's previous answer): the edge is usually close by
         if ok(i_hint) is not None:
+            # review 2026-11-24 (7a): the hint is an UPPER bracket only; the edge is searched below it.  (Before, ``prev = i_hint`` was set
+            # unconditionally, the bracket had zero width and a stale, too high hint current was returned as the answer.)
             hit = i_hint
             near = max(I, i_hint - 0.3)
             if near > I and ok(near) is None:
-                prev = near
-            prev = i_hint
+                prev = near                                # the edge lies in [near, hint]
+            else:
+                hit, prev = None, I                        # the edge lies below near: full search from the grid's current
     if hit is None:
         start = prev
         for k in range(1, 25):
@@ -1211,7 +1259,7 @@ def thermal_at(m: Mapping[str, Any], rpm: float, I: float, h: float, ambient_c: 
     damping, last_res = 1.0, float("inf")
     for it in range(1, max_it + 1):
         ls = losses(m, rpm, I, t_w, drive)
-        if ls["unavailable"]:
+        if ls["unavailable"] or ls["missing_loss_groups"]:
             return None
         th = temperatures(m["thermal_geom"], ls["cu_dc"] + ls["cu_ac"], ls["fe_rotor"] + ls["rotor_eddy"],
                           ls["motor_total"], h, ambient_c, cal)
@@ -1347,8 +1395,8 @@ def _fixed_point(m: Mapping[str, Any], rpm: float, q_em: float, h: float, ambien
         if I > current_cap(m) + 1e-9:
             return {"state": "no_current", "status": "current", "t_w": t_w, "t_m": t_m, "it": it, "voltage": vc}
         ls = losses(m, rpm, I, t_w, drive)
-        if ls["unavailable"]:
-            return {"state": "loss_data", "groups": ls["unavailable"], "I": I, "it": it, "voltage": vc}
+        if ls["unavailable"] or ls["missing_loss_groups"]:
+            return {"state": "loss_data", "groups": ls["unavailable"] + ls["missing_loss_groups"], "I": I, "it": it, "voltage": vc}
         th = temperatures(m["thermal_geom"], ls["cu_dc"] + ls["cu_ac"], ls["fe_rotor"] + ls["rotor_eddy"],
                           ls["motor_total"], h, ambient_c, cal)
         res = max(abs(th["winding"] - t_w), abs(th["magnet"] - t_m))
@@ -1417,7 +1465,7 @@ def solve_point(m: Mapping[str, Any], prop: pp.Propeller, rpm: float, *, ambient
         "controller_bus_limit_A": drv.get("I_bus_cont_A"),
         "demag_limit_A": None, "demag_basis": None, "voltage": None, "current_grid_A": None,
         "converged": None, "iterations": 0, "below_loss_grid": False, "below_loss_grid_speed": False,
-        "below_loss_grid_current": False, "losses_unavailable": [], "drive_losses_unavailable": [],
+        "below_loss_grid_current": False, "losses_unavailable": [], "drive_losses_unavailable": [], "losses_missing": [],
         "fw_floor": False, "ok": False, "binding": None, "violations": [],
     }
     if rpm > lims["rpm_max"] + 1e-6:
@@ -1467,6 +1515,7 @@ def solve_point(m: Mapping[str, Any], prop: pp.Propeller, rpm: float, *, ambient
                below_loss_grid_speed=bool(ls["below_loss_grid_speed"]),
                below_loss_grid_current=bool(ls["below_loss_grid_current"]),
                drive_losses_unavailable=list(ls["drive_unavailable"]),
+               losses_missing=list(ls["missing_loss_groups"]),     # review H10: undeclared absent groups (the point is refused)
                electrical_power_W=p_in, controller_loss_W=pc, battery_power_W=p_batt,
                battery_current_A=i_batt, demag_limit_A=i_dm, demag_basis=dm_basis,
                margin_winding_K=lims["winding_C"] - th["winding"],
@@ -1884,3 +1933,50 @@ def s1_rating(m: Mapping[str, Any], prop: pp.Propeller, *, ambient_c: float = 25
                   "current, the demagnetisation limit at the magnet temperature and (if given) the pack's "
                   "continuous current; limit by bisection",
     }
+
+
+def continuous_torque(m: Mapping[str, Any], rpm: float, air_speed_ms: float, *, ambient_c: float = 25.0,
+                      q_max_Nm: float = 3.0, step_Nm: float = 0.05) -> Dict[str, Any]:
+    """The largest continuous LOAD torque the motor holds at ``rpm`` with ``air_speed_ms`` over the housing (no slipstream credit
+    unless the caller adds it): ``load_point`` at rising torque (steps of ``step_Nm``, then bisection at the last passing step)
+    until the winding or magnet limit, the current cap or the voltage at the pack minimum (``voltage_check``) stops it.
+    Used to check an opt-in propeller operating point (rpm, power) against the motor (owner 2026-11-22).
+    ``torque_Nm`` 0.0 = not even the first step holds; ``stops`` = what the next step breaks."""
+    lims = limits_of(m)
+    drv = resolve_drive(m)
+    pk = resolve_pack(m)
+    h = housing_film(float(air_speed_ms), ambient_c, float(m["thermal_geom"]["statorOD_mm"]) / 1000.0)
+
+    def at(q: float) -> Tuple[bool, Dict[str, Any]]:
+        p = load_point(m, rpm, q, h, ambient_c)
+        if not p or p.get("state") != "converged":
+            return False, {"state": (p or {}).get("state"), "status": (p or {}).get("status")}
+        I = float(p["current_A"])
+        vc = voltage_check(m, drv, rpm, I, p["T_magnet_C"], p["T_winding_C"], pk.get("v_min"))
+        if vc["status"] == "infeasible":
+            return False, {"state": "voltage_infeasible", "voltage": vc["status"]}
+        I = max(I, _num(vc.get("I_A")) or I)
+        info = {"current_A": I, "T_winding_C": p["T_winding_C"], "T_magnet_C": p["T_magnet_C"], "voltage": vc["status"]}
+        return (p["T_winding_C"] <= lims["winding_C"] and p["T_magnet_C"] <= lims["magnet_C"] and I <= lims["I_max_A"]), info
+
+    last, last_info, stop = None, None, None
+    q = step_Nm
+    while q <= q_max_Nm + 1e-12:
+        ok, info = at(q)
+        if ok:
+            last, last_info = q, info
+        else:
+            stop = info
+            break
+        q += step_Nm
+    if last is None:
+        return {"torque_Nm": 0.0, "at": None, "stops": stop, "air_speed_ms": float(air_speed_ms), "h_W_m2K": h, "limits": lims}
+    lo, hi = last, last + step_Nm
+    for _ in range(20):
+        mid = 0.5 * (lo + hi)
+        ok, info = at(mid)
+        if ok:
+            lo, last_info = mid, info
+        else:
+            hi, stop = mid, info
+    return {"torque_Nm": lo, "at": last_info, "stops": stop, "air_speed_ms": float(air_speed_ms), "h_W_m2K": h, "limits": lims}

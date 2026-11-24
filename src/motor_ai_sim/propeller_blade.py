@@ -18,8 +18,10 @@ from motor_ai_sim.propeller import PropellerDataError
 
 GEOMETRY_SOURCES = ("measured", "published", "vendor", "inferred")
 INTERPOLATIONS = ("linear", "pchip")
-POLAR_SOURCES = ("neuralfoil", "xfoil_table", "measured", "flatplate_model", "camber_model")
+POLAR_SOURCES = ("neuralfoil", "xfoil_table", "measured", "flatplate_model", "camber_model", "mfoil_table")
+COMPRESSIBILITY = ("prandtl_glauert",)
 ROTATIONS = ("cw_from_front", "ccw_from_front")
+MAX_STATIONS = 200
 MIN_STATIONS = 8
 DEFAULT_PITCH_AXIS = 0.25            # fraction of chord from the leading edge
 DEFAULT_INTERPOLATION = "pchip"
@@ -50,6 +52,7 @@ class BladeGeometry:
     sections: Dict[str, str]
     polars_source: Optional[str]
     polars_re_ref: Optional[float]
+    polars_compressibility: Optional[str] = None      # "prandtl_glauert" (opt-in, 2026-11-20) or None = incompressible
 
 
 def _num(d: Dict[str, Any], key: str, where: str, *, lo: float = -math.inf, hi: float = math.inf,
@@ -105,6 +108,8 @@ def parse_blade(raw: Any, diameter_m: float, where: str) -> BladeGeometry:
     st_raw = raw.get("stations")
     if not isinstance(st_raw, list) or len(st_raw) < MIN_STATIONS:
         raise PropellerDataError(f"{w}: stations must be a list of at least {MIN_STATIONS} entries")
+    if len(st_raw) > MAX_STATIONS:                       # review 2026-11-24 (10c): bounded input
+        raise PropellerDataError(f"{w}: at most {MAX_STATIONS} stations")
     stations = []
     last = -math.inf
     for i, s in enumerate(st_raw):
@@ -137,7 +142,7 @@ def parse_blade(raw: Any, diameter_m: float, where: str) -> BladeGeometry:
             raise PropellerDataError(f"{w}: sections lists airfoil {k!r} that no station uses")
 
     pol = raw.get("polars")
-    pol_src = pol_re = None
+    pol_src = pol_re = pol_comp = None
     if pol is not None:
         if not isinstance(pol, dict):
             raise PropellerDataError(f"{w}: polars must be a mapping")
@@ -145,10 +150,13 @@ def parse_blade(raw: Any, diameter_m: float, where: str) -> BladeGeometry:
         if pol_src not in POLAR_SOURCES:
             raise PropellerDataError(f"{w}: polars.source must be one of {list(POLAR_SOURCES)}, got {pol_src!r}")
         pol_re = _num(pol, "re_ref", f"{w} polars", lo=0.0, required=False, lo_open=True)
+        pol_comp = pol.get("compressibility")
+        if pol_comp not in (None,) + COMPRESSIBILITY:
+            raise PropellerDataError(f"{w}: polars.compressibility must be one of {list(COMPRESSIBILITY)}, got {pol_comp!r}")
 
     return BladeGeometry(
         geometry_source=src, source_ref=ref.strip(), estimated=estimated,
         method=(method.strip() if isinstance(method, str) else None),
         hub_radius_m=hub, root_cutout_m=cut, tip_radius_m=tip, pitch_axis=axis, interpolation=interp,
         rotation=rot, stations=tuple(stations), sections=dict(sec),
-        polars_source=pol_src, polars_re_ref=pol_re)
+        polars_source=pol_src, polars_re_ref=pol_re, polars_compressibility=pol_comp)

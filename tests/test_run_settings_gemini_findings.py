@@ -72,17 +72,14 @@ def test_finalist_note_absent_when_the_run_already_has_enough_steps():
     assert r["finalist_note"] is None
 
 
-def test_web_override_keys_match_the_resolver():
+def test_web_tab_request_keys_match_the_resolver():
     src = (ROOT / "web/src/lib/runSettings.ts").read_text(encoding="utf8")
-    got = set()
-    for name in ("OVERRIDE_KEYS_NUMBER", "OVERRIDE_KEYS_BOOLEAN"):
-        m = re.search(name + r"\s*=\s*\[([^\]]*)\]", src)
-        assert m, name
-        got |= set(re.findall(r"'([a-z_]+)'", m.group(1)))
-    server = set()
-    for keys in RS._OVERRIDABLE.values():
-        server |= set(keys)
-    assert got == server
+    body = src[src.index("export function tabRequest"):src.index("/** Two requests are the same values")]
+    sent = {k for k in re.findall(r"\b([a-z]+(?:_[a-z]+)+)\s*:", body) if k in RS._OVERRIDABLE["sweep"]} | {"demag"}
+    assert set(RS.TAB_REQUIRED) <= sent                           # everything the resolver requires is sent
+    for mode in ("sweep", "auto"):
+        assert sent <= set(RS._OVERRIDABLE[mode])                 # and nothing the resolver would refuse
+    assert "demag" not in RS._OVERRIDABLE["descent"]              # the web request omits it for a Descent run
 
 
 def test_baseline_runs_with_the_run_wire_cell(monkeypatch):

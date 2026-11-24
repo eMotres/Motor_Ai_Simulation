@@ -39,6 +39,22 @@ export function rippleGradeSteps(numSlots: number, numPoles: number): number {
     RIPPLE_SAMPLES_PER_COGGING_CYCLE * coggingCyclesPerPeriod(numSlots, numPoles));
 }
 
+/** WHY the count on the Simulation tab is what it is, when the tab's OWN rule set it (`stepsSource` 'eddy_default' and the count
+ *  equals the machine's default): the ripple grade (9 samples per cogging cycle) when it raised the count above the eddy
+ *  default, else the eddy default itself.  `null` for a count the user picked or any other count.  Uses the same helpers as the
+ *  tab, so the rule is not stated twice. */
+export type StepsReason =
+  | { kind: 'ripple_grade'; steps: number; cycles: number; samples: number }
+  | { kind: 'eddy_default'; steps: number };
+
+export function stepsReason(steps: number, source: unknown, numSlots: number, numPoles: number): StepsReason | null {
+  if (source !== 'eddy_default' || !(steps > 0) || steps !== rippleGradeSteps(numSlots, numPoles)) return null;
+  const cycles = coggingCyclesPerPeriod(numSlots, numPoles);
+  return RIPPLE_SAMPLES_PER_COGGING_CYCLE * cycles > EDDY_DEFAULT_STEPS
+    ? { kind: 'ripple_grade', steps, cycles, samples: RIPPLE_SAMPLES_PER_COGGING_CYCLE }
+    : { kind: 'eddy_default', steps };
+}
+
 /** The tab's factory defaults before 2026-09-26.  A count equal to one of them
  *  with no record of who set it is the old default, not a choice. */
 export const LEGACY_DEFAULT_STEPS: readonly number[] = [36, 40];

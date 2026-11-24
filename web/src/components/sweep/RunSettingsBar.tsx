@@ -1,18 +1,22 @@
 /**
- * The run settings of a Sweep / Optimization / Descent panel: two preset buttons, the steps and gap rows (editable: an edit is
- * an override and the run reads custom), and the other settings read-only with their source, all read from the server answer
- * (lib/useRunSettings).  Nothing here touches the Simulation or Mesh tab.
+ * The run settings of a Sweep / Optimization / Descent panel: ONE read-only line (owner 2026-11-24, one place for the settings).
+ * The values are the ones the Mesh and Simulation tabs hold; the server labels them (Optimization / Simulation preset, or custom)
+ * and the run uses exactly these.  Nothing can be typed here: "Change in Mesh" opens the Mesh tab.  Not the Optimization preset
+ * = warning colour AND the words.  A value the tabs do not hold = "unknown" and Run is disabled.
  */
 import React from 'react';
-import { Box, Button, Chip, TextField, Tooltip, Typography } from '@mui/material';
+import { Box, Button, Chip, Tooltip, Typography } from '@mui/material';
 import { nsT } from '../../i18n/nsT';
+import { useUIStore } from '../../stores/uiStore';
+import { stepsReason } from '../../lib/eddySteps';
+import { lineText, notOptimization } from '../../lib/runSettings';
 import type { RunSettingsState } from '../../lib/useRunSettings';
 
 const tx = nsT('simulation');
 
-const SRC: Record<string, string> = { preset: 'runSettingsSrcPreset', machine: 'runSettingsSrcMachine', override: 'runSettingsSrcTyped' };
+const SRC: Record<string, string> = { preset: 'runSettingsSrcPreset', machine: 'runSettingsSrcMachine', tab: 'runSettingsSrcTab', fixed: 'runSettingsSrcFixed' };
 
-/** The settings besides steps and gap rows, READ-ONLY, each with where it comes from. */
+/** The settings besides steps, gap rows and the wire cell, READ-ONLY, each with where it comes from. */
 export function describeSettings(st: Record<string, any>, src: Record<string, string> = {}): string {
   const onOff = (b: boolean) => (b ? tx('runSettingsOn') : tx('runSettingsOff'));
   const tag = (k: string) => (src[k] && SRC[src[k]] ? ` (${tx(SRC[src[k]])})` : '');
@@ -25,40 +29,45 @@ export function describeSettings(st: Record<string, any>, src: Record<string, st
           `${tx('runSettingsDemag')} ${onOff(!!st.demag)}${tag('demag')}`,
           `${tx('runSettingsEddy')} ${onOff(!!st.eddy)}${tag('eddy')}`,
           `${tx('runSettingsOuterAir')} ${st.outer_air_factor}${tag('outer_air_factor')}`,
-          `${tx('runSettingsWire')} ${st.coil_rel ?? 1}h${tag('coil_rel')}`,
           `${tx('runSettingsComponent')} ${comp}${tag('component_mesh')}`,
           `${tx('runSettingsOrder')} ${st.element_order}${tag('element_order')}`].join(' · ');
 }
 
 const RunSettingsBar: React.FC<{ rs: RunSettingsState; dense?: boolean }> = ({ rs, dense = true }) => {
+  const goToTab = useUIStore(st => st.setActiveTab);
   const r = rs.resolved;
   const st = r?.settings;
-  const label = r ? (r.custom ? tx('runSettingsCustom') : `${r.preset_label} ${tx('runSettingsPresetWord')}`) : '';
-  const diff = r ? Object.entries(r.differs).map(([k, d]) => `${k}: ${String(d.current)} (${r.preset_label} ${String(d.preset)})`) : [];
   const clamps = r ? r.clamps.map(c => `${c.key}: ${String(c.requested)} → ${String(c.used)} (${c.reason})`) : [];
+  const diff = r ? Object.entries(r.differs).map(([k, d]) => `${k}: ${String(d.current)} (${r.preset_label} ${String(d.preset)})`) : [];
   const fin = r?.finalist_note ? [tx('runSettingsFinalists', { n: r.finalist_note.min_steps, run: r.finalist_note.run_steps })] : [];
-  const field = (key: 'steps_per_period' | 'gap_layers', name: string, width: number) => (
-    <TextField label={name} type="number" size="small" disabled={!r} value={st ? st[key] : ''}
-      onChange={e => { const v = Number(e.target.value); if (Number.isInteger(v) && e.target.value !== '') rs.setOverride(key, v); }}
-      inputProps={{ step: key === 'gap_layers' ? 1 : 12, min: 1, style: { fontSize: 12, padding: '4px 6px', width } }}
-      InputLabelProps={{ sx: { fontSize: 11 } }} />
-  );
+  const why = r && st ? stepsReason(Number(st.steps_per_period), rs.stepsSource, Number(r.geometry?.num_slots), Number(r.geometry?.num_poles)) : null;
+  const reason = why ? (why.kind === 'ripple_grade'
+    ? tx('runSettingsReasonRipple', { cycles: why.cycles, samples: why.samples }) : tx('runSettingsReasonEddy')) : null;
+  const warn = !!r && notOptimization(r);
+  const text = r ? lineText(r, {
+    preset: (label, version) => tx('runSettingsPresetLine', { label, version }), custom: tx('runSettingsCustom'),
+    steps: n => tx('runSettingsStepsN', { n }), gap: n => tx(n === 1 ? 'runSettingsGapOne' : 'runSettingsGapMany', { n }),
+    wire: n => tx('runSettingsWireN', { n }),
+  }) : '';
+  const unknown = !rs.request && rs.missing.length > 0;
   return (
-    <Tooltip placement="top" title={<span style={{ whiteSpace: 'pre-line' }}>{[tx('runSettingsHelp'), ...diff, ...clamps, ...fin].join('\n')}</span>}>
+    <Tooltip placement="top" title={<span style={{ whiteSpace: 'pre-line' }}>
+      {[tx('runSettingsHelp'), ...(st ? [describeSettings(st, r?.sources)] : []), ...diff, ...clamps, ...fin].join('\n')}</span>}>
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75, flexWrap: 'wrap', mb: 1 }}>
-        <Typography sx={{ fontSize: dense ? 11 : 12, color: 'var(--text-2)' }}>{tx('runSettingsLabel')}</Typography>
-        {(['optimization', 'simulation'] as const).map(n => (
-          <Button key={n} size="small" variant={r && !r.custom && r.preset === n ? 'contained' : 'outlined'}
-            onClick={() => rs.choose(n)} sx={{ textTransform: 'none', fontSize: 11, py: 0.1 }}>
-            {tx(n === 'optimization' ? 'runPresetOptimization' : 'runPresetSimulation')}
-          </Button>
-        ))}
-        {r?.custom && <Chip size="small" color="warning" label={tx('runSettingsCustom')} sx={{ height: 20, fontSize: 10.5 }} />}
-        {field('steps_per_period', tx('runSettingsSteps'), 44)}
-        {field('gap_layers', tx('runSettingsGap'), 36)}
-        {r && st && <Typography sx={{ fontSize: 11, color: 'var(--text-3)' }}>
-          {label} · {describeSettings(st, r?.sources)}{clamps.length ? ` · ${tx('runSettingsAdjusted')}` : ''}
-        </Typography>}
+        {r && st && (
+          <Typography data-testid="run-settings-line" sx={{ fontSize: dense ? 11.5 : 12.5, color: warn ? '#fbbf24' : 'var(--text-2)' }}>
+            {text}{reason ? ` (${reason})` : ''}{clamps.length ? ` · ${tx('runSettingsAdjusted')}` : ''} · {tx('runSettingsSetInMesh')}
+          </Typography>
+        )}
+        {warn && <Chip size="small" color="warning" label={tx('runSettingsNotOptimization')} sx={{ height: 20, fontSize: 10.5 }} />}
+        {unknown && (
+          <Typography sx={{ fontSize: 11.5, color: '#fbbf24' }} role="alert">
+            {tx('runSettingsUnknown', { what: rs.missing.join(', ') })}
+          </Typography>
+        )}
+        <Button size="small" onClick={() => goToTab('mesh')} sx={{ textTransform: 'none', fontSize: 11, minWidth: 0, py: 0.1 }}>
+          {tx('runSettingsChangeInMesh')}
+        </Button>
         {rs.error && (
           <Typography sx={{ fontSize: 11, color: '#fca5a5' }} role="alert">
             {tx('sweepPresetError')} {rs.error}{' '}

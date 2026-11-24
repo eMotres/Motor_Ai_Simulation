@@ -634,6 +634,8 @@ const SweepStudyPanel: React.FC = () => {
   };
   const run = async () => {
     if (startingRef.current || running || !rs.ready || !rs.resolved) return;
+    const rsReq = rs.verify();        // the tabs may have changed since the line was shown: the run uses what the line shows
+    if (!rsReq) { setErr(tx('runSettingsStale')); return; }
     const inv = invertedRangeNames(sweepConfig.variations as never);
     if (inv.length) { setErr(tx('optRunBlockedInverted', { names: inv.join(', ') })); return; }
     startingRef.current = true; setAttachNote(null);
@@ -658,7 +660,7 @@ const SweepStudyPanel: React.FC = () => {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           variables: scanVars, operating_points: ops,
-          run_settings: runSettingsBody(rs.record, rs.resolved!),
+          run_settings: runSettingsBody(rsReq, rs.resolved!),
           ripple_max_pct: 100, max_geometries: Math.max(1, nGeom),
           // the un-varied current motor as an extra reference point — one more
           // full eval, off by default (user 2026-09-04: always stopped at 22/23)

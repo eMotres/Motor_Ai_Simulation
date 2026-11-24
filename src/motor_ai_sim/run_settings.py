@@ -315,6 +315,7 @@ def resolve(preset: Optional[str], overrides: Optional[Mapping[str, Any]], cfg: 
             "preset_label": ref_label, "matched": matched,
             "record_name": label if tab else name, "differs": differs, "settings": settings, "sources": sources,
             "clamps": clamps, "version": MP.version(), "mode": mode,
+            "geometry": {"num_slots": geometry.get("num_slots"), "num_poles": geometry.get("num_poles")},   # for the panel's reason line
             "finalist_note": finalist_note(settings["steps_per_period"], geometry),
             "coil_rel": coil_rel_used, "coil_rel_stored": coil_rel_stored, "coil_rel_override": coil_rel_override,
             "sig_scope": SIG_SCOPE_FULL if custom else SIG_SCOPE,

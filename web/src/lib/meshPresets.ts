@@ -29,12 +29,9 @@ export interface ResolvedPreset {
 
 export interface PresetSet { version: number; presets: ResolvedPreset[] }
 
-/** What the panels hold right now, by the request names. */
-export interface CurrentSettings {
-  steps?: number; gap_layers?: number; mesh_size_mm?: number; min_size_mm?: number;
-  outer_air_factor?: number; n_sectors?: number; demag?: boolean;
-  component_mesh: Record<string, number>;
-}
+import type { CurrentSettings } from './currentSettings';
+export type { CurrentSettings } from './currentSettings';
+export { readCurrentSettings } from './currentSettings';
 
 const REL = 1e-3;
 const close = (a: number | undefined, b: number): boolean =>
@@ -67,35 +64,6 @@ export function matchPreset(cur: CurrentSettings, set: PresetSet | null): Preset
     return p.name;
   }
   return 'custom';
-}
-
-function num(key: string): number | undefined {
-  try {
-    const raw = localStorage.getItem(key);
-    if (raw == null) return undefined;
-    const v = Number(JSON.parse(raw));
-    return Number.isFinite(v) ? v : undefined;
-  } catch { return undefined; }
-}
-
-/** The stored settings of this browser (the fields the panels persist). */
-export function readCurrentSettings(): CurrentSettings {
-  let comp: Record<string, number> = {};
-  try {
-    const raw = localStorage.getItem('mesh.componentMesh');
-    const o = raw ? JSON.parse(raw) : {};
-    if (o && typeof o === 'object') comp = o as Record<string, number>;
-  } catch { /* unreadable: no per-part sizes */ }
-  let demag: boolean | undefined;
-  try {
-    const raw = localStorage.getItem('sim.demag');
-    if (raw != null) demag = Boolean(JSON.parse(raw));
-  } catch { /* keep undefined */ }
-  return {
-    steps: num('sim.stepsPP'), gap_layers: num('mesh.gapLayers'), mesh_size_mm: num('mesh.meshSize'),
-    min_size_mm: num('mesh.minSize'), outer_air_factor: num('mesh.outerAir'), n_sectors: num('mesh.nSectors'),
-    demag, component_mesh: comp,
-  };
 }
 
 export async function fetchMeshPresets(): Promise<PresetSet> {

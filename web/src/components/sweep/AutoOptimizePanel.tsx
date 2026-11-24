@@ -90,9 +90,9 @@ type Plan = {
 };
 
 const AutoOptimizePanel: React.FC = () => {
-  // the run settings of THIS panel (preset button + overrides, resolved by the server); the ordinary-run settings are never touched
+  // the run settings of THIS panel: read-only, the values of the Mesh / Simulation tabs resolved by the server
   const rs = useRunSettings('auto');
-  const rsKey = JSON.stringify([rs.record.preset, rs.record.overrides]);
+  const rsKey = JSON.stringify(rs.request?.overrides ?? null);
   const { connectedToApi, descentState, loadLastDescent, applyDescentBest, cancelDescent,
           appliedSave, verifyAndApplyDescentPoint } = useMotorStore();
   const [verifying, setVerifying] = useState(false);
@@ -156,8 +156,8 @@ const AutoOptimizePanel: React.FC = () => {
   // Project rule: a run says what it costs before it starts.  So the card fetches
   // the plan as soon as the number changes and shows it next to the Run button —
   // the estimate is not an afterthought printed once the FEM is already burning.
-  const fetchPlan = useCallback(async (ripple: number, m: string, rec: { preset: string; overrides: Record<string, unknown> }) => {
-    if (!connectedToApi) return;
+  const fetchPlan = useCallback(async (ripple: number, m: string, rec: { preset: string; overrides: Record<string, unknown> } | null) => {
+    if (!connectedToApi || !rec) return;
     setPlanBusy(true); setPlanError(null);
     try {
       const r = await fetch(`${API}/api/optimization/auto/plan`, {
@@ -176,7 +176,7 @@ const AutoOptimizePanel: React.FC = () => {
 
   useEffect(() => {
     setPlan(null);   // a plan belongs to the settings it was built with
-    const t = setTimeout(() => { void fetchPlan(maxRipple, mode, rs.record); }, 350);
+    const t = setTimeout(() => { void fetchPlan(maxRipple, mode, rs.request); }, 350);
     return () => clearTimeout(t);
   }, [maxRipple, mode, fetchPlan, rsKey, rs.resolved?.sig]);   // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -204,13 +204,15 @@ const AutoOptimizePanel: React.FC = () => {
 
   const launch = async () => {
     if (!rs.ready || !rs.resolved) return;
+    const rsReq = rs.verify();        // the tabs may have changed since the line was shown: the run uses what the line shows
+    if (!rsReq) { setLaunchError('The run settings changed since they were shown. Check the line above and press Run again.'); return; }
     setLaunchError(null); setApplied(false); setSavedPoint(null);
     startedAt.current = Date.now();
     try {
       const r = await fetch(`${API}/api/optimization/auto`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ max_ripple_pct: maxRipple, mode,
-                               run_settings: runSettingsBody(rs.record, rs.resolved!) }),
+                               run_settings: runSettingsBody(rsReq, rs.resolved!) }),
       });
       const j = await r.json().catch(() => null);
       if (!r.ok) { if (r.status === 409) rs.refresh(); throw new Error(j?.detail ?? `HTTP ${r.status}`); }

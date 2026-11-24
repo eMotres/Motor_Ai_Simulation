@@ -316,3 +316,8 @@ def test_scan_descent_and_auto_store_the_matched_name_never_tab(monkeypatch):
         for mode in ("cmaes", "screen"):
             plan = O.auto_plan(O.AutoOptRequest(max_ripple_pct=5.0, mode=mode, run_settings=rec))["plan"]
             assert plan["run_settings"]["name"] == want, ("auto", mode, want)
+def test_the_answer_carries_the_machine_counts_for_the_panels_reason_line():
+    cfg = _cfg()
+    r = RS.resolve("tab", _tab("optimization", cfg), cfg)
+    geo = cfg["geometry"]
+    assert r["geometry"] == {"num_slots": geo.get("num_slots"), "num_poles": geo.get("num_poles")}

@@ -7,7 +7,7 @@ import { canWriteServer, getStoredUser } from '../lib/localAuth';
 import { autoSaveAppliedDesign } from '../lib/appliedAutoSave';
 import type { AppliedSaveResult, ApplyMode } from '../lib/appliedAutoSave';
 import { baselineBody } from '../lib/runSettings';
-import type { RunRecord, RunResolved } from '../lib/runSettings';
+import type { RunRequest, RunResolved } from '../lib/runSettings';
 import { geoSignature, setGeoSigGetter } from '../components/common/geoSig';
 import { geometryApplyOutcome } from '../lib/geometryApplyOutcome';
 import { dutyApplyInProgress } from '../lib/familyFollow';
@@ -273,7 +273,7 @@ interface MotorState {
    *  must never look like an apply that was archived. */
   appliedSave: (AppliedSaveResult & { busy?: boolean }) | null;
   loadLastDescent: () => Promise<void>;   // re-hydrate the last run's charts from the backend
-  computeBaselineLine: (opts: { currentBumpPct: number; record: RunRecord; resolved: RunResolved }) => Promise<{ stale: boolean }>;
+  computeBaselineLine: (opts: { currentBumpPct: number; request: RunRequest; resolved: RunResolved }) => Promise<{ stale: boolean }>;
 
   /** Hydrate sweepConfig from the backend so the selected variables follow the
    *  user across browsers; seeds the server if it has none yet but this browser does. */
@@ -1118,7 +1118,7 @@ export const useMotorStore = create<MotorState>()(
           set({ descentError: String(e?.message ?? e), descentRunning: false });
         }
       },
-      computeBaselineLine: async ({ currentBumpPct, record, resolved }) => {
+      computeBaselineLine: async ({ currentBumpPct, request, resolved }) => {
         // Draw the current-only baseline line up-front (2 sims @ I, +bump% I), WITHOUT
         // a full optimization. Same eval params (single sources) as runDescent so the
         // line matches what the optimizer will evaluate against.
@@ -1153,7 +1153,7 @@ export const useMotorStore = create<MotorState>()(
               ...baselineBody({
                 operating_point: { gamma_deg: op0.gamma_deg ?? 0, current_a: op0.current_a, rpm: op0.rpm },
                 current_bump_pct: currentBumpPct,
-              }, record, resolved),
+              }, request, resolved),
               pole_copy, torque_filter, end_winding_factor, coil_temp_c, structured_gap, airgap_macro, iron_template, geo_mesh,
             }),
           });

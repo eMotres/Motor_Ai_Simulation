@@ -7680,8 +7680,10 @@ def _end3d_stack_at(rec: dict, stack_mm: float):
 def _end3d_rec_points(rec: dict) -> list:
     """The ``(stack_mm, k_flux)`` points ONE passport measured: its `k_flux_vs_L` table plus its scalar at its own
     `stack_mm` when that is recorded, sorted by length."""
+    from motor_ai_sim.end3d_factors import k_flux_table
     pts = {}
-    curve = rec.get("k_flux_vs_L")
+    # A multi-row table without the stack-length marker contributes only its reference row (stale table guard).
+    curve = k_flux_table(rec)[0]
     if isinstance(curve, dict):
         for a_, b_ in curve.items():
             try:

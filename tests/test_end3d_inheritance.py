@@ -9,8 +9,11 @@ from motor_ai_sim.routes import simulation as S
 DESC = "24s/28p OD 200"
 
 
-def _rec(k, stack=None, curve=None, when="2026-09-01T00:00:00Z", desc=DESC):
-    return {"k_flux": k, "machine": desc, "adopted_utc": when, "stack_mm": stack, "k_flux_vs_L": curve}
+def _rec(k, stack=None, curve=None, when="2026-09-01T00:00:00Z", desc=DESC, method="own_mid_ratio"):
+    r = {"k_flux": k, "machine": desc, "adopted_utc": when, "stack_mm": stack, "k_flux_vs_L": curve}
+    if curve and method:                                  # a table written after the 2026-11-24 stack-length fix carries it
+        r["k_flux_vs_L_method"] = method
+    return r
 
 
 @pytest.fixture
@@ -67,6 +70,13 @@ def test_one_curve_per_machine_is_merged_from_every_passport_and_interpolated(en
     assert S._end3d_lookup("new", {}, diag=d) is None and "40-200" in d["note"]
 
 
+def test_a_stale_multi_row_table_lends_only_its_reference_row(env):
+    stale = {"40": 0.9461, "65": 0.9462, "170": 0.9463}              # flat in L: written before the stack-length fix
+    assert S._end3d_rec_points(_rec(0.9461, stack=40.0, curve=stale, method=None)) == [(40.0, 0.9461)]
+    r = _rec(0.9461, stack=40.0, curve=dict(stale))
+    assert S._end3d_rec_points(r) == [(40.0, 0.9461), (65.0, 0.9462), (170.0, 0.9463)]
+
+
 def test_the_newest_passport_wins_a_repeated_length_and_other_machines_are_ignored(env):
     env["store"] = {"a": _rec(0.90, stack=100.0, when="2026-08-01T00:00:00Z"),
                     "b": _rec(0.97, stack=100.0, when="2026-10-01T00:00:00Z"),
@@ -110,7 +120,10 @@ def test_adopt_entry_carries_the_basis():
 def test_charge_analytic_reads_the_scalar_factor_like_every_other_reader():
     from motor_ai_sim.charge_analytic import _k_end
     assert _k_end({"end3d": {"k_flux": 0.965, "k_flux_vs_L": {"12": 0.938, "40": 0.95}}, "L0_mm": 12}) == 0.965
-    assert _k_end({"end3d": {"k_flux_vs_L": {"12": 0.938, "40": 0.95}}, "L0_mm": 12}) == 0.938
+    marked = {"k_flux_vs_L": {"12": 0.938, "40": 0.95}, "k_flux_vs_L_method": "own_mid_ratio"}
+    assert _k_end({"end3d": dict(marked), "L0_mm": 12}) == 0.938
+    # a multi-row table without the marker is stale: no scalar and no reference row -> the honest 2-D answer
+    assert _k_end({"end3d": {"k_flux_vs_L": {"12": 0.938, "40": 0.95}}, "L0_mm": 12}) == 1.0
     assert _k_end({"end3d": {"k_flux": 7.0}}) == 1.0
     assert _k_end({}) == 1.0
 

@@ -117,12 +117,12 @@ def _k_end(pp: Dict[str, Any]) -> float:
     `end3d_factors.FACTOR_BAND`); the per-length table is used only when the passport carries no scalar (1.0 when the
     machine has no Stage-A measurement - the honest 2-D answer).  It used to read the table first, so one machine
     had two factors (0.938 from the table, 0.965 from the scalar)."""
-    from motor_ai_sim.end3d_factors import accepted_factor
+    from motor_ai_sim.end3d_factors import accepted_factor, k_flux_table
     e3 = pp.get("end3d") or {}
     k = accepted_factor(e3.get("k_flux"), "k_flux")
     if k is not None:
         return k
-    m = e3.get("k_flux_vs_L") or {}
+    m = k_flux_table(e3)[0]  # a stale multi-row table (no marker) lends only its reference row
     if m:
         pts = sorted((float(a), float(b)) for a, b in m.items())
         L0 = float(pp.get("L0_mm") or 0.0)

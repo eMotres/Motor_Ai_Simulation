@@ -349,7 +349,8 @@ def sweep_settings_of(result: Any, config: Optional[Dict[str, Any]] = None) -> D
         custom = bool(mp.get("custom")) or mixed or bool(mp.get("solved_differs"))
         srcs = mp.get("effective_source") if isinstance(mp.get("effective_source"), dict) else {}
         verified = srcs.get("steps_per_period") == "solved" and srcs.get("gap_layers") == "solved"
-        if "coil_rel" in srcs and srcs.get("coil_rel") != "solved":     # the wire cell must be verified by the solve too
+        names_cell = "coil_rel" in srcs or eff.get("coil_rel") is not None or mp.get("coil_rel") is not None
+        if names_cell and srcs.get("coil_rel") != "solved":     # a stamp that names the wire cell needs the solved cell too
             verified = False
         known = eff.get("steps_per_period") is not None and eff.get("gap_layers") is not None
         sig = None if (mixed or mp.get("solved_differs") or not verified or not known) else mp.get("sig")

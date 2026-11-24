@@ -36,7 +36,7 @@ export function sweepSettingsOf(x: any): SweepSettings {
     const bothSolved = !!es && es.steps_per_period === 'solved' && es.gap_layers === 'solved';
     return { preset: s.source === 'preset' ? (custom ? 'custom' : (typeof s.preset === 'string' ? s.preset : null)) : null,
              steps: numOrNull(s.steps_per_period), gapLayers: numOrNull(s.gap_layers), custom, mixed,
-             sig: s.source === 'preset' && !mixed && bothSolved && numOrNull(s.steps_per_period) !== null
+             sig: s.source === 'preset' && !mixed && bothSolved && s.sig_scope === 2 && numOrNull(s.steps_per_period) !== null
                && numOrNull(s.gap_layers) !== null ? sigOrNull(s.sig) : null,
              presetVersion: numOrNull(s.version), coilRel: numOrNull(s.coil_rel),
              source: s.source === 'preset' ? 'preset' : 'stored_request' };
@@ -82,7 +82,7 @@ export function sweepSettingsMismatch(a: SweepSettings, b: SweepSettings): boole
  *  the sweep origin always, the digest only when known (a mixed / legacy / disagreeing sweep never carries one). */
 export function sweepSettingsMetrics(s: SweepSettings): Record<string, number> {
   const m: Record<string, number> = { sweep_origin: 1 };
-  if (s.sig !== null) m.sweep_sig = s.sig;
+  if (s.sig !== null) { m.sweep_sig = s.sig; m.sweep_sig_scope = 2; }
   if (s.steps !== null && !s.mixed) m.sweep_steps = s.steps;
   if (s.gapLayers !== null && !s.mixed) m.sweep_gap_layers = s.gapLayers;
   return m;
@@ -102,6 +102,7 @@ export function sweepMetricsComparable(rows: Array<Record<string, unknown> | und
   const sweep = valid.filter(isSweepRow);
   if (!sweep.length) return true;
   if (sweep.length !== valid.length) return false;
+  if (sweep.some(r => Number((r as any).sweep_sig_scope) !== 2)) return false;   // a digest stored without the scope is unknown
   const sigs = sweep.map(r => (r as any).sweep_sig);
   if (sigs.some(v => typeof v !== 'number' || !Number.isFinite(v) || v <= 0)) return false;
   return new Set(sigs as number[]).size === 1;

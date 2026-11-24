@@ -319,7 +319,7 @@ def sweep_settings_of(result: Any, config: Optional[Dict[str, Any]] = None) -> D
         return {"preset": ("custom" if custom else mp.get("name")), "version": mp.get("version"), "custom": custom,
                 "mixed": mixed, "effective_source": mp.get("effective_source"),
                 "steps_per_period": eff.get("steps_per_period"), "gap_layers": eff.get("gap_layers"),
-                "sig": sig, "coil_rel": mp.get("coil_rel"), "differs": mp.get("differs") or {}, "source": "preset",
+                "sig": sig, "sig_scope": (2 if sig is not None else None), "coil_rel": mp.get("coil_rel"), "differs": mp.get("differs") or {}, "source": "preset",
                 "v": SETTINGS_VERSION}
     return {"preset": None, "version": None, "custom": False, "mixed": False, "sig": None,
             "steps_per_period": cfg.get("steps_per_period") or r.get("steps_per_period"),

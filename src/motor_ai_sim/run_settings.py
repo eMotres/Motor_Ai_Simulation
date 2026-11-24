@@ -169,12 +169,16 @@ def resolve(preset: Optional[str], overrides: Optional[Mapping[str, Any]], cfg: 
         same = (cur >= float(w) - 1e-9) if (k == "steps_per_period" and name == "simulation") else _same(cur, w)
         if not same:
             differs[k] = {"preset": w, "current": cur}
-    custom = bool(differs)
-    # the wire cell the run really uses is the machine's stored one (the keys above are read from the machine, not the preset)
+    # the wire cell the run really uses is the machine's stored one (the keys above are read from the machine, not the preset);
+    # a stored wire cell that is not the preset's makes the run custom: the label never claims the preset for another wire cell
     try:
         coil_rel_used = float((mach["component_mesh"] or {}).get("coil_rel", 1.0))
     except (TypeError, ValueError):
         coil_rel_used = 1.0
+    coil_rel_preset = float((v.get("component_mesh") or {}).get("coil_rel", 1.0))
+    if not _same(coil_rel_used, coil_rel_preset):
+        differs["coil_rel"] = {"preset": coil_rel_preset, "current": coil_rel_used}
+    custom = bool(differs)
     return {"preset": name, "overrides": given, "label": "custom" if custom else name, "custom": custom,
             "preset_label": pv["label"], "differs": differs, "settings": settings, "sources": sources,
             "clamps": clamps, "version": MP.version(), "mode": mode,

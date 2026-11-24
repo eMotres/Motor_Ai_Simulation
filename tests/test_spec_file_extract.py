@@ -677,3 +677,108 @@ def test_a_module_planted_in_the_working_directory_is_not_imported_by_the_worker
     monkeypatch.setattr(subprocess, "Popen", spy)
     X.extract_isolated("a.txt", b"x 1\n")
     assert seen["cwd"] and seen["cwd"] != str(tmp_path) and ("-P" in seen["cmd"] or sys.version_info < (3, 11))
+
+
+# ── round 3: relationship holes the reviewer found ───────────────────────────────────────────────────────────────────────
+
+CTRL = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/control"
+ACTB = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/activeXControlBinary"
+CHUNK = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/aFChunk"
+STY = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles"
+
+
+def test_a_namespaced_attribute_cannot_hide_the_real_one():
+    # Office reads the un-namespaced Type / TargetMode; the namespaced ones are decoys
+    raw = _rels(f'<R Id="a" Type="{ATT}" TargetMode="External" Target="http://e.test/t" xmlns:q="urn:q" q:Type="{STY}" q:TargetMode="Internal"/>')
+    with pytest.raises(X.ExtractError) as info:
+        X._check_relationships(raw)
+    assert info.value.code == "active"
+    twice = _rels(f'<R Id="a" Type="{STY}" type="{ATT}" Target="x"/>')                   # the same attribute in two spellings
+    with pytest.raises(X.ExtractError):
+        X._check_relationships(twice)
+
+
+@pytest.mark.parametrize("kind", [CTRL, ACTB, CHUNK])
+def test_activex_and_altchunk_relationship_types_are_refused(kind):
+    with pytest.raises(X.ExtractError) as info:
+        X._check_relationships(_rels(f'<R Id="a" Type="{kind}" Target="activeX/activeX1.xml"/>'))
+    assert info.value.code == "active"
+
+
+def test_activex_content_types_are_refused_and_a_renamed_folder_does_not_help():
+    ct = ('<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
+          '<Override PartName="/word/ctrl/c1.xml" ContentType="application/vnd.ms-office.activeX+xml"/></Types>')
+    with pytest.raises(X.ExtractError) as info:
+        X._check_relationships(ct.encode())
+    assert info.value.code == "macro"
+    members = {"[Content_Types].xml": ct.encode(), "word/document.xml": b"<w/>", "word/odd/c1.xml": b"<x/>"}
+    assert _err("a.docx", zip_with(members)).code == "macro"
+
+
+@pytest.mark.parametrize("target,mode,ok", [
+    ("https://example.test/x", "External", True), ("http://example.test/x", "External", True), ("mailto:a@example.test", "External", True),
+    ("file:///c:/x.exe", "External", False), ("\\\\\\\\host\\\\share\\\\x", "External", False), ("ms-msdt:/id", "External", False),
+    ("search-ms:query=x", "External", False), ("javascript:alert(1)", "External", False), ("ftp://example.test/x", "External", False),
+    ("styles.xml", None, True), ("/word/styles.xml", None, True), ("../x.xml", None, True),
+    ("file:///c:/x", None, False), ("http://evil.test/x", None, False), ("//host/share/x", None, False), ("\\\\host\\share\\x", None, False),
+    ("styles.xml", "Weird", False),
+])
+def test_hyperlink_targets_are_a_scheme_allow_list_and_internal_ones_name_parts(target, mode, ok):
+    attrs = f' TargetMode="{mode}"' if mode else ""
+    kind = LNK if mode == "External" else STY
+    raw = _rels(f'<R Id="a" Type="{kind}" Target="{target}"{attrs}/>')
+    if ok:
+        X._check_relationships(raw)
+    else:
+        with pytest.raises(X.ExtractError):
+            X._check_relationships(raw)
+
+
+def test_only_the_exact_hyperlink_type_may_leave_the_file():
+    for kind in (LNK + "x", "urn:other/hyperlink", IMG, ATT):
+        with pytest.raises(X.ExtractError):
+            X._check_relationships(_rels(f'<R Id="a" Type="{kind}" Target="https://example.test/x" TargetMode="External"/>'))
+
+
+def _docx_with_xml(body: bytes) -> bytes:
+    return _rewrite(make_docx(), {"word/document.xml": body})
+
+
+W = b'<?xml version="1.0"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p>%s</w:p></w:body></w:document>'
+
+
+@pytest.mark.parametrize("instr", [
+    b'<w:r><w:instrText>DDEAUTO c:\\\\windows\\\\system32\\\\cmd.exe "/k calc"</w:instrText></w:r>',
+    b'<w:r><w:instrText>DDE "cmd" "/c calc"</w:instrText></w:r>',
+    b'<w:r><w:instrText> INCLUDEPICTURE "http://e.test/p.png" </w:instrText></w:r>',
+    b'<w:r><w:instrText>INCLUDETEXT "c:\\\\x.docx"</w:instrText></w:r>',
+    b'<w:r><w:instrText>DD</w:instrText></w:r><w:r><w:instrText>EAUTO x</w:instrText></w:r>',                      # split over two runs
+    b'<w:fldSimple w:instr="DDEAUTO x y"><w:r><w:t>z</w:t></w:r></w:fldSimple>',
+    b'<w:r><w:instrText>LINK Excel.Sheet.12 "c:\\\\x.xlsx" "Sheet1!R1C1"</w:instrText></w:r>',
+])
+def test_dangerous_field_codes_are_refused(instr):
+    assert _err("a.docx", _docx_with_xml(W % instr)).code == "active"
+
+
+def test_ordinary_fields_and_text_that_mentions_links_pass():
+    ok = b'<w:r><w:instrText>PAGE</w:instrText></w:r><w:r><w:instrText>HYPERLINK "https://example.test"</w:instrText></w:r><w:r><w:t>DDE and LINK are words</w:t></w:r>'
+    assert X.extract("a.docx", _docx_with_xml(W % ok)).kind == "docx"
+
+
+def test_data_connections_and_query_tables_in_a_workbook_are_refused():
+    conn = b'<?xml version="1.0"?><connections xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><connection id="1" refreshOnLoad="1"/></connections>'
+    assert _err("a.xlsx", _rewrite(make_xlsx(), {"xl/connections.xml": conn})).code == "embedded"
+    assert _err("a.xlsx", _rewrite(make_xlsx(), {"xl/queryTables/queryTable1.xml": b"<q/>"})).code == "embedded"
+
+
+def test_relative_pythonpath_entries_reach_the_worker_as_absolute_ones(monkeypatch, tmp_path):
+    """The worker starts in an EMPTY directory with ``-P``: it finds the package through PYTHONPATH, as the deployed image does
+    (ENV PYTHONPATH=/app/src).  A relative entry is made absolute first."""
+    rel = os.path.relpath(os.path.dirname(os.path.dirname(os.path.dirname(X.__file__))), os.getcwd())
+    monkeypatch.setenv("PYTHONPATH", rel)
+    seen = {}
+    real = subprocess.Popen
+    monkeypatch.setattr(subprocess, "Popen", lambda cmd, **kw: (seen.update(env=kw["env"]), real(cmd, **kw))[1])
+    assert X.extract_isolated("a.docx", make_docx()).kind == "docx"                       # a docx through the entry point, as the route does it
+    assert X.extract_isolated("a.xlsx", make_xlsx()).kind == "xlsx"
+    assert os.path.isabs(seen["env"]["PYTHONPATH"].split(os.pathsep)[0])

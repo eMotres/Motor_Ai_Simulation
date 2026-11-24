@@ -14,7 +14,8 @@ Types: TXT (CSV and MD arrive through the same text path), DOCX, PDF, XLSX and X
   ``formatting_info=False``.  The size limit is checked before it is called, the sheet / row / cell limits while reading, and the
   route runs the whole extraction in a child process with an address-space and CPU limit (``extract_isolated``).
 * The OOXML containers (DOCX / XLSX) are checked as zip files first: member count, total uncompressed size, compression ratio,
-  encryption flag, macro / embedded-object / external-link parts.
+  encryption flag, macro / embedded-object / ActiveX / external-link / data-connection parts, every relationship (parsed: only an
+  http / https / mailto hyperlink may leave the file) and the field codes of the document parts (DDE, INCLUDEPICTURE, INCLUDETEXT, LINK).
 * A PDF is read with ``pypdf`` (pure Python; JavaScript and actions are never run); an encrypted one is refused, one without a
   usable text layer gets "this PDF has no text; please send the text version".
 
@@ -54,7 +55,7 @@ PAGE_EMPTY_CHARS = 25
 OLE_MAGIC = bytes.fromhex("D0CF11E0A1B11AE1")
 EXTENSIONS = (".txt", ".csv", ".md", ".docx", ".pdf", ".xlsx", ".xls")
 _MACRO_EXT = (".docm", ".xlsm", ".dotm", ".xltm", ".pptm")
-_BAD_MEMBERS = ("vbaproject.bin", "vbadata.xml", "externallinks/", "/embeddings/", "oleobject", "activex/")
+_BAD_MEMBERS = ("connections.xml", "querytables/", "/afchunk", "customui/", "/macros/", "vbaproject.bin", "vbadata.xml", "externallinks/", "/embeddings/", "oleobject", "activex/")
 
 
 @dataclass
@@ -237,14 +238,35 @@ def check_zip(data: bytes) -> zipfile.ZipFile:
                 raise _err("dtd")
             if low.endswith(".rels") or info.filename == "[Content_Types].xml":
                 _check_relationships(raw)
+            elif low.startswith("word/") and low.endswith(".xml"):
+                _check_fields(info.filename, raw)
     except (KeyError, zipfile.BadZipFile, RuntimeError, ValueError):
         raise _err("unreadable") from None
     return zf
 
 
 _DTD_MARKS = tuple(m for t in ("<!doctype", "<!entity") for m in (t.encode(), t.encode("utf-16-le"), t.encode("utf-16-be")))
-_ACTIVE_TYPES = frozenset({"oleobject", "package", "activexcontrol", "vbaproject", "vbadata", "externallink", "attachedtemplate",
-                           "oleobjectbin", "macrosheet", "dialogsheet"})
+_ACTIVE_TYPES = frozenset({"oleobject", "package", "control", "activexcontrolbinary", "vbaproject", "vbadata", "externallink", "attachedtemplate",
+                           "afchunk", "oleobjectbin", "macrosheet", "dialogsheet", "externallinkpath", "connections", "querytable"})
+_HYPERLINK = "http://schemas.openxmlformats.org/officedocument/2006/relationships/hyperlink"
+_LINK_SCHEMES = frozenset({"http", "https", "mailto"})
+_FIELD_CODE = re.compile(r"(?<![A-Za-z])(DDEAUTO|DDE|INCLUDEPICTURE|INCLUDETEXT|LINK)(?![A-Za-z])", re.IGNORECASE)
+_INSTR = re.compile(r"<(?:[\w.-]+:)?instrText\b[^>]*>(.*?)</(?:[\w.-]+:)?instrText>|\binstr\s*=\s*[\"']([^\"']*)", re.IGNORECASE | re.DOTALL)
+
+
+def _check_fields(name: str, raw: bytes) -> None:
+    """Field codes that fetch or run something (DDE / DDEAUTO, INCLUDEPICTURE, INCLUDETEXT, LINK) in a document part: refused.  The text of
+    one instruction may be split over several runs, so every instruction text of the part is joined before it is read."""
+    if raw[:2] in (b"\xff\xfe", b"\xfe\xff"):
+        text = raw.decode("utf-16", "ignore")
+    elif b"\x00" in raw[:8]:
+        text = raw.decode("utf-16-le", "ignore")
+    else:
+        text = raw.decode("utf-8", "ignore")
+    joined = "".join((m.group(1) or "") for m in _INSTR.finditer(text))
+    joined = re.sub(r"<[^>]+>", "", joined)
+    if _FIELD_CODE.search(joined) or any(_FIELD_CODE.search(m.group(2) or "") for m in _INSTR.finditer(text)):
+        raise _err("active")
 
 
 def _check_relationships(raw: bytes) -> None:
@@ -263,16 +285,35 @@ def _check_relationships(raw: bytes) -> None:
 
     def start(name, attrs):
         tag = local(name)
-        a = {local(k): " ".join(str(v).split()).lower() for k, v in attrs.items()}
+        # Office reads only the UN-namespaced attributes: a namespaced Type / TargetMode / Target next to them is an attempt to show us
+        # one thing and Office another; it is refused.  (Upper / lower case duplicates likewise.)
+        plain: dict[str, str] = {}
+        for k, v in attrs.items():
+            lk = local(k)
+            if " " in k:
+                if lk in ("type", "targetmode", "target", "contenttype", "id"):
+                    raise _err("active")
+                continue
+            if lk in plain:
+                raise _err("active")
+            plain[lk] = " ".join(str(v).split())
         if tag == "relationship":
-            kind = a.get("type", "")
-            if kind.rsplit("/", 1)[-1] in _ACTIVE_TYPES:
+            kind = plain.get("type", "")
+            mode = plain.get("targetmode", "").lower()
+            target = plain.get("target", "")
+            if kind.rsplit("/", 1)[-1].lower() in _ACTIVE_TYPES:
                 raise _err("active")
-            if a.get("targetmode") == "external" and not kind.endswith("/hyperlink"):
+            if mode not in ("", "internal", "external"):
                 raise _err("active")
+            if mode == "external":
+                scheme = target.split(":", 1)[0].lower() if re.match(r"^[A-Za-z][A-Za-z0-9+.-]*:", target) else ""
+                if kind.lower() != _HYPERLINK or scheme not in _LINK_SCHEMES:        # only the EXACT hyperlink type, and only http / https / mailto
+                    raise _err("active")
+            elif re.match(r"^[A-Za-z][A-Za-z0-9+.-]*:", target) or target.startswith(("//", "\\")) or "\\" in target:
+                raise _err("active")                                                  # an internal relationship names a part, never a URL / UNC / file
         elif tag in ("default", "override"):
-            ct = a.get("contenttype", "")
-            if "macroenabled" in ct or "vbaproject" in ct:
+            ct = plain.get("contenttype", "").lower()
+            if "macroenabled" in ct or "vbaproject" in ct or "activex" in ct or "oleobject" in ct:
                 raise _err("macro")
 
     parser = expat.ParserCreate(namespace_separator=" ")
@@ -694,6 +735,8 @@ def _run_worker(name: str, data: bytes) -> Extracted:
     import signal
     import tempfile
     env = {k: os.environ[k] for k in _CHILD_ENV if k in os.environ}
+    if env.get("PYTHONPATH"):                                       # the worker starts in an empty directory: relative entries would not resolve
+        env["PYTHONPATH"] = os.pathsep.join(os.path.abspath(x) for x in env["PYTHONPATH"].split(os.pathsep) if x)
     flags = ["-P"] if sys.version_info >= (3, 11) else []          # never put the working directory on sys.path
     with tempfile.TemporaryFile() as out, tempfile.TemporaryDirectory() as empty:
         try:

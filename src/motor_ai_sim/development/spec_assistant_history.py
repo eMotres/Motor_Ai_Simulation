@@ -64,7 +64,10 @@ def load(project_id: str, email: str, *, source_file: bool = False) -> list[dict
     for m in rows:
         row = {k: m.get(k) for k in ("id", "role", "text", "at")}
         if isinstance(m.get("file"), dict):
-            row["file"] = m["file"]
+            if source_file:
+                row["file"] = m["file"]
+            else:                                                  # who cannot open the file does not learn its name
+                row["text"] = "(attached file)"
         cards: dict[str, list[dict]] = {}
         for key in ("proposals", "applied"):
             found = [by_id[i] for i in (m.get(key) or []) if i in by_id]

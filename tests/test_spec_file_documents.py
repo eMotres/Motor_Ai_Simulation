@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import io
 import json
+import re
 import zipfile
 
 import pytest
@@ -147,7 +148,12 @@ def test_readers_of_the_project_documents_are_a_known_short_list():
         for p in (repo / base).rglob("*"):
             if p.suffix not in (".py", ".sh", ".yml", ".yaml", ".service", ".timer", ".cfg", ".ini", ".toml") or not p.is_file():
                 continue
-            if any(n in p.read_text(encoding="utf-8", errors="replace") for n in needles):
+            if "verification" in p.parts:                                    # verification cases keep their own documents: not project documents
+                continue
+            text = p.read_text(encoding="utf-8", errors="replace")
+            path_style = re.search(r"/\s*[\"']documents[\"']|[\"']documents[\"']\s*/|[\"']documents[\"']\s*,\s*[\"']files[\"']", text) and \
+                ("path_for(" in text or "_file(" in text or "Path(" in text)
+            if any(n in text for n in needles) or path_style:
                 found.add(str(p.relative_to(repo)))
     assert found == {"src/motor_ai_sim/development/cover.py", "src/motor_ai_sim/development/documents.py",
                      "src/motor_ai_sim/development/models.py", "src/motor_ai_sim/development/spec_file_assistant.py",
@@ -179,3 +185,21 @@ def test_the_upload_route_does_not_let_the_flag_be_set_or_cleared_by_hand(env):
     assert rows[r.json()["id"]].get("spec_source") in (None, False)
     r2 = env.patch(f"/api/projects/alpha/documents/{src}", headers=hdr("t-owner"), json={"spec_source": False})
     assert r2.status_code == 422
+
+
+def test_the_readers_of_the_audit_trail_do_not_print_the_original():
+    """Readers of a project's ``audit.jsonl`` whose rows carry the file name of an upload / download (``details.name``):
+    ``owner_report/sources.py`` (skips ``spec_source`` rows and ``spec.file.attach``: tested above), ``digest/collect.py`` (it handles
+    motor / specification actions only: it names no ``document.*`` action), ``development/admin_routes.py`` (the last-activity time only),
+    ``development/thread_audit.py`` (event ids).  Any other reader of that file is a new place to check."""
+    from pathlib import Path
+    root = Path(documents.__file__).resolve().parents[1]
+    readers = {str(p.relative_to(root)) for p in root.rglob("*.py") if re.search(r"[\"']audit\.jsonl[\"']", p.read_text(encoding="utf-8"))}
+    assert {"development/admin_routes.py", "development/thread_audit.py", "digest/collect.py", "owner_report/sources.py"} <= readers
+    # nobody else turns an upload / download audit row into text
+    printers = sorted(str(p.relative_to(root)) for p in root.rglob("*.py")
+                      if re.search(r"[\"']document\.(upload|download)[\"']", p.read_text(encoding="utf-8")))
+    assert printers == ["development/documents.py", "development/spec_file_assistant.py", "owner_report/sources.py"] or \
+        printers == ["development/documents.py", "owner_report/sources.py"], printers
+    digest = (root / "digest" / "collect.py").read_text(encoding="utf-8")
+    assert '"document.upload"' not in digest and '"document.download"' not in digest

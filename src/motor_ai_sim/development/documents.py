@@ -452,7 +452,8 @@ async def patch_document(request: Request, project_id: str, doc_id: str):
             if row.get("id") == doc_id and _visible([row], staff_flag, staff_flag, prices, spec_ok):   # a row this caller cannot list is "not found"
                 before = {k: row.get(k) for k in changes}
                 # the flags BEFORE this change: who could see the group a relabel leaves (the cleared-release note, Astra #852 r3)
-                found["original"] = {"internal": bool(row.get("internal")), "price_restricted": bool(row.get("price_restricted"))}
+                found["original"] = {"internal": bool(row.get("internal")), "price_restricted": bool(row.get("price_restricted")),
+                                     "spec_source": bool(row.get("spec_source"))}
                 row.update(changes)
                 if changes.get("archived") is False:
                     row["archived_at"] = None

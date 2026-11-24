@@ -531,8 +531,8 @@ def test_binding_refuses_a_card_the_file_does_not_prove(source, excerpt, value):
 
 def test_binding_token_boundaries_for_decimals():
     assert bind("2_6", {"continuous_Arms": 2}, "page 1", "Rated power 2 kW") is None                    # "2 kW" is not in "2.2 kW"
-    assert bind("1_6", {"maximum_rpm": 6000}, "page 4", "the tank is 6 000 rpm") == "page 4"              # "6 000" is 6000
-    assert bind("1_6", {"maximum_rpm": 6}, "page 4", "the tank is 6 000 rpm") is None                    # and not 6
+    assert bind("1_6", {"maximum_rpm": 6000}, "page 4", "the tank is 6 000 rpm") is None                  # "6 000": a thousands group or two numbers? assumed
+    assert bind("1_6", {"maximum_rpm": 6}, "page 4", "the tank is 6 000 rpm") is None
 
 
 def test_strings_and_booleans_are_compared_too():
@@ -545,7 +545,7 @@ def test_strings_and_booleans_are_compared_too():
 
 @pytest.mark.parametrize("raw,value,ambiguous", [
     ("6000", 6000, False), ("6.5", 6.5, False), ("6,5", 6.5, False), ("0,125", 0.125, False), ("0.125", 0.125, False),
-    ("1,234,567", 1234567, False), ("1.234,5", 1234.5, False), ("6 000", 6000, False), ("12 345", 12345, False),
+    ("1,234,567", 1234567, False), ("1.234,5", 1234.5, False), ("6 000", None, True), ("12 345", None, True), ("3 400", None, True),
     ("\u221240", -40, False), ("-40", -40, False), ("2,2", 2.2, False),
     ("1,234", None, True), ("1.234", None, True), ("6.000", None, True), ("1 23", None, True), ("1,23,4", None, True),
 ])
@@ -815,3 +815,87 @@ def test_a_deleted_project_that_had_a_file_stays_out_of_the_export(env, monkeypa
                 user_text="q", reply="the file said 6000 rpm")
     shutil.rmtree(store.path_for("eps"))                                                    # the project (and its flag) is gone
     assert "eps" not in [json.loads(x)["project_id"] for x in AR.export_lines(lambda a: True)]
+
+
+# ── round 3: the reviewer's inputs ───────────────────────────────────────────
+
+R3 = [FX.Block("page 1", "Motor 48 V/krpm. Winding 20 A/mm2. Gain 500 rpm/V. Kt 0.1 Nm/A. Ring 2 m in. Cap 5 m A. Drive 100 A peak. Drive2 100 A rms. "
+                         "Output 2.2E+3 V. Tol +/-10 % ok. Mains 3 400 V. Phases 3 kW. Plain 3 phases. Frequency 50 Hz."),
+      FX.Block("Spec!A1:C1", "A1=x; B1=48; C1=V/krpm")]
+
+
+def bind3(field, value, source, excerpt, converted=""):
+    return FA.bind_source(field, 2, value, source, excerpt, converted, R3)
+
+
+@pytest.mark.parametrize("field,value,excerpt", [
+    ("2_1", {"voltage_nominal_V": 48}, "Motor 48 V/krpm"),                  # the WHOLE written unit is V/krpm: it does not prove 48 V
+    ("2_6", {"continuous_Arms": 20}, "Winding 20 A/mm2"),
+    ("1_6", {"maximum_rpm": 500}, "Gain 500 rpm/V"),
+    ("4_1", {"length_mm": 0.1}, "Kt 0.1 Nm/A"),
+    ("4_1", {"length_mm": 2}, "Ring 2 m in"),                                # "m in" is two words, not "min"
+    ("2_6", {"continuous_Arms": 5}, "Cap 5 m A"),                            # not "mA"
+    ("2_6", {"continuous_Arms": 100}, "Drive 100 A peak"),                   # the field is "A rms": a different qualifier
+    ("2_1", {"voltage_nominal_V": 3400}, "Mains 3 400 V"),                   # "3 400" is not guessed
+    ("2_1", {"voltage_nominal_V": 400}, "Mains 3 400 V"),
+    ("2_1", {"voltage_nominal_V": 3}, "Mains 3 400 V"),
+    ("2_1", {"voltage_nominal_V": -10}, "Tol +/-10 % ok"),                   # a tolerance is not a signed value
+    ("2_1", {"voltage_nominal_V": 10}, "Tol +/-10 % ok"),
+])
+def test_r3_these_are_not_found_in_the_file(field, value, excerpt):
+    assert bind3(field, value, "page 1", excerpt) is None
+
+
+def test_r3_exponent_numbers_and_the_matching_qualifier():
+    assert bind3("2_6", {"continuous_Arms": 100}, "page 1", "Drive2 100 A rms") == "page 1"             # the same qualifier
+    assert bind3("2_6", {"continuous_Arms": 100}, "page 1", "Drive2 100 A") == "page 1"                  # no qualifier written: not contradicted
+    assert bind3("2_1", {"voltage_nominal_V": 2200}, "page 1", "Output 2.2E+3 V") == "page 1"            # 2.2E+3 is 2200, not 3
+    assert bind3("2_1", {"voltage_nominal_V": 3}, "page 1", "Output 2.2E+3 V") is None
+    assert bind3("1_6", {"maximum_rpm": 50}, "page 1", "Frequency 50 Hz") is None                         # Hz is no mechanical speed unit
+    assert FA._convert(50, "Hz", "rpm") is None
+    assert bind3("1_6", {"maximum_rpm": 3000}, "page 1", "Frequency 50 Hz", "50 Hz -> 3000 rpm") is None
+
+
+def test_r3_a_field_without_a_unit_takes_a_number_only_when_no_unit_follows(monkeypatch):
+    monkeypatch.setattr(FA.P, "field_info", lambda fid, version: ({"id": "x"}, {"type": "number"}))          # a count: a number with no unit
+    assert bind3("phases", 3, "page 1", "Phases 3 kW") is None                                              # "3 kW" does not prove a count
+    assert bind3("phases", 3, "page 1", "Plain 3 phases") == "page 1"                                      # a word that is no unit does not block it
+    assert bind3("phases", 3, "page 1", "Gain 3 rpm/V") is None
+    assert bind3("phases", 3, "page 1", "Tol +/-10 % ok") is None
+
+
+def test_r3_a_string_for_a_numeric_field_takes_the_numeric_path():
+    assert bind3("1_6", {"maximum_rpm": "6000"}, "page 1", "Frequency 50 Hz") is None
+    assert FA._leaves({"unit": "rpm", "type": "number"}, "6000") == [("num", 6000.0, {"unit": "rpm", "type": "number"})]
+    assert FA._leaves({"unit": "rpm", "type": "number"}, "1,234")[0][0] == "bool"                        # ambiguous: never proved
+
+
+def test_r3_a_cited_cell_that_does_not_exist_names_nothing():
+    assert FA.resolve("Spec!Z9", R3) == [] and FA.resolve("Spec!B1", R3) != []
+    assert FA.resolve("Spec!A1", R3)[0][1] is not None
+    blocks = [FX.Block("Spec!A1:C1", "A1=x; B1=48; C1=V")]
+    assert FA.bind_source("2_1", 2, {"voltage_nominal_V": 48}, "Spec!B1", "B1=48; C1=V", "", blocks) == "Spec!A1:C1"
+    assert FA.bind_source("2_1", 2, {"voltage_nominal_V": 48}, "Spec!Z1", "B1=48; C1=V", "", blocks) is None      # a missing cell does not lift the cell restriction
+    assert FA.bind_source("2_1", 2, {"voltage_nominal_V": 48}, "Spec!A1", "B1=48; C1=V", "", blocks) is None
+
+
+def test_r3_the_history_row_and_the_file_name_follow_the_card_gate(env, monkeypatch):
+    model(monkeypatch, "Read it.")
+    send(env, "secret-customer-spec.txt", b"Maximum speed 6000 rpm\n")
+    mine = env["client"].get("/api/projects/alpha/spec/assistant/history", headers=H).json()["messages"]
+    assert mine[0]["file"]["name"] == "secret-customer-spec.txt" and mine[0]["text"] == "secret-customer-spec.txt"
+    rows = store.path_for("alpha")
+    from motor_ai_sim.development import spec_assistant_history as HI
+    blind = HI.load("alpha", OWN, source_file=False)
+    assert "file" not in blind[0] and "secret-customer-spec" not in json.dumps(blind) and blind[0]["text"] == "(attached file)"
+    env["as"]("staff@example.test", "engineer")                                        # staff may open the file: they read the history with the name
+    staff = env["client"].get("/api/projects/alpha/spec/assistant/history?user=" + OWN, headers=H).json()["messages"]
+    assert staff[0]["file"]["name"] == "secret-customer-spec.txt"
+    env["as"]("cust@example.test", "user")
+    assert env["client"].get("/api/projects/alpha/spec/assistant/history?user=" + OWN, headers=H).status_code == 403
+
+
+def test_r3_found_original_carries_spec_source(env):
+    from motor_ai_sim.development import documents as D
+    src = open(D.__file__, encoding="utf-8").read()
+    assert 'found["original"] = {"internal": bool(row.get("internal")), "price_restricted": bool(row.get("price_restricted")),\n                                     "spec_source"' in src

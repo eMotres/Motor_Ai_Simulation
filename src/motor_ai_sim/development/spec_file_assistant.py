@@ -12,9 +12,11 @@ The project owner (or an admin: ``can_edit_spec``) attaches a TXT / DOCX / PDF /
    made) and a basis; a value whose excerpt is not found in the file is shown as "assumed".  A marker without a source is dropped, and so
    is any marker for the commercial fields or the production section.
 
-The original file is stored as a project document (folder ``docs``, not internal, visible to the members who see the specification,
-staff can open it) through the same stores as ``documents.py`` with the usual audit rows and download log.  The extracted text is kept
-beside it.  It follows NO training path: ``assistant_archive.SPEC_FILE_TEXT_IN_TRAINING`` is False.
+The original file is stored as a project document that is a SPEC SOURCE (``spec_source: true``, folder ``docs``): visible and downloadable
+only to who may edit the specification (project owner, admin) and to MOTRES staff, absent for every other member from the list, the counts,
+the ZIPs, the cover choices and the reports (``documents._visible`` / ``documents._spec``), with the usual audit rows and download log.  The
+extracted text is not kept anywhere.  It follows NO training path: ``assistant_archive.SPEC_FILE_TEXT_IN_TRAINING`` is False, and a project
+in which a file was used is kept out of every export.
 """
 from __future__ import annotations
 
@@ -273,7 +275,9 @@ def _refs_text(refs: list[str], limit: int = 8) -> str:
 # the card says "found in the file; check it is the right quantity".  Anything else is shown as assumed.
 
 _TOKEN = re.compile(
-    r"(?P<num>(?<![\w.,])[-+]?\d+(?:[ ,.]\d{3})*(?:[.,]\d+)?(?![\w]))"      # 6000  6.5  0,125  1,234  6 000  1.234,5
+    r"(?P<pm>(?:\+/-|\+-|\u00b1)\s*\d+(?:[.,]\d+)?)"                                       # +/-10 : a tolerance, never a signed value
+    r"|(?P<exp>(?<![\w.,])[-+]?\d+(?:[.,]\d+)?[eE][-+]?\d+(?![\w]))"                      # 2.2E+3
+    r"|(?P<num>(?<![\w.,])[-+]?\d+(?:[ ,.]\d{3})*(?:[.,]\d+)?(?![\w]))"      # 6000  6.5  0,125  1,234  6 000  1.234,5
     r"|(?P<num2>(?<![\w.,])[-+]?\d+(?:[.,]\d+)?)"                          # a number glued to its unit: 6000rpm
     r"|(?P<word>[^\W_]+)|(?P<other>\S)")
 _CELL = re.compile(r"^(.+)!([A-Z]{1,3})(\d+)(?::([A-Z]{1,3})(\d+))?$")
@@ -284,7 +288,7 @@ _UNITS: dict[str, tuple[str, float]] = {
     "g": ("M", 1e-3), "kg": ("M", 1.0), "lb": ("M", 0.45359237),
     "ms": ("T", 1e-3), "s": ("T", 1.0), "min": ("T", 60.0), "h": ("T", 3600.0),
     "mNm": ("N", 1e-3), "Nm": ("N", 1.0), "kNm": ("N", 1e3), "lbf·ft": ("N", 1.3558179),
-    "rpm": ("S", 1.0), "krpm": ("S", 1e3), "rad/s": ("S", 60 / (2 * math.pi)), "rps": ("S", 60.0), "Hz": ("S", 60.0),
+    "rpm": ("S", 1.0), "krpm": ("S", 1e3), "rad/s": ("S", 60 / (2 * math.pi)), "rps": ("S", 60.0),
 }
 _MINUS = str.maketrans({"−": "-", "‒": "-", "–": "-", "﹣": "-", "－": "-", " ": " ", " ": " ", " ": " "})
 
@@ -296,6 +300,7 @@ class Tok:
     value: Optional[float] = None
     ambiguous: bool = False      # "1,234": 1.234 or 1234?
     line: int = 0
+    sp: bool = False             # whitespace right before the token
 
 
 def parse_number(raw: str) -> tuple[Optional[float], bool]:
@@ -309,9 +314,8 @@ def parse_number(raw: str) -> tuple[Optional[float], bool]:
     seps = re.findall(r"[ ,.]", t)
     if not seps:
         return sign * float(t), False
-    if len(set(seps)) == 1 and seps[0] == " ":                    # "6 000": groups of exactly three after the first
-        parts = t.split(" ")
-        return (sign * float("".join(parts)), False) if all(len(x) == 3 for x in parts[1:]) and 1 <= len(parts[0]) <= 3 else (None, True)
+    if " " in t:                                                  # "6 000", "3 400": a thousands group or two numbers? never guessed
+        return None, True
     last = max(t.rfind(","), t.rfind("."))
     head, tail = t[:last], t[last + 1:]
     kinds = set(re.findall(r"[,.]", t))
@@ -333,14 +337,22 @@ def tokenize(text: str) -> list[Tok]:
     out: list[Tok] = []
     for ln, line in enumerate(str(text or "").translate(_MINUS).split("\n")):
         for m in _TOKEN.finditer(line):
-            if m.group("num") or m.group("num2"):
+            sp = m.start() > 0 and line[m.start() - 1].isspace()
+            if m.group("pm"):
+                out.append(Tok(" ".join(m.group("pm").split()), "num", None, True, ln, sp))
+            elif m.group("exp"):
+                try:
+                    out.append(Tok(m.group("exp"), "num", float(m.group("exp").replace(",", ".")), False, ln, sp))
+                except ValueError:
+                    out.append(Tok(m.group("exp"), "num", None, True, ln, sp))
+            elif m.group("num") or m.group("num2"):
                 raw = m.group("num") or m.group("num2")
                 v, amb = parse_number(raw)
-                out.append(Tok(" ".join(raw.split()), "num", v, amb, ln))
+                out.append(Tok(" ".join(raw.split()), "num", v, amb, ln, sp))
             elif m.group("word"):
-                out.append(Tok(m.group("word"), "word", line=ln))
+                out.append(Tok(m.group("word"), "word", line=ln, sp=sp))
             else:
-                out.append(Tok(m.group("other"), "other", line=ln))
+                out.append(Tok(m.group("other"), "other", line=ln, sp=sp))
     return out
 
 
@@ -365,32 +377,69 @@ def _convert(x: float, u1: str, u2: str) -> Optional[float]:
     return None
 
 
+_QUALIFIERS = frozenset({"rms", "peak", "pk", "pp", "p-p", "max", "min", "avg", "dc", "ac", "eff", "nom"})
+_KNOWN_UNITS = frozenset({_unit_norm(k) for k in _UNITS} | {"C", "F", "K", "%", "deg", "Ohm", "Hz", "N", "Pa", "bar", "Wh", "Ah", "J", "kWh", "mH", "uH"})
+_UNIT_PUNCT = frozenset("°·*/^%")
+
+
+def _run_at(toks: list[Tok], j: int) -> tuple[str, int]:
+    """The unit written from token ``j``: the WHOLE run of tokens that touch each other (no space, no separator) - "V/krpm" is one
+    unit - never joined across a space.  ``(text, index after it)``."""
+    parts = []
+    k = j
+    while k < len(toks):
+        t = toks[k]
+        if k > j and t.sp:
+            break
+        if t.kind == "word" or (t.kind == "other" and t.text in _UNIT_PUNCT):
+            parts.append(t.text)
+            k += 1
+        else:
+            break
+    return "".join(parts), k
+
+
 def _units_after(toks: list[Tok], i: int) -> list[str]:
-    """The unit strings that can follow the number at ``i``: the next 1-3 tokens joined ("°C", "N·m", "rad/s"), or the next table cell
-    ("; C2=rpm").  Token-level: "F" is not found inside "Fan"."""
-    out = []
+    """The unit that follows the number at ``i``, as ``[run, qualifier or ""]``: right behind it (a space may stand between), or in the next
+    table cell ("; C2=rpm").  Empty when nothing like a unit follows."""
     j = i + 1
     if j < len(toks) and toks[j].kind == "other" and toks[j].text == ";":                 # a table: B2=6000; C2=rpm
         k = j + 1
-        if k + 2 < len(toks) + 0 and toks[k].kind == "word" and toks[k + 1].text == "=" and re.fullmatch(r"[A-Z]{1,3}\d+", toks[k].text):
-            parts = []
-            for t in toks[k + 2:k + 5]:
-                if t.kind == "num" or t.text == ";":
-                    break
-                parts.append(t.text)
-            out.append("".join(parts))
-        return out
-    acc = ""
-    for t in toks[j:j + 3]:
-        if t.kind == "num" or t.text in ";,":
-            break
-        acc += t.text
-        out.append(acc)
-    return out
+        if k + 2 < len(toks) and toks[k].kind == "word" and toks[k + 1].text == "=" and re.fullmatch(r"[A-Z]{1,3}\d+", toks[k].text):
+            run, end = _run_at(toks, k + 2)
+            return [run, ""] if run else []
+        return []
+    if j >= len(toks):
+        return []
+    run, end = _run_at(toks, j)
+    if not run:
+        return []
+    qual = toks[end].text.lower() if end < len(toks) and toks[end].kind == "word" and toks[end].text.lower() in _QUALIFIERS and toks[end].sp else ""
+    return [run, qual]
+
+
+def _unit_matches(found: list[str], unit: str) -> bool:
+    """Does the written unit equal the field's unit?  The WHOLE run must equal it (case-sensitive), and a qualifier of the field ("A rms")
+    must be the written one; a different written qualifier ("A peak") does not match."""
+    if not found:
+        return False
+    run, qual = found
+    parts = str(unit).split()
+    base = parts[0]
+    want = parts[1].lower() if len(parts) > 1 else ""
+    if _unit_norm(run) != _unit_norm(base):
+        return False
+    return qual in ("", want) if want else True
 
 
 def _unit_follows(toks: list[Tok], i: int, unit: str) -> bool:
-    return any(_same_unit(c, unit) for c in _units_after(toks, i))
+    return _unit_matches(_units_after(toks, i), unit)
+
+
+def _any_unit_follows(toks: list[Tok], i: int) -> bool:
+    """Is a UNIT written after the number (so that a field without a unit cannot take it)?"""
+    found = _units_after(toks, i)
+    return bool(found) and (_unit_norm(found[0]) in _KNOWN_UNITS or "/" in found[0] or found[0] in ("°", "%"))
 
 
 def _contains_run(hay: list[Tok], needle: list[Tok]) -> list[int]:
@@ -408,6 +457,9 @@ def _leaves(node: dict, value: Any) -> list[tuple[str, Any, dict]]:
     if isinstance(value, (int, float)):
         return [("num", float(value), node)]
     if isinstance(value, str):
+        if node.get("type") in ("number", "integer"):             # "6000" for a numeric field is a number: it takes the numeric path
+            v, _amb = parse_number(value.strip())
+            return [("num", v, node)] if v is not None else [("bool", None, node)]          # an unreadable number is never proved
         return [("str", value, node)]
     out: list = []
     if isinstance(value, dict):
@@ -453,7 +505,9 @@ def resolve(ref: str, blocks: list[Block]) -> list[tuple[Block, Optional[tuple[i
             if bm and bm.group(1).casefold() == sheet.casefold() and r1 <= int(bm.group(3)) <= r2:
                 toks = tokenize(b.text)
                 row = int(bm.group(3))
-                found.append((b, _cell_span(toks, (c1, row), (c2, row)), None))
+                span = _cell_span(toks, (c1, row), (c2, row))
+                if span is not None:                                  # a cited cell that is not there names nothing
+                    found.append((b, span, None))
         return found
     m = re.match(r"(?i)^lines? (\d+)(?:-(\d+))?$", r)
     if m:
@@ -511,7 +565,7 @@ def _leaves_found(field_id: str, version: int, value: Any, ex: list[Tok], conver
         for i, t in enumerate(ex):
             if t.kind != "num" or t.value is None or not math.isclose(t.value, leaf, rel_tol=1e-9, abs_tol=1e-9):
                 continue
-            if not unit or _unit_follows(ex, i, unit):
+            if (_unit_follows(ex, i, unit) if unit else not _any_unit_follows(ex, i)):         # no unit field: no unit may follow
                 ok = True
                 break
         if not ok:
@@ -522,7 +576,7 @@ def _leaves_found(field_id: str, version: int, value: Any, ex: list[Tok], conver
                 if unit and not _same_unit(u2, unit):
                     continue
                 if any(t.kind == "num" and t.value is not None and math.isclose(t.value, x, rel_tol=1e-9, abs_tol=1e-9)
-                       and any(_unit_norm(c) == _unit_norm(u1) for c in _units_after(ex, i)) for i, t in enumerate(ex)):
+                       and (lambda f: bool(f) and _unit_norm(f[0]) == _unit_norm(u1))(_units_after(ex, i)) for i, t in enumerate(ex)):
                     ok = True                                  # the source number WITH its unit stands in the excerpt; the arithmetic holds
                     break
         if not ok:

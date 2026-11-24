@@ -92,14 +92,13 @@ const UnifiedViewer: React.FC<UnifiedViewerProps> = (p) => {
   }, [tree, hiddenKeys, loadedGroups, onlyKey, p.hiddenNames]);  // eslint-disable-line react-hooks/exhaustive-deps
   // the view frames what is shown: after the other parts are hidden, fit to the remaining one
   useEffect(() => { if (onlyKey && loadedGroups.length) { const h = window.setTimeout(() => canvas.current?.fit(), 60); return () => window.clearTimeout(h); } return undefined; }, [onlyKey, loadedGroups]);
-  const filterKey = [...(p.hiddenNames ?? [])].sort().join('|');
-  const lastFilter = useRef(filterKey);
+  const lastFilter = useRef(p.hiddenNames ?? null);
   useEffect(() => {
-    if (lastFilter.current === filterKey) return undefined;
-    lastFilter.current = filterKey;
+    if (lastFilter.current === (p.hiddenNames ?? null)) return undefined;
+    lastFilter.current = p.hiddenNames ?? null;
     const h = window.setTimeout(() => canvas.current?.fit(), 60);
     return () => window.clearTimeout(h);
-  }, [filterKey]);
+  }, [p.hiddenNames]);
   const glowKey = (p.highlightFamilies ?? []).join('|');
   const highlight = useMemo(() => {
     if (p.highlightFamilies && p.highlightFamilies.length > 0) {

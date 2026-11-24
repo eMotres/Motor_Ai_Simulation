@@ -29,6 +29,8 @@ const enc = encodeURIComponent;
 
 export interface ProjectModelRow {
   id: string; name: string; revision: string; note: string; size: number; sha256: string; uploaded_at: string; uploader: string;
+  /** the customer side gets the component names (tree, Frameless) */
+  show_part_names?: boolean;
   /** staff only */
   visible_to_customer?: boolean; archived?: boolean; archived_at?: string | null;
 }
@@ -131,7 +133,7 @@ const ProjectModel3D: React.FC<{ projectId: string; motors: ReadonlyArray<{ die:
   const groups = useMemo(() => (shown && loaded.id === shown.id ? loaded.groups : []), [loaded, shown]);
   const canFrameless = useMemo(() => hasFrameless(groups), [groups]);
   const framelessOn = frameless && canFrameless;
-  const tree = useMemo(() => modelTree(groups, framelessOn), [groups, framelessOn]);
+  const tree = useMemo(() => modelTree(groups, framelessOn, t('project.otherParts')), [groups, framelessOn, t]);
   const filtered = useMemo(() => (framelessOn ? notFrameless(groups) : null), [groups, framelessOn]);
   const staff = !!list?.can_upload;
   const date = (iso: string) => { try { return new Date(iso).toLocaleDateString(language || undefined); } catch { return iso.slice(0, 10); } };
@@ -151,7 +153,7 @@ const ProjectModel3D: React.FC<{ projectId: string; motors: ReadonlyArray<{ die:
     } catch (e: any) { setErr(e?.message ?? String(e)); } finally { setBusy(false); }
   };
 
-  const patch = useCallback(async (row: ProjectModelRow, body: { archived?: boolean; visible_to_customer?: boolean }) => {
+  const patch = useCallback(async (row: ProjectModelRow, body: { archived?: boolean; visible_to_customer?: boolean; show_part_names?: boolean }) => {
     setBusy(true); setErr(null);
     try {
       const r = await fetch(`${base(projectId)}/${enc(row.id)}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
@@ -234,7 +236,7 @@ const ProjectModel3D: React.FC<{ projectId: string; motors: ReadonlyArray<{ die:
           )}
           <Box sx={{ height: { xs: 420, md: 620 }, position: 'relative', border: '1px solid var(--line-soft)', borderRadius: 1.5, overflow: 'hidden' }}>
             {shown
-              ? <UnifiedViewer sourceKey={`project-model:${projectId}:${shown.id}`} resetKey={`project-model:${projectId}:${shown.id}`}
+              ? <UnifiedViewer sourceKey={`project-model:${projectId}:${shown.id}:${shown.show_part_names ? 'names' : ''}`} resetKey={`project-model:${projectId}:${shown.id}`}
                   glbUrl={`${base(projectId)}/${enc(shown.id)}/model.glb`} toolbarSpec="full" tree={tree} hiddenNames={filtered}
                   onLoaded={(r) => setLoaded({ id: shown.id, groups: r.groups })}
                   contextLostText={t('contextLost')} noViewText="" onError={(m) => m && setErr(m)} />
@@ -250,10 +252,11 @@ const ProjectModel3D: React.FC<{ projectId: string; motors: ReadonlyArray<{ die:
               <Table size="small" data-testid="project-model-history">
                 <TableHead><TableRow>
                   <TableCell>{t('project.revision')}</TableCell><TableCell>{t('project.file')}</TableCell><TableCell>{t('project.note')}</TableCell>
-                  <TableCell>{t('project.date')}</TableCell><TableCell>{t('project.visibleShort')}</TableCell><TableCell />
+                  <TableCell>{t('project.date')}</TableCell><TableCell>{t('project.visibleShort')}</TableCell>
+                  <TableCell><Box sx={{ display: 'flex', alignItems: 'center' }}>{t('project.partNames')}<HelpTip title={t('project.partNamesTip')} /></Box></TableCell><TableCell />
                 </TableRow></TableHead>
                 <TableBody>
-                  {list!.models.length === 0 && <TableRow><TableCell colSpan={6} sx={{ fontSize: 12.5, color: 'var(--text-3)' }}>{t(showArchived ? 'project.noUpload' : 'project.noLive')}</TableCell></TableRow>}
+                  {list!.models.length === 0 && <TableRow><TableCell colSpan={7} sx={{ fontSize: 12.5, color: 'var(--text-3)' }}>{t(showArchived ? 'project.noUpload' : 'project.noLive')}</TableCell></TableRow>}
                   {list!.models.map((m) => (
                     <TableRow key={m.id} hover selected={m.id === picked} sx={{ opacity: m.archived ? 0.55 : 1, cursor: m.archived ? 'default' : 'pointer' }}
                       onClick={() => { if (!m.archived) setPicked(m.id); }}>
@@ -264,6 +267,10 @@ const ProjectModel3D: React.FC<{ projectId: string; motors: ReadonlyArray<{ die:
                       <TableCell onClick={(e) => e.stopPropagation()}>
                         <Switch size="small" checked={!!m.visible_to_customer} disabled={busy} inputProps={{ 'aria-label': t('project.visible') }}
                           onChange={(e) => void patch(m, { visible_to_customer: e.target.checked })} />
+                      </TableCell>
+                      <TableCell onClick={(e) => e.stopPropagation()}>
+                        <Switch size="small" checked={!!m.show_part_names} disabled={busy} inputProps={{ 'aria-label': t('project.partNames') }} data-testid="project-model-part-names"
+                          onChange={(e) => void patch(m, { show_part_names: e.target.checked })} />
                       </TableCell>
                       <TableCell onClick={(e) => e.stopPropagation()}>
                         <Tooltip title={t(m.archived ? 'project.restore' : 'project.archive')}>

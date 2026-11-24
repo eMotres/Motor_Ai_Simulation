@@ -23,7 +23,9 @@ files from the disk; the bound OCCT has no switch to turn that off): it keeps th
 
 Part names (owner 2026-11-24: the component tree and the Frameless button of the project model): the coloured path reads the STEP's
 component name of every part and writes it as ``extras.label``; the node name stays the unique ``Part_<n>``.  The plain path (a file
-without colours) has no names and is unchanged.
+without colours) has no names and is unchanged.  The names can hold supplier names and internal part numbers, so ``glb_for_step``
+hands out the view WITHOUT them unless the caller asks (``labels=True``) - the caller decides who may read them.  The coloured path
+has budgets (parts, nesting depth, triangles: refused with a message; total size of the names: the view then has no names).
 
   python -m motor_ai_sim.production.step_glb in.step out.glb      (what the child process runs)
 """
@@ -269,6 +271,14 @@ def _rgb(style):
 #: names OCCT makes up itself for an unnamed instance: not a component name
 _GENERATED_NAME = re.compile(r"^(=>\[.*\]|NAUO\d+|\d+(:\d+)+|SOLID|COMPOUND|SHELL|Open CASCADE STEP translator.*)$", re.IGNORECASE)
 _LABEL_MAX = 120
+#: a raw name longer than this is not even read out of the document
+_RAW_NAME_MAX = 1024
+#: budgets of one coloured view; a file over one of the first three is refused (the STEP stays downloadable)
+MAX_PARTS = 5000
+MAX_DEPTH = 32
+MAX_TRIANGLES = 5_000_000
+#: all the names of one view together, UTF-8 bytes; above it the view has no names at all
+MAX_LABEL_BYTES = 256 * 1024
 
 
 def clean_label(raw) -> str:
@@ -279,14 +289,52 @@ def clean_label(raw) -> str:
 
 def _component_name(node) -> str:
     """The name of a leaf of the assembly: the instance's own name (Fusion "Core:1"), else the part's."""
-    from OCP.TDataStd import TDataStd_Name
-    for label in (node.Label, node.RefLabel):
-        attr = TDataStd_Name()
-        if not label.IsNull() and label.FindAttribute(TDataStd_Name.GetID_s(), attr):
-            text = clean_label(attr.Get().ToExtString())
-            if text:
-                return text
+    try:
+        from OCP.TDataStd import TDataStd_Name
+        for label in (node.Label, node.RefLabel):
+            attr = TDataStd_Name()
+            if not label.IsNull() and label.FindAttribute(TDataStd_Name.GetID_s(), attr):
+                raw = attr.Get()
+                if raw.Length() > _RAW_NAME_MAX:                   # not materialised: no component is named like that
+                    continue
+                text = clean_label(raw.ToExtString())
+                if text:
+                    return text
+    except Exception as ex:                                      # noqa: BLE001 - a name never costs the colours
+        log.warning("production: STEP component name not read (%s)", ex)
     return ""
+
+
+def bounded_labels(labels: list[str]) -> list[str]:
+    """The names of one view, or no names at all when they exceed ``MAX_LABEL_BYTES`` together."""
+    total = 0
+    for text in labels:
+        total += len(text.encode("utf-8", "replace"))
+        if total > MAX_LABEL_BYTES:
+            log.warning("production: STEP component names over %d bytes; the view has none", MAX_LABEL_BYTES)
+            return [""] * len(labels)
+    return labels
+
+
+def without_labels(glb: bytes) -> bytes:
+    """The same GLB without the component names; geometry, node names and materials untouched."""
+    size = struct.unpack_from("<I", glb, 12)[0]
+    doc = json.loads(glb[20:20 + size])
+    found = False
+    for node in doc.get("nodes", []):
+        if isinstance(node.get("extras"), dict) and "label" in node["extras"]:
+            del node["extras"]["label"]
+            found = True
+    if not found:
+        return glb
+    js = json.dumps(doc, separators=(",", ":")).encode("utf-8")
+    js += b" " * ((-len(js)) % 4)
+    rest = glb[20 + size:]
+    return struct.pack("<III", GLB_MAGIC, 2, 20 + len(js) + len(rest)) + struct.pack("<II", len(js), CHUNK_JSON) + js + rest
+
+
+def _too_many(what: str, limit: int) -> "StepConversionError":
+    return StepConversionError("This assembly is too large for the 3-D view (more than %s %s); download the STEP instead." % ("{:,}".format(limit), what), status=413)
 
 
 def coloured_solids(step_path: str):
@@ -313,10 +361,15 @@ def coloured_solids(step_path: str):
     if reader.ReadFile(str(step_path)) != IFSelect_RetDone or not reader.Transfer(doc):
         raise RuntimeError("STEPCAFControl_Reader could not read the file")
     shape_tool = XCAFDoc_DocumentTool.ShapeTool_s(doc.Main())
-    out, any_colour = [], False
+    out, any_colour, leaves = [], False, 0
     explorer = XCAFPrs_DocumentExplorer(doc, XCAFPrs_DocumentExplorerFlags_OnlyLeafNodes)
     while explorer.More():
         node = explorer.Current()
+        if explorer.CurrentDepth() > MAX_DEPTH:
+            raise _too_many("nested levels", MAX_DEPTH)
+        leaves += 1
+        if leaves > MAX_PARTS:
+            raise _too_many("parts", MAX_PARTS)
         shape = shape_tool.GetShape_s(node.RefLabel)              # in the part's own frame; node.Location places it
         own = _rgb(node.Style)                                    # the leaf's colour, the assembly's inherited when it has none
         component = _component_name(node)
@@ -345,6 +398,8 @@ def coloured_solids(step_path: str):
                 coloured.append((cq.Face(faces.Current().Moved(node.Location)), colour_of(faces.Current(), base)))
                 faces.Next()
             any_colour = any_colour or any(c is not None for _f, c in coloured)
+            if len(out) >= MAX_PARTS:
+                raise _too_many("parts", MAX_PARTS)
             out.append((cq.Solid(solid.Moved(node.Location)), coloured, component))
             solids.Next()
         if not found and not shape.IsNull():                      # a surface-only part: its faces as one body, as the plain path does
@@ -391,11 +446,15 @@ def _convert_coloured(step_path: str):
         for mat in sorted(groups):
             pos, nrm, idx = merge_faces(groups[mat])
             triangles += len(idx) // 3
+            if triangles > MAX_TRIANGLES:
+                raise _too_many("triangles", MAX_TRIANGLES)
             prims.append((pos, nrm, idx, mat))
         if prims:
             parts.append(("Part_%d" % i if len(found) > 1 else "Part", prims, component))
     if not parts:
         raise StepConversionError("The STEP file has no solid geometry.")
+    labels = bounded_labels([component for _name, _prims, component in parts])
+    parts = [(name, prims, label) for (name, prims, _c), label in zip(parts, labels)]
     info = {"solids": len(parts), "triangles": triangles, "colours": len(palette) - 1,
             "bbox_mm": [round(bb.xlen, 3), round(bb.ylen, 3), round(bb.zlen, 3)]}
     return build_coloured_glb(parts, palette), info
@@ -489,16 +548,24 @@ def _run_child(step_path: Path, glb_path: Path, timeout: int) -> None:
     if p.returncode != 0 or not glb_path.is_file() or glb_path.stat().st_size == 0:
         tail = (p.stderr or p.stdout or "").strip().splitlines()[-3:]
         log.warning("production: STEP conversion failed (rc=%s): %s", p.returncode, " | ".join(tail))
-        if "StepConversionError" in (p.stderr or ""):
-            raise StepConversionError("The STEP file has no solid geometry.")
+        for line in reversed((p.stderr or "").strip().splitlines()):
+            m = re.match(r"StepConversionError\((\d{3})\): (.{1,300})$", line)
+            if m:                                                  # the child's own refusal: a fixed text of this module
+                raise StepConversionError(m.group(2), status=int(m.group(1)))
         raise StepConversionError("This STEP file could not be turned into a 3-D view.")
 
 
-def glb_for_step(step_path: Path, file_id: str, cache_dir: Path, timeout: int = TIMEOUT_S) -> bytes:
-    """The GLB of one STEP file: from the cache when it is there, else built (once) and cached.
+def glb_for_step(step_path: Path, file_id: str, cache_dir: Path, timeout: int = TIMEOUT_S, *, labels: bool = False) -> bytes:
+    """The GLB of one STEP file: from the cache when it is there, else built (once) and cached.  Without the component names unless
+    ``labels`` - the caller asks for them only for a reader who may see them.
 
     A cache that cannot be written (read-only volume) is not an error: the view is served from memory and rebuilt next time.
     """
+    data = _glb_with_labels(step_path, file_id, cache_dir, timeout)
+    return data if labels else without_labels(data)
+
+
+def _glb_with_labels(step_path: Path, file_id: str, cache_dir: Path, timeout: int) -> bytes:
     cached = cache_path(cache_dir, file_id)
     try:
         if cached.is_file() and cached.stat().st_size > 0 and cached.stat().st_mtime >= step_path.stat().st_mtime:
@@ -534,7 +601,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     try:
         info = convert_in_process(argv[0], argv[1])
     except StepConversionError as ex:
-        print("StepConversionError: %s" % ex.detail, file=sys.stderr)
+        print("StepConversionError(%d): %s" % (ex.status, ex.detail), file=sys.stderr)
         return 3
     print(json.dumps(info))
     return 0

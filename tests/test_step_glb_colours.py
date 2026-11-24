@@ -262,3 +262,67 @@ def test_the_entity_scan_is_linear_on_long_names_spaces_and_open_strings(tmp_pat
 ])
 def test_a_component_name_is_one_short_line_and_a_generated_one_is_dropped(raw, shown):
     assert step_glb.clean_label(raw) == shown
+
+
+def test_the_view_is_handed_out_without_names_unless_asked(tmp_path):
+    src = _coloured(tmp_path / "c.step")
+    named = step_glb.glb_for_step(src, "m1", tmp_path / "cache", labels=True)
+    plain = step_glb.glb_for_step(src, "m1", tmp_path / "cache")
+    labels = [n["extras"].get("label") for n in _glb(named)["nodes"][1:]]
+    assert any("pcb" in (x or "") for x in labels)
+    assert all(word not in plain for word in (b"pcb", b"chip", b"pins", b"label"))
+    a, b = _glb(named), _glb(plain)
+    for n in a["nodes"]:
+        n.get("extras", {}).pop("label", None)
+    assert a == b and step_glb.without_labels(plain) is plain                                                # nothing else changes
+    assert named[-1000:] == plain[-1000:]                                                                   # the binary chunk
+
+
+@pytest.mark.parametrize("cap, what", [("MAX_PARTS", "parts"), ("MAX_TRIANGLES", "triangles")])
+def test_an_assembly_over_a_budget_is_refused_with_a_message(tmp_path, monkeypatch, cap, what):
+    src = _coloured(tmp_path / "c.step")
+    monkeypatch.setattr(step_glb, cap, 2)
+    with pytest.raises(step_glb.StepConversionError) as err:
+        step_glb.convert_in_process(str(src), str(tmp_path / "c.glb"))
+    assert err.value.status == 413 and what in err.value.detail and "download the STEP" in err.value.detail
+    assert not (tmp_path / "c.glb").exists()
+
+
+def test_a_too_deep_assembly_is_refused(tmp_path, monkeypatch):
+    src = _coloured(tmp_path / "c.step")
+    monkeypatch.setattr(step_glb, "MAX_DEPTH", 0)
+    with pytest.raises(step_glb.StepConversionError) as err:
+        step_glb.convert_in_process(str(src), str(tmp_path / "c.glb"))
+    assert err.value.status == 413 and "nested levels" in err.value.detail
+
+
+def test_the_refusal_of_the_child_reaches_the_caller(tmp_path, monkeypatch):
+    class Done:
+        returncode, stdout, stderr = 3, "", "noise\nStepConversionError(413): This assembly is too large for the 3-D view (x).\n"
+    monkeypatch.setattr(step_glb.subprocess, "run", lambda *a, **k: Done())
+    with pytest.raises(step_glb.StepConversionError) as err:
+        step_glb._run_child(tmp_path / "a.step", tmp_path / "a.glb", 5)
+    assert err.value.status == 413 and err.value.detail.startswith("This assembly is too large")
+
+
+def test_names_over_the_total_budget_are_dropped_but_the_view_stays(tmp_path, monkeypatch):
+    monkeypatch.setattr(step_glb, "MAX_LABEL_BYTES", 5)
+    assert step_glb.bounded_labels(["ab", "cd"]) == ["ab", "cd"] and step_glb.bounded_labels(["abc", "def"]) == ["", ""]
+    src = _coloured(tmp_path / "c.step")
+    info = step_glb.convert_in_process(str(src), str(tmp_path / "c.glb"))
+    doc = _glb((tmp_path / "c.glb").read_bytes())
+    assert info["colours"] == 3 and all("label" not in n["extras"] for n in doc["nodes"][1:])
+
+
+def test_a_huge_raw_name_is_not_read_and_a_failing_name_never_costs_the_colours(tmp_path, monkeypatch):
+    import cadquery as cq
+    a = cq.Assembly(name="top")
+    a.add(cq.Workplane().box(1, 1, 1), name="x" * 5000, color=cq.Color(1, 0, 0))
+    a.add(cq.Workplane().box(1, 1, 1).translate((3, 0, 0)), name="ok", color=cq.Color(0, 1, 0))
+    a.save(str(tmp_path / "h.step"))
+    step_glb.convert_in_process(str(tmp_path / "h.step"), str(tmp_path / "h.glb"))
+    glb = (tmp_path / "h.glb").read_bytes()
+    assert b"x" * 200 not in glb
+    monkeypatch.setattr(step_glb, "clean_label", lambda raw: (_ for _ in ()).throw(RuntimeError("bad name")))
+    info = step_glb.convert_in_process(str(tmp_path / "h.step"), str(tmp_path / "h2.glb"))
+    assert info["colours"] == 2

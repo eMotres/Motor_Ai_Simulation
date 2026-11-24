@@ -146,3 +146,42 @@ def test_atomic_write_keeps_the_target_mode_and_new_files_get_the_plain_write_mo
     new = tmp_path / "b.json"
     ss._atomic_write(new, "n")
     assert (new.stat().st_mode & 0o777) == (plain.stat().st_mode & 0o777)
+
+
+_posix = pytest.mark.skipif(__import__("os").name != "posix", reason="POSIX modes")
+
+
+@_posix
+def test_the_temp_file_is_private_while_the_content_is_written_and_a_private_target_stays_private(tmp_path, monkeypatch):
+    import os
+    import stat
+    t = tmp_path / "p.json"
+    t.write_text("old")
+    os.chmod(t, 0o600)
+    seen = []
+    real = os.fdopen
+
+    def spy(fd, *a, **k):
+        seen.append(stat.S_IMODE(os.fstat(fd).st_mode))   # mode before any content exists
+        return real(fd, *a, **k)
+
+    monkeypatch.setattr(ss.os, "fdopen", spy)
+    ss._atomic_write(t, "new")
+    assert seen == [0o600]
+    assert t.read_text() == "new" and stat.S_IMODE(t.stat().st_mode) == 0o600
+
+
+@_posix
+def test_a_failing_mode_change_aborts_the_replacement(tmp_path, monkeypatch):
+    import os
+    t = tmp_path / "q.json"
+    t.write_text("old")
+    os.chmod(t, 0o600)
+
+    def boom(*a, **k):
+        raise PermissionError("no")
+
+    monkeypatch.setattr(ss.os, "fchmod", boom)
+    with pytest.raises(PermissionError):
+        ss._atomic_write(t, "new")
+    assert t.read_text() == "old" and [p.name for p in tmp_path.iterdir()] == ["q.json"]

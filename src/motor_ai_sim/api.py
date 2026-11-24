@@ -1509,6 +1509,7 @@ def update_winding_config(patch: WindingConfigPatch):
 
 def _apply_winding_patch(patch: WindingConfigPatch) -> dict:
     updates: dict = {}
+    _coil_fix = None
     if patch.connection is not None:
         try:
             n_par, n_ser = _parse_connection(patch.connection)
@@ -1525,7 +1526,26 @@ def _apply_winding_patch(patch: WindingConfigPatch) -> dict:
         updates["n_parallel"]  = str(n_par)
         updates["n_series"]    = str(n_ser)
     if patch.n_coils_per_phase is not None:
-        updates["n_coils_per_phase"] = str(patch.n_coils_per_phase)
+        # The count is DERIVED from the slots: a differing value on a 3-phase winding is corrected to the derived
+        # one, logged, and the correction is returned in the response.  A winding of another phase layout (six-phase)
+        # is not covered by the formula: its value is stored as sent.
+        _ns_c, _ = _current_winding_layout()
+        _ph_c = patch.phases if patch.phases is not None else (get_config().get("winding") or {}).get("phases")
+        _val_c = int(patch.n_coils_per_phase)
+        try:
+            _three = int(float(_ph_c or 3)) == 3
+        except (TypeError, ValueError):
+            _three = False
+        if _three:
+            _want_c = _coils_per_phase(_ns_c)
+            if _val_c != _want_c:
+                _coil_fix = {"requested": _val_c, "stored": _want_c,
+                             "reason": f"{_ns_c} slots give {_want_c} coils per phase"}
+                logging.getLogger("motor_ai_sim.winding").warning(
+                    "winding: n_coils_per_phase %s corrected to the derived %s (%s)",
+                    _val_c, _want_c, _coil_fix["reason"])
+                _val_c = _want_c
+        updates["n_coils_per_phase"] = str(_val_c)
     if patch.layers is not None:
         if int(patch.layers) not in (1, 2):
             raise HTTPException(status_code=400, detail="layers must be 1 or 2")
@@ -1578,7 +1598,10 @@ def _apply_winding_patch(patch: WindingConfigPatch) -> dict:
             raise HTTPException(status_code=422, detail=_e6)
 
     _write_winding_updates(updates)
-    return {"status": "ok", "updated": {k: v.strip('"') for k, v in updates.items()}}
+    out = {"status": "ok", "updated": {k: v.strip('"') for k, v in updates.items()}}
+    if _coil_fix:
+        out["n_coils_per_phase_corrected"] = _coil_fix
+    return out
 
 
 # ── Mesh ──────────────────────────────────────────────────────────────────────

@@ -150,6 +150,16 @@ def main(argv=None) -> int:
         print(f"  {k[:12]}  {v.get('machine')}  stack {v.get('stack_mm')}  k_flux {v.get('k_flux')}  "
               f"rows {len(v.get('k_flux_vs_L') or {})}  method {v.get('k_flux_vs_L_method') or '-'}")
     errors = old["errors"] + new["errors"]
+    # the lookup matches by machine class: show how the configurations spread over the classes, so a class that matches
+    # no passport (or a wrong class read from the geometry) is visible instead of silently listing nothing
+    classes = {}
+    for r in rows:
+        classes.setdefault(r["machine"], 0)
+        classes[r["machine"]] += 1
+    have = {str(v.get("machine")) for v in store.values() if isinstance(v, dict)}
+    print("\nconfigurations per machine class (* = the store has a passport of that class):")
+    for m, c in sorted(classes.items(), key=lambda kv: str(kv[0])):
+        print(f"  {'*' if m in have else ' '} {m}: {c}")
     shown = [r for r in rows if a.all or r["changed"]]
     print(f"\n{len(rows)} configurations checked, {sum(r['changed'] for r in rows)} changed "
           f"(|diff| > {a.threshold:g} in k_flux or k_T, or a factor appears / disappears), {len(errors)} errors")

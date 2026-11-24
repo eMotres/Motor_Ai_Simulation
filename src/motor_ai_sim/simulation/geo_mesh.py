@@ -2897,6 +2897,8 @@ def geo_mesh_halves(p: Dict, polys: Dict, outer_air_factor: float = 1.2,
     iron_edge = math.sqrt(max(area, 1e-6) / 0.4330)
     air_mm = (float(air_mesh_mm) if float(air_mesh_mm or 0.0) > 0
               else max(3.0, 2.0 * iron_edge))
+    log.info("geo air edge: %.3f mm (%s; iron edge %.3f mm)", air_mm,
+             "requested" if float(air_mesh_mm or 0.0) > 0 else "default max(3, 2*iron edge)", iron_edge)
     # PER-PART element size: every solid part already owns a CDT region seed
     # (stator iron / each coil / rotor steel / each magnet), so a requested part
     # size is simply that seed's target cell area.  Parts not requested keep the

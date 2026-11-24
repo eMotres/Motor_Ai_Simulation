@@ -367,12 +367,19 @@ def solve_steady_thermal(
     cut_sel = wedge_cut_facets(mesh, bnd)
     if cut_sel.size:
         outer_sel = np.setdiff1d(outer_sel, cut_sel)
+    # …and the two duplicated rings of the SLIP line.  Both are mesh boundaries; where the slip radius lies above 0.9 of the housing
+    # radius (a thin-walled machine) they passed the radial band and the contour walk started from them, so the external film also
+    # cooled the internal gap faces (Astra audit 2026-11-21, F01: 288 cooled facets instead of 96, -6.3 K on a probe).  A slip facet
+    # is an internal interface: it never carries an external film.
+    slip_sel = bnd[(side_w[fnodes[0]] > 0) & (side_w[fnodes[1]] > 0)] if slip_r > 0.0 else np.array([], int)
+    if slip_sel.size:
+        outer_sel = np.setdiff1d(outer_sel, slip_sel)
     # …and the WHOLE outer contour, notch walls down to the bottom (owner 2026-11-04:
     # «вода омывает весь контур статора»).  The midpoint rule alone cut the notch
     # walls at 0.9 R and depended on the mesh: a long facet whose midpoint fell below
     # the radius dropped out, so one stator was cooled through 0.0270 m² on the sine
     # mesh and 0.0205 m² on the PWM mesh, and the real contour is 0.0392 m².
-    outer_sel = outer_contour_facets(mesh, bnd, outer_sel, cut_sel)
+    outer_sel = outer_contour_facets(mesh, bnd, outer_sel, cut_sel, exclude=slip_sel)
     # OUTER_OD (2026-11-03): only the facets lying ON the OD circle — the iron
     # arcs a sleeve pressed on the stator touches.  The notch walls and the
     # OD corner fillets are left out (they touch nothing).  Both ends within
@@ -929,7 +936,8 @@ def solve_steady_thermal(
     }
 
 
-def outer_contour_facets(mesh, bnd: np.ndarray, seed: np.ndarray, cut: np.ndarray) -> np.ndarray:
+def outer_contour_facets(mesh, bnd: np.ndarray, seed: np.ndarray, cut: np.ndarray,
+                         exclude: Optional[np.ndarray] = None) -> np.ndarray:
     """The boundary facets connected to ``seed`` along the boundary, cut lines excluded.
 
     Selected by connection, not by radius, so the answer does not depend on the mesh:
@@ -942,6 +950,8 @@ def outer_contour_facets(mesh, bnd: np.ndarray, seed: np.ndarray, cut: np.ndarra
     if seed.size == 0:
         return seed
     walk = np.setdiff1d(bnd, cut) if cut.size else bnd
+    if exclude is not None and exclude.size:        # internal interfaces (the slip rings) are never part of the exterior
+        walk = np.setdiff1d(walk, exclude)
     nodes = mesh.facets[:, walk]
     at_node: dict[int, list[int]] = {}
     for i, (a, b) in enumerate(nodes.T):

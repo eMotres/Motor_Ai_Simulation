@@ -2692,6 +2692,15 @@ ${s1Text.text}` : '';
               {propLine ? `⚠ ${propLine.text}` : ''}
             </Typography>
           )}
+          {/* ONE flag, admins only (clients get no 3-D provenance line, owner 2026-08-24): the passport's k(L)
+              table predates the 2026-11-24 fix, so only its reference value is used (motorScaling.end3dKTable) */}
+          {isAdmin && result.k_end3d_stale && (
+            <Tooltip title={tx('configure.kLStaleTip')}>
+              <Typography sx={{ ...LABEL, fontSize: 11, lineHeight: '16px', color: '#fbbf24', alignSelf: 'flex-start' }}>
+                {`⚑ ${tx('configure.kLStale')}`}
+              </Typography>
+            </Tooltip>
+          )}
           <Box sx={{ display: 'flex', gap: 0.75, flexWrap: 'wrap' }}>
             <MetricTile label={tx('configure.torque')} value={pointGate.accepted ? result.T_Nm : null} unit="N·m" d={1} base={baseRes.T_Nm} goodHi
               tip={`${tx('configure.torqueTip')} ${KT_BASIS_TIP(result.kt_km_basis)}`} blankTip={pointBlankTip} />

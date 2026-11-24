@@ -12,6 +12,7 @@ Dependencies:
 - OmegaConf (optional, for YAML config loading)
 """
 
+import math
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
@@ -48,6 +49,9 @@ DERIVED_GEOMETRY_FIELDS = (
     "stator_outer_radius", "stator_inner_radius",
     "rotor_outer_radius", "rotor_inner_radius",
     "angle_slot", "angle_pole", "slot_pitch", "pole_pitch",
+    # STORED `slot_width` = the wire pitch the slot has to accept (column + 2 x wire_spacing_x + 2 x insulation).
+    # It is NOT the pocket the builders cut into the iron: that is one wire_spacing_x narrower and is the COMPUTED
+    # `pocket_width()` below (never stored).  Mesh, thermal and hashes read this stored one: do not change it.
     "slot_width",
 )
 
@@ -160,6 +164,31 @@ def canonical_outer_notches(g: Dict[str, Any]) -> Dict[str, Any]:
         else:
             g[STATOR_OUTER_NOTCHES] = False
     return g
+
+
+def pocket_width(geo: Optional[Dict[str, Any]]) -> Optional[float]:
+    """The coil pocket the builders actually CUT into the lamination [mm]; None when an input is missing.
+
+    ``column + 2 x insulation_thickness + wire_spacing_x`` with ``column = N x wire_width +
+    (N - 1) x STRIP_GAP_FACTOR x wire_spacing_x`` and ``N = wire_split`` (``cadquery_geometry``:
+    ``slot_w = wire_col_w + ins_w*2 + wire_d_x``; ``iron_template``: the same ``coil_w``).  Computed on read,
+    never stored.  It is NOT ``derived_geometry()["slot_width"]`` (the stored `slot_width`), which is one
+    ``wire_spacing_x`` wider: two wire stacks can agree in one number and differ in the other, and the iron
+    follows this one.  The one implementation: ``routes.family._built_slot_width`` is an alias of it.  Pure."""
+    try:
+        from motor_ai_sim.winding import STRIP_GAP_FACTOR as _gf
+        g = dict(geo or {})
+        ww, wsx, ins = float(g["wire_width"]), float(g["wire_spacing_x"]), float(g["insulation_thickness"])
+        if not all(math.isfinite(v) for v in (ww, wsx, ins)):
+            return None                                     # inf / nan = missing (the web twin agrees)
+        try:
+            n = max(1, int(round(float(g.get("wire_split") or 1))))   # round() is half-to-even
+        except (TypeError, ValueError, OverflowError):      # non-finite / unreadable split = one strip
+            n = 1
+        col = ww if n <= 1 else n * ww + (n - 1) * _gf * wsx
+        return col + 2.0 * ins + wsx
+    except Exception:                                       # noqa: BLE001 - cannot tell = no verdict
+        return None
 
 
 def derived_geometry(g: Dict[str, Any]) -> Dict[str, float]:

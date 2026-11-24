@@ -186,3 +186,38 @@ def test_a_stale_derived_copy_is_not_another_lamination(dies, monkeypatch):
         _save()
     assert e.value.status_code == 409
     assert _names(dies) == {DIE}
+
+
+# ── the pocket-width key: the "no implicit die" check reads the NEW and the OLD diff key (2026-11-24) ──────────
+def _force_diffs(monkeypatch, diffs):
+    monkeypatch.setattr(fam, "die_shape_diffs", lambda *_a, **_k: [dict(d) for d in diffs])
+
+
+def test_the_real_diff_of_a_wider_wire_is_keyed_pocket_width(dies):
+    """The scenario of the first test, read through the real die_shape_diffs: one entry, the new key, the built pocket."""
+    d = fam.die_shape_diffs({**GEO, **WIRE}, LIVE_GEO)
+    assert [x["key"] for x in d] == ["pocket_width"]
+    assert d[0]["die"] == pytest.approx(7.54) and d[0]["live"] == pytest.approx(8.04)   # 7 + 0.34 + 0.2 ; 7.5 + 0.34 + 0.2
+
+
+@pytest.mark.parametrize("key", ["pocket_width", "slot_width"])
+def test_a_pocket_only_difference_is_saved_into_the_configuration_under_either_key(dies, monkeypatch, key):
+    _force_diffs(monkeypatch, [{"key": key, "label": "x", "die": 7.5, "live": 8.0}])
+    out = _save()
+    assert "transitioned" not in out and _names(dies) == {DIE}
+    assert _yaml(dies / DIE / f"{CFG}.yaml")["geometry_overrides"]["wire_width"] == 7.5
+
+
+@pytest.mark.parametrize("key", ["pocket_width", "slot_width"])
+def test_a_pocket_difference_next_to_a_real_lamination_difference_is_still_refused(dies, monkeypatch, key):
+    live = {"geometry": dict(LIVE_GEO, magnet_height=23.0),
+            "simulation": {"current_a": 420.0, "rpm": 3000.0, "gamma_deg": 22.0, "mode": "motor"},
+            "winding": {"connection": "8S"}, "materials": dict(MATS)}
+    monkeypatch.setattr(fam, "_live_cfg", lambda: live)
+    _force_diffs(monkeypatch, [{"key": key, "label": "x", "die": 7.5, "live": 8.0},
+                               {"key": "magnet_height", "label": "magnet height", "die": 18.8, "live": 23.0}])
+    before = _bytes(dies)
+    with pytest.raises(HTTPException) as e:
+        _save()
+    assert e.value.status_code == 409
+    assert _bytes(dies) == before and _names(dies) == {DIE}

@@ -187,6 +187,13 @@ def get_catalog(authorization: Optional[str] = Header(default=None)):
         cat["by_diameter"] = {d: [i for i in ids
                                   if any(m["id"] == i for m in cat["motors"])]
                               for d, ids in cat["by_diameter"].items()}
+    else:
+        # the LISTING leaves an archived configuration's card out for admins too (configuration archive, 2026-11-22); an
+        # admin's direct card reads (load, passport) still find it
+        from motor_ai_sim import motor_access as _ma
+        cat["motors"] = _ma._drop_archived_cards(cat.get("motors", []), admin=True)
+        cat["by_diameter"] = {d: [i for i in ids if any(m["id"] == i for m in cat["motors"])]
+                              for d, ids in cat["by_diameter"].items()}
     return cat
 
 
@@ -902,7 +909,8 @@ def generate_motor_passport(motor_id: str, coarse: bool = False,
                 "mm = p.get('machine') or {}\n"
                 "md = p.get('model') or {}\n"
                 "out = {k: p.get(k) for k in ('k_flux', 'k_flux_self',\n"
-                "                             'generated_utc', 'l_stack_curve')}\n"
+                "                             'generated_utc', 'l_stack_curve',\n"
+                "                             'k_flux_vs_L_method')}\n"
                 "out['materials'] = mm.get('materials')\n"
                 "out['mesh'] = {k: md.get(k) for k in ('h_gap_mm', 'h_solid_mm',\n"
                 "               'mesh_rule', 'box_z_mm', 'iron_stack_kf')}\n"
@@ -946,6 +954,10 @@ def generate_motor_passport(motor_id: str, coarse: bool = False,
                            f"OD {2*result['geo']['statorOR_mm']:.0f}",
                 "k_flux_vs_L": {str(e["stack_mm"]): round(e["k_flux"], 5)
                                 for e in (_sa.get("l_stack_curve") or [])},
+                # how the per-length rows were formed (end_effect.K_FLUX_VS_L_*);
+                # absent on a passport from before the 2026-11-24 fix
+                **({"k_flux_vs_L_method": _sa["k_flux_vs_L_method"]}
+                   if _sa.get("k_flux_vs_L_method") else {}),
                 # provenance: the steel actually solved and the mesh rule, so
                 # a wrong-material passport can be found later
                 "materials": _sa.get("materials"),
@@ -958,6 +970,8 @@ def generate_motor_passport(motor_id: str, coarse: bool = False,
             None if _e3 is None else
             {"k_flux": _e3["k_flux"],
              "k_flux_vs_L": _e3.get("k_flux_vs_L") or None,
+             **({"k_flux_vs_L_method": _e3["k_flux_vs_L_method"]}
+                if _e3.get("k_flux_vs_L_method") else {}),
              "fidelity": _e3.get("fidelity")})
     except Exception:  # noqa: BLE001 — a 3D failure must not lose the 2D passport
         log.exception("catalog passport: 3D end-effect attach failed — "
@@ -1110,7 +1124,9 @@ def _visible_context(ctx: Dict[str, Any], acc: dict) -> Dict[str, Any]:
         cfg = str(pr.get("config") or "")
         try:
             row = info.get(cfg)
-            if isinstance(row, (list, tuple)) and len(row) == 4:
+            if acc.get("is_admin"):
+                ok = True                  # an admin opens every preset, an archived configuration's too (config archive, 2026-11-22)
+            elif isinstance(row, (list, tuple)) and len(row) == 4:
                 ok = _ma.may_see_config_file(acc, str(row[0]), str(row[1]), Path(str(row[2])), layer=row[3])
             else:
                 ok = bool(cfg) and _ma.config_allowed(acc, str(pr.get("die") or ""), cfg)

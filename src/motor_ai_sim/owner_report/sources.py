@@ -431,7 +431,7 @@ def _project_audit_text(ev: dict) -> Optional[tuple]:
         where = f" [{folder}]" if folder else ""
         if action == "document.upload":
             return f"document uploaded: {name}{where}" + (f" rev {det['revision']}" if det.get("revision") else "") + (
-                " (internal)" if det.get("internal") else ""), "documents"
+                " (internal)" if det.get("internal") else "") + (" (price-restricted)" if det.get("price_restricted") else ""), "documents"
         if action == "document.update":
             changes = det.get("changes") if isinstance(det.get("changes"), dict) else {}
             return f"document updated: {name} ({', '.join(str(k) for k in changes)})", "documents"
@@ -448,18 +448,33 @@ def _project_audit_text(ev: dict) -> Optional[tuple]:
     return f"{action} {entity} {eid}".strip(), None
 
 
+def _internal_allowed() -> bool:
+    """Staff-only (internal) message lines go into the report only when EVERY recipient, fallbacks included, is an enabled staff account."""
+    try:
+        from motor_ai_sim.development import access as DA
+        from motor_ai_sim.owner_report import send as S
+        return all(DA.is_staff_email(a) for a in S.recipients())
+    except Exception:                                        # noqa: BLE001 - fail closed
+        return False
+
+
 def _fmt_projects(start: float, end: float) -> list:
     from motor_ai_sim.development import store as PS
     from motor_ai_sim.digest import collect as C
+    internal_ok = _internal_allowed()
     blocks = []
     for project in PS.list_projects():
         pid = str(project.get("id") or "")
         try:
             lines = []
+            staff_ids = C._marked_thread_ids([m for m in _read_jsonl(PS.path_for(pid) / "thread.jsonl") if m.get("kind") != "resolution"],
+                                             "staff_only")
             for ev in _read_jsonl(PS.path_for(pid) / "audit.jsonl"):
                 ts = ts_of(ev.get("time"))
                 if not _in(ts, start, end):
                     continue
+                if not internal_ok and str(ev.get("entity_id") or "") in staff_ids:
+                    continue                                 # resolve / reopen of an internal message: its id and time are internal too
                 got = _project_audit_text(ev)
                 if got is None or got[0] is None:            # a posted message comes from thread.jsonl, not its audit row
                     continue
@@ -474,7 +489,11 @@ def _fmt_projects(start: float, end: float) -> list:
             # messages (thread) and new computed results: the digest collector's own lines
             for it in C.collect_project(project, start, end):
                 if it.kind in ("message", "results"):
-                    lines.append(B.Line(it.ts, it.en, it.link or "", "", "customer" if it.kind == "message" else "system"))
+                    internal = "staff" in it.requires               # a staff-only message is never shown as a customer's line
+                    if internal and not internal_ok:
+                        continue
+                    lines.append(B.Line(it.ts, ("[internal] " + it.en) if internal else it.en, it.link or "", "",
+                                        "staff" if internal else ("customer" if it.kind == "message" else "system")))
             if lines:
                 blocks.append(B.Block(f"Project: {project.get('title') or pid} [{project.get('status') or 'spec'}]", lines,
                                       RP.project_path(pid) or ""))

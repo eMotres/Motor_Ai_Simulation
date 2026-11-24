@@ -200,3 +200,46 @@ def enrich(end3d: Optional[Dict[str, Any]], fingerprint: Optional[str],
     out["k_torque"] = k
     out["torque_basis"] = basis
     return out
+
+
+#: ``k_flux_vs_L_method`` values whose per-length rows are right (``simulation.static3d.end_effect.K_FLUX_VS_L_*``).
+#: A table with more than one row and without one of these was written before the 2026-11-24 fix: every row but the
+#: reference one used the REFERENCE length's 3-D mid-plane / 2-D ratio, so k_flux(L) came out nearly flat in L.
+K_FLUX_VS_L_METHODS_OK = frozenset({"own_mid_ratio", "self_no_2d"})
+#: The one short flag a reader shows for such a table (EN; the web carries its own EN + zh-CN string).
+STALE_KL_FLAG = "k(L) computed before 2026-11-24: recompute"
+
+
+def k_flux_table(end3d: Optional[Dict[str, Any]]) -> Tuple[Dict[float, float], bool]:
+    """``(table, stale)``: the per-length table ``{stack_mm: k_flux}`` a reader may interpolate, and whether a stored
+    table was refused as stale.
+
+    - a table whose ``k_flux_vs_L_method`` is in :data:`K_FLUX_VS_L_METHODS_OK`, or one with a single row (that row is
+      the passport's own length = its scalar ``k_flux``), is returned as it is, ``stale = False``;
+    - a multi-row table without the marker (or with an unknown one) is stale: only its REFERENCE row is kept,
+      ``({L_ref: k_flux}, True)`` - that row was always right and equals the scalar ``k_flux``.  The reference length is
+      the entry's ``stack_mm`` when recorded, else the one row whose value is the scalar (the stores round it to 5
+      decimals); when neither identifies it the answer is ``({}, True)``.  The reader then uses the scalar at every
+      length and shows :data:`STALE_KL_FLAG`.  Marked and unmarked rows are never mixed: the marker is the table's.
+
+    Rows that are not finite numbers are dropped (as every reader did)."""
+    e = end3d if isinstance(end3d, dict) else {}
+    raw = e.get("k_flux_vs_L")
+    rows: Dict[float, float] = {}
+    if isinstance(raw, dict):
+        for a, b in raw.items():
+            x, y = _num(a), _num(b)
+            if x is not None and y is not None and math.isfinite(x) and math.isfinite(y):
+                rows[x] = y
+    if len(rows) <= 1:
+        return rows, False
+    if str(e.get("k_flux_vs_L_method") or "") in K_FLUX_VS_L_METHODS_OK:
+        return rows, False
+    k = _num(e.get("k_flux"))
+    if k is None or not math.isfinite(k):
+        return {}, True
+    own = _num(e.get("stack_mm"))
+    if own is not None and own > 0:
+        return {own: k}, True
+    ref = [x for x, y in rows.items() if abs(y - k) <= 5e-6]
+    return ({ref[0]: k} if len(ref) == 1 else {}), True

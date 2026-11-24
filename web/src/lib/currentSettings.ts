@@ -3,6 +3,8 @@
  * run request.  Pure (no `import.meta`, no store), so `node --test` loads it with a stubbed storage.  A field the tabs never
  * wrote is ABSENT: nothing is defaulted here, except the Simulation tab's own constant (field-based rotor eddy is always on).
  */
+import { parseMagnetTempC } from './magnetTemp.ts';
+
 /** What the panels hold right now, by the request names. */
 export interface CurrentSettings {
   steps?: number; gap_layers?: number; mesh_size_mm?: number; min_size_mm?: number;
@@ -10,6 +12,8 @@ export interface CurrentSettings {
   /** The field-based rotor eddy of the Simulation tab (`sim.fieldLosses`; the tab has no toggle: always on, SimulationPanel `fieldLosses = true`). */
   rotor_eddy?: boolean;
   component_mesh: Record<string, number>;
+  /** The Simulation tab's MAGNET TEMPERATURE field (`sim.magnetTempC`, text) as a number: absent when blank / not a number = the card as written. */
+  magnet_temp_c?: number;
 }
 
 
@@ -45,10 +49,15 @@ export function readCurrentSettings(st: Store = ls()): CurrentSettings {
     const raw = st.getItem('sim.fieldLosses');
     if (raw != null) rotor_eddy = Boolean(JSON.parse(raw));
   } catch { /* keep the tab's constant */ }
+  let magnet_temp_c: number | undefined;
+  try {
+    const raw = st.getItem('sim.magnetTempC');
+    if (raw != null) { const v = parseMagnetTempC(JSON.parse(raw)); if (v != null) magnet_temp_c = v; }
+  } catch { /* unreadable: the card as written */ }
   return {
     steps: num('sim.stepsPP', st), gap_layers: num('mesh.gapLayers', st), mesh_size_mm: num('mesh.meshSize', st),
     min_size_mm: num('mesh.minSize', st), outer_air_factor: num('mesh.outerAir', st), n_sectors: num('mesh.nSectors', st),
-    demag, rotor_eddy, component_mesh: comp,
+    demag, rotor_eddy, component_mesh: comp, ...(magnet_temp_c !== undefined ? { magnet_temp_c } : {}),
   };
 }
 

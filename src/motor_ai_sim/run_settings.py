@@ -85,20 +85,27 @@ SIG_SCOPE_FULL = 3
 # separates runs that asked for different ones, it does not prove what the mesher produced.
 
 
-def identity_sig(steps: Any, gap_layers: Any, preset_version: Any = None, coil_rel: Any = None) -> int:
+def identity_sig(steps: Any, gap_layers: Any, preset_version: Any = None, coil_rel: Any = None,
+                 magnet_temp_c: Any = None) -> int:
     """A numeric digest of the run identity: steps, gap rows, the preset version and the wire cell (``coil_rel``) the run used.
-    Two sweeps are ranked together only when it is known and equal.  Without the last two arguments it is the old pair digest."""
+    Two sweeps are ranked together only when it is known and equal.  Without the last two arguments it is the old pair digest.
+    ``magnet_temp_c`` is the magnet temperature the run TYPED (None = the card as written, which leaves the digest exactly as it was):
+    a typed one is part of the identity, so two sweeps at different magnet temperatures are never ranked together."""
     body = [int(steps), round(float(gap_layers), 4)]
     if preset_version is not None:
         body += [int(preset_version), round(float(coil_rel if coil_rel is not None else 1.0), 4)]
+    if magnet_temp_c is not None:
+        body += ["magnet", round(float(magnet_temp_c), 2)]
     return int(hashlib.md5(json.dumps(body).encode()).hexdigest()[:12], 16)
 
 
-def full_sig(settings: Mapping[str, Any], preset_version: Any) -> int:
+def full_sig(settings: Mapping[str, Any], preset_version: Any, magnet_temp_c: Any = None) -> int:
     """The digest of a custom run: EVERY resolved setting the run uses (``settings`` is the resolver's dict) and the preset version.
     Two custom runs rank together only when all of them are equal."""
     body = {"v": int(preset_version) if preset_version is not None else None,
             "s": {k: settings[k] for k in sorted(settings)}}
+    if magnet_temp_c is not None:               # absent when blank: the digest of every run before this field is unchanged
+        body["m"] = round(float(magnet_temp_c), 2)
     return int(hashlib.md5(json.dumps(body, sort_keys=True, default=str).encode()).hexdigest()[:12], 16)
 
 
@@ -148,6 +155,8 @@ def resolution_token(out: Mapping[str, Any], geometry: Mapping[str, Any]) -> str
     body = {"mode": out["mode"], "preset": out["preset"], "overrides": out["overrides"], "settings": out["settings"],
             "sources": out["sources"], "version": out["version"],
             "slots": geometry.get("num_slots"), "poles": geometry.get("num_poles")}
+    if (out.get("magnet") or {}).get("requested") is not None:      # absent when blank: the token of a blank run is unchanged
+        body["magnet"] = out["magnet"]["requested"]
     return hashlib.md5(json.dumps(body, sort_keys=True, default=str).encode()).hexdigest()
 
 
@@ -193,9 +202,46 @@ def _match_tab(settings: Mapping[str, Any], geometry: Mapping[str, Any], mode: s
     return None, first[1], first[2]
 
 
+#: the range of a magnet temperature a run may be asked for [C] (the Simulation field's own range, web/src/lib/magnetTemp.ts)
+MAGNET_T_MIN, MAGNET_T_MAX = -60.0, 350.0
+
+
+def magnet_block(requested: Any = None) -> Dict[str, Any]:
+    """The magnet temperature a run solves at, as the SERVER resolves it: ``requested`` (the typed number or None), ``used_c``, ``source``
+    ("typed" / "card") and the assigned card with its own temperature.  Blank = the card as the library writes it: ``used_c`` is what
+    the solver's own reader (``fem_solver_2d._run_magnet_temp_c``) answers, so it can never disagree with the solve; it is never
+    replaced by the coil temperature or anything else.  A number that is not finite or outside the range is not a request (None).
+    Read-only."""
+    try:
+        req = None if requested is None or str(requested).strip() == "" else float(requested)
+        if req is not None and not (math.isfinite(req) and MAGNET_T_MIN <= req <= MAGNET_T_MAX):
+            req = None
+    except (TypeError, ValueError):
+        req = None
+    out: Dict[str, Any] = {"requested": req, "used_c": req, "source": "typed" if req is not None else "card",
+                           "card": None, "card_c": None}
+    try:
+        from motor_ai_sim.routes.simulation import _assigned_magnet_card
+        name, _card = _assigned_magnet_card()
+        out["card"] = str(name) if name else None
+    except Exception:       # noqa: BLE001 - a display block must never break the resolve
+        pass
+    try:
+        from motor_ai_sim.simulation.fem_solver_2d import _run_magnet_temp_c
+        t = _run_magnet_temp_c(None)         # the card's reference temperature as the solver reads it (request materials included)
+        out["card_c"] = None if t is None else float(t)
+    except Exception:       # noqa: BLE001
+        pass
+    if req is None:
+        out["used_c"] = out["card_c"]
+    return out
+
+
 def resolve(preset: Optional[str], overrides: Optional[Mapping[str, Any]], cfg: Mapping[str, Any],
-            mode: str = "sweep") -> Dict[str, Any]:
-    """The complete effective settings of one run, the label and every difference from the preset, the clamps applied."""
+            mode: str = "sweep", magnet_temp_c: Any = None) -> Dict[str, Any]:
+    """The complete effective settings of one run, the label and every difference from the preset, the clamps applied.
+    ``magnet_temp_c``: the magnet temperature typed in the Simulation tab (None = the card as written); it only enters the digest and the
+    token when typed and is reported back, resolved, in ``magnet``."""
     name = str(preset or "optimization").strip().lower()
     tab = name == TAB
     if name not in PRESETS and not tab:
@@ -319,7 +365,8 @@ def resolve(preset: Optional[str], overrides: Optional[Mapping[str, Any]], cfg: 
             "finalist_note": finalist_note(settings["steps_per_period"], geometry),
             "coil_rel": coil_rel_used, "coil_rel_stored": coil_rel_stored, "coil_rel_override": coil_rel_override,
             "sig_scope": SIG_SCOPE_FULL if custom else SIG_SCOPE,
-            "sig": (full_sig(settings, MP.version()) if custom else
-                    identity_sig(settings["steps_per_period"], settings["gap_layers"], MP.version(), coil_rel_used))}
+            "magnet": magnet_block(magnet_temp_c),
+            "sig": (full_sig(settings, MP.version(), magnet_temp_c) if custom else
+                    identity_sig(settings["steps_per_period"], settings["gap_layers"], MP.version(), coil_rel_used, magnet_temp_c))}
     out["token"] = resolution_token(out, geometry)
     return out

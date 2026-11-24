@@ -58,12 +58,15 @@ const RunSettingsBar: React.FC<{ rs: RunSettingsState; dense?: boolean }> = ({ r
     steps: n => tx('runSettingsStepsN', { n }), gap: n => tx(n === 1 ? 'runSettingsGapOne' : 'runSettingsGapMany', { n }),
     wire: n => tx('runSettingsWireN', { n }), fromSim: tx('runSettingsFromSim'), fromMesh: tx('runSettingsFromMesh'),
     notOptimization: tx('runSettingsNotOptimization'),
+    magnet: (t, source, card) => (source === 'typed' ? tx('runSettingsMagnetTyped', { t: Math.round((t ?? 0) * 10) / 10 })
+      : t == null ? tx('runSettingsMagnetCardOnly', { card: card ?? '-' })
+        : tx('runSettingsMagnetCard', { t: Math.round(t * 10) / 10, card: card ?? '-' })),
     diff: (k, cur, pre) => tx('runSettingsDiff', { name: KEY_NAME[k] ? tx(KEY_NAME[k]) : k, current: val(k, cur), preset: val(k, pre) }),
   }) : '';
   const unknown = !rs.request && rs.missing.length > 0;
   return (
     <Tooltip placement="top" title={<span style={{ whiteSpace: 'pre-line' }}>
-      {[tx('runSettingsHelp'), ...(reason ? [`${tx('runSettingsKeySteps')}: ${reason}`] : []), ...(st ? [describeSettings(st, r?.sources)] : []), ...diff, ...clamps, ...fin].join('\n')}</span>}>
+      {[tx('runSettingsHelp'), ...(r?.magnet ? [tx('runSettingsMagnetHelp')] : []), ...(reason ? [`${tx('runSettingsKeySteps')}: ${reason}`] : []), ...(st ? [describeSettings(st, r?.sources)] : []), ...diff, ...clamps, ...fin].join('\n')}</span>}>
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75, flexWrap: 'wrap', mb: 1 }}>
         {r && st && (
           <Typography data-testid="run-settings-line" sx={{ fontSize: dense ? 11.5 : 12.5, color: warn ? '#fbbf24' : 'var(--text-2)' }}>

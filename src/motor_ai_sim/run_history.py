@@ -70,6 +70,9 @@ serving yesterday's answer under today's build would silently un-fix the bug
 for every repeat launch.  Resolution order — the first that is available
 wins:
 
+0. ``MOTRES_BUILD_ID`` (``roles.build_id()``, the value ``GET /api/health`` reports as ``build``;
+   set per container by deploy/docker-compose.yml; the compose placeholders ``dev`` / ``latest``
+   do not count).  Containers have neither marker nor git, so this is their only source.
 1. ``.deployed_commit`` next to the app root (the server's own marker file,
    written by the deploy script beside ``src/`` — see
    ``AGENT_RULES_motor_ai_sim.md`` §5.5).
@@ -142,6 +145,22 @@ def _from_deployed_commit_marker() -> Optional[str]:
     return None
 
 
+#: MOTRES_BUILD_ID values that are compose defaults, not a commit.
+_PLACEHOLDER_BUILDS = frozenset({"", "dev", "latest", "unknown"})
+
+
+def _from_build_env() -> Optional[str]:
+    """The image's build id (env ``MOTRES_BUILD_ID``, set by deploy/docker-compose.yml from the
+    deployed sha): the SAME value ``GET /api/health`` reports as ``build`` (``roles.build_id``).
+    The container has no ``.deployed_commit`` and no git HEAD, so this is the only source there."""
+    try:
+        from motor_ai_sim import roles as _roles
+        b = _roles.build_id()
+    except Exception:                                       # noqa: BLE001
+        return None
+    return b[:40] if b and b.lower() not in _PLACEHOLDER_BUILDS else None
+
+
 def _from_git_head() -> Optional[str]:
     try:
         import subprocess
@@ -167,7 +186,8 @@ def code_version() -> str:
     with _CV_LOCK:
         if _CV_CACHE is not None:
             return _CV_CACHE
-        v = _from_deployed_commit_marker() or _from_git_head() or "unknown"
+        v = (_from_build_env() or _from_deployed_commit_marker()
+             or _from_git_head() or "unknown")
         _CV_CACHE = v
         return v
 

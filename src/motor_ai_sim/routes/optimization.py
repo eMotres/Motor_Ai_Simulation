@@ -2308,6 +2308,25 @@ def _cogging_identity() -> Dict[str, Any]:
     return {"build": cv, "image": stamp.get("image"), "materials": digest}
 
 
+_COG_STATUS: Dict[str, Any] = {"t": 0.0, "v": None}
+
+
+def cogging_identity_status(max_age_s: float = 60.0) -> Dict[str, Any]:
+    """Whether the Cogging pp identity can be formed right now (code version known AND the assigned
+    material cards readable).  Never raises; cached for ``max_age_s`` (health polls it)."""
+    import time as _t
+    now = _t.monotonic()
+    if _COG_STATUS["v"] is not None and now - _COG_STATUS["t"] < max_age_s:
+        return dict(_COG_STATUS["v"])
+    try:
+        _cogging_identity()
+        v: Dict[str, Any] = {"ok": True, "reason": None}
+    except Exception as e:                                  # noqa: BLE001
+        v = {"ok": False, "reason": str(e)[:200]}
+    _COG_STATUS["t"], _COG_STATUS["v"] = now, v
+    return dict(v)
+
+
 def _cogging_sig(parts: List[Any]) -> int:
     """A numeric digest of every setting two Cogging pp values must share to be compared (it rides in
     the numbers-only applied metrics; two values compare only when both sigs are KNOWN and equal)."""

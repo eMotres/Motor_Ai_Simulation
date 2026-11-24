@@ -207,3 +207,52 @@ def test_code_version_fallback_order(monkeypatch, tmp_path):
     monkeypatch.setattr(RH, "_from_git_head", lambda: None)
     RH._reset_code_version_cache_for_tests()
     assert RH.code_version() == "unknown"
+
+
+# --- build identity: code_version() must follow the same source as GET /api/health "build" ---------
+
+def test_code_version_follows_health_build_env(monkeypatch):
+    """A container has no .deployed_commit and no git: MOTRES_BUILD_ID (what /api/health reports as
+    'build') must give code_version(), never 'unknown'."""
+    sha = "589828ec" + "0" * 32
+    monkeypatch.setenv("MOTRES_BUILD_ID", sha)
+    monkeypatch.setattr(RH, "_from_deployed_commit_marker", lambda: None)
+    monkeypatch.setattr(RH, "_from_git_head", lambda: None)
+    RH._reset_code_version_cache_for_tests()
+    try:
+        from motor_ai_sim import roles
+        assert roles.build_id() == sha
+        assert RH.code_version() == sha
+    finally:
+        RH._reset_code_version_cache_for_tests()
+
+
+def test_code_version_unknown_stays_failclosed(monkeypatch):
+    for v in ("", "dev", "latest"):
+        monkeypatch.setenv("MOTRES_BUILD_ID", v)
+        monkeypatch.setattr(RH, "_from_deployed_commit_marker", lambda: None)
+        monkeypatch.setattr(RH, "_from_git_head", lambda: None)
+        RH._reset_code_version_cache_for_tests()
+        assert RH.code_version() == "unknown"
+    RH._reset_code_version_cache_for_tests()
+
+
+def test_health_reports_cogging_identity(monkeypatch):
+    from fastapi.testclient import TestClient
+    from motor_ai_sim import api
+    from motor_ai_sim.routes import optimization as O
+    monkeypatch.setenv("MOTRES_BUILD_ID", "abc123")
+    monkeypatch.setattr(O, "_cogging_identity", lambda: {"build": "abc123"})
+    O._COG_STATUS["v"] = None
+    body = TestClient(api.app).get("/api/health").json()
+    assert body["build"] == "abc123"
+    assert body["cogging_identity"] == {"ok": True, "reason": None}
+
+    def boom():
+        raise RuntimeError("the solver build is not identified (no code version)")
+    monkeypatch.setattr(O, "_cogging_identity", boom)
+    O._COG_STATUS["v"] = None
+    body = TestClient(api.app).get("/api/health").json()
+    assert body["cogging_identity"]["ok"] is False
+    assert "not identified" in body["cogging_identity"]["reason"]
+    O._COG_STATUS["v"] = None

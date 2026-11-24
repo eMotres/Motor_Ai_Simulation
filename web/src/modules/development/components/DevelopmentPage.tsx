@@ -9,7 +9,7 @@ import { HeaderRight, HeaderTabs } from '../../../components/common/PanelHeader'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
   import {
   Alert, Box, Button, Chip, CircularProgress, Dialog, DialogActions, DialogContent, DialogTitle,
-  Divider, FormControlLabel, IconButton, MenuItem, Paper, Select, Stack, TextField, ToggleButton, ToggleButtonGroup,
+  Divider, FormControlLabel, IconButton, MenuItem, Paper, Select, Stack, Switch, TextField, ToggleButton, ToggleButtonGroup,
   Tooltip, Typography, Checkbox,
 } from '@mui/material';
   import AddIcon from '@mui/icons-material/Add';
@@ -136,6 +136,7 @@ export default function DevelopmentPage() {
   const [projectId, setProjectId] = useState('');
   const [email, setEmail] = useState('');
   const [memberRole, setMemberRole] = useState('customer');
+  const [memberPrices, setMemberPrices] = useState(false);
   const [picker, setPicker] = useState<{ this_project: ProjectMotorPickerItem[]; catalog: ProjectMotorPickerItem[] }>({ this_project: [], catalog: [] });
   const [snapshots, setSnapshots] = useState<ProjectSnapshot[]>([]);
   const [showAllVersions, setShowAllVersions] = useState(false);
@@ -717,10 +718,18 @@ export default function DevelopmentPage() {
     } catch (e) { if (isCurrentProject(id, token)) setError(e instanceof Error ? e.message : String(e)); }
     finally { if (isCurrentProject(id, token)) setBusy(false); }
   };
+  // who decides about the prices: the server says (MOTRES staff and the project owner), the page does not derive it
+  const canSetPrices = !!selected && selected.can_manage_prices === true;
+  const switchPrices = async (member: string, value: boolean) => {
+    if (!selected) return;
+    setBusy(true); setError('');
+    try { await developmentApi.setSeesPrices(selected.id, member, value); await loadProject(selected); }
+    catch (e) { setError(e instanceof Error ? e.message : String(e)); } finally { setBusy(false); }
+  };
   const submitInvite = async () => {
     if (!selected) return;
     setBusy(true); setError('');
-    try { await developmentApi.invite(selected.id, email.trim(), memberRole); setInviteOpen(false); setEmail(''); await loadProject(selected); await refreshProjects(); }
+    try { await developmentApi.invite(selected.id, email.trim(), memberRole, canSetPrices && memberRole !== 'owner' ? memberPrices : undefined); setInviteOpen(false); setEmail(''); setMemberPrices(false); await loadProject(selected); await refreshProjects(); }
     catch (e) { setError(e instanceof Error ? e.message : String(e)); } finally { setBusy(false); }
   };
   const submitLink = async (item: ProjectMotorPickerItem) => {
@@ -879,7 +888,7 @@ export default function DevelopmentPage() {
     {view === 'notes' && canManageGlobally && <NotesPanel project={selected} onSave={async (notes) => { try { const p = await developmentApi.update(selected.id, { notes }); setSelected(p); } catch (e) { setError(e instanceof Error ? e.message : String(e)); } }} t={tr} />}
     <TypeDialog value={pendingType} busy={busy} onClose={() => setPendingType(null)} onSubmit={() => void submitType()} ct={ct} />
     <RenameDialog value={renameTo} busy={busy} onChange={setRenameTo} onClose={() => setRenameTo(null)} onSubmit={() => void submitRename()} t={tr} />
-    <InviteDialog open={inviteOpen} busy={busy} email={email} role={memberRole} onEmail={setEmail} onRole={setMemberRole} onClose={() => setInviteOpen(false)} onSubmit={() => void submitInvite()} t={tr} />
+    <InviteDialog open={inviteOpen} busy={busy} email={email} role={memberRole} onEmail={setEmail} onRole={setMemberRole} prices={memberPrices} onPrices={setMemberPrices} canSetPrices={canSetPrices} members={selected?.member_switches ?? []} onSwitch={(m: string, v: boolean) => void switchPrices(m, v)} onClose={() => setInviteOpen(false)} onSubmit={() => void submitInvite()} t={tr} />
     <LinkDialog open={linkOpen} busy={busy} picker={picker} onClose={() => setLinkOpen(false)} onSubmit={(item: ProjectMotorPickerItem) => void submitLink(item)} onRestore={(item: ProjectMotorPickerItem) => void restoreMotor(item)} t={tr} />
     <Dialog open={!!unlinkTarget} onClose={() => !busy && setUnlinkTarget(null)}><DialogTitle>{tr('unlink')} {unlinkTarget?.die} / {unlinkTarget?.config}?</DialogTitle><DialogContent>{tr('unlinkConfirm')}</DialogContent><DialogActions><Button disabled={busy} onClick={() => setUnlinkTarget(null)}>{tr('cancel')}</Button><Button color="error" disabled={busy} onClick={() => void confirmUnlink()}>{tr('unlink')}</Button></DialogActions></Dialog>
     <Dialog open={!!pendingStatusForProject(pendingProjectStatus, selected.id)} onClose={() => !busy && setPendingProjectStatus((value) => cancelProjectStatus(value))}><DialogTitle>{tr('confirmProjectStatus.title')}</DialogTitle><DialogContent>{tr('confirmProjectStatus.body', { status: pendingProjectStatus ? tr(`status.${pendingProjectStatus.proposed}`) : '' })}</DialogContent><DialogActions><Button disabled={busy} onClick={() => setPendingProjectStatus((value) => cancelProjectStatus(value))}>{tr('cancel')}</Button><Button disabled={busy} variant="contained" onClick={() => void confirmProjectStatus()}>{tr('confirmProjectStatus.confirm')}</Button></DialogActions></Dialog>
@@ -918,7 +927,7 @@ function TypeDialog({ value, busy, onClose, onSubmit, ct }: { value: ProjectType
   return <Dialog open={value !== null} onClose={() => !busy && onClose()} fullWidth maxWidth="xs"><DialogTitle>{ct('type.confirmTitle', { type: value ? ct(`type.${value}`) : '' })}</DialogTitle><DialogContent>{ct('type.confirmBody')}</DialogContent><DialogActions><Button disabled={busy} onClick={onClose}>{ct('type.cancel')}</Button><Button disabled={busy} variant="contained" data-testid="project-type-confirm" onClick={onSubmit}>{ct('type.confirm')}</Button></DialogActions></Dialog>;
 }
 function RenameDialog({ value, busy, onChange, onClose, onSubmit, t }: { value: string | null; busy: boolean; onChange: (v: string) => void; onClose: () => void; onSubmit: () => void; t: (key: string) => string }) { return <Dialog open={value !== null} onClose={() => !busy && onClose()} fullWidth maxWidth="xs"><DialogTitle>{t('renameProject')}</DialogTitle><DialogContent><TextField label={t('projectTitle')} value={value ?? ''} onChange={(e) => onChange(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter' && value?.trim()) { e.preventDefault(); onSubmit(); } }} autoFocus fullWidth inputProps={{ maxLength: 120 }} sx={{ mt: 1 }} /></DialogContent><DialogActions><Button disabled={busy} onClick={onClose}>{t('cancel')}</Button><Button disabled={busy || !value?.trim()} onClick={onSubmit}>{t('save')}</Button></DialogActions></Dialog>; }
-function InviteDialog({ open, busy, email, role, onEmail, onRole, onClose, onSubmit, t }: any) { return <Dialog open={open} onClose={onClose} fullWidth maxWidth="xs"><DialogTitle>{t('invite')}</DialogTitle><DialogContent><Stack spacing={1.2} sx={{ pt: 1 }}><TextField label={t('email')} value={email} onChange={(e) => onEmail(e.target.value)} /><Select value={role} onChange={(e) => onRole(e.target.value)}>{['customer', 'engineer', 'owner'].map((v) => <MenuItem key={v} value={v}>{t(`memberRole.${v}`)}</MenuItem>)}</Select></Stack></DialogContent><DialogActions><Button onClick={onClose}>{t('cancel')}</Button><Button disabled={busy || !email.includes('@')} onClick={onSubmit}>{t('invite')}</Button></DialogActions></Dialog>; }
+function InviteDialog({ open, busy, email, role, onEmail, onRole, prices, onPrices, canSetPrices, members, onSwitch, onClose, onSubmit, t }: any) { return <Dialog open={open} onClose={onClose} fullWidth maxWidth="xs"><DialogTitle>{t('invite')}</DialogTitle><DialogContent><Stack spacing={1.2} sx={{ pt: 1 }}><TextField label={t('email')} value={email} onChange={(e) => onEmail(e.target.value)} /><Select value={role} onChange={(e) => onRole(e.target.value)}>{['customer', 'engineer', 'owner'].map((v) => <MenuItem key={v} value={v}>{t(`memberRole.${v}`)}</MenuItem>)}</Select>{canSetPrices && role !== 'owner' && <Tooltip title={t('seesPricesTip')}><FormControlLabel control={<Switch size="small" checked={!!prices} onChange={(e) => onPrices(e.target.checked)} />} label={t('seesPrices')} /></Tooltip>}{canSetPrices && (members ?? []).filter((m: any) => m.role !== 'owner').map((m: any) => <Tooltip key={m.email} title={t('seesPricesTip')}><FormControlLabel control={<Switch size="small" disabled={busy} checked={m.sees_prices === true} onChange={(e) => onSwitch(m.email, e.target.checked)} />} label={`${m.email} · ${t('seesPrices')}`} /></Tooltip>)}</Stack></DialogContent><DialogActions><Button onClick={onClose}>{t('cancel')}</Button><Button disabled={busy || !email.includes('@')} onClick={onSubmit}>{t('invite')}</Button></DialogActions></Dialog>; }
 function snapshotSourceLabel(source: string, t: (key: string) => string): string { return t(snapshotSourceKey(source) ?? 'snapshots.sourceOther'); }
 function LinkDialog({ open, busy, picker, onClose, onSubmit, onRestore, t }: { open: boolean; busy: boolean; picker: { this_project: ProjectMotorPickerItem[]; catalog: ProjectMotorPickerItem[] }; onClose: () => void; onSubmit: (item: ProjectMotorPickerItem) => void; onRestore: (item: ProjectMotorPickerItem) => void; t: (key: string, args?: Record<string, unknown>) => string }) {
   const [query, setQuery] = useState('');

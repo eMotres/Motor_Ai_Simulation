@@ -93,7 +93,9 @@ export const developmentApi = {
   /** Make an image of the project's documents the cover (the server makes the thumbnail) / remove the cover. */
   setCover: (id: string, documentId: string) => call<{ document_id: string; cover_version: string }>('PUT', `${p(id)}/cover`, { document_id: documentId }),
   clearCover: (id: string) => call<{ cover_version: null }>('DELETE', `${p(id)}/cover`),
-  invite: (id: string, email: string, role: string) => call<unknown>('POST', `${p(id)}/members`, { email, role }),
+  invite: (id: string, email: string, role: string, seesPrices?: boolean) => call<unknown>('POST', `${p(id)}/members`, { email, role, ...(seesPrices === undefined ? {} : { sees_prices: seesPrices }) }),
+  /** a project owner (or an admin) switches who sees the prices: the shared quote and the price-restricted documents / messages */
+  setSeesPrices: (id: string, email: string, value: boolean) => call<{ email: string; sees_prices: boolean }>('PATCH', `${p(id)}/members/sees_prices`, { email, sees_prices: value }),
   motors: async (id: string, showAll = false) => (await call<{ motors: ProjectMotor[] }>('GET', `${p(id)}/motors${showAll ? '?show_all=true' : ''}`)).motors,
   /** Live runs on the project's motors (one request per project; polled every 30 s while the page is visible). */
   activity: async (id: string, since?: string | null) => parseActivity(await call<unknown>('GET', `${p(id)}/activity${since ? `?since=${encodeURIComponent(since)}` : ''}`)),

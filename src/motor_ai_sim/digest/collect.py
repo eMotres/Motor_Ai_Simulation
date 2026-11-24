@@ -31,6 +31,7 @@ from motor_ai_sim.digest import store as DS
 #: Capability names (see module docstring).
 INTERNAL = "internal"
 COSTS = "costs"
+STAFF = "staff"            # a staff-only (internal) project message: only recipients whose ACCOUNT is MOTRES staff (owner 2026-11-24)
 PRICES = "prices"          # a price-restricted project message: only recipients who see the prices (owner 2026-11-22)
 
 EXCERPT = 90
@@ -81,9 +82,9 @@ class Item:
 
 # -- small helpers ---------------------------------------------------------------------------------------------------------
 
-def _restricted_thread_ids(rows: list) -> set:
-    """Ids of the price-restricted messages and of every reply (any depth) to one: the digest treats a reply to a hidden message as hidden."""
-    out = {str(m.get("id") or "") for m in rows if m.get("price_restricted")}
+def _marked_thread_ids(rows: list, flag: str) -> set:
+    """Ids of the messages carrying ``flag`` and of every reply (any depth) to one: the digest treats a reply to a hidden message as hidden."""
+    out = {str(m.get("id") or "") for m in rows if m.get(flag)}
     parent = {str(m.get("id") or ""): str(m.get("reply_to") or "") for m in rows}
     grew = True
     while grew:
@@ -93,6 +94,10 @@ def _restricted_thread_ids(rows: list) -> set:
                 out.add(mid)
                 grew = True
     return out
+
+
+def _restricted_thread_ids(rows: list) -> set:
+    return _marked_thread_ids(rows, "price_restricted")
 
 
 def excerpt(text: Any, n: int = EXCERPT) -> str:
@@ -327,6 +332,7 @@ def collect_project(project: dict, start: float, end: float, *,
                                   "项目信息已更新（" + ", ".join(public) + "）", RP.project_path(pid), frozenset(), key="project"))
     thread_rows = [m for m in _read_jsonl(PS.path_for(pid) / "thread.jsonl") if m.get("kind") != "resolution"]
     restricted_ids = _restricted_thread_ids(thread_rows)
+    staff_ids = _marked_thread_ids(thread_rows, "staff_only")
     for m in thread_rows:
         ts = DS.parse_ts(m.get("created_at"))
         if not _in(ts, start, end):
@@ -336,7 +342,8 @@ def collect_project(project: dict, start: float, end: float, *,
         mid = str(m.get("id") or "")
         items.append(Item("message", ts, f"New message from {who_en}: {text}", f"{who_zh} 的新留言：{text}",
                           RP.project_path(pid, "messages", item=mid) or RP.project_path(pid, "messages"),
-                          frozenset({PRICES}) if mid in restricted_ids else frozenset(), key=f"msg:{mid}"))
+                          (frozenset({PRICES}) if mid in restricted_ids else frozenset())
+                          | (frozenset({STAFF}) if mid in staff_ids else frozenset()), key=f"msg:{mid}"))
     # new computed points of the project's motors
     for link in links.values():
         die, config = str(link.get("die") or ""), str(link.get("config") or "")

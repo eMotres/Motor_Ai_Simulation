@@ -156,13 +156,14 @@ def _summary(project: dict, user: dict) -> dict:
     projection["can_edit"] = bool(engineer)
     projection["can_edit_spec"] = access.can_edit_spec(user, project)
     projection["can_manage_prices"] = access.can_manage_prices(user, project)        # the capability the price switches follow
+    projection["can_post_internal"] = access.is_staff(user)                          # the capability of the "Internal (staff only)" switch
     # the shared quote (owner 2026-11-03): only a flag here, never its numbers; it lives in GET /{id}/quote
     projection["quote_shared"] = quote_shared(user, project)
     # the project timeline (owner 2026-11-03): only a flag here; plan and forecast live in GET /{id}/timeline
     projection["timeline_ready"] = timeline_ready(user, project)
     projection["completeness"] = models.completeness(draft.get("draft", {}))
     projection["spec_submitted"] = _spec_submitted(project["id"])
-    if access.is_engineer(user):         # the internal notes are MOTRES staff's: a customer who owns the project never gets them (owner 2026-11-06)
+    if access.is_engineer(user):         # the legacy internal notes field (kept as the migration backup; the page shows them as thread messages) are MOTRES staff's: a customer who owns the project never gets them (owner 2026-11-06)
         projection["notes"] = project.get("notes", "")
     # Only expose the current caller's member record to customers.
     if not access.is_engineer(user):
@@ -1294,6 +1295,11 @@ async def post_thread(request: Request, project_id: str):
     restricted = body.get("price_restricted", False)
     if not isinstance(restricted, bool):
         raise HTTPException(status_code=422, detail="price_restricted must be true or false")
+    staff_only = body.get("staff_only", False)
+    if not isinstance(staff_only, bool):
+        raise HTTPException(status_code=422, detail="staff_only must be true or false")
+    if staff_only and not access.is_staff(user):
+        raise HTTPException(status_code=403, detail="Only MOTRES staff can post an internal message")
     reply_to = body.get("reply_to")
     if reply_to is not None:
         if not isinstance(reply_to, str) or len(reply_to) > 128:
@@ -1302,6 +1308,7 @@ async def post_thread(request: Request, project_id: str):
         if parent is None:
             raise HTTPException(status_code=404, detail="Thread message not found")
         restricted = restricted or bool(parent.get("price_restricted"))      # a reply inside a restricted message stays restricted
+        staff_only = staff_only or bool(parent.get("staff_only"))            # a staff reply inside an internal message stays internal
     if restricted and not (access.can_manage_prices(user, project)
                            or (reply_to is not None and parent.get("price_restricted"))):
         raise HTTPException(status_code=403, detail="Only the project owner or MOTRES staff can mark a message price-restricted")
@@ -1312,8 +1319,11 @@ async def post_thread(request: Request, project_id: str):
         message["reply_to"] = reply_to
     if restricted:
         message["price_restricted"] = True                  # absent = not restricted: stored messages and payloads stay as they were
+    if staff_only:
+        message["staff_only"] = True                        # absent = visible to the whole project
     message["audit_intent"] = thread_audit.make_intent(_email(user), "post", message["id"],
-                                                       {"field_ref": field_ref, **({"price_restricted": True} if restricted else {})})
+                                                       {"field_ref": field_ref, **({"price_restricted": True} if restricted else {}),
+                                                        **({"staff_only": True} if staff_only else {})})
     store.append_jsonl(project_id, "thread.jsonl", message)    # the change and its audit intent commit in this one append
     thread_audit.flush(project_id)
     message = thread_audit.strip(message)
@@ -1712,8 +1722,24 @@ async def remove_member(request: Request, project_id: str, email: str):
 
 
 def notify_project_members(project_id: str, message: dict) -> None:
-    """Stage 1 notification hook. Stage 2 may deliver notifications here."""
+    """Stage 1 notification hook. Stage 2 may deliver notifications here.  A staff-only message is never announced to project members
+    (owner 2026-11-24): a delivery built on this hook must go through ``notification_recipients``."""
     return None
+
+
+def notification_recipients(project: dict, message: dict) -> list[str]:
+    """The project members (by address) who may be told about ``message``: every message-visibility mark is applied by ACCOUNT identity."""
+    out = []
+    for m in project.get("members", []):
+        email = str(m.get("email") or "").strip().lower() if isinstance(m, dict) else ""
+        if not email:
+            continue
+        if message.get("staff_only") and not access.is_staff_email(email):
+            continue
+        if message.get("price_restricted") and not access.sees_prices_email(email, project):
+            continue
+        out.append(email)
+    return out
 
 
 # Documents of a project (production package files): /api/projects/{project_id}/documents*

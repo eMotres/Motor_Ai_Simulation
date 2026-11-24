@@ -208,7 +208,7 @@ test('F13: the remembered step is a stable id; an old card index lands on the cl
   assert.equal(old(4), 7);
   assert.equal(old(9), 0);
   assert.equal(restorableView({ project: 'a', view: 'specification', step: 2, stepId: 'gone' }, ids, true).step, 0);
-  assert.equal(restorableView({ project: 'a', view: 'notes', step: 0 }, ids, false).view, 'specification');
+  assert.equal(restorableView({ project: 'a', view: 'notes', step: 0 }, ids, false).view, 'messages')   // the Internal notes tab is gone (owner 2026-11-24);
   assert.deepEqual(parseDevelopmentView({ project: 'a', view: 'motors', step: 2, stepId: 'supply' }), { project: 'a', view: 'motors', step: 2, stepId: 'supply' });
   assert.deepEqual(parseDevelopmentView({ project: 'a', view: 'motors', step: 2, stepId: 'Not Valid!' }), { project: 'a', view: 'motors', step: 2 });
   assert.equal(parseDevelopmentView({ project: 'a', view: 'motors' }), null);

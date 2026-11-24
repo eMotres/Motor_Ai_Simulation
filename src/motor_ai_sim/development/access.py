@@ -48,13 +48,41 @@ def sees_prices(user: dict | None, project: dict) -> bool:
     return False
 
 
+def is_staff(user: dict | None) -> bool:
+    """THE central staff rule for STAFF-ONLY messages (owner 2026-11-24, "one message stream"): MOTRES staff = the GLOBAL role admin or
+    engineer, never an MCP agent (even one acting for a staff owner), never a factory account, never a project role.  Independent of
+    ``sees_prices``: a message may carry both marks and a staff member always passes both."""
+    if not user or auth._AGENT_USER.get() is not None:
+        return False
+    return is_engineer(user)
+
+
+can_see_staff_only = is_staff
+
+
+def is_staff_email(email: str) -> bool:
+    """``is_staff`` for a RECIPIENT known only by address (digest, notifications): the account's global role is resolved from the user
+    store.  An address with no (enabled) account is a pending invite or a stranger: False."""
+    from motor_ai_sim import users
+    key = str(email or "").strip().lower()
+    account = users.get_user(key) if key else None
+    if not account or account.get("disabled"):
+        return False
+    return is_staff({"email": key, "role": account.get("role", "user")})
+
+
 def can_see_message(user: dict | None, project: dict, message: dict) -> bool:
-    """A project message marked ``price_restricted`` (owner 2026-11-22) is seen by whoever ``sees_prices`` lets through now: the one
-    central rule, no exception for the author (a revoked or demoted author loses it too).  Nobody else sees its text or its existence.
-    This judges the message itself; ``visible_messages`` also hides the replies of a hidden message."""
-    if not isinstance(message, dict) or not message.get("price_restricted"):
+    """Two independent marks.  ``staff_only`` (an internal note, owner 2026-11-24): only ``is_staff``.  ``price_restricted`` (owner
+    2026-11-22): whoever ``sees_prices`` lets through now - the one central rule, no exception for the author (a revoked or demoted
+    author loses it too).  Nobody else sees the text or the existence.  This judges the message itself; ``visible_messages`` also hides
+    the replies of a hidden message."""
+    if not isinstance(message, dict):
         return True
-    return sees_prices(user, project)
+    if message.get("staff_only") and not is_staff(user):
+        return False
+    if message.get("price_restricted") and not sees_prices(user, project):
+        return False
+    return True
 
 
 def visible_messages(user: dict | None, project: dict, messages: list) -> list:

@@ -474,7 +474,9 @@ def _fmt_projects(start: float, end: float) -> list:
             # messages (thread) and new computed results: the digest collector's own lines
             for it in C.collect_project(project, start, end):
                 if it.kind in ("message", "results"):
-                    lines.append(B.Line(it.ts, it.en, it.link or "", "", "customer" if it.kind == "message" else "system"))
+                    internal = "staff" in it.requires               # a staff-only message is never shown as a customer's line
+                    lines.append(B.Line(it.ts, ("[internal] " + it.en) if internal else it.en, it.link or "", "",
+                                        "staff" if internal else ("customer" if it.kind == "message" else "system")))
             if lines:
                 blocks.append(B.Block(f"Project: {project.get('title') or pid} [{project.get('status') or 'spec'}]", lines,
                                       RP.project_path(pid) or ""))

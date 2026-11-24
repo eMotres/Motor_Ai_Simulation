@@ -55,12 +55,19 @@ class Group:
     path: Optional[str] = None      # the app path of the group's own page
     #: project groups: the members who see the prices (owners and ``sees_prices`` members); a restricted message needs it
     price_emails: frozenset = field(default_factory=frozenset)
+    #: project groups: the members whose ACCOUNT is MOTRES staff (global admin / engineer); a staff-only message needs it
+    staff_emails: frozenset = field(default_factory=frozenset)
 
     def caps(self, role: str, email: str = "") -> frozenset:
         """What a member of this role may see (see collect.INTERNAL / COSTS / PRICES; the last is by member, so it needs ``email``)."""
         if self.kind == "project":
             base = frozenset({C.INTERNAL}) if role in ("owner", "engineer") else frozenset()
-            return base | {C.PRICES} if str(email or "").strip().lower() in self.price_emails else base
+            who = str(email or "").strip().lower()
+            if who in self.price_emails:
+                base = base | {C.PRICES}
+            if who in self.staff_emails:
+                base = base | {C.STAFF}
+            return base
         if role in ("owner", "engineer"):
             return frozenset({C.INTERNAL, C.COSTS})
         return frozenset({C.COSTS}) if self.record.get("share_costs_with_oem") else frozenset()
@@ -94,8 +101,9 @@ def project_group(project: dict) -> Group:
     # by ACCOUNT identity, the one central rule (a factory account never, staff always; owner 2026-11-23), resolved at build AND at send
     from motor_ai_sim.development import access as _access
     prices = frozenset(e for e, _role in _members(project) if _access.sees_prices_email(e, project))
+    staff = frozenset(e for e, _role in _members(project) if _access.is_staff_email(e))     # staff-only messages: by account, never by project role
     return Group(DS.project_scope(pid), "project", project, title, title, _members(project),
-                 str(project.get("status") or "spec") != "closed", RP.project_path(pid), price_emails=prices)
+                 str(project.get("status") or "spec") != "closed", RP.project_path(pid), price_emails=prices, staff_emails=staff)
 
 
 def production_group(production: dict) -> Group:

@@ -33,6 +33,7 @@ import { shownMass, perMass } from '../../lib/fullMass';
 import { SharedComparisonTable, type SharedComparisonColumn } from './SharedComparisonTable';
 import { bestValueColor, buildComparisonModel, shouldSuppressMixedBasisColor } from './comparisonModel';
 import { ktFromKv } from '../../lib/kvKt';
+import { pocketWidth, POCKET_WIDTH_TIP, SLOT_WIDTH_TIP } from '../../lib/pocketWidth';
 import { nsT } from '../../i18n/nsT';
 import { coggingComparable, storedNumber } from '../../lib/coggingPp';
 import { isSweepRow, sweepMetricsComparable } from '../../lib/sweepSettings';
@@ -47,8 +48,14 @@ interface SavedSim {
   results: Record<string, any>;
 }
 
+/** A saved row with the computed pocket width beside its params (a copy; the stored row is not touched). */
+function withPocketWidth(s: SavedSim): SavedSim {
+  const pw = pocketWidth(s.params);
+  return pw == null || !s.params ? s : { ...s, params: { ...s.params, pocket_width: pw } };
+}
+
 // ── friendly labels + units for params (fallback = raw key) ─────────────────
-const PARAM_META: Record<string, { label: string; unit?: string; d?: number }> = {
+const PARAM_META: Record<string, { label: string; unit?: string; d?: number; tip?: string }> = {
   // operating point
   I_phase_rms:        { label: 'I phase',       unit: 'A',   d: 1 },
   gamma_deg:          { label: 'γ angle',       unit: '°',   d: 1 },
@@ -81,7 +88,9 @@ const PARAM_META: Record<string, { label: string; unit?: string; d?: number }> =
   magnet_height:      { label: 'Magnet h',      unit: 'mm',  d: 2 },
   magnet_down_height: { label: 'Magnet base',   unit: 'mm',  d: 2 },
   slot_height:        { label: 'Slot height',   unit: 'mm',  d: 2 },
-  slot_width:         { label: 'Slot width',    unit: 'mm',  d: 2 },
+  // The pocket CUT in the iron (computed on load from the row's wire keys; never stored) and the STORED wire pitch.
+  pocket_width:       { label: 'Pocket width',  unit: 'mm',  d: 2, tip: POCKET_WIDTH_TIP },
+  slot_width:         { label: 'Slot width (wire pitch)', unit: 'mm', d: 2, tip: SLOT_WIDTH_TIP },
   tooth_width:        { label: 'Tooth width',   unit: 'mm',  d: 2 },
   tooth2_width:       { label: 'Tooth2 width',  unit: 'mm',  d: 2 },
   motor_length:       { label: 'Stack length',  unit: 'mm',  d: 1 },
@@ -130,7 +139,7 @@ const LIB_COLS = [
   'I_phase_rms', 'gamma_deg', 'rpm', 'n_sectors',
   'num_poles', 'num_slots', 'num_wires_per_slot',
   'stator_diameter', 'stator_outer_radius', 'rotor_outer_radius', 'air_gap',
-  'magnet_height', 'slot_height', 'slot_width', 'tooth_width', 'motor_length',
+  'magnet_height', 'slot_height', 'pocket_width', 'tooth_width', 'motor_length',
   ...TAB_DEFAULT_COLS,
 ];
 
@@ -472,7 +481,8 @@ const ComparePanel: React.FC = () => {
     fetch(`${API}/api/sims/saved`)
       .then(r => r.json())
       .then(d => {
-        const list: SavedSim[] = d.sims || [];
+        // `pocket_width` is computed here from the row's own wire keys (display only, never stored)
+        const list: SavedSim[] = ((d.sims || []) as SavedSim[]).map(withPocketWidth);
         setSims(list);
         // The selection is the USER's, and it survives reloads: no auto-ticking
         // of "the first four" (that fought every attempt to compare a different
@@ -530,6 +540,7 @@ const ComparePanel: React.FC = () => {
       'I_phase_rms', 'gamma_deg', 'rpm', 'coil_temp_c', 'end_winding_factor',
       'connection', 'steps_per_period', 'n_sectors', 'element_order',
       'mesh_size_mm', 'min_size_mm', 'gap_layers', 'frequency_hz',
+      'pocket_width',   // computed for display from the wire keys, not a geometry input
     ]);
     const geo: Record<string, number> = {};
     const mats: Record<string, string> = {};
@@ -1036,7 +1047,7 @@ const ComparePanel: React.FC = () => {
                     control={<Checkbox size="small" checked={visibleCols.includes(k)} onChange={() => toggleCol(k)}
                       sx={{ p: 0.25, mr: 0.5, color: 'var(--text-4)', '&.Mui-checked': { color: '#3b82f6' } }} />}
                     label={<Typography sx={{ fontSize: 11, color: 'var(--text-1)' }}>
-                      {paramLabel(k)}{paramUnit(k) ? <Box component="span" sx={{ color: 'var(--text-4)' }}> ({paramUnit(k)})</Box> : null}
+                      {PARAM_META[k]?.tip ? <Tooltip title={PARAM_META[k].tip!}><span>{paramLabel(k)}</span></Tooltip> : paramLabel(k)}{paramUnit(k) ? <Box component="span" sx={{ color: 'var(--text-4)' }}> ({paramUnit(k)})</Box> : null}
                     </Typography>} />
                 ))}
               </Box>
@@ -1126,7 +1137,7 @@ const ComparePanel: React.FC = () => {
                 {/* …then the inputs that produced them. */}
                 {displayCols.map(k => (
                   <Box component="th" key={k} sx={TH}>
-                    {paramLabel(k)}{paramUnit(k) ? <Box component="span" sx={{ color: 'var(--text-3)', fontWeight: 500 }}>{unitGap(paramUnit(k))}{paramUnit(k)}</Box> : null}
+                    {PARAM_META[k]?.tip ? <Tooltip title={PARAM_META[k].tip!}><span>{paramLabel(k)}</span></Tooltip> : paramLabel(k)}{paramUnit(k) ? <Box component="span" sx={{ color: 'var(--text-3)', fontWeight: 500 }}>{unitGap(paramUnit(k))}{paramUnit(k)}</Box> : null}
                   </Box>
                 ))}
                 <Box component="th" sx={{ ...TH, textAlign: 'left' }}>Saved</Box>

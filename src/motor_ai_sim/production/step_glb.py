@@ -531,6 +531,13 @@ def cache_path(cache_dir: Path, file_id: str) -> Path:
     return cache_dir / ("%s.%s.glb" % (file_id, VERSION))
 
 
+#: what a refusal of the child process becomes in the reply; anything else it prints is only logged
+CHILD_REFUSALS = {
+    413: "This assembly is too large for the 3-D view; download the STEP instead.",
+    422: "The STEP file has no solid geometry.",
+}
+
+
 def _run_child(step_path: Path, glb_path: Path, timeout: int) -> None:
     cmd = [sys.executable, "-m", "motor_ai_sim.production.step_glb", str(step_path), str(glb_path)]
     kwargs: dict = {}
@@ -549,9 +556,9 @@ def _run_child(step_path: Path, glb_path: Path, timeout: int) -> None:
         tail = (p.stderr or p.stdout or "").strip().splitlines()[-3:]
         log.warning("production: STEP conversion failed (rc=%s): %s", p.returncode, " | ".join(tail))
         for line in reversed((p.stderr or "").strip().splitlines()):
-            m = re.match(r"StepConversionError\((\d{3})\): (.{1,300})$", line)
-            if m:                                                  # the child's own refusal: a fixed text of this module
-                raise StepConversionError(m.group(2), status=int(m.group(1)))
+            m = re.match(r"StepConversionError\((\d{3})\): ", line)
+            if m and p.returncode == 3 and int(m.group(1)) in CHILD_REFUSALS:  # the status and the text are ours, never the child's
+                raise StepConversionError(CHILD_REFUSALS[int(m.group(1))], status=int(m.group(1)))
         raise StepConversionError("This STEP file could not be turned into a 3-D view.")
 
 

@@ -300,13 +300,22 @@ def test_a_too_deep_assembly_is_refused(tmp_path, monkeypatch):
     assert err.value.status == 413 and "nested levels" in err.value.detail
 
 
-def test_the_refusal_of_the_child_reaches_the_caller(tmp_path, monkeypatch):
+@pytest.mark.parametrize("line, status, text", [
+    ("StepConversionError(413): /srv/data/secret.step has 9 parts", 413, "This assembly is too large for the 3-D view"),
+    ("StepConversionError(422): whatever", 422, "The STEP file has no solid geometry."),
+    ("StepConversionError(200): fine", 422, "This STEP file could not be turned"),
+    ("StepConversionError(302): http://example.invalid", 422, "This STEP file could not be turned"),
+    ("StepConversionError(500): trace", 422, "This STEP file could not be turned")])
+def test_a_child_refusal_becomes_a_fixed_status_and_text(tmp_path, monkeypatch, line, status, text):
     class Done:
-        returncode, stdout, stderr = 3, "", "noise\nStepConversionError(413): This assembly is too large for the 3-D view (x).\n"
+        returncode, stdout, stderr = 3, "", "noise
+%s
+" % line
     monkeypatch.setattr(step_glb.subprocess, "run", lambda *a, **k: Done())
     with pytest.raises(step_glb.StepConversionError) as err:
         step_glb._run_child(tmp_path / "a.step", tmp_path / "a.glb", 5)
-    assert err.value.status == 413 and err.value.detail.startswith("This assembly is too large")
+    assert err.value.status == status and err.value.detail.startswith(text)
+    assert "secret" not in err.value.detail and "invalid" not in err.value.detail
 
 
 def test_names_over_the_total_budget_are_dropped_but_the_view_stays(tmp_path, monkeypatch):

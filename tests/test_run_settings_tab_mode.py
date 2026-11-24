@@ -212,3 +212,107 @@ def test_an_unknown_scope_is_unknown_and_the_old_scope_keeps_its_meaning():
     assert SS.sweep_settings_of({"mesh_preset": {**st, "sig_scope": None}})["sig"] is None
     old = SS.sweep_settings_of({"mesh_preset": {**st, "sig_scope": 2, "sig": 77}})            # a stored scope-2 row stays as it was
     assert old["sig"] == 77 and old["sig_scope"] == 2
+
+
+# ── review fixes: nothing of a tab run comes from a preset scaffold; the match tolerance; stored names; 422 ─────────────
+def test_rotor_eddy_and_demag_are_required_from_the_tab_and_a_descent_run_takes_no_demag():
+    cfg = _cfg()
+    assert RS.TAB_REQUIRED[-2:] == ("rotor_eddy", "demag") and RS.tab_required("descent") == RS.TAB_REQUIRED[:-1]
+    for k in ("rotor_eddy", "demag"):
+        n = _tab("optimization", cfg)
+        del n[k]
+        with pytest.raises(RS.RunSettingsError) as ei:
+            RS.resolve("tab", n, cfg, "sweep")
+        assert k in str(ei.value)
+    n = _tab("optimization", cfg)
+    del n["demag"]
+    RS.resolve("tab", n, cfg, "descent")                                            # no demag needed in a Descent request ...
+    with pytest.raises(RS.RunSettingsError):
+        RS.resolve("tab", _tab("optimization", cfg), cfg, "descent")                # ... and one that carries it is refused
+
+
+def test_the_tabs_rotor_eddy_and_demag_decide_the_run_and_the_label():
+    cfg = _cfg(coil_rel=1)
+    sim = _numbers("simulation", cfg)
+    assert RS.resolve("tab", sim, cfg)["label"] == "simulation"
+    opt = _tab("optimization", cfg)
+    off = RS.resolve("tab", {**opt, "rotor_eddy": not opt["rotor_eddy"]}, cfg)
+    assert off["label"] == "custom" and off["settings"]["rotor_eddy"] is (not opt["rotor_eddy"]) and "rotor_eddy" in off["differs"]
+    nodemag = RS.resolve("tab", {**opt, "demag": not opt["demag"]}, cfg)
+    assert nodemag["label"] == "custom" and nodemag["settings"]["demag"] is (not opt["demag"])
+    # against Simulation the tab's own switch is compared, not the Optimization scaffold's
+    assert RS.resolve("tab", {**sim, "rotor_eddy": not sim["rotor_eddy"]}, cfg)["label"] == "custom"
+
+
+def test_no_setting_of_a_tab_run_is_filled_from_a_preset():
+    cfg = _cfg()
+    for mode in ("sweep", "descent", "auto"):
+        n = _tab("optimization", cfg)
+        if mode == "descent":
+            del n["demag"]
+        r = RS.resolve("tab", n, cfg, mode)
+        assert set(r["sources"]) == set(r["settings"]), mode
+        assert {r["sources"][k] for k in r["settings"]} <= {"tab", "machine", "fixed"}, (mode, r["sources"])
+        assert {k for k, v in r["sources"].items() if v == "fixed"} == {"element_order", "hi_fidelity"}
+        assert "preset" not in r["sources"].values()
+
+
+def test_the_mesh_size_tolerance_is_relative_1e9_so_a_different_size_is_never_a_preset():
+    assert MP._same(1.8, 1.8 * (1 + 1e-12)) and not MP._same(1.8, 1.8 * (1 + 1e-6))      # mesh_presets.py:299-303, 1e-9 relative
+    cfg = _cfg()
+    opt = _tab("optimization", cfg)
+    ms = opt["mesh_size_mm"]
+    assert RS.resolve("tab", {**opt, "mesh_size_mm": ms * (1 + 1e-12)}, cfg)["label"] == "optimization"       # below the tolerance
+    far = RS.resolve("tab", {**opt, "mesh_size_mm": ms * (1 + 1e-6)}, cfg)                                    # above it
+    assert far["label"] == "custom" and "mesh_size_mm" in far["differs"] and far["sig_scope"] == 3
+    near, base = RS.resolve("tab", {**opt, "mesh_size_mm": ms * (1 + 1e-12)}, cfg), RS.resolve("tab", opt, cfg)
+    assert near["sig"] == base["sig"] and near["sig_scope"] == 2          # equal to the tolerance: the same run, the same digest
+    assert far["sig"] != base["sig"]
+
+
+def test_known_gap_a_legacy_mode_override_of_the_mesh_is_not_labelled_custom():
+    """KNOWN GAP, older than the tab mode: in the legacy optimization / simulation modes only steps, gap rows and the wire cell decide
+    the label, so an override of a mesh size, the sectors or a switch keeps the preset's label and its scope-2 digest.  This test
+    documents the behaviour as it is; the tab mode does not have the gap.  Follow-up: label legacy overrides of every setting."""
+    cfg = _cfg()
+    plain = RS.resolve("optimization", {}, cfg)
+    for k, v in (("mesh_size_mm", 3.3), ("min_size_mm", 0.9), ("rotor_eddy", not plain["settings"]["rotor_eddy"])):
+        r = RS.resolve("optimization", {k: v}, cfg)
+        assert r["settings"][k] == v
+        assert r["label"] == "optimization" and r["sig_scope"] == 2 and r["sig"] == plain["sig"], k
+
+
+def test_a_preset_without_a_value_the_match_needs_is_a_422_not_a_500(monkeypatch):
+    cfg = _cfg()
+    vals = _tab("optimization", cfg)
+    real = MP.resolve
+
+    def lacking(name, geometry, **kw):
+        out = real(name, geometry, **kw)
+        out = {**out, "values": {k: v for k, v in out["values"].items() if k != "demag"}}
+        return out
+    monkeypatch.setattr(MP, "resolve", lacking)
+    with pytest.raises(RS.RunSettingsError):
+        RS.resolve("optimization", {}, cfg)
+    monkeypatch.setattr(O, "get_config", lambda *a, **k: cfg)
+    with pytest.raises(HTTPException) as ei:
+        O.run_settings_resolve(O.RunSettingsIn(preset="tab", overrides=vals), "sweep")
+    assert ei.value.status_code == 422
+
+
+def test_scan_descent_and_auto_store_the_matched_name_never_tab(monkeypatch):
+    cfg = _cfg(coil_rel=1)
+    monkeypatch.setattr(O, "get_config", lambda *a, **k: cfg)
+    for want, vals in (("simulation", _numbers("simulation", cfg)),
+                       ("optimization", _tab("optimization", cfg, coil_rel=2.0)),
+                       ("custom", _tab("optimization", cfg, steps_per_period=108))):
+        rec = {"preset": "tab", "overrides": vals}
+        scan = O.prepare_scan(_req(run_settings=rec))["response"]["mesh_preset"]
+        assert scan["name"] == want and scan["run_settings"]["preset"] == "tab", ("scan", want)
+        dv = {k: v for k, v in vals.items() if k != "demag"}
+        desc = O.prepare_descent(O.DescentRequest(variables=[{"name": "tooth_width", "min": 0.0, "max": 0.0}],
+                                                  run_settings={"preset": "tab", "overrides": dv}))["response"]["mesh_preset"]
+        assert desc["name"] == want, ("descent", want)
+        for mode in ("cmaes", "screen"):
+            plan = O.auto_plan(O.AutoOptRequest(max_ripple_pct=5.0, mode=mode, run_settings=rec))["plan"]
+            assert plan["run_settings"]["name"] == want, ("auto", mode, want)

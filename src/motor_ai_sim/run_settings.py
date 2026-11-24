@@ -27,7 +27,13 @@ PRESETS = ("optimization", "simulation")
 #: Simulation tabs as ``overrides``; nothing is taken from a preset, the label is found by MATCH against the two presets
 TAB = "tab"
 #: the values a ``tab`` request must carry (a missing one is refused: no silent default)
-TAB_REQUIRED = ("steps_per_period", "gap_layers", "mesh_size_mm", "min_size_mm", "n_sectors", "coil_rel")
+TAB_REQUIRED = ("steps_per_period", "gap_layers", "mesh_size_mm", "min_size_mm", "n_sectors", "coil_rel", "rotor_eddy", "demag")
+
+
+def tab_required(mode: str) -> tuple:
+    """The values a ``tab`` request of ``mode`` must carry: a Descent run reads the demag switch from the machine's stored
+    Simulation block, so it is neither required nor accepted there."""
+    return tuple(k for k in TAB_REQUIRED if not (k == "demag" and mode == "descent"))
 #: settings the run request carries (and a user may override), by mode
 _OVERRIDABLE = {
     "sweep": ("steps_per_period", "gap_layers", "mesh_size_mm", "min_size_mm", "n_sectors", "rotor_eddy", "demag", "coil_rel"),
@@ -73,6 +79,10 @@ SIG_SCOPE = 2
 #: preset run keeps the scope-2 digest, so stored preset sweeps stay comparable; a reader that does not know scope 3 treats it as
 #: unknown (never ranked).
 SIG_SCOPE_FULL = 3
+# WHAT SCOPE 3 CERTIFIES: the run's REQUESTED settings.  The solve check (``_stamp_solved``) verifies only what the solver reports
+# back per point: the steps, the gap rows and the wire cell.  The mesh sizes, sectors and the rotor eddy / demag switches are echoed
+# from the request by the eval (``refine_proc``: ``mesh_size_mm`` / ``min_size_mm`` / ``n_sectors``), not solved values; the digest
+# separates runs that asked for different ones, it does not prove what the mesher produced.
 
 
 def identity_sig(steps: Any, gap_layers: Any, preset_version: Any = None, coil_rel: Any = None) -> int:
@@ -146,11 +156,14 @@ _MATCH_KEYS = ("steps_per_period", "gap_layers", "mesh_size_mm", "min_size_mm", 
 
 
 def _preset_numbers(pv: Mapping[str, Any]) -> Dict[str, Any]:
-    v = pv["values"]
-    return {"steps_per_period": int(v["n_steps_per_period"]), "gap_layers": float(v["gap_layers"]),
-            "mesh_size_mm": float(v["mesh_size_mm"]), "min_size_mm": float(v["min_size_mm"]),
-            "n_sectors": int(v["n_sectors"]), "coil_rel": float((v.get("component_mesh") or {}).get("coil_rel", 1.0)),
-            "rotor_eddy": bool(v["rotor_eddy"]), "demag": bool(v["demag"])}
+    try:
+        v = pv["values"]
+        return {"steps_per_period": int(v["n_steps_per_period"]), "gap_layers": float(v["gap_layers"]),
+                "mesh_size_mm": float(v["mesh_size_mm"]), "min_size_mm": float(v["min_size_mm"]),
+                "n_sectors": int(v["n_sectors"]), "coil_rel": float((v.get("component_mesh") or {}).get("coil_rel", 1.0)),
+                "rotor_eddy": bool(v["rotor_eddy"]), "demag": bool(v["demag"])}
+    except (KeyError, TypeError, ValueError) as exc:
+        raise RunSettingsError("a preset lacks a value a tab run is matched on (%s)" % (exc,))
 
 
 def _match_tab(settings: Mapping[str, Any], geometry: Mapping[str, Any], mode: str, opt_pv: Mapping[str, Any],
@@ -188,9 +201,10 @@ def resolve(preset: Optional[str], overrides: Optional[Mapping[str, Any]], cfg: 
     if name not in PRESETS and not tab:
         raise RunSettingsError("unknown preset %r; the presets are %s, %s" % (preset, ", ".join(PRESETS), TAB))
     if tab:
-        missing = [k for k in TAB_REQUIRED if k not in dict(overrides or {})]
+        need = tab_required(mode)
+        missing = [k for k in need if k not in dict(overrides or {})]
         if missing:
-            raise RunSettingsError("a tab request must carry %s; missing %s" % (", ".join(TAB_REQUIRED), ", ".join(missing)))
+            raise RunSettingsError("a tab request must carry %s; missing %s" % (", ".join(need), ", ".join(missing)))
     if mode not in _OVERRIDABLE:
         raise RunSettingsError("unknown run mode %r" % (mode,))
     geometry = dict(cfg.get("geometry") or {})
@@ -200,11 +214,14 @@ def resolve(preset: Optional[str], overrides: Optional[Mapping[str, Any]], cfg: 
         raise RunSettingsError("the %s preset cannot be resolved for this machine: %s" % (name, exc))
     v = pv["values"]
     mach = _machine_values(cfg)
-    base = {"steps_per_period": int(v["n_steps_per_period"]), "gap_layers": float(v["gap_layers"]),
-            "mesh_size_mm": float(v["mesh_size_mm"]), "min_size_mm": float(v["min_size_mm"]),
-            "n_sectors": int(v["n_sectors"]), "coil_rel": float((v.get("component_mesh") or {}).get("coil_rel", 1.0)),
-            "element_order": int(v["element_order"]),
-            "rotor_eddy": bool(v["rotor_eddy"]), "demag": bool(v["demag"]), "hi_fidelity": False}
+    try:
+        base = {"steps_per_period": int(v["n_steps_per_period"]), "gap_layers": float(v["gap_layers"]),
+                "mesh_size_mm": float(v["mesh_size_mm"]), "min_size_mm": float(v["min_size_mm"]),
+                "n_sectors": int(v["n_sectors"]), "coil_rel": float((v.get("component_mesh") or {}).get("coil_rel", 1.0)),
+                "element_order": int(v["element_order"]),
+                "rotor_eddy": bool(v["rotor_eddy"]), "demag": bool(v["demag"]), "hi_fidelity": False}
+    except (KeyError, TypeError, ValueError) as exc:
+        raise RunSettingsError("the %s preset lacks a value this run needs (%s)" % (name, exc))
     settings: Dict[str, Any] = dict(base)
     sources = {k: "preset" for k in base}
     clamps: List[Dict[str, Any]] = []
@@ -254,6 +271,9 @@ def resolve(preset: Optional[str], overrides: Optional[Mapping[str, Any]], cfg: 
         sources[k] = "tab" if tab else "override"
     if mode == "descent":                     # the descent evals read demag from the stored Simulation block
         settings["demag"], sources["demag"] = mach["demag_cfg"], "machine"
+    if tab:     # nothing of a tab run comes from a preset: what the tab did not give is the solver's fixed basis (P2, no hi-fidelity bundle)
+        for k in ("element_order", "hi_fidelity"):
+            sources[k] = "fixed"
     settings["eddy"], sources["eddy"] = mach["eddy"], "machine"
     settings["outer_air_factor"], sources["outer_air_factor"] = mach["outer_air_factor"], "machine"
     settings["component_mesh"], sources["component_mesh"] = mach["component_mesh"], "machine"   # the stored block; coil_rel above is the run's

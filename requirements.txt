@@ -65,7 +65,7 @@ python-docx==1.2.0  # report_docx.py — the DEFAULT report format since 2026-09
 openpyxl==3.1.5
 # Specification-file upload for the project specification assistant (2026-11-24, development/spec_file_extract.py): pure-Python
 # readers, imported only when a PDF / .xls arrives (without them the assistant answers "not available on this server").
-pypdf==7.1.1  # PDF text layer; BSD-3, no code execution (JavaScript / actions are never run); the version the tests ran with
+pypdf==6.9.2  # PDF text layer; BSD-3; released 2026-03-23 (older than the 7.x line on purpose); the version the tests ran with
 xlrd==2.0.2  # old .xls cell values only (no macro engine, no fetch); BSD-3; read-only, on_demand, formatting_info=False
 # MCP server for external AI agents at /mcp (Stage 1, 2026-09-28,
 # docs/MCP_2026-09-28.md): the official Model Context Protocol SDK, streamable

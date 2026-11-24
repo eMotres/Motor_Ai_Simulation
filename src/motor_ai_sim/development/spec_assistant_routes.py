@@ -18,6 +18,7 @@ The assistant never writes the draft itself; only ``apply`` / fill mode do, thro
 from __future__ import annotations
 
 import json as _json
+from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.concurrency import run_in_threadpool
@@ -87,10 +88,37 @@ def _refusal(exc: FX.ExtractError, lang: str, status: int = 422) -> HTTPExceptio
     return HTTPException(status_code=status, detail={"message": exc.message(lang), "code": exc.code})
 
 
+async def _read_upload(request: Request) -> tuple[Any, Any]:
+    """The multipart body, with a STREAMING bound: the stream is counted as it arrives and refused (413) as soon as it passes the file
+    limit plus the form's own overhead, whether or not a Content-Length was declared; at most ONE file part and a few small fields."""
+    from starlette.formparsers import MultiPartException, MultiPartParser
+    bound = FX.MAX_BYTES + 256 * 1024
+
+    async def limited():
+        seen = 0
+        async for chunk in request.stream():
+            seen += len(chunk)
+            if seen > bound:
+                raise HTTPException(status_code=413, detail={"message": FX._MSG["too_big"][0], "code": "too_big"})
+            yield chunk
+
+    if "multipart/form-data" not in request.headers.get("content-type", "").lower():
+        raise HTTPException(status_code=400, detail="multipart/form-data expected")
+    try:
+        form = await MultiPartParser(request.headers, limited(), max_files=1, max_fields=8).parse()
+    except MultiPartException:
+        raise HTTPException(status_code=400, detail="One file and a few small fields expected") from None
+    return form, form.get("file")
+
+
 @router.post("/{project_id}/spec/assistant/file")
 async def assistant_file(request: Request, project_id: str):
     """Read an attached specification file (owner 2026-11-24).  Only the project owner and admins (``can_edit_spec``; anyone else gets
-    403 / 404 like the other spec routes), motor projects only, signed in only.  The answer is a reply with proposal cards."""
+    403 / 404 like the other spec routes), motor projects only, signed in only.  The answer is a reply with proposal cards.
+
+    Order: access -> streaming body bound -> file name and cheap type / size checks -> provider configured -> extraction in a limited
+    worker -> sanitising -> ONLY THEN the quotas are charged -> the original is stored -> the model.  A refused file (type, size, active
+    content, no text) uses no quota and leaves no bytes behind."""
     if not store.valid_id(project_id):
         raise HTTPException(status_code=404, detail="Project not found")
     user, project, _ = access.require_spec_editor(request, project_id)
@@ -102,48 +130,56 @@ async def assistant_file(request: Request, project_id: str):
         declared = 0
     if declared > FX.MAX_BYTES + 256 * 1024:
         raise _refusal(FX.ExtractError("too_big", *FX._MSG["too_big"]), "en", 413)
-    form = await request.form()
-    uploaded = form.get("file")
-    if uploaded is None or isinstance(uploaded, str):
-        raise HTTPException(status_code=400, detail="No file uploaded")
-    lang = A.lang_of(form.get("lang"))
+    form, uploaded = await _read_upload(request)
     try:
-        raw_messages = _json.loads(str(form.get("messages") or "[]"))
-    except ValueError:
-        raw_messages = []
-    name = str(uploaded.filename or "file")
-    email = str(user.get("email") or "").strip().lower()
-
-    def read() -> bytes:
-        return uploaded.file.read(FX.MAX_BYTES + 1)
-
-    data = await run_in_threadpool(read)
-    try:
-        FX.precheck(name, data)                                # type / size / macro refusals do not use up the user's file limit
-    except FX.ExtractError as exc:
-        raise _refusal(exc, lang, 413 if exc.code == "too_big" else 422)
-    if not _provider_configured():
-        raise HTTPException(status_code=503, detail={"message": A.REPLIES["unavailable"][lang], "code": "unavailable"})
-    if not access.is_engineer(user):                           # the account day cap of the chat (staff are exempt there too)
-        from motor_ai_sim.routes import support as S
-        if email and not S._charge_account(email):
+        if uploaded is None or isinstance(uploaded, str):
+            raise HTTPException(status_code=400, detail="No file uploaded")
+        lang = A.lang_of(form.get("lang"))
+        try:
+            raw_messages = _json.loads(str(form.get("messages") or "[]"))
+        except ValueError:
+            raw_messages = []
+        name = str(uploaded.filename or "")
+        email = str(user.get("email") or "").strip().lower()
+        data = await run_in_threadpool(lambda: uploaded.file.read(FX.MAX_BYTES + 1))
+        try:
+            FX.precheck(name, data)                            # name, type, size, macro container, old binary file: nothing is parsed
+        except FX.ExtractError as exc:
+            raise _refusal(exc, lang, 413 if exc.code == "too_big" else 422)
+        if not _provider_configured():
+            raise HTTPException(status_code=503, detail={"message": A.REPLIES["unavailable"][lang], "code": "unavailable"})
+        hit = FA.check_limits(email, project_id)
+        if hit or not FA.attempt(email):
+            code = hit or "tries"
+            raise HTTPException(status_code=429, detail={"message": FA.LIMIT_TEXT[code][lang], "code": "file_" + code})
+        try:
+            extracted = await run_in_threadpool(FX.extract_isolated, name, data)
+            san = FA.sanitise(extracted.blocks)
+            FA.check_size(san)
+            if not san.blocks:
+                raise FX.ExtractError("no_text", *FX._MSG["no_text"])
+        except FX.ExtractError as exc:
+            raise _refusal(exc, lang, 413 if exc.code in ("too_big", "storage_full") else 422)
+        # the file is accepted: now the quotas are used (the chat day cap, the account cap, the file limits)
+        if not access.is_engineer(user):
+            from motor_ai_sim.routes import support as S
+            if email and not S._charge_account(email):
+                raise HTTPException(status_code=429, detail={"message": "The assistant has reached its daily limit for your account - please try again tomorrow."
+                                                             if lang == "en" else "今日助手使用次数已达上限，请明天再试。", "code": "account_day"})
+        if not A._charge(email):
             raise HTTPException(status_code=429, detail={"message": "The assistant has reached its daily limit for your account - please try again tomorrow."
-                                                         if lang == "en" else "今日助手使用次数已达上限，请明天再试。", "code": "account_day"})
-    hit = FA.charge_file(email, project_id)
-    if hit:
-        raise HTTPException(status_code=429, detail={"message": FA.LIMIT_TEXT[hit][lang], "code": "file_" + hit})
-    try:
-        extracted = await run_in_threadpool(FX.extract_isolated, name, data)
-        san = FA.sanitise(extracted.blocks)
-        FA.check_size(san)
-        if not san.blocks:
-            raise FX.ExtractError("no_text", *FX._MSG["no_text"])
-        row = await run_in_threadpool(FA.store_original, project_id, user, name, data, str(getattr(uploaded, "content_type", "") or ""))
-    except FX.ExtractError as exc:
-        raise _refusal(exc, lang, 413 if exc.code in ("too_big", "storage_full") else 422)
-    except ValueError:                                         # the store's own size / empty refusal
-        raise HTTPException(status_code=413, detail={"message": FX._MSG["too_big"][0 if lang == "en" else 1], "code": "too_big"})
-    FA.store_text(project_id, row["id"], extracted)
+                                                         if lang == "en" else "今日助手使用次数已达上限，请明天再试。", "code": "chat_day"})
+        hit = FA.charge_file(email, project_id)
+        if hit:
+            raise HTTPException(status_code=429, detail={"message": FA.LIMIT_TEXT[hit][lang], "code": "file_" + hit})
+        try:
+            row = await run_in_threadpool(FA.store_original, project_id, user, name, data, str(getattr(uploaded, "content_type", "") or ""))
+        except FX.ExtractError as exc:
+            raise _refusal(exc, lang, 413)
+        except ValueError:                                     # the store's own size / empty refusal
+            raise HTTPException(status_code=413, detail={"message": FX._MSG["too_big"][0 if lang == "en" else 1], "code": "too_big"})
+    finally:
+        await form.close()
     base = None
     try:
         from motor_ai_sim.routes import support as S

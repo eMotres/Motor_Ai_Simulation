@@ -190,7 +190,7 @@ def process_markers(project_id: str, found: list[dict], lang: str, *, fill_email
     count = 0
     for fields in found:
         if count >= cap:
-            log.warning("spec assistant: proposal for %r dropped (more than %d in one reply)", fields.get("field"), cap)
+            log.warning("spec assistant: a proposal was dropped (more than %d in one reply)", cap)
             dropped += 1
             continue
         field_id = str(fields.get("field") or "").strip().strip("\"'")
@@ -209,7 +209,7 @@ def process_markers(project_id: str, found: list[dict], lang: str, *, fill_email
                             answer_status="not_known_yet" if nky else "filled", sources=_URL.findall(reason),
                             file_source=fields.get("_file_source"))
         except Exception as exc:                              # noqa: BLE001 - a bad marker must never fail the reply
-            log.warning("spec assistant: proposal for %r dropped (%s)", field_id, str(exc)[:160])
+            log.warning("spec assistant: a proposal was dropped (%s)", type(exc).__name__)
             dropped += 1
             try:
                 section, _ = P.field_info(field_id, P.schema_version_of(P.draft_wrapper(project_id)))
@@ -225,7 +225,7 @@ def process_markers(project_id: str, found: list[dict], lang: str, *, fill_email
                 applied.append(done["proposal"])
                 continue
             except Exception as exc:                          # noqa: BLE001 - stays a card
-                log.warning("spec assistant: fill of %r not applied, kept as a card (%s)", field_id, str(exc)[:160])
+                log.warning("spec assistant: a fill was not applied, kept as a card (%s)", type(exc).__name__)
         opened.append(prop)
     return {"open": opened, "applied": applied, "refused": refused, "dropped": dropped}
 

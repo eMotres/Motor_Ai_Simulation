@@ -72,7 +72,7 @@ def make_pdf(pages) -> bytes:
     return buf.getvalue()
 
 
-def make_xls(rows, hidden=False) -> bytes:
+def make_xls(rows, hidden=False, extra_dir=None, sheet_type=0) -> bytes:
     """A minimal BIFF8 workbook inside an OLE2 compound file (one sheet; text and numbers), no third-party writer needed."""
     def rec(rid, body=b""):
         return struct.pack("<HH", rid, len(body)) + body
@@ -98,7 +98,7 @@ def make_xls(rows, hidden=False) -> bytes:
         + rec(0x0022, struct.pack("<H", 0))
 
     def boundsheet(offset):
-        return rec(0x0085, struct.pack("<IBBB", offset, 1 if hidden else 0, 0, len(name)) + b"\x00" + name)
+        return rec(0x0085, struct.pack("<IBBB", offset, 1 if hidden else 0, sheet_type, len(name)) + b"\x00" + name)
 
     offset = len(glob_head) + len(boundsheet(0)) + 4              # the sheet starts after the globals' closing EOF (4 bytes)
     book = glob_head + boundsheet(offset) + rec(0x000A) + sheet
@@ -115,7 +115,7 @@ def make_xls(rows, hidden=False) -> bytes:
                 + b"\x00" * 16 + b"\x00" * 4 + b"\x00" * 16 + struct.pack("<IQ", start, size)).ljust(128, b"\x00")[:128]
 
     directory = (dirent("Root Entry", 5, 1, end, 0) + dirent("Workbook", 2, free, 2, len(book))
-                 + b"\x00" * 128 + b"\x00" * 128)
+                 + (dirent(extra_dir, 1, free, end, 0) if extra_dir else b"\x00" * 128) + b"\x00" * 128)
     header = (bytes.fromhex("D0CF11E0A1B11AE1") + b"\x00" * 16 + struct.pack("<HHHHH", 0x3E, 3, 0xFFFE, 9, 6) + b"\x00" * 6
               + struct.pack("<IIIIIIIII", 0, 1, 1, 0, 4096, end, 0, end, 0) + struct.pack("<I", 0)
               + struct.pack("<108I", *([free] * 108)))
@@ -287,8 +287,11 @@ def test_xlsx_sheet_and_cell_limits():
 
 # ── PDF (stub always; real pypdf when importable) ────────────────────────────
 
-class _Page:
+class _Page(dict):
+    """A page of the stub reader: an (empty) PDF page dictionary with a text."""
+
     def __init__(self, text):
+        super().__init__()
         self._t = text
 
     def extract_text(self):
@@ -304,6 +307,7 @@ def _stub_pypdf(monkeypatch, pages, encrypted=False):
         def __init__(self, stream, strict=False):
             self.is_encrypted = encrypted
             self.pages = [_Page(t) for t in pages]
+            self.trailer = {"/Root": {}}
 
     mod.PdfReader = PdfReader
     monkeypatch.setitem(sys.modules, "pypdf", mod)
@@ -337,7 +341,7 @@ def test_pdf_page_limit_encryption_and_bad_page_stub(monkeypatch):
     _stub_pypdf(monkeypatch, [GOOD], encrypted=True)
     assert _err("lock.pdf", PDF).code == "encrypted"
     _stub_pypdf(monkeypatch, [GOOD, RuntimeError("bad page"), GOOD])
-    assert [b.ref for b in X.extract("one-bad.pdf", PDF).blocks] == ["page 1", "page 3"]
+    assert _err("one-bad.pdf", PDF).code == "unreadable"                   # never read half-way and silently
 
 
 def test_pdf_not_a_pdf_and_missing_library(monkeypatch):
@@ -407,12 +411,170 @@ def test_isolated_extraction_in_a_child_process_and_its_refusals():
 def test_the_child_environment_carries_no_keys(monkeypatch):
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test-should-not-travel")
     seen = {}
-    real = subprocess.run
+    real = subprocess.Popen
 
     def spy(cmd, **kw):
-        seen["env"] = kw.get("env")
+        seen.update(env=kw.get("env"), session=kw.get("start_new_session"), pre=kw.get("preexec_fn"))
         return real(cmd, **kw)
 
-    monkeypatch.setattr(subprocess, "run", spy)
+    monkeypatch.setattr(subprocess, "Popen", spy)
     X.extract_isolated("a.txt", b"x 1\n")
     assert "ANTHROPIC_API_KEY" not in seen["env"] and set(seen["env"]) <= set(X._CHILD_ENV)
+    assert seen["session"] is True and seen["pre"] is None             # own process group; nothing runs between fork and exec
+
+
+# ── active content is refused BEFORE storage (the accepted original is handed to people) ──────────────────────────────────
+
+def _rewrite(data: bytes, edits: dict) -> bytes:
+    """A copy of a zip container with some members replaced (name -> bytes) or added."""
+    z = zipfile.ZipFile(io.BytesIO(data))
+    members = {n: z.read(n) for n in z.namelist()}
+    members.update(edits)
+    return zip_with(members)
+
+
+REL_NS = b'<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+
+
+def test_remote_template_and_external_links_in_a_docx_are_refused_but_a_hyperlink_passes():
+    base = make_docx()
+    remote = REL_NS + (b'<Relationship Id="rId9" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/attachedTemplate" '
+                       b'Target="https://evil.example/t.dotm" TargetMode="External"/></Relationships>')
+    assert _err("a.docx", _rewrite(base, {"word/_rels/settings.xml.rels": remote})).code == "active"
+    image = REL_NS + (b'<Relationship Id="rId9" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" '
+                      b'Target="http://evil.example/p.png" TargetMode="External"/></Relationships>')
+    assert _err("a.docx", _rewrite(base, {"word/_rels/document.xml.rels": image})).code == "active"
+    ole = REL_NS + (b'<Relationship Id="rId9" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/oleObject" '
+                    b'Target="embeddings/o.bin"/></Relationships>')
+    assert _err("a.docx", _rewrite(base, {"word/_rels/x.xml.rels": ole})).code == "active"
+    pkg = REL_NS + (b'<Relationship Id="rId9" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/package" '
+                    b'Target="embeddings/p.docx"/></Relationships>')
+    assert _err("a.docx", _rewrite(base, {"word/_rels/x.xml.rels": pkg})).code == "active"
+    link = REL_NS + (b'<Relationship Id="rId9" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink" '
+                     b'Target="https://example.test/datasheet" TargetMode="External"/></Relationships>')
+    assert X.extract("a.docx", _rewrite(base, {"word/_rels/x.xml.rels": link})).kind == "docx"   # inert text, never followed
+    sheet = _rewrite(make_xlsx(), {"xl/worksheets/_rels/sheet1.xml.rels": remote})
+    assert _err("a.xlsx", sheet).code == "active"
+
+
+def test_a_dtd_or_entity_in_any_xml_part_is_refused_for_docx_and_xlsx():
+    bomb = b'<?xml version="1.0"?><!DOCTYPE x [<!ENTITY a "aaaa"><!ENTITY b "&a;&a;&a;&a;">]><x>&b;</x>'
+    assert _err("a.xlsx", _rewrite(make_xlsx(), {"xl/sharedStrings.xml": bomb})).code == "dtd"
+    assert _err("a.docx", _rewrite(make_docx(), {"word/document.xml": bomb})).code == "dtd"
+    assert _err("a.docx", _rewrite(make_docx(), {"customXml/item1.xml": b'<!doctype html><x/>'})).code == "dtd"
+    utf16 = "<?xml version='1.0'?><!ENTITY a 'b'><x/>".encode("utf-16-le")
+    assert _err("a.xlsx", _rewrite(make_xlsx(), {"xl/styles.xml": utf16})).code == "dtd"
+
+
+def test_xlsx_beyond_the_columns_and_rows_we_read_is_refused_not_dropped():
+    wide = {"S": [("a",) + (None,) * (X.MAX_COLS + 3) + ("far",)]}
+    assert _err("a.xlsx", make_xlsx(wide)).code == "cells"
+    rows = [("x",)] * 3 + [(None,)] * (X.MAX_SCAN_ROWS + 5) + [("late",)]
+    assert _err("a.xlsx", make_xlsx({"S": rows})).code == "cells"
+    assert X.extract("ok.xlsx", make_xlsx({"S": [("a",) + (None,) * (X.MAX_COLS - 2) + ("last",)]})).stats["cells"] == 2
+
+
+def _pdf(extra=None, js=False, attach=False, open_js=False):
+    pypdf = pytest.importorskip("pypdf", reason="pypdf is not installed here")
+    w = pypdf.PdfWriter()
+    w.add_blank_page(width=300, height=300)
+    if js:
+        w.add_js("app.alert('x')")
+    if attach:
+        w.add_attachment("a.txt", b"hello")
+    buf = io.BytesIO()
+    w.write(buf)
+    return buf.getvalue()
+
+
+@pytest.mark.parametrize("kw", [{"js": True}, {"attach": True}])
+def test_pdf_with_a_script_or_an_embedded_file_is_refused(kw):
+    pytest.importorskip("pypdf", reason="pypdf is not installed here")
+    assert _err("a.pdf", _pdf(**kw)).code == "active"
+
+
+def test_pdf_active_names_are_found_even_when_spelled_with_hex_escapes():
+    raw = b"%PDF-1.4\n1 0 obj<< /Type /Catalog /OpenAction << /S /#4Aava#53cript /JS (x) >> >>endobj\ntrailer<< /Root 1 0 R >>\n%%EOF"
+    pytest.importorskip("pypdf", reason="pypdf is not installed here")
+    assert _err("a.pdf", raw).code == "active"
+    assert _err("a.pdf", b"%PDF-1.4\n1 0 obj<< /S /Launch /F (cmd.exe) >>endobj").code == "active"
+
+
+def test_pdf_objects_inside_the_parsed_file_actions_stub(monkeypatch):
+    """The parsed-object scan (compressed object streams hide names from the raw scan): catalog actions, name trees, annotations."""
+    def with_reader(root, page_extra=None):
+        _stub_pypdf(monkeypatch, [GOOD])
+        mod = sys.modules["pypdf"]
+        base = mod.PdfReader
+
+        class R(base):
+            def __init__(self, *a, **k):
+                super().__init__(*a, **k)
+                self.trailer = {"/Root": root}
+                if page_extra:
+                    self.pages[0].update(page_extra)
+        mod.PdfReader = R
+
+    with_reader({"/OpenAction": {"/S": "/JavaScript"}})
+    assert _err("a.pdf", PDF).code == "active"
+    with_reader({"/OpenAction": [0, "/Fit"]})                                    # an ordinary destination is fine
+    assert X.extract("a.pdf", PDF).kind == "pdf"
+    with_reader({"/Names": {"/EmbeddedFiles": {}}})
+    assert _err("a.pdf", PDF).code == "active"
+    with_reader({"/AcroForm": {"/XFA": []}})
+    assert _err("a.pdf", PDF).code == "active"
+    with_reader({}, {"/Annots": [{"/Subtype": "/FileAttachment"}]})
+    assert _err("a.pdf", PDF).code == "active"
+    with_reader({}, {"/Annots": [{"/Subtype": "/Link", "/A": {"/S": "/Launch"}}]})
+    assert _err("a.pdf", PDF).code == "active"
+    with_reader({}, {"/Annots": [{"/Subtype": "/Link", "/A": {"/S": "/URI"}}]})  # a plain link is inert
+    assert X.extract("a.pdf", PDF).kind == "pdf"
+
+
+def test_xls_macro_forms_beyond_the_vba_project_stream_are_refused():
+    pytest.importorskip("xlrd", reason="xlrd is not installed here")
+    base = make_xls([("a", 1)])
+    assert X.extract("ok.xls", base).kind == "xls"
+    for name in ("VBA", "Macros", "_VBA_PROJECT_CUR", "ObjectPool", "MBD0001", "\x01Ole10Native"):
+        assert _err("m.xls", make_xls([("a", 1)], extra_dir=name)).code == "macro", name
+    assert _err("m.xls", make_xls([("a", 1)], sheet_type=1)).code == "macro"          # an Excel 4.0 macro sheet
+
+
+# ── names, limits of the worker ──────────────────────────────────────────────
+
+@pytest.mark.parametrize("name", ["", "   ", "a" * 201 + ".txt", "a\x00b.txt", "a\nb.txt", "a\x7f.txt", "dir/a.txt", "dir\\a.txt", "../a.txt"])
+def test_bad_file_names_are_refused_before_anything_else(name):
+    assert _err(name, b"x 1\n").code == "badname"
+    with pytest.raises(X.ExtractError):
+        X.extract_isolated(name, b"x 1\n")
+
+
+def test_a_limit_that_cannot_be_set_or_verified_fails_closed(monkeypatch):
+    import resource
+    def no(*a, **k):
+        raise OSError("not permitted")
+    monkeypatch.setattr(resource, "setrlimit", no)
+    assert X._set_limits() is False
+    monkeypatch.setattr(resource, "setrlimit", lambda *a, **k: None)         # accepted but not applied: the read-back differs
+    monkeypatch.setattr(resource, "getrlimit", lambda which: (resource.RLIM_INFINITY, resource.RLIM_INFINITY))
+    assert X._set_limits() is False
+    assert X._main(["--name", "a.txt"]) == X._WORKER_BAD_LIMITS
+
+
+def test_the_worker_is_killed_as_a_group_on_a_timeout_and_its_answer_is_checked(monkeypatch):
+    monkeypatch.setattr(X, "CHILD_WALL_SECONDS", 0.001)
+    with pytest.raises(X.ExtractError) as info:
+        X.extract_isolated("a.txt", b"x 1\n" * 1000)
+    assert info.value.code == "timeout"
+    monkeypatch.setattr(X, "CHILD_WALL_SECONDS", 25)
+    monkeypatch.setattr(X, "CHILD_OUT_BYTES", 10)                              # an answer over the cap is refused, never read in full
+    with pytest.raises(X.ExtractError) as info:
+        X.extract_isolated("a.txt", b"x 1\n")
+    assert info.value.code == "unreadable"
+
+
+@pytest.mark.parametrize("bad", [None, [], {}, {"kind": "exe", "blocks": []}, {"kind": "txt", "blocks": "x"},
+                                  {"kind": "txt", "blocks": [{"ref": 1, "text": "a"}]}, {"kind": "txt", "blocks": [{"ref": "a"}]}])
+def test_the_answer_of_the_worker_must_have_the_schema(bad):
+    with pytest.raises(X.ExtractError):
+        X.from_dict(bad)

@@ -237,16 +237,37 @@ def stats(**flt: Any) -> dict:
     return {"days": [{"day": k, **v} for k, v in sorted(days.items())], "total": total}
 
 
+def _project_had_file(pid: str, known: set, cache: Dict[str, bool]) -> bool:
+    """True for a project in which a file was attached: found in the archive, or flagged on the project record at the first upload."""
+    if not pid:
+        return False
+    if pid in known:
+        return True
+    if pid not in cache:
+        try:
+            from motor_ai_sim.development import store as DS
+            cache[pid] = bool((DS.get_project(pid) or {}).get("spec_file_used")) if DS.valid_id(pid) else False
+        except Exception:                              # noqa: BLE001 - an unreadable project is not exported either: fail closed
+            cache[pid] = True
+    return cache[pid]
+
+
 def export_lines(training_allowed=None, **flt: Any) -> Iterable[str]:
     """JSONL for the analysis / dataset: every record plus a ``dataset`` block.  ``candidate`` only says the record may be offered to
     the dataset; ``training_allowed`` is the account's own flag from the Platform Agreement and the dataset's own gate
     (``training_allow``) still decides downstream.  Anonymous visitors are never training-allowed."""
     cache: Dict[str, bool] = {}
     tainted: set = set()
-    if not SPEC_FILE_TEXT_IN_TRAINING:                 # a conversation that ever carried a file stays out, every turn of it
-        tainted = {str(r.get("conv_id")) for r in iter_records() if r.get("file_turn") and r.get("conv_id")}
+    file_projects: set = set()
+    seen_projects: Dict[str, bool] = {}
+    if not SPEC_FILE_TEXT_IN_TRAINING:                 # a project that ever had a file stays out: every conversation of it, every member
+        for r in iter_records():
+            if r.get("file_turn"):
+                tainted.add(str(r.get("conv_id")))
+                file_projects.add(str(r.get("project_id") or ""))
     for r in iter_records(**flt):
-        if not SPEC_FILE_TEXT_IN_TRAINING and (r.get("file_turn") or str(r.get("conv_id")) in tainted):
+        if not SPEC_FILE_TEXT_IN_TRAINING and (r.get("file_turn") or str(r.get("conv_id")) in tainted
+                                               or _project_had_file(str(r.get("project_id") or ""), file_projects, seen_projects)):
             continue
         acct = str(r.get("account") or "")
         ok = False

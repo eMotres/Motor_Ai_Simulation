@@ -71,17 +71,17 @@ def test_the_plan_carries_the_settings_stamp():
 
 def test_the_effective_settings_come_from_the_solved_points():
     rec = O._sweep_settings_record({"name": "optimization", "custom": False}, 48, 1.0)
-    assert rec["effective_source"] == "requested"
+    assert set(rec["effective_source"].values()) == {"requested"}
     pts = [{"fem": True, "feasible": True, "n_steps_per_period_solved": 48, "gap_layers_per_side": 1.0}]
     ok = O._stamp_solved(rec, pts)
-    assert ok["effective_source"] == "solved" and ok["custom"] is not True
+    assert set(ok["effective_source"].values()) == {"solved"} and ok["custom"] is not True
     # the solver snapped the count and raised the gap rows: the stamp says so and is no longer a preset
     pts = [{"fem": True, "feasible": True, "n_steps_per_period_solved": 52, "gap_layers_per_side": 4.0}]
     bad = O._stamp_solved(rec, pts)
     assert bad["effective"] == {"steps_per_period": 52, "gap_layers": 4.0}
-    assert bad["custom"] is True and bad["solved_differs"] is True
+    assert bad["custom"] is True and bad["solved_differs"] is True and bad["name"] == "custom"
     none = O._stamp_solved(rec, [{"fem": True, "feasible": True}])
-    assert none["effective_source"] == "requested" and none["n_points_reporting"] == 0
+    assert set(none["effective_source"].values()) == {"requested"} and none["n_points_reporting"] == 0
     assert SS.sweep_settings_of({"mesh_preset": bad})["preset"] == "custom"
 
 

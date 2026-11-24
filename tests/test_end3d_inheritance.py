@@ -160,3 +160,15 @@ def test_dry_list_old_and_new_on_a_tiny_catalog(tmp_path, monkeypatch):
     (row,) = rep["changed"]
     assert row["config"] == "L150" and row["old"] == 0.946
     assert row["new"] == pytest.approx(0.946 + (0.9896 - 0.946) * 110.0 / 160.0) and row["new_basis"] == "curve"
+
+
+def test_k_flux_basis_label_reads_the_verdict_not_the_usable_flag():
+    from motor_ai_sim.simulation.static3d.end_effect import k_flux_basis_label as lab
+    assert lab({"verdict": "PASS", "k_flux_usable": True}) == "2-D check passed"
+    nc = lab({"verdict": "NOT CHECKED", "k_flux_usable": True})
+    assert "not checked" in nc and "passed" not in nc
+    assert lab({"verdict": "FAIL", "k_flux_usable": False}).startswith("2-D check failed")
+    assert lab({"verdict": "INVALID", "k_flux_usable": False}).startswith("2-D check failed")
+    assert lab({"k_flux_usable": True}) == "2-D check passed"           # no verdict: as before
+    assert lab({"k_flux_usable": False}).startswith("2-D check failed")
+    assert lab(None).startswith("self-normalised")

@@ -461,7 +461,10 @@ def preflight(store: Path, m: Dict[str, Any]) -> List[str]:
         if not (dies / n / "die.yaml").is_file():
             out.append(f"'{n}' is not a die of the shared catalog")
     taken = {p.name.casefold() for p in dies.iterdir() if p.is_dir()}
-    taken |= {p.name.casefold() for p in (store / "workspaces").glob("*/dies/*") if p.is_dir()}
+    for r in _layer_roots(store):
+        taken |= {p.name.casefold() for p in (r / "dies").glob("*") if p.is_dir()}
+        if (r / "dies" / succ).is_dir():
+            out.append(f"the successor has a copy in a non-shared layer: {(r / 'dies' / succ).relative_to(store)}")
     if retired.casefold() in taken:
         out.append(f"the retired name '{retired}' is taken")
     for c in m["continuing"]:
@@ -499,7 +502,7 @@ def _mark_saved_sweeps(store: Path, pred: str, retired: str, continuing: set, dr
     retired die and say ``previous_sheet``; the numbers are kept.  Runs BEFORE the renames (afterwards ``pred`` is the
     successor and the two could not be told apart)."""
     hits = []
-    for f in sorted(store.glob("workspaces/*/optimization_saves/*.json")) + sorted(store.glob("shared/optimization_saves/*.json")):
+    for f in _lglob(store, "optimization_saves/*.json") + sorted(store.glob("shared/optimization_saves/*.json")):
         try:
             doc = json.loads(f.read_text(encoding="utf-8"))
         except (OSError, ValueError):
@@ -522,7 +525,7 @@ def _mark_saved_sweeps(store: Path, pred: str, retired: str, continuing: set, dr
             if not dry_run:
                 from motor_ai_sim import json_store
                 json_store.atomic_write_json(f, doc)
-    for f in sorted(store.glob("workspaces/*/saved_simulations.json")):
+    for f in _lglob(store, "saved_simulations.json"):
         try:
             doc = json.loads(f.read_text(encoding="utf-8"))
         except (OSError, ValueError):
@@ -548,12 +551,56 @@ def _mark_saved_sweeps(store: Path, pred: str, retired: str, continuing: set, dr
     return hits
 
 
+def _layer_roots(store: Path) -> List[Path]:
+    """Every NON-shared layer root a reader can resolve a die or a result through: the process workspace (``identity/``, the
+    MOTOR_AI_SIM_CONFIG directory: anonymous callers, the service token, background jobs - workspace.py process_workspace /
+    layers), every account workspace and every published namespace."""
+    roots = [store / "identity"]
+    for top in ("workspaces", "published"):
+        roots += [d for d in sorted((store / top).glob("*")) if d.is_dir() and not d.name.startswith(".")]
+    return roots
+
+
+def _lglob(store: Path, pattern: str) -> List[Path]:
+    return [f for r in _layer_roots(store) for f in sorted(r.glob(pattern))]
+
+
+def _move_shadows(store: Path, pred: str, retired: str, dry_run: bool) -> List[str]:
+    """A die folder named like the predecessor in a non-shared layer (``<layer>/dies/<pred>``) is read BEFORE the shared
+    catalog by that layer's callers (workspace.layers): it would shadow the successor.  It follows the predecessor to the
+    retired name, its history too; the die / configuration documents in it name the retired die."""
+    import yaml
+    moved = []
+    for r in _layer_roots(store):
+        src = r / "dies" / pred
+        if not src.is_dir():
+            continue
+        dst = r / "dies" / retired
+        if dst.exists():
+            raise SystemExit(f"refused: {dst.relative_to(store)} exists")
+        moved.append(str(src.relative_to(store)))
+        if dry_run:
+            continue
+        src.rename(dst)
+        hs, hd = r / "dies" / ".history" / pred, r / "dies" / ".history" / retired
+        if hs.is_dir() and not hd.exists():
+            hs.rename(hd)
+        for f in sorted(dst.glob("*.yaml")):
+            doc = yaml.safe_load(f.read_text(encoding="utf-8")) or {}
+            body = doc["config"] if isinstance(doc.get("config"), dict) else doc
+            key = "name" if f.name == "die.yaml" else "die"
+            if isinstance(body, dict) and body.get(key) == pred:
+                body[key] = retired
+                f.write_text(yaml.safe_dump(doc, sort_keys=False, allow_unicode=True), encoding="utf-8")
+    return moved
+
+
 def _relabel_last_scans(store: Path, pred: str, succ: str, retired: str, aside_map: Dict[str, str]) -> List[str]:
     """``.last_scan.json`` (the last sweep a user ran) names the machine it ran on: the predecessor's -> the retired name, the
     successor's moved-aside working copy -> its aside name under the predecessor's name."""
     from motor_ai_sim import json_store
     hits = []
-    for f in sorted(store.glob("workspaces/*/.last_scan.json")):
+    for f in _lglob(store, ".last_scan.json"):
         try:
             doc = json.loads(f.read_text(encoding="utf-8"))
         except (OSError, ValueError):
@@ -579,7 +626,7 @@ def _relabel_compare_names(store: Path, pred: str, retired: str) -> List[str]:
     previous sheet, so the name says the retired die and the row says ``previous_sheet``; the numbers are kept."""
     from motor_ai_sim import json_store
     hits = []
-    for f in sorted(store.glob("workspaces/*/saved_simulations.json")):
+    for f in _lglob(store, "saved_simulations.json"):
         doc = json.loads(f.read_text(encoding="utf-8"))
         n = 0
         for rows in (doc.values() if isinstance(doc, dict) else []):
@@ -737,7 +784,7 @@ def switch(store: Path, m: Dict[str, Any], *, dry_run: bool, actor: str) -> Dict
     # the successor's own saved sweeps of a moved-aside name belong to the aside copy (relabelled after the renames)
     aside_map = {c["config"]: c["successor_own"]["moved_aside_as"].format(date=date) for c in m["continuing"] if c.get("successor_own")}
     own_sweeps = []
-    for f in sorted(store.glob("workspaces/*/optimization_saves/*.json")):
+    for f in _lglob(store, "optimization_saves/*.json"):
         try:
             doc = json.loads(f.read_text(encoding="utf-8"))
         except (OSError, ValueError):
@@ -754,12 +801,13 @@ def switch(store: Path, m: Dict[str, Any], *, dry_run: bool, actor: str) -> Dict
         r = DRN.run(F, old, new, src_dir=dies / old, dst_dir=dies / new, dry_run=dry_run, glob_scope=True, actor=actor)
         log.append({"step": "rename", "from": old, "to": new, "changes": len(r.get("changes") or []),
                     "manual": r.get("manual") or []})
+    log.append({"step": "layer_shadows", "moved": _move_shadows(store, pred, retired, dry_run)})
     # 4b. every workspace / published ledger: rows of the predecessor -> the retired name, rows of the successor -> the
     #     predecessor's name (die_rename rekeys the shared ledger only); the application's own duty_results.rename_die
     if not dry_run:
         from motor_ai_sim import duty_results as DRS
         moved = []
-        for led in sorted(store.glob("workspaces/*/.duty_results.json")) + sorted(store.glob("published/**/.duty_results.json")):
+        for led in _lglob(store, ".duty_results.json"):
             with DRS.using_store(led):
                 a = DRS.rename_die(pred, retired)
                 b = DRS.rename_die(succ, pred)
@@ -887,9 +935,7 @@ def check(before: Path, after: Path, m: Dict[str, Any], rep: Dict[str, Any]) -> 
     # the ledgers, by their real structure (results[die][cfg], history[die][cfg]) and through the application's own reader
     _point_at(after)
     from motor_ai_sim import duty_results as DRS
-    ledgers = ([Path("shared/.duty_results.json"), Path("identity/.duty_results.json")]
-               + [p.relative_to(after) for p in sorted(after.glob("workspaces/*/.duty_results.json"))]
-               + [p.relative_to(after) for p in sorted(after.glob("published/**/.duty_results.json"))])
+    ledgers = [Path("shared/.duty_results.json")] + [p.relative_to(after) for p in _lglob(after, ".duty_results.json")]
     aside = {c["config"]: c["successor_own"]["moved_aside_as"].format(date=m.get("date", "")) for c in m["continuing"]
              if c.get("successor_own")}
     ledger_rows = []
@@ -968,6 +1014,28 @@ def check(before: Path, after: Path, m: Dict[str, Any], rep: Dict[str, Any]) -> 
             if d:
                 miss.append(f"{rel}: {d[:5]}")
     res["predecessor_complete_as_retired"] = {"ok": not miss, "problems": miss[:40], "count": len(miss)}
+    # (2b) no die named like the predecessor in any non-shared layer (it would shadow the successor), every such copy kept
+    #      under the retired name, and the application's resolver sends a caller without a workspace to the shared successor
+    shadow = []
+    for r in _layer_roots(before):
+        rel = r.relative_to(before)
+        if (after / rel / "dies" / pred).exists():
+            shadow.append(f"{rel}/dies/{pred} still exists")
+        src = r / "dies" / pred
+        for f in sorted(src.rglob("*")) if src.is_dir() else []:
+            g = after / rel / "dies" / retired / f.relative_to(src)
+            if f.is_file() and not g.is_file():
+                shadow.append(f"missing {g.relative_to(after)}")
+            elif f.is_file() and f.suffix in (".yaml", ".yml"):
+                d = [x for x in _diff_paths(_load(f), _load(g)) if not x.endswith((".name", ".die"))]
+                if d:
+                    shadow.append(f"{g.relative_to(after)}: {d[:5]}")
+    from motor_ai_sim import workspace as WS
+    with WS.use_workspace(WS.process_workspace()):
+        got = WS.resolve_die_dir(pred)
+    if got is None or Path(str(got)).resolve() != (ad / pred).resolve():
+        shadow.append(f"resolve_die_dir({pred!r}) in the process workspace -> {got}")
+    res["no_layer_shadow"] = {"ok": not shadow, "problems": shadow}
     # (3) every link of the projects resolves, and their snapshots name the retired die
     links = []
     for p in m["projects"]:
@@ -1023,8 +1091,12 @@ def check(before: Path, after: Path, m: Dict[str, Any], rep: Dict[str, Any]) -> 
             return False
         d = _diff_paths(_load(before / path), _load(after / path), cap=10000)
         return bool(d) and all(x.endswith(".name") or x.endswith(".previous_sheet") for x in d)
+    def moved_shadow(path: str) -> bool:
+        """A layer's copy of the predecessor, moved to the retired name with its history."""
+        return any(path.startswith(f"{r.relative_to(before)}/dies/{n}/") for r in _layer_roots(before)
+                   for n in (retired, f".history/{retired}"))
     def explained(path: str) -> bool:
-        return (path.endswith(".lock") or compare_relabel_only(path) or path == "identity/admin_audit.jsonl"
+        return (path.endswith(".lock") or compare_relabel_only(path) or moved_shadow(path) or path == "identity/admin_audit.jsonl"
                 or any(path.startswith(f"shared/dies/.history/{n}/") for n in (pred, retired, succ)) or lineage_only(path))
     touched = ([r["to"] for r in rep["renamed"]] + rep["added"] + rep["removed"] + [c["file"] for c in rep["changed"]])
     out_of = sorted(t for t in touched if outside(t) and not explained(t))

@@ -12,6 +12,7 @@ the Simulation tab.
 """
 from __future__ import annotations
 
+import functools
 import hashlib
 import json
 import logging
@@ -488,6 +489,9 @@ def _eval_cache_key(overrides: Dict[str, float], current_a: float, steps: int,
         # `warm_seeded` and `demag_seed_from` (fem_solver_2d), so a cached
         # point says for itself whose state it continued.
     }
+    _cr_run = _RUN_COIL_REL.get()
+    if _cr_run is not None:                      # a run at another wire cell than the stored block never shares an entry with one at it
+        payload["cr"] = round(float(_cr_run), 4)
     return hashlib.md5(json.dumps(payload, sort_keys=True, default=str).encode()).hexdigest()
 
 
@@ -1086,6 +1090,39 @@ _EVAL_THREAD_KEYS = ("MKL_NUM_THREADS", "OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS
 _EVAL_SIBLINGS = _ctxv_o.ContextVar("eval_siblings", default=None)
 
 
+# The wire cell (coil_rel) a RUN solves with when it is not the one in the machine's stored Mesh block: the Optimization / Simulation
+# preset's own cell, or the user's override (owner 2026-11-24).  None = the stored block, exactly as before.  Set by
+# ``_with_run_coil`` around the run's worker (the pool copies the context into its workers), written to the eval subprocess as
+# MOTRES_RUN_COIL_REL by ``_base_eval_env`` and read in ``refine_proc.run_one``; part of ``_eval_cache_key``.  Never written to the
+# machine's stored settings.
+_RUN_COIL_REL = _ctxv_o.ContextVar("run_coil_rel", default=None)
+
+
+def _run_coil_of(rec: Any) -> Optional[float]:
+    """The per-run wire cell a settings record carries (``coil_rel_override``), or None."""
+    try:
+        v = rec.get("coil_rel_override") if isinstance(rec, dict) else None
+        return float(v) if v is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _with_run_coil(fn, rec):
+    """``fn`` wrapped so that it runs with the record's per-run wire cell set (no wrapper when the record has none)."""
+    cr = _run_coil_of(rec)
+    if cr is None:
+        return fn
+
+    @functools.wraps(fn)
+    def _run(*a, **k):
+        tok = _RUN_COIL_REL.set(cr)
+        try:
+            return fn(*a, **k)
+        finally:
+            _RUN_COIL_REL.reset(tok)
+    return _run
+
+
 def _base_eval_env() -> Dict[str, str]:
     """The eval subprocess's environment, fresh, with the caller's WORKSPACE in it.
 
@@ -1121,6 +1158,11 @@ def _base_eval_env() -> Dict[str, str]:
         env["SB_TDM_SIBLINGS"] = str(int(_sibs))
     else:
         env.pop("SB_TDM_SIBLINGS", None)
+    _cr = _RUN_COIL_REL.get()
+    if _cr is not None:
+        env["MOTRES_RUN_COIL_REL"] = repr(float(_cr))
+    else:
+        env.pop("MOTRES_RUN_COIL_REL", None)      # a value inherited from the server's own environment never reaches an eval
     from motor_ai_sim.simulation.pardiso_runtime import pardiso_subprocess_env
     return pardiso_subprocess_env(env)
 
@@ -3400,7 +3442,8 @@ def _run_settings_stamp(rs, resolved):
             "version": resolved["version"], "custom": resolved["custom"], "differs": resolved["differs"],
             "run_settings": {"preset": resolved["preset"], "overrides": resolved["overrides"]},
             "settings": resolved["settings"], "sources": resolved["sources"], "clamps": resolved["clamps"],
-            "sig": resolved["sig"], "sig_scope": resolved["sig_scope"], "coil_rel": resolved["coil_rel"]}
+            "sig": resolved["sig"], "sig_scope": resolved["sig_scope"], "coil_rel": resolved["coil_rel"],
+            "coil_rel_stored": resolved["coil_rel_stored"], "coil_rel_override": resolved["coil_rel_override"]}
 
 
 @router.post("/run-settings/resolve")
@@ -3710,7 +3753,7 @@ def scan_designs(req: ScanRequest):
     # spawns and the stores it writes are all that caller's.
     _new_scan_thread = threading.Thread(target=_WSP.bind(_JOBS.as_job(
                          "optimizer.scan", priority=_JOBS.Priority.CAMPAIGN,
-                         run_id=req.run_id)(_scan_worker)),
+                         run_id=req.run_id)(_with_run_coil(_scan_worker, plan["kwargs"].get("mesh_preset")))),
                      args=plan["args"],
                      # The machine the sweep is requested ON: the worker may
                      # wait in the job queue and must not adopt whatever is
@@ -6571,7 +6614,7 @@ def descent_start(req: DescentRequest):
     threading.Thread(
         target=_WSP.bind(_JOBS.as_job(           # Stage 3 + Stage 4: workspace + slot
             "optimizer.descent", priority=_JOBS.Priority.CAMPAIGN,
-            run_id=req.run_id)(plan["worker"])),
+            run_id=req.run_id)(_with_run_coil(plan["worker"], plan["response"].get("mesh_preset")))),
         args=plan["args"], kwargs=plan["kwargs"],
         daemon=True).start()
     return plan["response"]
@@ -9400,7 +9443,7 @@ def auto_start(req: AutoOptRequest, request: Request):
             "run_id": req.run_id, "error": None, "cancel": False})
 
     worker = _screen_worker if plan["mode"] == "screen" else _auto_worker
-    threading.Thread(target=_WSP.bind(worker),    # Stage 3: carry the workspace
+    threading.Thread(target=_WSP.bind(_with_run_coil(worker, plan.get("run_settings"))),    # Stage 3: carry the workspace
                      args=(plan, req.run_id, bucket, name),
                      daemon=True).start()
     return {"started": True, "run_id": req.run_id, "plan": plan, "point_name": name}

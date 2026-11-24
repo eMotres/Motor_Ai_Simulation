@@ -443,7 +443,7 @@ def run_descent(O, body: Dict[str, Any], *, frozen: List[str] = (),
                       if req.auto_expand else []))
     log("plan: " + json.dumps(plan["response"], default=str))
     O.begin_descent_state(plan)
-    t = threading.Thread(target=plan["worker"], args=plan["args"],
+    t = threading.Thread(target=O._with_run_coil(plan["worker"], plan["response"].get("mesh_preset")), args=plan["args"],
                          kwargs=plan["kwargs"], name="headless-descent")
     t.start()
     last = None
@@ -504,7 +504,7 @@ def run_sweep(O, body: Dict[str, Any], *, frozen: List[str] = (),
     from motor_ai_sim import machine_binding as MB
     kw = {**plan["kwargs"], "binding": MB.MachineBinding(
         lambda keys: O._config_fingerprint(keys), what="FEM scan")}
-    t = threading.Thread(target=O._scan_worker, args=plan["args"], kwargs=kw,
+    t = threading.Thread(target=O._with_run_coil(O._scan_worker, plan["kwargs"].get("mesh_preset")), args=plan["args"], kwargs=kw,
                          name="headless-sweep")
     t.start()
     last = None

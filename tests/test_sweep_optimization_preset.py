@@ -413,13 +413,21 @@ def test_the_digest_changes_with_the_preset_version_and_the_wire_cell():
     a = RS.resolve("optimization", {}, cfg)
     cfg2 = _cfg(coil_rel=1)
     b = RS.resolve("optimization", {}, cfg2)
-    assert a["coil_rel"] == 2.0 and b["coil_rel"] == 1.0 and a["sig"] != b["sig"]
-    # a stored 1h wire cell is NOT the Optimization preset's 2h: the run is custom, never labelled with the preset
-    assert a["label"] == "optimization" and a["differs"] == {}
-    assert b["label"] == "custom" and b["differs"]["coil_rel"] == {"preset": 2.0, "current": 1.0}
-    # the Simulation preset is 1h: a 2h machine is custom for it, a 1h machine is not
-    assert RS.resolve("simulation", {}, _cfg(coil_rel=1))["label"] == "simulation"
-    assert RS.resolve("simulation", {}, cfg)["label"] == "custom"
+    # the run uses the PRESET's wire cell whatever the stored block says: same label, same digest, a per-run override when they differ
+    assert a["coil_rel"] == 2.0 and b["coil_rel"] == 2.0 and a["sig"] == b["sig"]
+    assert a["label"] == b["label"] == "optimization" and a["differs"] == b["differs"] == {}
+    assert a["coil_rel_override"] is None and b["coil_rel_override"] == 2.0 and b["coil_rel_stored"] == 1.0
+    assert b["sources"]["coil_rel"] == "preset"
+    # only an explicit override of the cell makes the run custom, and the digest records the cell the run used
+    c = RS.resolve("optimization", {"coil_rel": 1}, cfg)
+    assert c["label"] == "custom" and c["differs"]["coil_rel"] == {"preset": 2.0, "current": 1.0} and c["sig"] != a["sig"]
+    assert c["coil_rel_override"] == 1.0 and c["sources"]["coil_rel"] == "override"
+    with pytest.raises(RS.RunSettingsError):
+        RS.resolve("optimization", {"coil_rel": 3}, cfg)
+    # the Simulation preset is 1h: on a stored-2h machine the run is at 1h (a per-run override), still the preset
+    sim = RS.resolve("simulation", {}, cfg)
+    assert sim["label"] == "simulation" and sim["coil_rel"] == 1.0 and sim["coil_rel_override"] == 1.0
+    assert RS.resolve("simulation", {}, _cfg(coil_rel=1))["coil_rel_override"] is None
     assert a["sig_scope"] == 2 and a["version"] == MP.version()
 
 

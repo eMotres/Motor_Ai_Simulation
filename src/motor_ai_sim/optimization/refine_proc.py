@@ -151,6 +151,22 @@ def _eff_magnet_temp_c(magnet_temp_c):
         return None
 
 
+def _component_mesh_for_run(cfg) -> Dict[str, Any]:
+    """The machine's stored per-part mesh block, with the wire cell (``coil_rel``) of THIS run when the run carries one
+    (``MOTRES_RUN_COIL_REL``, set by the route for a preset run whose wire cell is not the stored one; the stored settings are
+    not written).  Absent or unreadable = the stored block, exactly as before."""
+    cm = dict((cfg.get("mesh", {}) or {}).get("component_mesh") or {})
+    raw = os.environ.get("MOTRES_RUN_COIL_REL")
+    if raw:
+        try:
+            v = float(raw)
+        except ValueError:
+            v = 0.0
+        if v > 0.0:
+            cm["coil_rel"] = v
+    return cm
+
+
 def run_one(overrides: Dict[str, float], current_a: float, steps: int,
             coil_temp_c: float, n_periods: float = 1.0,
             gamma_deg: float = 0.0, mesh_size_mm: float = 4.0,
@@ -390,7 +406,7 @@ def run_one(overrides: Dict[str, float], current_a: float, steps: int,
         "v_phase_peak": (0.0 if no_load else float(_sim.get("v_phase_peak", 0.0) or 0.0)),
         "v_delta_deg": (0.0 if no_load else float(_sim.get("v_delta_deg", 0.0) or 0.0)),
         "demag": bool(_demag),   # per-element irreversible demag (doubles the frames)
-        "component_mesh": json.dumps(cfg.get("mesh", {}).get("component_mesh") or {}),
+        "component_mesh": json.dumps(_component_mesh_for_run(cfg)),
         "sliding_band": True, "fresh": True, "geo": json.dumps(overrides),
     })
     _fs_cand._OPT_CANDIDATE.reset(_cand_tok)

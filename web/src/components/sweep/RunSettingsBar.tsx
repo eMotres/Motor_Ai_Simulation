@@ -25,6 +25,7 @@ export function describeSettings(st: Record<string, any>, src: Record<string, st
           `${tx('runSettingsDemag')} ${onOff(!!st.demag)}${tag('demag')}`,
           `${tx('runSettingsEddy')} ${onOff(!!st.eddy)}${tag('eddy')}`,
           `${tx('runSettingsOuterAir')} ${st.outer_air_factor}${tag('outer_air_factor')}`,
+          `${tx('runSettingsWire')} ${st.coil_rel ?? 1}h${tag('coil_rel')}`,
           `${tx('runSettingsComponent')} ${comp}${tag('component_mesh')}`,
           `${tx('runSettingsOrder')} ${st.element_order}${tag('element_order')}`].join(' · ');
 }

@@ -3,7 +3,7 @@ export interface ProjectMember { email: string; role: 'customer' | 'engineer' | 
 export interface Completeness { filled?: number; required?: number; filled_required?: number; total_required?: number; answered?: number; unknown?: number; missing?: number; invalid?: number; /** the minimum needed to simulate the machine is given (server rule); Submit stays off while false */ simulation_ready?: boolean; simulation_missing?: Array<{ field: string; field_id: string; section: string; label: string; message: string }>; sections?: Record<string, { filled: number; required: number; total?: number; complete?: boolean }> }
 export interface ProjectSummary {
   id: string; title: string; customer_org: string; status: ProjectStatus; owner_engineer?: string;
-  members: ProjectMember[]; /** owner / admin only: members and pending invites with their price switch */ member_switches?: ProjectMember[]; /** server capability: staff or a project owner may change who sees the prices */ can_manage_prices?: boolean; linked_motors: Array<{ die: string; config: string }>;
+  members: ProjectMember[]; /** owner / admin only: members and pending invites with their price switch */ member_switches?: ProjectMember[]; /** server capability: staff or a project owner may change who sees the prices */ can_manage_prices?: boolean; /** server capability: MOTRES staff may post an internal (staff-only) message */ can_post_internal?: boolean; linked_motors: Array<{ die: string; config: string }>;
   grant_removal_candidates?: Array<{ email: string; die: string; config: string; reason: string }>;
   can_edit?: boolean; can_edit_spec?: boolean; completeness?: Completeness; notes?: string;
   /** newest submitted specification version (derived by the server; `at` is an ISO UTC stamp); null = none submitted */
@@ -36,7 +36,7 @@ export interface SpecState { draft: Record<string, unknown>; revision: number; s
   /** the newest submitted version, its date, and whether the working draft still equals it (null = never submitted) */
   submitted?: { version: number; submitted_at?: string | null; unchanged: boolean } | null }
 export interface SpecSnapshot { version: number; schema_version?: number; schema?: DevelopmentSchema; author_display_name?: string; created_at?: string; spec?: Record<string, unknown>; draft?: Record<string, unknown> }
-export interface ProjectThreadMessage { id?: string; author_display_name?: string; created_at: string; text: string; field_ref?: string; row_id?: string; version?: number; revision?: number; resolved?: boolean; resolved_at?: string; resolved_by?: string; /** not read by the caller yet (server flag) */ unread?: boolean; /** only who sees the prices gets this message */ price_restricted?: boolean }
+export interface ProjectThreadMessage { id?: string; author_display_name?: string; created_at: string; text: string; field_ref?: string; row_id?: string; version?: number; revision?: number; resolved?: boolean; resolved_at?: string; resolved_by?: string; /** not read by the caller yet (server flag) */ unread?: boolean; /** only who sees the prices gets this message */ price_restricted?: boolean; /** an internal message: MOTRES staff only (owner 2026-11-24) */ staff_only?: boolean }
 export interface ResultProvenance {
   kind: 'estimate' | 'solve' | 'unknown'; source?: string; run_id?: string;
   revision?: string; input_fingerprint?: string; geometry_fingerprint?: string;

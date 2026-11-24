@@ -75,7 +75,7 @@ export const developmentApi = {
   thread: async (id: string) => (await call<{ messages: ProjectThreadMessage[] }>('GET', `${p(id)}/thread`)).messages,
   /** The caller has seen the thread up to message `upTo` (the server never moves the mark back). */
   markThreadRead: (id: string, upTo: string) => call<{ last_read_id: string; unread: number }>('POST', `${p(id)}/thread/read`, { up_to: upTo }),
-  postMessage: (id: string, text: string, field_ref?: string, scope: { version?: number; revision?: number; row_id?: string } = {}, price_restricted = false) => call<ProjectThreadMessage>('POST', `${p(id)}/thread`, { text, ...(field_ref ? { field_ref } : {}), ...scope, ...(price_restricted ? { price_restricted: true } : {}) }),
+  postMessage: (id: string, text: string, field_ref?: string, scope: { version?: number; revision?: number; row_id?: string; reply_to?: string } = {}, price_restricted = false, staff_only = false) => call<ProjectThreadMessage>('POST', `${p(id)}/thread`, { text, ...(field_ref ? { field_ref } : {}), ...scope, ...(price_restricted ? { price_restricted: true } : {}), ...(staff_only ? { staff_only: true } : {}) }),
   resolveMessage: (id: string, messageId: string, resolved: boolean) => call<ProjectThreadMessage>('POST', `${p(id)}/thread/${enc(messageId)}/resolve`, { resolved }),
   /** Documents of a project (production package files): KiCad, fabrication, BOM, 3-D models, drawings. */
   documents: (id: string, archived = false) => call<ProjectDocumentList>('GET', `${p(id)}/documents${archived ? '?archived=true' : ''}`),

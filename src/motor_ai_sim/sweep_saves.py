@@ -39,6 +39,8 @@ import logging
 import os
 import re
 import shutil
+import tempfile
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -248,11 +250,26 @@ def write_entry(entry: Dict[str, Any]) -> Path:
     """Atomic write (tmp + replace): a crash mid-write never leaves half a save."""
     p = safe_path(str(entry["id"]))
     p.parent.mkdir(parents=True, exist_ok=True)
-    tmp = p.with_suffix(".json.tmp")
-    tmp.write_text(json.dumps(entry, default=float), encoding="utf-8")
-    os.replace(tmp, p)
+    _atomic_write(p, json.dumps(entry, default=float))
     _write_meta(p, entry)
     return p
+
+
+def _atomic_write(target: Path, text: str) -> None:
+    """Write `text` to a UNIQUE temporary file beside `target`, then rename it over
+    the target: concurrent writers never share a temporary name, and a reader sees
+    either the old file or the whole new one, never a half-written one."""
+    fd, name = tempfile.mkstemp(prefix=target.stem + ".", suffix=".tmp", dir=str(target.parent))
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(text)
+        os.replace(name, target)
+    except BaseException:
+        try:
+            os.unlink(name)
+        except OSError:
+            pass
+        raise
 
 
 def _meta_path(p: Path) -> Path:
@@ -263,10 +280,7 @@ def _write_meta(p: Path, entry: Dict[str, Any]) -> None:
     """The list row beside the save.  Best effort: a missing sidecar is rebuilt
     from the save the next time the list is read."""
     try:
-        mp = _meta_path(p)
-        tmp = mp.with_suffix(".meta.tmp")
-        tmp.write_text(json.dumps(meta(entry), default=float), encoding="utf-8")
-        os.replace(tmp, mp)
+        _atomic_write(_meta_path(p), json.dumps(meta(entry), default=float))
     except Exception as e:                               # noqa: BLE001
         log.debug("sweep save meta not written: %s", e)
 
@@ -362,8 +376,9 @@ def list_entries() -> List[Dict[str, Any]]:
     if not d.is_dir():
         return []
     out: List[Dict[str, Any]] = []
+    budget = _RebuildBudget()
     for f in d.glob("*.json"):
-        row = _read_meta_row(f)
+        row = _read_meta_row(f, budget)
         if row is not None:
             out.append(row)
     out.sort(key=_when_key, reverse=True)
@@ -380,7 +395,50 @@ def _when_key(row: Dict[str, Any]) -> float:
         return 0.0
 
 
-def _read_meta_row(f: Path) -> Optional[Dict[str, Any]]:
+# One-time migration bound: a listing rebuilds at most this many sidecars and spends at most this long on it; the rest
+# are rebuilt by the following listings.  Until then a row is listed with UNKNOWN settings (never a stale label).
+REBUILD_MAX_PER_LISTING = 200
+REBUILD_SECONDS_PER_LISTING = 2.0
+
+
+class _RebuildBudget:
+    """How many sidecars (and how much time) one listing may spend on parsing saves."""
+
+    def __init__(self, max_n: Optional[int] = None, seconds: Optional[float] = None) -> None:
+        self.left = REBUILD_MAX_PER_LISTING if max_n is None else max_n
+        self.deadline = time.monotonic() + (REBUILD_SECONDS_PER_LISTING if seconds is None else seconds)
+
+    def take(self) -> bool:
+        if self.left <= 0 or time.monotonic() > self.deadline:
+            return False
+        self.left -= 1
+        return True
+
+
+def _pending_row(f: Path, mp: Path) -> Dict[str, Any]:
+    """The list row of a save whose sidecar is not rebuilt yet (budget spent): the old sidecar's fields when it is readable,
+    else the bare identity; the settings are UNKNOWN (no signature), never an out-of-date label."""
+    row: Dict[str, Any] = {}
+    try:
+        old = json.loads(mp.read_text(encoding="utf-8"))
+        if isinstance(old, dict) and old.get("id") == f.stem:
+            row = dict(old)
+    except Exception:                                    # noqa: BLE001
+        pass
+    if not row:
+        try:
+            made = datetime.fromtimestamp(f.stat().st_mtime, tz=timezone.utc).isoformat()
+        except OSError:
+            made = ""
+        row = {"id": f.stem, "name": f.stem, "created_at": made, "machine": unattributed()}
+    row.setdefault("auto", False)
+    row["settings"] = {"preset": None, "version": None, "custom": False, "mixed": False, "sig": None,
+                       "steps_per_period": None, "gap_layers": None, "source": "pending_rebuild", "v": 0}
+    row["steps_per_period"] = None
+    return row
+
+
+def _read_meta_row(f: Path, budget: Optional[_RebuildBudget] = None) -> Optional[Dict[str, Any]]:
     """The list row of one save: its sidecar when that is current, else parsed
     from the save (and the sidecar written) - a save is never edited in place,
     so a sidecar newer than its save is right.  A sidecar written before the
@@ -394,6 +452,8 @@ def _read_meta_row(f: Path) -> Optional[Dict[str, Any]]:
                 return row
     except Exception:                                    # noqa: BLE001
         pass
+    if budget is not None and not budget.take():
+        return _pending_row(f, mp)
     try:
         entry = json.loads(f.read_text(encoding="utf-8"))
     except Exception:                                    # noqa: BLE001

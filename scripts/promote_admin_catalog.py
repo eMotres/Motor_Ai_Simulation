@@ -62,8 +62,23 @@ def _fingerprint(die: dict[str, Any], cfg: dict[str, Any]) -> str:
     root = Path(__file__).resolve().parents[1]
     if str(root) not in sys.path:
         sys.path.insert(0, str(root))
-    from motor_ai_sim.routes.family import _build_sig
-    return _build_sig(die, cfg)
+    from motor_ai_sim.routes.family import _build_sigs
+    sigs = _build_sigs(die, cfg)            # every spelling of the SAME build (default liner / enamel unnamed, healed coil count)
+    return _Sig(sigs[0], sigs)
+
+
+class _Sig(str):
+    """The current build signature (what a promoted record is stamped with) that also knows every other spelling of
+    the same build; a stored stamp is judged with :func:`_same_build`, exactly as the application judges it."""
+
+    def __new__(cls, first: str, every=()):
+        o = super().__new__(cls, first)
+        o.every = tuple(every) or (first,)
+        return o
+
+
+def _same_build(stamp: Any, current: str) -> bool:
+    return stamp == current or (bool(stamp) and stamp in getattr(current, "every", ()))
 
 
 def _is_within(path: Path, root: Path) -> bool:
@@ -153,7 +168,7 @@ def _evidence_files(source_die: Path, cfg_name: str, cfg: dict[str, Any],
         if not isinstance(duty, dict):
             continue
         duty_sig = duty.get("build_sig")
-        if duty_sig and duty_sig != build_sig:
+        if duty_sig and not _same_build(duty_sig, build_sig):
             # A result recorded under a different build is retained in the
             # original workspace but is not promoted with the new definition.
             if duty.get("runs"):
@@ -169,7 +184,7 @@ def _evidence_files(source_die: Path, cfg_name: str, cfg: dict[str, Any],
         for drive, run in runs.items():
             if not isinstance(run, dict):
                 continue
-            if run.get("build_sig") != build_sig:
+            if not _same_build(run.get("build_sig"), build_sig):
                 if run.get("payload_file"):
                     references_valid = False
                 warnings.append(
@@ -205,7 +220,7 @@ def _evidence_files(source_die: Path, cfg_name: str, cfg: dict[str, Any],
                 run_anchor = {
                     "die": source_die.name, "config": cfg_name,
                     "duty": str(duty.get("name") or ""), "drive": str(drive),
-                    "build_sig": build_sig, "geometry_fingerprint": geo_fp,
+                    "build_sig": str(build_sig), "geometry_fingerprint": geo_fp,
                     "geometry_fingerprint_v2": inner.get("geometry_fingerprint_v2")
                         or inner.get("geo_fingerprint_v2"),
                     "catalog_refs": inner.get("catalog_refs"),
@@ -437,7 +452,7 @@ def _result_rows(source_store: Path, die_doc: dict[str, Any], cfg_docs: dict[str
             for kind, rec in kinds.items():
                 if not isinstance(rec, dict):
                     continue
-                if rec.get("build_sig") == expected:
+                if _same_build(rec.get("build_sig"), expected):
                     valid[kind] = rec
                     continue
                 # Older compact thermal/mechanical records predate build_sig.
@@ -451,7 +466,7 @@ def _result_rows(source_store: Path, die_doc: dict[str, Any], cfg_docs: dict[str
                         for a in anchors)):
                     valid[kind] = rec
             for kind, rec in kinds.items():
-                if (isinstance(rec, dict) and rec.get("build_sig") != expected
+                if (isinstance(rec, dict) and not _same_build(rec.get("build_sig"), expected)
                         and kind not in valid):
                     warnings.append(f"stale/unfingerprinted result skipped: {die_doc.get('name')}/{cfg_name}/{duty}/{kind}")
             if valid:
@@ -643,7 +658,7 @@ def build_plan(email: str, admin_emails: Iterable[str], workspaces_root: Path,
                 for duty, kinds in duties.items():
                     existing = cfg_target.get(duty)
                     if isinstance(existing, dict) and any(
-                            isinstance(rec, dict) and rec.get("build_sig") != expected
+                            isinstance(rec, dict) and not _same_build(rec.get("build_sig"), expected)
                             for rec in existing.values()):
                         conflicts.append(
                             f"shared result row has a different build fingerprint: {source_die.name}/{cfg_name}/{duty}")

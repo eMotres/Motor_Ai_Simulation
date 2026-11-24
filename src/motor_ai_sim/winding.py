@@ -513,6 +513,9 @@ def with_derived_coil_count(winding: Optional[Mapping[str, Any]], num_slots: int
     try:
         if int(float(w.get("phases") or 3)) != 3:
             return w, None
+    except (TypeError, ValueError):                 # an unreadable phase layout: not covered, left as stored
+        return w, None
+    try:
         old = int(float(w["n_coils_per_phase"]))
     except (TypeError, ValueError):
         old = None

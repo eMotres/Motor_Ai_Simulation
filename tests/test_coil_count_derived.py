@@ -43,6 +43,11 @@ def test_with_derived_coil_count():
     for phases in (6, 2):                                                             # not covered: as stored
         w, old = W.with_derived_coil_count({"n_coils_per_phase": 8, "phases": phases}, 48 if phases == 6 else 24)
         assert old is None and w["n_coils_per_phase"] == 8
+    for bad in ("six", "x6", [1], "3 phases"):                                         # unreadable phase layout: unchanged
+        blk = {"n_coils_per_phase": 8, "phases": bad, "connection": "4P"}
+        w, old = W.with_derived_coil_count(blk, 24)
+        assert old is None and w == blk
+    assert W.with_derived_coil_count({"n_coils_per_phase": 8, "phases": ""}, 24)[1] == 8   # not stated: three-phase
     src = {"n_coils_per_phase": 8}
     W.with_derived_coil_count(src, 24)
     assert src["n_coils_per_phase"] == 8                                              # the input is not touched
@@ -93,7 +98,7 @@ def test_a_stale_count_that_is_neither_half_nor_double_does_not_age_the_stamps()
     assert build_sig_moved(stamp, _build_sigs(die, healed))                           # without the record: aged
     _alias_count_only(die, healed, 4)
     assert not build_sig_moved(stamp, _build_sigs(die, healed))
-    assert healed["build_sig_aliases"]
+    assert healed["build_sig_count_aliases"]
     other = {**healed, "winding": {**healed["winding"], "connection": "4S-2P", "n_parallel": 2, "n_series": 4}}
     assert build_sig_moved(stamp, _build_sigs(die, other))                            # a real change still moves it
     other_mat = {**healed, "materials": {"magnet": "N42"}}
@@ -101,7 +106,7 @@ def test_a_stale_count_that_is_neither_half_nor_double_does_not_age_the_stamps()
     # nothing recorded when nothing was healed
     same = {**stale}
     _alias_count_only(die, same, 4)
-    assert "build_sig_aliases" not in same
+    assert "build_sig_count_aliases" not in same
 
 
 # ── PATCH / GET ─────────────────────────────────────────────────────────────
@@ -119,13 +124,15 @@ def test_patch_corrects_a_wrong_count_and_says_so(client):                      
 
 
 def test_patch_leaves_a_six_phase_count_as_sent(client):                              # noqa: F811
-    _set_machine(8, "4S-2P", 2, 4)                                                    # 48 slots
-    r = client.patch("/api/winding/config", json={"phases": 6, "set1_paths": "1", "n_coils_per_phase": 3})
-    if r.status_code == 200:                                                          # the six-phase validation passed
-        assert r.json()["updated"]["n_coils_per_phase"] == "3"
-        assert "n_coils_per_phase_corrected" not in r.json()
-    else:                                                                             # refused for its own reason, not the count
-        assert "coils" not in r.text.lower() or "n_coils_per_phase" not in r.text
+    _set_machine(4, "2S-2P", 2, 2)                                                    # 24 slots, wires as six-phase
+    r = client.patch("/api/winding/config", json={"phases": 6, "n_coils_per_phase": 3})
+    assert r.status_code == 200, r.text                                              # the real answer, not a refusal
+    body = r.json()
+    assert body["updated"]["n_coils_per_phase"] == "3" and body["updated"]["phases"] == "6"
+    assert "n_coils_per_phase_corrected" not in body
+    r = client.patch("/api/winding/config", json={"phases": 3, "n_coils_per_phase": 3})
+    assert r.status_code == 200, r.text
+    assert r.json()["n_coils_per_phase_corrected"]["stored"] == 4                     # back on three phases: derived
 
 
 def test_get_follows_the_one_definition_for_any_layers(client):                        # noqa: F811
@@ -173,6 +180,27 @@ def _stale_catalog(tmp_path, monkeypatch):
     return root
 
 
+def test_duplicate_and_copy_record_the_aliases_from_the_real_die_document(tmp_path, monkeypatch):
+    """A duplicate / copy records its aliases from the REAL die document the caller loaded (today the signature reads
+    only the die's geometry, so this also pins that the two agree)."""
+    import yaml
+    from motor_ai_sim.routes import family as fam
+    root = _stale_catalog(tmp_path, monkeypatch)
+    die_doc = fam._load_yaml(root / "SD 24" / "die.yaml", "die")
+    c = fam._load_yaml(root / "SD 24" / "L40.yaml", "configuration")
+    stamp = fam._build_sig(die_doc, c)                                # stamped while the count was stale (8)
+    c["duties"] = [{"name": "peak", "result": {"build_sig": stamp}}]
+    fam._repick_config_winding(c, dict(die_doc["geometry"]), "dup", die_doc)
+    assert c["winding"]["n_coils_per_phase"] == 4
+    assert not fam.build_sig_moved(stamp, fam._build_sigs(die_doc, c))
+    # the same on a die with another wire stack
+    die2 = {**die_doc, "geometry": {**die_doc["geometry"], "wire_width": 3.0}}
+    c2 = fam._load_yaml(root / "SD 24" / "L40.yaml", "configuration")
+    stamp2 = fam._build_sig(die2, c2)
+    fam._repick_config_winding(c2, dict(die2["geometry"]), "copy", die2)
+    assert not fam.build_sig_moved(stamp2, fam._build_sigs(die2, c2))
+
+
 def test_opening_and_listing_a_stale_configuration_writes_nothing(tmp_path, monkeypatch):
     from fastapi.testclient import TestClient
     from motor_ai_sim.api import app
@@ -180,9 +208,11 @@ def test_opening_and_listing_a_stale_configuration_writes_nothing(tmp_path, monk
     snap = {p: p.read_bytes() for p in sorted(root.rglob("*")) if p.is_file()}
     c = TestClient(app)
     r = c.get("/api/family/payload/SD 24/L40")
-    assert r.status_code in (200, 401, 403, 404), r.text            # the answer may be refused; the files are the pin
-    if r.status_code == 200:
-        assert r.json()["winding"]["n_coils_per_phase"] == 4        # corrected IN MEMORY for the answer
+    assert r.status_code == 200, r.text                              # the real answer (AUTH_ENFORCE=0), not a refusal
+    assert r.json()["winding"]["n_coils_per_phase"] == 4             # corrected IN MEMORY for the answer
+    assert r.json()["coil_count_corrected"] == {"from": 8, "to": 4}  # and shown
+    t = c.get("/api/family/tree")
+    assert t.status_code == 200, t.text
     c.get("/api/family/tree")
     from motor_ai_sim.routes import family as fam
     c2 = {"winding": dict(fam._load_yaml(root / "SD 24" / "L40.yaml", "configuration")["winding"])}

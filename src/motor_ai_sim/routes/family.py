@@ -1262,9 +1262,9 @@ def _build_sigs(die_doc: dict, cfg_doc: dict) -> tuple:
         if s not in out:
             out.append(s)
     # Stamps written while the stored coil count was stale: a save that healed the count recorded the signatures of
-    # that build (count-only difference) in ``build_sig_aliases`` (:func:`_alias_count_only`), so nothing the heal
+    # that build (count-only difference) in ``build_sig_count_aliases`` (:func:`_alias_count_only`), so nothing the heal
     # touched reads "computed on an older build".
-    _al = cfg_doc.get("build_sig_aliases")
+    _al = cfg_doc.get("build_sig_count_aliases")
     if isinstance(_al, dict):                      # {current signature: [stamps of the same build before the heal]}
         for alias in (_al.get(out[0]) or []):      # valid only while the build is still the one that was healed
             if isinstance(alias, str) and alias and alias not in out:
@@ -2467,7 +2467,7 @@ def _build_config_row(die: dict, c: dict, name: str, _dr_cfg: dict) -> dict:
         # Every stamp that names this same build (`_build_sigs`): a
         # stored result is "older build" only when its stamp is none
         # of these (web lib/simPoints.isStale, catalogCardStaleness).
-        "build_sig_aliases": list(_bsigs),
+        "build_sig_count_aliases": list(_bsigs),
         # The mode the Motors row shows and loads (owner 2026-10-13);
         # `default_duty_stored` is what the yaml says, kept visible
         # when it names a duty that no longer exists.
@@ -3244,7 +3244,7 @@ def _live_winding_healed(live: dict) -> tuple:
 
 def _alias_count_only(die_doc: dict, c: dict, old_count) -> None:
     """After a save healed ``c['winding']['n_coils_per_phase']`` (stale ``old_count`` -> derived): record in
-    ``c['build_sig_aliases']`` (keyed by the current signature) the build signatures the configuration had with the OLD count and everything else as
+    ``c['build_sig_count_aliases']`` (keyed by the current signature) the build signatures the configuration had with the OLD count and everything else as
     it is now.  The count reaches no solved number (the FEM reads ``n_parallel`` / ``n_series``; the legacy dry run
     passes it to a function that ignores it), so results stamped before the heal stay current; a stamp that also
     differs in anything else does not match an alias and still reads as an older build."""
@@ -3257,9 +3257,9 @@ def _alias_count_only(die_doc: dict, c: dict, old_count) -> None:
     if extra:
         # keyed by the signature the healed build has NOW: a later real change moves that signature and the
         # aliases stop applying (they never keep results of another build current)
-        book = c.get("build_sig_aliases") if isinstance(c.get("build_sig_aliases"), dict) else {}
+        book = c.get("build_sig_count_aliases") if isinstance(c.get("build_sig_count_aliases"), dict) else {}
         book[now[0]] = sorted(set(book.get(now[0]) or []) | set(extra))
-        c["build_sig_aliases"] = book
+        c["build_sig_count_aliases"] = book
 
 
 def _coil_note(fix: Optional[dict]) -> Optional[str]:
@@ -3317,7 +3317,7 @@ def _config_doc_from_live(die: str, name: str, role: str, live: dict) -> tuple:
         "end_winding_factor": sim.get("end_winding_factor"),
         "duties": [],
     }
-    _repick_config_winding(doc, geo, f"new configuration '{die}/{name}'")
+    _repick_config_winding(doc, geo, f"new configuration '{die}/{name}'", _die_doc_for_sig(die))
     return name, doc
 
 
@@ -3546,9 +3546,8 @@ def duplicate_config(die: str, cfg: str, req: ConfigDuplicate,
     # PWM/BLDC runs and their sidecars are copied like the duties they belong to.
     _refile_config_runs(die, c, cfg, new, copy=True)
     try:
-        _repick_config_winding(
-            c, dict(_load_yaml(_die_file(die), "die").get("geometry") or {}),
-            f"'{die}/{new}'")
+        _die_d = _load_yaml(_die_file(die), "die")
+        _repick_config_winding(c, dict(_die_d.get("geometry") or {}), f"'{die}/{new}'", _die_d)
     except Exception:   # noqa: BLE001
         pass
     _save_yaml(dst, c)
@@ -4970,7 +4969,8 @@ def _matching_die(live_geo: dict, exclude: str) -> Optional[str]:
     return None
 
 
-def _repick_config_winding(c: dict, geo: Optional[dict], where: str) -> Optional[str]:
+def _repick_config_winding(c: dict, geo: Optional[dict], where: str,
+                           die_doc: Optional[dict] = None) -> Optional[str]:
     """Make configuration ``c``'s winding connection valid for ``geo``'s slot
     count, IN PLACE.  Returns the one-line note when it was re-picked (logged),
     None when it was already valid or there is no winding block.
@@ -4987,14 +4987,14 @@ def _repick_config_winding(c: dict, geo: Optional[dict], where: str) -> Optional
     fixed, note = repick_connection(w, slot_pole_counts(geo or {})[0])
     if note:
         c["winding"] = fixed
-        _alias_count_only({"geometry": dict(geo or {})}, c, w.get("n_coils_per_phase"))
+        _alias_count_only(die_doc or {"geometry": dict(geo or {})}, c, w.get("n_coils_per_phase"))
         log.warning("family: %s: %s", where, note)
     elif fixed != w:
         # same machine, label normalised (a two-set winding's per-set "4S" is
         # 4S-2P): no re-pick to announce, but the payload must carry a label
         # PATCH /api/winding/config accepts
         c["winding"] = fixed
-        _alias_count_only({"geometry": dict(geo or {})}, c, w.get("n_coils_per_phase"))
+        _alias_count_only(die_doc or {"geometry": dict(geo or {})}, c, w.get("n_coils_per_phase"))
         log.info("family: %s: winding block normalised (connection label %r -> %r, n_coils_per_phase %r -> %r)",
                  where, w.get("connection"), fixed.get("connection"),
                  w.get("n_coils_per_phase"), fixed.get("n_coils_per_phase"))
@@ -5019,7 +5019,7 @@ def _repick_die_windings(die: str, *, skip_locked: bool = False) -> list:
             continue
         if skip_locked and c.get("locked") is True:
             continue
-        n = _repick_config_winding(c, geo, f"'{die}/{pth.stem}'")
+        n = _repick_config_winding(c, geo, f"'{die}/{pth.stem}'", d)
         if n:
             _save_yaml(pth, c)
             notes.append(f"{pth.stem}: {n}")
@@ -5091,9 +5091,9 @@ def _copy_config_into(src_die: str, dst_die: str, cfg: str) -> str:
     dst_name = _unique_config_name(dst_die, _caller_config_name(dst_die, cfg))
     c["die"] = dst_die
     try:
-        _repick_config_winding(
-            c, dict(_load_yaml(_die_file(dst_die), "die").get("geometry") or {}),
-            f"'{dst_die}/{dst_name}' (copied from '{src_die}')")
+        _dst_d = _load_yaml(_die_file(dst_die), "die")
+        _repick_config_winding(c, dict(_dst_d.get("geometry") or {}),
+                               f"'{dst_die}/{dst_name}' (copied from '{src_die}')", _dst_d)
     except Exception:   # noqa: BLE001 — the solve still refuses an invalid one
         pass
     if dst_name != cfg:
@@ -7867,10 +7867,15 @@ def payload(die: str, cfg: str, duty: Optional[str] = None,
     # announces nothing (owner 2026-10-30).
     _wc = {"winding": dict(c.get("winding") or {})}
     _repick_config_winding(_wc, geo, f"apply '{die}/{cfg}'")
+    _cc_apply = None
+    _o_n, _n_n = (c.get("winding") or {}).get("n_coils_per_phase"), _wc["winding"].get("n_coils_per_phase")
+    if _o_n is not None and _n_n is not None and _o_n != _n_n:
+        _cc_apply = {"from": _o_n, "to": _n_n}      # shown, not written: the file keeps its value until a save
     out = {
         "die": die, "config": cfg,
         "geometry": geo,
         "winding": _wc["winding"],
+        **({"coil_count_corrected": _cc_apply} if _cc_apply else {}),
         "materials": mats,
         # {part: default} for the parts filled from _ABSENT_MATERIALS, and the
         # one-line statement of it (plus any part left as loaded) — the load

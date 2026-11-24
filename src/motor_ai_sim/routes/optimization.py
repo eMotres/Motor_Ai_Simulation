@@ -2135,7 +2135,19 @@ def _enumerate_geometries(variables: List[Dict[str, Any]], max_geom: int,
 
 
 def _geometry_reject(ov: Dict[str, float]) -> Optional[str]:
-    """Engineer-readable reason this grid geometry must NOT be solved, or None.
+    """The reason text of ``_geometry_reject_detail`` (None = solvable)."""
+    d = _geometry_reject_detail(ov)
+    return None if d is None else d[0]
+
+
+def _geometry_reject_detail(ov: Dict[str, float]):
+    """``(text, violations)`` for a grid geometry that must NOT be solved, or None.
+
+    ``text`` carries EVERY violation with its overlap pair (no "... and N more" cut); ``violations``
+    is the structured list ``[{code, part_a, part_b, likely_params, overlap_area_mm2}]`` the Sweep
+    banner groups by (a closed-form bound is ``code = "bound"`` with its target in ``likely_params``).
+
+    Engineer-readable reason this grid geometry must NOT be solved, or None.
 
     A SWEEP is an explicit list of values the user asked for.  Silently pulling
     one back to its feasibility bound and solving that instead answers a
@@ -2168,13 +2180,21 @@ def _geometry_reject(ov: Dict[str, float]) -> Optional[str]:
                **{k: v for k, v in ov.items() if k != "gamma_deg"}}
         why = _vmsg(geo)
         if why:
-            return why
+            from motor_ai_sim.geometry_constraints import violations as _viol
+            return why, [{"code": "bound", "part_a": str(r.get("target")), "part_b": "",
+                          "likely_params": [str(r.get("target"))], "overlap_area_mm2": 0.0}
+                         for r in _viol(geo)]
     except Exception:                      # cannot decide → not a reject
         return None
     try:
         from motor_ai_sim.geometry_validation import validate_geometry as _vgeo
         res = _vgeo(geo)
-        return None if res.ok else res.summary()
+        if res.ok:
+            return None
+        return res.summary(limit=60), [
+            {"code": v.code, "part_a": v.part_a, "part_b": v.part_b,
+             "likely_params": list(v.likely_params),
+             "overlap_area_mm2": round(float(v.overlap_area_mm2), 6)} for v in res.errors]
     except Exception as _e:                # noqa: BLE001 — cannot decide
         log.debug("sweep gate could not build a candidate's polygons (%s) — "
                   "deferring to the eval subprocess", _e)
@@ -2867,7 +2887,7 @@ def _scan_worker(variables, operating_points, steps, coil_temp_c, ripple_max,
         # breaks a closed-form feasibility bound — a winding that cannot fit the
         # slot being the one that bites — is REJECTED, not clamped-and-solved.
         # One check per geometry, memoised by geom_id; pure arithmetic.
-        _rej: Dict[int, Optional[str]] = {}
+        _rej: Dict[int, Any] = {}
         misses = []
         n_rejected = 0
         for i, t in enumerate(tasks):
@@ -2875,14 +2895,16 @@ def _scan_worker(variables, operating_points, steps, coil_temp_c, ripple_max,
             g = float(ov.get("gamma_deg", opg))
             geo_ov = {k: v for k, v in ov.items() if k != "gamma_deg"}
             if gi not in _rej:
-                _rej[gi] = _geometry_reject(ov)
+                _rej[gi] = _geometry_reject_detail(ov)
             if _rej[gi]:
+                _why, _viol = _rej[gi]
                 points[i] = {"overrides": ov, "current_a": I, "geom_id": gi,
                              "op_index": oi, "gamma_deg": g, "fem": False,
                              "feasible": False, "eligible": False,
-                             "geometry_rejected": True, "error": _rej[gi]}
+                             "geometry_rejected": True, "error": _why,
+                             "geometry_violations": _viol}
                 n_rejected += 1
-                _log_prefence_reject(geo_ov, I, g, _rej[gi])
+                _log_prefence_reject(geo_ov, I, g, _why)
                 continue
             out = _EVAL_CACHE.get(_cache_key(geo_ov, I, g, oprpm))
             if out is not None:
@@ -2898,7 +2920,7 @@ def _scan_worker(variables, operating_points, steps, coil_temp_c, ripple_max,
         if n_rejected:
             log.info("sweep: %d of %d points rejected before solving — %s",
                      n_rejected, len(tasks),
-                     next(m for m in _rej.values() if m))
+                     next(m[0] for m in _rej.values() if m))
         n_cached = sum(1 for p in points if p is not None) - n_rejected
         with _scan_lock:
             if _scan_owns(run_id):

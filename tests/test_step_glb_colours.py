@@ -98,7 +98,11 @@ def test_colour_names_are_found_across_read_chunks(tmp_path):
 def test_the_child_process_and_the_v2_cache(tmp_path):
     src = _coloured(tmp_path / "c.step")
     data = step_glb.glb_for_step(src, "m1", tmp_path / "cache")
-    assert (tmp_path / "cache" / "m1.v3.glb").read_bytes() == data
+    cached = (tmp_path / "cache" / "m1.v3.glb").read_bytes()
+    # the cache keeps the component names; a caller gets them only when it asks
+    assert step_glb.glb_for_step(src, "m1", tmp_path / "cache", labels=True) == cached
+    assert b'"label"' in cached and b'"label"' not in data
+    assert data == step_glb.without_labels(cached)
     assert len(_glb(data)["materials"]) == 4
 
 

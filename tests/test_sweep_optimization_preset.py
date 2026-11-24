@@ -340,17 +340,13 @@ def test_an_old_sidecar_without_the_settings_label_is_rebuilt_not_the_save(tmp_p
 
 
 # ── round 4 ────────────────────────────────────────────────────────────────────────────────────────────────────
-def test_both_auto_plan_branches_carry_the_run_settings_stamp(monkeypatch):
-    from fastapi.testclient import TestClient
-    from motor_ai_sim.api import app
-    c = TestClient(app)
+def test_both_auto_plan_branches_carry_the_run_settings_stamp():
     for mode in ("cmaes", "screen"):
-        r = c.post("/api/optimization/auto/plan", json={"max_ripple_pct": 5.0, "mode": mode,
-                                                         "run_settings": {"preset": "optimization", "overrides": {}}})
-        assert r.status_code == 200, r.text
-        plan = r.json()["plan"]
+        plan = O.auto_plan(O.AutoOptRequest(max_ripple_pct=5.0, mode=mode,
+                                            run_settings={"preset": "optimization", "overrides": {}}))["plan"]
         shown = RS.resolve("optimization", {}, O.get_config(), "auto")
         assert plan["run_settings"]["sig"] == shown["sig"], mode        # what the panel's Run button compares
+        assert plan["eval"]["steps_per_period"] == shown["settings"]["steps_per_period"]
 
 
 def test_descent_and_auto_record_the_solved_pair():

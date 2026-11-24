@@ -29,7 +29,8 @@ test('a legacy sweep is labelled by its stored request and has no digest', () =>
 });
 
 test('a server list row is read the same way', () => {
-  const s = sweepSettingsOf({ settings: { preset: 'custom', custom: true, steps_per_period: 108, gap_layers: 2, source: 'preset', sig: 5 } });
+  const s = sweepSettingsOf({ settings: { preset: 'custom', custom: true, steps_per_period: 108, gap_layers: 2, source: 'preset', sig: 5,
+    effective_source: { steps_per_period: 'solved', gap_layers: 'solved' } } });
   assert.equal(s.preset, 'custom'); assert.equal(s.sig, 5);
 });
 

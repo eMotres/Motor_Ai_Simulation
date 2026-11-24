@@ -274,7 +274,7 @@ def build_manifest(store: Path, inv: Dict[str, Any], pred: str, succ: str, retir
                if p.is_dir() and p.name in (pred, succ)]
     return {"pred": pred, "succ": succ, "retired": retired, "sheet": sheet, "die_keys_also_differing": other,
             "pocket_clearance_slot": {"key": "magnet_pocket_clearance", "level": "die (geometry)", "value": pocket},
-            "continuing": configs, "stays": stays, "projects": projects, "stores": stores,
+            "continuing": configs, "stays": stays, "never_nested": [".".join(k) for k in NEVER_NESTED], "projects": projects, "stores": stores,
             "die_access": {pred: access.get(pred, "inherit"), succ: access.get(succ, "inherit")},
             "workspace_or_published_copies": shadows}
 
@@ -331,12 +331,26 @@ def manifest_text(m: Dict[str, Any]) -> str:
 def _point_at(store: Path) -> None:
     """Every root of the application at the store directory; must run before the first import of the application."""
     import os
+    import sys as _sys
+    if any(m == "motor_ai_sim" or m.startswith("motor_ai_sim.") for m in _sys.modules):
+        raise SystemExit("refused: the application was imported before its roots were pointed at the store")
+    # the process config directory IS the identity directory on the server (deploy/README.md, "the identity trap"): users,
+    # die access, tombstones, the admin audit and the process workspace all resolve from it - bound to the store here
+    os.environ["MOTOR_AI_SIM_CONFIG"] = str(store / "identity" / "motor_config.yaml")
     os.environ["SHARED_ROOT"] = str(store / "shared")
     os.environ["WORKSPACES_ROOT"] = str(store / "workspaces")
     os.environ["PUBLISHED_ROOT"] = str(store / "published")
-    from motor_ai_sim import motor_access, users
-    users._USERS_FILE = store / "identity" / "users.json"
-    motor_access._DIE_ACCESS_FILE = store / "identity" / "die_access.json"
+    from motor_ai_sim import config, motor_access, users
+    from motor_ai_sim import workspace as WS
+    want = (store / "identity").resolve()
+    for name, path in (("config", Path(config.DEFAULT_CONFIG_PATH).parent), ("users", users._USERS_FILE.parent),
+                       ("die access", motor_access._DIE_ACCESS_FILE.parent), ("tombstones", WS._tombstones_file().parent),
+                       ("process workspace", Path(str(WS.process_workspace().root)))):
+        if Path(path).resolve() != want:
+            raise SystemExit(f"refused: the {name} path {path} is not inside the store")
+    for name, path in (("shared", WS.shared_root()), ("workspaces", WS.workspaces_root()), ("published", WS.published_root())):
+        if not str(Path(str(path)).resolve()).startswith(str(store.resolve()) + "/"):
+            raise SystemExit(f"refused: the {name} root {path} is not inside the store")
 
 
 def _fam():
@@ -442,6 +456,53 @@ def _mark_saved_sweeps(store: Path, pred: str, retired: str, continuing: set, dr
     return hits
 
 
+def _relabel_last_scans(store: Path, pred: str, succ: str, retired: str, aside_map: Dict[str, str]) -> List[str]:
+    """``.last_scan.json`` (the last sweep a user ran) names the machine it ran on: the predecessor's -> the retired name, the
+    successor's moved-aside working copy -> its aside name under the predecessor's name."""
+    from motor_ai_sim import json_store
+    hits = []
+    for f in sorted(store.glob("workspaces/*/.last_scan.json")):
+        try:
+            doc = json.loads(f.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        mach = doc.get("machine") if isinstance(doc, dict) else None
+        if not isinstance(mach, dict):
+            continue
+        if mach.get("die") == pred:
+            mach["die"] = retired
+            doc["previous_sheet"] = {"die": retired}
+        elif mach.get("die") == succ:
+            mach["die"] = pred
+            mach["config"] = aside_map.get(mach.get("config"), mach.get("config"))
+        else:
+            continue
+        json_store.atomic_write_json(f, doc)
+        hits.append(str(f.relative_to(store)))
+    return hits
+
+
+def _relabel_compare_names(store: Path, pred: str, retired: str) -> List[str]:
+    """Saved Compare rows that name their machine only in the row name ("<pred> / <cfg> / <duty> ..."): computed on the
+    previous sheet, so the name says the retired die and the row says ``previous_sheet``; the numbers are kept."""
+    from motor_ai_sim import json_store
+    hits = []
+    for f in sorted(store.glob("workspaces/*/saved_simulations.json")):
+        doc = json.loads(f.read_text(encoding="utf-8"))
+        n = 0
+        for rows in (doc.values() if isinstance(doc, dict) else []):
+            for row in rows if isinstance(rows, list) else []:
+                name = row.get("name") if isinstance(row, dict) else None
+                if isinstance(name, str) and name.startswith(f"{pred} / ") and not row.get("previous_sheet"):
+                    row["name"] = retired + name[len(pred):]
+                    row["previous_sheet"] = {"die": retired, "was_name": name}
+                    n += 1
+        if n:
+            json_store.atomic_write_json(f, doc)
+            hits.append(f"{f.relative_to(store)} ({n} rows)")
+    return hits
+
+
 def _drop_cached_answers(store: Path, pred: str, dry_run: bool) -> List[str]:
     """Cached answers computed on the previous sheet (``shared/.answers``): removed, they are rebuilt on demand."""
     hits = []
@@ -543,6 +604,9 @@ def _registry(pred: str, retired: str, cont: List[str], aside: List[str], projec
 
 def switch(store: Path, m: Dict[str, Any], *, dry_run: bool, actor: str) -> Dict[str, Any]:
     _point_at(store)
+    if "never_nested" in m:                         # the manifest's own choice of dropped nested keys is what is applied
+        NEVER_NESTED.clear()
+        NEVER_NESTED.update({tuple(k.split(".", 1)): "dropped by the manifest" for k in m["never_nested"]})
     from motor_ai_sim import config_archive as CA
     from motor_ai_sim import config_move as CM
     from motor_ai_sim import die_rename as DRN
@@ -598,6 +662,20 @@ def switch(store: Path, m: Dict[str, Any], *, dry_run: bool, actor: str) -> Dict
         r = DRN.run(F, old, new, src_dir=dies / old, dst_dir=dies / new, dry_run=dry_run, glob_scope=True, actor=actor)
         log.append({"step": "rename", "from": old, "to": new, "changes": len(r.get("changes") or []),
                     "manual": r.get("manual") or []})
+    # 4b. every workspace / published ledger: rows of the predecessor -> the retired name, rows of the successor -> the
+    #     predecessor's name (die_rename rekeys the shared ledger only); the application's own duty_results.rename_die
+    if not dry_run:
+        from motor_ai_sim import duty_results as DRS
+        moved = []
+        for led in sorted(store.glob("workspaces/*/.duty_results.json")) + sorted(store.glob("published/**/.duty_results.json")):
+            with DRS.using_store(led):
+                a = DRS.rename_die(pred, retired)
+                b = DRS.rename_die(succ, pred)
+            if a or b:
+                moved.append({"ledger": str(led.relative_to(store)), "predecessor": a, "successor": b})
+        log.append({"step": "workspace_ledgers", "ledgers": moved})
+        log.append({"step": "last_scans", "files": _relabel_last_scans(store, pred, succ, retired, aside_map)})
+        log.append({"step": "compare_names", "files": _relabel_compare_names(store, pred, retired)})
     # 5. the definition copies (results empty) and their links
     if not dry_run:
         from motor_ai_sim import json_store
@@ -713,16 +791,52 @@ def check(before: Path, after: Path, m: Dict[str, Any], rep: Dict[str, Any]) -> 
         bad += [f"{c}/{d.get('name')}: {k}" for d in body.get("duties") or [] for k in RESULT_KEYS if k in d]
         if (ad / pred / "runs" / c).exists():
             bad.append(f"{c}: runs/ folder")
-    for led in [after / "shared" / ".duty_results.json"] + sorted(after.glob("workspaces/*/.duty_results.json")):
-        try:
-            doc = json.loads(led.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
-            continue
-        for _path, _n in _names_in(doc, tuple(f"{pred}/{c}" for c in cont)):
-            bad.append(f"{led.relative_to(after)}: {_path}")
+    # the ledgers, by their real structure (results[die][cfg], history[die][cfg]) and through the application's own reader
+    _point_at(after)
+    from motor_ai_sim import duty_results as DRS
+    ledgers = ([Path("shared/.duty_results.json"), Path("identity/.duty_results.json")]
+               + [p.relative_to(after) for p in sorted(after.glob("workspaces/*/.duty_results.json"))]
+               + [p.relative_to(after) for p in sorted(after.glob("published/**/.duty_results.json"))])
+    aside = {c["config"]: c["successor_own"]["moved_aside_as"].format(date=m.get("date", "")) for c in m["continuing"]
+             if c.get("successor_own")}
+    ledger_rows = []
+    for rel in ledgers:
+        la, lb = after / rel, before / rel
+        da = json.loads(la.read_text(encoding="utf-8")) if la.is_file() else {}
+        db = json.loads(lb.read_text(encoding="utf-8")) if lb.is_file() else {}
+        for block in ("results", "history"):
+            node = (da.get(block) or {}).get(pred) or {}
+            bad += [f"{rel}: {block}[{pred}][{c}]" for c in cont if c in node]
+            # the predecessor's rows are the retired die's now; the successor's are the predecessor's (aside renamed)
+            want_r = (db.get(block) or {}).get(pred) or {}
+            want_p = {aside.get(k, k): v for k, v in ((db.get(block) or {}).get(succ) or {}).items()}
+            got_r = (da.get(block) or {}).get(retired) or {}
+            got_p = {k: v for k, v in ((da.get(block) or {}).get(pred) or {}).items()}
+            if want_r != got_r:
+                bad.append(f"{rel}: {block}[{retired}] differs from the predecessor's rows before")
+            if want_p != got_p:
+                bad.append(f"{rel}: {block}[{pred}] differs from the successor's rows before")
+            if (da.get(block) or {}).get(succ):
+                bad.append(f"{rel}: {block}[{succ}] still has rows")
+            ledger_rows.append({"ledger": str(rel), "block": block, "retired_rows": len(got_r), "successor_rows": len(got_p)})
+        if la.is_file():
+            with DRS.using_store(la):
+                for c in cont:
+                    body = _y(ad / pred / f"{c}.yaml")
+                    body = body.get("config", body) if isinstance(body.get("config"), dict) else body
+                    if DRS.get(pred, c):
+                        bad.append(f"{rel}: duty_results.get({pred}, {c}) returns {sorted(DRS.get(pred, c))}")
+                    for d in body.get("duties") or []:
+                        if DRS.history(pred, c, str(d.get("name"))):
+                            bad.append(f"{rel}: duty_results.history({pred}, {c}, {d.get('name')}) is not empty")
+    res["ledgers"] = {"ok": True, "rows": ledger_rows}
     for f in sorted((after / "shared" / ".answers").rglob("*.json")):
-        if any(True for _ in _names_in(_load(f)[0] if _load(f) else {}, tuple(f"{pred}/{c}" for c in cont))):
+        docs = _load(f)
+        if docs and any(True for _ in _names_in(docs[0], tuple(f"{pred}/{c}" for c in cont) + (pred,))):
             bad.append(f"cached answer {f.relative_to(after)}")
+    # the cogging and field stores of the copies (the configuration's own files beside it) must not exist
+    for c in cont:
+        bad += [f"{p.relative_to(after)}" for p in (ad / pred).glob(f"{c}.*") if p.suffix != ".yaml"]
     res["no_old_result_under_successor"] = {"ok": not bad, "found": bad[:40], "count": len(bad)}
     # (2) the predecessor complete under the retired name (each file the same apart from the die name)
     miss = []
@@ -733,6 +847,26 @@ def check(before: Path, after: Path, m: Dict[str, Any], rep: Dict[str, Any]) -> 
         g = ad / retired / rel
         if not g.is_file():
             miss.append(f"missing {rel}")
+        elif f.suffix == ".npz":
+            # die_rename rewrites the die name in a field file's ``meta``; every array must be identical
+            import numpy as np
+            x, y = np.load(f, allow_pickle=False), np.load(g, allow_pickle=False)
+            if sorted(x.files) != sorted(y.files):
+                miss.append(f"{rel}: arrays {sorted(set(x.files) ^ set(y.files))}")
+            for k in x.files:
+                if k == "meta" or k not in y.files:
+                    continue
+                if not np.array_equal(x[k], y[k]):
+                    miss.append(f"{rel}: array {k} differs")
+            if "meta" in x.files and "meta" in y.files:
+                d = [p for p in _diff_paths(json.loads(str(x["meta"])), json.loads(str(y["meta"])))
+                     if not p.endswith((".die", ".die_name"))]
+                if d:
+                    miss.append(f"{rel}: meta {d[:5]}")
+        elif f.suffix not in (".yaml", ".yml", ".json"):
+            import hashlib
+            if hashlib.sha256(f.read_bytes()).digest() != hashlib.sha256(g.read_bytes()).digest():
+                miss.append(f"{rel}: bytes differ")
         elif f.suffix in (".yaml", ".yml", ".json"):
             a, b = _load(f), _load(g)
             d = [x for x in _diff_paths(a, b) if not x.endswith((".die", ".die_name", ".copied_from.die"))
@@ -789,8 +923,14 @@ def check(before: Path, after: Path, m: Dict[str, Any], rep: Dict[str, Any]) -> 
         die = parts[3] if parts[2] == ".history" else parts[2]
         a, b = _load(before / "shared" / "dies" / die / "die.yaml"), _load(after / "shared" / "dies" / die / "die.yaml")
         return bool(a and b) and _diff_paths(a, b) == ["~$[0].derived_from.die"]
+    def compare_relabel_only(path: str) -> bool:
+        """A saved-simulations file whose only change is old-sheet Compare rows relabelled (name + previous_sheet)."""
+        if not path.endswith("saved_simulations.json"):
+            return False
+        d = _diff_paths(_load(before / path), _load(after / path), cap=10000)
+        return bool(d) and all(x.endswith(".name") or x.endswith(".previous_sheet") for x in d)
     def explained(path: str) -> bool:
-        return (path.endswith(".lock") or path == "identity/admin_audit.jsonl"
+        return (path.endswith(".lock") or compare_relabel_only(path) or path == "identity/admin_audit.jsonl"
                 or any(path.startswith(f"shared/dies/.history/{n}/") for n in (pred, retired, succ)) or lineage_only(path))
     touched = ([r["to"] for r in rep["renamed"]] + rep["added"] + rep["removed"] + [c["file"] for c in rep["changed"]])
     out_of = sorted(t for t in touched if outside(t) and not explained(t))
@@ -886,6 +1026,31 @@ def visibility_diff(before: Dict[str, Any], after: Dict[str, Any], m: Dict[str, 
             "snapshots_visible_before": len(sb), "snapshots_visible_after": len(sa)}
 
 
+def surfaces(store: Path, pred: str, retired: str) -> Dict[str, Any]:
+    """What else names the die: digest drafts (status, recipient count) and the US mirror's view of the dies."""
+    out: Dict[str, Any] = {"digest_drafts": []}
+    for f in sorted((store / "shared" / "digests" / "drafts").glob("*.json")):
+        try:
+            d = json.loads(f.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if any(True for _ in _names_in(d, (pred, retired))) or f"{pred} /" in json.dumps(d, ensure_ascii=False):
+            rec = d.get("recipients") or []
+            out["digest_drafts"].append({"draft": f.name, "status": d.get("status"), "kind": d.get("kind"),
+                                         "recipients": len(rec) if isinstance(rec, list) else None,
+                                         "recipient_status": sorted({str(r.get("status")) for r in rec if isinstance(r, dict)})})
+    _point_at(store)
+    try:
+        from motor_ai_sim.regions import catalog_manifest as CM2
+        man = CM2.build(store / "shared")
+        names = {k.split("/")[1] for k in man.get("files", {}) if k.startswith("dies/") and k.count("/") >= 2}
+        out["mirror"] = {"mirrored_dies": sorted(n for n in names if n.startswith(pred)),
+                         "excluded": [e for e in man.get("excluded_dies", []) if str(e.get("die", "")).startswith(pred)]}
+    except Exception as exc:                                # noqa: BLE001
+        out["mirror"] = {"error": repr(exc)}
+    return out
+
+
 def main(argv: List[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -902,6 +1067,8 @@ def main(argv: List[str] | None = None) -> int:
     mf.add_argument("--continuing", action="append", required=True)
     mf.add_argument("--stays", action="append", default=[])
     mf.add_argument("--pocket", type=float, default=None)
+    mf.add_argument("--keep-nested", action="append", default=[],
+                    help="a nested key normally dropped that is copied after all, e.g. bearings.thermal_path (owner's choice)")
     mf.add_argument("--out", required=True, type=Path)
     for name in ("dry-run", "apply"):
         sp = sub.add_parser(name)
@@ -916,7 +1083,13 @@ def main(argv: List[str] | None = None) -> int:
     ck.add_argument("--after", required=True, type=Path)
     ck.add_argument("--manifest", required=True, type=Path)
     ck.add_argument("--inventory", required=True, type=Path)
+    ck.add_argument("--date", required=True)
     ck.add_argument("--out", required=True, type=Path)
+    su = sub.add_parser("surfaces")
+    su.add_argument("--store", required=True, type=Path)
+    su.add_argument("--pred", required=True)
+    su.add_argument("--retired", required=True)
+    su.add_argument("--out", required=True, type=Path)
     vs = sub.add_parser("visibility")
     vs.add_argument("--store", required=True, type=Path)
     vs.add_argument("--out", required=True, type=Path)
@@ -927,6 +1100,11 @@ def main(argv: List[str] | None = None) -> int:
     vd.add_argument("--date", required=True)
     vd.add_argument("--out", required=True, type=Path)
     a = ap.parse_args(argv)
+    if a.cmd == "surfaces":
+        r = surfaces(a.store, a.pred, a.retired)
+        a.out.write_text(json.dumps(r, indent=1, ensure_ascii=False, default=str), encoding="utf-8")
+        print(json.dumps(r, ensure_ascii=False, default=str)[:3000])
+        return 0
     if a.cmd == "visibility-diff":
         m = json.loads(a.manifest.read_text(encoding="utf-8"))
         m["date"] = a.date
@@ -942,6 +1120,7 @@ def main(argv: List[str] | None = None) -> int:
     if a.cmd == "check":
         m = json.loads(a.manifest.read_text(encoding="utf-8"))
         m["inventory_path"] = str(a.inventory)
+        m["date"] = a.date
         rep = report(a.before, a.after)
         res = check(a.before, a.after, m, rep)
         a.out.write_text(json.dumps({"report": rep, "check": res}, indent=1, ensure_ascii=False), encoding="utf-8")
@@ -958,6 +1137,8 @@ def main(argv: List[str] | None = None) -> int:
         print(json.dumps(r, ensure_ascii=False, default=str)[:4000])
         return 1 if r.get("refused") else 0
     if a.cmd == "manifest":
+        for k in a.keep_nested:
+            NEVER_NESTED.pop(tuple(k.split(".", 1)), None)
         m = build_manifest(a.store, json.loads(a.inventory.read_text()), a.pred, a.succ, a.retired, a.continuing, a.stays, a.pocket)
         a.out.write_text(json.dumps(m, indent=1, ensure_ascii=False, default=str), encoding="utf-8")
         a.out.with_suffix(".md").write_text(manifest_text(m), encoding="utf-8")

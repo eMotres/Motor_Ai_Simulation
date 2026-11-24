@@ -207,3 +207,48 @@ def test_refine_proc_reports_the_cell_it_gave_the_mesher(monkeypatch):
     assert RP._coil_rel_solved({"mesh": {"component_mesh": {"coil_rel": 2}}}) == 2.0
     monkeypatch.setenv("MOTRES_RUN_COIL_REL", "2.0")
     assert RP._coil_rel_solved({"mesh": {"component_mesh": {"coil_rel": 1}}}) == 2.0
+
+
+def test_a_nested_unstamped_worker_does_not_inherit_the_outer_cell_and_the_outer_one_is_restored():
+    seen = {}
+
+    @O._run_coil_worker(lambda a, k: None)
+    def inner():
+        seen["inner"] = O._RUN_COIL_REL.get()
+        return "in"
+
+    @O._run_coil_worker(lambda a, k: {"coil_rel_override": 2.0})
+    def outer():
+        seen["outer_before"] = O._RUN_COIL_REL.get()
+        inner()
+        seen["outer_after"] = O._RUN_COIL_REL.get()
+
+    outer()
+    assert seen == {"outer_before": 2.0, "inner": None, "outer_after": 2.0}
+    assert O._RUN_COIL_REL.get() is None
+
+    @O._run_coil_worker(lambda a, k: (_ for _ in ()).throw(RuntimeError("no record")))
+    def broken_inner():
+        seen["broken"] = O._RUN_COIL_REL.get()
+
+    @O._run_coil_worker(lambda a, k: {"coil_rel_override": 2.0})
+    def outer2():
+        broken_inner()
+    outer2()
+    assert seen["broken"] is None                                  # an extractor failure is "no override" too
+
+
+def test_a_stamp_that_names_the_cell_without_a_solved_cell_does_not_rank():
+    from motor_ai_sim import sweep_saves as SS
+    base = {"name": "optimization", "sig": 99, "sig_scope": 2, "coil_rel": 2.0,
+            "effective": {"steps_per_period": 48, "gap_layers": 1.0, "coil_rel": 2.0}}
+    full = dict(base, effective_source={"steps_per_period": "solved", "gap_layers": "solved", "coil_rel": "solved"})
+    assert SS.sweep_settings_of({"mesh_preset": full})["sig"] == 99
+    missing = dict(base, effective_source={"steps_per_period": "solved", "gap_layers": "solved"})
+    assert SS.sweep_settings_of({"mesh_preset": missing})["sig"] is None
+    top_only = {"name": "optimization", "sig": 99, "sig_scope": 2, "coil_rel": 2.0,
+                "effective": {"steps_per_period": 48, "gap_layers": 1.0},
+                "effective_source": {"steps_per_period": "solved", "gap_layers": "solved"}}
+    assert SS.sweep_settings_of({"mesh_preset": top_only})["sig"] is None
+    no_cell = {k: v for k, v in top_only.items() if k != "coil_rel"}      # a stamp that never named a cell is unchanged
+    assert SS.sweep_settings_of({"mesh_preset": no_cell})["sig"] == 99

@@ -64,21 +64,18 @@ def _fingerprint(die: dict[str, Any], cfg: dict[str, Any]) -> str:
         sys.path.insert(0, str(root))
     from motor_ai_sim.routes.family import _build_sigs
     sigs = _build_sigs(die, cfg)            # every spelling of the SAME build (default liner / enamel unnamed, healed coil count)
-    return _Sig(sigs[0], sigs)
+    _EVERY_SPELLING[sigs[0]] = tuple(sigs)
+    return sigs[0]
 
 
-class _Sig(str):
-    """The current build signature (what a promoted record is stamped with) that also knows every other spelling of
-    the same build; a stored stamp is judged with :func:`_same_build`, exactly as the application judges it."""
-
-    def __new__(cls, first: str, every=()):
-        o = super().__new__(cls, first)
-        o.every = tuple(every) or (first,)
-        return o
+#: current signature -> every spelling of the same build (filled by :func:`_fingerprint`)
+_EVERY_SPELLING: dict[str, tuple] = {}
 
 
 def _same_build(stamp: Any, current: str) -> bool:
-    return stamp == current or (bool(stamp) and stamp in getattr(current, "every", ()))
+    """A stored stamp names the current build when it is the signature or any other spelling of it, exactly as
+    the application judges it (``routes.family.build_sig_moved``)."""
+    return stamp == current or (bool(stamp) and stamp in _EVERY_SPELLING.get(current, ()))
 
 
 def _is_within(path: Path, root: Path) -> bool:
@@ -220,7 +217,7 @@ def _evidence_files(source_die: Path, cfg_name: str, cfg: dict[str, Any],
                 run_anchor = {
                     "die": source_die.name, "config": cfg_name,
                     "duty": str(duty.get("name") or ""), "drive": str(drive),
-                    "build_sig": str(build_sig), "geometry_fingerprint": geo_fp,
+                    "build_sig": build_sig, "geometry_fingerprint": geo_fp,
                     "geometry_fingerprint_v2": inner.get("geometry_fingerprint_v2")
                         or inner.get("geo_fingerprint_v2"),
                     "catalog_refs": inner.get("catalog_refs"),

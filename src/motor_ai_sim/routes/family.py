@@ -2467,7 +2467,7 @@ def _build_config_row(die: dict, c: dict, name: str, _dr_cfg: dict) -> dict:
         # Every stamp that names this same build (`_build_sigs`): a
         # stored result is "older build" only when its stamp is none
         # of these (web lib/simPoints.isStale, catalogCardStaleness).
-        "build_sig_count_aliases": list(_bsigs),
+        "build_sig_aliases": list(_bsigs),
         # The mode the Motors row shows and loads (owner 2026-10-13);
         # `default_duty_stored` is what the yaml says, kept visible
         # when it names a duty that no longer exists.

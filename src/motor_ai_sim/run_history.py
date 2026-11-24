@@ -70,6 +70,15 @@ serving yesterday's answer under today's build would silently un-fix the bug
 for every repeat launch.  Resolution order — the first that is available
 wins:
 
+Every source must look like a commit id (7 to 40 hex digits); ``dev``, labels and garbage are
+rejected (a marker holding such a value is skipped, not trusted).  A stale marker cannot be told
+from a fresh one by content: the deploy scripts write it with each deploy, and the container env
+(0.) wins whenever present, so the marker only decides where the env is absent.  "unknown" is
+never cached.
+
+0. ``MOTRES_BUILD_ID`` (``roles.build_id()``, the value ``GET /api/health`` reports as ``build``;
+   set per container by deploy/docker-compose.yml; the compose placeholders ``dev`` / ``latest``
+   do not count).  Containers have neither marker nor git, so this is their only source.
 1. ``.deployed_commit`` next to the app root (the server's own marker file,
    written by the deploy script beside ``src/`` — see
    ``AGENT_RULES_motor_ai_sim.md`` §5.5).
@@ -88,6 +97,7 @@ import json
 import logging
 import os
 import pickle
+import re
 import threading
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -137,9 +147,33 @@ def _from_deployed_commit_marker() -> Optional[str]:
                 sha = marker.read_text(encoding="utf-8").strip()
             except OSError:
                 continue
-            if sha:
-                return sha[:40]
+            ok = _valid_commit_id(sha)
+            if ok:
+                return ok
+            # a marker that is not a commit id ("dev", garbage) is not trusted; try the next source
     return None
+
+
+_COMMIT_ID_RE = re.compile(r"^[0-9a-fA-F]{7,40}$")
+
+
+def _valid_commit_id(v: Any) -> Optional[str]:
+    """``v`` lower-cased when it looks like a commit id (7 to 40 hex digits), else None.  Placeholders
+    (``dev``, ``latest``, ``unknown``, empty) and any label are rejected, whatever the source."""
+    v = str(v or "").strip()
+    return v.lower() if _COMMIT_ID_RE.match(v) else None
+
+
+def _from_build_env() -> Optional[str]:
+    """The image's build id (env ``MOTRES_BUILD_ID``, set by deploy/docker-compose.yml from the
+    deployed sha): the SAME value ``GET /api/health`` reports as ``build`` (``roles.build_id``).
+    The container has no ``.deployed_commit`` and no git HEAD, so this is the only source there."""
+    try:
+        from motor_ai_sim import roles as _roles
+        b = _roles.build_id()
+    except Exception:                                       # noqa: BLE001
+        return None
+    return _valid_commit_id(b)
 
 
 def _from_git_head() -> Optional[str]:
@@ -149,7 +183,7 @@ def _from_git_head() -> Optional[str]:
             ["git", "rev-parse", "HEAD"], cwd=str(_repo_root()),
             stderr=subprocess.DEVNULL, timeout=5,
         ).decode("ascii", "ignore").strip()
-        return sha[:40] if sha else None
+        return _valid_commit_id(sha)
     except Exception:                                       # noqa: BLE001
         return None
 
@@ -167,8 +201,10 @@ def code_version() -> str:
     with _CV_LOCK:
         if _CV_CACHE is not None:
             return _CV_CACHE
-        v = _from_deployed_commit_marker() or _from_git_head() or "unknown"
-        _CV_CACHE = v
+        v = (_from_build_env() or _from_deployed_commit_marker()
+             or _from_git_head() or "unknown")
+        if v != "unknown":          # never freeze "unknown": a later call may find a valid source
+            _CV_CACHE = v
         return v
 
 

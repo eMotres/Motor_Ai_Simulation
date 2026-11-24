@@ -190,6 +190,13 @@ async def _lifespan(_app):
     _log = logging.getLogger(__name__)
     _log.info("process role: %s (instance %s, build %s)", _roles.role(), _roles.instance() or "-",
               _roles.build_id() or "-")
+    try:
+        from motor_ai_sim.routes.optimization import cogging_identity_status as _cis
+        _st = _cis(0.0)
+        (_log.info if _st["ok"] else _log.error)(
+            "cogging identity: %s", "can be formed" if _st["ok"] else "CANNOT be formed (%s): Cogging pp returns no value" % _st["reason"])
+    except Exception as _e:                                 # noqa: BLE001
+        _log.error("cogging identity check failed: %s", _e)
     if _roles.serves_compute():
         if _roles.is_worker():
             # Nothing can be running in a process that has just started: records left "queued"/"running" by a crash
@@ -584,8 +591,15 @@ def health_check():
         pardiso_threading_status, libiomp5_mapped)
     status = pardiso_threading_status()
     from motor_ai_sim import roles as _roles
+    try:
+        from motor_ai_sim.routes.optimization import cogging_identity_status as _cis
+        _cog = _cis()
+    except Exception as _e:                                 # noqa: BLE001
+        logging.getLogger(__name__).error("cogging identity status failed: %s", _e)
+        _cog = {"ok": False, "reason": "error"}
     return {
         "status": "healthy",
+        "cogging_identity": _cog,
         # deploy stage 2: which process answered (the blue-green switch and the worker update check these)
         "role": _roles.role(), "instance": _roles.instance(), "build": _roles.build_id(),
         "mkl": {

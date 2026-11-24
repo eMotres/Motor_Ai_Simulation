@@ -2266,6 +2266,14 @@ COGGING_BASIS = "no_load_full_strength"
 COGGING_BASIS_TEXT = "no-load, full-strength magnets (demagnetisation at load not applied)"
 
 
+class _CogIdentityError(RuntimeError):
+    """A cogging identity failure with a FIXED public reason code (build_unknown,
+    material_not_assigned, material_library_unreadable); the message is for the server log only."""
+    def __init__(self, code: str, msg: str):
+        super().__init__(msg)
+        self.code = code
+
+
 def _cogging_identity() -> Dict[str, Any]:
     """The build and material identity a stored Cogging pp value stands on; RAISES when either is not
     really known (fail closed: no cache, no value).  Build = a real code version (not "unknown",
@@ -2275,7 +2283,7 @@ def _cogging_identity() -> Dict[str, Any]:
     stamp = dict(_dr.solver_stamp() or {})
     cv = str(stamp.get("code_version") or "")
     if not cv or cv == "unknown":
-        raise RuntimeError("the solver build is not identified (no code version)")
+        raise _CogIdentityError("build_unknown", "the solver build is not identified (no code version)")
     from motor_ai_sim.config import get_material_assignments
     from motor_ai_sim import materials as _ml
     from motor_ai_sim.material_context import get_request_materials
@@ -2293,7 +2301,7 @@ def _cogging_identity() -> Dict[str, Any]:
         name = asg.get(part) or _ml_default.get(part)
         if not name:
             if part in ("stator_core", "magnet"):
-                raise RuntimeError("no %s material is assigned" % part)
+                raise _CogIdentityError("material_not_assigned", "no %s material is assigned" % part)
             continue
         name = str(name)
         if name in ov_props and isinstance(ov_props[name], dict) and ov_props[name]:
@@ -2302,10 +2310,39 @@ def _cogging_identity() -> Dict[str, Any]:
             obj = _ml.resolve_assigned(part, name)        # raises when the library / overlay lacks it
             props = _dc.asdict(obj) if _dc.is_dataclass(obj) else dict(vars(obj))
         if not props:
-            raise RuntimeError("the %s card %r resolved to no content" % (part, name))
+            raise _CogIdentityError("material_library_unreadable", "the %s card %r resolved to no content" % (part, name))
         cards[part] = [name, props]
     digest = _hl.md5(json.dumps(cards, sort_keys=True, default=str).encode()).hexdigest()[:16]
     return {"build": cv, "image": stamp.get("image"), "materials": digest}
+
+
+def _cogging_identity_code(e: BaseException) -> str:
+    """The fixed public reason code of an identity failure (never the exception text)."""
+    if isinstance(e, _CogIdentityError):
+        return e.code
+    if isinstance(e, (OSError, KeyError, ValueError)):     # library / card missing or unparsable
+        return "material_library_unreadable"
+    return "error"
+
+
+_COG_STATUS: Dict[str, Any] = {"t": 0.0, "v": None}
+
+
+def cogging_identity_status(max_age_s: float = 60.0) -> Dict[str, Any]:
+    """Whether the Cogging pp identity can be formed right now (code version known AND the assigned
+    material cards readable).  Never raises; cached for ``max_age_s`` (health polls it)."""
+    import time as _t
+    now = _t.monotonic()
+    if _COG_STATUS["v"] is not None and now - _COG_STATUS["t"] < max_age_s:
+        return dict(_COG_STATUS["v"])
+    try:
+        _cogging_identity()
+        v: Dict[str, Any] = {"ok": True, "reason": None}
+    except Exception as e:                                  # noqa: BLE001
+        v = {"ok": False, "reason": _cogging_identity_code(e)}
+        logging.getLogger(__name__).error("cogging identity unavailable (%s): %s", v["reason"], e)
+    _COG_STATUS["t"], _COG_STATUS["v"] = now, v
+    return dict(v)
 
 
 def _cogging_sig(parts: List[Any]) -> int:
@@ -2343,7 +2380,8 @@ def _cogging_pp_fields(out: Optional[Dict[str, Any]], steps_requested: int,
                 pp, err = None, "no-load solve carried no provenance (not an unexcited no-load run)"
             enough = r.get("cogging_sampling_final_quality_sufficient") is True
         else:
-            err = "no-load solve failed: %s" % ((out or {}).get("error") or "no result")
+            logging.getLogger(__name__).warning("cogging no-load solve failed: %s", (out or {}).get("error") or "no result")
+            err = "no-load solve failed"
     eff_steps = prov.get("steps_per_period_effective") if prov else None
     # the temperature the SOLVE used (from its result), never the request or a pre-solve guess
     eff_temp = prov.get("magnet_temp_c_effective") if prov else None
@@ -2409,7 +2447,8 @@ class _SweepCogging:
         try:
             key = self._key_of(geo_ov)
         except Exception as e:                      # noqa: BLE001 - fail closed
-            return self._missing("cache key unavailable: %s" % e)
+            logging.getLogger(__name__).warning("cogging cache key unavailable: %s", e)
+            return self._missing("cache key unavailable")
         if key in self._memo:
             return self._memo[key]
         out = _EVAL_CACHE.get(key)
@@ -2422,7 +2461,8 @@ class _SweepCogging:
         try:
             key = self._key_of(geo_ov)
         except Exception as e:                      # noqa: BLE001 - fail closed
-            return self._missing("cache key unavailable: %s" % e)
+            logging.getLogger(__name__).warning("cogging cache key unavailable: %s", e)
+            return self._missing("cache key unavailable")
         with self._guard:
             lock = self._locks.setdefault(key, threading.Lock())
         with lock:
@@ -2433,7 +2473,8 @@ class _SweepCogging:
                 try:
                     out = self._solve(geo_ov)
                 except Exception as e:              # noqa: BLE001
-                    out = {"ok": False, "error": str(e)}
+                    logging.getLogger(__name__).warning("cogging no-load solve raised: %s", e, exc_info=True)
+                    out = {"ok": False, "error": "solve raised"}
                 self.solves += 1
                 if out and out.get("ok"):
                     _store_eval(key, out)
@@ -2454,7 +2495,8 @@ def _cogging_no_load_refusal() -> Optional[str]:
         from motor_ai_sim.optimization.refine_proc import _excitation_args
         drive = _excitation_args(dict(get_config().get("simulation") or {})).get("drive")
     except Exception as e:                          # noqa: BLE001
-        return "the loaded excitation could not be resolved (%s)" % e
+        logging.getLogger(__name__).warning("cogging excitation unresolved: %s", e)
+        return "the loaded excitation could not be resolved"
     if drive != "current":
         return ("the loaded points run on the %s drive: one unexcited no-load solve cannot be "
                 "guaranteed to be the same machine state" % drive)
@@ -2744,7 +2786,9 @@ def _scan_worker(variables, operating_points, steps, coil_temp_c, ripple_max,
                 _cog_ident = _cogging_identity()      # fail closed: no identity = no cache, no value
                 _cog_ident_err = None
             except Exception as _e_id:                # noqa: BLE001
-                _cog_ident, _cog_ident_err = None, "build / material identity unavailable: %s" % _e_id
+                _code = _cogging_identity_code(_e_id)
+                logging.getLogger(__name__).warning("cogging identity unavailable (%s): %s", _code, _e_id)
+                _cog_ident, _cog_ident_err = None, "build / material identity unavailable (%s)" % _code
 
             def _cog_key(geo_ov):
                 _excl = tuple(geo_ov.keys())

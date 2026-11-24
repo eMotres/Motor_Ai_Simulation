@@ -107,7 +107,7 @@ def test_final_needs_120_steps_20c_and_sufficient_sampling():
 
 def test_a_failed_no_load_solve_gives_no_value_and_says_why():
     f = O._cogging_pp_fields(_out(ok=False), 48, 20.0)
-    assert f["cogging_pp_Nm"] is None and f["cogging_final"] is False and "boom" in f["cogging_error"]
+    assert f["cogging_pp_Nm"] is None and f["cogging_final"] is False and "boom" not in f["cogging_error"] and "no-load solve failed" in f["cogging_error"]
     f = O._cogging_pp_fields(_out(pp=float("nan")), 48, 20.0)
     assert f["cogging_pp_Nm"] is None and f["cogging_error"]
 
@@ -482,3 +482,18 @@ def test_the_identity_includes_the_implicit_default_sleeve_card_and_a_new_sleeve
     assert O._cogging_identity()["materials"] == base
     asg["sleeve"] = "CF2"                            # a sweep that introduces a sleeve
     assert O._cogging_identity()["materials"] != base
+
+
+def test_no_path_or_exception_text_reaches_cogging_error(sweep, monkeypatch):
+    secret = "/srv/secret_dir/lib.json"
+
+    def boom():
+        raise FileNotFoundError("cannot open " + secret)
+    monkeypatch.setattr(O, "_cogging_identity", boom)
+    result, _calls = sweep(cogging_pp=True, magnet_temp_c=20.0)
+    errs = [p["cogging_error"] for p in result["points"] if p.get("cogging_error")]
+    assert errs and all(secret not in e and "cannot open" not in e and "secret_dir" not in e for e in errs)
+    assert all("material_library_unreadable" in e for e in errs)
+    # a failed no-load solve: the raw error stays in the log
+    out = O._cogging_pp_fields({"ok": False, "error": "Traceback /home/x/y.py boom"}, 48, 20.0)
+    assert "/home" not in out["cogging_error"] and "boom" not in out["cogging_error"]

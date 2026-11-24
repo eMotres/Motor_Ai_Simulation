@@ -221,16 +221,11 @@ def magnet_block(requested: Any = None) -> Dict[str, Any]:
     out: Dict[str, Any] = {"requested": req, "used_c": req, "source": "typed" if req is not None else "card",
                            "card": None, "card_c": None}
     try:
-        from motor_ai_sim.routes.simulation import _assigned_magnet_card
-        name, _card = _assigned_magnet_card()
-        out["card"] = str(name) if name else None
-    except Exception:       # noqa: BLE001 - a display block must never break the resolve
-        pass
-    try:
-        from motor_ai_sim.simulation.fem_solver_2d import _run_magnet_temp_c
-        t = _run_magnet_temp_c(None)         # the card's reference temperature as the solver reads it (request materials included)
+        from motor_ai_sim.simulation.fem_solver_2d import _run_magnet_card_name, _run_magnet_temp_c
+        out["card"] = _run_magnet_card_name()        # the card and its reference temperature, both as the solver reads them
+        t = _run_magnet_temp_c(None)                 # (request materials included)
         out["card_c"] = None if t is None else float(t)
-    except Exception:       # noqa: BLE001
+    except Exception:       # noqa: BLE001 - a display block must never break the resolve
         pass
     if req is None:
         out["used_c"] = out["card_c"]
@@ -333,6 +328,10 @@ def resolve(preset: Optional[str], overrides: Optional[Mapping[str, Any]], cfg: 
                            "reason": "a full ring is solved on the natural symmetry sector (it changes neither the steps nor the gap rows)"})
             settings["n_sectors"] = sym
     # THE LABEL IS ABOUT THE PAIR (steps, gap rows) ONLY: what differs from the chosen preset's own numbers
+    # the magnet temperature the run TYPED, as magnet_block reads it: a number that is not finite or outside the range is no request, in
+    # the digest and the token too (they must agree with the block shown)
+    magnet = magnet_block(magnet_temp_c)
+    magnet_req = magnet["requested"]
     differs: Dict[str, Any] = {}
     matched: Optional[str] = None
     ref_label = pv["label"]
@@ -365,8 +364,8 @@ def resolve(preset: Optional[str], overrides: Optional[Mapping[str, Any]], cfg: 
             "finalist_note": finalist_note(settings["steps_per_period"], geometry),
             "coil_rel": coil_rel_used, "coil_rel_stored": coil_rel_stored, "coil_rel_override": coil_rel_override,
             "sig_scope": SIG_SCOPE_FULL if custom else SIG_SCOPE,
-            "magnet": magnet_block(magnet_temp_c),
-            "sig": (full_sig(settings, MP.version(), magnet_temp_c) if custom else
-                    identity_sig(settings["steps_per_period"], settings["gap_layers"], MP.version(), coil_rel_used, magnet_temp_c))}
+            "magnet": magnet,
+            "sig": (full_sig(settings, MP.version(), magnet_req) if custom else
+                    identity_sig(settings["steps_per_period"], settings["gap_layers"], MP.version(), coil_rel_used, magnet_req))}
     out["token"] = resolution_token(out, geometry)
     return out

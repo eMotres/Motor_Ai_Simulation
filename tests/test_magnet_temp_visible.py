@@ -380,3 +380,59 @@ def test_the_server_side_baseline_with_run_settings_solves_at_the_typed_temperat
     body["run_settings"] = _rs(None, "descent")
     O.descent_baseline(O.BaselineRequest(**body))
     assert len(got) == 2 and all(g.get("magnet_temp_c") is None for g in got)
+
+
+# ── follow-ups of the second review ──────────────────────────────────────────────────────────────────────────────────
+def test_a_body_value_with_a_digest_shown_without_it_is_refused_and_one_shown_with_it_is_accepted():
+    """What a headless / cogging-screen caller must NOT do: a top-level magnet_temp_c next to run settings whose digest and token were
+    resolved without it.  (No caller in the repo does: the panels put the value in run_settings only, the headless runner sends no run
+    settings, scripts/stage2_seed_refine posts a bare auto request.)"""
+    shown = O._resolve_run_settings(_rs(None), "sweep")
+    stale = _rs(None, expect_sig=shown["sig"], expect_token=shown["token"])
+    with pytest.raises(HTTPException) as e:
+        O._resolve_run_settings(stale, "sweep", 60.0)
+    assert e.value.status_code == 409
+    withit = O._resolve_run_settings(_rs(60.0), "sweep")
+    ok = _rs(60.0, expect_sig=withit["sig"], expect_token=withit["token"])
+    assert O._resolve_run_settings(ok, "sweep", 60.0)["magnet"]["requested"] == 60.0
+    # no run settings at all (the headless way): the body value alone is fine
+    plan = O.prepare_scan(_scan(magnet_temp_c=60.0, cogging_screen=True))
+    assert plan["kwargs"]["magnet_temp_c"] == 60.0
+
+
+def test_the_card_name_comes_from_the_solvers_own_reader(monkeypatch):
+    import motor_ai_sim.simulation.fem_solver_2d as fs
+    monkeypatch.setattr(fs, "_run_magnet_card_name", lambda: "WORKSPACE_CARD")
+    assert RS.magnet_block(None)["card"] == "WORKSPACE_CARD" and RS.magnet_block(60.0)["card"] == "WORKSPACE_CARD"
+
+
+def test_the_solver_reader_names_the_assigned_card():
+    import motor_ai_sim.simulation.fem_solver_2d as fs
+    from motor_ai_sim.config import get_material_assignments
+    assert fs._run_magnet_card_name() == (get_material_assignments() or {}).get("magnet")
+
+
+def test_the_baseline_without_run_settings_applies_the_same_grade_limit(monkeypatch):
+    got = []
+
+    def fake(overrides, current_a, steps, coil_temp_c, **kw):
+        got.append(dict(kw))
+        return {"ok": True, "res": {"torque_per_mass_Nm_kg": 1.0 + 0.1 * len(got), "efficiency": 0.9 - 0.01 * len(got)}}
+    monkeypatch.setattr(O, "_subprocess_eval", fake)
+    base = {"operating_point": {"current_a": 10.0, "gamma_deg": 0.0, "rpm": 1000.0}, "current_bump_pct": 10.0}
+    with pytest.raises(HTTPException) as e:
+        O.descent_baseline(O.BaselineRequest(**base, magnet_temp_c=340.0))     # far above the grade's maximum working temperature
+    assert e.value.status_code == 422 and not got                              # refused before any solve
+    O.descent_baseline(O.BaselineRequest(**base, magnet_temp_c=60.0))
+    assert len(got) == 2 and all(g["magnet_temp_c"] == 60.0 for g in got)
+
+
+@pytest.mark.parametrize("bad", [float("nan"), float("inf"), 500.0, -100.0])
+def test_resolve_drops_an_unusable_value_from_the_digest_like_the_block(bad):
+    blank = RS.resolve("tab", dict(TAB), get_config(), "sweep")
+    r = RS.resolve("tab", dict(TAB), get_config(), "sweep", magnet_temp_c=bad)
+    assert r["magnet"]["requested"] is None and r["magnet"]["source"] == "card"
+    assert r["sig"] == blank["sig"] and r["token"] == blank["token"]            # the digest agrees with the block shown
+    ov = {k: v for k, v in TAB.items() if k != "demag"}
+    assert RS.resolve("tab", ov, get_config(), "descent", magnet_temp_c=bad)["sig"] == RS.resolve("tab", ov, get_config(), "descent")["sig"]
+    assert RS.resolve("tab", dict(TAB), get_config(), "sweep", magnet_temp_c=60.0)["sig"] != blank["sig"]

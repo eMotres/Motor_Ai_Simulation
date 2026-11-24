@@ -73,3 +73,12 @@ test('Compare rejects unknown sweep rows BEFORE the count shortcut: a lone unkno
   assert.equal(sweepMetricsComparable([{ T_avg_Nm: 1 }, { T_avg_Nm: 2 }]), true);   // no sweep rows: nothing to refuse
   assert.equal(sweepMetricsComparable([known, { ...known }]), true);
 });
+
+test('a list row needs BOTH numbers solved: requested sources never give an identity', () => {
+  const row = (es) => ({ settings: { preset: 'optimization', source: 'preset', sig: 5, steps_per_period: 48, gap_layers: 1, effective_source: es } });
+  assert.equal(sweepSettingsOf(row({ steps_per_period: 'solved', gap_layers: 'solved' })).sig, 5);
+  assert.equal(sweepSettingsOf(row({ steps_per_period: 'requested', gap_layers: 'requested' })).sig, null);
+  assert.equal(sweepSettingsOf(row({ steps_per_period: 'solved', gap_layers: 'requested' })).sig, null);
+  assert.equal(sweepSettingsOf({ settings: { preset: 'optimization', source: 'preset', sig: 5, steps_per_period: 48, gap_layers: 1 } }).sig, null);
+  assert.equal(sweepSettingsOf(stamp({ effective_source: { steps_per_period: 'solved', gap_layers: 'requested' } })).sig, null);
+});

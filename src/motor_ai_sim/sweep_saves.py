@@ -290,6 +290,10 @@ def delete_entry(sid: str) -> bool:
     return False
 
 
+#: bumped whenever the rule behind the list label changes: a sidecar written under an older rule is rebuilt (the save is not touched)
+SETTINGS_VERSION = 4
+
+
 def sweep_settings_of(result: Any, config: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """The settings a stored sweep RAN with, for its label.  ONE helper for the result, the saved list, Apply and Compare.
 
@@ -307,16 +311,16 @@ def sweep_settings_of(result: Any, config: Optional[Dict[str, Any]] = None) -> D
                                               if isinstance(mp.get("effective_source"), dict))
         custom = bool(mp.get("custom")) or mixed or bool(mp.get("solved_differs"))
         srcs = mp.get("effective_source") if isinstance(mp.get("effective_source"), dict) else {}
-        verified = any(v == "solved" for v in srcs.values())
+        verified = srcs.get("steps_per_period") == "solved" and srcs.get("gap_layers") == "solved"
         known = eff.get("steps_per_period") is not None and eff.get("gap_layers") is not None
         sig = None if (mixed or mp.get("solved_differs") or not verified or not known) else mp.get("sig")
         return {"preset": ("custom" if custom else mp.get("name")), "version": mp.get("version"), "custom": custom,
                 "mixed": mixed, "effective_source": mp.get("effective_source"),
                 "steps_per_period": eff.get("steps_per_period"), "gap_layers": eff.get("gap_layers"),
-                "sig": sig, "differs": mp.get("differs") or {}, "source": "preset"}
+                "sig": sig, "differs": mp.get("differs") or {}, "source": "preset", "v": SETTINGS_VERSION}
     return {"preset": None, "version": None, "custom": False, "mixed": False, "sig": None,
             "steps_per_period": cfg.get("steps_per_period") or r.get("steps_per_period"),
-            "gap_layers": sp.get("gap_layers"), "source": "stored_request"}
+            "gap_layers": sp.get("gap_layers"), "source": "stored_request", "v": SETTINGS_VERSION}
 
 
 def meta(d: Dict[str, Any]) -> Dict[str, Any]:
@@ -385,7 +389,8 @@ def _read_meta_row(f: Path) -> Optional[Dict[str, Any]]:
     try:
         if mp.exists() and mp.stat().st_mtime >= f.stat().st_mtime:
             row = json.loads(mp.read_text(encoding="utf-8"))
-            if isinstance(row, dict) and row.get("id") == f.stem and "auto" in row and "settings" in row:
+            if isinstance(row, dict) and row.get("id") == f.stem and "auto" in row \
+                    and (row.get("settings") or {}).get("v") == SETTINGS_VERSION:
                 return row
     except Exception:                                    # noqa: BLE001
         pass

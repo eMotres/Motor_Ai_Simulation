@@ -337,3 +337,71 @@ def test_an_old_sidecar_without_the_settings_label_is_rebuilt_not_the_save(tmp_p
     row = SS._read_meta_row(f)
     assert row["settings"]["steps_per_period"] == 108 and row["settings"]["source"] == "stored_request"
     assert f.read_text() == saved
+
+
+# ── round 4 ────────────────────────────────────────────────────────────────────────────────────────────────────
+def test_both_auto_plan_branches_carry_the_run_settings_stamp(monkeypatch):
+    from fastapi.testclient import TestClient
+    from motor_ai_sim.api import app
+    c = TestClient(app)
+    for mode in ("cmaes", "screen"):
+        r = c.post("/api/optimization/auto/plan", json={"max_ripple_pct": 5.0, "mode": mode,
+                                                         "run_settings": {"preset": "optimization", "overrides": {}}})
+        assert r.status_code == 200, r.text
+        plan = r.json()["plan"]
+        shown = RS.resolve("optimization", {}, O.get_config(), "auto")
+        assert plan["run_settings"]["sig"] == shown["sig"], mode        # what the panel's Run button compares
+
+
+def test_descent_and_auto_record_the_solved_pair():
+    launch = {"name": "optimization", "custom": False, "sig": 7}
+    pt = {"kind": "candidate", "n_steps_per_period_solved": 48, "gap_layers_per_side": 1.0}
+    st = {"mesh_preset": launch, "eval_params": {"steps_per_period": 48, "gap_layers": 1.0},
+          "points": [dict(pt), dict(pt),
+                     {"kind": "final_validation", "n_steps_per_period_solved": 96, "gap_layers_per_side": 2.0}]}
+    ok = O._descent_solved_stamp(st)
+    assert ok["effective_source"] == {"steps_per_period": "solved", "gap_layers": "solved"} and ok["sig"] == 7
+    assert not ok.get("custom")                                   # the final validations keep their own purpose
+    st["points"].append({"kind": "candidate", "n_steps_per_period_solved": 52, "gap_layers_per_side": 1.0})
+    assert O._descent_solved_stamp(st)["mixed"] is True
+    # the eval summary and the cloud point carry the solved pair
+    res = {"n_steps_per_period_solved": 52, "gap_layers_per_side": 1.0, "T_em_Nm": 1.0, "efficiency": 0.9}
+    assert O._msum(res)["n_steps_per_period_solved"] == 52
+    assert O._pt({"ok": True, "res": res, "overrides": {}}, "candidate")["gap_layers_per_side"] == 1.0
+    assert O._descent_solved_stamp({"mesh_preset": None}) is None
+
+
+def test_the_identity_needs_both_numbers_solved():
+    rec = O._sweep_settings_record({"name": "optimization", "custom": False, "sig": 99}, 48, 1.0)
+    steps_only = O._stamp_solved(rec, [{"fem": True, "feasible": True, "n_steps_per_period_solved": 48}])
+    assert steps_only["effective_source"] == {"steps_per_period": "solved", "gap_layers": "requested"}
+    assert steps_only["sig"] is None
+    assert SS.sweep_settings_of({"mesh_preset": steps_only})["sig"] is None
+    both = O._stamp_solved(rec, [{"fem": True, "feasible": True, "n_steps_per_period_solved": 48, "gap_layers_per_side": 1.0}])
+    assert both["sig"] == 99
+
+
+def test_a_sidecar_from_an_older_rule_is_rebuilt_even_when_it_has_settings(tmp_path):
+    import json
+    entry = {"id": "s2", "name": "x", "created_at": "2026-11-01T10:00:00", "config": {"steps_per_period": 48}, "auto": True,
+             "result": {"steps_per_period": 48, "points": [], "mesh_preset": {
+                 "name": "optimization", "sig": 111, "effective": {"steps_per_period": 48, "gap_layers": 1.0},
+                 "effective_source": {"steps_per_period": "requested", "gap_layers": "requested"}}}}
+    f = tmp_path / "s2.json"
+    f.write_text(json.dumps(entry))
+    SS._meta_path(f).write_text(json.dumps({"id": "s2", "auto": True,
+        "settings": {"preset": "optimization", "source": "preset", "sig": 111, "steps_per_period": 48, "gap_layers": 1.0}}))
+    saved = f.read_text()
+    row = SS._read_meta_row(f)
+    assert row["settings"]["sig"] is None and row["settings"]["v"] == SS.SETTINGS_VERSION
+    assert f.read_text() == saved
+
+
+def test_gap_rows_and_steps_are_whole_numbers():
+    cfg = _cfg()
+    for bad in (1.231, 1.5, 100.5):
+        for key in ("gap_layers", "steps_per_period"):
+            with pytest.raises(RS.RunSettingsError):
+                RS.resolve("optimization", {key: bad}, cfg)
+    assert RS.resolve("optimization", {"gap_layers": 2.0}, cfg)["settings"]["gap_layers"] == 2.0
+    assert RS.resolve("optimization", {"gap_layers": 1}, cfg)["sig"] == RS.resolve("optimization", {}, cfg)["sig"]

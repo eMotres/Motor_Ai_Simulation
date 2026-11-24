@@ -749,8 +749,12 @@ const ComparePanel: React.FC = () => {
   const selectedHasFullBasis = new Map(resultCols.map(r => [
     colId(r), !r.activeBasis || selected.some(s => !r.activeBasis!(resultSrc(r, s))),
   ]));
+  // The Δ% row and its column maxima follow the same rule as the ranking: a sweep point whose steps-and-gap identity is unknown /
+  // mixed / different (or that sits beside an ordinary run) gets no delta and does not set a maximum.
+  const selSweepMixed = !sweepMetricsComparable(selected.map(s => s.results as any));
   const comparisonPercentValue = (r: ResultCol, s: SavedSim): number => {
     if (r.text) return NaN;
+    if (selSweepMixed && isSweepRow(s.results as any)) return NaN;
     const raw = resultVal(r, s);
     if (!Number.isFinite(raw)) return NaN;
     return r.activeBasis?.(resultSrc(r, s)) && selectedHasFullBasis.get(colId(r)) === true ? NaN : raw;
@@ -842,7 +846,7 @@ const ComparePanel: React.FC = () => {
   // name can't collide).
   const colMax: Record<string, number> = {};
   resultCols.forEach(r => {
-    const ns = extentVals(r, selected);
+    const ns = extentVals(r, selSweepMixed ? selected.filter(s => !isSweepRow(s.results as any)) : selected);
     if (ns.length) colMax[`r:${colId(r)}`] = Math.max(...ns);
   });
   /** Deviation from the column maximum, in %. 0 % = the leader. */

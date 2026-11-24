@@ -37,8 +37,8 @@ const RunSettingsBar: React.FC<{ rs: RunSettingsState; dense?: boolean }> = ({ r
   const clamps = r ? r.clamps.map(c => `${c.key}: ${String(c.requested)} → ${String(c.used)} (${c.reason})`) : [];
   const field = (key: 'steps_per_period' | 'gap_layers', name: string, width: number) => (
     <TextField label={name} type="number" size="small" disabled={!r} value={st ? st[key] : ''}
-      onChange={e => { const v = Number(e.target.value); if (Number.isFinite(v) && e.target.value !== '') rs.setOverride(key, v); }}
-      inputProps={{ step: key === 'gap_layers' ? 1 : 12, style: { fontSize: 12, padding: '4px 6px', width } }}
+      onChange={e => { const v = Number(e.target.value); if (Number.isInteger(v) && e.target.value !== '') rs.setOverride(key, v); }}
+      inputProps={{ step: key === 'gap_layers' ? 1 : 12, min: 1, style: { fontSize: 12, padding: '4px 6px', width } }}
       InputLabelProps={{ sx: { fontSize: 11 } }} />
   );
   return (

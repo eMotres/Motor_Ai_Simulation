@@ -26,10 +26,12 @@ export function sweepSettingsOf(x: any): SweepSettings {
   if (s && typeof s === 'object') {
     const mixed = s.mixed === true;
     const custom = s.custom === true || mixed;
+    const es = s.effective_source && typeof s.effective_source === 'object' ? s.effective_source : null;
+    const bothSolved = !!es && es.steps_per_period === 'solved' && es.gap_layers === 'solved';
     return { preset: s.source === 'preset' ? (custom ? 'custom' : (typeof s.preset === 'string' ? s.preset : null)) : null,
              steps: numOrNull(s.steps_per_period), gapLayers: numOrNull(s.gap_layers), custom, mixed,
-             sig: s.source === 'preset' && !mixed && numOrNull(s.steps_per_period) !== null && numOrNull(s.gap_layers) !== null
-               ? sigOrNull(s.sig) : null,
+             sig: s.source === 'preset' && !mixed && bothSolved && numOrNull(s.steps_per_period) !== null
+               && numOrNull(s.gap_layers) !== null ? sigOrNull(s.sig) : null,
              source: s.source === 'preset' ? 'preset' : 'stored_request' };
   }
   const mp = x?.mesh_preset;
@@ -38,7 +40,7 @@ export function sweepSettingsOf(x: any): SweepSettings {
     const srcs = mp.effective_source && typeof mp.effective_source === 'object' ? Object.values(mp.effective_source) : [];
     const mixed = mp.mixed === true || srcs.includes('mixed');
     const custom = mp.custom === true || mixed || mp.solved_differs === true;
-    const verified = srcs.includes('solved');
+    const verified = mp.effective_source?.steps_per_period === 'solved' && mp.effective_source?.gap_layers === 'solved';
     const sig = mixed || mp.solved_differs === true || !verified || numOrNull(eff.steps_per_period) === null
       || numOrNull(eff.gap_layers) === null ? null : sigOrNull(mp.sig);
     return { preset: custom ? 'custom' : (typeof mp.name === 'string' ? mp.name : null),

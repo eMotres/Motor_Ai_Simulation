@@ -71,3 +71,15 @@ test('no UI string or comment claims a complete-settings identity or a stale-dis
     assert.ok(!/full settings|complete settings|COMPLETE settings/i.test(readFileSync(new URL(f, root), 'utf8')), f);
   }
 });
+
+test('the Compare delta row and its column maxima follow the same sweep exclusion as the ranking', () => {
+  const src = readFileSync(new URL('../../components/compare/ComparePanel.tsx', import.meta.url), 'utf8');
+  const a = src.indexOf('const comparisonPercentValue');
+  assert.ok(src.slice(a, a + 400).includes('selSweepMixed && isSweepRow'));
+  assert.ok(/extentVals\(r, selSweepMixed \? selected\.filter\(s => !isSweepRow/.test(src));
+});
+
+test('the gap-rows field takes whole numbers only', () => {
+  const src = readFileSync(new URL('../../components/sweep/RunSettingsBar.tsx', import.meta.url), 'utf8');
+  assert.ok(src.includes('Number.isInteger'));
+});

@@ -3432,8 +3432,8 @@ def _stamp_solved(rec, points):
             eff[field] = None
             mixed = True
     rec["effective"], rec["effective_source"], rec["n_points_reporting"] = eff, src, n_rep
-    if not any(v == "solved" for v in src.values()):
-        rec["sig"] = None           # nothing was verified by the solve: the identity is unknown, never the requested one
+    if not (src.get("steps_per_period") == "solved" and src.get("gap_layers") == "solved"):
+        rec["sig"] = None           # the identity needs BOTH numbers verified by the solve; one requested value makes it unknown
     if differs:
         rec["solved_differs"] = True
     if mixed:
@@ -4735,6 +4735,9 @@ def _msum(m: Dict[str, Any]) -> Dict[str, Any]:
         "THD_LL_pct":      m.get("THD_LL_pct"),      # line-to-line voltage THD (FOC)
         "Kt_Nm_per_Arms":  m.get("Kt_Nm_per_Arms"),
         "current_a":       m.get("current_a"),   # current the design was solved at
+        # the steps (as snapped) and gap rows (as used) the solver reports: the run's solved pair is stamped from these
+        "n_steps_per_period_solved": m.get("n_steps_per_period_solved"),
+        "gap_layers_per_side": m.get("gap_layers_per_side"),
         "cogging_sampling_purpose": m.get("cogging_sampling_purpose"),
         "cogging_raw_samples_per_cycle": m.get("cogging_raw_samples_per_cycle"),
         "cogging_cycles_per_electrical_period": m.get("cogging_cycles_per_electrical_period"),
@@ -4769,6 +4772,9 @@ def _pt(out: Dict[str, Any], kind: str):
             # of them can still be reconstructed instead of dropped).
             "mass": r.get("mass_total_kg"),
             "thd": r.get("THD_LL_pct"),      # line-to-line voltage THD (FOC quality)
+            # what the solver reported for this point (steps as snapped, gap rows as used): the run's solved pair
+            "n_steps_per_period_solved": r.get("n_steps_per_period_solved"),
+            "gap_layers_per_side": r.get("gap_layers_per_side"),
             # The columns the run's own table shows.  A cloud point used to carry
             # only what the 2-D scatter plots, so the table under it could not
             # say WHY a design scored well — losses, terminal voltage and current
@@ -5312,6 +5318,11 @@ def _publish_standard_final(result: Dict[str, Any], validation: Dict[str, Any],
     public["failed"] = validation.get("failed") or []
     public["dropped_count"] = len(public["failed"])
     result["screening_best"] = result.get("best")
+    with _descent_lock:
+        _stamp_src = dict(_descent_state)
+    _stamped = _descent_solved_stamp(_stamp_src, points)
+    if isinstance(_stamped, dict):
+        result["mesh_preset"] = _stamped
     result["final_validation"] = public
     certified = validation.get("status") == "certified"
     if certified:
@@ -6543,6 +6554,20 @@ def descent_baseline(req: BaselineRequest):
     return {"baseline_line": _make_bline(a["res"], b["res"], bump)}
 
 
+def _descent_solved_stamp(st: Dict[str, Any], points: Optional[list] = None):
+    """The run's settings stamp of a Descent / Auto run with the steps and gap rows the solver REPORTED for its evaluated
+    candidates (the final validations, which keep their own purpose, are not counted); the launch stamp when the run has no
+    stamp or no eval parameters (a legacy request)."""
+    rec = st.get("mesh_preset")
+    ep = st.get("eval_params") or {}
+    if not isinstance(rec, dict) or "steps_per_period" not in ep:
+        return rec
+    base = _sweep_settings_record(rec, int(ep["steps_per_period"]), float(ep.get("gap_layers") or 1.0))
+    pts = [p for p in (points if points is not None else (st.get("points") or []))
+           if isinstance(p, dict) and not str(p.get("kind") or "").startswith("final")]
+    return _stamp_solved(base, pts)
+
+
 def _with_pareto(st: Dict[str, Any]) -> Dict[str, Any]:
     """Annotate a state SNAPSHOT with Pareto-dominance flags + a summary.
 
@@ -6573,7 +6598,10 @@ def descent_progress():
         # that is how it expires when the hosting process dies.
         if not _descent_state.get("running") or _descent_external[0]:
             _refresh_descent_state_from_disk()
-        return _json_sane(_with_pareto(dict(_descent_state)))
+        out = _with_pareto(dict(_descent_state))
+        if isinstance(out.get("mesh_preset"), dict):
+            out["mesh_preset"] = _descent_solved_stamp(out)
+        return _json_sane(out)
 
 
 @router.post("/descent/cancel")
@@ -7917,6 +7945,7 @@ def _auto_assemble(max_ripple_pct: float, budget_evals: int = 0,
             "operating_point": {"current_a": I, "rpm": rpm, "gamma_deg": gamma,
                                 "connection": _conn, "n_parallel": _npar},
             "eval": ev,
+            **({"run_settings": _run_settings_stamp(run_settings, _rs_resolved)} if _rs_resolved else {}),
             "variables": variables,
             # searched-out by a manufacturing floor (optimization/manufacturing.py)
             "excluded_variables": excluded_vars,

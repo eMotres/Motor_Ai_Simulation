@@ -124,6 +124,10 @@ def resolve(preset: Optional[str], overrides: Optional[Mapping[str, Any]], cfg: 
             settings[k] = int(n)
         else:
             x = _num(k, raw)
+            if k in ("steps_per_period", "gap_layers") and x != int(x):
+                # a count of rows / frames: the presets hold whole numbers, the Mesh tab and the stored configs use 1 and 2; a
+                # fraction would give two digests (and two displays) for ONE eval-cache key
+                raise RunSettingsError("%s is a count and must be a whole number, got %r" % (k, raw))
             if k in ("steps_per_period", "gap_layers"):
                 used = _bound(k, x, mode, "override", clamps)
             else:

@@ -257,8 +257,7 @@ def test_the_entity_scan_is_linear_on_long_names_spaces_and_open_strings(tmp_pat
 
 
 @pytest.mark.parametrize("raw, shown", [
-    ("Core:1", "Core:1"), ("  Stator_holder
-:1 ", "Stator_holder :1"), ("", ""), (None, ""), ("NAUO12", ""), ("=>[0:1:1:2]", ""),
+    ("Core:1", "Core:1"), ("  Stator_holder\n:1 ", "Stator_holder :1"), ("", ""), (None, ""), ("NAUO12", ""), ("=>[0:1:1:2]", ""),
     ("0:1:1:2", ""), ("SOLID", ""), ("COMPOUND", ""), ("Solid rotor", "Solid rotor"), ("x" * 300, "x" * 120),
 ])
 def test_a_component_name_is_one_short_line_and_a_generated_one_is_dropped(raw, shown):

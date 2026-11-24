@@ -2,7 +2,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { DEFAULT_RECORD, validRecord, choosePreset, withOverride, withoutOverride, answerKey, runSettingsBody } from '../runSettings.ts';
+import { DEFAULT_RECORD, validRecord, choosePreset, withOverride, withoutOverride, answerKey, runSettingsBody, baselineBody } from '../runSettings.ts';
 
 test('the default record is the Optimization preset with no overrides', () => {
   assert.deepEqual(DEFAULT_RECORD, { preset: 'optimization', overrides: {} });
@@ -82,4 +82,24 @@ test('the Compare delta row and its column maxima follow the same sweep exclusio
 test('the gap-rows field takes whole numbers only', () => {
   const src = readFileSync(new URL('../../components/sweep/RunSettingsBar.tsx', import.meta.url), 'utf8');
   assert.ok(src.includes('Number.isInteger'));
+});
+
+test('an old stored record drops hi_fidelity and any key the resolver does not accept, keeps the accepted ones', () => {
+  const v = validRecord({ preset: 'optimization', overrides: { hi_fidelity: false, steps_per_period: 96, gap_layers: 2, demag: true, rotor_eddy: false, mesh_size_mm: 1.5, min_size_mm: 0.2, n_sectors: 2, element_order: 2, junk: 1 } });
+  assert.deepEqual(v, { preset: 'optimization', overrides: { steps_per_period: 96, gap_layers: 2, demag: true, rotor_eddy: false, mesh_size_mm: 1.5, min_size_mm: 0.2, n_sectors: 2 } });
+  assert.deepEqual(validRecord({ preset: 'simulation', overrides: { hi_fidelity: true } }), { preset: 'simulation', overrides: {} });
+  // the wrong type for a key is dropped too (the resolver refuses a number for a switch and the reverse)
+  assert.deepEqual(validRecord({ preset: 'simulation', overrides: { rotor_eddy: 1, steps_per_period: true } }), { preset: 'simulation', overrides: {} });
+});
+
+test('the Draw baseline body carries the resolved steps and gap rows and the record, nothing from the stored Mesh tab', () => {
+  const shown = { sig: 5, settings: { steps_per_period: 96, gap_layers: 2, n_sectors: 2, mesh_size_mm: 1, min_size_mm: 0.1 } };
+  const b = baselineBody({ operating_point: { current_a: 10 }, current_bump_pct: 10 }, choosePreset('simulation'), shown);
+  assert.equal(b.steps_per_period, 96);
+  assert.equal(b.gap_layers, 2);
+  assert.equal(b.n_sectors, 2);
+  assert.deepEqual(b.run_settings, { preset: 'simulation', overrides: {}, expect_sig: 5 });
+  const src = readFileSync(new URL('../../stores/motorStore.ts', import.meta.url), 'utf8');
+  const fn = src.slice(src.indexOf('computeBaselineLine: async'), src.indexOf('cancelDescent: async'));
+  assert.ok(fn.includes('baselineBody(') && !/storedGapLayers|mesh\.meshSize|mesh\.minSize|sim\.fieldLosses/.test(fn));
 });

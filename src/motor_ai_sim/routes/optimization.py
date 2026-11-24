@@ -4769,6 +4769,7 @@ class BaselineRequest(BaseModel):
     end_winding_factor: float = 0.0
     n_sectors: int = -1
     element_order: int = 2         # P2 by default — the baseline line must use the same basis as the descent
+    run_settings: Optional[RunSettingsIn] = None   # the Descent panel's resolved run settings: when present the ONLY source of steps, gap rows, mesh sizes, sectors, rotor eddy, element order
 
 
 def _msum(m: Dict[str, Any]) -> Dict[str, Any]:
@@ -6583,12 +6584,16 @@ def descent_baseline(req: BaselineRequest):
     'current-only' trade-off line A–B, so the objective-space chart can draw it
     BEFORE a full optimization.  Runs synchronously (2 evals); returns the line +
     auto-weights via _make_bline (same as a descent computes internally)."""
+    _rs_rec = None
+    if req.run_settings is not None:        # the SAME resolve a Descent run does: the baseline is drawn with the run's settings
+        _resolved = _resolve_run_settings(req.run_settings, "descent")
+        req = _apply_run_settings(req, _resolved)
+        _rs_rec = _run_settings_stamp(req.run_settings, _resolved)
     I    = float(req.operating_point.current_a)
     g    = float(req.operating_point.gamma_deg)
     bump = max(0.0, min(float(req.current_bump_pct), 100.0))
     steps     = max(8, min(int(req.steps_per_period), 180))
-    mesh_size = max(1.0, min(float(req.mesh_size_mm), 12.0))
-    min_size  = max(0.1, min(float(req.min_size_mm), 3.0))
+    mesh_size, min_size, _ = _mesh_sizes(req, _rs_rec)
     gap       = max(1.0, min(_resolve_gap_layers(req.gap_layers)[0], 8.0))
     n_sectors = int(req.n_sectors)
 

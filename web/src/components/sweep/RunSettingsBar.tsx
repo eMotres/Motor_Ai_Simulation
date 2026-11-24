@@ -35,6 +35,7 @@ const RunSettingsBar: React.FC<{ rs: RunSettingsState; dense?: boolean }> = ({ r
   const label = r ? (r.custom ? tx('runSettingsCustom') : `${r.preset_label} ${tx('runSettingsPresetWord')}`) : '';
   const diff = r ? Object.entries(r.differs).map(([k, d]) => `${k}: ${String(d.current)} (${r.preset_label} ${String(d.preset)})`) : [];
   const clamps = r ? r.clamps.map(c => `${c.key}: ${String(c.requested)} → ${String(c.used)} (${c.reason})`) : [];
+  const fin = r?.finalist_note ? [tx('runSettingsFinalists', { n: r.finalist_note.min_steps, run: r.finalist_note.run_steps })] : [];
   const field = (key: 'steps_per_period' | 'gap_layers', name: string, width: number) => (
     <TextField label={name} type="number" size="small" disabled={!r} value={st ? st[key] : ''}
       onChange={e => { const v = Number(e.target.value); if (Number.isInteger(v) && e.target.value !== '') rs.setOverride(key, v); }}
@@ -42,7 +43,7 @@ const RunSettingsBar: React.FC<{ rs: RunSettingsState; dense?: boolean }> = ({ r
       InputLabelProps={{ sx: { fontSize: 11 } }} />
   );
   return (
-    <Tooltip placement="top" title={<span style={{ whiteSpace: 'pre-line' }}>{[tx('runSettingsHelp'), ...diff, ...clamps].join('\n')}</span>}>
+    <Tooltip placement="top" title={<span style={{ whiteSpace: 'pre-line' }}>{[tx('runSettingsHelp'), ...diff, ...clamps, ...fin].join('\n')}</span>}>
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75, flexWrap: 'wrap', mb: 1 }}>
         <Typography sx={{ fontSize: dense ? 11 : 12, color: 'var(--text-2)' }}>{tx('runSettingsLabel')}</Typography>
         {(['optimization', 'simulation'] as const).map(n => (

@@ -298,6 +298,7 @@
   "runSettingsOn": "on",
   "runSettingsOff": "off",
   "runSettingsAdjusted": "adjusted",
+  "runSettingsFinalists": "finalists are solved with at least {n} steps per period (cogging quality); the run itself uses {run}",
   "runSettingsMachine": "stored on the machine",
   "runSettingsHelp": "Steps per period and gap rows are exactly what this run uses: a preset button sets both, typing in a field overrides it and the label reads custom (the label is about these two numbers only). The other settings are shown read-only with where they come from. These run settings never change the Simulation or Mesh tab.",
   "runSettingsStale": "The run settings changed since they were shown. They are refreshed; check them and press Run again.",

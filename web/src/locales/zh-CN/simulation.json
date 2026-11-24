@@ -298,6 +298,7 @@
   "runSettingsOn": "开",
   "runSettingsOff": "关",
   "runSettingsAdjusted": "已调整",
+  "runSettingsFinalists": "终选方案按至少 {n} 步每周期求解（齿槽转矩质量）；本次运行本身使用 {run} 步",
   "runSettingsMachine": "取自电机已存设置",
   "runSettingsHelp": "每周期步数和气隙层数即为本次运行实际使用的值：预设按钮同时设置两者，在输入框中键入则覆盖并显示为自定义（标签仅针对这两个数）。其他设置以只读方式显示并注明来源。这些运行设置不会改变仿真或网格标签页。",
   "runSettingsStale": "运行设置在显示后发生了变化，已刷新；请检查后再次点击运行。",

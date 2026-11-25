@@ -111,16 +111,26 @@ def _records() -> List[Dict[str, Any]]:
     return out
 
 
-def measured_k_T(fingerprint: Optional[str], geo: Optional[Dict[str, Any]] = None
-                 ) -> Optional[Dict[str, Any]]:
+def measured_k_T(fingerprint: Optional[str], geo: Optional[Dict[str, Any]] = None,
+                 stack_mm: Optional[float] = None) -> Optional[Dict[str, Any]]:
     """The measured k_T for this geometry: exact fingerprint first; else one
     measured on an earlier geometry of the SAME machine (slots, poles, OD
     within 0.5 mm) at the SAME stack length (within 5 %), flagged inherited.
-    None when neither exists."""
+    None when neither exists.
+
+    ``stack_mm`` (the length the factor is wanted at): an exact-fingerprint record measured at another stack length
+    (more than 5 % off, or unrecorded) is NOT returned - the torque factor of a 40 mm stack is not that of a 200 mm
+    one; the same-machine rule below then looks for a record at this length."""
     recs = _records()
     fp = str(fingerprint or "")
     for r in recs:
         if fp and r["fingerprint"] == fp:
+            if stack_mm:
+                try:
+                    if abs(float(r["stack_mm"]) - float(stack_mm)) > 0.05 * float(stack_mm):
+                        continue
+                except (TypeError, ValueError, KeyError):
+                    continue
             return {"k_T": r["k_T"], "source": r["source"], "inherited": False}
     g = geo or {}
     try:
@@ -129,7 +139,9 @@ def measured_k_T(fingerprint: Optional[str], geo: Optional[Dict[str, Any]] = Non
         poles = int(g.get("num_poles") or 0) or ns * int(g.get("num_poles_per_segment") or 0)
         od = float(g.get("stator_diameter") or 0.0) or 2.0 * float(
             g.get("stator_outer_radius") or 0.0)
-        L = float(g.get("motor_length") or 0.0)
+        # the length the factor is wanted at (the argument) wins over the geometry's own; a geometry without
+        # motor_length still matches by the argument
+        L = float(stack_mm or 0.0) or float(g.get("motor_length") or 0.0)
     except (TypeError, ValueError):
         return None
     if not (slots and poles and od and L):
@@ -186,10 +198,15 @@ def enrich(end3d: Optional[Dict[str, Any]], fingerprint: Optional[str],
     out = dict(end3d)
     if _num(out.get("k_T")) is None:
         # a passport inherited from an earlier geometry looks its k_T up
-        # under that geometry's fingerprint first
-        m = measured_k_T(out.get("inherited_from") or fingerprint, geo)
+        # under that geometry's fingerprint first - but only a k_T measured at THIS stack length (5 %) may ride with
+        # it; a passport lent on the length curve (another length) carries k_flux only
+        want = _num(out.get("inherited_for_stack_mm")) if out.get("inherited") else None
+        m = measured_k_T(out.get("inherited_from") or fingerprint, geo, stack_mm=want)
         if m is None and out.get("inherited_from"):
-            m = measured_k_T(fingerprint, geo)
+            m = measured_k_T(fingerprint, geo, stack_mm=want)
+        if m and out.get("inherited") and not m.get("inherited"):
+            m = {**m, "inherited": True,
+                 "inherited_note": "measured on an earlier geometry of this machine at this stack length - used until it is re-measured"}
         if m:
             out["k_T"] = m["k_T"]
             out["k_T_source"] = m["source"]
@@ -200,3 +217,47 @@ def enrich(end3d: Optional[Dict[str, Any]], fingerprint: Optional[str],
     out["k_torque"] = k
     out["torque_basis"] = basis
     return out
+
+
+#: ``k_flux_vs_L_method`` values whose per-length rows are right (``simulation.static3d.end_effect.K_FLUX_VS_L_*``).
+#: A table with more than one row and without one of these was written before the 2026-11-24 fix: every row but the
+#: reference one used the REFERENCE length's 3-D mid-plane / 2-D ratio, so k_flux(L) came out nearly flat in L.
+#: "self_applied": the rows are k_flux_self, stored when the scalar applied is k_flux_self (end3d_verdict.applied_table)
+K_FLUX_VS_L_METHODS_OK = frozenset({"own_mid_ratio", "self_no_2d", "self_applied"})
+#: The one short flag a reader shows for such a table (EN; the web carries its own EN + zh-CN string).
+STALE_KL_FLAG = "k(L) computed before 2026-11-24: recompute"
+
+
+def k_flux_table(end3d: Optional[Dict[str, Any]]) -> Tuple[Dict[float, float], bool]:
+    """``(table, stale)``: the per-length table ``{stack_mm: k_flux}`` a reader may interpolate, and whether a stored
+    table was refused as stale.
+
+    - a table whose ``k_flux_vs_L_method`` is in :data:`K_FLUX_VS_L_METHODS_OK`, or one with a single row (that row is
+      the passport's own length = its scalar ``k_flux``), is returned as it is, ``stale = False``;
+    - a multi-row table without the marker (or with an unknown one) is stale: only its REFERENCE row is kept,
+      ``({L_ref: k_flux}, True)`` - that row was always right and equals the scalar ``k_flux``.  The reference length is
+      the entry's ``stack_mm`` when recorded, else the one row whose value is the scalar (the stores round it to 5
+      decimals); when neither identifies it the answer is ``({}, True)``.  The reader then uses the scalar at every
+      length and shows :data:`STALE_KL_FLAG`.  Marked and unmarked rows are never mixed: the marker is the table's.
+
+    Rows that are not finite numbers are dropped (as every reader did)."""
+    e = end3d if isinstance(end3d, dict) else {}
+    raw = e.get("k_flux_vs_L")
+    rows: Dict[float, float] = {}
+    if isinstance(raw, dict):
+        for a, b in raw.items():
+            x, y = _num(a), _num(b)
+            if x is not None and y is not None and math.isfinite(x) and math.isfinite(y):
+                rows[x] = y
+    if len(rows) <= 1:
+        return rows, False
+    if str(e.get("k_flux_vs_L_method") or "") in K_FLUX_VS_L_METHODS_OK:
+        return rows, False
+    k = _num(e.get("k_flux"))
+    if k is None or not math.isfinite(k):
+        return {}, True
+    own = _num(e.get("stack_mm"))
+    if own is not None and own > 0:
+        return {own: k}, True
+    ref = [x for x, y in rows.items() if abs(y - k) <= 5e-6]
+    return ({ref[0]: k} if len(ref) == 1 else {}), True

@@ -359,8 +359,13 @@ def eigen_modes(K, M, n_modes: int, n_rigid_expected: int = 3
     k = int(n_modes) + n_exp
     k = max(1, min(k, ndof - 2))
     scale = float(K.diagonal().sum() / max(M.diagonal().sum(), 1e-300))
+    # A FIXED start vector (2026-11-25): ARPACK's default is random, so two
+    # solves of the same rotor differed in the last bits of every frequency and
+    # in the sign of every shape.  A seeded generic vector keeps the answer the
+    # same to those bits and makes it reproducible.
+    v0 = np.random.default_rng(0).standard_normal(ndof)
     vals, vecs = spla.eigsh(K.tocsc(), k=k, M=M.tocsc(),
-                            sigma=-1e-3 * scale, which="LM")
+                            sigma=-1e-3 * scale, which="LM", v0=v0)
     o = np.argsort(vals)
     vals, vecs = vals[o], vecs[:, o]
     n_rigid = 0
@@ -728,11 +733,18 @@ def solve_modes(polys: dict,
 
     _t_mesh = time.perf_counter()
     if body == "rotor":
+        # a pocket drawn with a clearance (2026-11-25): the magnet is bonded
+        # across the clearance ring, drawn air beyond it stays air — the same
+        # object for every other machine (see ``pocket_clearance``)
+        from motor_ai_sim.simulation.mechanical import pocket_clearance as _pkc
+        polys = _pkc.bonded_variant(polys)
         rm = build_rotor_mesh(polys, mesh_size_mm=mesh_size_mm,
                               progress=lambda d, t, ph=None, c=None: led.at(d, ph))
         mesh, part_tri, outlines = rm.mesh, rm.part_tri, rm.outlines
         mech = resolve_part_materials(assignments, polys.get("sleeve") is not None,
                                       material_overrides)
+        # …its density scaled to the drawn magnet's mass
+        mech = _pkc.scaled_mechs(mech, polys)
         ne = mesh.t.shape[1]
         p = mesh.p.T
         cen = (p[mesh.t[0]] + p[mesh.t[1]] + p[mesh.t[2]]) / 3.0
@@ -893,6 +905,11 @@ def solve_modes(polys: dict,
                "walls." if body == "stator" and m_cu > 0 else
                "no winding mass on this body.")),
     }
+    if body == "rotor":
+        from motor_ai_sim.simulation.mechanical import pocket_clearance as _pkc
+        _pk = _pkc.summary(polys, _pkc.RULE_MODAL)
+        if _pk is not None:
+            out["pocket_clearance"] = _pk
     if with_shapes:
         ext = float(np.abs(pts_mm).max())
         out["field"] = {

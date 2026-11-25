@@ -270,6 +270,7 @@
     "incompleteTip": "Standard name incomplete; missing: {missing}",
     "old": "old",
     "oldTip": "Another motor with the same designation and the same application is the one a project or production links; this copy is old",
+    "oldArchiveTip": "click to archive this copy",
     "production": "production {rev}",
     "computed": "computed",
     "loadTip": "Load this motor at its default mode",
@@ -352,7 +353,8 @@
       "open": "Open the project",
       "active": "Set Active",
       "parked": "Park",
-      "archived": "Archive"
+      "archived": "Archive",
+      "item": "{project}: {action}"
     },
     "recordTip": "Stored record {name}: {n, plural, one {# motor} other {# motors}} of this sheet; its lock and menu are beside it",
     "newestShort": "newest",
@@ -363,8 +365,9 @@
       "projectTip": "Show only the motors these projects link",
       "running": "Running",
       "runningTip": "Show only the motors a computation or optimisation runs for now",
-      "onlyHighlighted": "Only {project}",
-      "onlyHighlightedTip": "Show only the motors of the project chosen in the project selector",
+      "highlightedRow": "★ {project}",
+      "showOld": "Show old ({n})",
+      "showOldTip": "Active hides the motors marked old (a project or production links their twin); turn on to show them",
       "sets": "My filters",
       "setsTip": "Saved filter sets: pick one, or save the current filters under a name (kept for your account in this browser)",
       "deleteSet": "Delete the set {name}",
@@ -374,6 +377,19 @@
       "saveCurrent": "＋ Save the current filters…",
       "count": "{shown} of {total} motors",
       "clear": "Clear"
-    }
+    },
+    "archiveMotor": "Archive"
+  },
+  "configArchive": {
+    "title": "Archive {die} / {config}",
+    "reason": "Reason",
+    "hint": "It leaves every list for everybody; nothing is deleted and Restore brings it back. Refused while a project links it, it has a Production record or a job runs on it.",
+    "confirm": "Archive",
+    "done": "{die} / {config} archived",
+    "restored": "{die} / {config} restored",
+    "show": "Show archived ({n})",
+    "open": "Open",
+    "restore": "Restore",
+    "reasonRequired": "A reason is required"
   }
 }

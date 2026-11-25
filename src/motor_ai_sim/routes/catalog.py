@@ -187,6 +187,13 @@ def get_catalog(authorization: Optional[str] = Header(default=None)):
         cat["by_diameter"] = {d: [i for i in ids
                                   if any(m["id"] == i for m in cat["motors"])]
                               for d, ids in cat["by_diameter"].items()}
+    else:
+        # the LISTING leaves an archived configuration's card out for admins too (configuration archive, 2026-11-22); an
+        # admin's direct card reads (load, passport) still find it
+        from motor_ai_sim import motor_access as _ma
+        cat["motors"] = _ma._drop_archived_cards(cat.get("motors", []), admin=True)
+        cat["by_diameter"] = {d: [i for i in ids if any(m["id"] == i for m in cat["motors"])]
+                              for d, ids in cat["by_diameter"].items()}
     return cat
 
 
@@ -852,9 +859,21 @@ def generate_motor_passport(motor_id: str, coarse: bool = False,
     # The tuner rescales this passport analytically (no FEM) as the user moves
     # KV (turns/connection) and the lamination length — so the 3D correction
     # must ride WITH the passport, as k_flux over a few STACK LENGTHS for the
-    # length slider to interpolate.  Store hit is free; a miss costs three
-    # quick Stage A solves (~30-60 min, admin-side, once per catalog motor).
+    # length slider to interpolate.  Store hit is free; a miss costs four or five
+    # quick Stage A solves (l_factors 'auto' plus a 0.75 row: Configure's k(L) and the
+    # passport lending need a row below the stack) (~30-60 min each on large machines).
     # coarse=true never solves — it attaches a store hit or an honest null.
+    class _Stage3DAsJob(Exception):
+        """The catalogue child refused the 3-D sweep as too long for its timeout (end3d_cost)."""
+        def __init__(self, estimate):
+            super().__init__("3-D passport: run as a job")
+            self.estimate = estimate
+
+    def _e3_applied(sa):
+        # the applied scalar, the raw k_flux, basis / verdict / status and the applied table (end3d_verdict)
+        from motor_ai_sim.end3d_verdict import store_fields
+        return store_fields(sa)
+
     try:
         from motor_ai_sim.routes.simulation import (_geometry_fingerprint,
                                                     _end3d_lookup)
@@ -893,17 +912,28 @@ def generate_motor_passport(motor_id: str, coarse: bool = False,
                 "    from motor_ai_sim.material_context import set_request_materials\n"
                 "    set_request_materials({'assignment': mats, 'materials': {}})\n"
                 "from motor_ai_sim.simulation.static3d.end_effect import run_stage_a\n"
+                "# cost first (end3d_cost): a sweep that cannot finish inside this child's\n"
+                "# timeout is not started; the passport ships 2-D and the 3-D runs as a job\n"
+                "from motor_ai_sim.end3d_cost import preflight\n"
+                "est = preflight(geo_override=g, n_stack=4, n_cap=6, auto_extra=(0.75,))\n"
+                "# plan: 'auto' (auto rows + 0.75), 'three_row' (0.75 / 1 / 1.5) or 'job'\n"
+                "if est['plan'] == 'job':\n"
+                "    print('PASSPORT3D_JOB:' + json.dumps(est, default=float))\n"
+                "    raise SystemExit(0)\n"
                 "# mesh sizes: run_stage_a derives them from the PHYSICAL\n"
                 "# scales (air gap, thinnest magnet), never from the OD\n"
                 "p = run_stage_a(geo_override=g, n_stack=4, n_cap=6,\n"
-                "                order=2, l_factors=(0.75, 1.0, 1.5),\n"
+                "                order=2, l_factors=tuple(est['l_factors']),\n"
                 "                do_bracket=False, do_2d=True,\n"
                 "                tol=3e-3, max_iter=45, verbose=False)\n"
                 "mm = p.get('machine') or {}\n"
                 "md = p.get('model') or {}\n"
                 "out = {k: p.get(k) for k in ('k_flux', 'k_flux_self',\n"
-                "                             'generated_utc', 'l_stack_curve')}\n"
+                "                             'generated_utc', 'l_stack_curve',\n"
+                "                             'k_flux_vs_L_method', 'two_d', 'version')}\n"
                 "out['materials'] = mm.get('materials')\n"
+                "out['plan'] = est['plan']\n"
+                "out['estimate'] = {k: est.get(k) for k in ('seconds', 'seconds_worst', 'rows')}\n"
                 "out['mesh'] = {k: md.get(k) for k in ('h_gap_mm', 'h_solid_mm',\n"
                 "               'mesh_rule', 'box_z_mm', 'iron_stack_kf')}\n"
                 "print('PASSPORT3D:' + json.dumps(out, default=float))\n")
@@ -931,21 +961,29 @@ def generate_motor_passport(motor_id: str, coarse: bool = False,
                     _P2(_mfile).unlink()
                 except OSError:
                     pass
-            _line = next((ln for ln in (_pr.stdout or "").splitlines()
-                          if ln.startswith("PASSPORT3D:")), None)
-            if _pr.returncode != 0 or not _line:
+            from motor_ai_sim.end3d_cost import parse_child_output
+            _kind, _ans = parse_child_output(_pr.stdout, _pr.returncode)
+            if _kind == "job":
+                # too long for this child (end3d_cost): 2-D passport + the note; the full Stage A is a job
+                # (scripts/stage_a_job.py, adopted through POST /api/static3d/passport/adopt)
+                raise _Stage3DAsJob(_ans)
+            if _kind != "ok":
                 raise RuntimeError(
                     "stage-A subprocess failed (rc=%s): %s"
                     % (_pr.returncode, (_pr.stderr or "")[-400:]))
-            _sa = _j2.loads(_line[len("PASSPORT3D:"):])
+            _sa = _ans
             _e3 = {
-                "k_flux": _sa["k_flux"], "k_flux_self": _sa["k_flux_self"],
-                "fidelity": "quick (n_stack=4, 3-point L-sweep)",
+                # the factor to apply, decided once from the run's 2-D verdict; the raw k_flux beside it
+                **_e3_applied(_sa),
+                "fidelity": ("quick (n_stack=4, %s L-sweep)" % ("auto" if _sa.get("plan") == "auto"
+                                                                  else "3-point 0.75/1/1.5")),
                 "generated_utc": _sa.get("generated_utc"),
                 "machine": f"{result['slots']}s/{result['poles']}p "
                            f"OD {2*result['geo']['statorOR_mm']:.0f}",
-                "k_flux_vs_L": {str(e["stack_mm"]): round(e["k_flux"], 5)
-                                for e in (_sa.get("l_stack_curve") or [])},
+                # the passport's own length (the reference row of the sweep): readers need it to tell the scalar's length
+                **({"stack_mm": float(machine["geometry"]["motor_length"])}
+                   if (machine.get("geometry") or {}).get("motor_length") else {}),
+                # k_flux_vs_L / k_flux_vs_L_method / k_flux_vs_L_raw come from _e3_applied (the applied table)
                 # provenance: the steel actually solved and the mesh rule, so
                 # a wrong-material passport can be found later
                 "materials": _sa.get("materials"),
@@ -957,8 +995,18 @@ def generate_motor_passport(motor_id: str, coarse: bool = False,
         result["passport"]["end3d"] = (
             None if _e3 is None else
             {"k_flux": _e3["k_flux"],
+             **({"stack_mm": _e3["stack_mm"]} if _e3.get("stack_mm") else {}),
              "k_flux_vs_L": _e3.get("k_flux_vs_L") or None,
+             **({"k_flux_vs_L_method": _e3["k_flux_vs_L_method"]}
+                if _e3.get("k_flux_vs_L_method") else {}),
+             **({"k_flux_status": _e3["k_flux_status"]} if _e3.get("k_flux_status") else {}),
              "fidelity": _e3.get("fidelity")})
+    except _Stage3DAsJob as _job_exc:
+        from motor_ai_sim.end3d_cost import job_note_fields
+        est = _job_exc.estimate
+        log.info("catalog passport: 3-D sweep estimated %.0f s > %.0f s budget (%s rows, %s dofs) - shipped 2-D, "
+                 "run Stage A as a job", est.get("seconds", 0), est.get("budget_s", 0), est.get("rows"), est.get("dofs"))
+        result["passport"].update(job_note_fields(est))
     except Exception:  # noqa: BLE001 — a 3D failure must not lose the 2D passport
         log.exception("catalog passport: 3D end-effect attach failed — "
                       "the passport ships without it (Configure shows 2D)")
@@ -1110,7 +1158,9 @@ def _visible_context(ctx: Dict[str, Any], acc: dict) -> Dict[str, Any]:
         cfg = str(pr.get("config") or "")
         try:
             row = info.get(cfg)
-            if isinstance(row, (list, tuple)) and len(row) == 4:
+            if acc.get("is_admin"):
+                ok = True                  # an admin opens every preset, an archived configuration's too (config archive, 2026-11-22)
+            elif isinstance(row, (list, tuple)) and len(row) == 4:
                 ok = _ma.may_see_config_file(acc, str(row[0]), str(row[1]), Path(str(row[2])), layer=row[3])
             else:
                 ok = bool(cfg) and _ma.config_allowed(acc, str(pr.get("die") or ""), cfg)

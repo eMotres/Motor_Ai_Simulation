@@ -42,13 +42,20 @@ t('the same hostile and foreign addresses the server refuses', () => {
     '/', '/?verify=abc', '/agent-consent?request=1', '/admin', '/api/auth/logout', '/production', '/projects', '/projects/', '/projects/Bad_Id',
     '//evil.com/production/a/b/documents', '//evil.com/projects/p1', '/production/../admin/x/documents', '/production/a/..%2fb/documents',
     '/production/a%2Fb/c/documents', '/production/a%5Cb/c/documents', '/production/%2e%2e/b/documents', '/production//b/documents',
-    '/production/a/b/documents?since=yesterday', '/production/a/b/documents?since=2026-13-45', '/production/a/b/documents?ids=a//b',
-    '/production/a/b/documents?ids=<script>', '/production/' + 'a'.repeat(90) + '/b/documents',
+    '/production/a/b/documents?since=yesterday', '/production/a/b/documents?since=2026-13-45',
+    '/production/' + 'a'.repeat(90) + '/b/documents',
     '/production/a/b/secrets', '/production/a/b/bom?since=2026-10-19', '/production/a/b/bom?ids=x', '/production/a/b/bom?item=<x>',
     '/projects/p1/admin', '/projects/p1/../p2', '/projects/p1//motors', '/projects/p1/motors?die=a', '/projects/p1/motors?config=a',
     '/projects/p1/motors?die=../x&config=y', '/projects/p1/motors?die=a&config=b&item=' + 'x'.repeat(90), '/projects/' + 'a'.repeat(70),
     '/projects/p1\\evil', '/production/a/b/documents\n', '/production/a/b/documents\u0000',
   ]) assert.equal(parse(p), null, p);
+});
+
+t('a malformed ids= list is parsed as an INVALID selection (the page says so), the server still refuses it as a return path', () => {
+  for (const p of ['/production/a/b/documents?ids=a//b', '/production/a/b/documents?ids=<script>']) {
+    const l = parse(p);
+    assert.equal(l.invalidIds, true, p); assert.equal(l.ids, undefined, p);
+  }
 });
 
 t('build refuses what the server would refuse', () => {

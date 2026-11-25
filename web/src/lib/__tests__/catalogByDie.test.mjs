@@ -148,6 +148,27 @@ test('the state filter: chips of other states hidden, a motor linked only to old
   assert.deepEqual(stateCounts(g), { active: 2, parked: 0, archived: 2, all: 3 });
 });
 
+test('Active hides the old motors unless "Show old" (owner 2026-11-25); a die left only with old motors goes; counts follow', async () => {
+  const { buildByDie, activeView, hideOld, oldInActive, stateCounts, motorCount, parseFilter } = await import('../catalogByDie.ts');
+  const ov = { items: { 'D/A': { projects: [{ id: 'p', link_status: 'current' }], productions: [] } },
+    projects: { p: { id: 'p', title: 'P', status: 'design', display: { state: 'active' } } }, productions: {} };
+  // A (linked) and B (same designation, unlinked) on D: B is old; E on its own die with the same designation: old too
+  const ds = [{ name: 'D', stator_diameter: 40, configs: [cfg('A', 'CIANO14 40_10 7F2SY'), cfg('B', 'CIANO14 40_10 7F2SY'), cfg('C', 'CIANO14 40_11 7F2SY')] },
+    { name: 'D old', stator_diameter: 40, configs: [cfg('E', 'CIANO14 40_10 7F2SY')] }];
+  const g = buildByDie(ds, ov);
+  const names = (x) => x.flatMap((f) => f.blocks.flatMap((b) => b.motors.map((m) => m.config))).sort();
+  assert.deepEqual(names(activeView(g, 'active', false)), ['A', 'C']);
+  assert.deepEqual(names(activeView(g, 'active', true)), ['A', 'B', 'C', 'E']);
+  assert.deepEqual(names(activeView(g, 'all', false)), ['A', 'B', 'C', 'E']);            // only the Active view hides them
+  assert.ok(hideOld(g).every((f) => f.blocks.every((b) => b.motors.length)));             // the block of "D old" is gone
+  assert.equal(oldInActive(g), 2);
+  assert.deepEqual(stateCounts(g, false), { active: 2, parked: 0, archived: 0, all: 4 });
+  assert.deepEqual(stateCounts(g), { active: 4, parked: 0, archived: 0, all: 4 });
+  assert.equal(motorCount(activeView(g, 'active', false)), stateCounts(g, false).active);  // the tab says what is shown
+  assert.equal(parseFilter({ showOld: true }).showOld, true);
+  assert.equal(parseFilter({ showOld: 'yes' }).showOld, false);
+});
+
 test('a job chip names kind, server, queued and progress', async () => {
   const { jobChip } = await import('../catalogByDie.ts');
   assert.equal(jobChip({ kind: 'optimisation', server: 'us', state: 'running', progress: { done: 12, total: 40 } }), 'optimisation · US · 12/40');
@@ -189,7 +210,7 @@ test('saved sets: named, replaced by name, sorted; stored values parsed back saf
   sets = upsertSet(sets, 'My current', { ...NO_FILTER, stages: ['in_production', 'simulation'] });
   assert.deepEqual(sets.map((s) => [s.name, s.filter.stages]), [['All production', ['in_production']], ['My current', ['in_production', 'simulation']]]);
   assert.equal(upsertSet(sets, '   ', NO_FILTER), sets);
-  assert.deepEqual(parseFilter({ state: 'bogus', stages: ['a', 3], running: 'yes' }), { state: 'active', stages: ['a'], projects: [], running: false, onlyHighlighted: false });
+  assert.deepEqual(parseFilter({ state: 'bogus', stages: ['a', 3], running: 'yes' }), { state: 'active', stages: ['a'], projects: [], running: false, onlyHighlighted: false, showOld: false });
   assert.equal(parseFilter(null), null);
   assert.deepEqual(parseSets([{ name: 'x', filter: { state: 'parked' } }, 7]).map((s) => [s.name, s.filter.state]), [['x', 'parked']]);
   assert.equal(parseSets('nope'), null);

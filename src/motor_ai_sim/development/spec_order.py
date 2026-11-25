@@ -99,7 +99,9 @@ def _own_project(user: dict, project_id: str) -> dict:
     """The caller's own project (a member of it), else ``OrderError`` - the same answer for "missing" and "not yours"."""
     pid = str(project_id or "").strip().lower()
     project = store.get_project(pid) if store.valid_id(pid) else None
-    if project is None or access.membership(_email(user), project) is None:
+    from motor_ai_sim.development import project_type as PT
+    if project is None or access.membership(_email(user), project) is None or PT.of(project) == PT.CONTROLLER:
+        # a controller project is internal (coordinator 2026-11-23): never reachable through the MCP order tools
         raise OrderError(f"project '{project_id}' not found among your projects (get_order_status lists them)")
     return project
 
@@ -898,7 +900,7 @@ def _row(user: dict, project: dict, lang: str, *, detail: bool = False) -> dict:
     state = _draft_state(pid, lang, with_answers=detail)
     last = _last_submission(pid)
     try:
-        unread_count = len(unread.unread_ids(pid, _email(user)))
+        unread_count = len(unread.unread_ids(pid, _email(user), user=user, agent=True))   # MCP: never a restricted message
     except Exception:                                    # noqa: BLE001 - a badge never breaks the status
         unread_count = 0
     row = {"project_id": pid, "title": project.get("title", ""), "customer_org": project.get("customer_org", ""),
@@ -931,7 +933,8 @@ def order_status(user: dict, project_id: Any = None, lang: Any = "en") -> dict:
     rows = []
     for pid in store.membership_projects(_email(user)):
         project = store.get_project(pid)
-        if project and access.membership(_email(user), project) is not None:
+        from motor_ai_sim.development import project_type as PT
+        if project and access.membership(_email(user), project) is not None and PT.of(project) != PT.CONTROLLER:
             rows.append(_row(user, project, lang))
     rows.sort(key=lambda r: str(r.get("updated_at") or ""), reverse=True)
     return {"projects": rows[:MAX_PROJECTS_LISTED], "count": len(rows),

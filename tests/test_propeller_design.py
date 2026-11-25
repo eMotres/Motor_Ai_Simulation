@@ -29,7 +29,7 @@ def with_profile(**limits):
 
 
 def test_design_file_content_and_what_is_unconfirmed():
-    assert D.id == "own_family" and D.diameters_in == (10, 11, 12, 13) and D.blades_options == [2, 3]
+    assert D.id == "own_family" and D.diameters_in == (10, 10.5, 11, 11.5, 12, 12.5, 13, 13.5, 14) and D.blades_options == [2, 3]
     assert sorted(D.operating_points) == ["L12", "L20"]
     assert D.operating_points["L12"].torque_limit_Nm == 0.64 and D.operating_points["L12"].rated_rpm_ref == 13628.1
     assert D.operating_points["L20"].torque_limit_Nm == 0.82 and D.operating_points["L20"].rated_rpm_ref == 13000.0
@@ -91,7 +91,7 @@ def test_validity_rules_name_the_variable():
     assert "root_cutout_inside_hub" in rules(hub_radius_mm=20.0, root_cutout_mm=12.0)
     assert "root_cutout_beyond_inner_zone" in rules(root_cutout_mm=60.0)
     assert "blades_not_offered" in rules(blades=4)
-    assert "diameter_not_in_family" in rules(diameter_in=14)
+    assert "diameter_not_in_family" in rules(diameter_in=14.5)
     assert "airfoil_not_offered" in rules(airfoil_tip="naca4-9909")
     v = seed()
     del v["hub_radius_mm"]
@@ -115,7 +115,7 @@ def test_variables_table_groups():
     by = {r["name"]: r for r in rows}
     assert by["chord_R@0.2"]["group"] == by["twist_deg@0.3"]["group"] == by["hub_radius_mm"]["group"] == "inner"
     assert by["chord_R@0.45"]["group"] == by["twist_deg@1"]["group"] == "outer"
-    assert by["blades"]["options"] == [2, 3] and by["diameter_in"]["options"] == [10, 11, 12, 13]
+    assert by["blades"]["options"] == [2, 3] and by["diameter_in"]["options"] == [10, 10.5, 11, 11.5, 12, 12.5, 13, 13.5, 14]
     assert all(r["confirmed"] is False for r in rows if r["group"] in ("inner", "outer"))
     assert len(rows) == len(pd.variable_names(D))
 

@@ -355,18 +355,34 @@ class TdmMemoryExceeded(RuntimeError):
     (transactional), so the container is not killed by the memory limit."""
 
 
+def sibling_evals() -> int:
+    """How many eval processes the pool runs AT THE SAME TIME as this one
+    (itself included): ``SB_TDM_SIBLINGS`` set by the sweep pool.  Unset,
+    unreadable or below 2 is 1, i.e. the guard behaves as it always did."""
+    try:
+        return max(1, int(os.environ.get("SB_TDM_SIBLINGS", "1")))
+    except (TypeError, ValueError):
+        return 1
+
+
 def memory_budget_bytes() -> Optional[int]:
     """Bytes this process may still grow by: the smaller of the cgroup limit and
     the free system memory, 85 %, minus what it already holds. ``None`` when
-    neither is readable (the guard then stays off)."""
+    neither is readable (the guard then stays off).
+
+    With ``SB_TDM_SIBLINGS`` = n > 1 the CONTAINER limit is shared by n evals
+    that start together and all keep their orbit factors alive: this process
+    may use 1/n of it (the free-memory reading is left as it is: it already
+    shrinks as the siblings grow)."""
     try:
         lim = []
+        sibs = sibling_evals()
         for f in ("/sys/fs/cgroup/memory.max",
                   "/sys/fs/cgroup/memory/memory.limit_in_bytes"):
             try:
                 v = open(f).read().strip()
                 if v.isdigit() and int(v) < (1 << 50):
-                    lim.append(int(v))
+                    lim.append(int(v) // sibs)
             except OSError:
                 pass
         try:
@@ -750,12 +766,21 @@ class TimePeriodicEddy:
         per = fac.kept_bytes()
         if per <= 0:
             return
-        need = per * self.N
+        # The budget is "RSS-relative" (it already subtracts what this process
+        # holds), and the RSS holds every factor built so far. Charging all N
+        # factors again would count the built ones twice (a 48-frame eval that
+        # fits its share was refused at frame ~25). So only the factors NOT
+        # yet built are charged; the one just factored is in the RSS. The
+        # counter is capped at N and never reset: on the later Newton passes
+        # every factor is already in the RSS and nothing more is charged.
+        built = min(self.N, int(getattr(self, "_mem_built", 0)) + 1)
+        self._mem_built = built
+        need = per * (self.N - built)
         left = memory_budget_bytes()
         if left is not None and need > left:
             self._mem_abort = (
-                "tdm_memory: %d frame factors of %.2f GB need %.1f GB, %.1f GB left; "
-                "the orbit is marched instead" % (self.N, per / 2**30, need / 2**30,
+                "tdm_memory: %d frame factors of %.2f GB, %d still to build need %.1f GB, %.1f GB left; "
+                "the orbit is marched instead" % (self.N, per / 2**30, self.N - built, need / 2**30,
                                                   max(left, 0) / 2**30))
             raise TdmMemoryExceeded(self._mem_abort)
 

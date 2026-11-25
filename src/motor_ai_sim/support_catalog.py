@@ -432,6 +432,20 @@ def _visitor_access() -> dict:
             "configs": frozenset()}
 
 
+def _archive_generation() -> tuple:
+    """The configuration archive's state as a cache key part: the store file's stamp (or "absent"); a damaged or unreachable
+    store gives a fresh key every time, so a stale digest is never reused while archive state is unknown."""
+    try:
+        from motor_ai_sim import config_archive as CA
+        st = CA.store_path().stat()
+        CA.archived_keys()                                  # raises for a damaged store
+        return (st.st_mtime_ns, st.st_size)
+    except FileNotFoundError:
+        return ("absent",)
+    except Exception:                                       # noqa: BLE001 - unknown state: never a cache hit
+        return ("unknown", time.monotonic())
+
+
 def _access_key(a: dict, visitor: bool) -> tuple:
     return ("visitor" if visitor else "user", str(a.get("mode")), bool(a.get("is_admin")),
             tuple(sorted(str(x) for x in (a.get("dies") or ()))),
@@ -460,7 +474,7 @@ def published_motors_block(authorization: Optional[str] = None, *, visitor: bool
         from motor_ai_sim import motor_access as MA
         from motor_ai_sim.routes import family as fam
         acc = _visitor_access() if visitor else MA.catalog_access(authorization)
-        key = _access_key(acc, visitor)
+        key = (_access_key(acc, visitor), _archive_generation())    # an archive change rebuilds the digest (owner 2026-11-22)
         t = time.monotonic() if now is None else now
         with _lock:
             hit = _cache.get(key)

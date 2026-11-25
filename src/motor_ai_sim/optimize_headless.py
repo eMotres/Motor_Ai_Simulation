@@ -279,8 +279,7 @@ def refuse_magnet_temperature(O, mode_body: Dict[str, Any], machine_sim: Dict[st
     from motor_ai_sim.simulation.fem_solver_2d import _run_magnet_temp_c
     card = _run_magnet_temp_c(None)
     if card is None or abs(float(card) - float(want)) > 1e-6:
-        hint = (" (set 'magnet_temp_c' in the sweep body)" if mode == "sweep"
-                else " (Descent has no magnet_temp_c field yet)")
+        hint = " (set 'magnet_temp_c' in the %s body)" % ("sweep" if mode == "sweep" else "descent")
         raise Refused(f"machine.simulation.magnet_temp_c {want} but the evals would solve "
                       f"the magnet card at {card}" + hint)
 
@@ -324,6 +323,9 @@ class EvalMemo:
         fp = self.O._config_fingerprint(tuple(sorted(overrides or {})))
         payload = [fp, sorted((overrides or {}).items()), float(current_a),
                    int(steps), float(coil_temp_c), sorted(kw.items())]
+        cr = self.O._RUN_COIL_REL.get()
+        if cr is not None:          # the run's wire cell is part of the identity; an entry stored without one is never an answer to it
+            payload.append(["coil_rel", round(float(cr), 4)])
         return hashlib.sha256(json.dumps(payload, sort_keys=True, default=str)
                               .encode()).hexdigest()
 
@@ -629,7 +631,10 @@ def main(argv: Optional[List[str]] = None) -> int:
         say(f"REFUSED: {e}")
         return 2
     final.pop("cancel", None)
-    final["mesh_preset"] = preset_rec
+    # keep the stamp the RUN wrote (digest, wire cell, what the solve verified); the fill record of this runner goes beside it
+    final["headless_preset_fill"] = preset_rec
+    if not isinstance(final.get("mesh_preset"), dict):
+        final["mesh_preset"] = preset_rec
     (req_p.parent / "result.json").write_text(
         json.dumps(O._json_sane(final), indent=1, default=str), encoding="utf-8")
     try:

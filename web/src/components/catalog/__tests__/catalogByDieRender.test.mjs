@@ -22,6 +22,7 @@ import { I18nextProvider } from 'react-i18next';
 import { createI18n } from '${rel('i18n/core.ts')}';
 import CatalogByDie from '${rel('components/catalog/CatalogByDie.tsx')}';
 export { dieMenuItems, motorMenuItems } from '${rel('components/catalog/CatalogByDie.tsx')}';
+export { catalogFilterApi } from '${rel('stores/catalogFilterStore.ts')}';
 import { DesignationDecoder } from '${rel('components/common/MotorDesignation.tsx')}';
 import enCommon from '${rel('locales/en/common.json')}';
 import zhCommon from '${rel('locales/zh-CN/common.json')}';
@@ -45,6 +46,10 @@ await build({
 });
 const m = await import(pathToFileURL(out).href);
 process.on('exit', () => { try { rmSync(tmp, { recursive: true, force: true }); } catch { /* */ } });
+// these tests show how an OLD copy looks: "Show old" on (Active hides old motors by default since 2026-11-25; that rule is
+// tested in catalogFiltersRender.test.mjs).  A server render reads the store's initial state: point it at the current one.
+m.catalogFilterApi.getInitialState = m.catalogFilterApi.getState;
+m.catalogFilterApi.setState({ filter: { ...m.catalogFilterApi.getState().filter, showOld: true } });
 const ready = (i) => new Promise((r) => (i.isInitialized ? r() : i.on('initialized', () => r())));
 const decode = (s) => s.replace(/&#x27;|&#39;/g, "'").replace(/&quot;/g, '"').replace(/&amp;/g, '&');
 
@@ -63,14 +68,20 @@ const overview = { items: { 'CILN28/G2-L40': { projects: [{ id: 'p1', link_statu
   projects: { p1: { id: 'p1', title: 'Pump project', status: 'design' } },
   productions: { 'CILN28/G2-L40': { die: 'CILN28', config: 'G2-L40', status: 'active', current_revision: '1.2' } } };
 
-for (const [lng, solidWord, sliceWord, oldWord, prod, motors] of [
-  ['en', 'solid magnet', 'magnet in 5 mm slices', '>old<', 'production 1.2', '2 motors'],
-  ['zh-CN', '整体磁钢', '磁钢分段 5 mm', '>旧<', '生产 1.2', '2 台电机']]) {
+for (const [lng, solidWord, sliceWord, oldWord, prod, one] of [
+  ['en', 'solid magnet', 'magnet in 5 mm slices', '>old<', 'production 1.2', '1 motor'],
+  ['zh-CN', '整体磁钢', '磁钢分段 5 mm', '>旧<', '生产 1.2', '1 台电机']]) {
   test(`${lng}: an admin sees the family, the designations, the parameters beside them, the links and the old copy`, async () => {
     const i18n = m.makeI18n(lng); await ready(i18n);
     const html = decode(m.render(i18n, { dies, isAdmin: true, overview }));
-    assert.ok(html.includes('>CILN28 200<') && html.includes(motors), html);           // one family header for both laminations
+    // ONE header line per stamped sheet (owner 2026-11-23): thumbnail, family name, size, its own motor count, markers
     assert.equal((html.match(/data-testid="by-die-block"/g) || []).length, 2);
+    const heads = [...html.matchAll(/data-testid="by-die-head"([\s\S]*?)data-testid="by-die-motor"/g)].map((x) => x[1]);
+    assert.equal(heads.length, 2);
+    for (const h of heads) {
+      assert.ok(h.includes('>CILN28 200<') && h.includes(one) && /Ø\d+ · \d+s\d+p/.test(h), h);      // all on that one line
+      assert.ok(h.indexOf('>CILN28 200<') < h.search(/Ø\d/) && h.search(/Ø\d/) < h.indexOf(one), h);  // in this column order
+    }
     assert.equal((html.match(/>CILN28 200_40 24F4SY</g) || []).length, 2);
     assert.ok(!html.includes('G2-L40 copy') && !html.includes('>CILN28 vadim 2<'), html);  // no old names shown
     assert.ok(!html.includes('B15AHV950M') && !html.includes('Al2O3'), html);           // the materials left the row
@@ -132,10 +143,10 @@ test('the row menus carry every action of the list view, each calling the right 
   const t = (k, o) => i18n.t(`motors:${k}`, o);
   const admin = { canWrite: true, isAdmin: true, standardUser: false };
   const motor = m.motorMenuItems({ die: 'D', config: 'C' }, admin, actions, t);
-  assert.deepEqual(motor.map((x) => x.key), ['ren', 'lock', 'his', 'dup', 'bat', 'mov', 'cpy', 'ds', 'rep', 'pdf', 'del']);
+  assert.deepEqual(motor.map((x) => x.key), ['ren', 'lock', 'his', 'dup', 'bat', 'mov', 'cpy', 'arch', 'ds', 'rep', 'pdf', 'del']);
   motor.forEach((x) => x.run());
-  assert.deepEqual(calls, [['renameCfg', 'D', 'C'], ['toggleCfgLock', 'D', 'C'], ['cfgHistory', 'D', 'C'], ['duplicateCfg', 'D', 'C'],
-    ['battery', 'D', 'C'], ['moveCfg', 'D', 'C', 'move'], ['moveCfg', 'D', 'C', 'copy'], ['datasheet', 'D', 'C'],
+  assert.deepEqual(calls, [['archivable', 'D'], ['renameCfg', 'D', 'C'], ['toggleCfgLock', 'D', 'C'], ['cfgHistory', 'D', 'C'], ['duplicateCfg', 'D', 'C'],
+    ['battery', 'D', 'C'], ['moveCfg', 'D', 'C', 'move'], ['moveCfg', 'D', 'C', 'copy'], ['archiveCfg', 'D', 'C'], ['datasheet', 'D', 'C'],
     ['report', 'D', 'C', false], ['report', 'D', 'C', true], ['deleteCfg', 'D', 'C']]);
   assert.ok(motor.every((x) => x.label && !x.label.includes('byDie.')));
   calls.length = 0;

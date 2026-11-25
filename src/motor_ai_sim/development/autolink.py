@@ -109,6 +109,18 @@ def _projects_in_die(die: str) -> set:
 
 
 def _link(project_id: str, die: str, config: str, actor: str) -> bool:
+    """An automatic link - through the configuration archive's admission (owner 2026-11-22): never for an archived
+    configuration, never interleaved with an archive."""
+    from motor_ai_sim import config_archive as _CA
+    try:
+        with _CA.admission(die, config):
+            return _link_unlocked(project_id, die, config, actor)
+    except _CA.Archived:
+        log.info("autolink: %s/%s is archived - not linked", die, config)
+        return False
+
+
+def _link_unlocked(project_id: str, die: str, config: str, actor: str) -> bool:
     key = motors._key(die, config)
     grant_key = f"{die}/{config}"
     from motor_ai_sim.development.models import now

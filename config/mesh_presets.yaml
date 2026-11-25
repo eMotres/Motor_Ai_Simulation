@@ -9,7 +9,7 @@
 #   c_D, f_min and the reference-air factor come from the size class of D (below).
 # Each value carries its source: owner (an owner's decision), measured (a mesh-study result), provisional (proposed, not yet
 # qualified).  PROVISIONAL means: do not read these coefficients as measured production defaults.
-version: 1
+version: 2        # 2 (2026-11-24): the Optimization preset's wire cell is 2h (was 1h)
 policy: 2026-11-17.stage2a-provisional
 size_classes:                                  # c_D in h0, f_min = minimum-size fraction, air = reference air size in h0
   - {from_mm: 12, to_mm: 100, c_D: 0.0125, f_min: 0.1, air: 3.0, source: provisional}              # 1/80, 1/10: matches the measured pilot at D80
@@ -23,7 +23,7 @@ presets:
     gap_layers: {value: 1, source: owner}                 # owner 2026-11-16: one row per side in an optimisation
     n_periods: {value: 1, source: owner}
     global_edge_factor: {value: 1.0, source: provisional} # global edge = g * h0; the study's rungs are g = 1, 4/3, 16/9
-    coil_rel: {value: 1, source: provisional}             # wire-cell size = coil_rel * wire height; 0.5 / 1 / 2 only (candidate rung: 2)
+    coil_rel: {value: 2, source: owner}                   # owner 2026-11-24: the wire cell is 2h in an optimisation (Mesh tab rungs 1/2h, 1h, 2h); wire-cell size = coil_rel * wire height
     outer_air_factor: {value: 1.2, source: provisional}   # outer boundary radius / stator radius (measured pilot factor)
     n_sectors: {rule: symmetry, source: provisional}      # gcd(slots, poles): the natural sector of the machine
     element_order: {value: 2, source: owner}

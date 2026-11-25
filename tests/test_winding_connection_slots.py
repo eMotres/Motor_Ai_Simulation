@@ -67,8 +67,11 @@ def test_repick_keeps_the_parallel_paths_when_it_can():
     w, note = W.repick_connection({"connection": "10P", "n_parallel": 10}, 48)
     assert (w["connection"], w["n_parallel"]) == ("8S", 1) and note
     # a valid one is left alone, byte for byte
-    src = {"connection": "4S-2P", "n_parallel": 2, "n_series": 4, "n_coils_per_phase": 4}
+    src = {"connection": "4S-2P", "n_parallel": 2, "n_series": 4, "n_coils_per_phase": 8}
     w, note = W.repick_connection(src, 48)
+    assert note is None and w == src
+    # ...except a stale coil COUNT (a copy of another machine's 4 on 48 slots): healed, the machine untouched
+    w, note = W.repick_connection({**src, "n_coils_per_phase": 4}, 48)
     assert note is None and w == src
 
 

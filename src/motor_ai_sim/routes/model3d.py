@@ -421,9 +421,10 @@ def get_bom_csv(die: str, config: str, request: Request, authorization: Optional
         buf = io.StringIO()
         buf.write("# " + stamp["line"] + "\n")                  # a comment line, not a quoted cell
         w = csv.writer(buf, lineterminator="\n")
+        from motor_ai_sim.spreadsheet_text import csv_safe_row   # quoting is not formula neutralisation
         w.writerow(BOM_HEADER)
-        w.writerows(_bom_rows(tree))
-        w.writerow(_bom_total(tree))
+        w.writerows(csv_safe_row(r) for r in _bom_rows(tree))
+        w.writerow(csv_safe_row(_bom_total(tree)))
         return buf.getvalue().encode("utf-8-sig")
     return _deliver(request, who, rec, e, die, config, kind="bom_csv", ext="csv", media="text/csv", body=body)
 
@@ -501,7 +502,8 @@ def get_full_params_csv(die: str, config: str, request: Request, authorization: 
         w.writerow(["Name", "Unit", "Expression", "Value", "Comment", "Favorite"])
         for n, unit, v, desc in rows:
             num = "%g" % v
-            w.writerow([n, unit, num, num, ("%s [%s]" % (desc, stamp["download_id"])).strip(), "False"])
+            from motor_ai_sim.spreadsheet_text import csv_safe_row
+            w.writerow(csv_safe_row([n, unit, num, num, ("%s [%s]" % (desc, stamp["download_id"])).strip(), "False"]))
         return buf.getvalue().encode("utf-8-sig")
     return _deliver(request, who, rec, e, die, config, kind="params_csv", ext="csv", media="text/csv", body=body)
 

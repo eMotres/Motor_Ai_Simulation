@@ -50,16 +50,26 @@ t('run labels name what changed', () => {
 
 t('the Pareto front keeps the non-dominated runs, ignores runs with a missing objective, and handles ties', () => {
   const runs = [
-    { thrust_per_shaft_W: 0.040, air_ms: 9 },     // 0 front (best efficiency)
-    { thrust_per_shaft_W: 0.038, air_ms: 11 },    // 1 front
-    { thrust_per_shaft_W: 0.036, air_ms: 10 },    // 2 dominated by 1
-    { thrust_per_shaft_W: 0.030, air_ms: 14 },    // 3 front (most air)
-    { thrust_per_shaft_W: null, air_ms: 20 },     // 4 not comparable
-    { thrust_per_shaft_W: 0.040, air_ms: 9 },     // 5 equal to 0: neither dominates, both stay
+    { thrust_per_shaft_W: 0.040, air_ms: 9, constraintsMet: true },     // 0 front (best efficiency)
+    { thrust_per_shaft_W: 0.038, air_ms: 11, constraintsMet: true },    // 1 front
+    { thrust_per_shaft_W: 0.036, air_ms: 10, constraintsMet: true },    // 2 dominated by 1
+    { thrust_per_shaft_W: 0.030, air_ms: 14, constraintsMet: true },    // 3 front (most air)
+    { thrust_per_shaft_W: null, air_ms: 20, constraintsMet: true },     // 4 not comparable
+    { thrust_per_shaft_W: 0.040, air_ms: 9, constraintsMet: true },     // 5 equal to 0: neither dominates, both stay
   ];
   assert.deepEqual(P.paretoFront(runs), [0, 1, 3, 5]);
   assert.deepEqual(P.paretoFront([]), []);
   assert.deepEqual(P.paretoFront([{ thrust_per_shaft_W: null, air_ms: null }]), []);
+});
+
+t('an infeasible run never enters the front, even with the best objectives (review 2026-11-21 H3)', () => {
+  const runs = [
+    { thrust_per_shaft_W: 0.050, air_ms: 20, constraintsMet: false },   // 0 best numbers, infeasible
+    { thrust_per_shaft_W: 0.040, air_ms: 9, constraintsMet: true },     // 1 front
+    { thrust_per_shaft_W: 0.030, air_ms: 14 },                          // 2 unknown feasibility = not on the front (review 2026-11-22)
+    { thrust_per_shaft_W: 0.030, air_ms: 13, constraintsMet: true },    // 3 front
+  ];
+  assert.deepEqual(P.paretoFront(runs), [1, 3]);
 });
 
 t('front cost: efficiency given up per m/s gained, null with fewer than two points', () => {
@@ -80,6 +90,7 @@ t('planform polygon is closed around the pitch axis and the profile keeps gaps a
 
 t('key flags keep a fixed order and drop the rest; formatting never prints NaN', () => {
   assert.deepEqual(P.keyFlags(['rpm_capped', 'x', 'root_flow_not_validated']), ['root_flow_not_validated', 'rpm_capped']);
+  assert.deepEqual(P.keyFlags(['unconverged_elements:3', 're_outside_tables', 'polar_viscous_model_mfoil']), ['unconverged_elements', 're_outside_tables']);
   assert.equal(P.fmt(null), '—');
   assert.equal(P.fmt(NaN), '—');
   assert.equal(P.fmt(1.2345, 1), '1.2');
@@ -108,4 +119,22 @@ t('toRun copies the vector so a later edit cannot change the stored run', () => 
   v.a = 99;
   assert.equal(run.vector.a, 1);
   assert.equal(run.air_ms, 8);
+});
+
+t('runMap keeps the best value per diameter and rpm, sorted, and filters blades', () => {
+  const run = (d, b, rpm, v) => ({ diameter_in: d, blades: b, operating: { rpm }, best: { flight_thrust_N: v === null ? null : { value: v } } });
+  const m = P.runMap([run(12, 2, 13000, 30), run(12, 2, 13000, 31), run(12, 2, 12000, 29), run(11.5, 2, 13000, 31.2), run(12, 3, 13000, 40), run(13, 2, 13000, null)],
+    'flight_thrust_N', 2);
+  assert.deepEqual(m, [
+    { diameter_in: 11.5, points: [{ rpm: 13000, value: 31.2 }] },
+    { diameter_in: 12, points: [{ rpm: 12000, value: 29 }, { rpm: 13000, value: 31 }] },
+  ]);
+  assert.equal(P.runMap([run(12, 3, 13000, 40)], 'flight_thrust_N').length, 1);
+});
+
+t('convergence is the best feasible value so far per generation', () => {
+  const e = (g, ok, v) => ({ generation: g, feasible: ok, objectives: { flight_thrust_N: v } });
+  const c = P.convergence([e(0, false, 50), e(0, false, 1), e(1, true, 20), e(1, false, 99), e(2, true, 18), e(2, true, 25)], 'flight_thrust_N');
+  assert.deepEqual(c.map((x) => x.best), [null, 20, 25]);
+  assert.deepEqual(c.map((x) => [x.feasible, x.total]), [[0, 2], [1, 2], [2, 2]]);
 });

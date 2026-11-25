@@ -174,6 +174,11 @@ _NODE_AGENT_PATH = re.compile(
     r"|worker/(install\.sh|motres_compute_worker\.py))$")
 
 
+#: Owner-queue agent routes (docs/OWNER_QUEUE.md): create / read / withdraw the agent's OWN items.
+_OWNER_QUEUE_AGENT_PATH = re.compile(
+    r"^/api/owner-queue/agent/(items|items/[A-Za-z0-9_-]+|items/[A-Za-z0-9_-]+/withdraw|priority)$")
+
+
 def anonymous_allowed(path: str) -> bool:
     """May a caller WITHOUT credentials reach `path` when the exhibit is closed?
 
@@ -188,6 +193,9 @@ def anonymous_allowed(path: str) -> bool:
         return True
     # user-owned compute nodes: own mcnode_ bearer, checked in routes/compute_nodes
     if _NODE_AGENT_PATH.fullmatch(p):   # fullmatch: `$` alone accepts a trailing newline
+        return True
+    # owner queue agents: own oq_ bearer, checked in routes/owner_queue
+    if _OWNER_QUEUE_AGENT_PATH.match(p):
         return True
     return any(p == pfx or p.startswith(pfx + "/") for pfx in _ANON_OK_PREFIXES)
 

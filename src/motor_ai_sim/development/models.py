@@ -1338,13 +1338,14 @@ def clean_document_label(value: Any, limit: int, field: str) -> str:
 
 
 def normalize_document(file_id: str, uploader_email: str, name: str, *, folder: str | None = None, revision: str = "",
-                       internal: bool = False, size: int = 0, sha256: str = "", content_type: str = "") -> dict:
+                       internal: bool = False, size: int = 0, sha256: str = "", content_type: str = "",
+                       price_restricted: bool = False) -> dict:
     """One project document row.  The file itself lives under ``documents/files/<file_id>``; the row is never deleted
     (``archived`` hides it), so the audit trail and the stored file always match."""
     name = clean_document_label(Path(str(name or "").replace("\\", "/")).name, 200, "name") or "unnamed"
     if folder not in DOCUMENT_FOLDERS:
         folder = guess_document_folder(name)
     return {"id": "doc-" + __import__("secrets").token_urlsafe(9), "file_id": file_id, "name": name, "folder": folder,
-            "revision": revision, "internal": bool(internal), "size": int(size), "sha256": sha256,
+            "revision": revision, "internal": bool(internal), "price_restricted": bool(price_restricted), "size": int(size), "sha256": sha256,
             "content_type": str(content_type or "")[:100], "uploader_email": str(uploader_email or "").strip().lower(),
             "uploaded_at": now(), "archived": False, "archived_at": None, "archived_by": None}

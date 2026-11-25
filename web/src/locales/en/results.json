@@ -61,5 +61,17 @@
   "refineRipple": "Refine ripple",
   "refiningRipple": "Refining…",
   "rippleRefined": "Ripple · {layers}/side",
-  "rippleRefinedTip": "Ripple refined at {layers} air-gap layers/side; the base run ({baseLayers}/side) read {base} %. Everything else on the card is the base run."
+  "rippleRefinedTip": "Ripple refined at {layers} air-gap layers/side; the base run ({baseLayers}/side) read {base} %. Everything else on the card is the base run.",
+  "end3dStatus_verified": "3D check ✓",
+  "end3dStatusTip_verified": "The 3-D factor's 2-D agreement check passed: the end deficit L(1 − k) is constant over the stack lengths solved, so the 3-D and 2-D models agree.",
+  "end3dStatus_unverified": "3D unverified",
+  "end3dStatusTip_unverified": "The 3-D factor is applied but its 2-D agreement could not be checked (fewer than two usable stack lengths, or a passport older than the check). Re-run Stage A with the auto stack lengths to verify it.",
+  "end3dStatus_failed": "3D check failed",
+  "end3dStatusTip_failed": "The 3-D and 2-D models disagree beyond the end effect: k_flux_self is applied where the run has it. Recompute Stage A.",
+  "end3dStatus_invalid": "3D 2-D leg invalid",
+  "end3dStatusTip_invalid": "The 2-D reference of the Stage A run is zero or not a number: no 3-D / 2-D ratio exists and k_flux_self is applied. Recompute Stage A.",
+  "end3dStatus_fallback": "3D fallback",
+  "end3dStatusTip_fallback": "The run's k_flux is not a usable factor, so the pure 3-D end factor k_flux_self is applied. Recompute Stage A.",
+  "end3dStatus_recompute": "3D: recompute",
+  "end3dStatusTip_recompute": "An older Stage A run whose 2-D check cannot be read safely: k_flux_self is applied until Stage A is rerun."
 }

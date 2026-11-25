@@ -75,25 +75,30 @@ export const developmentApi = {
   thread: async (id: string) => (await call<{ messages: ProjectThreadMessage[] }>('GET', `${p(id)}/thread`)).messages,
   /** The caller has seen the thread up to message `upTo` (the server never moves the mark back). */
   markThreadRead: (id: string, upTo: string) => call<{ last_read_id: string; unread: number }>('POST', `${p(id)}/thread/read`, { up_to: upTo }),
-  postMessage: (id: string, text: string, field_ref?: string, scope: { version?: number; revision?: number; row_id?: string } = {}) => call<ProjectThreadMessage>('POST', `${p(id)}/thread`, { text, ...(field_ref ? { field_ref } : {}), ...scope }),
+  postMessage: (id: string, text: string, field_ref?: string, scope: { version?: number; revision?: number; row_id?: string; reply_to?: string } = {}, price_restricted = false, staff_only = false) => call<ProjectThreadMessage>('POST', `${p(id)}/thread`, { text, ...(field_ref ? { field_ref } : {}), ...scope, ...(price_restricted ? { price_restricted: true } : {}), ...(staff_only ? { staff_only: true } : {}) }),
   resolveMessage: (id: string, messageId: string, resolved: boolean) => call<ProjectThreadMessage>('POST', `${p(id)}/thread/${enc(messageId)}/resolve`, { resolved }),
   /** Documents of a project (production package files): KiCad, fabrication, BOM, 3-D models, drawings. */
   documents: (id: string, archived = false) => call<ProjectDocumentList>('GET', `${p(id)}/documents${archived ? '?archived=true' : ''}`),
-  uploadDocument: (id: string, file: File, o: { folder?: string; revision?: string; internal?: boolean } = {}) => {
+  uploadDocument: (id: string, file: File, o: { folder?: string; revision?: string; internal?: boolean; priceRestricted?: boolean } = {}) => {
     const form = new FormData();
     form.append('file', file, file.name);
     if (o.folder) form.append('folder', o.folder);
     if (o.revision) form.append('revision', o.revision);
     if (o.internal) form.append('internal', 'true');
+    if (o.priceRestricted) form.append('price_restricted', 'true');
     return call<ProjectDocument>('POST', `${p(id)}/documents`, form);
   },
-  patchDocument: (id: string, docId: string, v: Partial<Pick<ProjectDocument, 'internal' | 'folder' | 'revision'>> | { archived: false }) =>
+  patchDocument: (id: string, docId: string, v: Partial<Pick<ProjectDocument, 'internal' | 'price_restricted' | 'folder' | 'revision'>> | { archived: false }) =>
     call<ProjectDocument>('PATCH', `${p(id)}/documents/${enc(docId)}`, v),
   archiveDocument: (id: string, docId: string) => call<ProjectDocument>('DELETE', `${p(id)}/documents/${enc(docId)}`),
+  /** Choose the current release (a revision label), or null for the default (the newest group). */
+  setDocumentRelease: (id: string, revision: string | null) => call<{ current: string | null }>('PUT', `${p(id)}/documents/release`, { revision }),
   /** Make an image of the project's documents the cover (the server makes the thumbnail) / remove the cover. */
   setCover: (id: string, documentId: string) => call<{ document_id: string; cover_version: string }>('PUT', `${p(id)}/cover`, { document_id: documentId }),
   clearCover: (id: string) => call<{ cover_version: null }>('DELETE', `${p(id)}/cover`),
-  invite: (id: string, email: string, role: string) => call<unknown>('POST', `${p(id)}/members`, { email, role }),
+  invite: (id: string, email: string, role: string, seesPrices?: boolean) => call<unknown>('POST', `${p(id)}/members`, { email, role, ...(seesPrices === undefined ? {} : { sees_prices: seesPrices }) }),
+  /** a project owner (or an admin) switches who sees the prices: the shared quote and the price-restricted documents / messages */
+  setSeesPrices: (id: string, email: string, value: boolean) => call<{ email: string; sees_prices: boolean }>('PATCH', `${p(id)}/members/sees_prices`, { email, sees_prices: value }),
   motors: async (id: string, showAll = false) => (await call<{ motors: ProjectMotor[] }>('GET', `${p(id)}/motors${showAll ? '?show_all=true' : ''}`)).motors,
   /** Live runs on the project's motors (one request per project; polled every 30 s while the page is visible). */
   activity: async (id: string, since?: string | null) => parseActivity(await call<unknown>('GET', `${p(id)}/activity${since ? `?since=${encodeURIComponent(since)}` : ''}`)),
@@ -170,8 +175,10 @@ async function saveResponse(r: Response, fallbackName: string): Promise<void> {
 export const downloadProjectDocument = async (id: string, doc: Pick<ProjectDocument, 'id' | 'name'>): Promise<void> =>
   saveResponse(await fetch(`${API}${p(id)}/documents/${enc(doc.id)}/download`), doc.name);
 
-export const downloadProjectDocumentsZip = async (id: string): Promise<void> =>
-  saveResponse(await fetch(`${API}${p(id)}/documents.zip`), `${id}_documents.zip`);
+/** One release (`revision`: its label, '' = the unlabelled documents) or, without it, every group (MOTRES staff only). */
+export const downloadProjectDocumentsZip = async (id: string, revision?: string): Promise<void> =>
+  saveResponse(await fetch(`${API}${p(id)}/documents.zip${revision === undefined ? '' : `?revision=${encodeURIComponent(revision)}`}`),
+    revision ? `${id}_${revision}_documents.zip` : `${id}_documents.zip`);
 
 const coverCache = new Map<string, Promise<string>>();
 /** The cover thumbnail as an object URL (the session header is added by the global fetch, so a plain <img src> would 401).

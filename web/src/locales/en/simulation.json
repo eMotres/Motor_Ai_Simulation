@@ -285,7 +285,7 @@
   "propOptObj_flight_thrust_N": "Thrust in flight",
   "sweepResultSettingsTip": "The preset, steps per electrical period and gap rows this result was computed with. A sweep saved before this label existed shows the settings of its stored request.",
   "coggingPpCol": "Cogging pp",
-  "coggingPpTip": "Adds the cogging torque peak-to-peak (N·m) of each geometry: one extra no-load solve per geometry, shared by all its currents, with the same magnet temperature, steps and mesh as the loaded points. The loaded points are not replaced. A value at 48 steps is for ranking only. This is the no-load, full-strength-magnets figure; it reads about 3 to 6 % lower than a normal no-load run with demagnetisation on (measured in two cases).",
+  "coggingPpTip": "Adds the cogging torque peak-to-peak (N·m) of each geometry: one extra no-load solve per geometry, shared by all its currents, with the same magnet temperature, steps and mesh as the loaded points. The loaded points are not replaced. The table also shows it as a percentage of the point's own torque. A value at 48 steps is for ranking only. This is the no-load, full-strength-magnets figure; it reads about 3 to 6 % lower than a normal no-load run with demagnetisation on (measured in two cases).",
   "coggingPpRanking": "ranking only",
   "coggingPpRankingTip": "Ranking only: not a final cogging value. A final value needs 120 or more steps per period at 20 C.",
   "coggingPpMissing": "No Cogging pp for this geometry: its no-load solve was refused or failed. The loaded values are unchanged.",

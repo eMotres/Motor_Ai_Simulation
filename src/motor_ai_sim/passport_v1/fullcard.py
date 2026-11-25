@@ -35,6 +35,7 @@ def _load(p: Path) -> Optional[Dict[str, Any]]:
 def stage2_block(full_dir: Path, repo: Path, L_mm: float,
                  k_T_rule: str = "stage_b_inherited") -> Dict[str, Any]:
     import re
+    from motor_ai_sim.end3d_verdict import BASIS_K_FLUX, applied_flux_factor
     ee = _load(repo / "config" / "end_effect_3d.json") or {}
     sb = ee.get("stage_b") or {}
     lsf = ((sb.get("long_stack_honesty_test") or {}).get("the_inductive_end_effect_factor") or {})
@@ -54,14 +55,19 @@ def stage2_block(full_dir: Path, repo: Path, L_mm: float,
         if abs(Lr - L_mm) < 1e-6 or B1_2d is None:
             B1_2d = b2 if b2 else B1_2d
         b1m = (sx.get("spill_profile") or {}).get("B1_mid_T") or sx.get("B1_mid_T")
-        # the run's own 2-D leg decides whether k_flux (axial mean / 2-D) is usable:
-        # when the 3-D mid-plane and the 2-D field disagree beyond its tolerance it
-        # says so (k_flux_usable False) and the pure end effect k_flux_self is used
-        usable = (sx.get("two_d") or {}).get("k_flux_usable", True) is not False
+        # the run's own 2-D verdict decides which factor is applied, in ONE place
+        # (end3d_verdict): the real k_flux unless the end-deficit check FAILED or the
+        # 2-D leg is INVALID; the old mid-plane FAIL is end physics, not a model check.
+        # The real k_flux is always kept beside the applied one (k_flux_raw).
+        af = applied_flux_factor(sx.get("k_flux"), sx.get("k_flux_self"), sx.get("two_d"), sx.get("version"),
+                                 sx.get("generated_utc"))
+        usable = af["basis"] == BASIS_K_FLUX
         curve.append({"stack_mm": Lr, "k_flux_self": sx.get("k_flux_self"),
                       "B1_mid_T": b1m, "k_flux_raw": sx.get("k_flux"),
                       "k_flux_usable": usable,
-                      "k_psi": sx.get("k_flux") if usable else sx.get("k_flux_self"),
+                      "k_flux_applied": af["basis"], "k_flux_verdict": af["verdict"],
+                      "k_flux_rule": af["rule"], "k_flux_note": af["note"],
+                      "k_psi": af["value"],
                       "picard_converged":
                           ((sx.get("solves") or [{}])[0]).get("picard_converged"),
                       "two_d_verdict": (sx.get("two_d") or {}).get("verdict"),
@@ -96,17 +102,40 @@ def stage2_block(full_dir: Path, repo: Path, L_mm: float,
                     "today's die cross-section, n_stack 4 (quick fidelity)",
                     "B1_2d_T": B1_2d,
                     "labels": ["3-D", "no-load", "quick fidelity"]}
-    if own and own.get("k_flux_usable") is False:
+    if own:
+        # what was applied and why, beside the real k_flux: never a silent substitution
+        out["k_psi"].update({"k_flux": own.get("k_flux_raw"), "k_flux_self": own.get("k_flux_self"),
+                             "basis": own.get("k_flux_applied"), "verdict": own.get("k_flux_verdict"),
+                             "rule": own.get("k_flux_rule")})
+        if own.get("k_flux_note"):
+            out["k_psi"]["note"] = own["k_flux_note"]
+            out["k_psi"]["labels"] = ["3-D", "no-load", "quick fidelity",
+                                      ("old mid-plane check not applied" if own.get("k_flux_applied") == BASIS_K_FLUX
+                                       else str(own.get("k_flux_verdict")))]
+    _forced = bool(own) and own.get("k_flux_usable") is False and str(own.get("k_flux_verdict")).upper() in (
+        "PASS", "NOT CHECKED")
+    if _forced:
+        # the 2-D check passed (or could not run), but k_flux itself is not a usable factor (outside the band /
+        # missing): k_flux_self is applied for THAT reason, not because the run said so
+        out["k_psi"]["method"] = ("3-D magnetostatic Stage A (I = 0) at this machine's own stack: "
+                                  "k_flux_self (axial mean of the gap fundamental / its own "
+                                  "mid-plane value) — the run's 2-D check is %s, but its k_flux = %s is "
+                                  "not a usable factor, so k_flux_self is applied"
+                                  % (own.get("k_flux_verdict"), own.get("k_flux_raw")))
+        out["k_psi"]["labels"] = ["3-D", "no-load", "quick fidelity", "k_flux_self (k_flux not a usable factor)"]
+    elif own and own.get("k_flux_usable") is False:
         out["k_psi"]["method"] = ("3-D magnetostatic Stage A (I = 0) at this machine's own stack: "
                                   "k_flux_self (axial mean of the gap fundamental / its own "
                                   "mid-plane value, the pure end effect) — the run's 2-D check "
-                                  "FAILED (3-D mid-plane / 2-D = %.4f, tolerance 2 %%), so "
-                                  "k_flux = %.4f is not used, as the run itself instructs"
-                                  % (float(((_load(full_dir / ("stage_a_L%g.json" % L_mm))
+                                  "is %s (3-D mid-plane / 2-D = %.4f), so "
+                                  "k_flux = %.4f is not applied, as the run itself instructs"
+                                  % (own.get("k_flux_verdict"),
+                                     float(((_load(full_dir / ("stage_a_L%g.json" % L_mm))
                                              or {}).get("two_d") or {}).get(
                                                  "ratio_3d_mid_over_2d") or float("nan")),
                                      float(own.get("k_flux_raw") or float("nan"))))
-        out["k_psi"]["labels"] = ["3-D", "no-load", "quick fidelity", "k_flux_self (2-D check failed)"]
+        out["k_psi"]["labels"] = ["3-D", "no-load", "quick fidelity",
+                                  "k_flux_self (2-D check %s)" % str(own.get("k_flux_verdict")).lower()]
     if logp.exists():
         out["k_psi"]["sweep_note"] = ("7-point L-sweep stopped after 6 mm (69 min per "
                                       "warm-started length under load); 12 and 20 mm solved, "

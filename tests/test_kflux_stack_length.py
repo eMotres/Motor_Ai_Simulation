@@ -119,7 +119,7 @@ def test_without_a_2d_leg_rows_keep_k_flux_self(stubbed):
 
 def test_new_table_carries_the_method_marker(stubbed):
     pp = _run()
-    assert pp["version"] == EE.PASSPORT_VERSION == "static3d-stageA-2"
+    assert pp["version"] == EE.PASSPORT_VERSION == "static3d-stageA-3"
     assert pp["k_flux_vs_L_method"] == EE.K_FLUX_VS_L_OWN_MID == "own_mid_ratio"
     b1, ks = TABLE[REF_MM]
     assert pp["k_flux_self"] == ks          # reference values untouched

@@ -15,16 +15,14 @@ import {
   MenuItem,
   Paper,
   TextField,
-  Tooltip,
   Typography,
 } from '@mui/material';
 import CloseIcon from '@mui/icons-material/Close';
+import ViewInArIcon from '@mui/icons-material/ViewInAr';
 import { useTranslation } from 'react-i18next';
 import BilingualText, { BilingualInput, useContentLang } from './BilingualText';
 import PartName from './PartName';
-import { UnifiedViewer } from '../../viewer3d';
-const API = (import.meta.env.VITE_API_URL ?? 'http://localhost:8001') as string;
-import { downloadFile, downloadModelStep, fileObjectUrl, openFileInNewWindow, productionApi } from '../api';
+import { downloadFile, fileObjectUrl, openFileInNewWindow, productionApi } from '../api';
 import { canEditProcurement, DEFAULT_CURRENCY, displayText, formatMoney, formatReceiptTime, getStatusColor, makeBilingual, partFamilies } from '../helpers';
 import type {
   CostRow,
@@ -100,20 +98,6 @@ export const InlineDrawing: React.FC<{ ctx: ProdCtx; d: DrawingFile; pdf?: Drawi
 
 export const DrawingPreview: React.FC<{ ctx: ProdCtx; d: DrawingFile }> = InlineDrawing;
 
-/** The part's own 3-D model: the motor's full CAD model with only this part shown, in the standard viewer, no tree. */
-const PartModel3D: React.FC<{ ctx: ProdCtx; part: Part }> = ({ ctx, part }) => {
-  const fams = ctx.productType === 'electronics' ? [] : partFamilies(part.name.en || '');
-  if (fams.length === 0) return null;
-  const glb = `${API}/api/model3d/${encodeURIComponent(ctx.die)}/${encodeURIComponent(ctx.config)}/model.glb`;
-  return (
-    <Box sx={{ flex: '1 1 420px', minWidth: 320, height: 460, border: '1px solid var(--line-soft)', borderRadius: 1.5, overflow: 'hidden', bgcolor: 'var(--panel-2)' }}>
-      <UnifiedViewer sourceKey={`production:${ctx.die}:${ctx.config}`} resetKey={`production:${ctx.die}:${ctx.config}:${fams.join('|')}`}
-        glbUrl={glb} toolbarSpec="full" tree={null} onlyFamilies={fams}
-        contextLostText="3-D view lost - reload the page" noViewText="" />
-    </Box>
-  );
-};
-
 export interface PartDetailPanelProps {
   part: Part;
   ctx: ProdCtx;
@@ -127,6 +111,8 @@ export interface PartDetailPanelProps {
   onProcurementSaved?: () => void;
   onChanged: () => void;
   onClose?: () => void;
+  /** "Show in 3D": the page opens the 3D tab on this part */
+  onShowIn3D?: (partId: string) => void;
 }
 
 export const PartDetailPanel: React.FC<PartDetailPanelProps> = ({
@@ -142,6 +128,7 @@ export const PartDetailPanel: React.FC<PartDetailPanelProps> = ({
   onProcurementSaved,
   onChanged,
   onClose,
+  onShowIn3D,
 }) => {
   const { t } = useTranslation('production');
   const ui = useContentLang();
@@ -765,7 +752,7 @@ export const PartDetailPanel: React.FC<PartDetailPanelProps> = ({
         </Box>
       )}
 
-      {/* drawings and the part's own 3-D model side by side (owner 2026-10-18) */}
+      {/* the drawings; the part's 3-D view lives in the 3D tab (owner 2026-11-25) */}
       <Box sx={{ display: 'flex', gap: 2, alignItems: 'flex-start', flexWrap: 'wrap' }}>
         <Box sx={{ flex: '1 1 480px', minWidth: 0 }}>
           {part.drawing_files.filter((d) => d.kind === 'png').map((d) => {
@@ -778,7 +765,6 @@ export const PartDetailPanel: React.FC<PartDetailPanelProps> = ({
             <Typography sx={{ fontSize: 11.5, color: 'var(--text-4)', mb: 1 }}>{t('parts.noDrawings')}</Typography>
           )}
         </Box>
-        <PartModel3D ctx={ctx} part={part} />
       </Box>
 
       <Box sx={{ display: 'flex', gap: 1.5, flexWrap: 'wrap', mt: 1 }}>
@@ -792,20 +778,12 @@ export const PartDetailPanel: React.FC<PartDetailPanelProps> = ({
             {t('parts.partStep')}
           </Button>
         )}
-        <Tooltip title={t('parts.model3dTip')}>
-          <Button
-            size="small"
-            variant="outlined"
-            sx={{ textTransform: 'none', fontSize: 11, py: 0.25 }}
-            onClick={() =>
-              void downloadModelStep(ctx.die, ctx.config).catch((e) =>
-                setErr(t('failed', { reason: e instanceof Error ? e.message : String(e) }))
-              )
-            }
-          >
-            {t('parts.model3d')}
+        {onShowIn3D && ctx.productType !== 'electronics' && partFamilies(part.name.en || '').length > 0 && (
+          <Button size="small" variant="outlined" startIcon={<ViewInArIcon sx={{ fontSize: 16 }} />} data-testid="show-in-3d"
+            sx={{ textTransform: 'none', fontSize: 11, py: 0.25 }} onClick={() => onShowIn3D(part.id)}>
+            {t('tab3d.show')}
           </Button>
-        </Tooltip>
+        )}
       </Box>
 
       {/* Linked Documents */}

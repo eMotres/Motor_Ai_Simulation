@@ -74,6 +74,7 @@ import { shownStatus } from '../projectStage';
   import { SharedComparisonTable } from '../../../components/compare/SharedComparisonTable';
   import { developmentComparisonColumns, developmentComparisonRows } from '../comparisonRows';
   import { specPointRefs } from '../specPoints';
+  import SpecPointsSection from './SpecPointsSection';
   import { claimProjectOpenIntent, projectOpenEvent, restoreProjectOpenIntent } from '../projectOpenIntent.ts';
   import { filterPickerCatalog, groupPickerCatalog, pickerDisplayLabel, pickerReasonKey, snapshotSourceKey } from '../pickerModel';
   import { acceptedProjectStatus, allowedProjectStatuses, cancelProjectStatus, pendingStatusForProject, proposeProjectStatus, visibleProjectVersions } from '../motorStatus';
@@ -840,6 +841,8 @@ export default function DevelopmentPage() {
     {view === 'motors' && !isController && <Box>
       <Box sx={{ display: 'flex', alignItems: 'center', mb: 1 }}><Box sx={{ flex: 1 }}><HelpTip title={tr('motorsTip')} /></Box>{canManageGlobally && <Button size="small" startIcon={<AddIcon />} onClick={async () => { if (selected) { try { setPicker(await developmentApi.motorPicker(selected.id)); setLinkOpen(true); } catch (e) { setError(e instanceof Error ? e.message : String(e)); } } }}>{tr('linkMotor')}</Button>}</Box>
       {canEditProject && !!selected.grant_removal_candidates?.length && <Tooltip title={<Stack spacing={0.4}><Typography sx={{ fontSize: 11 }}>{tr('grantReviewTip')}</Typography>{selected.grant_removal_candidates.map((candidate) => <Typography key={`${candidate.email}/${candidate.die}/${candidate.config}`} sx={{ fontSize: 11 }}>{candidate.email} · {candidate.die}/{candidate.config} · {tr(`grantReason.${candidate.reason}`)}</Typography>)}</Stack>}><Alert severity="info" sx={{ mb: 1, py: 0 }}>{tr('grantReviewCount', { count: selected.grant_removal_candidates.length })}</Alert></Tooltip>}
+      {selected && <SpecPointsSection projectId={selected.id} motors={motors} canLink={canManageGlobally} tr={tr} nf={(v) => (typeof v === 'number' && Number.isFinite(v) ? String(Number(v.toFixed(2))) : '-')}
+        onChanged={() => { void loadProjectMotors(selected.id, projectToken.current); }} />}
       {(() => {
         // ONE group per geometry variant (name + step note once in its header, a colour accent per die), its duties as compact sub-rows;
         // history snapshots sit under their variant and show only in "All versions" (owner 2026-10-26)

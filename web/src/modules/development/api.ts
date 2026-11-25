@@ -4,6 +4,7 @@ import { finalComparison } from '../../lib/resultsPanel';
 import type { ProjectProductionEntry } from './projectProductions';
 import type { CostEstimate, CostEstimateAnswer, CostSnapshot, CostSuggestions } from './costEstimate';
 import type { OrderRequest } from './orderRequests';
+import type { PointLink } from './types';
 import type { ProjectQuote, SharedQuoteMark } from './quote';
 import type { SimStoredPoints, SimStoredRun } from '../../lib/simReadOnly';
 import type { AdminTimeline, ProjectTimeline, TimelineDoc } from './timeline';
@@ -124,6 +125,10 @@ export const developmentApi = {
   /** Staff only: mark / unmark the variant's report as checked (members may download it only then). */
   setReportReviewed: (id: string, die: string, config: string, value: boolean) => call<unknown>('PATCH', `${p(id)}/motors/report_reviewed`, { die, config, value }),
   /** Staff only: THE recommended variant of the project (setting it clears the previous one). */
+  /** Engineers: link a specification requirement to a duty of a linked motor (duty null = remove the link); owner 2026-11-25. */
+  setPointLink: (id: string, die: string, config: string, specRowId: string, duty: string | null) => call<{ point_links: PointLink[] }>('PUT', `${p(id)}/motors/point-links`, { die, config, spec_row_id: specRowId, duty }),
+  /** Engineers: link every unambiguous match of one motor. */
+  autoPointLinks: (id: string, die: string, config: string) => call<{ linked: number; point_links: PointLink[] }>('POST', `${p(id)}/motors/point-links/auto`, { die, config }),
   setRecommended: (id: string, die: string, config: string, value: boolean) => call<unknown>('PATCH', `${p(id)}/motors/recommended`, { die, config, value }),
   /** Order requests of the project (a request to our team; the app shows no price). */
   orderRequests: async (id: string) => (await call<{ order_requests: OrderRequest[] }>('GET', `${p(id)}/order-requests`)).order_requests ?? [],

@@ -2050,6 +2050,13 @@ def _delete_config_runs(die: str, cfg: str) -> None:
 
 # ── models ───────────────────────────────────────────────────────────────────
 
+def _new_duty_id() -> str:
+    """The immutable id of a duty (owner 2026-11-25): written once, kept by a rename, new for every copy.  A project's
+    ``point_links`` follow the duty by it, so a rename never breaks a link."""
+    import uuid
+    return "d-" + uuid.uuid4().hex[:12]
+
+
 class DutySpec(BaseModel):
     name: str
     mode: str = "motor"                  # "motor" | "generator"
@@ -4017,6 +4024,7 @@ def _upsert_duty(req: DutyCreate, _w: dict, *, may_move: bool = True) -> dict:
              # operating point must not silently erase targets or the note.
              "note": (d.note if d.note is not None
                       else (prev or {}).get("note", "") or "")}
+    entry["duty_id"] = (prev or {}).get("duty_id") or _new_duty_id()     # immutable; a legacy duty gets one on its next save
     # the duty kind: sent -> written ("test" / "operating"; "" drops it); absent -> the previous value survives
     if d.kind is not None:
         _kind = str(d.kind).strip().lower()
@@ -4420,6 +4428,7 @@ def duplicate_duty(die: str, cfg: str, duty: str, req: DutyDuplicate,
     import copy as _copy
     entry = _copy.deepcopy(src)
     entry["name"] = new
+    entry["duty_id"] = _new_duty_id()          # a copy is another duty: it never inherits the id a link points at
     entry["saved_at"] = datetime.now().isoformat(timespec="seconds")
     # A full copy means the STORED RUNS too — their sidecars are copied under
     # the new duty's own file names, so deleting either duty later cannot take
@@ -4512,7 +4521,7 @@ def save_continuous_point(die: str, cfg: str, duty: str,
     p_shaft = _ttl_num(power.get("P_shaft_W")) or _ttl_num(power.get("P_mech_W"))
     t_em = _ttl_num(power.get("T_em_Nm"))
     entry = {
-        "name": new_name, "mode": src.get("mode", "motor"),
+        "name": new_name, "mode": src.get("mode", "motor"), "duty_id": _new_duty_id(),
         "saved_at": datetime.now().isoformat(timespec="seconds"),
         "current_arms": round(float(cp["I_cont_A_rms"]), 3),
         "rpm": round(float(cp["rpm"]), 1),
@@ -4570,6 +4579,8 @@ def rename_duty(die: str, cfg: str, duty: str, req: DutyDuplicate,
     # The sidecar file names are derived from the duty name — move them with it
     # (a rename that orphaned the PWM payload would be a silent data loss).
     _move_duty_runs(die, src, cfg, new, copy=False)
+    if not src.get("duty_id"):
+        src["duty_id"] = _new_duty_id()        # a legacy duty is given its id now; the id then survives every later rename
     src["name"] = new
     if c.get("default_duty") == duty:
         c["default_duty"] = new

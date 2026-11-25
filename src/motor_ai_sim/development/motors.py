@@ -1030,8 +1030,12 @@ def _comparison_projection(duty: dict, stored: dict) -> dict:
 
 
 def _results(die: str, config: str, cfg: dict, stored_by_duty: dict | None = None,
-             configure_duties: set[str] | None = None, *, own_only: bool = False) -> list[dict]:
+             configure_duties: set[str] | None = None, *, own_only: bool = False, sync: bool = False) -> list[dict]:
     """One row per duty of the configuration.
+
+    ``sync`` (owner 2026-11-25, the specification <-> card comparison): each row also carries its immutable ``duty_id``,
+    ``build_stale`` (the stored result is of an older build; ``None`` = unknown), ``hidden_records`` (what ``own_only`` set aside,
+    with the reason: the row SAYS why a number is missing) and ``thermal_hold``.  Without it the rows are what they were.
 
     ``own_only`` (the points-limited Configure and the steps feed, owner 2026-10-26): the stored records that feed a row
     (coupled / thermal temperatures, losses, ...) are only the duty's OWN records solved at its operating point
@@ -1071,9 +1075,10 @@ def _results(die: str, config: str, cfg: dict, stored_by_duty: dict | None = Non
         for key, value in _run_temperatures(primary_result, duty.get("summary")).items():
             em.setdefault(key, value)
         stored_duty = by_duty.get(name) or {}
+        hidden: list = []
         if own_only:
             from motor_ai_sim.development import motor_view
-            stored_duty = motor_view.own_records(stored_duty, motor_view.operating_of({"operating_point": duty}))[0]
+            stored_duty, hidden = motor_view.own_records(stored_duty, motor_view.operating_of({"operating_point": duty}))
         has_result = bool(duty.get("result") or duty.get("summary") or stored_duty)
         try:
             from motor_ai_sim.routes import family as family_module
@@ -1081,7 +1086,16 @@ def _results(die: str, config: str, cfg: dict, stored_by_duty: dict | None = Non
         except Exception:
             can_open_simulation = False
         can_open_configure = name in (configure_duties or set())
-        out.append({"duty": name, "has_result": has_result,
+        extra: dict = {}
+        if sync:
+            try:
+                from motor_ai_sim.routes import family as _fam
+                build_stale = _fam.stored_build_stale(_fam._die_doc_for_sig(die), cfg, name)
+            except Exception:  # noqa: BLE001 - unknown, said so
+                build_stale = None
+            extra = {"duty_id": duty.get("duty_id") or None, "build_stale": build_stale,
+                     "hidden_records": list(hidden), "thermal_hold": _thermal_hold(stored_duty)}
+        out.append({**extra, "duty": name, "has_result": has_result,
                     "can_open_simulation": can_open_simulation,
                     "can_open_configure": can_open_configure,
                     # torque_nm / power_kw are the duty's requested TARGETS (DutySpec) - shown until a solve exists.
@@ -1092,6 +1106,22 @@ def _results(die: str, config: str, cfg: dict, stored_by_duty: dict | None = Non
                                        if isinstance(row, dict) and _metric_projection(row)},
                     "comparison": {**_comparison_projection({**duty, "result": primary_result}, stored_duty), **cogging_keys}})
     return out
+
+
+def _thermal_hold(stored_duty: Any) -> dict:
+    """Can the point be held, from the duty's own coupled record: ``within`` (inside every limit: holds), ``limited`` with the
+    time to the limit in seconds (the shorter of the cold and the rated start), or ``unknown`` (no coupled record, or one written
+    before the time to limit was stored).  Reads only; nothing is computed here."""
+    coupled = stored_duty.get("coupled") if isinstance(stored_duty, dict) else None
+    block = coupled.get("time_to_limit") if isinstance(coupled, dict) else None
+    if not isinstance(block, dict):
+        return {"state": "unknown", "time_s": None}
+    if block.get("within_limits", True):
+        return {"state": "within", "time_s": None}
+    starts = block.get("starts") if isinstance(block.get("starts"), dict) else {}
+    times = [t for t in (_number((starts.get(k) or {}).get("time_to_limit_s")) for k in ("cold", "rated")
+                         if isinstance(starts.get(k), dict)) if t is not None]
+    return {"state": "limited", "time_s": min(times) if times else None}
 
 
 _SOLVED_METRICS = ("T_em_avg_Nm", "T_avg_Nm", "torque_nm", "P_mech_W",
@@ -1393,6 +1423,72 @@ def _is_staff_identity(ident: dict) -> bool:
     return bool(ident.get("is_admin")) or str(ident.get("role") or "").lower() in {"admin", "engineer"}
 
 
+def _linked_duty_rows(cfg: dict, link: dict) -> list:
+    """The duties of ``cfg`` the link's point_links point at (id first, name for a link or duty without an id); a link whose duty
+    is gone gives a ``None`` entry so that a deletion changes the stamp."""
+    from motor_ai_sim.development import spec_sync
+    duties = [d for d in (cfg.get("duties") or []) if isinstance(d, dict)]
+    rows = [{"duty": d.get("name"), "duty_id": d.get("duty_id"), "_d": d} for d in duties]
+    return [spec_sync.resolve_duty(pl, rows) for pl in link.get("point_links") or [] if isinstance(pl, dict)]
+
+
+def _results_stamp(cfg: dict, stored: Any, link: dict) -> str | None:
+    """A digest of the stored results of the duties the project links to a requirement (the duty's own save stamp, its primary
+    result, its runs and its stored records, each with its ``recorded_at``).  ``None`` when the link names no duty.  Any recompute,
+    rename or deletion of a linked duty changes it."""
+    import hashlib
+    links = [pl for pl in link.get("point_links") or [] if isinstance(pl, dict)]
+    if not links:
+        return None
+    by_duty = stored if isinstance(stored, dict) else {}
+    parts = []
+    for pl, hit in zip(links, _linked_duty_rows(cfg, link)):
+        if hit is None:
+            parts.append([pl.get("spec_row_id"), "gone"])
+            continue
+        d = hit["_d"]
+        recs = by_duty.get(str(d.get("name") or "")) or {}
+        parts.append([pl.get("spec_row_id"), d.get("duty_id"), d.get("saved_at"), (d.get("result") or {}).get("recorded_at")
+                      if isinstance(d.get("result"), dict) else None,
+                      sorted(str((r or {}).get("recorded_at")) for r in (d.get("runs") or {}).values() if isinstance(r, dict)),
+                      sorted([str(k), str(v.get("recorded_at"))] for k, v in recs.items() if isinstance(v, dict))])
+    return hashlib.sha1(json.dumps(parts, sort_keys=True, default=str).encode()).hexdigest()[:16]
+
+
+def _review_valid(link: dict, cfg: dict, stored: Any, available: bool = True) -> bool:
+    """The ``report_reviewed`` stamp holds: set, and (when it recorded the linked duties' results) those results are unchanged.
+    A stamp written before this rule has no ``results_stamp`` and stays valid; a recompute of a linked duty clears it - the
+    customer cannot download until an engineer reviews again (owner 2026-11-25)."""
+    rv = link.get("report_reviewed")
+    if not isinstance(rv, dict):
+        return False
+    saved = rv.get("results_stamp")
+    if saved is None:
+        return True
+    if not available:
+        return False
+    try:
+        return _results_stamp(cfg, stored, link) == saved
+    except Exception:  # noqa: BLE001 - cannot tell: closed
+        return False
+
+
+def _review_valid_for(die: str, config: str, link: dict) -> bool:
+    """``_review_valid`` for a caller that has only the identity (the catalogue report gate)."""
+    rv = link.get("report_reviewed")
+    if not isinstance(rv, dict):
+        return False
+    if rv.get("results_stamp") is None:
+        return True
+    try:
+        from motor_ai_sim import duty_results
+        from motor_ai_sim.routes import family
+        cfg = yaml.safe_load(Path(str(family._cfg_file(die, config))).read_text(encoding="utf-8")) or {}
+        return _review_valid(link, cfg, duty_results.get(die, config) or {})
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def _set_link_flag(project_id: str, req: FlagUpdate, request: Request, flag: str, audit_action: str, *,
                    exclusive: bool = False) -> dict:
     """Set / clear one staff flag (``report_reviewed``, ``recommended``) on a linked motor of the project.
@@ -1422,6 +1518,15 @@ def _set_link_flag(project_id: str, req: FlagUpdate, request: Request, flag: str
                 stamp["report_commit"] = run_history.code_version()
             except Exception:
                 stamp["report_commit"] = "unknown"
+            try:   # the results this review looked at: a recompute of a linked duty later clears the stamp
+                from motor_ai_sim import duty_results
+                from motor_ai_sim.routes import family
+                cfg_doc = yaml.safe_load(Path(str(family._cfg_file(key_die, key_config))).read_text(encoding="utf-8")) or {}
+                results_stamp = _results_stamp(cfg_doc, duty_results.get(key_die, key_config) or {}, linked)
+                if results_stamp:
+                    stamp["results_stamp"] = results_stamp
+            except Exception:  # noqa: BLE001 - no stamp: the review stays as before
+                pass
 
         def mutate(doc):
             found = False
@@ -1458,6 +1563,120 @@ def set_recommended(project_id: str, req: FlagUpdate, request: Request):
     return _set_link_flag(project_id, req, request, "recommended", "motor.recommended", exclusive=True)
 
 
+class PointLinkUpdate(BaseModel):
+    die: str
+    config: str
+    spec_row_id: str
+    duty: Optional[str] = None      # the duty NAME to link; null / empty = remove the link
+
+
+def _point_link_context(project_id: str, request: Request, die: str, config: str):
+    """Engineers only (``edit=True`` + ``is_engineer``): returns ``(user, link row, cfg, spec rows)``.  The requirements are NOT
+    changed here (only ``can_edit_spec`` does that, through the specification routes)."""
+    user, _project, _role = access.require_project(request, project_id, edit=True)
+    if not access.is_engineer(user):
+        raise HTTPException(403, detail="Engineer access required")
+    project = store.get_project(project_id)
+    if project is None:
+        raise HTTPException(404, detail="Project not found")
+    linked = _linked_motor_for_status(project, die.strip(), config.strip())
+    if linked is None:
+        raise HTTPException(404, detail="Linked motor not found")
+    from motor_ai_sim.routes import family
+    try:
+        cfg = yaml.safe_load(Path(str(family._cfg_file(str(linked.get("die") or die), str(linked.get("config") or config)))).read_text(encoding="utf-8")) or {}
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(404, detail="The linked motor is not available") from exc
+    from motor_ai_sim.development import spec_sync
+    rows = spec_sync.spec_points((store.load_json(project_id, "draft.json", {}) or {}).get("draft"))
+    return user, linked, cfg, rows
+
+
+def _write_point_links(project_id: str, key_die: str, key_config: str, change) -> list:
+    out: list = []
+
+    def mutate(doc):
+        for item in doc.get("linked_motors", []):
+            if isinstance(item, dict) and _key(str(item.get("die") or ""), str(item.get("config") or "")) == _key(key_die, key_config):
+                links = [x for x in item.get("point_links") or [] if isinstance(x, dict)]
+                links = change(links)
+                if links:
+                    item["point_links"] = links
+                else:
+                    item.pop("point_links", None)
+                out[:] = links
+                from motor_ai_sim.development.models import now
+                doc["updated_at"] = now()
+                return
+        raise HTTPException(404, detail="Linked motor not found")
+    store.mutate_project(project_id, mutate)
+    return out
+
+
+def _link_record(point: dict, duty: dict, actor: str, mode: str) -> dict:
+    from motor_ai_sim.development import spec_sync
+    from motor_ai_sim.development.models import now
+    return {"spec_row_id": point["row_id"], "duty_id": duty.get("duty_id") or None, "duty_name": str(duty.get("name") or ""),
+            "mode": mode, "ack_spec_digest": spec_sync.point_digest(point), "linked_by": actor, "linked_at": now()}
+
+
+@router.put("/point-links")
+def set_point_link(project_id: str, req: PointLinkUpdate, request: Request):
+    """Link one requirement (``spec_row_id``) of the specification to a duty of a linked motor, or remove the link (engineers).
+
+    The link follows the duty by its immutable ``duty_id`` (a legacy duty without one is followed by name until its next save).
+    It stores the digest of the requirement it was confirmed against: a later edit of the requirement makes the point ``stale``."""
+    user, linked, cfg, rows = _point_link_context(project_id, request, req.die, req.config)
+    point = next((p for p in rows if p["row_id"] == req.spec_row_id), None)
+    if point is None:
+        raise HTTPException(404, detail="Requirement not found in the specification")
+    actor = str(user.get("email") or "")
+    key_die, key_config = str(linked.get("die") or ""), str(linked.get("config") or "")
+    name = (req.duty or "").strip()
+    with transaction():
+        if name:
+            from motor_ai_sim.duty_kind import is_test_duty
+            duty = next((d for d in cfg.get("duties") or [] if isinstance(d, dict) and d.get("name") == name and not is_test_duty(d)), None)
+            if duty is None:
+                raise HTTPException(404, detail="Duty not found in the motor")
+            rec = _link_record(point, duty, actor, "manual")
+            links = _write_point_links(project_id, key_die, key_config,
+                                       lambda ls: [x for x in ls if x.get("spec_row_id") != point["row_id"]] + [rec])
+        else:
+            links = _write_point_links(project_id, key_die, key_config,
+                                       lambda ls: [x for x in ls if x.get("spec_row_id") != point["row_id"]])
+        store.append_audit(project_id, actor, "motor.point_link", "motor", f"{key_die}/{key_config}",
+                           {"spec_row_id": point["row_id"], "duty": name or None})
+    return {"die": key_die, "config": key_config, "point_links": links}
+
+
+@router.post("/point-links/auto")
+def auto_point_links(project_id: str, req: FlagUpdate, request: Request):
+    """Link every UNAMBIGUOUS match of this motor (engineers): a requirement with exactly one duty that meets its speed band and
+    torque, claimed by no other requirement.  Existing links are never changed; the rest stays ``no point`` for confirmation."""
+    user, linked, cfg, rows = _point_link_context(project_id, request, req.die, req.config)
+    from motor_ai_sim import duty_results
+    from motor_ai_sim.development import spec_sync
+    from motor_ai_sim.routes import family
+    key_die, key_config = str(linked.get("die") or ""), str(linked.get("config") or "")
+    try:
+        stored = duty_results.get(key_die, key_config) or {}
+    except Exception:  # noqa: BLE001
+        stored = {}
+    result_rows = _results(key_die, key_config, cfg, stored, set(), own_only=True, sync=True)
+    existing = [x for x in linked.get("point_links") or [] if isinstance(x, dict)]
+    hints = spec_sync.suggestions(rows, result_rows, existing)
+    actor = str(user.get("email") or "")
+    by_name = {str(d.get("name")): d for d in cfg.get("duties") or [] if isinstance(d, dict)}
+    new = [_link_record(next(p for p in rows if p["row_id"] == rid), by_name[name], actor, "auto")
+           for rid, name in hints.items() if name in by_name]
+    with transaction():
+        links = _write_point_links(project_id, key_die, key_config, lambda ls: ls + [r for r in new if r["spec_row_id"] not in {x.get("spec_row_id") for x in ls}]) if new else existing
+        if new:
+            store.append_audit(project_id, actor, "motor.point_link.auto", "motor", f"{key_die}/{key_config}", {"linked": len(new)})
+    return {"die": key_die, "config": key_config, "linked": len(new), "point_links": links}
+
+
 def report_link_state(die: str, config: str) -> dict | None:
     """The project link behind ``die/config`` (``{"project_id", "link"}``) or ``None`` when it belongs to no project."""
     try:
@@ -1483,7 +1702,7 @@ def require_report_reviewed(die: str, config: str, authorization: str | None) ->
     state = report_link_state(die, config)
     if state is None:
         return
-    if not isinstance((state["link"] or {}).get("report_reviewed"), dict):
+    if not _review_valid_for(die, config, state["link"] or {}):
         raise HTTPException(403, detail={"code": "report_not_reviewed",
                                          "message": "The report is being checked by our engineers."})
 
@@ -1502,7 +1721,7 @@ def project_motor_report(project_id: str, request: Request, die: str, config: st
     user, role, open_die, cfg_name, _path, _cfg, link = _project_motor(project_id, request, die, config, show_all)
     authorization = request.headers.get("authorization")
     staff = access.is_engineer(user)
-    if not staff and not isinstance(link.get("report_reviewed"), dict):
+    if not staff and not _review_valid_for(open_die, cfg_name, link):
         raise HTTPException(403, detail={"code": "report_not_reviewed",
                                          "message": "The report is being checked by our engineers."})
     # run_id: the id the page polls GET /api/family/report/progress with - the same progress ring as the catalogue (owner 2026-10-27)
@@ -1554,6 +1773,8 @@ def list_project_motors(project_id: str, request: Request, show_all: bool = Fals
     ident = _identity(request)
     entries_cache: list = []
     link_stamps = linked_at_index(project)
+    from motor_ai_sim.development import spec_sync
+    spec_rows = spec_sync.spec_points((store.load_json(project_id, "draft.json", {}) or {}).get("draft"))
     for link in project.get("linked_motors", []):
         if not isinstance(link, dict): continue
         die, config = str(link.get("die") or ""), str(link.get("config") or "")
@@ -1589,7 +1810,9 @@ def list_project_motors(project_id: str, request: Request, show_all: bool = Fals
             except Exception:
                 # A malformed reference must not break the read-only project list.
                 configure_duties = set()
-        result_rows = _results(open_die, config, cfg, stored, configure_duties) if available else []
+        # own_only + sync (owner 2026-11-25): the list shows the same own records as the motor view, and a row says WHY a record
+        # was set aside (hidden_records) instead of showing a number of another point or dropping it silently
+        result_rows = _results(open_die, config, cfg, stored, configure_duties, own_only=True, sync=True) if available else []
         from motor_ai_sim.duty_kind import is_test_duty
         duty_names = [str(x.get("name")) for x in cfg.get("duties", [])
                       if isinstance(x, dict) and x.get("name") and not is_test_duty(x)]
@@ -1609,13 +1832,18 @@ def list_project_motors(project_id: str, request: Request, show_all: bool = Fals
                 # when the variant joined the project (ISO); null on a legacy row: "Latest" picks the newest stamp
                 "linked_at": link_stamps.get(_key(die, config)),
                 # staff marks: the variant whose report was checked, and THE recommended variant of the project
-                "report_reviewed": link.get("report_reviewed") if isinstance(link.get("report_reviewed"), dict) else None,
+                # the reviewed stamp counts only while the linked duties are as they were when it was set (owner 2026-11-25)
+                "report_reviewed": link.get("report_reviewed") if _review_valid(link, cfg, stored, available) else None,
+                "report_review_stale": isinstance(link.get("report_reviewed"), dict) and not _review_valid(link, cfg, stored, available),
                 "recommended": link.get("recommended") if isinstance(link.get("recommended"), dict) else None,
+                "point_links": [dict(x) for x in link.get("point_links") or [] if isinstance(x, dict)],
+                "point_comparisons": spec_sync.comparisons(spec_rows, [x for x in link.get("point_links") or [] if isinstance(x, dict)],
+                                                           result_rows, available),
                 "results": result_rows}
         results.append(item)
         if is_customer:
             store.append_audit(project_id, str(user.get("email") or ""), "motor.results.read", "motor", f"{die}/{config}")
-    return {"motors": results}
+    return {"motors": results, "spec_points": spec_rows}
 
 
 _POINT_KEYS = ("duty", "operating_point", "electromagnetic", "comparison", "stored_results")

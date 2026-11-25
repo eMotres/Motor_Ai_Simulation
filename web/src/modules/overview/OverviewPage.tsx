@@ -2,7 +2,7 @@
  *  its die / platform, with the Project and the Production columns kept apart; a flat Projects tab beside it.  Reads
  *  `/api/overview` (projects, productions, registry ids, display states) and the catalog tree; writes only the display state. */
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { Accordion, AccordionDetails, AccordionSummary, Box, Button, Chip, CircularProgress, IconButton, Link, Paper, Popover, Table, TableBody, TableCell,
+import { Accordion, AccordionDetails, AccordionSummary, Badge, Box, Button, Chip, CircularProgress, IconButton, Link, Paper, Popover, Table, TableBody, TableCell,
   TableHead, TableRow, ToggleButton, ToggleButtonGroup, Tooltip, Typography } from '@mui/material';
 import ArchiveOutlinedIcon from '@mui/icons-material/ArchiveOutlined';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
@@ -21,11 +21,14 @@ import { fetchFamilyTree, invalidateFamilyTree } from '../../lib/familyTree';
 import { NARROW } from '../../lib/narrowLayout';
 import { shownStatus } from '../development/projectStage';
 import ArchivedDies from './ArchivedDies';
+import DecisionsView from './decisions/DecisionsView';
+import { badgeTotal, type OqCount } from './decisions/model';
+import { ownerQueueApi } from './decisions/ownerQueueApi';
 import { buildView, flatProjects, headerChips, type Family, type OverviewAnswer, type OverviewProduction, type OverviewProject, type TreeDie } from './overviewModel';
 
 const API = (import.meta.env.VITE_API_URL ?? 'http://localhost:8001') as string;
 const DERIVED_STAGES: readonly string[] = ['specification', 'simulation', 'confirmation', 'in_production', 'finished'];
-const VIEWS = ['tree', 'projects'] as const;
+const VIEWS = ['tree', 'projects', 'decisions'] as const;
 type View = typeof VIEWS[number];
 
 const STATE_SX: Record<DisplayState, object> = {
@@ -48,6 +51,9 @@ const OverviewPage: React.FC = () => {
   const [filter, setFilter] = useRememberedView<DisplayFilter>('overview.displayFilter', 'active', oneOf(DISPLAY_FILTERS));
   const [reviewAnchor, setReviewAnchor] = useState<HTMLElement | null>(null);
   const [askConfirm, setAskConfirm] = useState<ConfirmState | null>(null);
+  const [oq, setOq] = useState<OqCount | null>(null);
+  const loadCount = useCallback(() => { ownerQueueApi.count().then(setOq).catch(() => setOq(null)); }, []);
+  useEffect(() => { loadCount(); const id = window.setInterval(loadCount, 60000); return () => window.clearInterval(id); }, [loadCount]);
 
   const load = useCallback(async () => {
     setLoading(true); setErr('');
@@ -174,8 +180,13 @@ const OverviewPage: React.FC = () => {
           sx={{ '& .MuiToggleButton-root': { py: 0.2, px: 1, fontSize: 11.5, textTransform: 'none' } }}>
           <ToggleButton value="tree">{t('overview.byMotor')}</ToggleButton>
           <ToggleButton value="projects">{t('overview.projects')}</ToggleButton>
+          <ToggleButton value="decisions" data-testid="overview-decisions-tab">
+            <Tooltip title={t('ownerQueue.countTip', { blocking: oq?.open_blocking ?? 0, messages: oq?.open_messages ?? 0 })}>
+              <Badge color="warning" badgeContent={badgeTotal(oq)} sx={{ '& .MuiBadge-badge': { right: -10, top: 2 } }}><span>{t('ownerQueue.tab')}</span></Badge>
+            </Tooltip>
+          </ToggleButton>
         </ToggleButtonGroup>
-        {model && <DisplayStateFilter value={filter} onChange={setFilter}
+        {model && view !== 'decisions' && <DisplayStateFilter value={filter} onChange={setFilter}
           counts={view === 'tree' ? { counts: model.counts, woke: { active: 0, parked: 0, archived: 0, all: 0 } } : projectCounts}
           tip={t(view === 'tree' ? 'overview.countsRowsTip' : 'overview.countsProjectsTip')} />}
         {answer && !answer.registry && <Tooltip title={t('overview.noRegistryTip')}><Chip size="small" label={t('overview.noRegistry')} sx={{ height: 20, fontSize: 11 }} /></Tooltip>}
@@ -200,7 +211,8 @@ const OverviewPage: React.FC = () => {
       </Box>
       {loading && !answer && <Box sx={{ display: 'flex', gap: 1.5, color: 'var(--text-3)', py: 3 }}><CircularProgress size={18} /></Box>}
       {err && <Typography sx={{ fontSize: 12, color: '#f87171' }}>{err}</Typography>}
-      {empty && <Typography sx={{ fontSize: 13, color: 'var(--text-3)' }}>{t('overview.empty')}</Typography>}
+      {empty && view !== 'decisions' && <Typography sx={{ fontSize: 13, color: 'var(--text-3)' }}>{t('overview.empty')}</Typography>}
+      {view === 'decisions' && <DecisionsView projects={answer?.projects ?? {}} onChanged={loadCount} />}
       {model && !empty && view === 'tree' && (
         <>
           {model.motors.length > 0 && familyTable(model.motors, 'motors')}

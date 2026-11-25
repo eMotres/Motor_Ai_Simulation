@@ -87,6 +87,8 @@ ACTIONS = frozenset({
     "user.region", "regions.classify", "regions.directory_sync", "regions.remote_read",
     # regions stage 2: mail / LLM relayed for the peer (no content, hashed recipients only)
     "relay.mail", "relay.llm",
+    # owner queue (owner_queue.py, 2026-11-25): what agents post for the owner, his answers, the agent tokens (never a token, never the detail text)
+    "owner_queue.create", "owner_queue.answer", "owner_queue.withdraw", "owner_queue.token_create", "owner_queue.token_revoke",
 })
 
 _SECRETISH = ("password", "secret", "token", "key", "authorization", "cookie",

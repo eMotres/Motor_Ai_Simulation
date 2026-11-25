@@ -520,6 +520,9 @@ app.include_router(digest_admin_router)
 # Owner's daily report (owner 2026-10-27): preview + send-now, admin only, to the owner's address only
 from motor_ai_sim.owner_report.routes import router as owner_report_router
 app.include_router(owner_report_router)
+# Owner queue (2026-11-25): decisions / questions / messages agents post for the owner; agent side = own oq_ bearer
+from motor_ai_sim.routes.owner_queue import router as owner_queue_router
+app.include_router(owner_queue_router)
 # Tests (owner 2026-10-26): measured data per configuration, compared with the simulation of the same point -
 # /api/motor-tests/{die}/{config} (production side) and /api/projects/{id}/motors/tests (read-only project view)
 from motor_ai_sim.motor_tests.routes import router as motor_tests_router, project_router as motor_tests_project_router

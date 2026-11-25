@@ -916,13 +916,14 @@ def generate_motor_passport(motor_id: str, coarse: bool = False,
                 "# timeout is not started; the passport ships 2-D and the 3-D runs as a job\n"
                 "from motor_ai_sim.end3d_cost import preflight\n"
                 "est = preflight(geo_override=g, n_stack=4, n_cap=6, auto_extra=(0.75,))\n"
-                "if not est['fits']:\n"
+                "# plan: 'auto' (auto rows + 0.75), 'three_row' (0.75 / 1 / 1.5) or 'job'\n"
+                "if est['plan'] == 'job':\n"
                 "    print('PASSPORT3D_JOB:' + json.dumps(est, default=float))\n"
                 "    raise SystemExit(0)\n"
                 "# mesh sizes: run_stage_a derives them from the PHYSICAL\n"
                 "# scales (air gap, thinnest magnet), never from the OD\n"
                 "p = run_stage_a(geo_override=g, n_stack=4, n_cap=6,\n"
-                "                order=2, l_factors='auto', auto_extra=(0.75,),\n"
+                "                order=2, l_factors=tuple(est['l_factors']),\n"
                 "                do_bracket=False, do_2d=True,\n"
                 "                tol=3e-3, max_iter=45, verbose=False)\n"
                 "mm = p.get('machine') or {}\n"
@@ -931,6 +932,8 @@ def generate_motor_passport(motor_id: str, coarse: bool = False,
                 "                             'generated_utc', 'l_stack_curve',\n"
                 "                             'k_flux_vs_L_method', 'two_d', 'version')}\n"
                 "out['materials'] = mm.get('materials')\n"
+                "out['plan'] = est['plan']\n"
+                "out['estimate'] = {k: est.get(k) for k in ('seconds', 'seconds_worst', 'rows')}\n"
                 "out['mesh'] = {k: md.get(k) for k in ('h_gap_mm', 'h_solid_mm',\n"
                 "               'mesh_rule', 'box_z_mm', 'iron_stack_kf')}\n"
                 "print('PASSPORT3D:' + json.dumps(out, default=float))\n")
@@ -972,7 +975,8 @@ def generate_motor_passport(motor_id: str, coarse: bool = False,
             _e3 = {
                 # the factor to apply, decided once from the run's 2-D verdict; the raw k_flux beside it
                 **_e3_applied(_sa),
-                "fidelity": "quick (n_stack=4, auto L-sweep)",
+                "fidelity": ("quick (n_stack=4, %s L-sweep)" % ("auto" if _sa.get("plan") == "auto"
+                                                                  else "3-point 0.75/1/1.5")),
                 "generated_utc": _sa.get("generated_utc"),
                 "machine": f"{result['slots']}s/{result['poles']}p "
                            f"OD {2*result['geo']['statorOR_mm']:.0f}",

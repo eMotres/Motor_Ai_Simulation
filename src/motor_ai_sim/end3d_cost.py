@@ -1,34 +1,38 @@
-"""How long a Stage A sweep takes, estimated BEFORE it starts, so the catalogue does not start one it cannot finish.
+"""How long a Stage A sweep takes, estimated BEFORE it starts, so the catalogue does not start one that clearly cannot
+finish inside its child's 7200 s timeout (coordinator 2026-11-25: the timeout stays).
 
-The catalogue passport builds its 3-D end-effect factor in a child process with a hard 7200 s timeout (coordinator
-2026-11-25: the timeout stays).  A sweep that cannot finish inside it is not started: the passport ships 2-D with the
-note "3-D passport: run as a job" and the full Stage A runs through the job queue (``scripts/stage_a_job.py``), its
-result adopted through ``POST /api/static3d/passport/adopt``.
+The decision uses CENTRAL constants (medians of the measured solves) and refuses only when the central estimate is
+above the timeout; the worst-case estimate (the largest measured constants) is kept beside it as information.
 
-The rule (constants and their evidence; every measurement is a payload-only us1 job of 2026-11-18 .. 25, 2-4 cpus):
+    dofs       = 1.40 x 3 x n_tri x layers
+    t_central  = 150 s + 1.40e-4 s x dofs_c x (45 + 18 x (rows - 1))       layers_c = max(n_stack + n_cap, 12)
+    t_worst    = 300 s + 2.10e-4 s x dofs_w x (46 x min(rows, 2) + 25 x (rows - min(rows, 2)))
+                                                                              layers_w = n_stack + n_cap + 2
+    fits       = t_central <= 7200 s
 
-    dofs  = DOF_PER_ELEMENT x TETS_PER_PRISM x n_tri x layers        layers = n_stack + n_cap + LAYER_MARGIN
-    t     = OVERHEAD_S + SEC_PER_DOF_ITER x dofs x (ITER_COLD x n_cold + ITER_WARM x n_warm)
-            n_cold = min(rows, 2)  (the reference, and the longest row: a longer stack may add axial layers and then
-                                    starts cold - run A's 180 mm row did)
-            n_warm = rows - n_cold
-    fits  = t <= BUDGET_SHARE x 7200 s
+Evidence (payload-only us1 jobs 2026-11-18 .. 25, 2-4 cpus, 14 cold and 15 warm solves):
 
-* ``n_tri`` is the 2-D cross-section mesh of the run (cheap to build; ``preflight`` builds it the way run_stage_a does).
-* DOF_PER_ELEMENT 1.40: P2 dofs / tets measured 1.375-1.40 (478 075 / 341 424 ... 860 535 / 625 944).
-* TETS_PER_PRISM 3 and layers: elements = 3 x n_tri x layers exactly; layers measured 11-12 at n_stack 4 / n_cap 6,
-  18 at 8 / 10, 22 at 12 / 10, 26 at 12 / 14  ->  n_stack + n_cap (+ LAYER_MARGIN 2).
-* SEC_PER_DOF_ITER 2.1e-4 s: the LARGEST of 14 measured cold and warm solves (8.1e-5 .. 2.06e-4 s per dof per Picard
-  iteration; 2-4 cpus, a shared server).
-* ITER_COLD 46 (cold solves stop at 42-46 iterations, the cap) and ITER_WARM 25 (warm-started rows 15-25).
-* OVERHEAD_S 300: the 2-D leg (10-115 s measured), meshing and start-up.
-* BUDGET_SHARE 0.8: 20 % of the timeout kept free on top of the worst-case constants.
+* dofs per element 1.40 (P2 / tets measured 1.375-1.40); elements = 3 x n_tri x layers exactly; layers measured 11-12
+  at n_stack 4 / n_cap 6, 18 at 8 / 10, 22 at 12 / 10, 26 at 12 / 14.
+* s per dof per Picard iteration: cold solves 8.1e-5 .. 2.06e-4, median 1.39e-4; warm 1.32e-4 median -> 1.40e-4.
+* iterations: cold median 45 (42-46, the cap), warm median 18 (15-25); the reference row is cold, the others warm-start.
+* overhead: the 2-D leg 10-115 s plus meshing.
 
-Checked against the seven measured runs, the rule over-predicts every one (1.5-3.1 x): the 400 mm pilot (1 quick row)
-4 917 s estimated / 3 122 s measured; run A (3 default rows) 19 873 / 11 491; run B (2 rows, n_stack 12) 18 769 /
-12 633; the 40 mm full run 21 510 / 11 569; its 1-row quick proof 5 303 / 1 730; 80 mm 3-row runs 15 659 / 6 668 and
-15 680 / 5 885.  Consequence: a 4-row quick catalogue sweep (auto + the 0.75 row) fits only below about 3 600
-cross-section triangles (5 rows: 3 100; 1 row: 11 200); the measured machines (7 400 - 11 700) go to the job queue.
+On the seven measured runs, ``t_central > 7200`` classifies all seven right (no false refusal, no false accept):
+pilot 400 mm 1 quick row 3 161 s / measured 3 122; 40 mm 1 quick row 3 413 / 1 730; 80 mm 3 default rows 6 530 / 6 668
+and 6 539 / 5 885 (fit); 400 mm run A 8 281 / 11 491, run B 7 879 / 12 633, 40 mm full 8 961 / 11 569 (do not fit).
+The worst-case constants would refuse two of the four that fit (the 80 mm 3-row runs).  The central rule under-reads long default-fidelity sweeps (0.62-0.77)
+and over-reads the small quick one (1.97): a false accept costs a killed child and a 2-D passport, as before.
+
+Catalogue plans (``preflight``), first that fits:
+
+1. ``auto``: ``l_factors='auto'`` plus the 0.75 row (4 rows; 5 below the end zone) - the full agreement check;
+2. ``three_row``: the old catalogue sweep (0.75, 1, 1.5) - 3 rows; the check then fits the 1.0 and 1.5 rows only, an
+   EXACT two-row fit (``agreement_check.exact_fit``; a per-row k error dk becomes 5 x dk in eps) or NOT CHECKED when the
+   1.0 row is in the end zone.  k_flux itself is formed exactly as before; only the verdict is weaker;
+3. ``job``: the passport ships 2-D with the note below, and the full Stage A runs as a job (``scripts/stage_a_job.py``).
+   The web route never submits a job: ``motres-agent-job`` is root-only, the coordinator (or a session with that
+   right) submits it and adopts the result through ``POST /api/static3d/passport/adopt``.
 """
 from __future__ import annotations
 
@@ -36,41 +40,69 @@ import math
 from typing import Any, Dict, Optional, Sequence
 
 CATALOG_CHILD_TIMEOUT_S = 7200
-BUDGET_SHARE = 0.8
-SEC_PER_DOF_ITER = 2.1e-4
-ITER_COLD = 46
-ITER_WARM = 25
+
+# central (decides)
+SEC_PER_DOF_ITER = 1.40e-4
+ITER_COLD = 45
+ITER_WARM = 18
+OVERHEAD_S = 150.0
+MIN_LAYERS = 12
+# worst case (information only)
+SEC_PER_DOF_ITER_WORST = 2.10e-4
+ITER_COLD_WORST = 46
+ITER_WARM_WORST = 25
+OVERHEAD_S_WORST = 300.0
+LAYER_MARGIN_WORST = 2
+
 DOF_PER_ELEMENT = 1.40
 TETS_PER_PRISM = 3
-LAYER_MARGIN = 2
-OVERHEAD_S = 300.0
 
-JOB_NOTE = "3-D passport: run as a job"
+#: the old catalogue sweep, the fallback plan
+THREE_ROW_FACTORS = (0.75, 1.0, 1.5)
+
+JOB_NOTE = ("3-D passport: run as a job (too long for the catalogue's 7200 s; the coordinator submits it, "
+            "the web route cannot)")
 
 
 def estimate_stage_a(n_tri: int, rows: int, n_stack: int = 4, n_cap: int = 6,
                      timeout_s: float = CATALOG_CHILD_TIMEOUT_S) -> Dict[str, Any]:
-    """The rule of the module docstring: ``{dofs, seconds, budget_s, fits, rows, layers, n_tri}``."""
+    """``{seconds (central), seconds_worst, dofs, dofs_worst, fits, rows, layers, n_tri, budget_s, rule}``."""
     n_tri, rows = int(n_tri), int(rows)
     if n_tri <= 0 or rows <= 0:
         raise ValueError("n_tri and rows must be positive")
-    layers = int(n_stack) + int(n_cap) + LAYER_MARGIN
+    layers = max(int(n_stack) + int(n_cap), MIN_LAYERS)
+    layers_w = int(n_stack) + int(n_cap) + LAYER_MARGIN_WORST
     dofs = DOF_PER_ELEMENT * TETS_PER_PRISM * n_tri * layers
-    n_cold = min(rows, 2)
-    n_warm = rows - n_cold
-    seconds = OVERHEAD_S + SEC_PER_DOF_ITER * dofs * (ITER_COLD * n_cold + ITER_WARM * n_warm)
-    budget = BUDGET_SHARE * float(timeout_s)
-    return {"n_tri": n_tri, "rows": rows, "layers": layers, "dofs": int(round(dofs)),
-            "seconds": float(seconds), "budget_s": budget, "fits": bool(seconds <= budget),
-            "rule": "t = %g + %g * dofs * (%d * cold + %d * warm), dofs = %.2f * %d * n_tri * (n_stack + n_cap + %d)"
-                    % (OVERHEAD_S, SEC_PER_DOF_ITER, ITER_COLD, ITER_WARM, DOF_PER_ELEMENT, TETS_PER_PRISM,
-                       LAYER_MARGIN)}
+    dofs_w = DOF_PER_ELEMENT * TETS_PER_PRISM * n_tri * layers_w
+    t = OVERHEAD_S + SEC_PER_DOF_ITER * dofs * (ITER_COLD + ITER_WARM * (rows - 1))
+    cold_w = min(rows, 2)
+    t_w = OVERHEAD_S_WORST + SEC_PER_DOF_ITER_WORST * dofs_w * (ITER_COLD_WORST * cold_w
+                                                                  + ITER_WARM_WORST * (rows - cold_w))
+    return {"n_tri": n_tri, "rows": rows, "layers": layers, "dofs": int(round(dofs)), "dofs_worst": int(round(dofs_w)),
+            "seconds": float(t), "seconds_worst": float(t_w), "budget_s": float(timeout_s), "fits": bool(t <= timeout_s),
+            "rule": "t = %g + %g * dofs * (%d + %d * (rows - 1)), dofs = %.2f * %d * n_tri * max(n_stack + n_cap, %d); "
+                    "fits when t <= %g s" % (OVERHEAD_S, SEC_PER_DOF_ITER, ITER_COLD, ITER_WARM, DOF_PER_ELEMENT,
+                                             TETS_PER_PRISM, MIN_LAYERS, timeout_s)}
+
+
+def plan_catalogue(n_tri: int, auto_factors: Sequence[float], n_stack: int = 4, n_cap: int = 6,
+                   timeout_s: float = CATALOG_CHILD_TIMEOUT_S) -> Dict[str, Any]:
+    """The first catalogue plan that fits (module docstring): ``auto`` (``auto_factors``), ``three_row``, or ``job``.
+    The answer is the chosen plan's estimate plus ``plan``, ``l_factors`` and ``estimates`` (every plan tried)."""
+    tried = {}
+    for plan, factors in (("auto", list(auto_factors)), ("three_row", list(THREE_ROW_FACTORS))):
+        est = estimate_stage_a(n_tri, len(factors), n_stack, n_cap, timeout_s)
+        tried[plan] = {k: est[k] for k in ("rows", "seconds", "seconds_worst", "fits")}
+        if est["fits"]:
+            return dict(est, plan=plan, l_factors=factors, estimates=tried)
+    est = estimate_stage_a(n_tri, len(list(auto_factors)), n_stack, n_cap, timeout_s)
+    return dict(est, fits=False, plan="job", l_factors=list(auto_factors), estimates=tried)
 
 
 def preflight(geo_override: Optional[dict] = None, n_stack: int = 4, n_cap: int = 6,
               auto_extra: Sequence[float] = (0.75,), timeout_s: float = CATALOG_CHILD_TIMEOUT_S) -> Dict[str, Any]:
-    """Build the run's 2-D cross-section exactly as ``run_stage_a`` does (no 3-D mesh, no solve) and estimate the
-    ``l_factors='auto'`` sweep plus ``auto_extra``.  Runs in the catalogue CHILD process, never in the API."""
+    """Build the run's 2-D cross-section exactly as ``run_stage_a`` does (no 3-D mesh, no solve) and choose the
+    catalogue plan.  Runs in the catalogue CHILD process, never in the API."""
     from motor_ai_sim.simulation.static3d.end_effect import auto_l_factors
     from motor_ai_sim.simulation.static3d.motor_geometry import load_motor_section
     from motor_ai_sim.simulation.static3d.motor_mesh import build_section_mesh_2d, physical_mesh_sizes
@@ -84,8 +116,8 @@ def preflight(geo_override: Optional[dict] = None, n_stack: int = 4, n_cap: int 
     for f in auto_extra:
         if not any(abs(float(f) - g) < 1e-9 for g in factors):
             factors.append(float(f))
-    est = estimate_stage_a(sect2d.n_tri, len(factors), n_stack, n_cap, timeout_s)
-    est.update(stack_mm=section.stack_mm, pole_pitch_mm=tau, l_factors=factors)
+    est = plan_catalogue(sect2d.n_tri, factors, n_stack, n_cap, timeout_s)
+    est.update(stack_mm=section.stack_mm, pole_pitch_mm=tau)
     return est
 
 
@@ -105,7 +137,7 @@ def parse_child_output(stdout: str, returncode: int):
 
 def job_note_fields(estimate: Dict[str, Any]) -> Dict[str, Any]:
     """What the catalogue passport carries when its 3-D sweep goes to the job queue: ``end3d`` None (2-D), the note,
-    and the estimate that decided it."""
+    and the estimate that decided it (central and worst case, every plan tried)."""
     return {"end3d": None, "end3d_note": JOB_NOTE,
-            "end3d_estimate": {k: estimate.get(k) for k in ("seconds", "budget_s", "rows", "dofs", "n_tri", "layers",
-                                                           "l_factors")}}
+            "end3d_estimate": {k: estimate.get(k) for k in ("seconds", "seconds_worst", "budget_s", "rows", "dofs",
+                                                           "n_tri", "layers", "l_factors", "plan", "estimates")}}

@@ -2,7 +2,8 @@
 """Stage A (3-D end-effect) of ONE catalogue machine as a queued job, for machines the catalogue child cannot finish
 inside its 7200 s timeout (``motor_ai_sim.end3d_cost``: the passport then ships 2-D with "3-D passport: run as a job").
 
-The app does not submit jobs.  The recipe (us1 agent jobs, ``motres-agent-job``, background class):
+The web route never submits a job: ``motres-agent-job`` is root-only (sudo), so the coordinator - or a session that has
+that right - submits it and adopts the result.  The recipe (us1 agent jobs, background class):
 
     mkdir -p ~/jobs/<tag> && sudo motres-agent-job prep <tag>
     sudo motres-agent-catalog get <tag> "<die>" "<configuration>"          # read-only copy into ~/jobs/<tag>/bundle

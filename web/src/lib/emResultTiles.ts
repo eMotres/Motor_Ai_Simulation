@@ -48,9 +48,10 @@ export interface EmTileSummary {
   P_core_W?: number | null;
   /** per half (stator / rotor): the iron loss split behind the IRON LOSS tile's tooltip */
   P_core_terms?: Record<string, { hysteresis_W: number; eddy_W: number; excess_W: number; model?: string }> | null;
-  /** axial magnet slicing: the factor the 2-D magnet eddy loss was multiplied by */
+  /** axial magnet slicing: the factor applied to the magnet conductivity in the field solve
+   *  (applied_as 'field_sigma', since 2026-11-25), or, on an older run, to the 2-D magnet eddy watts */
   magnet_segmentation?: { slice_mm?: number | null; stack_mm?: number | null; width_mm?: number | null;
-    factor?: number | null } | null;
+    factor?: number | null; applied_as?: string | null } | null;
   P_stranded_W?: number | null;
   P_mag_W?: number | null;
   P_shaft_W?: number | null;
@@ -421,7 +422,7 @@ export function emTileRows(s: EmTileSummary, view: EmTileView = {}): EmTileSpec[
       unit: 'W', d: 0, value: num(s.P_core_W) }),
     tile({ id: 'copperLoss', labelKey: 'configure.copperLoss', tipKey: 'emTiles.copperLossTip', unit: 'W', d: 0, value: num(s.P_stranded_W) }),
     tile({ id: 'magnetLoss', labelKey: 'configure.magnetLoss', tipKey: 'emTiles.magnetLossTip',
-      tipExtraKeys: [...(segSliced ? ['emTiles.magnetSeg'] : []), ...(unsettled && !notSolved ? ['emTiles.eddyUnsettled'] : [])],
+      tipExtraKeys: [...(segSliced ? [seg?.applied_as === 'field_sigma' ? 'emTiles.magnetSegSigma' : 'emTiles.magnetSeg'] : []), ...(unsettled && !notSolved ? ['emTiles.eddyUnsettled'] : [])],
       tipVars: { slice: num(seg?.slice_mm) ?? '-', stack: num(seg?.stack_mm) ?? '-', width: num(seg?.width_mm) ?? '-',
         factor: num(seg?.factor) != null ? (num(seg?.factor) as number).toPrecision(3) : '-' },
       unit: 'W', d: 0,

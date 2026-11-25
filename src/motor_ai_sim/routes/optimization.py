@@ -489,6 +489,20 @@ def _eval_cache_key(overrides: Dict[str, float], current_a: float, steps: int,
         # `warm_seeded` and `demag_seed_from` (fem_solver_2d), so a cached
         # point says for itself whose state it continued.
     }
+    # SLICED MAGNETS (2026-11-25): solved with sigma x factor in the field, no
+    # longer full sigma + scaled watts, so an entry stored for a machine with
+    # magnet_lamination > 0 before that change is other physics.  Only sliced
+    # machines carry the tag; every other key is byte-identical.
+    try:
+        from motor_ai_sim.simulation.fem_solver_2d import (
+            magnet_segmentation_cache_tag as _mseg_tag)
+        _geo_eff = dict(get_config().get("geometry") or {})
+        _geo_eff.update(overrides or {})
+        _mseg = _mseg_tag(_geo_eff)
+    except Exception:  # noqa: BLE001 — a key must never fail on a config hiccup
+        _mseg = None
+    if _mseg is not None:
+        payload["mseg"] = _mseg
     _cr_run = _RUN_COIL_REL.get()
     if _cr_run is not None:                      # a run at another wire cell than the stored block never shares an entry with one at it
         payload["cr"] = round(float(_cr_run), 4)

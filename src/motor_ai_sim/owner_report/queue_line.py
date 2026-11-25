@@ -24,12 +24,16 @@ def urgent_names(urgent: list) -> str:
 
 
 def format_queue_line(counts: dict, now: float, urgent: Optional[list] = None) -> str:
-    """``Decisions: 2 urgent (Pump project: ...; ...), 4 open, 9 messages, oldest 2 d 5 h`` from ``owner_queue.counts()`` (pure).
-    The urgent part appears only when something urgent is open; it names at most three items, then ``+N``."""
+    """``Decisions: 2 urgent (Pump project: ...; ...), 4 open (3 specification submits), 9 messages, oldest 2 d 5 h`` from
+    ``owner_queue.counts()`` (pure).  The urgent part appears only when something urgent is open; it names at most three
+    items, then ``+N``."""
     line = "Decisions: "
     if counts.get("open_urgent"):
         line += f"{int(counts['open_urgent'])} urgent" + (f" ({urgent_names(urgent)})" if urgent else "") + ", "
-    line += f"{int(counts.get('open_blocking', 0))} open, {int(counts.get('open_messages', 0))} messages"
+    line += f"{int(counts.get('open_blocking', 0))} open"
+    if counts.get("open_spec_submits"):
+        line += f" ({int(counts['open_spec_submits'])} specification submits)"
+    line += f", {int(counts.get('open_messages', 0))} messages"
     oldest = counts.get("oldest_open_at")
     if oldest:
         age = max(0, int(now - calendar.timegm(time.strptime(oldest, "%Y-%m-%dT%H:%M:%SZ"))))

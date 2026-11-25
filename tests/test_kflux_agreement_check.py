@@ -123,7 +123,7 @@ def test_two_rows_are_an_exact_fit_with_the_error_amplification_said():
 
 def test_three_rows_record_the_residual_and_a_bent_curve_is_not_checked():
     ok = EE.end_deficit_check(_curve([(90.0, 0.96942381), (135.0, 0.98104254), (180.0, 0.98661238)]), 90.0)
-    assert ok["exact_fit"] is False and ok["residual_rms_mm"] / (sum(ok["D_mm"]) / 3) < 0.01
+    assert ok["verdict"] == "PASS" and ok["exact_fit"] is False and ok["residual_rms_mm"] / (sum(ok["D_mm"]) / 3) < 0.01
     bent = EE.end_deficit_check(_curve([(12.0, 1 - 0.9 / 12), (18.0, 1 - 1.3 / 18), (24.0, 1 - 0.9 / 24)]), 12.0)
     assert bent["verdict"] == "NOT CHECKED" and "not linear" in bent["reason"]
 
@@ -181,3 +181,72 @@ def test_invalid_path_has_no_old_tolerance_key(stubbed, monkeypatch):  # noqa: F
     monkeypatch.setattr(REF2D, "solve_2d_reference_converged", lambda *a, **kw: r2)
     t = EE.run_stage_a(l_factors=(1.0,), do_bracket=False, do_2d=True, verbose=False)["two_d"]
     assert t["verdict"] == "INVALID" and "agreement_tolerance" not in t and t["k_flux_status"] == "invalid"
+
+
+
+# --------------------------------------------------------------------------
+# re-review (2026-11-25): one-sided coarse screen, labels, dropped NaN
+# --------------------------------------------------------------------------
+
+@pytest.mark.parametrize("L, ratio, inside", [
+    (6.0, 0.891, True),     # 80 mm machine, 6 mm, correct (bound 1 - 0.3*5.565/6 = 0.722)
+    (8.0, 0.923, True),
+    (12.0, 0.957, True),    # bound 0.85
+    (12.0, 0.849, False),
+    (180.0, 1.0064, True),  # 400 mm machine at 180 mm: 3-D 0.5 % above 2-D
+    (12.0, 1.0199, True),
+    (12.0, 1.0201, False),  # end physics never raises the ratio
+    (12.0, 1.08, False),    # an unconverged 2-D leg ~8 % low
+])
+def test_coarse_screen_bounds_are_one_sided(L, ratio, inside):
+    lo, hi = EE.coarse_screen_bounds(L, 3.141592653589793 * 24.8 / 14)
+    assert (lo <= ratio <= hi) is inside
+    assert lo == pytest.approx(1 - max(0.15, 0.3 * 3.141592653589793 * 24.8 / 14 / L))
+
+
+def _stub_2d(monkeypatch, b1):
+    from types import SimpleNamespace
+    from motor_ai_sim.simulation.static3d import ref2d as REF2D
+    r2 = SimpleNamespace(B1_T=b1, harmonics={}, n_tri=1, ndofs=1, wall_s=0.0, outer_r_mm=40.0, relaxation=1.0,
+                         picard_sweeps=1, picard_residual=0.0, picard_converged=True, even_over_odd=0.0)
+    monkeypatch.setattr(REF2D, "solve_2d_reference_converged", lambda *a, **kw: r2)
+
+
+def test_coarse_screen_refuses_a_ratio_above_one_on_an_uncheckable_run(stubbed, monkeypatch):  # noqa: F811
+    _stub_2d(monkeypatch, TABLE[REF_MM][0] / 1.05)                       # mid / 2-D = 1.05 at 12 mm
+    t = EE.run_stage_a(l_factors=(1.0, 0.5), do_bracket=False, do_2d=True, verbose=False)["two_d"]
+    assert t["verdict"] == "FAIL" and t["agreement_check"]["coarse_screen"]["high"] == pytest.approx(1.02)
+    assert EE.k_flux_basis_label(t) == "2-D check failed: apply k_flux_self, not k_flux"
+
+
+def test_coarse_screen_after_a_residual_not_checked_says_coarse_screen_not_eps(stubbed, monkeypatch):  # noqa: F811
+    real = EE.end_deficit_check
+
+    def bent(curve, ref, **kw):            # what the residual guard returns: NOT CHECKED with eps / D0 already formed
+        out = real(curve, ref, **kw)
+        out.update(verdict="NOT CHECKED", eps=0.004, D0_mm=0.9, reason="D is not linear in L: rms residual ...")
+        return out
+    monkeypatch.setattr(EE, "end_deficit_check", bent)
+    _stub_2d(monkeypatch, TABLE[REF_MM][0] / 1.05)                       # mid / 2-D = 1.05: outside the screen
+    t = EE.run_stage_a(l_factors=(1.0, 0.5), do_bracket=False, do_2d=True, verbose=False)["two_d"]
+    chk = t["agreement_check"]
+    assert chk["verdict"] == "FAIL" and chk["eps"] == 0.004 and "coarse_screen" in chk
+    assert t["warning"].startswith("coarse screen") and "eps =" not in t["warning"]
+
+
+def test_labels_follow_the_verdict_and_its_reason():
+    assert EE.k_flux_basis_label({"verdict": "FAIL", "agreement_check": {}}) == "2-D check failed: apply k_flux_self, not k_flux"
+    assert "applied as stored" in EE.k_flux_basis_label({"verdict": "FAIL"})          # old-rule passport
+    inv = EE.k_flux_basis_label({"verdict": "INVALID"})
+    assert inv.startswith("2-D check failed") and "no 2-D ratio" in inv
+    nc = EE.k_flux_basis_label({"verdict": "NOT CHECKED", "agreement_check": {"reason": "the usable lengths span only 1.083 x"}})
+    assert "span only 1.083" in nc and "unverified" in nc
+
+
+def test_a_nan_stack_length_is_dropped_as_null():
+    c = EE.end_deficit_check(_curve([(12.0, 0.9227), (24.0, 0.96067)]) +
+                             [{"stack_mm": float("nan"), "k_flux": 0.95, "ratio_3d_mid_over_2d": 1.0},
+                              {"stack_mm": "x", "k_flux": 0.95}], 12.0)
+    assert sorted((d["stack_mm"] is None) for d in c["dropped_rows"]) == [True, True]
+    import json
+    json.dumps(c, allow_nan=False)

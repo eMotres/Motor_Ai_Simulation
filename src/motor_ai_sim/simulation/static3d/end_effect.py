@@ -88,9 +88,23 @@ MAX_REL_RESIDUAL = 0.03
 END_ZONE_POLE_PITCHES = 2.0
 #: D0 above this share of a pole pitch is flagged (an end loss longer than half a pole pitch is unusual)
 D0_FLAG_POLE_PITCHES = 0.5
-#: a run that cannot be checked (one usable length) is still refused when its mid-plane / 2D ratio is off by more
-#: than this: a coarse screen for gross model faults.  Not tighter: a correct 6 mm run of the 80 mm machine has 0.891.
-COARSE_SCREEN = 0.15
+#: Coarse screen for a run the fit cannot check (one-sided, 2026-11-25).  End physics only LOWERS the mid-plane / 2D
+#: ratio (short stack: 0.891 at 6 mm, 0.923 at 8 mm, 0.957 at 12 mm on the 80 mm machine), so a ratio above
+#: 1 + COARSE_SCREEN_HIGH is a model fault (an unconverged 2D Picard ~11 % low reads ~1.08); the largest correct value
+#: measured is 1.0064 (400 mm machine at 180 mm, a 3D-above-2D offset of ~0.5 %).  Below, the allowed deficit grows
+#: as the stack shortens: ratio < 1 - max(COARSE_SCREEN_LOW, COARSE_SCREEN_TAU * pole pitch / L) is a fault
+#: (6 mm on the 80 mm machine, pole pitch 5.6 mm: bound 0.72, measured 0.891).
+COARSE_SCREEN_HIGH = 0.02
+COARSE_SCREEN_LOW = 0.15
+COARSE_SCREEN_TAU = 0.3
+
+
+def coarse_screen_bounds(stack_mm: float, pole_pitch_mm: Optional[float]) -> Tuple[float, float]:
+    """``(lowest, highest)`` mid-plane / 2D ratio a run the fit cannot check may have (see COARSE_SCREEN_*)."""
+    low = COARSE_SCREEN_LOW
+    if pole_pitch_mm and pole_pitch_mm > 0 and stack_mm and stack_mm > 0:
+        low = max(low, COARSE_SCREEN_TAU * float(pole_pitch_mm) / float(stack_mm))
+    return 1.0 - low, 1.0 + COARSE_SCREEN_HIGH
 
 
 def end_deficit_check(curve: Sequence[dict], ref_stack_mm: float,
@@ -111,8 +125,12 @@ def end_deficit_check(curve: Sequence[dict], ref_stack_mm: float,
         try:
             L, k = float(r["stack_mm"]), float(r["k_flux"])
         except (KeyError, TypeError, ValueError):
-            dropped.append(dict(stack_mm=r.get("stack_mm") if isinstance(r, dict) else None,
-                                reason="no stack length / k_flux"))
+            _l = r.get("stack_mm") if isinstance(r, dict) else None
+            try:
+                _l = float(_l) if math.isfinite(float(_l)) else None
+            except (TypeError, ValueError):
+                _l = None
+            dropped.append(dict(stack_mm=_l, reason="no stack length / k_flux"))
             continue
         try:
             rt = float(r.get("ratio_3d_mid_over_2d"))
@@ -129,7 +147,7 @@ def end_deficit_check(curve: Sequence[dict], ref_stack_mm: float,
         else:
             pts[round(L, 9)] = L * (1.0 - k)
             continue
-        dropped.append(dict(stack_mm=L, reason=why))
+        dropped.append(dict(stack_mm=(L if math.isfinite(L) else None), reason=why))
     rows = sorted(pts.items())
     xs_l = [L for L, _ in rows]
     out = dict(rule="D(L) = L(1 - k_flux) = D0 + eps*L (eps dimensionless) over the rows at >= the reference stack "
@@ -196,27 +214,33 @@ class SectorSolve:
 
 
 _KFLUX_FAILED_LABEL = "2-D check failed: k_flux is applied as stored (k_flux_self x mid-plane/2-D ratio); k_flux_self is the 3-D-only alternative"
+#: a FAIL of the end-deficit check (passport static3d-stageA-3): the factor to apply is k_flux_self
+_KFLUX_FAILED_NEW_LABEL = "2-D check failed: apply k_flux_self, not k_flux"
+_KFLUX_INVALID_LABEL = "2-D check failed: the 2-D leg is invalid (no 2-D ratio exists), k_flux = k_flux_self"
 
 
 def k_flux_basis_label(two_d):
     """Short honest label of how ``k_flux`` was formed, read from the 2-D agreement ``verdict`` (not from
     ``k_flux_usable``, which is also True for a check that was NOT CHECKED).  PASS -> "2-D check passed";
-    NOT CHECKED -> the agreement was not checked; FAIL / INVALID -> failed; no verdict (older passports) -> the
-    ``k_flux_usable`` flag as before; no 2-D block at all -> self-normalised.
-
-    FAIL / INVALID: the stored ``k_flux`` is k_flux_self x the mid-plane ratio and every reader still applies it, so the
-    label says what is applied (not "use k_flux_self"); which factor to apply on a failed check is #871's decision."""
+    NOT CHECKED -> the agreement was not checked, with the check's own reason when it has one; FAIL of the end-deficit
+    check -> apply k_flux_self (what ``end3d_verdict.applied_flux_factor`` applies); FAIL of the old mid-plane rule ->
+    the stored ``k_flux`` is applied as stored; INVALID -> no 2-D ratio exists; no verdict (older passports) -> the
+    ``k_flux_usable`` flag as before; no 2-D block at all -> self-normalised."""
     if two_d is None:
         return "self-normalised (2-D check not run; k_flux = k_flux_self)"
     v = str(two_d.get("verdict") or "").strip().upper()
+    chk = two_d.get("agreement_check") if isinstance(two_d.get("agreement_check"), dict) else None
     if v == "PASS":
         return "2-D check passed"
     if v == "NOT CHECKED":
-        return ("2-D agreement not checked (fewer than two usable stack lengths): k_flux applied, unverified"
-                if isinstance(two_d.get("agreement_check"), dict) else
-                "2-D agreement not checked (single length): k_flux = k_flux_self")
-    if v in ("FAIL", "INVALID"):
-        return _KFLUX_FAILED_LABEL
+        if chk is not None:
+            return "2-D agreement not checked (%s): k_flux applied, unverified" % (
+                chk.get("reason") or "fewer than two usable stack lengths")
+        return "2-D agreement not checked (single length): k_flux = k_flux_self"
+    if v == "INVALID":
+        return _KFLUX_INVALID_LABEL
+    if v == "FAIL":
+        return _KFLUX_FAILED_NEW_LABEL if chk is not None else _KFLUX_FAILED_LABEL
     return "2-D check passed" if two_d.get("k_flux_usable") else _KFLUX_FAILED_LABEL
 
 
@@ -584,7 +608,8 @@ SCHEMA = {
                  "pitches; PASS |eps| <= 1 % and D0 > 0 -> verified; FAIL -> "
                  "not usable; NOT CHECKED (fewer than two usable lengths, span "
                  "< 1.25 x, or D not linear in L) -> usable, unverified, unless "
-                 "the mid-plane ratio is off by > 15 % (coarse screen -> FAIL)); "
+                 "the mid-plane ratio is above 1.02 or below 1 - max(0.15, "
+                 "0.3 pole pitch / L) (one-sided coarse screen -> FAIL)); "
                  "two rows are an exact fit (eps error = dk (L1+L2)/(L2-L1), 5 x "
                  "dk for the catalog's 1.0 / 1.5 rows); INVALID when the 2D "
                  "fundamental is zero / not a number; mid_plane_check is a "
@@ -886,15 +911,19 @@ def run_stage_a(geo_override: Optional[dict] = None,
         # the end deficit grows with the stack length, i.e. the two models
         # disagree beyond the end effect: k_flux (which multiplies a 2D result
         # by a number derived from BOTH models) would inherit that, so it is
-        # marked not usable.  NOT CHECKED (a single length at >= the reference)
-        # leaves k_flux usable.  The mid-plane ratio stays as a diagnostic.
+        # marked not usable.  NOT CHECKED (fewer than two usable lengths, lengths
+        # too close, or D not linear in L) leaves k_flux usable, unless the
+        # one-sided coarse screen refuses the mid-plane ratio.  The mid-plane
+        # ratio stays as a diagnostic.
         off = abs(ratio - 1.0)
         pole_pitch = math.pi * float(section.mid_r_mm) / max(1, int(section.pole_pairs))
         chk = end_deficit_check(curve, section.stack_mm, pole_pitch_mm=pole_pitch)
-        if chk["verdict"] == "NOT CHECKED" and off > COARSE_SCREEN:
+        lo, hi = coarse_screen_bounds(section.stack_mm, pole_pitch)
+        if chk["verdict"] == "NOT CHECKED" and not (lo <= ratio <= hi):
             chk["verdict"] = "FAIL"
-            chk["reason"] = ("coarse screen: not checkable (%s) and the mid-plane / 2D ratio %.4f is off by more "
-                             "than %g %%" % (chk.get("reason"), ratio, 100 * COARSE_SCREEN))
+            chk["coarse_screen"] = dict(low=lo, high=hi, ratio=ratio)
+            chk["reason"] = ("coarse screen: not checkable (%s) and the mid-plane / 2D ratio %.4f is outside "
+                             "[%.4f, %.4f]" % (chk.get("reason"), ratio, lo, hi))
         two_d["agreement_check"] = chk
         two_d["mid_plane_check"] = dict(
             ratio=ratio, tolerance=MID_PLANE_TOL,
@@ -908,7 +937,8 @@ def run_stage_a(geo_override: Optional[dict] = None,
             two_d["warning"] = (
                 ("the end deficit L(1 - k_flux) grows with the stack length "
                  f"(eps = {100 * chk['eps']:.2f} %, dimensionless; D0 = {chk['D0_mm']:.3f} mm)"
-                 if chk.get("eps") is not None else chk.get("reason", "")) +
+                 if chk.get("eps") is not None and not chk.get("coarse_screen")
+                 else chk.get("reason", "")) +
                 ": 3D and 2D disagree beyond the end effect. Use k_flux_self "
                 "and the spill profile; do NOT use k_flux until the two models "
                 "are reconciled. First two things to check, in order: (1) the "

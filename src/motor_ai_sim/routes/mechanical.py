@@ -122,6 +122,26 @@ def _live_polys(geo: Optional[str]):
     return motor.get_2d_polygons(0.0), motor, ov
 
 
+def _live_mech_polys(geo: Optional[str]):
+    """``_live_polys`` as the MECHANICAL solvers mesh it (2026-11-25).
+
+    The same cross-section, except that a magnet pocket DRAWN with a clearance
+    wider than the rotor mesher's weld (``geometry.magnet_pocket_clearance``)
+    has its magnet meshed as the body that fills the clearance ring, with the
+    drawn clearance carried as the contact's stress-free gap — see
+    ``simulation.mechanical.pocket_clearance``.  Every other machine gets the
+    very same polygons object ``_live_polys`` returns.  A pocket that is not the
+    magnet offset by the clearance is a 422 naming it, never a silent solve.
+    """
+    from motor_ai_sim.simulation.mechanical import pocket_clearance as _pkc
+    polys, motor, ov = _live_polys(geo)
+    try:
+        polys = _pkc.mechanical_polys(polys, getattr(motor, "parameters", None))
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    return polys, motor, ov
+
+
 def _assignments() -> Dict[str, str]:
     """part -> material name: the config's ``materials:`` block, then this
     request's override.  Same precedence the solver uses."""
@@ -1139,7 +1159,7 @@ def rotor_stress(
     try:
         t0 = time.time()
         try:
-            polys, motor, geo_ov = _live_polys(geo)
+            polys, motor, geo_ov = _live_mech_polys(geo)
         except HTTPException:
             raise
         except Exception as exc:  # noqa: BLE001
@@ -1618,7 +1638,7 @@ def limit_speed(
     try:
         t0 = time.time()
         try:
-            polys, motor, geo_ov = _live_polys(geo)
+            polys, motor, geo_ov = _live_mech_polys(geo)
         except HTTPException:
             raise
         except Exception as exc:  # noqa: BLE001
@@ -1975,7 +1995,7 @@ def _auto_limit_speed(out: Dict[str, Any],
         _progress.start(total=max_solves, phase="geometry build",
                         kind="limit_speed", composition="")
         try:
-            polys, motor, geo_ov = _live_polys(geo)
+            polys, motor, geo_ov = _live_mech_polys(geo)
             assign = _assignments()
             stack_mm = float(motor.parameters.get("motor_length") or 0.0)
             n_poles = _num_poles(motor)
@@ -2412,7 +2432,7 @@ def modes(
     try:
         t0 = time.time()
         try:
-            polys, motor, geo_ov = _live_polys(geo)
+            polys, motor, geo_ov = _live_mech_polys(geo)
         except HTTPException:
             raise
         except Exception as exc:  # noqa: BLE001
@@ -2549,7 +2569,7 @@ def critical_speeds(
     try:
         t0 = time.time()
         try:
-            polys, motor, geo_ov = _live_polys(geo)
+            polys, motor, geo_ov = _live_mech_polys(geo)
         except HTTPException:
             raise
         except Exception as exc:  # noqa: BLE001
@@ -2792,7 +2812,7 @@ def mesh(
     try:
         t0 = time.time()
         try:
-            polys, _motor, geo_ov = _live_polys(geo)
+            polys, _motor, geo_ov = _live_mech_polys(geo)
         except HTTPException:
             raise
         except Exception as exc:  # noqa: BLE001

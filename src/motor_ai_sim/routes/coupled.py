@@ -5114,6 +5114,32 @@ def _mechanical_step(body: Dict[str, Any], field: Dict[str, Any], *,
     return out
 
 
+def _mechanical_failures(block: Optional[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Every mechanical step of a coupled run that did NOT solve, as
+    ``[{"step", "error"}]`` — the rotor stress (the block itself), the ring
+    modes and the critical speeds (its two sub-blocks).  Empty when they all
+    solved or when the run did not ask for the mechanics (``block`` None).
+
+    Owner 2026-11-25: a coupled run whose mechanical step failed must say so in
+    its RESULT, not only inside ``coupling.mechanical`` — the run used to read
+    ``ok`` with the refusal visible only to somebody who opened the nested
+    block.  A retention FAIL is not in this list: that step solved, and its
+    verdict rides in the block's ``retention``.
+    """
+    if not isinstance(block, dict):
+        return []
+    out: List[Dict[str, Any]] = []
+    if block.get("ok") is False:
+        out.append({"step": "rotor_stress",
+                    "error": str(block.get("error") or "the step did not solve")})
+    for key in ("modes", "critical_speeds"):
+        sub = block.get(key)
+        if isinstance(sub, dict) and sub.get("ok") is False:
+            out.append({"step": key,
+                        "error": str(sub.get("error") or "the step did not solve")})
+    return out
+
+
 def _http_detail_text(detail: Any) -> str:
     """The one line of an HTTPException's detail — the route's ``error`` when
     it sent the structured form, the text otherwise."""
@@ -8185,6 +8211,16 @@ def _run(body: Dict[str, Any],
         "computed_at": em.get("computed_at"),
         "elapsed_s": round(max(time.time() - t0, 1e-3), 2),
     }
+    # The mechanical steps' outcome at the TOP of the result (2026-11-25), only
+    # when the run asked for them: a run without the mechanics reads exactly as
+    # it always did.
+    if mech_block is not None:
+        _mfail = _mechanical_failures(mech_block)
+        out["mechanical_ok"] = not _mfail
+        if _mfail:
+            out["mechanical_failures"] = _mfail
+            out["mechanical_warning"] = "mechanical step failed: " + "; ".join(
+                f"{f['step']}: {f['error']}" for f in _mfail)
     # /last keeps everything but the two heavy payloads: it answers "what did the
     # loop last conclude", and shipping a transient plus a temperature-per-node
     # map to do it is how a lookup becomes a download.

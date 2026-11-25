@@ -79,3 +79,13 @@ def test_run_stage_a_pass_and_fail_on_longer_rows(stubbed, monkeypatch):  # noqa
     t = pp["two_d"]
     assert t["verdict"] == "FAIL" and t["k_flux_usable"] is False and "grows with the stack length" in t["warning"]
     assert t["agreement_check"]["eps"] == pytest.approx(0.03, rel=1e-6)
+
+
+def test_short_stack_single_reference_runs_on_the_80mm_machine():
+    """Two real single-reference runs of the 28-pole 80 mm cross-section (own-ratio rows, derived numbers): the old
+    mid-plane rule said FAIL on both (mid / 2-D 0.923 at 8 mm, 0.957 at 12 mm) although their k_flux agree to 0.02 %."""
+    l8 = EE.end_deficit_check(_curve([(8.0, 0.88685), (12.0, 0.92271), (6.0, 0.85826)]), 8.0)
+    assert l8["verdict"] == "PASS" and l8["rows_mm"] == [8.0, 12.0]
+    assert l8["eps"] == pytest.approx((12 * (1 - 0.92271) - 8 * (1 - 0.88685)) / 4, rel=1e-9)   # +0.56 %
+    l12 = EE.end_deficit_check(_curve([(12.0, 0.92270), (8.0, 0.88702), (6.0, 0.85845)]), 12.0)
+    assert l12["verdict"] == "NOT CHECKED"

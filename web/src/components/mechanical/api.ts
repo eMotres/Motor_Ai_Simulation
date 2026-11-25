@@ -6,6 +6,8 @@
  * number is worth, and a sleeve sized off a number whose provenance is hidden
  * is a sleeve sized off nothing.
  */
+import { shaftCouplingTorqueNm } from '../../lib/shaftCoupling';
+export { shaftCouplingTorqueNm };
 const API = (import.meta.env.VITE_API_URL ?? 'http://localhost:8001') as string;
 const BASE = `${API.replace(/\/$/, '')}/api/mechanical`;
 
@@ -816,7 +818,10 @@ export function readSimTorqueNm(): number | null {
   try {
     const raw = localStorage.getItem('sim.lastTransient');
     if (!raw) return null;
-    const v = (JSON.parse(raw) as { T_avg_Nm?: number })?.T_avg_Nm;
+    const tr = JSON.parse(raw) as { T_avg_Nm?: number; summary?: Record<string, unknown> };
+    const sc = shaftCouplingTorqueNm(tr?.summary);
+    if (sc !== null) return sc;
+    const v = tr?.T_avg_Nm;
     return typeof v === 'number' && Number.isFinite(v) && v !== 0
       ? Math.abs(v) : null;
   } catch { return null; }
@@ -850,11 +855,16 @@ export function readShownTorqueNm(): number | null {
   try {
     const raw = localStorage.getItem('sim.lastSummary');
     if (!raw) return null;
-    const v = (JSON.parse(raw) as { T_em_avg_Nm?: number })?.T_em_avg_Nm;
+    const ls = JSON.parse(raw) as Record<string, unknown>;
+    // a run on the shaft-side convention: the torque the shaft carries (at the coupling), never the field torque
+    const sc = shaftCouplingTorqueNm(ls);
+    if (sc !== null) return sc;
+    const v = (ls as { T_em_avg_Nm?: number })?.T_em_avg_Nm;
     return typeof v === 'number' && Number.isFinite(v) && v !== 0
       ? Math.abs(v) : null;
   } catch { return null; }
 }
+
 
 export const fmt = (v: number | null | undefined, d = 1): string =>
   (v === null || v === undefined || !Number.isFinite(v)) ? '—' : v.toFixed(d);

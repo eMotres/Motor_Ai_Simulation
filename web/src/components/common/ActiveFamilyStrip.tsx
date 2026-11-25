@@ -698,6 +698,8 @@ const ActiveFamilyStrip: React.FC = () => {
           body: JSON.stringify({ die: tDie, config: cfgName, duty: tDuty,
             drive, assignment_sig: dutyBody.assignment_sig,
             result: { efficiency_pct: dutyEfficiencyPct(s, rotorW),
+                      // the shaft-power convention of these numbers (1 = core loss on the shaft; the catalog never ranks two)
+                      ...(sc ? { shaft_conv: 1 } : {}),
                       // the refined ripple when there is one (lib/rippleAccuracy)
                       ripple_pct: quotedRipple(s).value ?? s.T_ripple_pct,
                       v_ll_peak_v: Number(s.V_line_peak_V) * (k3d ?? 1),

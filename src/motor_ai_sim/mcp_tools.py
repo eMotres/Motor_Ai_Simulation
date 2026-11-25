@@ -388,6 +388,9 @@ def _duty_headline(d: dict) -> Dict[str, Any]:
             "mass_active_kg": _f(r.get("mass_active_kg")),
             "mass_partial": bool(r.get("mass_partial", False)),
             "connection": d.get("star_delta") or None,
+            # the shaft-power convention of the efficiency / power (1 = core loss on the shaft; 0 = an earlier run)
+            "shaft_conv": 1 if (r.get("shaft_conv") == 1 or (d.get("summary") or {}).get("shaft_convention")
+                                == "fe_on_shaft_k3d_v1") else 0,
             "saved_at": d.get("saved_at")}
 
 
@@ -526,6 +529,7 @@ def check_fit(p: Principal, torque_nm: float, speed_rpm: float,
                 cool_of[(m["die"], m["config"], d["duty"])] = _find_cooling(
                     idx.get(str(d["duty"])) or {})
     fits, rejected = [], []
+    conv_of = {(m["die"], m["config"], d["duty"]): d.get("shaft_conv", 0) for m in ms for d in m["duties"]}
     for m in ms:
         for d in m["duties"]:
             reasons, unverified, margins = [], [], {}
@@ -564,7 +568,12 @@ def check_fit(p: Principal, torque_nm: float, speed_rpm: float,
                 rejected.append({**row, "reasons": reasons})
             else:
                 fits.append({**row, "unverified": unverified})
-    fits.sort(key=lambda r: (len(r["unverified"]),
+    # two shaft-power conventions are never ranked together: a stored duty of an earlier run (every loss on the
+    # electrical side) is flagged and sorts after the current convention's (owner 2026-11-25)
+    for r in fits + rejected:
+        r["shaft_convention"] = ("core loss on the shaft" if conv_of.get((r["die"], r["config"], r["duty"])) == 1
+                                 else "earlier run: every loss on the electrical side")
+    fits.sort(key=lambda r: (r["shaft_convention"] != "core loss on the shaft", len(r["unverified"]),
                              r["mass_kg"] if r["mass_kg"] is not None else 1e9,
                              -(r["efficiency_pct"] or 0)))
     rejected.sort(key=lambda r: len(r["reasons"]))

@@ -7988,7 +7988,18 @@ def payload(die: str, cfg: str, duty: Optional[str] = None,
                     _summ = dict(_summ)
                     _summ["saturation"] = {**_sat, "droop_pct": 0.0}
                     out["duty"]["summary"] = _summ
-            if isinstance(_summ, dict) and _summ.get("end3d") is None:
+            if isinstance(_summ, dict) and _summ.get("end3d") is None \
+                    and _summ.get("shaft_convention") == "fe_on_shaft_k3d_v1":
+                # a run on the shaft-side convention keeps ITS factor: its shaft numbers were built with it, so
+                # a passport measured later is not attached to it (re-solve to use it; shaft_convention)
+                from motor_ai_sim.routes.simulation import (_end3d_lookup,
+                                                            _geometry_fingerprint)
+                if _end3d_lookup(_geometry_fingerprint(geo), geo, diag={}):
+                    _s2 = dict(_summ)
+                    _s2["end3d_note"] = ("a 3-D passport measured after this run is not applied to its numbers; "
+                                         "re-solve the point to use it")
+                    out["duty"]["summary"] = _s2
+            elif isinstance(_summ, dict) and _summ.get("end3d") is None:
                 from motor_ai_sim.routes.simulation import (_end3d_lookup,
                                                             _geometry_fingerprint)
                 _e3diag: dict = {}

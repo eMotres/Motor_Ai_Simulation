@@ -406,5 +406,110 @@ def test_b7_mechanical_and_customer_match_use_the_shaft_torque():
     s = _marked(T_shaft_Nm=8.7, T_field_k_Nm=9.0)
     assert ME._torque_of_block(s) == pytest.approx(8.7)
     assert ME._torque_of_block({"T_em_avg_Nm": 10.0, "end3d": {"k_flux": 0.9}}) == pytest.approx(9.0)
-    assert RC._torque({"em": s}) == pytest.approx(8.7)
-    assert RC._torque({"em": dict(s, op_mode="generator")}) == pytest.approx(9.0)
+    # Astra r2: a shaft requirement is matched at the coupling - motor 8.7 (bearings unknown), 8.5 with X = 20 W;
+    # a generator's INPUT 9.3, not its field torque 9 (omega = 100 rad/s)
+    m = _marked(rpm=RPM100, P_mech_W=870.0, T_shaft_Nm=8.7, T_field_k_Nm=9.0)
+    assert RC._torque({"em": m}) == pytest.approx(8.7)
+    assert RC._torque({"em": dict(m, P_mech_extra_W=20.0)}) == pytest.approx(8.5)
+    g = _marked(rpm=RPM100, op_mode="generator", P_mech_W=930.0, T_shaft_Nm=9.3, T_field_k_Nm=9.0)
+    assert RC._torque({"em": g}) == pytest.approx(9.3)
+    assert RC._torque({"em": dict(g, P_mech_extra_W=20.0)}) == pytest.approx(9.5)
+
+
+
+# ── Astra review round 2 ─────────────────────────────────────────────────────────────────────────────────────────────
+def _plain_marked(**over):
+    """omega 100 rad/s, |T| 10, k 0.9, Fe 30, L 100, nothing embedded (Astra r2's common case)."""
+    s = {"shaft_convention": SC.SHAFT_CONVENTION, "op_mode": "motor", "rpm": RPM100, "T_em_avg_Nm": 10.0,
+         "shaft_k3d": 0.9, "torque_side": "rotor", "shaft_rotor_in_field": False, "P_loss_total_W": 100.0,
+         "P_core_W": 30.0, "P_mag_W": 0.0, "P_shaft_W": 0.0, "P_sleeve_W": 0.0}
+    s.update(over)
+    SC.rederive(s)
+    return s
+
+
+def test_r2_b2_overlay_carries_mode_and_speed():
+    from motor_ai_sim.development import motor_view as MV
+    base = _plain_marked(mass_total_kg=2.0)
+    before = dict(base)
+    gen = _plain_marked(op_mode="generator")
+    assert gen["P_mech_W"] == pytest.approx(930.0, abs=0.06)
+    SC.overlay(base, gen)
+    base["T_em_avg_Nm"] = gen["T_em_avg_Nm"]
+    MV._rescale_to_loop(base, before)
+    assert base["op_mode"] == "generator" and base["P_mech_W"] == pytest.approx(930.0, abs=0.06)
+    assert base["T_shaft_Nm"] == pytest.approx(9.3, abs=1e-3)
+
+
+def test_r2_b2_density_rebuilt_from_the_selected_torque():
+    from motor_ai_sim.development import motor_view as MV
+    base = {"op_mode": "motor", "rpm": RPM100, "T_em_avg_Nm": 10.0, "P_mech_W": 1000.0, "mass_total_kg": 2.0,
+            "torque_per_mass_Nm_kg": 5.0, "power_per_mass_W_kg": 500.0}
+    before = dict(base)
+    SC.overlay(base, _plain_marked())
+    MV._rescale_to_loop(base, before)
+    assert base["torque_per_mass_Nm_kg"] == pytest.approx(4.35, abs=1e-3)
+    assert base["power_per_mass_W_kg"] == pytest.approx(435.0, abs=0.05)
+
+
+def test_r2_b2_light_panel_keeps_the_convention():
+    from motor_ai_sim.development import motor_view as MV
+    s = _plain_marked()
+    lp = MV.light_panel({"summary": s, "source": {}})["summary"]
+    for k in ("shaft_convention", "torque_side", "shaft_rotor_in_field", "op_mode"):
+        assert lp.get(k) == s.get(k), k
+
+
+def test_r2_b3_rating_does_not_count_bearings_as_em_drag():
+    from motor_ai_sim import coupled_continuous_rating as CR
+    ref = {"T_em_avg_Nm": 10.0, "rpm": RPM100, "k_flux": 0.9, "shaft_k3d": 0.9,
+           "shaft_convention": SC.SHAFT_CONVENTION, "torque_side": "rotor", "shaft_rotor_in_field": False,
+           "op_mode": "motor", "P_mech_extra_W": 10.0}
+    loss = {"winding": 70.0, "stator": 30.0, "rotor": 10.0, "magnet": 0.0, "coil_ref_c": 20.0,
+            "split": {"rotor_solid_W": 0.0}, "mech_in_nodes_W": 10.0, "rpm": RPM100}
+    out = CR._power_block(ref, loss, 70.0, 1.0, 20.0, mode="motor")
+    assert out["P_mech_W"] == pytest.approx(870.0, abs=0.01)          # k*T*w - Fe
+    assert out["P_shaft_W"] == pytest.approx(860.0, abs=0.01)         # minus the bearings once
+    assert out["P_elec_W"] == pytest.approx(970.0, abs=0.01)          # + Cu + Fe
+
+
+def test_r2_b3_pwm_updates_net_and_full_mass():
+    from motor_ai_sim import coupled_pwm_final as PF
+    s = _plain_marked(P_core_rotor_W=10.0, P_loss_rotor_W=10.0, efficiency=0.5, P_mech_extra_W=20.0,
+                      P_shaft_net_W=850.0, efficiency_shaft=0.8, mass_total_kg=1.0, mass_full_kg=2.0)
+    out = PF.apply_to_summary(s, {"raw_W": 10.0, "selected_W": 0.0})
+    assert out["P_mech_W"] == pytest.approx(880.0, abs=0.06)
+    assert out["P_shaft_net_W"] == pytest.approx(860.0, abs=0.06)
+    assert out["power_per_mass_full_W_kg"] == pytest.approx(440.0, abs=0.06)
+    assert out["torque_per_mass_full_Nm_kg"] == pytest.approx(4.40, abs=1e-3)
+
+
+def test_r2_thresholds_of_the_earlier_convention():
+    # 0.5 W of shaft output beside 0.25 W of loss: no efficiency from sub-watt powers, as before
+    b = SC.balance(t_field_nm=0.75 / W1000, rpm=1000.0, k=None, d_w=0.25, p_loss_w=0.25)
+    assert b["P_mech_W"] == pytest.approx(0.5) and b["efficiency"] == 0.0
+
+
+def test_r2_negative_power_is_not_made_positive():
+    from motor_ai_sim.routes import presets
+    e: dict = {}
+    presets._enrich_card_entry(e, {}, {"rpm": 1000.0}, {"T_avg_Nm": 0.01, "P_mech_W": -30.0, "efficiency": 0.0,
+                                                       "shaft_convention": SC.SHAFT_CONVENTION, "op_mode": "motor"})
+    assert e["power_w"] == pytest.approx(-30.0)
+    src = (Path(__file__).resolve().parent.parent / "src" / "motor_ai_sim" / "datasheet.py").read_text(encoding="utf-8")
+    assert 'if _g(d, "summary.shaft_convention") == "fe_on_shaft_k3d_v1":\n            return float(w) / 1000.0' in src
+
+
+def test_r2_journal_and_passport_keep_provenance():
+    root = Path(__file__).resolve().parent.parent / "src" / "motor_ai_sim"
+    sim = (root / "routes" / "simulation.py").read_text(encoding="utf-8")
+    assert '**({"shaft_conv": 1, "shaft_basis":' in sim
+    fam = (root / "routes" / "family.py").read_text(encoding="utf-8")
+    assert 'a 3-D passport measured after this run is not applied to its numbers' in fam
+
+
+def test_r2_rederive_uses_the_full_precision_torque():
+    s = _plain_marked(T_em_avg_Nm=0.128, T_field_Nm=0.12784, rpm=1900.0, P_core_W=3.2, P_loss_total_W=4.4,
+                      op_mode="generator")
+    w = 2 * math.pi * 1900.0 / 60.0
+    assert s["P_mech_W"] == pytest.approx(0.9 * 0.12784 * w + 3.2, abs=0.06)

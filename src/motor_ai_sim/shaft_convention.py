@@ -1,37 +1,38 @@
 """The shaft-power convention of a run summary (owner decision 2026-11-25).
 
-ONE place that answers three questions for every reader of a transient summary:
+ONE place that answers, for every reader of a transient summary:
 
-* which shaft-side load ``D`` the reported (field) torque does NOT already contain;
-* the shaft-side power ``P_mech_W`` and the efficiency built on it;
+* where each loss sits relative to the reported torque, and the shaft-side power
+  ``P_mech_W`` and efficiency built on that;
 * whether a stored summary follows this convention or the earlier one.
 
-The convention, marker ``shaft_convention = "fe_on_shaft_k3d_v1"``:
+The convention, marker ``shaft_convention = "fe_on_shaft_k3d_v1"``, with s = +1 for a
+motor and -1 for a generator:
 
-* the core loss is a SHAFT load: a motor delivers ``k*T*w - D`` at the shaft, a
-  generator needs ``k*T*w + D`` at the shaft (quoted positive, as input);
-* ``k`` is the run's 3-D torque factor (measured k_T, else the Stage A k_flux),
-  applied to the FIELD part only, never to ``D``;
-* every loss stays 2-D (conservative: copper at a given current is unchanged, and
-  iron at the 2-D flux reads slightly high);
-* the electrical power closes on the same losses: motor ``P_elec = P_mech + L``,
-  generator ``P_elec = P_mech - L``.
+* the converted air-gap power ``G`` is rebuilt from the reported torque by removing
+  what that torque already contains:
 
-``D`` depends on which torque was reported and on what the field solve already
-dissipated (the drag of a loss solved IN the field is already in a rotor-side torque;
-a stator-side torque is the power that entered the field, so it contains every
-in-field loss):
+  ==========================================  ==============================
+  reported torque                             G
+  ==========================================  ==============================
+  rotor-side (Coulomb, Maxwell), rotor eddy   ``|T|*w + s*R`` (its drag R is
+  solved IN the field                         in the force on the rotor)
+  stator-side (flux linkage, terminal work)   ``|T|*w - s*Cu_ac`` (the power
+                                              into the field holds the solved
+                                              copper AC)
+  any other                                   ``|T|*w``
+  ==========================================  ==============================
 
-=====================  ===================  =============================================
-reported torque        in-field losses      D
-=====================  ===================  =============================================
-rotor-side (Coulomb,   coupled rotor eddy   Fe
-Maxwell)               rotor eddy not       Fe + magnet + shaft + sleeve (reported)
-                       coupled
-stator-side (flux      none (eddy off)      Fe + magnet + shaft + sleeve (reported)
-linkage, terminal      copper AC (eddy on)  Fe + solved copper AC + magnet + shaft +
-work)                                       sleeve (reported)
-=====================  ===================  =============================================
+* ``k`` (the run's 3-D torque factor: measured k_T, else the Stage A k_flux) scales
+  ``G`` only, never a loss;
+* ``D`` = core loss + every rotor loss (magnet, shaft, sleeve) is a SHAFT load:
+  ``P = k*G - s*D`` (a generator's input is quoted positive);
+* the electrical power closes on the same 2-D losses ``L``: ``E = P + s*L``;
+* bearings and windage (``X``) sit between the rotor and the coupling: motor output
+  ``P - X``, generator input ``P + X``;
+* every loss stays 2-D.  At the same current this keeps copper unchanged; iron at the
+  2-D flux reads slightly high for k <= 1.  For k > 1 or a separately measured k_T this
+  is a modelling choice, not a conservative bound.
 
 A summary WITHOUT the marker is the earlier convention: every loss on the electrical
 side and ``P_mech_W = T*w`` (2-D).  It is never converted: old and restored runs keep
@@ -55,9 +56,9 @@ SHAFT_CONVENTION_CODE = 1
 ROTOR_SIDE_METHODS = frozenset({"coulomb_virtual_work", "maxwell_stress"})
 
 #: One sentence that goes with every summary carrying the marker.
-BASIS_NOTE = ("Shaft side: core loss counted as a shaft load; the 3-D torque factor applies to the field "
-              "torque only; losses stay 2-D (conservative: copper at the given current is unchanged, iron at "
-              "the 2-D flux reads slightly high).")
+BASIS_NOTE = ("Shaft side: core loss and rotor losses counted as shaft loads; the 3-D torque factor applies "
+              "to the converted air-gap power only, never to a loss; losses stay 2-D (copper at the given "
+              "current is unchanged; iron at the 2-D flux reads slightly high when the factor is below 1).")
 #: The same, for a run with no 3-D passport (an optimiser candidate, a machine never measured).
 BASIS_NOTE_2D = ("Shaft side: core loss counted as a shaft load; no 3-D passport for this geometry, so the "
                  "torque is the 2-D field torque; losses are 2-D.")
@@ -154,16 +155,17 @@ def balance(*, t_field_nm: float, rpm: float, k: Optional[float], d_w: float,
     if op == "generator":
         p_mech = kk * g + d                       # input at the shaft
         p_elec = p_mech - loss                    # output at the terminals
-        eff = (p_elec / p_mech) if (p_mech > 0.0 and p_elec > 0.0) else 0.0
+        # the earlier convention's thresholds: no efficiency of a sub-watt input
+        eff = (p_elec / p_mech) if (p_mech > max(loss, 1.0) and p_elec > 0.0) else 0.0
     else:
         p_mech = kk * g - d                       # output at the shaft (negative at no load)
         p_elec = p_mech + loss                    # input at the terminals
-        eff = (p_mech / p_elec) if (p_mech > 0.0 and p_elec > 0.0) else 0.0
+        eff = (p_mech / p_elec) if (p_mech > 0.0 and p_elec > 1.0) else 0.0
     return {
         "op_mode": op, "omega": w, "k": (kk if kk != 1.0 or k is not None else None),
         "P_field_W": p_field, "P_gap_W": g, "P_gap_k_W": kk * g, "P_mech_W": p_mech,
         "P_elec_W": p_elec, "efficiency": eff,
-        "T_field_k_Nm": kk * abs(t),
+        "T_field_k_Nm": kk * abs(t), "T_field_Nm": abs(t),
         "T_shaft_Nm": (p_mech / w) if w > 0.0 else 0.0,
     }
 
@@ -184,7 +186,10 @@ def per_mass_torque(b: Mapping[str, Any]) -> float:
 #: The summary fields a marked summary carries for its convention (copied or stripped together).
 CONVENTION_KEYS = ("shaft_convention", "shaft_k3d", "torque_side", "shaft_rotor_in_field",
                    "P_torque_embedded_W", "P_cu_ac_field_W", "P_shaft_drag_W", "P_shaft_drag_terms",
-                   "P_field_W", "P_gap_W", "T_field_k_Nm", "T_shaft_Nm", "P_elec_W", "shaft_basis_note")
+                   "P_field_W", "P_gap_W", "T_field_Nm", "T_field_k_Nm", "T_shaft_Nm", "P_elec_W",
+                   "shaft_basis_note")
+#: ... and what the shaft side of those numbers cannot be read without (copied with them, never stripped)
+CONVENTION_CONTEXT_KEYS = ("op_mode", "rpm")
 
 
 def drag_of_summary(summary: Mapping[str, Any]) -> Dict[str, Any]:
@@ -208,6 +213,8 @@ def fields(b: Mapping[str, Any], dr: Mapping[str, Any], k: Optional[float]) -> D
         "shaft_convention": SHAFT_CONVENTION,
         "P_field_W": round(b["P_field_W"], 1), "P_gap_W": round(b["P_gap_W"], 1),
         "T_field_k_Nm": round(b["T_field_k_Nm"], 4), "T_shaft_Nm": round(b["T_shaft_Nm"], 4),
+        # the reported 2-D torque at full precision (T_em_avg_Nm is stored to 1 mN*m): a rebuild from it
+        "T_field_Nm": float("%.6g" % b["T_field_Nm"]),
         "P_shaft_drag_W": round(dr["D_W"], 3), "P_shaft_drag_terms": list(dr["terms"]),
         "torque_side": dr["side"], "shaft_rotor_in_field": bool(dr["rotor_in_field"]),
         "P_torque_embedded_W": round(dr["rotor_embedded_W"] or dr["stator_embedded_W"], 3),
@@ -226,6 +233,9 @@ def rederive(out: Dict[str, Any]) -> bool:
     if not has_marker(out):
         return False
     t = abs(_f(out.get("T_em_avg_Nm")))
+    tp = out.get("T_field_Nm")
+    if tp is not None and abs(round(abs(_f(tp)), 3) - round(t, 3)) < 6e-4:
+        t = abs(_f(tp))                 # the same torque at full precision
     if str(out.get("op_mode") or "") == "generator":
         t = -t
     dr = drag_of_summary(out)
@@ -249,9 +259,32 @@ def overlay(base: Dict[str, Any], over: Mapping[str, Any]) -> None:
     is marked, none (and the marker removed) when it is not."""
     strip(base)
     if has_marker(over):
-        for key in CONVENTION_KEYS:
-            if key in over:
+        for key in CONVENTION_KEYS + CONVENTION_CONTEXT_KEYS:
+            if over.get(key) is not None:
                 base[key] = over[key]
+
+
+def coupling_power(summary: Mapping[str, Any]) -> Optional[float]:
+    """The power at the COUPLING of a marked summary: motor ``P - X``, generator ``P + X``
+    with ``X`` = bearings + windage when the run names them, else the shaft-side ``P``
+    (negative for a motor at no load).  None without a marker or a power."""
+    if not has_marker(summary) or summary.get("P_mech_W") is None:
+        return None
+    p = _f(summary.get("P_mech_W"))
+    x = summary.get("P_mech_extra_W")
+    if x is None:
+        return p
+    return p + _f(x) if str(summary.get("op_mode") or "") == "generator" else p - _f(x)
+
+
+def coupling_torque(summary: Mapping[str, Any]) -> Optional[float]:
+    """The torque at the coupling of a marked summary (power / w): a motor's output, a
+    generator's input; None without a marker, a power or a speed."""
+    p = coupling_power(summary)
+    w = 2.0 * math.pi * _f(summary.get("rpm")) / 60.0
+    if p is None or w <= 0.0:
+        return None
+    return p / w
 
 
 def comparable(rows: Sequence[Optional[Mapping[str, Any]]]) -> bool:

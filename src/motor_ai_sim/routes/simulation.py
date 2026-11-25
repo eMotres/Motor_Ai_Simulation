@@ -3547,6 +3547,11 @@ def _append_run_journal(result: Dict) -> None:
                    "demag": result.get("demag"), "eddy": result.get("eddy_coupled")},
             "metrics": {k: _num(s.get(k)) for k in _mkeys if s.get(k) is not None},
             "end3d_k": _num((s.get("end3d") or {}).get("k_flux")) if isinstance(s.get("end3d"), dict) else None,
+            # the shaft-power convention of P / eta / densities above (1 = core loss on the shaft, the factor on the
+            # converted power; absent = an earlier row) and where its losses sit
+            **({"shaft_conv": 1, "shaft_basis": {k: s.get(k) for k in (
+                "shaft_k3d", "torque_side", "shaft_rotor_in_field", "P_torque_embedded_W", "P_shaft_drag_W",
+                "T_shaft_Nm", "T_field_k_Nm")}} if _shaft_marker(s) else {}),
             "n_frames_solved": result.get("n_frames_solved"),
             "wall_s": _num(result.get("wall_s") or result.get("elapsed_s")),
         }

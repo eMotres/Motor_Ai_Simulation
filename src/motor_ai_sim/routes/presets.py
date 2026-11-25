@@ -308,7 +308,10 @@ def _enrich_card_entry(entry: dict, geo: dict, sim: dict, met: dict) -> None:
     # subtracted the in-field rotor drag a second time and is signed);
     # generators are quoted positive
     pmech = _pick("P_mech_W", "power_w")
-    pmech = abs(pmech) if pmech is not None else None
+    # quoted positive for a generator; a marked motor at no load keeps its negative shaft power
+    if pmech is not None and not (mm.get("shaft_convention") == "fe_on_shaft_k3d_v1"
+                                  and mm.get("op_mode") != "generator"):
+        pmech = abs(pmech)
     pelec = _pick("P_elec_in_W")
     eff = _pick("efficiency", "efficiency_pct")
     if eff is None and pmech and pelec and pelec > 0:

@@ -147,11 +147,63 @@ test('sweep: a marked point is never scaled again, not even by the loaded machin
   assert.match(read('components/sweep/SweepStudyPanel.tsx'), /\.\.\.\(p\.sc \|\| \{\}\)/);
 });
 
-test('duty-cycle torque: a marked run gives the shaft torque (motor) / field x k (generator)', async () => {
+test('duty-cycle torque: a marked run gives the shaft torque, a generator its input', async () => {
   const DC = await import('../../components/thermal/dutyCycleTorque.ts');
   assert.equal(DC.dutyTorqueNm({ summary: { shaft_convention: 'fe_on_shaft_k3d_v1', op_mode: 'motor', T_shaft_Nm: 8.7,
     T_field_k_Nm: 9, T_em_avg_Nm: 10, end3d: { k_flux: 0.9 } } }), 8.7);
+  // a generator's duty-chart torque is its shaft INPUT (Astra r2), not the field torque 9
   assert.equal(DC.dutyTorqueNm({ summary: { shaft_convention: 'fe_on_shaft_k3d_v1', op_mode: 'generator', T_shaft_Nm: 9.3,
-    T_field_k_Nm: 9, T_em_avg_Nm: 10 } }), 9);
+    T_field_k_Nm: 9, T_em_avg_Nm: 10 } }), 9.3);
   assert.equal(DC.dutyTorqueNm({ summary: { T_em_avg_Nm: 10, end3d: { k_flux: 0.9 } } }), 9);
+});
+
+// ── Astra review round 2 ──
+te('tiles: a negative shaft power keeps the coupling boundary too (-50 W -> -0.5 N*m at 100 rad/s)', () => {
+  const rpm100 = 100 * 60 / (2 * Math.PI);
+  const idle = { shaft_convention: 'fe_on_shaft_k3d_v1', op_mode: 'motor', rpm: rpm100, T_em_avg_Nm: 0.0,
+    T_shaft_Nm: -0.3, P_mech_W: -30, P_loss_total_W: 31, end3d: null };
+  const rows = E.emTileRows(idle, { mech: { bearings_W: 15, windage_W: 5, extra_W: 20 } });
+  near(one(rows, 'torque').value, -0.5, 'coupling torque at no load');
+  near(one(rows, 'power').value * 1000, -50, 'coupling power at no load');
+});
+
+test('apply3d is idempotent', () => {
+  const once = A.apply3dToSummary({ T_em_avg_Nm: 10, P_mech_W: 1000, P_loss_total_W: 100, V_line_peak_V: 100, end3d: { k_flux: 0.9 } });
+  const twice = A.apply3dToSummary(once);
+  near(twice.T_em_avg_Nm, 9, 'one factor'); near(twice.V_line_peak_V, 90, 'flux once');
+  const m = A.apply3dToSummary(A.apply3dToSummary(MOTOR));
+  near(m.T_em_avg_Nm, 9, 'marked: one factor');
+});
+
+test('mechanical: the shown torque of a marked run is the shaft torque at the coupling', async () => {
+  const M = await import('../shaftCoupling.ts');
+  const rpm100 = 100 * 60 / (2 * Math.PI);
+  const g = { shaft_convention: 'fe_on_shaft_k3d_v1', op_mode: 'generator', rpm: rpm100, P_mech_W: 930, T_em_avg_Nm: 9 };
+  near(M.shaftCouplingTorqueNm(g), 9.3, 'generator input');
+  near(M.shaftCouplingTorqueNm({ ...g, P_mech_extra_W: 20 }), 9.5, 'generator input at the coupling');
+  near(M.shaftCouplingTorqueNm({ ...g, op_mode: 'motor', P_mech_W: 870, P_mech_extra_W: 20 }), 8.5, 'motor at the coupling');
+  assert.equal(M.shaftCouplingTorqueNm({ T_em_avg_Nm: 9, P_mech_W: 900, rpm: rpm100 }), null);
+});
+
+test('development steps table: two conventions are marked and not ranked', async () => {
+  const R = await import('../../modules/development/comparisonRows.ts');
+  const mk = (conv) => ({ id: String(conv), variant: 'v', motor: {}, result: {}, hasResult: true, inputs: {}, history: false,
+    estimate: false, values: { efficiency: 90, keyPowerKw: 1, keyTorque: 1, torqueMass: 1, shaftConv: conv } });
+  const t = (k) => k;
+  const rows = [mk(1), mk(0)];
+  const cols = R.developmentComparisonColumns(t, rows);
+  const eff = cols.find((c) => c.key === 'efficiency');
+  assert.equal(eff.format(90, rows[1]).endsWith('†'), true);
+  assert.equal(eff.format(90, rows[0]).endsWith('†'), false);
+  assert.deepEqual(eff.rankValues(rows), []);
+  assert.match(eff.title(90, rows[1]), /common:shaftConvOld/);
+  const single = R.developmentComparisonColumns(t, [mk(1), mk(1)]).find((c) => c.key === 'efficiency');
+  assert.equal(single.format(90, rows[0]).endsWith('†'), false);
+});
+
+test('catalog by die: efficiency of two conventions sorts in two groups', async () => {
+  const C = await import('../catalogByDie.ts');
+  const m = (e, c) => ({ values: { efficiency_pct: e, shaft_conv: c } });
+  const sorted = C.sortMotors([m(95, 0), m(90, 1), m(92, 1)], 'eff', 'desc');
+  assert.deepEqual(sorted.map((x) => [x.values.efficiency_pct, x.values.shaft_conv]), [[92, 1], [90, 1], [95, 0]]);
 });

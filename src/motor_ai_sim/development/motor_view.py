@@ -721,11 +721,18 @@ def _rescale_to_loop(base: Dict[str, Any], before: Dict[str, Any]) -> None:
             for _k in ("torque_per_mass_full_Nm_kg", "power_per_mass_full_W_kg"):
                 base.pop(_k, None)
     if _SC.rederive(base):
-        # shaft-side convention: the shaft side is k*T*w -/+ D, not a proportion of the torque
-        def _tpm(s_: Dict[str, Any]) -> Any:
-            return s_.get("T_field_k_Nm") if s_.get("op_mode") == "generator" else s_.get("T_shaft_Nm")
-        scale(("torque_per_mass_Nm_kg", "torque_per_mass_full_Nm_kg"), _ratio(_tpm(base), _tpm(before)))
-        scale(("power_per_mass_W_kg", "power_per_mass_full_W_kg"), _ratio(base.get("P_mech_W"), before.get("P_mech_W")))
+        # shaft-side convention: the shaft side is k*G -/+ D, not a proportion of the torque, and the densities are
+        # rebuilt from the selected torque (motor shaft / generator field x k) and the masses themselves
+        _t = _num(base.get("T_field_k_Nm") if base.get("op_mode") == "generator" else base.get("T_shaft_Nm"))
+        _p = _num(base.get("P_mech_W"))
+        for _mk, _tk, _pk in (("mass_total_kg", "torque_per_mass_Nm_kg", "power_per_mass_W_kg"),
+                              ("mass_full_kg", "torque_per_mass_full_Nm_kg", "power_per_mass_full_W_kg")):
+            _m = _num(base.get(_mk))
+            if _m and _m > 0:
+                if _t is not None:
+                    base[_tk] = _t / _m
+                if _p is not None:
+                    base[_pk] = _p / _m
     else:
         scale(("P_mech_W", "torque_per_mass_Nm_kg", "power_per_mass_W_kg", "torque_per_mass_full_Nm_kg",
                "power_per_mass_full_W_kg"), _ratio(base.get("T_em_avg_Nm"), before.get("T_em_avg_Nm")))
@@ -899,6 +906,14 @@ def light_panel(panel: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
             out[k] = s[k]
     if isinstance(s.get("mass_partial"), bool):
         out["mass_partial"] = s["mass_partial"]
+    # the shaft-power convention, whole: without it the light panel's shaft numbers are read as the earlier
+    # convention and get the 3-D factor a second time (motor_ai_sim.shaft_convention)
+    from motor_ai_sim.shaft_convention import CONVENTION_KEYS, has_marker
+    if has_marker(s):
+        for k in CONVENTION_KEYS:
+            v = s.get(k)
+            if isinstance(v, (str, bool)) or (isinstance(v, list) and all(isinstance(x, str) for x in v)):
+                out[k] = v
     if isinstance(s.get("end3d"), dict):
         out["end3d"] = {k: v for k, v in s["end3d"].items() if isinstance(v, (int, float)) and not isinstance(v, bool)}
     cpl = s.get("coupling") if isinstance(s.get("coupling"), dict) else {}

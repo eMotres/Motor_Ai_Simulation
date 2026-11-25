@@ -11,6 +11,8 @@
 export interface Apply3dFields {
   /** "fe_on_shaft_k3d_v1": the server already put the torque factor into the shaft-side numbers (lib/shaftConvention.ts) */
   shaft_convention?: string | null;
+  /** set on the OUTPUT of apply3dToSummary (the factor it applied): a second call returns the summary unchanged */
+  _apply3d_k?: number | null;
   T_em_avg_Nm?: number | null;
   P_mech_W?: number | null;
   P_loss_total_W?: number | null;
@@ -73,6 +75,8 @@ function scaledEfficiency(summary: Apply3dFields, Pm: number | null | undefined)
 
 /** The summary with the 3-D correction applied to its flux- and torque-proportional fields (the input when there is no factor). */
 export function apply3dToSummary<T extends Apply3dFields>(summary: T): T {
+  // idempotent: a summary this function already scaled is returned as it is (never 10 -> 9 -> 8.1 N*m)
+  if (summary._apply3d_k != null) return summary;
   const { k, kq: kqRaw } = apply3dFactors(summary);
   if (k == null) return summary;
   const kq = kqRaw ?? k;
@@ -93,7 +97,7 @@ export function apply3dToSummary<T extends Apply3dFields>(summary: T): T {
   // efficiency, the per-mass figures, Kt and Km (field part only, the core loss on the shaft) - applying it again would
   // double it.  Only the 2-D field torque and the flux-proportional numbers are scaled here.
   if (isShaftConvention(summary)) {
-    return { ...summary, T_em_avg_Nm: mul(summary.T_em_avg_Nm, kq), ...flux };
+    return { ...summary, T_em_avg_Nm: mul(summary.T_em_avg_Nm, kq), ...flux, _apply3d_k: k };
   }
   const Pm = summary.P_mech_W != null ? summary.P_mech_W * kq : summary.P_mech_W;
   return {
@@ -122,5 +126,6 @@ export function apply3dToSummary<T extends Apply3dFields>(summary: T): T {
     Km_per_mass_Nm_sqrtW_kg: mul(summary.Km_per_mass_Nm_sqrtW_kg, kq),
     Km_per_mass_full_Nm_sqrtW_kg: mul(summary.Km_per_mass_full_Nm_sqrtW_kg, kq),
     efficiency: scaledEfficiency(summary, Pm),
+    _apply3d_k: k,
   };
 }

@@ -232,10 +232,12 @@ def _torque(col: Mapping[str, Any]) -> Optional[float]:
     """The duty's torque on the SAME basis as the report's main torque tables: the end-effect corrected
     ``end3d.T_corrected_Nm`` when the run has one, else the 2-D average."""
     em = _em(col)
-    if em.get("shaft_convention") == "fe_on_shaft_k3d_v1":
-        # the shaft-side convention: a motor duty is matched on its SHAFT torque (field x k minus the core
-        # loss / w), a generator on the field torque x k it is held at (motor_ai_sim.shaft_convention)
-        t = _num(em.get("T_field_k_Nm") if em.get("op_mode") == "generator" else em.get("T_shaft_Nm"))
+    from motor_ai_sim import shaft_convention as _SC
+    if _SC.has_marker(em):
+        # the shaft-side convention: a requirement is a SHAFT requirement, so the duty is matched on the
+        # torque at the coupling - a motor's output, a generator's input, bearings and windage included
+        # when the run names them (motor_ai_sim.shaft_convention.coupling_torque)
+        t = _SC.coupling_torque({**em, "rpm": em.get("rpm") or _rpm(col)})
         if t is not None:
             return abs(t)
     t = _num(_g(em, "end3d.T_corrected_Nm"))
@@ -247,8 +249,9 @@ def _torque(col: Mapping[str, Any]) -> Optional[float]:
 def _torque_basis(col: Mapping[str, Any]) -> str:
     em = _em(col)
     if em.get("shaft_convention") == "fe_on_shaft_k3d_v1":
-        return ("3-D field torque" if em.get("op_mode") == "generator"
-                else "shaft torque, core loss on the shaft")
+        _at = "at the coupling" if em.get("P_mech_extra_W") is not None else "before bearings and windage (unknown)"
+        return ("shaft input torque %s, core loss on the shaft" % _at if em.get("op_mode") == "generator"
+                else "shaft output torque %s, core loss on the shaft" % _at)
     return ("3-D corrected" if _num(_g(em, "end3d.T_corrected_Nm")) is not None else "2-D")
 
 

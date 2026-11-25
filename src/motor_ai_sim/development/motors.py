@@ -769,10 +769,14 @@ def _comparison_projection(duty: dict, stored: dict) -> dict:
     if torque is not None:
         comparison["torque_nm"] = torque
 
-    power = _first(primary + [coupled_em], "p_mech_w", "p_mech_avg_w", "p_out_w",
+    power = _first(primary + [coupled_em], "p_mech_w", "p_out_w",
         "p_shaft_out_w", "p_shaft_w", "power_w")
     if power is not None:
         comparison["power_w"] = power
+    # the shaft-power convention of the source these numbers come from (motor_ai_sim.shaft_convention)
+    _src = summary_raw if summary_raw else coupled_em_raw
+    if isinstance(_src, dict) and _src.get("shaft_convention") == "fe_on_shaft_k3d_v1":
+        comparison["shaft_conv"] = 1
 
     # Phase voltage peak of the solved waveform (owner 2026-10-25: every row shows it).
     phase_peak = _first(primary + [coupled_em], "v_phase_peak_v")

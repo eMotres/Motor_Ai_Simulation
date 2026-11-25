@@ -75,6 +75,8 @@ export function developmentComparisonRows(motors: ProjectMotor[], specPoints: Sp
       rotorTemp: finite(solved.rotor_temp_c) ?? mappedTemperature(temperatures, ['rotor']),
       bearingTemp: finite(solved.bearing_temp_c) ?? mappedTemperature(temperatures, ['bearing', 'bearings']),
       demag: first(solved.demag, solved.demagnetization),
+      // the shaft-power convention of these numbers (1 = core loss on the shaft, src/motor_ai_sim/shaft_convention.py)
+      shaftConv: Number(solved.shaft_conv) === 1 || solved.shaft_convention === 'fe_on_shaft_k3d_v1' ? 1 : 0,
     };
     for (const [name, value] of Object.entries(temperatures)) {
       const part = temperaturePart(name);
@@ -145,14 +147,26 @@ export function developmentComparisonColumns(t: (key: string, args?: Record<stri
   // a variant without any stored result is ONE sub-row that says so (owner 2026-10-26)
   const dutyColumn = neutral(input('duty', 'duty'));
   dutyColumn.format = (v, r) => (v !== undefined && v !== null && v !== '' ? String(v) : r.hasResult ? '-' : t('notComputed'));
+  // TWO SHAFT-POWER CONVENTIONS IN ONE TABLE (owner 2026-11-25): an earlier run keeps its numbers, so its power, torque,
+  // efficiency and torque density are marked "†" with the reason in the tooltip and nothing is ranked across the mix.
+  const shaftMixed = new Set(rows.filter((r) => r.hasResult).map((r) => r.values.shaftConv)).size > 1;
+  const conventionAware = (column: SharedComparisonColumn<DevelopmentComparisonRow>): SharedComparisonColumn<DevelopmentComparisonRow> => {
+    if (!shaftMixed) return column;
+    const fmt = column.format, title = column.title;
+    return { ...column,
+      format: (v, r) => `${fmt ? fmt(v, r) : formatValue(v, false, t)}${r.hasResult && r.values.shaftConv !== 1 ? '†' : ''}`,
+      title: (v, r) => [r.hasResult && r.values.shaftConv !== 1 ? t('common:shaftConvOld') : '', title ? title(v, r) : '']
+        .filter(Boolean).join(' ') || undefined,
+      rankValues: () => [], noColor: () => true };
+  };
   return [
     dutyColumn,
-    keyPoint('keyPowerKw', 'power', 'kW', 'keyPowerTarget', 1), keyPoint('keyTorque', 'torque', 'N·m', 'keyTorqueTarget', 1),
+    conventionAware(keyPoint('keyPowerKw', 'power', 'kW', 'keyPowerTarget', 1)), conventionAware(keyPoint('keyTorque', 'torque', 'N·m', 'keyTorqueTarget', 1)),
     neutral(input('rpm', 'speed', 'rpm')), neutral(input('current', 'current', 'A')),
     keyPoint('vPhase', 'phasePeak', 'V', undefined, 1), neutral(input('gamma', 'gamma', '°')),
-    result('efficiency', 'efficiency', '%', 'hi'),
+    conventionAware(result('efficiency', 'efficiency', '%', 'hi')),
     losses, result('pCu', 'copperLoss', 'W', 'lo'), result('pFe', 'ironLoss', 'W', 'lo'), result('pMag', 'magnetLoss', 'W', 'lo'), result('pSolid', 'solidLoss', 'W', 'lo'), result('pMech', 'mechanicalLoss', 'W', 'lo'),
-    mass, torqueMass, result('ripple', 'ripple', '%', 'lo'),
+    mass, conventionAware(torqueMass), result('ripple', 'ripple', '%', 'lo'),
     (() => {
       // no-load cogging torque of the configuration, pk-pk (owner 2026-10-26); the digits follow its size
       const cogging = result('cogging', 'cogging', 'N·m', 'lo');

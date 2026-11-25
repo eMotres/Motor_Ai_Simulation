@@ -343,7 +343,7 @@ export function emTileRows(s: EmTileSummary, view: EmTileView = {}): EmTileSpec[
   // are known, else the electromagnetic shaft torque
   const wSc = 2 * Math.PI * (num((s as any).rpm) ?? 0) / 60;
   const T = sc && num(s.T_shaft_Nm) != null
-    ? (mechKnown && bal != null && wSc > 0 && !bal.noOutput ? bal.pShaft / wSc : num(s.T_shaft_Nm))
+    ? (mechKnown && bal != null && wSc > 0 ? bal.pShaft / wSc : num(s.T_shaft_Nm))
     : num(s.T_em_avg_Nm);
   const etaPct = bal?.eta != null ? 100 * bal.eta : null;
   const partial = s.solid_loss_not_solved === true;       // magnet / shaft eddy not solved → optimistic

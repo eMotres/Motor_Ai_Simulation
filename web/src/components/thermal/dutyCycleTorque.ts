@@ -69,10 +69,13 @@ export function dutyTorqueNm(d: TorqueDuty | null | undefined): number | null {
   const s = d?.summary;
   if (!s || typeof s !== 'object') return null;
   const r = s as Record<string, unknown>;
-  // the shaft-side convention (src/motor_ai_sim/shaft_convention.py): a motor's shaft torque, a generator's field torque x
-  // k (the quantity its torque hold matches); both already carry the run's factor
+  // the shaft-side convention (src/motor_ai_sim/shaft_convention.py): the torque at the COUPLING - a motor's output, a
+  // generator's input, bearings and windage included when the run names them; it already carries the run's factor
   if (r.shaft_convention === 'fe_on_shaft_k3d_v1') {
-    const ts = num(r.op_mode === 'generator' ? r.T_field_k_Nm : r.T_shaft_Nm);
+    const p = num(r.P_mech_W), rpm = num(r.rpm), x = num(r.P_mech_extra_W);
+    const w = rpm !== null ? 2 * Math.PI * rpm / 60 : 0;
+    if (p !== null && w > 0) return (r.op_mode === 'generator' ? p + (x ?? 0) : p - (x ?? 0)) / w;
+    const ts = num(r.T_shaft_Nm);
     if (ts !== null) return ts;
   }
   const t2d = num(r.T_em_avg_Nm);

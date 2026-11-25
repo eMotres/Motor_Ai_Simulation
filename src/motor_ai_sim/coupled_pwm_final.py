@@ -187,12 +187,16 @@ def apply_to_summary(summary: Mapping[str, Any],
             x = extra / p_mech
             eff = float(out["efficiency"])
             out["efficiency_shaft"] = round(eff / (1.0 + x) if gen else eff * max(0.0, 1.0 - x), 6)
-        m = _num(out.get("mass_total_kg"))
-        if m and p_mech is not None:
-            out["power_per_mass_W_kg"] = round(p_mech / m, 1)
-            _t = _num(out.get("T_field_k_Nm") if gen else out.get("T_shaft_Nm"))
-            if _t is not None:
-                out["torque_per_mass_Nm_kg"] = round(_t / m, 3)
+        if extra is not None and p_mech is not None and out.get("P_shaft_net_W") is not None:
+            out["P_shaft_net_W"] = round(p_mech + extra if gen else max(p_mech - extra, 0.0), 1)
+        _t = _num(out.get("T_field_k_Nm") if gen else out.get("T_shaft_Nm"))
+        for mk, tk, pk in (("mass_total_kg", "torque_per_mass_Nm_kg", "power_per_mass_W_kg"),
+                           ("mass_full_kg", "torque_per_mass_full_Nm_kg", "power_per_mass_full_W_kg")):
+            m = _num(out.get(mk))
+            if m and p_mech is not None:
+                out[pk] = round(p_mech / m, 1)
+                if _t is not None:
+                    out[tk] = round(_t / m, 3)
         return out
     if out.get("efficiency") is not None and p_mech is not None \
             and p_loss is not None and p_mech > 0.0:

@@ -1265,7 +1265,13 @@ def build_datasheet(*, die: str, cfg: str, die_doc: Dict[str, Any],
         if v is not None:
             return float(v)
         w = _g(d, "summary.P_mech_W")
-        return abs(float(w)) / 1000.0 if w is not None else None
+        if w is None:
+            return None
+        # shaft-side convention: a motor at no load keeps its negative shaft power (the shaft SUPPLIES the core loss);
+        # generators are quoted positive in both conventions (motor_ai_sim.shaft_convention)
+        if _g(d, "summary.shaft_convention") == "fe_on_shaft_k3d_v1":
+            return float(w) / 1000.0
+        return abs(float(w)) / 1000.0
 
     P_kw = [_pkw(d) for d in duties]
     T_nm = [_g(d, "torque_nm", "summary.T_em_avg_Nm") for d in duties]

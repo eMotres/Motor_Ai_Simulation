@@ -16,6 +16,7 @@ import { activeView, applyFilters, buildByDie, oldInActive, restrictTo, stageKey
 import { useCatalogFilterStore } from '../../stores/catalogFilterStore';
 import { displayStateApi } from '../../lib/displayStateApi';
 import { appLinkPath } from '../../lib/appLink';
+import { ownerQueueApi } from '../../modules/overview/decisions/ownerQueueApi';
 import { parseDesignation, SEGMENTS } from '../../lib/motorDesignation';
 import { DesignationDecoder } from '../common/MotorDesignation';
 import { NARROW } from '../../lib/narrowLayout';
@@ -200,6 +201,12 @@ const CatalogByDie: React.FC<Props> = ({ dies, thumbs, rated, active, isAdmin, c
   const setProjectState = async (id: string, state: 'active' | 'parked' | 'archived') => {
     try { await displayStateApi.set({ kind: 'project', project_id: id }, state); } catch { /* the chip stays as it was */ }
     setOverviewGen((n) => n + 1);                               // re-read the Overview: the chip moves to its state
+  };
+
+  // owner queue (2026-11-25): the project's priority, written through the queue's own route (admin only), then the Overview is re-read
+  const setProjectPriority = async (id: string, p: 'urgent' | 'normal' | 'low') => {
+    try { await ownerQueueApi.setPriority(id, p); } catch { /* not an admin, or the store needs attention: nothing changes */ }
+    setOverviewGen((n) => n + 1);
   };
 
   // the four per-motor parameters left the row (owner 2026-11-17); they are in the "?" popover, under the name's segments
@@ -473,6 +480,10 @@ const CatalogByDie: React.FC<Props> = ({ dies, thumbs, rated, active, isAdmin, c
           ...(['active', 'parked', 'archived'] as const).map((st) => (
             <MenuItem key={st} dense onClick={run(() => void setProjectState(projMenu.id, st))}>{t(`byDie.projectMenu.${st}`)}</MenuItem>
           )),
+          ...(isAdmin ? (['urgent', 'normal', 'low'] as const).map((p) => (
+            <MenuItem key={`prio-${p}`} dense data-testid={`project-priority-${p}`} onClick={run(() => void setProjectPriority(projMenu.id, p))}>
+              {t('common:ownerQueue.priorityMenu', { priority: t(`common:ownerQueue.priority.${p}`) })}</MenuItem>
+          )) : []),
         ]}
       </Menu>
       <Menu open={!!dieMenu} anchorEl={dieMenu?.el ?? null} onClose={() => setDieMenu(null)}>

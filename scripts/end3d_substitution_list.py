@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import sys
 from pathlib import Path
 from typing import Any, Dict, Iterator, List, Optional, Tuple
@@ -36,35 +37,40 @@ from motor_ai_sim.end3d_verdict import substitution_of  # noqa: E402
 
 def _num(v: Any) -> Optional[float]:
     try:
-        return float(v)
+        f = float(v)
     except (TypeError, ValueError):
         return None
+    return f if math.isfinite(f) else None
 
 
-def _walk(o: Any, path: str = "") -> Iterator[Tuple[str, Dict[str, Any]]]:
+def _walk(o: Any, path: str = "", l0: Optional[float] = None) -> Iterator[Tuple[str, Dict[str, Any], Optional[float]]]:
+    """Every block with k_flux / stage2_3d, with the nearest enclosing ``L0_mm`` (a card's passport carries its stack
+    there, not inside ``end3d``)."""
     if isinstance(o, dict):
+        l0 = _num(o.get("L0_mm")) or l0
         if "k_flux" in o or "stage2_3d" in o:
-            yield path or "/", o
+            yield path or "/", o, l0
         for k, v in o.items():
-            yield from _walk(v, "%s/%s" % (path, k))
+            yield from _walk(v, "%s/%s" % (path, k), l0)
     elif isinstance(o, list):
         for i, v in enumerate(o):
-            yield from _walk(v, "%s[%d]" % (path, i))
+            yield from _walk(v, "%s[%d]" % (path, i), l0)
 
 
 def _real(e: Dict[str, Any], stack: Optional[float]) -> Tuple[Optional[float], Optional[float]]:
     """(stack, real k_flux) from a stored entry's own-stack table row, or from a full passport's k_psi_curve."""
     s2 = e.get("stage2_3d")
     if isinstance(s2, dict):
-        kp = s2.get("k_psi") or {}
+        kp = s2.get("k_psi") if isinstance(s2.get("k_psi"), dict) else {}
         L = _num(kp.get("L_mm")) or _num(s2.get("L_mm")) or stack
-        own = next((r for r in (s2.get("k_psi_curve") or [])
-                    if L is not None and _num(r.get("stack_mm")) is not None and abs(float(r["stack_mm"]) - L) < 1e-6),
-                   {})
+        curve = s2.get("k_psi_curve") if isinstance(s2.get("k_psi_curve"), list) else []
+        own = next((r for r in curve
+                    if isinstance(r, dict) and L is not None and _num(r.get("stack_mm")) is not None
+                    and abs(float(r["stack_mm"]) - L) < 1e-6), {})
         return L, _num(own.get("k_flux_raw"))
     t = e.get("k_flux_vs_L") if isinstance(e.get("k_flux_vs_L"), dict) else {}
     rows = [(x, y) for x, y in ((_num(a), _num(b)) for a, b in t.items()) if x is not None and y is not None]
-    st = _num(e.get("stack_mm")) or stack
+    st = _num(e.get("stack_mm")) or (None if e.get("inherited") else stack)
     if st is None and len(rows) == 1:
         st = rows[0][0]
     return st, next((y for x, y in rows if st is not None and abs(x - st) <= 1e-6 * max(1.0, st)), None)
@@ -72,13 +78,15 @@ def _real(e: Dict[str, Any], stack: Optional[float]) -> Tuple[Optional[float], O
 
 def row(source: str, key: str, e: Dict[str, Any], stack: Optional[float], how: str) -> Dict[str, Any]:
     s2 = e.get("stage2_3d") if isinstance(e.get("stage2_3d"), dict) else None
-    kf = _num(((s2 or {}).get("k_psi") or {}).get("value")) if s2 else _num(e.get("k_flux"))
+    kp = (s2 or {}).get("k_psi") if isinstance((s2 or {}).get("k_psi"), dict) else {}
+    kf = _num(kp.get("value")) if s2 else _num(e.get("k_flux"))
     ks = _num(e.get("k_flux_self"))
     st, real = _real(e, stack)
     if s2 and ks is None:
-        own = next((r for r in (s2.get("k_psi_curve") or [])
-                    if st is not None and _num(r.get("stack_mm")) is not None and abs(float(r["stack_mm"]) - st) < 1e-6),
-                   {})
+        curve = s2.get("k_psi_curve") if isinstance(s2.get("k_psi_curve"), list) else []
+        own = next((r for r in curve
+                    if isinstance(r, dict) and st is not None and _num(r.get("stack_mm")) is not None
+                    and abs(float(r["stack_mm"]) - st) < 1e-6), {})
         ks = _num(own.get("k_flux_self"))
     old = None
     if real is not None and ks:
@@ -108,12 +116,16 @@ def scan(store: Optional[Path], root: Optional[Path], catalog: Optional[Path], f
     def judge(source: str, key: str, e: Dict[str, Any], stack: Optional[float]) -> None:
         nonlocal seen
         seen += 1
-        how = substitution_of(e, stack)
-        if how:
-            hits.append(row(source, key, e, stack, how))
-        elif _equal_only(e):
-            equal.append({"source": source, "key": key, "k_flux": e.get("k_flux"), "fidelity": e.get("fidelity"),
-                          "why": "equal by an INVALID / no-2-D run or not recoverable: not a substitution"})
+        try:                                   # one broken record never stops the listing
+            how = substitution_of(e, stack)
+            if how:
+                hits.append(row(source, key, e, stack, how))
+            elif _equal_only(e):
+                equal.append({"source": source, "key": key, "k_flux": e.get("k_flux"),
+                              "fidelity": e.get("fidelity"),
+                              "why": "equal by an INVALID / no-2-D run or not recoverable: not a substitution"})
+        except Exception as ex:                # noqa: BLE001 - reported, not raised
+            errors.append("%s %s: %s: %s" % (source, key, type(ex).__name__, ex))
 
     if store:
         try:
@@ -135,20 +147,21 @@ def scan(store: Optional[Path], root: Optional[Path], catalog: Optional[Path], f
                 errors.append("%s: %s" % (f, ex))
                 continue
             L = _num(((doc.get("geometry") or {}) if isinstance(doc, dict) else {}).get("motor_length"))
-            for path, e in _walk(doc):
+            for path, e, _l0 in _walk(doc):
                 judge("catalog", "%s / %s %s" % (f.parent.name, f.stem, path), e, L)
     for label, src in (("motor_catalog", catalog), ("full_passport", full), ("snapshot", snapshots)):
         if not src:
             continue
-        files = [src] if src.is_file() else sorted(src.rglob("*.json"))
+        files = ([src] if src.is_file() else
+                 sorted(src.rglob("passport_L*.json")) if label == "full_passport" else sorted(src.rglob("*.json")))
         for f in files:
             try:
                 doc = json.loads(f.read_text(encoding="utf-8"))
             except (OSError, ValueError) as ex:
                 errors.append("%s: %s" % (f, ex))
                 continue
-            for path, e in _walk(doc):
-                judge(label, "%s %s" % (f.name, path), e, _num(e.get("L0_mm")))
+            for path, e, l0 in _walk(doc):
+                judge(label, "%s %s" % (f.name, path), e, l0)
     uniq: Dict[Tuple, List[str]] = {}
     for h in hits:
         uniq.setdefault((h["applied_k_flux"], h["k_flux_self"], h["real_k_flux_own_stack"]), []).append(h["key"])

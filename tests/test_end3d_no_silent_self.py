@@ -17,6 +17,7 @@ from motor_ai_sim import end3d_verdict as V
 
 ROOT = Path(__file__).resolve().parents[1]
 KF, KS = 0.93812, 0.96476
+GEN = "2026-11-18T13:06:16Z"           # after the 2-D source fix of 2026-08-04
 OLD_CARD_TEXT = "Stage A k_flux_self at the own stack (2-D check failed, raw k_flux not used)"
 
 
@@ -42,7 +43,7 @@ def _two_d(verdict, new_rule=False, ratio=KF / KS, converged=True):
     (None, "k_flux", "NOT CHECKED (no 2-D leg)"),
 ])
 def test_applied_factor_by_verdict(two_d, basis, verdict):
-    a = V.applied_flux_factor(KF, KS, two_d)
+    a = V.applied_flux_factor(KF, KS, two_d, generated_utc=GEN)
     assert a["basis"] == basis and a["verdict"] == verdict
     assert a["value"] == (KF if basis == "k_flux" else KS)
     assert a["k_flux"] == KF and a["k_flux_self"] == KS            # the real k_flux always travels
@@ -52,7 +53,7 @@ def test_applied_factor_by_verdict(two_d, basis, verdict):
 
 @pytest.mark.parametrize("kf, ks, ratio", [(KF, KS, 0.9724), (0.88685, 0.96100, 0.9228), (0.92270, 0.96404, 0.9571)])
 def test_measured_short_stack_old_fails_pass_the_plausibility_guard(kf, ks, ratio):
-    a = V.applied_flux_factor(kf, ks, _two_d("FAIL", ratio=ratio))
+    a = V.applied_flux_factor(kf, ks, _two_d("FAIL", ratio=ratio), generated_utc=GEN)
     assert a["basis"] == "k_flux" and a["value"] == kf and a["verdict"] == V.VERDICT_OLD_NOT_CHECKED
 
 
@@ -64,13 +65,13 @@ def test_measured_short_stack_old_fails_pass_the_plausibility_guard(kf, ks, rati
     (_two_d("FAIL", ratio=None), "no ratio"),
 ])
 def test_an_implausible_old_fail_keeps_k_flux_self_and_asks_for_a_recompute(two_d, why):
-    a = V.applied_flux_factor(KF, KS, two_d)
+    a = V.applied_flux_factor(KF, KS, two_d, generated_utc=GEN)
     assert a["basis"] == "k_flux_self" and a["value"] == KS, why
     assert a["verdict"] == V.VERDICT_OLD_RECOMPUTE and "recompute" in a["note"]
 
 
 def test_an_old_fail_with_k_flux_above_k_flux_self_is_not_the_short_stack_signature():
-    a = V.applied_flux_factor(0.97, 0.96, _two_d("FAIL", ratio=0.95))
+    a = V.applied_flux_factor(0.97, 0.96, _two_d("FAIL", ratio=0.95), generated_utc=GEN)
     assert a["basis"] == "k_flux_self" and a["verdict"] == V.VERDICT_OLD_RECOMPUTE
 
 
@@ -132,7 +133,7 @@ def _stage2(tmp_path, two_d, kf=KF, ks=KS, L=12.0):
     d = tmp_path / "full"
     d.mkdir()
     (d / ("stage_a_L%g.json" % L)).write_text(json.dumps({
-        "k_flux": kf, "k_flux_self": ks, "two_d": two_d,
+        "k_flux": kf, "k_flux_self": ks, "two_d": two_d, "generated_utc": GEN,
         "spill_profile": {"B1_mid_T": 1.6354}, "solves": [{"picard_converged": True}]}), encoding="utf-8")
     return stage2_block(d, ROOT, L)
 
@@ -237,3 +238,60 @@ def test_list_finds_every_old_shape_and_writes_nothing(tmp_path, capsys):
 def test_list_needs_an_explicit_source():
     with pytest.raises(SystemExit):
         _script().main([])
+
+
+
+# --------------------------------------------------------------------------
+# follow-up of the #878 review (2026-11-25)
+# --------------------------------------------------------------------------
+
+@pytest.mark.parametrize("gen", [None, "", "2026-08-03T13:32:51Z"])
+def test_an_old_fail_before_the_source_fix_or_undated_keeps_k_flux_self(gen):
+    a = V.applied_flux_factor(KF, KS, _two_d("FAIL"), generated_utc=gen)
+    assert a["basis"] == "k_flux_self" and a["verdict"] == V.VERDICT_OLD_RECOMPUTE and "2026-08-04" in a["note"]
+    assert V.applied_flux_factor(KF, KS, _two_d("FAIL"), generated_utc="2026-08-05T00:00:00Z")["basis"] == "k_flux"
+
+
+def test_a_text_hit_on_an_old_card_asks_to_verify_against_the_full_passport():
+    how = V.substitution_of({"k_flux": KS, "k_flux_vs_L": None, "fidelity": OLD_CARD_TEXT, "labels": 7})
+    assert "verify against the full passport" in how
+
+
+def test_an_inherited_table_is_not_read_at_the_configurations_own_length():
+    # lent from a passport measured at 20 mm: its 12 mm row is a sweep row, not this configuration's own stack
+    e = {"k_flux": KS, "k_flux_self": KS, "k_flux_vs_L": {"12.0": KF, "20.0": KS}, "inherited": True}
+    assert V.substitution_of(e, stack_mm=12.0) is None
+    assert V.substitution_of(dict(e, inherited=False), stack_mm=12.0) is not None
+
+
+def test_broken_full_passport_parts_do_not_raise():
+    assert V.substitution_of({"stage2_3d": {"k_psi": 3, "k_psi_curve": [1, None, {"stack_mm": "x"}]}}) is None
+
+
+def test_the_writer_says_why_a_pass_run_gets_k_flux_self(tmp_path):
+    kp = _stage2(tmp_path, _two_d("PASS", ratio=0.995), kf=1.7)["k_psi"]  # k_flux outside the factor band
+    assert kp["value"] == KS and kp["basis"] == "k_flux_self"
+    assert "not a usable factor" in kp["method"] and "as the run itself instructs" not in kp["method"]
+
+
+def test_the_list_survives_broken_records_and_reads_the_right_stack(tmp_path, capsys):
+    store = tmp_path / "s.json"
+    store.write_text(json.dumps({"bad": {"k_flux": KS, "stage2_3d": {"k_psi": "x"}},
+                                 "nan": {"k_flux": float("nan"), "k_flux_self": float("nan")}}), encoding="utf-8")
+    cat = tmp_path / "motor_catalog.json"                # L0_mm sits in the passport, not in its end3d block
+    cat.write_text(json.dumps({"motors": [{"passport": {"passport": {
+        "L0_mm": 12.0, "end3d": {"k_flux": KS, "k_flux_self": KS, "k_flux_vs_L": {"12.0": KF}}}}}]}), encoding="utf-8")
+    full = tmp_path / "full"
+    full.mkdir()
+    (full / "passport_L12.json").write_text(json.dumps({"stage2_3d": {"L_mm": 12.0, "k_psi": {"value": KS},
+                                            "k_psi_curve": [{"stack_mm": 12.0, "k_flux_raw": KF}]}}), encoding="utf-8")
+    (full / "stage_a_L12.json").write_text(json.dumps({"k_flux": KS, "k_flux_self": KS,
+                                                       "k_flux_vs_L": {"12.0": KF}}), encoding="utf-8")
+    m = _script()
+    assert m.main(["--store", str(store), "--catalog", str(cat), "--full", str(full)]) == 0
+    out = json.loads(capsys.readouterr().out)
+    src = sorted(h["source"] for h in out["substituted"])
+    assert src == ["full_passport", "motor_catalog"]                      # stage_a_L12.json is not read by --full
+    assert next(h for h in out["substituted"] if h["source"] == "motor_catalog")["stack_mm"] == 12.0
+    assert all("nan" not in json.dumps(h).lower() for h in out["substituted"])
+    assert m._num(float("nan")) is None and m._num(float("inf")) is None

@@ -3,13 +3,14 @@
  *  and the production that use it.  Every action of the list view stays reachable: the motor row's ▶ loads it at its
  *  default mode, the two ⋮ menus carry everything else.  The grouping and the current / old rule: lib/catalogByDie.ts. */
 import React, { useEffect, useMemo, useState } from 'react';
-import { Box, Chip, IconButton, Menu, MenuItem, Popover, Tooltip, Typography } from '@mui/material';
+import { Box, Chip, Divider, IconButton, Menu, MenuItem, Popover, Tooltip, Typography } from '@mui/material';
+import ArrowDropDownIcon from '@mui/icons-material/ArrowDropDown';
 import HelpOutlineIcon from '@mui/icons-material/HelpOutline';
 import MoreVertIcon from '@mui/icons-material/MoreVert';
 import PlayArrowIcon from '@mui/icons-material/PlayArrow';
 import { useTranslation } from 'react-i18next';
 import MotorThumbnail from './MotorThumbnail';
-import { applyFilters, buildByDie, restrictTo, stageKey, COL_DIGITS, colValue, COLS, filterByState, jobChip, motorCount, motorStage, NAME_COL_W, nextSort,
+import { activeView, applyFilters, buildByDie, oldInActive, restrictTo, stageKey, COL_DIGITS, colValue, COLS, jobChip, motorCount, motorStage, NAME_COL_W, nextSort,
   projectOptions, segmentationText, sortMotors, stageOptions, stateCounts, type ByDieDie, type ByDieOverview, type ColKey, type JobsAnswer, type MotorRow, type RunningJob, type ServerView, type Sort,
   type StateFilter } from '../../lib/catalogByDie';
 import { useCatalogFilterStore } from '../../stores/catalogFilterStore';
@@ -82,7 +83,7 @@ export function rowClickLoads(target: ClickNode | null, row: ClickNode): boolean
   const own = target.closest(ROW_CONTROLS);
   return !own || own === row || !row.contains(own);
 }
-const REST_W = { application: 84, marks: 130, stage: 96, jobs: 170, production: 96 } as const;
+const REST_W = { application: 84, marks: 130, projects: 200, stage: 96, jobs: 170, production: 96 } as const;
 const markChip = { height: 18, fontSize: 10.5, maxWidth: 120, color: 'var(--text-3)', '& .MuiChip-label': { px: 0.75 } } as const;
 /** The tab's scroller (App.tsx, the Motors tab) has `p: 3` = 24 px: the sticky header sits at -24 px so that it is flush with the
  *  scroller's top edge, right under the Motors title line; at 0 it stopped 24 px lower and rows showed through above it. */
@@ -105,6 +106,14 @@ export function dieMenuItems(die: ByDieDie, who: Who, a: ByDieActions, t: T): Me
     ...(who.isAdmin ? [{ key: 'arc', label: die.layer === 'shared' ? t('retireDieConfirm') : t('archiveDieConfirm'), run: () => a.retireOrArchive(n) }] : []),
     { key: 'del', label: t('byDie.deleteDie'), run: () => a.deleteDie(n), danger: true },
   ];
+}
+
+/** The project items of the motor menu (admins; owner 2026-11-25: "there are no buttons there"): park / archive / set
+ *  active each project the row shows, the same action as the project chip's menu. */
+export function projectStateItems(m: Pick<MotorRow, 'projects'>, t: T, setState: (id: string, state: 'active' | 'parked' | 'archived') => void): MenuEntry[] {
+  return m.projects.flatMap((p) => (['active', 'parked', 'archived'] as const).filter((st) => st !== p.state)
+    .map((st) => ({ key: `prj-${p.id}-${st}`, label: t('byDie.projectMenu.item', { project: p.title, action: t(`byDie.projectMenu.${st}`) }),
+      run: () => setState(p.id, st) })));
 }
 
 /** The motor menu: every configuration action of the list view (the lock of the row, the load is ▶). */
@@ -146,6 +155,8 @@ const CatalogByDie: React.FC<Props> = ({ dies, thumbs, rated, active, isAdmin, c
   const setFilterOptions = useCatalogFilterStore((s) => s.setOptions);
   const stateFilter: StateFilter = filter.state;
   const [projMenu, setProjMenu] = useState<{ el: HTMLElement; id: string; title: string } | null>(null);
+  // the "old" chip of a row opens its one action, Archive (owner 2026-11-25: the archive must be findable on the row)
+  const [oldMenu, setOldMenu] = useState<{ el: HTMLElement; m: MotorRow } | null>(null);
   const [overviewGen, setOverviewGen] = useState(0);
   // the running work per motor and server (admins only; the route is admin-gated), refreshed while the page is open
   const [jobs, setJobs] = useState<JobsAnswer | null>(givenJobs ?? null);
@@ -171,8 +182,11 @@ const CatalogByDie: React.FC<Props> = ({ dies, thumbs, rated, active, isAdmin, c
     [allDies, dies, overview, isAdmin]);
   // the state filter needs the Overview's links: admins only (a customer's view is the whole catalog, as before)
   const showState = isAdmin && !!overview;
-  const stateGroups = useMemo(() => (showState ? filterByState(allGroups, stateFilter) : allGroups), [allGroups, showState, stateFilter]);
-  const counts = useMemo(() => stateCounts(allGroups), [allGroups]);
+  // Active leaves out the motors marked old unless "Show old" is on (owner 2026-11-25); the tab counts say what is shown
+  const stateGroups = useMemo(() => (showState ? activeView(allGroups, stateFilter, filter.showOld) : allGroups),
+    [allGroups, showState, stateFilter, filter.showOld]);
+  const counts = useMemo(() => stateCounts(allGroups, filter.showOld), [allGroups, filter.showOld]);
+  const oldCount = useMemo(() => (showState ? oldInActive(allGroups) : 0), [allGroups, showState]);
   // the stage / project / running filters are the admin's (they read the Overview and the jobs); "only the highlighted
   // project's motors" is everybody's (their own project, through the project selector of the tab)
   const effFilter = isAdmin ? filter : { ...filter, stages: [], projects: [], running: false };
@@ -181,8 +195,8 @@ const CatalogByDie: React.FC<Props> = ({ dies, thumbs, rated, active, isAdmin, c
     [stateGroups, effFilter.stages.join('|'), effFilter.projects.join('|'), effFilter.running, effFilter.onlyHighlighted, jobs, highlighted]);   // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {
     setFilterOptions({ stages: isAdmin ? stageOptions(allGroups) : [], projects: isAdmin ? projectOptions(allGroups) : [],
-      counts, shown: motorCount(groups), total: motorCount(allGroups) });
-  }, [allGroups, groups, counts, isAdmin, setFilterOptions]);
+      counts, shown: motorCount(groups), total: motorCount(allGroups), old: oldCount });
+  }, [allGroups, groups, counts, oldCount, isAdmin, setFilterOptions]);
   const setProjectState = async (id: string, state: 'active' | 'parked' | 'archived') => {
     try { await displayStateApi.set({ kind: 'project', project_id: id }, state); } catch { /* the chip stays as it was */ }
     setOverviewGen((n) => n + 1);                               // re-read the Overview: the chip moves to its state
@@ -221,7 +235,8 @@ const CatalogByDie: React.FC<Props> = ({ dies, thumbs, rated, active, isAdmin, c
       </Tooltip>
     );
   };
-  const run = (fn: () => void) => () => { setDieMenu(null); setCfgMenu(null); setProjMenu(null); fn(); };
+  const run = (fn: () => void) => () => { setDieMenu(null); setCfgMenu(null); setProjMenu(null); setOldMenu(null); fn(); };
+  const canArchive = (die: string) => isAdmin && canWrite && !!actions.archiveCfg && (actions.archivable?.(die) ?? true);
   const stageLabel = (s: string | null) => (!s ? '' : t(stageKey(s), { defaultValue: s }));
   const jobTip = (j: RunningJob) => t('byDie.job.tip', { tag: j.tag || '—', session: j.session || '—', since: j.started_at || '—',
     cpus: j.cpus_reserved ?? '—', used: j.cpu_used ?? '—', mem: j.mem_reserved_gb ?? '—', now: j.mem_now_gb ?? '—' });
@@ -312,13 +327,33 @@ const CatalogByDie: React.FC<Props> = ({ dies, thumbs, rated, active, isAdmin, c
           <Box data-testid="by-die-marks" sx={{ width: REST_W.marks, flexShrink: 0, display: 'flex', alignItems: 'center', gap: 0.5, overflow: 'hidden' }}>
             {extra?.marks}
             {/* one short chip each, the reason in the tooltip: a sentence wrapped the Marks column on three lines (browser finding) */}
-            {m.old && <Tooltip title={t('byDie.oldTip')}><Chip size="small" variant="outlined" label={t('byDie.old')} data-testid="by-die-old" sx={markChip} /></Tooltip>}
+            {m.old && (
+              <Tooltip title={canArchive(m.die) ? `${t('byDie.oldTip')} · ${t('byDie.oldArchiveTip')}` : t('byDie.oldTip')}>
+                <Chip size="small" variant="outlined" label={t('byDie.old')} data-testid="by-die-old"
+                  {...(canArchive(m.die) ? { onClick: (e: React.MouseEvent<HTMLElement>) => setOldMenu({ el: e.currentTarget, m }),
+                    onDelete: (e: React.SyntheticEvent) => setOldMenu({ el: (e.currentTarget as HTMLElement).closest('.MuiChip-root') as HTMLElement, m }),
+                    deleteIcon: <ArrowDropDownIcon data-testid="by-die-old-open" /> } : {})} sx={markChip} />
+              </Tooltip>
+            )}
             {m.newestLocked && (
               <Tooltip title={`${t('byDie.newestLocked')}: ${t('byDie.newestLockedTip')}`}>
                 <Chip size="small" variant="outlined" label={t('byDie.newestShort')} data-testid="by-die-newest-locked" sx={markChip} />
               </Tooltip>
             )}
           </Box>
+          {/* the projects BEFORE stage / running (owner 2026-11-25: at the far right the chips were cut off) */}
+          {isAdmin && (
+            <Tooltip title={projects}>
+              <Box data-testid="by-die-projects" sx={{ ...small, width: REST_W.projects, flexShrink: 0, display: 'flex', gap: 0.5, overflow: 'hidden', whiteSpace: 'nowrap' }}>
+                {m.projects.map((p) => (
+                  <Chip key={p.id} size="small" variant="outlined" label={p.title} data-testid="by-die-project-chip"
+                    onClick={(e) => setProjMenu({ el: e.currentTarget, id: p.id, title: p.title })}
+                    sx={{ height: 18, fontSize: 10.5, maxWidth: 160, ...(p.trial ? { borderStyle: 'dashed' } : {}), ...(p.state !== 'active' ? { opacity: 0.6 } : {}) }} />
+                ))}
+                {!m.projects.length && m.computed && !m.productions.length ? <span>{t('byDie.computed')}</span> : null}
+              </Box>
+            </Tooltip>
+          )}
           {isAdmin && (
             <Typography component="span" noWrap data-testid="by-die-stage" sx={{ ...small, width: REST_W.stage, flexShrink: 0, color: 'var(--text-2)' }}>
               {stageLabel(motorStage(m))}
@@ -328,18 +363,6 @@ const CatalogByDie: React.FC<Props> = ({ dies, thumbs, rated, active, isAdmin, c
             <Box data-testid="by-die-jobs" sx={{ width: REST_W.jobs, flexShrink: 0, display: 'flex', gap: 0.5, overflow: 'hidden' }}>
               {(jobs?.motors?.[`${m.die}/${m.config}`] ?? []).map(jobChipEl)}
             </Box>
-          )}
-          {isAdmin && (
-            <Tooltip title={projects}>
-              <Box data-testid="by-die-projects" sx={{ ...small, flex: '1 1 120px', minWidth: 0, display: 'flex', gap: 0.5, overflow: 'hidden', whiteSpace: 'nowrap' }}>
-                {m.projects.map((p) => (
-                  <Chip key={p.id} size="small" variant="outlined" label={p.title} data-testid="by-die-project-chip"
-                    onClick={(e) => setProjMenu({ el: e.currentTarget, id: p.id, title: p.title })}
-                    sx={{ height: 18, fontSize: 10.5, maxWidth: 160, ...(p.trial ? { borderStyle: 'dashed' } : {}), ...(p.state !== 'active' ? { opacity: 0.6 } : {}) }} />
-                ))}
-                {!m.projects.length && m.computed && !m.productions.length ? <span>{t('byDie.computed')}</span> : null}
-              </Box>
-            </Tooltip>
           )}
           {isAdmin && (
             <Typography component="span" noWrap data-testid="by-die-production" sx={{ ...small, width: REST_W.production, flexShrink: 0 }}>
@@ -369,9 +392,9 @@ const CatalogByDie: React.FC<Props> = ({ dies, thumbs, rated, active, isAdmin, c
       <Box sx={{ display: 'flex', columnGap: 1, flexWrap: 'wrap', flex: '1 1 320px', minWidth: 0 }}>
         <Box component="span" sx={{ width: REST_W.application, flexShrink: 0 }}>{t('byDie.col.application')}</Box>
         <Box component="span" sx={{ width: REST_W.marks, flexShrink: 0 }}>{t('byDie.col.marks')}</Box>
+        {isAdmin && <Box component="span" sx={{ width: REST_W.projects, flexShrink: 0 }}>{t('byDie.col.projects')}</Box>}
         {isAdmin && <Box component="span" sx={{ width: REST_W.stage, flexShrink: 0 }}>{t('byDie.col.stage')}</Box>}
         {isAdmin && <Box component="span" sx={{ width: REST_W.jobs, flexShrink: 0 }}>{t('byDie.col.jobs')}</Box>}
-        {isAdmin && <Box component="span" sx={{ flex: '1 1 120px' }}>{t('byDie.col.projects')}</Box>}
         {isAdmin && <Box component="span" sx={{ width: REST_W.production, flexShrink: 0 }}>{t('byDie.col.production')}</Box>}
       </Box>
     </Box>
@@ -461,6 +484,17 @@ const CatalogByDie: React.FC<Props> = ({ dies, thumbs, rated, active, isAdmin, c
         {cfgMenu && motorMenuItems(cfgMenu.m, { canWrite, isAdmin, standardUser }, actions, t).map((it) => (
           <MenuItem key={it.key} dense sx={it.danger ? { color: '#f87171' } : undefined} onClick={run(it.run)}>{it.label}</MenuItem>
         ))}
+        {cfgMenu && isAdmin && cfgMenu.m.projects.length > 0 && <Divider />}
+        {cfgMenu && isAdmin && projectStateItems(cfgMenu.m, t, (id, st) => void setProjectState(id, st)).map((it) => (
+          <MenuItem key={it.key} dense data-testid="by-die-motor-project-state" onClick={run(it.run)}>{it.label}</MenuItem>
+        ))}
+      </Menu>
+      <Menu open={!!oldMenu} anchorEl={oldMenu?.el ?? null} onClose={() => setOldMenu(null)}>
+        {oldMenu && (
+          <MenuItem dense data-testid="by-die-old-archive" onClick={run(() => actions.archiveCfg?.(oldMenu.m.die, oldMenu.m.config))}>
+            {t('byDie.archiveMotor')}
+          </MenuItem>
+        )}
       </Menu>
     </Box>
   );

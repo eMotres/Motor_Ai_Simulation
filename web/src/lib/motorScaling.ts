@@ -453,8 +453,17 @@ export function scaleMotor(p: Passport, k: Knobs, poles?: number): ScaledResult 
     if (pts.length === 1) return pts[0][1];
     return e3.k_flux ?? null;
   };
-  const kEnd = kOfL(k.L_mm);
-  const kEnd0 = kOfL(p.L0_mm);
+  // Base factor, same length rule as ``charge_analytic.k_end_info``: the scalar k_flux (the factor at the passport's own
+  // stack_mm) when L0 is within 5 % of that length; otherwise the table at L0 (a stale table already collapsed to its
+  // reference row above, so it yields the scalar and ``k_end3d_stale``).  A knob length equal to L0 reads the same
+  // value, so the base point keeps its k(L)/k(L0) ratio of exactly 1.
+  const ownStack = Number(e3?.stack_mm);
+  const kScalar = Number(e3?.k_flux);
+  const kEnd0 = e3 && Number.isFinite(kScalar) && kScalar > 0.5 && kScalar < 1.5 && Number.isFinite(ownStack) && ownStack > 0
+    && p.L0_mm > 0 && p.L0_mm !== ownStack && Math.abs(p.L0_mm - ownStack) <= 0.05 * p.L0_mm
+    ? kScalar
+    : kOfL(p.L0_mm);
+  const kEnd = k.L_mm === p.L0_mm ? kEnd0 : kOfL(k.L_mm);
   // Flux factor for the tuned machine relative to the 2D base solve.
   const fEnd = kEnd != null && kEnd0 != null ? kEnd : 1;
   // TORQUE factor (owner 2026-09-30): the passport's measured k_T when it has

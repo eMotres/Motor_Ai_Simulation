@@ -111,16 +111,26 @@ def _records() -> List[Dict[str, Any]]:
     return out
 
 
-def measured_k_T(fingerprint: Optional[str], geo: Optional[Dict[str, Any]] = None
-                 ) -> Optional[Dict[str, Any]]:
+def measured_k_T(fingerprint: Optional[str], geo: Optional[Dict[str, Any]] = None,
+                 stack_mm: Optional[float] = None) -> Optional[Dict[str, Any]]:
     """The measured k_T for this geometry: exact fingerprint first; else one
     measured on an earlier geometry of the SAME machine (slots, poles, OD
     within 0.5 mm) at the SAME stack length (within 5 %), flagged inherited.
-    None when neither exists."""
+    None when neither exists.
+
+    ``stack_mm`` (the length the factor is wanted at): an exact-fingerprint record measured at another stack length
+    (more than 5 % off, or unrecorded) is NOT returned - the torque factor of a 40 mm stack is not that of a 200 mm
+    one; the same-machine rule below then looks for a record at this length."""
     recs = _records()
     fp = str(fingerprint or "")
     for r in recs:
         if fp and r["fingerprint"] == fp:
+            if stack_mm:
+                try:
+                    if abs(float(r["stack_mm"]) - float(stack_mm)) > 0.05 * float(stack_mm):
+                        continue
+                except (TypeError, ValueError, KeyError):
+                    continue
             return {"k_T": r["k_T"], "source": r["source"], "inherited": False}
     g = geo or {}
     try:
@@ -129,7 +139,9 @@ def measured_k_T(fingerprint: Optional[str], geo: Optional[Dict[str, Any]] = Non
         poles = int(g.get("num_poles") or 0) or ns * int(g.get("num_poles_per_segment") or 0)
         od = float(g.get("stator_diameter") or 0.0) or 2.0 * float(
             g.get("stator_outer_radius") or 0.0)
-        L = float(g.get("motor_length") or 0.0)
+        # the length the factor is wanted at (the argument) wins over the geometry's own; a geometry without
+        # motor_length still matches by the argument
+        L = float(stack_mm or 0.0) or float(g.get("motor_length") or 0.0)
     except (TypeError, ValueError):
         return None
     if not (slots and poles and od and L):
@@ -186,10 +198,15 @@ def enrich(end3d: Optional[Dict[str, Any]], fingerprint: Optional[str],
     out = dict(end3d)
     if _num(out.get("k_T")) is None:
         # a passport inherited from an earlier geometry looks its k_T up
-        # under that geometry's fingerprint first
-        m = measured_k_T(out.get("inherited_from") or fingerprint, geo)
+        # under that geometry's fingerprint first - but only a k_T measured at THIS stack length (5 %) may ride with
+        # it; a passport lent on the length curve (another length) carries k_flux only
+        want = _num(out.get("inherited_for_stack_mm")) if out.get("inherited") else None
+        m = measured_k_T(out.get("inherited_from") or fingerprint, geo, stack_mm=want)
         if m is None and out.get("inherited_from"):
-            m = measured_k_T(fingerprint, geo)
+            m = measured_k_T(fingerprint, geo, stack_mm=want)
+        if m and out.get("inherited") and not m.get("inherited"):
+            m = {**m, "inherited": True,
+                 "inherited_note": "measured on an earlier geometry of this machine at this stack length - used until it is re-measured"}
         if m:
             out["k_T"] = m["k_T"]
             out["k_T_source"] = m["source"]

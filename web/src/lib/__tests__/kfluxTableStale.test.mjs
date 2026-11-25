@@ -51,3 +51,18 @@ test('scaleMotor: a marked table is interpolated exactly as before, no flag', ()
   assert.equal(none.k_end3d, null);
   assert.equal(none.k_end3d_stale, false);
 });
+
+// the base length rule follows charge_analytic.k_end_info: the scalar (the factor at the passport's own stack_mm) when
+// L0 is within 5 % of it, else the marked table at L0
+test('scaleMotor: marked passport with L0 != stack_mm uses the scalar within 5 %, the table beyond', () => {
+  const marked = { ...OLD, stack_mm: 12, k_flux_vs_L_method: 'own_mid_ratio' };
+  const near = { ...P(marked), L0_mm: 12.4 };
+  const rn = scaleMotor(near, K(12.4), 14);
+  assert.equal(rn.k_end3d, OLD.k_flux);                       // scalar, not the table at 12.4 mm
+  assert.equal(rn.k_end3d_stale, false);
+  const far = { ...P(marked), L0_mm: 15 };
+  const rf = scaleMotor(far, K(15), 14);
+  assert.ok(Math.abs(rf.k_end3d - (0.95183 + (0.95737 - 0.95183) * 0.5)) < 1e-12);   // table at L0 = 15
+  // L0 == stack_mm: unchanged
+  assert.equal(scaleMotor(P(marked), K(12), 14).k_end3d, 0.95183);
+});

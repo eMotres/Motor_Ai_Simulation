@@ -7991,7 +7991,13 @@ def payload(die: str, cfg: str, duty: Optional[str] = None,
             if isinstance(_summ, dict) and _summ.get("end3d") is None:
                 from motor_ai_sim.routes.simulation import (_end3d_lookup,
                                                             _geometry_fingerprint)
-                _e3 = _end3d_lookup(_geometry_fingerprint(geo), geo)
+                _e3diag: dict = {}
+                _e3 = _end3d_lookup(_geometry_fingerprint(geo), geo, diag=_e3diag)
+                if not _e3 and _e3diag.get("note"):
+                    # a passport of another geometry was NOT lent (stack length outside the measured span): say so
+                    _s2 = dict(_summ)
+                    _s2["end3d_note"] = _e3diag["note"]
+                    out["duty"]["summary"] = _s2
                 if _e3:
                     _s2 = dict(_summ)
                     _T = _s2.get("T_em_avg_Nm")

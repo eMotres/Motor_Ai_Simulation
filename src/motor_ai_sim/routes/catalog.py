@@ -952,6 +952,9 @@ def generate_motor_passport(motor_id: str, coarse: bool = False,
                 "generated_utc": _sa.get("generated_utc"),
                 "machine": f"{result['slots']}s/{result['poles']}p "
                            f"OD {2*result['geo']['statorOR_mm']:.0f}",
+                # the passport's own length (the reference row of the sweep): readers need it to tell the scalar's length
+                **({"stack_mm": float(machine["geometry"]["motor_length"])}
+                   if (machine.get("geometry") or {}).get("motor_length") else {}),
                 "k_flux_vs_L": {str(e["stack_mm"]): round(e["k_flux"], 5)
                                 for e in (_sa.get("l_stack_curve") or [])},
                 # how the per-length rows were formed (end_effect.K_FLUX_VS_L_*);
@@ -969,6 +972,7 @@ def generate_motor_passport(motor_id: str, coarse: bool = False,
         result["passport"]["end3d"] = (
             None if _e3 is None else
             {"k_flux": _e3["k_flux"],
+             **({"stack_mm": _e3["stack_mm"]} if _e3.get("stack_mm") else {}),
              "k_flux_vs_L": _e3.get("k_flux_vs_L") or None,
              **({"k_flux_vs_L_method": _e3["k_flux_vs_L_method"]}
                 if _e3.get("k_flux_vs_L_method") else {}),

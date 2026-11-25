@@ -191,3 +191,68 @@ def substitution_of(entry: Optional[Mapping[str, Any]], stack_mm: Optional[float
 def is_silent_substitution(entry: Optional[Mapping[str, Any]], stack_mm: Optional[float] = None) -> bool:
     """True when :func:`substitution_of` finds the old silent substitution in this block."""
     return substitution_of(entry, stack_mm) is not None
+
+
+def status_of(two_d: Optional[Mapping[str, Any]], applied: Optional[Mapping[str, Any]] = None) -> str:
+    """``verified`` / ``unverified`` / ``failed`` / ``invalid`` of a stored 3-D factor.
+
+    With ``applied`` (:func:`applied_flux_factor`'s answer) the status follows what is APPLIED:
+    k_flux_self because the check failed (FAIL, old-rule recompute, unknown + not usable) -> failed; k_flux_self because
+    the 2-D leg is INVALID or k_flux itself is not a usable factor -> invalid; k_flux with an end-deficit PASS (an
+    ``agreement_check`` or passport version >= 3) -> verified; any other k_flux (NOT CHECKED, an old mid-plane PASS,
+    no 2-D leg) -> unverified.  Without ``applied``: from ``two_d`` alone, the same way."""
+    if applied is None:
+        t = two_d if isinstance(two_d, Mapping) else {}
+        v = str(t.get("verdict") or "").strip().upper()
+        new = isinstance(t.get("agreement_check"), Mapping)
+        if v == "INVALID":
+            return "invalid"
+        if new and v == "FAIL":
+            return "failed"
+        return "verified" if (new and v == "PASS") else "unverified"
+    basis = applied.get("basis")
+    verdict = str(applied.get("verdict") or "").upper()
+    if basis == BASIS_SELF:
+        # FAIL / old-rule recompute / unknown-not-usable: the check said no; anything else forced k_flux_self because
+        # there is no usable k_flux or no 2-D ratio
+        if verdict == "FAIL" or verdict.startswith("NOT CHECKED (OLD RULE") or verdict.startswith("UNKNOWN"):
+            return "failed"
+        return "invalid"
+    if verdict == "PASS" and applied.get("rule") == RULE_END_DEFICIT:
+        return "verified"
+    return "unverified"
+
+
+#: ``k_flux_vs_L_method`` of a stored table whose rows are k_flux_self (the factor applied when the check failed)
+K_FLUX_VS_L_SELF_APPLIED = "self_applied"
+
+
+def applied_table(l_stack_curve: Any, applied: Mapping[str, Any], method: Any = None) -> Dict[str, Any]:
+    """The per-length table a store entry carries for what it APPLIES, so the table and the scalar never disagree:
+    ``{"k_flux_vs_L": {L: k}, "k_flux_vs_L_method": m, "k_flux_vs_L_raw": {L: raw k} | absent}``.
+
+    The scalar is k_flux -> the rows' k_flux (the run's own table, its ``method`` kept).  The scalar is k_flux_self ->
+    the rows' k_flux_self under ``self_applied``, and the raw k_flux rows beside it as ``k_flux_vs_L_raw``.  Rows are
+    rounded to 5 decimals as the stores always did; a row without the number is left out."""
+    rows = [e for e in (l_stack_curve or []) if isinstance(e, Mapping) and _num(e.get("stack_mm")) is not None]
+
+    def tab(key: str) -> Dict[str, float]:
+        out: Dict[str, float] = {}
+        for e in rows:
+            v = _num(e.get(key))
+            if v is not None:
+                out[str(e["stack_mm"])] = round(v, 5)
+        return out
+    raw = tab("k_flux")
+    if applied.get("basis") == BASIS_SELF:
+        own = tab("k_flux_self")
+        out: Dict[str, Any] = {"k_flux_vs_L": own or None}
+        if own:
+            out["k_flux_vs_L_method"] = K_FLUX_VS_L_SELF_APPLIED
+        if raw:
+            out["k_flux_vs_L_raw"] = raw
+        return out
+    out = {"k_flux_vs_L": raw or None}
+    if raw and method:
+        out["k_flux_vs_L_method"] = str(method)
+    return out

@@ -61,5 +61,13 @@
   "refineRipple": "细化脉动",
   "refiningRipple": "细化中…",
   "rippleRefined": "脉动 · 每侧 {layers} 层",
-  "rippleRefinedTip": "脉动已按每侧 {layers} 层气隙网格细化；基础运行（每侧 {baseLayers} 层）为 {base} %。卡片上的其他数值均来自基础运行。"
+  "rippleRefinedTip": "脉动已按每侧 {layers} 层气隙网格细化；基础运行（每侧 {baseLayers} 层）为 {base} %。卡片上的其他数值均来自基础运行。",
+  "end3dStatus_verified": "3D 校验 ✓",
+  "end3dStatusTip_verified": "三维系数的二维一致性校验通过：所算各叠长下端部损失 L(1 − k) 保持不变，三维与二维模型一致。",
+  "end3dStatus_unverified": "3D 未校验",
+  "end3dStatusTip_unverified": "已应用三维系数，但其二维一致性无法校验（可用叠长少于两个，或护照早于该校验）。请用自动叠长重新运行 Stage A 以完成校验。",
+  "end3dStatus_failed": "3D 校验未通过",
+  "end3dStatusTip_failed": "三维与二维模型的差异超出端部效应：改用纯三维端部系数 k_flux_self 代替 k_flux。请重新计算 Stage A。",
+  "end3dStatus_invalid": "3D 二维参考无效",
+  "end3dStatusTip_invalid": "Stage A 的二维参考为零或非数值：不存在三维/二维比值，已应用 k_flux_self。请重新计算 Stage A。"
 }

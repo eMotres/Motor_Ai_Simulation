@@ -393,7 +393,7 @@ export function turnsFactor(p: Passport, k: Knobs): number {
  *  `poles` (optional) enables ψ_PM — the electrical frequency needs it. */
 /** ``k_flux_vs_L_method`` values whose per-length rows are right (Stage A since 2026-11-24;
  *  mirror of ``end3d_factors.K_FLUX_VS_L_METHODS_OK``). */
-export const K_FLUX_VS_L_METHODS_OK: ReadonlySet<string> = new Set(['own_mid_ratio', 'self_no_2d']);
+export const K_FLUX_VS_L_METHODS_OK: ReadonlySet<string> = new Set(['own_mid_ratio', 'self_no_2d', 'self_applied']);
 
 /** The k(L) points a reader may interpolate, sorted by length, and whether a stored table was refused as STALE
  *  (mirror of ``end3d_factors.k_flux_table``).  A table with one row, or marked with a method above, is used as it is.

@@ -859,9 +859,23 @@ def generate_motor_passport(motor_id: str, coarse: bool = False,
     # The tuner rescales this passport analytically (no FEM) as the user moves
     # KV (turns/connection) and the lamination length — so the 3D correction
     # must ride WITH the passport, as k_flux over a few STACK LENGTHS for the
-    # length slider to interpolate.  Store hit is free; a miss costs three
-    # quick Stage A solves (~30-60 min, admin-side, once per catalog motor).
+    # length slider to interpolate.  Store hit is free; a miss costs four or five
+    # quick Stage A solves (l_factors 'auto' plus a 0.75 row: Configure's k(L) and the
+    # passport lending need a row below the stack) (~30-60 min each on large machines).
     # coarse=true never solves — it attaches a store hit or an honest null.
+    def _e3_applied(sa):
+        from motor_ai_sim.end3d_verdict import applied_flux_factor, applied_table, status_of
+        af = applied_flux_factor(sa.get("k_flux"), sa.get("k_flux_self"), sa.get("two_d"),
+                                 sa.get("version"), sa.get("generated_utc"))
+        # the table of what is APPLIED: k_flux_self rows ("self_applied") when the scalar is k_flux_self, raw beside it
+        tabs = applied_table(sa.get("l_stack_curve"), af, sa.get("k_flux_vs_L_method"))
+        return {"k_flux": af["value"] if af["value"] is not None else sa["k_flux"],
+                "k_flux_self": sa["k_flux_self"], "k_flux_raw": sa.get("k_flux"),
+                "k_flux_applied": af["basis"], "k_flux_verdict": af["verdict"],
+                "k_flux_status": status_of(sa.get("two_d"), af),
+                "k_flux_vs_L": tabs.get("k_flux_vs_L") or {},
+                **{k_: tabs[k_] for k_ in ("k_flux_vs_L_method", "k_flux_vs_L_raw") if tabs.get(k_)}}
+
     try:
         from motor_ai_sim.routes.simulation import (_geometry_fingerprint,
                                                     _end3d_lookup)
@@ -903,14 +917,14 @@ def generate_motor_passport(motor_id: str, coarse: bool = False,
                 "# mesh sizes: run_stage_a derives them from the PHYSICAL\n"
                 "# scales (air gap, thinnest magnet), never from the OD\n"
                 "p = run_stage_a(geo_override=g, n_stack=4, n_cap=6,\n"
-                "                order=2, l_factors=(0.75, 1.0, 1.5),\n"
+                "                order=2, l_factors='auto', auto_extra=(0.75,),\n"
                 "                do_bracket=False, do_2d=True,\n"
                 "                tol=3e-3, max_iter=45, verbose=False)\n"
                 "mm = p.get('machine') or {}\n"
                 "md = p.get('model') or {}\n"
                 "out = {k: p.get(k) for k in ('k_flux', 'k_flux_self',\n"
                 "                             'generated_utc', 'l_stack_curve',\n"
-                "                             'k_flux_vs_L_method')}\n"
+                "                             'k_flux_vs_L_method', 'two_d', 'version')}\n"
                 "out['materials'] = mm.get('materials')\n"
                 "out['mesh'] = {k: md.get(k) for k in ('h_gap_mm', 'h_solid_mm',\n"
                 "               'mesh_rule', 'box_z_mm', 'iron_stack_kf')}\n"
@@ -947,20 +961,16 @@ def generate_motor_passport(motor_id: str, coarse: bool = False,
                     % (_pr.returncode, (_pr.stderr or "")[-400:]))
             _sa = _j2.loads(_line[len("PASSPORT3D:"):])
             _e3 = {
-                "k_flux": _sa["k_flux"], "k_flux_self": _sa["k_flux_self"],
-                "fidelity": "quick (n_stack=4, 3-point L-sweep)",
+                # the factor to apply, decided once from the run's 2-D verdict; the raw k_flux beside it
+                **_e3_applied(_sa),
+                "fidelity": "quick (n_stack=4, auto L-sweep)",
                 "generated_utc": _sa.get("generated_utc"),
                 "machine": f"{result['slots']}s/{result['poles']}p "
                            f"OD {2*result['geo']['statorOR_mm']:.0f}",
                 # the passport's own length (the reference row of the sweep): readers need it to tell the scalar's length
                 **({"stack_mm": float(machine["geometry"]["motor_length"])}
                    if (machine.get("geometry") or {}).get("motor_length") else {}),
-                "k_flux_vs_L": {str(e["stack_mm"]): round(e["k_flux"], 5)
-                                for e in (_sa.get("l_stack_curve") or [])},
-                # how the per-length rows were formed (end_effect.K_FLUX_VS_L_*);
-                # absent on a passport from before the 2026-11-24 fix
-                **({"k_flux_vs_L_method": _sa["k_flux_vs_L_method"]}
-                   if _sa.get("k_flux_vs_L_method") else {}),
+                # k_flux_vs_L / k_flux_vs_L_method / k_flux_vs_L_raw come from _e3_applied (the applied table)
                 # provenance: the steel actually solved and the mesh rule, so
                 # a wrong-material passport can be found later
                 "materials": _sa.get("materials"),
@@ -976,6 +986,7 @@ def generate_motor_passport(motor_id: str, coarse: bool = False,
              "k_flux_vs_L": _e3.get("k_flux_vs_L") or None,
              **({"k_flux_vs_L_method": _e3["k_flux_vs_L_method"]}
                 if _e3.get("k_flux_vs_L_method") else {}),
+             **({"k_flux_status": _e3["k_flux_status"]} if _e3.get("k_flux_status") else {}),
              "fidelity": _e3.get("fidelity")})
     except Exception:  # noqa: BLE001 — a 3D failure must not lose the 2D passport
         log.exception("catalog passport: 3D end-effect attach failed — "

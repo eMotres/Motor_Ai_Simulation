@@ -222,7 +222,8 @@ def enrich(end3d: Optional[Dict[str, Any]], fingerprint: Optional[str],
 #: ``k_flux_vs_L_method`` values whose per-length rows are right (``simulation.static3d.end_effect.K_FLUX_VS_L_*``).
 #: A table with more than one row and without one of these was written before the 2026-11-24 fix: every row but the
 #: reference one used the REFERENCE length's 3-D mid-plane / 2-D ratio, so k_flux(L) came out nearly flat in L.
-K_FLUX_VS_L_METHODS_OK = frozenset({"own_mid_ratio", "self_no_2d"})
+#: "self_applied": the rows are k_flux_self, stored when the scalar applied is k_flux_self (end3d_verdict.applied_table)
+K_FLUX_VS_L_METHODS_OK = frozenset({"own_mid_ratio", "self_no_2d", "self_applied"})
 #: The one short flag a reader shows for such a table (EN; the web carries its own EN + zh-CN string).
 STALE_KL_FLAG = "k(L) computed before 2026-11-24: recompute"
 

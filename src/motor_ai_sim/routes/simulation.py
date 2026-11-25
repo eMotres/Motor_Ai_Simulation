@@ -7799,8 +7799,12 @@ def _end3d_lookup(geo_fp: Optional[str], geo: Optional[dict] = None,
         _same_len = bool(basis == "point" and _src_stack > 0 and abs(_src_stack - stack) <= _END3D_STACK_TOL * stack)
         _drop = ("k_torque", "torque_basis") if _same_len else (
             "k_T", "k_T_source", "k_T_inherited", "k_T_note", "k_torque", "torque_basis")
+        # the source's own check (status / applied / raw / verdict) does not describe a LENT, possibly interpolated
+        # factor on another geometry: dropped, and the lent factor is "unverified"
+        _drop = _drop + ("k_flux_status", "k_flux_applied", "k_flux_raw", "k_flux_verdict", "k_flux_vs_L_raw")
         v = {kk: vv for kk, vv in v.items() if kk not in _drop}
         return _e3_enrich({**v, "k_flux": float(kf), "k_flux_passport": v.get("k_flux"), "inherited": True,
+                "k_flux_status": "unverified",
                 "inherited_from": k, "inherited_stack_basis": basis, "inherited_for_stack_mm": float(stack),
                 "inherited_curve": {"span_mm": [span[0], span[1]], "points": len(curve)},
                 "inherited_note": (

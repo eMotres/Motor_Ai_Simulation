@@ -54,3 +54,15 @@ test('two UNKNOWN signatures never match, and null is not a number', async () =>
   assert.ok(Number.isNaN(storedNumber(null)) && Number.isNaN(storedNumber('')) && Number.isNaN(storedNumber(undefined)));
   assert.equal(storedNumber('0.25'), 0.25);
 });
+
+test('percent of the point torque and the export value', async () => {
+  const { coggingPctOfTorque, coggingExportValue } = await import('../coggingPp.ts');
+  const c = coggingOf(pt({ cogging_pp_Nm: 0.3 }));
+  assert.equal(coggingPctOfTorque(c, 6), 5);
+  assert.equal(coggingPctOfTorque(c, -6), 5);
+  assert.equal(coggingPctOfTorque(c, 0), undefined);
+  assert.equal(coggingPctOfTorque(coggingOf(pt({ cogging_pp_Nm: null })), 6), undefined);
+  assert.equal(coggingExportValue(0.3), 0.3);
+  assert.equal(coggingExportValue(undefined), null);
+  assert.equal(coggingExportValue(1e9), null);   // the on-screen sort sentinel never reaches the CSV
+});

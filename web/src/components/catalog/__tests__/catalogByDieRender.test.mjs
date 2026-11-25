@@ -22,6 +22,7 @@ import { I18nextProvider } from 'react-i18next';
 import { createI18n } from '${rel('i18n/core.ts')}';
 import CatalogByDie from '${rel('components/catalog/CatalogByDie.tsx')}';
 export { dieMenuItems, motorMenuItems } from '${rel('components/catalog/CatalogByDie.tsx')}';
+export { catalogFilterApi } from '${rel('stores/catalogFilterStore.ts')}';
 import { DesignationDecoder } from '${rel('components/common/MotorDesignation.tsx')}';
 import enCommon from '${rel('locales/en/common.json')}';
 import zhCommon from '${rel('locales/zh-CN/common.json')}';
@@ -45,6 +46,10 @@ await build({
 });
 const m = await import(pathToFileURL(out).href);
 process.on('exit', () => { try { rmSync(tmp, { recursive: true, force: true }); } catch { /* */ } });
+// these tests show how an OLD copy looks: "Show old" on (Active hides old motors by default since 2026-11-25; that rule is
+// tested in catalogFiltersRender.test.mjs).  A server render reads the store's initial state: point it at the current one.
+m.catalogFilterApi.getInitialState = m.catalogFilterApi.getState;
+m.catalogFilterApi.setState({ filter: { ...m.catalogFilterApi.getState().filter, showOld: true } });
 const ready = (i) => new Promise((r) => (i.isInitialized ? r() : i.on('initialized', () => r())));
 const decode = (s) => s.replace(/&#x27;|&#39;/g, "'").replace(/&quot;/g, '"').replace(/&amp;/g, '&');
 

@@ -699,6 +699,17 @@ def registry_ids() -> list:
         return [w.id for w in _REG.values()]
 
 
+def live_workspaces() -> list:
+    """Every workspace holding memory in this process: the registered ones and the process workspace (readers of
+    "what is running anywhere", e.g. the deploy guard; never creates a workspace or a store)."""
+    with _REG_LOCK:
+        out = list(_REG.values())
+    cache = _PROC_CACHE
+    if cache is not None:
+        out.append(cache[1])
+    return out
+
+
 def evict_workspace(ws: "Workspace") -> int:
     """Drop one workspace's memory by hand (admin, tests, a shutdown hook)."""
     return ws.state.evict()

@@ -8,10 +8,45 @@ Without ``--date`` the date is the report that is due now (today from 06:00 loca
 from __future__ import annotations
 
 import argparse
+import calendar
+import functools
 import sys
 import time
+from typing import Optional
 
 from motor_ai_sim.owner_report import run as R
+
+
+def format_queue_line(counts: dict, now: float) -> str:
+    """``Decisions: 4 open, 9 messages, oldest 2 d 5 h`` from ``owner_queue.counts()`` (pure)."""
+    line = f"Decisions: {int(counts.get('open_blocking', 0))} open, {int(counts.get('open_messages', 0))} messages"
+    oldest = counts.get("oldest_open_at")
+    if oldest:
+        age = max(0, int(now - calendar.timegm(time.strptime(oldest, "%Y-%m-%dT%H:%M:%SZ"))))
+        d, h = age // 86400, age % 86400 // 3600
+        line += ", oldest " + (f"{d} d {h} h" if d else f"{h} h")
+    return line
+
+
+def queue_line(now: float) -> str:
+    """The owner-queue line of the report; a failure is ``Decisions: unavailable`` and never breaks the report."""
+    try:
+        from motor_ai_sim import owner_queue as OQ
+        return format_queue_line(OQ.counts(), now)
+    except Exception:                                              # noqa: BLE001
+        return "Decisions: unavailable"
+
+
+def _with_queue_line(line: str):
+    """run.build_report calls ``build.build`` without the line; wrap it for THIS process only (run.py is not ours to edit)."""
+    orig = R.B.build
+
+    @functools.wraps(orig)
+    def build(*a, **kw):
+        kw.setdefault("queue_line", line)
+        return orig(*a, **kw)
+    R.B.build = build
+    return orig
 
 
 def main(argv=None) -> int:
@@ -25,7 +60,11 @@ def main(argv=None) -> int:
     if a.send and a.dry_run:
         ap.error("--send and --dry-run exclude each other")
     now = time.time()
-    res = R.run_daily(now=now, date=a.date, force=a.force, dry_run=not a.send)
+    orig = _with_queue_line(queue_line(now))
+    try:
+        res = R.run_daily(now=now, date=a.date, force=a.force, dry_run=not a.send)
+    finally:
+        R.B.build = orig
     rep = res.get("report")
     if res["status"] == "dry_run":
         print(rep.html if a.html else rep.text)

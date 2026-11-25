@@ -1776,15 +1776,17 @@ def _boundary_facets(mesh, part_tri: np.ndarray, parts: Sequence[int]):
     return bf, mid, n, ln
 
 
-def gap_surface(mesh, part_tri: np.ndarray, band: float = GAP_BAND):
+def gap_surface(mesh, part_tri: np.ndarray, band: float = GAP_BAND,
+                parts: Sequence[int] = (PART_ROTOR, PART_MAGNET)):
     """The rotor solids' facets that face the air gap.
 
-    Boundary facets of ROTOR or MAGNET elements whose outward normal points
-    outward-radially and whose midpoint sits within ``band`` of the outermost
-    such radius.  The sleeve is excluded on purpose (see the section comment).
-    Returns (facet ids, reference radius r_o [m], arc length [m]).
+    Boundary facets of ROTOR or MAGNET elements (``parts``) whose outward
+    normal points outward-radially and whose midpoint sits within ``band`` of
+    the outermost such radius.  The sleeve is excluded on purpose (see the
+    section comment).  Returns (facet ids, reference radius r_o [m], arc
+    length [m]).
     """
-    bf, mid, n, ln = _boundary_facets(mesh, part_tri, (PART_ROTOR, PART_MAGNET))
+    bf, mid, n, ln = _boundary_facets(mesh, part_tri, tuple(parts))
     if bf.size == 0:
         return np.zeros(0, np.int64), 0.0, 0.0
     r = np.hypot(mid[:, 0], mid[:, 1])
@@ -1799,7 +1801,9 @@ def gap_surface(mesh, part_tri: np.ndarray, band: float = GAP_BAND):
 
 def torque_load(mesh, part_tri: np.ndarray, torque_nm: float,
                 stack_length_m: float, order: int = 2,
-                band: float = GAP_BAND) -> Tuple[np.ndarray, Dict[str, Any]]:
+                band: float = GAP_BAND,
+                parts: Sequence[int] = (PART_ROTOR, PART_MAGNET)
+                ) -> Tuple[np.ndarray, Dict[str, Any]]:
     """(load vector, report) for a uniform tangential traction of total ``T``.
 
     The load vector is in the module's usual units — force per metre of stack —
@@ -1816,7 +1820,7 @@ def torque_load(mesh, part_tri: np.ndarray, torque_nm: float,
             "a torque load needs the stack length: the air-gap shear is "
             "T / (2*pi*r^2*L) and L = 0 makes it infinite. Set "
             "geometry.motor_length (the route passes it automatically).")
-    facets, r_o, arc = gap_surface(mesh, part_tri, band=band)
+    facets, r_o, arc = gap_surface(mesh, part_tri, band=band, parts=parts)
     if facets.size == 0 or r_o <= 0:
         raise ValueError(
             "no air-gap-facing surface was found on the rotor solids, so there "
@@ -2807,6 +2811,13 @@ def solve_rotor_stress(polys: dict,
                          "(sleeve_thickness = 0)")
 
     mech = resolve_part_materials(assignments, has_sleeve, material_overrides)
+    # A pocket DRAWN with a clearance wider than the mesh weld (2026-11-25,
+    # ``pocket_clearance``): the meshed magnet fills the clearance ring, so its
+    # density is scaled to the drawn magnet's mass.  Every other machine gets
+    # the same dict back.
+    from motor_ai_sim.simulation.mechanical import pocket_clearance as _pkc
+    mech_card = mech
+    mech = _pkc.scaled_mechs(mech, polys_all)
 
     # ── the step budget, built from the REQUEST ─────────────────────────────
     # Two fixed steps (mesh, assembly) plus one contact iteration cap per solve,
@@ -3087,6 +3098,12 @@ def solve_rotor_stress(polys: dict,
     spec.update(contacts or {})
     led.phase("assembly (contact system, stiffness, loads)")
     cs = ctc.build_contact_system(mesh, part_tri, spec, order=order)
+    # …and its pairs: the drawn clearance is each magnet pair's stress-free gap,
+    # and those pairs start OPEN (2026-11-25, ``pocket_clearance``).  None —
+    # every other machine — leaves the zero gaps of the conforming mesh.
+    _pk_g0 = _pkc.pair_gaps(cs, polys_all)
+    if _pk_g0 is not None:
+        cs.pair_g0 = _pk_g0
     smesh = cs.mesh                                 # interfaces duplicated
     basis, K, f_rot, f_eig = assemble_plane_stress(
         smesh, C_elem, rho_elem, eps0, order=order)
@@ -3118,8 +3135,16 @@ def solve_rotor_stress(polys: dict,
     # long and the torque is 1/n as big.
     torque_sector_nm = float(torque_nm) / n_sym
     if use_torque:
-        f_torque, torque_report = torque_load(smesh, part_tri, torque_sector_nm,
-                                              L_stack, order=order)
+        # A magnet in a pocket drawn with a clearance (``pocket_clearance``) is
+        # meshed up to the chord over its pocket opening; the gap shear is put
+        # on the IRON pole tops only, so the magnet is loaded by what it
+        # carries in the machine (its own spin, the pull) and the whole torque
+        # goes through the iron to the bore — a loose magnet is not driven
+        # sideways across its clearance by a traction modelled on its face.
+        f_torque, torque_report = torque_load(
+            smesh, part_tri, torque_sector_nm, L_stack, order=order,
+            **({"parts": (PART_ROTOR,)} if _pkc.info(polys_all) is not None
+               else {}))
         hold = bore_hold(smesh, part_tri, order=order)
         if hold is not None and sector_plan is not None:
             from motor_ai_sim.simulation.mechanical import symmetry as sym
@@ -3228,6 +3253,15 @@ def solve_rotor_stress(polys: dict,
     # active set of the rated case is close to the standstill one, which is what
     # keeps the iteration count in single figures.
     warm: Optional[np.ndarray] = None
+    # A pair across a DRAWN clearance (``pocket_clearance``) is open until the
+    # magnet seats, and every solve starts from that state: the seating offsets
+    # are per solve (``contact.ContactSystem.pair_g0``), so a closed set carried
+    # over from the previous case would shut pairs whose stress-free gap is the
+    # whole drawn air and pull the magnet into the iron by it.  None — every
+    # other machine — keeps the warm start it always had.
+    _pk_open0 = (~(_pk_g0 > 0.0)) if _pk_g0 is not None else None
+    if _pk_open0 is not None:
+        warm = _pk_open0.copy()
     sols: Dict[str, Any] = {}
     of_cache: Dict[float, Dict[str, float]] = {}
 
@@ -3324,7 +3358,8 @@ def solve_rotor_stress(polys: dict,
                 try:
                     cs.pair_mu = np.zeros_like(mu_saved)
                     free_sol = ctc.solve_contact(
-                        K, f, cs, basis, closed0=None,
+                        K, f, cs, basis,
+                        closed0=(None if _pk_open0 is None else _pk_open0.copy()),
                         max_iter=MAX_CONTACT_ITER, solve_fn=solve_fn, hold=hold,
                         progress=_iter,
                         f_ramp=(f_torque if use_torque else None),
@@ -3363,7 +3398,7 @@ def solve_rotor_stress(polys: dict,
     for _i, (case, k) in enumerate(cases.items()):
         sol = _run(k, warm, f"case {_i + 1}/{_n_cases}: {case} — "
                             "contact iterations")
-        warm = sol.closed
+        warm = sol.closed if _pk_open0 is None else _pk_open0.copy()
         sols[case] = sol
         of_cache[k] = _open_fracs(sol)
     led.phase("post-processing (stress recovery, safety factors)")
@@ -4148,6 +4183,15 @@ def solve_rotor_stress(polys: dict,
         # meshed vs drawn part areas, machine scale (2026-10-25, B1)
         "mass_check": {k: v for k, v in mass_check.items()},
     }
+    _pk_sum = _pkc.summary(polys_all, _pkc.RULE_STRESS)
+    if _pk_sum is not None:
+        # the material table quotes the CARD; the solve used the scaled density
+        _pk_sum["magnet_density_card"] = float(mech_card["magnet"].density) \
+            if mech_card.get("magnet") is not None else None
+        if mech_card.get("magnet") is not None and "magnet" in out["materials"]:
+            out["materials"]["magnet"]["density"] = mech_card["magnet"].density
+            out["materials"]["magnet"]["density_effective"] = mech["magnet"].density
+        out["pocket_clearance"] = _pk_sum
     # ── the ANSWER's retention verdict (2026-10-25) ─────────────────────────
     # A FAIL in any case is a FAIL of the geometry: the overspeed case is the
     # one the rotor is sized on, and a separation answer that does not retain

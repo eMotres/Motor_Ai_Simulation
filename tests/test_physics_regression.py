@@ -797,17 +797,25 @@ def test_axial_slices_cut_the_magnet_eddy_loss_by_the_modelled_factor(
     # multiplier on the reported watts: the sliced loss is the SOLVED loss of
     # a magnet with sigma x k, which is at least k x the solid loss (the loss
     # is linear in sigma while resistance-limited, sub-linear once skin-limited)
-    # and below the solid one.  tests/test_magnet_segmentation_in_field.py pins
-    # the equivalence with a sigma x k magnet card and the directions.
+    # and well below the solid one.  The solid reference is solved HERE at the
+    # same settings (not read from the pin) so the band can be tight; a revert
+    # to the scaled watts also fails `applied_as`, and
+    # tests/test_magnet_segmentation_in_field.py pins the sigma x k equivalence.
     assert seg.get("applied_as") == "field_sigma", seg
-    want = baseline["p2_eddy"]
+    set_request_materials(OVERRIDE)
+    try:
+        d0 = fem_transient_sliding_band(geo_override=dict(GEO_30MM), rpm=RPM,
+                                        connection=CONNECTION,
+                                        end_winding_factor=K_END, **kw)
+    finally:
+        set_request_materials(None)
     for key in ("P_mag_solve_W", "P_mag_linear_W"):
-        got = float(d[key])
-        assert want[key] * k * (1.0 - 0.05) <= got <= want[key], (
-            f"{key}: {want[key]:.6g} W solid x {k:.4g} = "
-            f"{want[key] * k:.6g} W lower bound, got {got:.6g} W")
+        got, solid = float(d[key]), float(d0[key])
+        assert 0.99 * k * solid <= got <= 1.5 * k * solid, (
+            f"{key}: {solid:.6g} W solid x {k:.4g} = "
+            f"{solid * k:.6g} W, got {got:.6g} W (band 0.99..1.5 x)")
     assert float(d["P_shaft_solve_W"]) == pytest.approx(
-        want["P_shaft_solve_W"], rel=0.05, abs=ATOL["P_shaft_solve_W"]), \
+        float(d0["P_shaft_solve_W"]), rel=0.05, abs=ATOL["P_shaft_solve_W"]), \
         "the shaft is one continuous conductor — slicing magnets cannot cut it"
 
 

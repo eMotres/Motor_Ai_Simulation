@@ -165,3 +165,97 @@ def test_no_slicing_is_the_library_sigma_bit_for_bit():
         assert float(a[key]).hex() == float(b[key]).hex(), key
     assert a["power_balance"]["residual_W"] == b["power_balance"]["residual_W"]
     assert not math.isnan(float(a["T_avg_Nm"]))
+
+
+# ── warm seeds and cache keys of SLICED machines (review B1, 2026-11-25) ─────
+
+UNSLICED_WMETA_KEYS = {"nspp", "npd", "conn", "temp", "mscale", "wind", "ts"}
+
+
+def test_warm_meta_gains_the_sigma_mode_only_when_sliced():
+    base = {"nspp": 12, "npd": 1.0, "conn": "np1", "temp": 120.0,
+            "mscale": 1.0, "wind": "abc", "ts": "bdf2"}
+    m1 = F._wmeta_with_segmentation(dict(base), 1.0)
+    assert m1 == base and json.dumps(m1, sort_keys=True) == json.dumps(base, sort_keys=True)
+    m2 = F._wmeta_with_segmentation(dict(base), 0.1999937)
+    assert m2["msig"] == 0.199994 and F._seed_field_identity(m2)["msig"] == 0.199994
+    assert m2 != base      # the legacy meta comparison refuses a full-sigma seed
+
+
+def test_cache_tag_only_for_sliced_or_unreadable_lamination():
+    tag = F.MAGNET_SEGMENTATION_PHYSICS
+    for g in ({}, None, {"magnet_lamination": 0}, {"magnet_lamination": 0.0},
+              {"magnet_lamination": None}):
+        assert F.magnet_segmentation_cache_tag(g) is None, g
+    for g in ({"magnet_lamination": 5}, {"magnet_lamination": "2.5"},
+              {"magnet_lamination": float("nan")}, {"magnet_lamination": "x"}):
+        assert F.magnet_segmentation_cache_tag(g) == tag, g
+
+
+def test_eval_cache_key_moves_only_for_a_sliced_machine(monkeypatch):
+    from motor_ai_sim.routes import optimization as O
+    cfg = {"geometry": dict(T.GEO_30MM)}
+    monkeypatch.setattr(O, "get_config", lambda: cfg)
+    args = (12, 120.0, 1.0, 0.0, 1.4, 0.35, 2, False, False, "fp")
+
+    def key(ov):
+        return O._eval_cache_key(ov, 60.0, *args, rotor_eddy=True)
+    k_solid = key({})
+    k_sliced = key({"magnet_lamination": 2.0})
+    k_solid_ov = key({"magnet_lamination": 0.0})
+    assert k_sliced != k_solid
+    # the solid machine's key has no segmentation term at all: same payload
+    # as before the change (a lamination-0 override is a no-op of the config)
+    assert k_solid_ov == k_solid
+    real_dumps = json.dumps
+    seen = []
+    monkeypatch.setattr(O.json, "dumps", lambda o, **kw: (seen.append(o), real_dumps(o, **kw))[1])
+    key({}); key({"magnet_lamination": 2.0})
+    payloads = [p for p in seen if isinstance(p, dict) and "v" in p]
+    assert "mseg" not in payloads[0] and payloads[1]["mseg"] == F.MAGNET_SEGMENTATION_PHYSICS
+
+
+@pytest.mark.slow
+def test_warm_library_key_separates_sliced_states_and_keeps_solid_keys(monkeypatch):
+    """The library machine key of a SLICED machine carries `msig`; an unsliced
+    machine's key inputs (field identity, op digest fields) have exactly the
+    pre-change terms.  The library is switched on with no stored states and
+    nothing written, so the solve itself is a cold one."""
+    rec = {"mk": [], "op": []}
+    real_mk, real_op = F._wlib.machine_key, F._wlib.op_digest
+    monkeypatch.setattr(F._wlib, "enabled", lambda: True)
+    monkeypatch.setattr(F._wlib, "catalog_enabled", lambda: False)
+    monkeypatch.setattr(F._wlib, "candidates", lambda key: [])
+    monkeypatch.setattr(F._wlib, "store", lambda *a, **k: None)
+    monkeypatch.setattr(F, "_warm_cache_load", lambda *a, **k: None)
+    monkeypatch.setattr(F, "_warm_cache_store", lambda *a, **k: None)
+    monkeypatch.setattr(F._wlib, "machine_key",
+                        lambda *a, **k: (rec["mk"].append((a, k)), real_mk(*a, **k))[1])
+    monkeypatch.setattr(F._wlib, "op_digest",
+                        lambda f: (rec["op"].append(dict(f)), real_op(f))[1])
+
+    def solve(geo):
+        F._SB_WARM_CACHE.clear()
+        kw = dict(T.CASES["p2_eddy"]); kw["torque_method"] = "coulomb"
+        set_request_materials(T.OVERRIDE)
+        try:
+            return F.fem_transient_sliding_band(
+                geo_override=geo, rpm=RPM_HI, connection=T.CONNECTION,
+                end_winding_factor=T.K_END, **kw)
+        finally:
+            set_request_materials(None)
+
+    d0 = solve(dict(T.GEO_30MM))
+    geo = dict(T.GEO_30MM); geo["magnet_lamination"] = 2.0542
+    d1 = solve(geo)
+    assert len(rec["mk"]) == 2 and len(rec["op"]) == 2, rec
+    id0, id1 = rec["mk"][0][0][2], rec["mk"][1][0][2]
+    assert set(id0) == UNSLICED_WMETA_KEYS - {"temp"}, id0
+    assert "msig" not in id0
+    k = float(d1["magnet_segmentation"]["factor"])
+    assert id1["msig"] == float("%.6g" % k)
+    assert {x: v for x, v in id1.items() if x != "msig"} == id0
+    assert real_mk(*rec["mk"][0][0], **rec["mk"][0][1]) != \
+        real_mk(*rec["mk"][1][0], **rec["mk"][1][1])
+    assert rec["op"][0] == rec["op"][1]          # the op digest is unchanged
+    assert d0["magnet_segmentation"].get("applied_as") is None

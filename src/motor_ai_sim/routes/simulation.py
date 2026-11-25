@@ -5780,6 +5780,20 @@ def get_fem_transient(
         _sb_key_fields["geo_ov"] = tuple(sorted(_geo_ov.items()))
     if ripple_refine:   # may step past the requested layers: never a plain entry
         _sb_key_fields["ripple_refine"] = ("ripple_refine", 1)
+    # SLICED MAGNETS (2026-11-25): solved with sigma x factor in the field, so a
+    # ledger / cache entry of a sliced machine from the scaled-watts code is
+    # other physics.  Only a machine with magnet_lamination > 0 carries it.
+    try:
+        from motor_ai_sim.simulation.fem_solver_2d import (
+            magnet_segmentation_cache_tag as _mseg_tag)
+        from motor_ai_sim.config import get_config as _get_cfg_k
+        _geo_eff_k = dict((_get_cfg_k().get("geometry") or {}))
+        _geo_eff_k.update(_geo_ov or {})
+        _mseg = _mseg_tag(_geo_eff_k)
+    except Exception:  # noqa: BLE001 — the key never fails a run
+        _mseg = None
+    if _mseg is not None:
+        _sb_key_fields["magnet_segmentation"] = ("mseg", _mseg)
     _sb_key = tuple(_sb_key_fields.values())
     # Key of the field snapshot this run's last frame belongs under — built ONCE
     # here and used both to store it after the solve and to tell a cache hit

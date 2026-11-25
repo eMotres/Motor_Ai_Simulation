@@ -3607,6 +3607,38 @@ def _br_withheld_across_steps(wc, wmeta) -> bool:
 _SEED_FIELD_FREE_META = ("temp",)
 
 
+def _wmeta_with_segmentation(wmeta: dict, seg_k: float) -> dict:
+    """Add the magnet-sigma mode of a SLICED machine to the warm-seed meta.
+
+    ``msig`` = the segmentation factor (6 significant digits) the magnet
+    conductivity was multiplied by in the field.  It is a field-state term
+    (not in ``_SEED_FIELD_FREE_META``), so it reaches the legacy meta
+    comparison and the warm library's machine key alike.  ``seg_k == 1``
+    (no slicing) leaves ``wmeta`` untouched."""
+    if float(seg_k) < 1.0:
+        wmeta["msig"] = float("%.6g" % float(seg_k))
+    return wmeta
+
+
+#: The magnet-segmentation physics of this solver (2026-11-25: sliced magnets
+#: are solved with sigma x factor IN the field).  Cache keys of SLICED machines
+#: carry it (`magnet_segmentation_cache_tag`) so an evaluation stored by the
+#: old scaled-watts code is never served for them; unsliced keys never do.
+MAGNET_SEGMENTATION_PHYSICS = "field_sigma_v1"
+
+
+def magnet_segmentation_cache_tag(geo: Optional[Mapping]) -> Optional[str]:
+    """``MAGNET_SEGMENTATION_PHYSICS`` for a machine whose effective
+    ``magnet_lamination`` is a positive (or non-finite) number, else None."""
+    try:
+        lam = float((geo or {}).get("magnet_lamination") or 0.0)
+    except (TypeError, ValueError):
+        return MAGNET_SEGMENTATION_PHYSICS
+    if not math.isfinite(lam) or lam > 0.0:
+        return MAGNET_SEGMENTATION_PHYSICS
+    return None
+
+
 def _seed_field_identity(meta) -> Optional[dict]:
     """The seed meta without the terms that do not change the field state."""
     if not isinstance(meta, Mapping):
@@ -6101,7 +6133,20 @@ def _fem_transient_sliding_band_once(
 
         The factor is computed ONCE, from the magnet bodies' own mesh nodes
         and CAD outlines.  0 (solid) returns exactly 1.0, so an unsegmented
-        run is bit-identical."""
+        run is bit-identical.  A failure on a SLICED machine (or a slice
+        length that is not a finite number) is reported as an error in the
+        block, never as an empty block that reads as "solid"."""
+        _lam_raw = (geo or {}).get("magnet_lamination", 0.0)
+        try:
+            _lam_seg = float(_lam_raw or 0.0)
+        except (TypeError, ValueError):
+            _lam_seg = float("nan")
+        if not math.isfinite(_lam_seg):
+            log.warning("magnet segmentation: magnet_lamination %r is not a "
+                        "finite number - solved as a solid magnet", _lam_raw)
+            return 1.0, {"factor": 1.0, "slice_mm": None,
+                         "error": "magnet_lamination is not a finite number "
+                                  "(%r); solved as a solid magnet" % (_lam_raw,)}
         try:
             _pt_seg = np.asarray(_rm_seg.p, float)
             _tt_seg = np.asarray(_rm_seg.t, int)
@@ -6139,6 +6184,10 @@ def _fem_transient_sliding_band_once(
             return float(_k), _rep
         except Exception as _e_seg:      # noqa: BLE001 — no factor, not no run
             log.warning("magnet segmentation factor unavailable: %s", _e_seg)
+            if _lam_seg > 0.0:
+                return 1.0, {"factor": 1.0, "slice_mm": _lam_seg,
+                             "error": "segmentation factor unavailable (%s); "
+                                      "solved as a SOLID magnet" % (_e_seg,)}
             return 1.0, {}
 
     def _sigma_of_tag(t: int) -> float:
@@ -6577,6 +6626,13 @@ def _fem_transient_sliding_band_once(
               "conn": "np%d" % int(n_parallel),
               "temp": round(float(coil_temp_c), 1),
               "mscale": float(magnet_scale), "wind": _wind_fp}
+    # A SLICED machine's field state is solved with sigma x seg_k in the
+    # magnets (2026-11-25): its seeds (legacy slot, warm library and catalog
+    # states, and with them a carried Br map) must never match a state solved
+    # at the full sigma, nor one at another factor.  Only on sliced machines:
+    # an unsliced machine's meta, library machine key and op digest stay
+    # byte-identical.
+    _wmeta_with_segmentation(_wmeta, _seg_k)
     if _safe_warm_cache_enabled():
         try:
             _safe_s_tags = [int(t) for t in half["s"]["cells"]

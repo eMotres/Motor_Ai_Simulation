@@ -59,12 +59,12 @@ def stage2_block(full_dir: Path, repo: Path, L_mm: float,
         # (end3d_verdict): the real k_flux unless the end-deficit check FAILED or the
         # 2-D leg is INVALID; the old mid-plane FAIL is end physics, not a model check.
         # The real k_flux is always kept beside the applied one (k_flux_raw).
-        af = applied_flux_factor(sx.get("k_flux"), sx.get("k_flux_self"), sx.get("two_d"))
+        af = applied_flux_factor(sx.get("k_flux"), sx.get("k_flux_self"), sx.get("two_d"), sx.get("version"))
         usable = af["basis"] == BASIS_K_FLUX
         curve.append({"stack_mm": Lr, "k_flux_self": sx.get("k_flux_self"),
                       "B1_mid_T": b1m, "k_flux_raw": sx.get("k_flux"),
                       "k_flux_usable": usable,
-                      "k_flux_basis": af["basis"], "k_flux_verdict": af["verdict"],
+                      "k_flux_applied": af["basis"], "k_flux_verdict": af["verdict"],
                       "k_flux_rule": af["rule"], "k_flux_note": af["note"],
                       "k_psi": af["value"],
                       "picard_converged":
@@ -104,11 +104,13 @@ def stage2_block(full_dir: Path, repo: Path, L_mm: float,
     if own:
         # what was applied and why, beside the real k_flux: never a silent substitution
         out["k_psi"].update({"k_flux": own.get("k_flux_raw"), "k_flux_self": own.get("k_flux_self"),
-                             "basis": own.get("k_flux_basis"), "verdict": own.get("k_flux_verdict"),
+                             "basis": own.get("k_flux_applied"), "verdict": own.get("k_flux_verdict"),
                              "rule": own.get("k_flux_rule")})
         if own.get("k_flux_note"):
             out["k_psi"]["note"] = own["k_flux_note"]
-            out["k_psi"]["labels"] = ["3-D", "no-load", "quick fidelity", "old mid-plane check not applied"]
+            out["k_psi"]["labels"] = ["3-D", "no-load", "quick fidelity",
+                                      ("old mid-plane check not applied" if own.get("k_flux_applied") == BASIS_K_FLUX
+                                       else str(own.get("k_flux_verdict")))]
     if own and own.get("k_flux_usable") is False:
         out["k_psi"]["method"] = ("3-D magnetostatic Stage A (I = 0) at this machine's own stack: "
                                   "k_flux_self (axial mean of the gap fundamental / its own "

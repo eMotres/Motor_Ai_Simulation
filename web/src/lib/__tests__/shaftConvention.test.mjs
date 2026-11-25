@@ -129,3 +129,29 @@ test('duty efficiency: a marked motor at no load has none; a delivered output ke
   near(D.dutyEfficiencyPct({ shaft_convention: 'fe_on_shaft_k3d_v1', op_mode: 'motor', P_loss_total_W: 100 }, 900),
     90, 'P/(P+L)');
 });
+
+te('tiles: with bearings known the torque tile is at the SAME boundary as the power tile (the coupling)', () => {
+  const rows = E.emTileRows(MOTOR, { mech: { bearings_W: 15, windage_W: 5, extra_W: 20 } });
+  const pw = one(rows, 'power').value * 1000;
+  near(pw, pShaft - 20, 'power at the coupling');
+  near(one(rows, 'torque').value, pw / w, 'torque = power / w');
+});
+
+test('sweep: a marked point is never scaled again, not even by the loaded machine factor', async () => {
+  const S3 = await import('../sweepApply3d.ts');
+  assert.equal(S3.pointApply3dK({ shaft_convention: 'fe_on_shaft_k3d_v1', end3d: { k_flux: 0.9 } }, 0.88, true), null);
+  assert.equal(S3.pointApply3dK({ end3d: { k_flux: 0.9 } }, 0.88, true), 0.9);
+  const f = S3.shaftPointFields({ shaft_convention: 'fe_on_shaft_k3d_v1', T_shaft_Nm: 1.2, op_mode: 'motor', x: 1 });
+  assert.equal(f.T_shaft_Nm, 1.2); assert.equal(f.x, undefined);
+  assert.deepEqual(S3.shaftPointFields({ T_shaft_Nm: 1.2 }), {});
+  assert.match(read('components/sweep/SweepStudyPanel.tsx'), /\.\.\.\(p\.sc \|\| \{\}\)/);
+});
+
+test('duty-cycle torque: a marked run gives the shaft torque (motor) / field x k (generator)', async () => {
+  const DC = await import('../../components/thermal/dutyCycleTorque.ts');
+  assert.equal(DC.dutyTorqueNm({ summary: { shaft_convention: 'fe_on_shaft_k3d_v1', op_mode: 'motor', T_shaft_Nm: 8.7,
+    T_field_k_Nm: 9, T_em_avg_Nm: 10, end3d: { k_flux: 0.9 } } }), 8.7);
+  assert.equal(DC.dutyTorqueNm({ summary: { shaft_convention: 'fe_on_shaft_k3d_v1', op_mode: 'generator', T_shaft_Nm: 9.3,
+    T_field_k_Nm: 9, T_em_avg_Nm: 10 } }), 9);
+  assert.equal(DC.dutyTorqueNm({ summary: { T_em_avg_Nm: 10, end3d: { k_flux: 0.9 } } }), 9);
+});

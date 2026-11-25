@@ -339,7 +339,12 @@ export function emTileRows(s: EmTileSummary, view: EmTileView = {}): EmTileSpec[
   const sc = s.shaft_convention === 'fe_on_shaft_k3d_v1';
   const scGen = sc && bal?.gen === true;
   const dragW = num(s.P_shaft_drag_W);
-  const T = sc && num(s.T_shaft_Nm) != null ? num(s.T_shaft_Nm) : num(s.T_em_avg_Nm);
+  // the torque at the SAME boundary as the power tile beside it: the coupling (bearings and windage included) when they
+  // are known, else the electromagnetic shaft torque
+  const wSc = 2 * Math.PI * (num((s as any).rpm) ?? 0) / 60;
+  const T = sc && num(s.T_shaft_Nm) != null
+    ? (mechKnown && bal != null && wSc > 0 && !bal.noOutput ? bal.pShaft / wSc : num(s.T_shaft_Nm))
+    : num(s.T_em_avg_Nm);
   const etaPct = bal?.eta != null ? 100 * bal.eta : null;
   const partial = s.solid_loss_not_solved === true;       // magnet / shaft eddy not solved → optimistic
   const etaFlag = etaPct != null && (partial || !mechKnown);

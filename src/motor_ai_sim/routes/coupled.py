@@ -1219,6 +1219,11 @@ _EM_FACE_KEYS = ("T_em_avg_Nm", "T_ripple_pct", "P_stranded_W", "P_core_W",
                  "THD_I_pct", "THD_LL_pct", "V_line_peak_V",
                  "n_steps_per_period")
 
+#: The shaft-power convention of the last run (motor_ai_sim.shaft_convention), copied
+#: whole into the record's ``em`` block with the shaft power and the mode it belongs to.
+_EM_SHAFT_KEYS = ("P_mech_W", "op_mode", "rpm") + tuple(__import__(
+    "motor_ai_sim.shaft_convention", fromlist=["CONVENTION_KEYS"]).CONVENTION_KEYS)
+
 #: The EM run's own verdict on its steady state (Codex review 2026-10-04): the
 #: eddy method used, why a TDM request was marched, and whether the reported
 #: window is a steady state at all.  Carried on every history row and on the
@@ -8087,6 +8092,10 @@ def _run(body: Dict[str, Any],
         # `reference_sine` that carried temperatures but no watts could not
         # print the one row the whole exercise is about (the carrier's cost).
         "em": {**{k: _last_summary.get(k) for k in _EM_FACE_KEYS
+                  if _last_summary.get(k) is not None},
+               # the run's shaft-power convention, all of it (motor_ai_sim.shaft_convention):
+               # a reader of this block must not inherit another run's
+               **{k: _last_summary.get(k) for k in _EM_SHAFT_KEYS
                   if _last_summary.get(k) is not None},
                # the verdict keys ALWAYS (None = the run did not say)
                **{k: _last_summary.get(k) for k in _EM_VERDICT_KEYS}},

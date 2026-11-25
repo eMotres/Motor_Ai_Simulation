@@ -35,7 +35,7 @@ import { canWriteServer } from '../../lib/localAuth';
 import { useRunSettings } from '../../lib/useRunSettings';
 import { runSettingsBody } from '../../lib/runSettings';
 import RunSettingsBar from './RunSettingsBar';
-import { pointApply3dK } from '../../lib/sweepApply3d';
+import { pointApply3dK, shaftPointFields } from '../../lib/sweepApply3d';
 import { sweepSettingsOf, sweepSettingsLabel, sweepSettingsMetrics } from '../../lib/sweepSettings';
 import { endWindingPin } from '../../lib/endWindingPin';
 import { coincidentGroups, coincidentOffsetPx } from '../../lib/coincidentPoints';
@@ -101,13 +101,16 @@ const readApply3dK = (): number | null => {
 // η recomputed from the corrected shaft power.
 const scale3d = (k: number | null, T2: number, P2_kW: number, Vpk2: number,
                  Vl2: number, KV2: number, td2: number, pd2: number,
-                 eff2: number, ploss_W: number) => {
+                 eff2: number, ploss_W: number, gen = false) => {
   if (k == null) return { T: T2, P: P2_kW, Vpk: Vpk2, Vl: Vl2, KV: KV2, td: td2, pd: pd2, eff: eff2 };
   const P = P2_kW * k;
+  const Pw = P * 1000;
   return {
     T: T2 * k, P, Vpk: Vpk2 * k, Vl: Vl2 * k, KV: KV2 > 0 ? KV2 / k : KV2,
     td: td2 * k, pd: pd2 * k,
-    eff: (P > 0 && ploss_W > 0) ? 100 * (P * 1000) / (P * 1000 + ploss_W) : eff2,
+    // a GENERATOR takes the shaft power in: (P - losses) / P; a motor P / (P + losses) (lib/apply3d.ts)
+    eff: (P > 0 && ploss_W > 0)
+      ? (gen ? (Pw > Math.max(ploss_W, 1) ? 100 * (Pw - ploss_W) / Pw : 0) : 100 * Pw / (Pw + ploss_W)) : eff2,
   };
 };
 
@@ -149,7 +152,7 @@ const SweepTable: React.FC<{ points: any[]; rpm: number; vdcFactor?: number; sel
       const kPt = kOfPoint(p, k3d);
       const s3 = scale3d(kPt, Number(p.T_em_Nm) || 0, P2, Number(p.V_peak) || 0,
                          Number(p.V_line_peak_V) || 0, Number(p.KV_rpm_per_V_line) || 0,
-                         td2, pd2, eff2, ploss);
+                         td2, pd2, eff2, ploss, p.op_mode === 'generator');
       const { T, P, eff, Vpk, td, pd } = s3;
       return {
         ov: p.overrides || {}, overrides: p.overrides || {}, I, g, x: td, y: eff,
@@ -757,7 +760,7 @@ const SweepStudyPanel: React.FC = () => {
       const s3 = scale3d(kPt, Number(p.T_em_Nm) || 0, P2, Number(p.V_peak) || 0,
                          Number(p.V_line_peak_V) || 0, Number(p.KV_rpm_per_V_line) || 0,
                          Number(p.torque_per_mass_Nm_kg) || 0, pd2,
-                         (p.efficiency ?? 0) * 100, Number(p.P_loss_total_W) || 0);
+                         (p.efficiency ?? 0) * 100, Number(p.P_loss_total_W) || 0, p.op_mode === 'generator');
       const row = { x: s3.td, y: s3.eff,
                      I: cur, g: gam, gi, ripple: p.T_ripple_pct, T: s3.T,
                      cp: coggingOf(p),
@@ -1033,7 +1036,7 @@ const SweepStudyPanel: React.FC = () => {
       const s3 = scale3d(k3d, Number(v.T_em_Nm) || 0, P2, Number(v.V_peak) || 0,
         Number(v.V_line_peak_V) || 0, Number(v.KV_rpm_per_V_line) || 0,
         Number(v.torque_per_mass_Nm_kg) || 0, pd2, (Number(v.efficiency) || 0) * 100,
-        Number(v.P_loss_total_W) || 0);
+        Number(v.P_loss_total_W) || 0, v.op_mode === 'generator');
       p = { ...p, overrides: v.overrides, I: v.current_a,
         g: v.gamma_deg, rpm: v.rpm, T: s3.T, ripple: v.T_ripple_pct,
         cp: coggingOf(v),
@@ -1043,6 +1046,8 @@ const SweepStudyPanel: React.FC = () => {
         ploss: v.P_loss_total_W, core: v.P_fe_W, stranded: v.P_cu_W,
         solid: (Number(v.P_mag_W) || 0) + (Number(v.P_shaft_W) || 0),
         rawSamplesPerCycle: v.cogging_raw_samples_per_cycle,
+        // the point's shaft-power convention, carried whole into the applied summary (lib/sweepApply3d.ts)
+        sc: shaftPointFields(v),
         raw2d: { T: v.T_em_Nm, P_mech_W: v.P_mech_W, Vpk: v.V_peak,
           V_line_peak_V: v.V_line_peak_V, KV_rpm_per_V_line: v.KV_rpm_per_V_line,
           td: v.torque_per_mass_Nm_kg, power_per_mass_W_kg: v.power_per_mass_W_kg,
@@ -1139,6 +1144,8 @@ const SweepStudyPanel: React.FC = () => {
           torque_per_mass_Nm_kg: Number(r2.td) || (mass > 0 ? T / mass : 0),
           power_per_mass_W_kg: Number(r2.power_per_mass_W_kg) || (mass > 0 ? Pmech / mass : 0),
           loss_density_W_kg: mass > 0 ? ploss / mass : 0,
+          // a marked point: its convention fields, so the card reads its shaft numbers as they are (never as legacy)
+          ...(p.sc || {}),
         };
         window.dispatchEvent(new CustomEvent('sim-apply-summary', { detail: { summary } }));
       } catch { /* summary is best-effort — geometry + operating point already applied */ }

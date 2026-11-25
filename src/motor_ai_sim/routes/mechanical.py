@@ -261,6 +261,15 @@ def _torque_of_block(block: Any) -> Optional[float]:
     block has one (what the Electromagnetic tab shows), else the plain mean.  ``None`` when there is none."""
     if not isinstance(block, dict):
         return None
+    # the shaft-side convention (motor_ai_sim.shaft_convention): the torque the shaft carries is the run's own
+    # shaft torque - a motor's output, a generator's input - already with its 3-D factor and the core loss on it
+    if block.get("shaft_convention") == "fe_on_shaft_k3d_v1":
+        try:
+            ts = float(block.get("T_shaft_Nm"))
+        except (TypeError, ValueError):
+            ts = None
+        if ts is not None and math.isfinite(ts) and ts != 0.0:
+            return abs(ts)
     t = None
     for key in ("T_em_avg_Nm", "T_avg_Nm"):
         try:

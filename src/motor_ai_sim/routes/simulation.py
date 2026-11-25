@@ -8472,33 +8472,18 @@ def _build_transient_summary(
         from motor_ai_sim import shaft_convention as _SC
         _kq = (float(_e3rec.get("k_torque") or _e3rec["k_flux"])
                if _e3rec and (_e3rec.get("k_torque") or _e3rec.get("k_flux")) else None)
-        _D, _D_terms, _side = _SC.drag_of_result(
-            sbres, p_fe=_Pfe, p_mag=_Pmag, p_shaft=_Pshaft, p_sleeve=_Psleeve)
-        _bal = _SC.balance(t_field_nm=float(sbres.get("T_avg_Nm", 0.0)), rpm=_rpm,
-                           k=_kq, d_w=_D, p_loss_w=_ploss)
+        _dr = _SC.drag_of_result(sbres, p_fe=_Pfe, p_mag=_Pmag, p_shaft=_Pshaft, p_sleeve=_Psleeve)
+        _bal = _SC.balance_of(_dr, t_field_nm=float(sbres.get("T_avg_Nm", 0.0)), rpm=_rpm,
+                              k=_kq, p_loss_w=_ploss)
         _op_mode = _bal["op_mode"]
         _Pmech = _bal["P_mech_W"]
         _Pelec = _bal["P_elec_W"]
         _eff = _bal["efficiency"]
         _Tq = _bal["T_field_k_Nm"]
         _Tpm = _SC.per_mass_torque(_bal)
-        _sc_fields = {
-            "shaft_convention": _SC.SHAFT_CONVENTION,
-            # the 2-D field power T*w, and the field torque with the 3-D factor
-            "P_field_W": round(_bal["P_field_W"], 1),
-            "T_field_k_Nm": round(_bal["T_field_k_Nm"], 3),
-            # shaft torque: a motor's output, a generator's input (quoted positive)
-            "T_shaft_Nm": round(_bal["T_shaft_Nm"], 3),
-            "P_shaft_drag_W": round(_D, 1),
-            "P_shaft_drag_terms": list(_D_terms),
-            # the solved (in-field) copper AC the drag counts on a stator-side torque
-            "P_cu_ac_field_W": (round(float(sbres.get("P_cu_ac_solve_W") or 0.0), 1)
-                                if "cu_ac" in _D_terms else None),
-            "torque_side": _side,
-            "P_elec_W": round(_Pelec, 1),
-            "shaft_k3d": (round(_kq, 6) if _kq is not None else None),
-            "shaft_basis_note": (_SC.BASIS_NOTE if _kq is not None else _SC.BASIS_NOTE_2D),
-        }
+        # the 2-D field power T*w, the field torque with the 3-D factor, the shaft
+        # torque (a motor's output, a generator's input), where each loss sits
+        _sc_fields = _SC.fields(_bal, _dr, _kq)
         # The battery and mechanical blocks below read the shaft side: a motor at
         # no load (negative shaft power: the shaft has to supply the core loss)
         # has no delivered output for them to bill.

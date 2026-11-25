@@ -4512,6 +4512,9 @@ def _log_eval(overrides, current_a, gamma_deg, result, *, solve=None,
                 "p_loss": r.get("P_loss_total_W"),
                 # Waveform quality (CIANO FOC spec) — lets the surrogate screen THD.
                 "thd_ll": r.get("THD_LL_pct"), "kt": r.get("Kt_Nm_per_Arms"),
+                # the shaft-power convention of eff / td (1 = core loss on the shaft);
+                # a row without it is the earlier convention and never warm-starts a v8 run
+                **({"shaft_conv": 1} if r.get("shaft_convention") == _SHAFT_CONVENTION else {}),
             })
         # WHICH MACHINE produced this row.  ``overrides`` is a DELTA on the
         # active baseline geometry, so without the baseline's fingerprint a
@@ -4995,6 +4998,10 @@ def _msum(m: Dict[str, Any]) -> Dict[str, Any]:
         "I_phase_rms_A":   m.get("I_phase_rms_A"),
         "THD_LL_pct":      m.get("THD_LL_pct"),      # line-to-line voltage THD (FOC)
         "Kt_Nm_per_Arms":  m.get("Kt_Nm_per_Arms"),
+        # the shaft-power convention of these numbers (motor_ai_sim.shaft_convention)
+        "shaft_convention": m.get("shaft_convention"),
+        "T_shaft_Nm":      m.get("T_shaft_Nm"),
+        "op_mode":         m.get("op_mode"),
         "current_a":       m.get("current_a"),   # current the design was solved at
         # the steps (as snapped) and gap rows (as used) the solver reports: the run's solved pair is stamped from these
         "n_steps_per_period_solved": m.get("n_steps_per_period_solved"),
@@ -5027,6 +5034,8 @@ def _pt(out: Dict[str, Any], kind: str):
             # the auto card's torque×ripple cloud could only plot the per-generation
             # BEST history (6 rows), not the run's 50+ measured designs.
             "torque": r.get("T_em_Nm"),
+            "T_shaft_Nm": r.get("T_shaft_Nm"),
+            "shaft_conv": 1 if r.get("shaft_convention") == _SHAFT_CONVENTION else None,
             # Mass travels with the point too: torque and torque density differ
             # ONLY by it, so with all three present the Pareto report can state
             # both axes for the same design (and a point that somehow lost one
@@ -7625,6 +7634,8 @@ def _auto_warm_start(recs, specs, cfg_fp: str, current_a: float, gamma_deg: floa
             continue
         if str(r.get("cfg_fp") or "") != str(cfg_fp or ""):
             continue                              # other machine, or unstamped
+        if r.get("shaft_conv") != 1:
+            continue                              # earlier shaft convention: another efficiency / torque density
         ov = r.get("overrides")
         if not isinstance(ov, dict):
             continue
@@ -9432,6 +9443,10 @@ def _auto_result_metrics(m: Dict[str, Any], rpm: float, geo_sig: str) -> Dict[st
         "I_phase_rms_A": m.get("I_phase_rms_A") or m.get("current_a"),
         "THD_LL_pct": m.get("THD_LL_pct"),
         "Kt_Nm_per_Arms": m.get("Kt_Nm_per_Arms"),
+        "shaft_convention": m.get("shaft_convention"),
+        "T_shaft_Nm": m.get("T_shaft_Nm"),
+        "op_mode": m.get("op_mode"),
+        "shaft_conv": 1 if m.get("shaft_convention") == _SHAFT_CONVENTION else None,
         "rpm": rpm,
         # The machine stamp travels WITH the numbers (stale-machine doctrine):
         # these results were solved on THIS cross-section and no other.

@@ -553,8 +553,8 @@ def run_one(overrides: Dict[str, float], current_a: float, steps: int,
     from motor_ai_sim import shaft_convention as _SC
     sl = float(np.mean(d.get("P_sleeve_eddy_W", [0.0]) or [0.0]))
     ploss = cu + fe + mg + sh + sl
-    _D, _D_terms, _side = _SC.drag_of_result(d, p_fe=fe, p_mag=mg, p_shaft=sh, p_sleeve=sl)
-    _bal = _SC.balance(t_field_nm=float(d["T_avg_Nm"]), rpm=rpm, k=None, d_w=_D, p_loss_w=ploss)
+    _dr = _SC.drag_of_result(d, p_fe=fe, p_mag=mg, p_shaft=sh, p_sleeve=sl)
+    _bal = _SC.balance_of(_dr, t_field_nm=float(d["T_avg_Nm"]), rpm=rpm, k=None, p_loss_w=ploss)
     op_mode = _bal["op_mode"]
     eff = _bal["efficiency"]
     pmech = _bal["P_mech_W"]
@@ -633,10 +633,7 @@ def run_one(overrides: Dict[str, float], current_a: float, steps: int,
         "op_mode": op_mode,     # derived from the power-flow sign (see above)
         "torque_per_mass_Nm_kg": round(_t_pm / mass, 4) if mass > 0 else 0.0,
         # the shaft-side convention of this row (motor_ai_sim.shaft_convention)
-        "shaft_convention": _SC.SHAFT_CONVENTION,
-        "T_shaft_Nm": round(_bal["T_shaft_Nm"], 3),
-        "P_shaft_drag_W": round(_D, 1), "P_shaft_drag_terms": list(_D_terms),
-        "torque_side": _side, "shaft_k3d": None, "shaft_basis_note": _SC.BASIS_NOTE_2D,
+        **_SC.fields(_bal, _dr, None),
         "P_sleeve_W": round(sl, 1),
         "T_ripple_pct": (None if d.get("T_ripple_pct") is None
                          else round(float(d["T_ripple_pct"]), 2)),

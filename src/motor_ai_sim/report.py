@@ -7428,7 +7428,13 @@ _PWM_KEEP_SINE_PREFIX = ("KV", "Kt", "Km", "Ld", "Lq", "L0", "psi",
 _PWM_EM_KEYS = ("T_em_avg_Nm", "T_ripple_pct", "P_stranded_W", "P_core_W",
                 "P_solid_W", "P_mag_W", "P_shaft_W", "P_sleeve_W",
                 "P_loss_total_W", "efficiency", "THD_I_pct", "THD_LL_pct",
-                "V_line_peak_V", "n_steps_per_period")
+                "V_line_peak_V", "n_steps_per_period",
+                # the run's shaft-power convention travels with its numbers
+                # (motor_ai_sim.shaft_convention.CONVENTION_KEYS)
+                "P_mech_W", "op_mode", "shaft_convention", "shaft_k3d", "torque_side",
+                "shaft_rotor_in_field", "P_torque_embedded_W", "P_cu_ac_field_W",
+                "P_shaft_drag_W", "P_shaft_drag_terms", "P_field_W", "P_gap_W",
+                "T_field_k_Nm", "T_shaft_Nm", "P_elec_W", "shaft_basis_note")
 
 
 def record_drive(entry: Any) -> str:
@@ -7669,6 +7675,13 @@ def pwm_em_overlay(sine: Dict[str, Any],
         if any(str(k).startswith(p) for p in _PWM_KEEP_SINE_PREFIX):
             continue
         out[k] = v
+    # the shaft-power convention is the PWM run's, all of it or none
+    from motor_ai_sim import shaft_convention as _SCo
+    _SCo.overlay(out, pwm or {})
+    if not _SCo.has_marker(out) and _SCo.has_marker(sine or {}) and pwm.get("P_mech_W") is None:
+        # an unmarked PWM run over a marked sine summary: the sine's shaft power is
+        # not this run's; the earlier convention's T*w follows below
+        out.pop("P_mech_W", None)
     # ROTOR POWER FOLLOWS THE TORQUE IT IS MADE OF.  The record-only path has a
     # torque and no power, and leaving the sinusoid's watts under a PWM torque
     # would put two different machines in one efficiency.
@@ -7834,6 +7847,9 @@ def _em_from_coupled(sine: Dict[str, Any], rec: Dict[str, Any],
     for k, v in over.items():
         if v is not None:
             out[k] = v
+    # the shaft-power convention is the RECORD's run's, all of it or none
+    from motor_ai_sim import shaft_convention as _SC
+    _SC.overlay(out, over)
     # THE RESISTANCE BELONGS TO THE TEMPERATURE THE LOOP SETTLED AT.  Km is
     # Kt/sqrt(3R) and the standalone solve's R is quoted at its own winding
     # temperature — 200 °C on the audited 'peak' duty against the coupled

@@ -708,6 +708,18 @@ def _rescale_to_loop(base: Dict[str, Any], before: Dict[str, Any]) -> None:
                 base[k] = base[k] * r
 
     from motor_ai_sim import shaft_convention as _SC
+    if not _SC.has_marker(base) and _SC.has_marker(before):
+        # an unmarked loop over a marked saved run: put the saved run's derived numbers back on the
+        # earlier convention (T*w, T/m) first, so the proportions below give the loop's own values
+        _w = 2.0 * math.pi * (_num(before.get("rpm")) or 0.0) / 60.0
+        _t0, _m0 = _num(before.get("T_em_avg_Nm")), _num(before.get("mass_total_kg"))
+        if _t0 is not None and _w > 0:
+            base["P_mech_W"] = abs(_t0) * _w
+            if _m0:
+                base["torque_per_mass_Nm_kg"] = abs(_t0) / _m0
+                base["power_per_mass_W_kg"] = abs(_t0) * _w / _m0
+            for _k in ("torque_per_mass_full_Nm_kg", "power_per_mass_full_W_kg"):
+                base.pop(_k, None)
     if _SC.rederive(base):
         # shaft-side convention: the shaft side is k*T*w -/+ D, not a proportion of the torque
         def _tpm(s_: Dict[str, Any]) -> Any:
@@ -829,6 +841,9 @@ def build_panel(duty_summary: Any, kept: Dict[str, Any], thermal: Optional[Dict[
                 base[k] = v
                 em_overlaid = True
         if em_overlaid:
+            # the shaft-power convention is the LOOP's run's, all of it or none (motor_ai_sim.shaft_convention)
+            from motor_ai_sim import shaft_convention as _SC
+            _SC.overlay(base, em)
             # the loop's own mechanical half rides with its electromagnetic numbers (top level of the record)
             for k in _PANEL_LOOP_KEYS:
                 if _num(final.get(k)) is not None:

@@ -176,6 +176,24 @@ def apply_to_summary(summary: Mapping[str, Any],
     p_mech = _num(out.get("P_mech_W"))
     p_loss = _num(out.get("P_loss_total_W"))
     gen = str(out.get("op_mode") or "").lower().startswith("gen")
+    from motor_ai_sim import shaft_convention as _SC
+    if _SC.rederive(out):
+        # the shaft-side convention: the core loss is a shaft load, so the shaft
+        # power, D, the shaft torque and the efficiency move with the new iron
+        # (rebuilt from the SAME losses, motor_ai_sim.shaft_convention)
+        p_mech = _num(out.get("P_mech_W"))
+        extra = _num(out.get("P_mech_extra_W"))
+        if out.get("efficiency_shaft") is not None and extra is not None and p_mech and p_mech > 0.0:
+            x = extra / p_mech
+            eff = float(out["efficiency"])
+            out["efficiency_shaft"] = round(eff / (1.0 + x) if gen else eff * max(0.0, 1.0 - x), 6)
+        m = _num(out.get("mass_total_kg"))
+        if m and p_mech is not None:
+            out["power_per_mass_W_kg"] = round(p_mech / m, 1)
+            _t = _num(out.get("T_field_k_Nm") if gen else out.get("T_shaft_Nm"))
+            if _t is not None:
+                out["torque_per_mass_Nm_kg"] = round(_t / m, 3)
+        return out
     if out.get("efficiency") is not None and p_mech is not None \
             and p_loss is not None and p_mech > 0.0:
         if gen:

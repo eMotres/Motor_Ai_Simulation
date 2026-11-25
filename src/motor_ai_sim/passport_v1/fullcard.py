@@ -59,7 +59,8 @@ def stage2_block(full_dir: Path, repo: Path, L_mm: float,
         # (end3d_verdict): the real k_flux unless the end-deficit check FAILED or the
         # 2-D leg is INVALID; the old mid-plane FAIL is end physics, not a model check.
         # The real k_flux is always kept beside the applied one (k_flux_raw).
-        af = applied_flux_factor(sx.get("k_flux"), sx.get("k_flux_self"), sx.get("two_d"), sx.get("version"))
+        af = applied_flux_factor(sx.get("k_flux"), sx.get("k_flux_self"), sx.get("two_d"), sx.get("version"),
+                                 sx.get("generated_utc"))
         usable = af["basis"] == BASIS_K_FLUX
         curve.append({"stack_mm": Lr, "k_flux_self": sx.get("k_flux_self"),
                       "B1_mid_T": b1m, "k_flux_raw": sx.get("k_flux"),
@@ -111,7 +112,18 @@ def stage2_block(full_dir: Path, repo: Path, L_mm: float,
             out["k_psi"]["labels"] = ["3-D", "no-load", "quick fidelity",
                                       ("old mid-plane check not applied" if own.get("k_flux_applied") == BASIS_K_FLUX
                                        else str(own.get("k_flux_verdict")))]
-    if own and own.get("k_flux_usable") is False:
+    _forced = bool(own) and own.get("k_flux_usable") is False and str(own.get("k_flux_verdict")).upper() in (
+        "PASS", "NOT CHECKED")
+    if _forced:
+        # the 2-D check passed (or could not run), but k_flux itself is not a usable factor (outside the band /
+        # missing): k_flux_self is applied for THAT reason, not because the run said so
+        out["k_psi"]["method"] = ("3-D magnetostatic Stage A (I = 0) at this machine's own stack: "
+                                  "k_flux_self (axial mean of the gap fundamental / its own "
+                                  "mid-plane value) — the run's 2-D check is %s, but its k_flux = %s is "
+                                  "not a usable factor, so k_flux_self is applied"
+                                  % (own.get("k_flux_verdict"), own.get("k_flux_raw")))
+        out["k_psi"]["labels"] = ["3-D", "no-load", "quick fidelity", "k_flux_self (k_flux not a usable factor)"]
+    elif own and own.get("k_flux_usable") is False:
         out["k_psi"]["method"] = ("3-D magnetostatic Stage A (I = 0) at this machine's own stack: "
                                   "k_flux_self (axial mean of the gap fundamental / its own "
                                   "mid-plane value, the pure end effect) — the run's 2-D check "

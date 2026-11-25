@@ -77,8 +77,13 @@ def _version_n(version: Any) -> Optional[int]:
         return None
 
 
+#: the 2-D magnet source was fixed to M/mu_rec on this date (static3d ref2d, 2026-08-04): an old-rule run generated
+#: before it may be the M-source fault the mid-plane gate caught, so it never gets the short-stack reading
+OLD_RULE_SOURCE_FIX_UTC = "2026-08-04T23:59:59Z"
+
+
 def applied_flux_factor(k_flux: Any, k_flux_self: Any, two_d: Optional[Mapping[str, Any]],
-                        version: Any = None) -> Dict[str, Any]:
+                        version: Any = None, generated_utc: Any = None) -> Dict[str, Any]:
     """``{value, k_flux, k_flux_self, verdict, rule, basis, note}`` for one Stage A result (see the module table).
     ``value`` is None only when neither number is a usable factor."""
     kf, ks = _factor(k_flux, "k_flux"), _factor(k_flux_self, "k_flux_self")
@@ -103,7 +108,8 @@ def applied_flux_factor(k_flux: Any, k_flux_self: Any, two_d: Optional[Mapping[s
             basis = BASIS_SELF if raw == "FAIL" else BASIS_K_FLUX
         elif raw == "FAIL":
             r = _num(t.get("ratio_3d_mid_over_2d"))
-            plausible = (t.get("picard_converged") is True and r is not None
+            dated = bool(generated_utc) and str(generated_utc) > OLD_RULE_SOURCE_FIX_UTC
+            plausible = (dated and t.get("picard_converged") is True and r is not None
                          and OLD_RULE_RATIO_MIN <= r < OLD_RULE_RATIO_MAX
                          and kf is not None and ks is not None and kf <= ks)
             rs = "%.4f" % r if r is not None else "?"
@@ -114,9 +120,10 @@ def applied_flux_factor(k_flux: Any, k_flux_self: Any, two_d: Optional[Mapping[s
                                "stack, not a model check, so k_flux is applied" % (rs, OLD_RULE_RATIO_MIN))
             else:
                 out["verdict"], basis = VERDICT_OLD_RECOMPUTE, BASIS_SELF
-                out["note"] = ("the run's mid-plane check said FAIL (3-D mid / 2-D = %s, 2-D Picard converged: %s) "
-                               "outside the short-stack signature: k_flux_self is applied; recompute Stage A"
-                               % (rs, t.get("picard_converged")))
+                out["note"] = ("the run's mid-plane check said FAIL (3-D mid / 2-D = %s, 2-D Picard converged: %s, "
+                               "generated %s) outside the short-stack signature (or before the 2-D source fix of "
+                               "2026-08-04, or undated): k_flux_self is applied; recompute Stage A"
+                               % (rs, t.get("picard_converged"), generated_utc or "?"))
         else:
             out["verdict"], basis = (raw or "NOT CHECKED"), BASIS_K_FLUX
     if basis == BASIS_K_FLUX and kf is None and ks is not None:
@@ -145,19 +152,23 @@ def substitution_of(entry: Optional[Mapping[str, Any]], stack_mm: Optional[float
     if (not isinstance(entry, Mapping) or entry.get("k_flux_applied")
             or entry.get("basis") in (BASIS_K_FLUX, BASIS_SELF)):
         return None
-    texts = [str(entry.get("fidelity") or "")] + [str(x) for x in (entry.get("labels") or [])]
+    labels = entry.get("labels")
+    labels = labels if isinstance(labels, (list, tuple)) else ([] if labels is None else [labels])
+    texts = [str(entry.get("fidelity") or "")] + [str(x) for x in labels]
     if any(t_ in x.lower() for x in texts for t_ in _SUBST_TEXTS):
-        return "old writer text (2-D check failed, k_flux_self applied)"
+        return ("old writer text (2-D check failed, k_flux_self applied): verify against the full passport "
+                "(the full passport may have been a PASS)")
     s2 = entry.get("stage2_3d")
     if isinstance(s2, Mapping):
-        kp = s2.get("k_psi") or {}
+        kp = s2.get("k_psi") if isinstance(s2.get("k_psi"), Mapping) else {}
         if kp.get("basis"):
             return None
         v = _num(kp.get("value"))
         L = _num(kp.get("L_mm")) or _num(s2.get("L_mm")) or stack_mm
-        own = next((r for r in (s2.get("k_psi_curve") or [])
-                    if L is not None and _num(r.get("stack_mm")) is not None and abs(float(r["stack_mm"]) - L) < 1e-6),
-                   None)
+        curve = s2.get("k_psi_curve") if isinstance(s2.get("k_psi_curve"), list) else []
+        own = next((r for r in curve
+                    if isinstance(r, Mapping) and L is not None and _num(r.get("stack_mm")) is not None
+                    and abs(float(r["stack_mm"]) - L) < 1e-6), None)
         raw = _num((own or {}).get("k_flux_raw"))
         if v is not None and raw is not None and abs(v - raw) > 1e-9:
             return "full passport: k_psi %.5f is not the own-stack k_flux %.5f" % (v, raw)
@@ -165,7 +176,8 @@ def substitution_of(entry: Optional[Mapping[str, Any]], stack_mm: Optional[float
     kf, ks = _num(entry.get("k_flux")), _num(entry.get("k_flux_self"))
     if kf is None or ks is None or kf != ks:
         return None
-    st = _num(entry.get("stack_mm")) or stack_mm
+    # an inherited table belongs to another reference length: only the entry's own stack_mm may pick its row
+    st = _num(entry.get("stack_mm")) or (None if entry.get("inherited") else stack_mm)
     tab = entry.get("k_flux_vs_L") if isinstance(entry.get("k_flux_vs_L"), Mapping) else {}
     rows = [(x, y) for x, y in ((_num(a), _num(b)) for a, b in tab.items()) if x is not None and y is not None]
     if st is None and len(rows) == 1:

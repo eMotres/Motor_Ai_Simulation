@@ -83,6 +83,15 @@ import numpy as np
 #: weld and meshed as the touching pocket it has always been meshed as.
 WELD_TOL_MM = 0.02
 
+#: How far around a magnet (beyond the fill's reach) the iron counts as its
+#: LOCAL outline, mm: the lips over it and the sides of the pole pieces beside
+#: it, not a pole tip half a pitch away.
+LOCAL_OD_MM = 1.0
+
+#: Per-magnet equilibrium (``magnet_equilibrium``) above this share of the
+#: magnet's load is reported as a warning on the case.
+EQUILIBRIUM_TOL = 1e-3
+
 #: The key ``mechanical_polys`` adds to a polygons dict.  Its presence is the
 #: whole switch: every solver hook reads it and does nothing without it.
 POCKET_KEY = "mech_pocket_clearance"
@@ -101,6 +110,11 @@ RULE_STRESS = ("magnet meshed to fill its pocket's air; separation pairs start "
 RULE_MODAL = ("magnet bonded to its pocket across the clearance ring (the ring "
               "filled, any drawn air beyond it left open), density scaled to "
               "the drawn magnet's mass")
+
+
+class PocketClearanceInternalError(RuntimeError):
+    """An inconsistency inside the solver's own tables (not the user's
+    geometry): a 500 at the route, never a 422."""
 
 
 def clearance_of(params: Optional[Dict[str, Any]]) -> float:
@@ -174,6 +188,23 @@ def _iron_span_mm(rotor) -> tuple:
     return r_lo, r_max - sag - 1e-6
 
 
+def _exterior_xy(rotor) -> np.ndarray:
+    from shapely.geometry import MultiPolygon
+    return np.concatenate([np.asarray(p.exterior.coords, dtype=float)
+                           for p in (rotor.geoms if isinstance(rotor, MultiPolygon)
+                                     else [rotor])])
+
+
+def _r_max_iron(rotor) -> float:
+    xy = _exterior_xy(rotor)
+    return float(np.hypot(xy[:, 0], xy[:, 1]).max())
+
+
+def _rmax_of(g) -> float:
+    xy = np.asarray(g.exterior.coords, dtype=float)
+    return float(np.hypot(xy[:, 0], xy[:, 1]).max())
+
+
 def _up_gap_of(params: Optional[Dict[str, Any]]) -> float:
     try:
         v = float((params or {}).get("magnet_up_gap", 0.0) or 0.0)
@@ -216,6 +247,7 @@ def mechanical_polys(polys: dict, params: Optional[Dict[str, Any]]) -> dict:
     mags = list(polys.get("magnets") or [])
     if not applies(c) or not mags:
         return polys
+    import shapely
     from shapely.geometry import Point
     from shapely.ops import unary_union
     from shapely.strtree import STRtree
@@ -228,6 +260,11 @@ def mechanical_polys(polys: dict, params: Optional[Dict[str, Any]]) -> dict:
     reach = c + up + 2.0 * WELD_TOL_MM
     r_lo, r_hi = _iron_span_mm(rotor)
     span = Point(0.0, 0.0).buffer(r_hi, quad_segs=1024)
+    r_od = _r_max_iron(rotor)
+    sag = max(0.0, r_od - r_hi - 1e-6)
+    ext_xy = _exterior_xy(rotor)
+    ext_r = np.hypot(ext_xy[:, 0], ext_xy[:, 1])
+    has_sleeve = polys.get("sleeve") is not None and not polys["sleeve"].is_empty
     if r_lo > 0.0:
         span = span.difference(Point(0.0, 0.0).buffer(r_lo, quad_segs=1024))
     drawn = [_valid(mp) for mp, _pol in mags]
@@ -249,17 +286,40 @@ def mechanical_polys(polys: dict, params: Optional[Dict[str, Any]]) -> dict:
         near = [drawn[int(j)] for j in tree.query(zone) if int(j) != i]
         cut = unary_union(blockers + near) if (blockers or near) else None
         # SEATING fill: the pocket's air within the reach of the drawn air
-        air = zone.intersection(span).difference(rotor)
+        # …clipped to the LOCAL outline: the highest iron within
+        # ``LOCAL_OD_MM`` of the fill's reach around the magnet (its lips and
+        # the pole pieces beside it), less the stations' sag — so a pocket
+        # under a q-axis notch or a shaped pole never fills above the iron
+        # around it, however high the rotor reaches elsewhere
+        loc_span = span
+        inside = shapely.contains_xy(mv.buffer(reach + LOCAL_OD_MM),
+                                     ext_xy[:, 0], ext_xy[:, 1])
+        r_loc_hi = r_hi
+        if inside.any():
+            r_loc_hi = min(r_hi, float(ext_r[inside].max()) - sag - 1e-6)
+            if r_loc_hi < r_hi - 1e-9:
+                loc_span = span.intersection(
+                    Point(0.0, 0.0).buffer(r_loc_hi, quad_segs=1024))
+        air = zone.intersection(loc_span).difference(rotor)
         if cut is not None:
             air = air.difference(cut)
         parts = [g for g in _polys_of(air) if g.intersects(mv)]
         fs = _largest(_valid(unary_union(parts + [mv])))
         # BONDED fill: the clearance ring only (the builder's own offset), so
         # drawn air beyond it — an up gap, an opening to the gap — stays air
-        rb = mv.buffer(c, join_style=2).intersection(span)
+        # (never into iron either: a pocket tighter than the clearance at a
+        # fillet or a bump keeps its iron)
+        rb = mv.buffer(c, join_style=2).intersection(loc_span).difference(rotor)
         if cut is not None:
             rb = rb.difference(cut)
         fb = _largest(_valid(unary_union([mv, rb])))
+        if has_sleeve and sag > WELD_TOL_MM and _rmax_of(fs) > r_loc_hi - 1e-5:
+            raise ValueError(
+                f"magnet_pocket_clearance {c:g} mm: the pocket of magnet {i + 1} "
+                f"opens under the sleeve, and the rotor's OD stations sag "
+                f"{sag * 1e3:.1f} um between points — more than the mesh weld "
+                f"({WELD_TOL_MM * 1e3:.0f} um), so the magnet could not be "
+                "joined to the sleeve across that chord; refine the OD sampling")
         extra = float(fs.area - mv.area)
         allowed = (float(mv.buffer(c + 2.0 * WELD_TOL_MM, join_style=2).area
                          - mv.area) + up * _width_mm(mv))
@@ -410,7 +470,7 @@ def pair_gaps(cs, polys: Optional[dict]) -> Optional[np.ndarray]:
 
     uni = np.asarray(getattr(cs, "pair_unilateral", np.zeros(0)), dtype=bool)
     if uni.size != cs.n_pairs:
-        raise ValueError(
+        raise PocketClearanceInternalError(
             f"pocket clearance: the contact system has {cs.n_pairs} pairs but "
             f"{uni.size} unilateral flags — the stress-free gaps cannot be set")
     ia = np.array([it.part_a == PART_MAGNET for it in cs.interfaces], dtype=bool)

@@ -2880,6 +2880,12 @@ def mesh(
             "geo_fingerprint": fp,
             "cached": False,
         }
+        # a pocket drawn with a clearance: the view shows the SEATING fill (what
+        # a separation solve meshes); modes and bonded solves mesh the ring
+        from motor_ai_sim.simulation.mechanical import pocket_clearance as _pkc
+        _pk = _pkc.summary(polys, _pkc.RULE_STRESS)
+        if _pk is not None:
+            out["pocket_clearance"] = _pk
         out["elapsed_s"] = _elapsed(t0)
         if len(_MESH_CACHE) >= _MESH_CACHE_MAX:
             _MESH_CACHE.popitem(last=False)

@@ -468,6 +468,10 @@ t('every tile of the OLD card has a home in the one panel (nothing dropped silen
   // the details that lived in the old tooltips survive in the new ones
   assert.ok(one(rows, 'ironLoss').tipExtraKeys.includes('emTiles.ironSplitStator'));
   assert.ok(one(rows, 'magnetLoss').tipExtraKeys.includes('emTiles.magnetSeg'));
+  // a run that solved the sliced magnet with sigma x factor IN the field says so (2026-11-25)
+  const rowsSig = E.emTileRows({ ...RUN, magnet_segmentation: { ...RUN.magnet_segmentation, applied_as: 'field_sigma' } }, VIEW);
+  assert.ok(one(rowsSig, 'magnetLoss').tipExtraKeys.includes('emTiles.magnetSegSigma'));
+  assert.ok(!one(rowsSig, 'magnetLoss').tipExtraKeys.includes('emTiles.magnetSeg'));
   assert.ok(one(rows, 'end3d').tipExtraKeys.includes('emTiles.end3dCorrected'));
 });
 

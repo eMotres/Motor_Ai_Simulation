@@ -76,7 +76,10 @@ def test_agent_routes_pass_the_closed_door_but_nothing_else_does(monkeypatch):
         assert auth.anonymous_allowed(p)
     for p in ("/api/owner-queue/items", "/api/owner-queue/count", "/api/owner-queue/tokens", "/api/owner-queue/tokens/x/revoke",
               "/api/owner-queue/items/oq-abc/answer", AG + "/items/a/b/c", AG + "/answer", AG + "/items/x/answer",
-              "/api/owner-queue/agentx/items", "/api/owner-queue/priority", "/api/owner-queue/priorities", AG + "/priority/x", AG + "/priorities", "/api/owner-queue/agent/items/a.b"):
+              "/api/owner-queue/agentx/items", "/api/owner-queue/priority", "/api/owner-queue/priorities", AG + "/priority/x", AG + "/priorities", "/api/owner-queue/agent/items/a.b",
+              # US · software review: a trailing newline, empty and dot segments never pass the door
+              AG + "/items\n", AG + "/priority\n", AG + "/items/oq-abc\n", AG + "//items", AG + "/items//withdraw",
+              AG + "/items/../../tokens", AG + "/../items", AG + "/items/./withdraw"):
         assert not auth.anonymous_allowed(p), p
     # through the real middleware: the agent route answers its own 401 (route check), the owner side is closed
     t = tok()

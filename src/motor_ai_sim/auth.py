@@ -194,8 +194,8 @@ def anonymous_allowed(path: str) -> bool:
     # user-owned compute nodes: own mcnode_ bearer, checked in routes/compute_nodes
     if _NODE_AGENT_PATH.match(p):
         return True
-    # owner queue agents: own oq_ bearer, checked in routes/owner_queue
-    if _OWNER_QUEUE_AGENT_PATH.match(p):
+    # owner queue agents: own oq_ bearer, checked in routes/owner_queue (fullmatch: `$` would also match before a trailing "\n")
+    if _OWNER_QUEUE_AGENT_PATH.fullmatch(p):
         return True
     return any(p == pfx or p.startswith(pfx + "/") for pfx in _ANON_OK_PREFIXES)
 

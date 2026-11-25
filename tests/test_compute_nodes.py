@@ -136,6 +136,10 @@ def test_worker_paths_pass_the_door_and_user_paths_do_not():
     assert auth.anonymous_allowed("/api/nodes/heartbeat")
     assert not auth.anonymous_allowed("/api/nodes")
     assert not auth.anonymous_allowed("/api/nodes/jobs/submit")
+    assert not auth.anonymous_allowed("/api/nodes/heartbeat\n")      # trailing newline is not the route
+    assert not auth.anonymous_allowed("/api/nodes/jobs/lease\n")
+    assert auth.anonymous_allowed("/api/owner-queue/agent/items")
+    assert not auth.anonymous_allowed("/api/owner-queue/agent/items\n")   # trailing newline is not the route
 
 
 # ── leases ───────────────────────────────────────────────────────────────────

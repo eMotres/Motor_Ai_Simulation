@@ -192,10 +192,10 @@ def anonymous_allowed(path: str) -> bool:
     if p in _ANON_OK_PATHS:
         return True
     # user-owned compute nodes: own mcnode_ bearer, checked in routes/compute_nodes
-    if _NODE_AGENT_PATH.match(p):
+    if _NODE_AGENT_PATH.fullmatch(p):   # fullmatch: `$` alone accepts a trailing newline
         return True
     # owner queue agents: own oq_ bearer, checked in routes/owner_queue
-    if _OWNER_QUEUE_AGENT_PATH.match(p):
+    if _OWNER_QUEUE_AGENT_PATH.fullmatch(p):
         return True
     return any(p == pfx or p.startswith(pfx + "/") for pfx in _ANON_OK_PREFIXES)
 
@@ -711,7 +711,7 @@ def _verify_google_token(token: str) -> Optional[dict]:
         return None
 
 
-def _registry_role(email: str, fallback: str = "user") -> str:
+def _registry_role(email: str, fallback: str = "user", fail_closed: bool = False) -> str:
     """OUR user registry decides the tier; ADMIN_EMAILS overrides upward.
     Auto-provisions a record on first sight so the admin panel can manage
     every account that ever signed in.  A disabled record resolves to None
@@ -730,8 +730,9 @@ def _registry_role(email: str, fallback: str = "user") -> str:
             rec = _u._load().get(email.strip().lower())
             if isinstance(rec, dict) and rec.get("disabled"):
                 return "__disabled__"
-        except Exception:                                   # noqa: BLE001 - an unreadable registry keeps the allowlist's answer
-            pass
+        except Exception:                                   # noqa: BLE001
+            if fail_closed:
+                return "__unavailable__"            # cannot tell whether the allowlisted account is disabled
         return "admin"
     try:
         from motor_ai_sim import users as _users
@@ -741,7 +742,7 @@ def _registry_role(email: str, fallback: str = "user") -> str:
             logger.error("auth: registry unreadable while resolving the tier of "
                          "%r (%s: %s) — keeping %r, provisioning nothing",
                          email, type(e).__name__, e, fallback)
-            return fallback
+            return "__unavailable__" if fail_closed else fallback
         u = store.get((email or "").strip().lower())
         if u is None and email:
             try:
@@ -868,7 +869,11 @@ def resolve_user_detail(authorization: Optional[str], *, renew: bool = False,
         return _out(None, "store_unavailable", sid=res.sid, email=res.email)
 
     if res.ok and res.user is not None:
-        role = _registry_role(res.user["email"], fallback=res.user.get("role", "user"))
+        role = _registry_role(res.user["email"], fallback=res.user.get("role", "user"), fail_closed=True)
+        if role == "__unavailable__":
+            logger.error("auth: registry unreadable while verifying a token (email=%r) - store_unavailable, session kept",
+                         res.email)
+            return _out(None, "store_unavailable", sid=res.sid, email=res.email)
         if role == "__disabled__":
             _report_reject("disabled", res.email, res.sid, ip, user_agent, path)
             return _out(None, "disabled", sid=res.sid, email=res.email)
@@ -902,10 +907,17 @@ def resolve_user_detail(authorization: Optional[str], *, renew: bool = False,
         if claims.get("email_verified") is not True:            # Google must say the address is verified
             _report_reject("google_unverified_email", email, "", ip, user_agent, path)
             return _out(None, "google_rejected", email=email)
-        role = _registry_role(email)
+        role = _registry_role(email, fail_closed=True)
+        if role == "__unavailable__":
+            logger.error("auth: registry unreadable while verifying a Google credential (email=%r) - store_unavailable", email)
+            return _out(None, "store_unavailable", email=email)
         if role == "__disabled__":
             _report_reject("disabled", email, "", ip, user_agent, path)
             return _out(None, "disabled", email=email)
+        if _should_report(("sidless", email, ip), _SIDLESS_QUIET_S):
+            # a raw Google credential has no session id either: it is part of the same inventory of unrevocable access
+            _sessions.record_event("sidless", email=email, sid="", reason="google_raw_credential", ip=ip,
+                                   user_agent=user_agent, path=path)
         try:
             _users.link_google(email)       # Google proof verifies a pending row
         except Exception:                                   # pragma: no cover

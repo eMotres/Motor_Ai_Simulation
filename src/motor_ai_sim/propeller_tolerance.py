@@ -13,11 +13,9 @@ A case that fails (invalid vector, no positive torque, ...) is listed under ``fa
 """
 from __future__ import annotations
 
-import contextlib
 import dataclasses
-import threading
 from dataclasses import dataclass
-from typing import Any, Dict, Iterator, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 
@@ -36,7 +34,6 @@ METRICS: Dict[str, Tuple[Tuple[str, ...], bool]] = {
     "cooling_air_axial_ms": (("objectives", "cooling_air_axial_ms"), True),
 }
 
-_PATCH_LOCK = threading.RLock()
 
 
 @dataclass(frozen=True)
@@ -134,29 +131,6 @@ def perturbations(vec: Dict[str, Any], tol: Tolerance, n_random: int = 6, seed: 
     return out
 
 
-@contextlib.contextmanager
-def _perturbed_build(thickness_scale: float) -> Iterator[None]:
-    """Scale the thickness ratio of every station of the propeller-2 dict that ``evaluate_candidate`` builds.  The thickness has no design
-    variable (it follows the airfoil), so it is the one tolerance that needs this hook; nothing else in ``propeller_design`` is touched."""
-    if thickness_scale == 1.0:
-        yield
-        return
-    with _PATCH_LOCK:
-        orig = pd.candidate_to_propeller2
-
-        def patched(dd, vv):
-            raw = orig(dd, vv)
-            for s in raw["blade"]["stations"]:
-                s["thickness_rel"] = s["thickness_rel"] * thickness_scale
-            return raw
-
-        pd.candidate_to_propeller2 = patched
-        try:
-            yield
-        finally:
-            pd.candidate_to_propeller2 = orig
-
-
 def _with_te_min(d: pd.Design, te_min_mm: Optional[float]) -> pd.Design:
     """The design with the trailing-edge minimum raised to ``te_min_mm`` (never lowered below a limit the profile already has)."""
     if te_min_mm is None:
@@ -202,8 +176,8 @@ def evaluate_robust(d: pd.Design, vec: Dict[str, Any], op_name: str, tol: Option
     failed: List[Dict[str, Any]] = []
     for p in perturbations(vec, tol, n_random=n_random, seed=seed, d=d):
         try:
-            with _perturbed_build(p.thickness_scale):
-                res = pd.evaluate_candidate(_with_te_min(d, p.te_min_mm), p.vec, op_name, v_inf=v_inf, **eval_kwargs)
+            res = pd.evaluate_candidate(_with_te_min(d, p.te_min_mm), p.vec, op_name, v_inf=v_inf, thickness_scale=p.thickness_scale,
+                                        **eval_kwargs)       # review 2026-11-24 (9a): explicit, no patched module function
         except Exception as exc:                                    # reported, never dropped
             failed.append({"name": p.name, "kind": p.kind, "error": "%s: %s" % (type(exc).__name__, exc)})
             continue
@@ -224,4 +198,10 @@ def evaluate_robust(d: pd.Design, vec: Dict[str, Any], op_name: str, tol: Option
         "nominal": nominal, "cases": cases, "metrics": metrics,
         "banner": BANNER, "estimated": True, "validated_against": None,
         "note": "worst case and spread over nominal + the perturbed cases; tolerance values are placeholders, not a factory guarantee",
+        # review 2026-11-24 (9b, 9c): what the numbers can and cannot show
+        "worst_is_sampled": True, "sampling": "%d global corners + %d random draws over %d design variables: a sample, not a bound"
+                                              % (len(cases) + len(failed) - int(n_random), int(n_random), len([k for k in vec if "@" in k])),
+        "insensitive": (["thickness", "trailing_edge_min"] if pd.polar_source(d) in ("mfoil_table", "xfoil_table", "measured") else []),
+        "insensitive_reason": ("the section polars are tables of the nominal airfoil: thickness and trailing-edge changes do not reach the "
+                               "aerodynamics in this model" if pd.polar_source(d) in ("mfoil_table", "xfoil_table", "measured") else None),
     }

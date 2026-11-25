@@ -156,13 +156,13 @@ const AutoOptimizePanel: React.FC = () => {
   // Project rule: a run says what it costs before it starts.  So the card fetches
   // the plan as soon as the number changes and shows it next to the Run button —
   // the estimate is not an afterthought printed once the FEM is already burning.
-  const fetchPlan = useCallback(async (ripple: number, m: string, rec: { preset: string; overrides: Record<string, unknown> } | null) => {
+  const fetchPlan = useCallback(async (ripple: number, m: string, rec: { preset: string; overrides: Record<string, unknown>; magnet_temp_c?: number } | null) => {
     if (!connectedToApi || !rec) return;
     setPlanBusy(true); setPlanError(null);
     try {
       const r = await fetch(`${API}/api/optimization/auto/plan`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ max_ripple_pct: ripple, mode: m, run_settings: { preset: rec.preset, overrides: rec.overrides } }),
+        body: JSON.stringify({ max_ripple_pct: ripple, mode: m, run_settings: { preset: rec.preset, overrides: rec.overrides, ...(rec.magnet_temp_c != null ? { magnet_temp_c: rec.magnet_temp_c } : {}) } }),
       });
       const j = await r.json().catch(() => null);
       if (!r.ok) throw new Error(j?.detail ?? `HTTP ${r.status}`);

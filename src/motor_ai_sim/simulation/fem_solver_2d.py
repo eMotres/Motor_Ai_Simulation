@@ -3663,6 +3663,23 @@ def _br_carry_hot_refusal(parent_tmax_c: Optional[float],
     return None
 
 
+def _run_magnet_card_name() -> Optional[str]:
+    """The name of the magnet card a run solves with: the machine's assignment with the request's own override on top - the same sources
+    ``_run_magnet_temp_c`` reads (``None`` when no magnet is assigned)."""
+    try:
+        from motor_ai_sim.config import get_material_assignments as _gma_n
+        asg = dict(_gma_n() or {})
+    except Exception:       # noqa: BLE001
+        asg = {}
+    try:
+        from motor_ai_sim.material_context import get_request_materials as _grm_n
+        asg.update({k: v for k, v in ((_grm_n() or {}).get("assignment") or {}).items() if v})
+    except Exception:       # noqa: BLE001
+        pass
+    name = asg.get("magnet")
+    return str(name) if name else None
+
+
 def _run_magnet_temp_c(magnet_temp_c: Optional[float]) -> Optional[float]:
     """The magnet temperature a run actually solves at: the request's, else
     the assigned card's own reference temperature (``None`` when unknown)."""

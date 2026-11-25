@@ -47,13 +47,13 @@ def test_family_lists_variables_bounds_and_operating_points():
     r = client().get(B + "/family", params={"diameter_in": 12, "blades": 3})
     assert r.status_code == 200
     j = r.json()
-    assert j["id"] == "own_family" and j["banner"] == pd.BANNER and j["diameters_in"] == [10, 11, 12, 13] and j["blades_options"] == [2, 3]
+    assert j["id"] == "own_family" and j["banner"] == pd.BANNER and j["diameters_in"] == [10, 10.5, 11, 11.5, 12, 12.5, 13, 13.5, 14] and j["blades_options"] == [2, 3]
     assert j["seed"]["diameter_in"] == 12 and j["seed"]["blades"] == 3
     assert sorted(j["operating_points"]) == ["L12", "L20"] and j["operating_points"]["L20"]["torque_limit_Nm"] == 0.82
     assert j["tip_mach_limit"] == {"value": 0.9, "confirmed": True, "source": j["tip_mach_limit"]["source"]}       # owner 2026-11-16: free, guard only
     assert j["inputs_unconfirmed"] is True and j["manufacturing"]["limits"] == {} and "wall_min_mm" in j["manufacturing"]["unset"]
     assert len(j["variables"]) == len(pd.variable_names(D))
-    assert client().get(B + "/family", params={"diameter_in": 14}).status_code == 422
+    assert client().get(B + "/family", params={"diameter_in": 14.5}).status_code == 422
     assert client().get(B + "/family", params={"blades": 5}).status_code == 422
 
 
@@ -197,7 +197,7 @@ def test_access_tiers_the_designer_is_a_solve_the_catalogue_stays_open():
 def test_polar_source_is_selectable_per_request_and_defaults_to_the_flat_plate():
     c = client()
     fam = c.get(B + "/family", params={"diameter_in": 10, "blades": 3}).json()
-    assert fam["polar_source"] == "flatplate_model" and fam["polar_sources"] == ["flatplate_model", "camber_model"]
+    assert fam["polar_source"] == "flatplate_model" and fam["polar_sources"] == ["flatplate_model", "camber_model", "mfoil_table"]
     body = {"vector": seed(10, 3), "op": "L12"}
     flat = c.post(B + "/evaluate", json=body).json()
     same = c.post(B + "/evaluate", json=dict(body, polar_source=None)).json()

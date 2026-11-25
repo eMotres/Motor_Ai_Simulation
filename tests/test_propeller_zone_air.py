@@ -41,7 +41,10 @@ def test_zone_inside_the_hub_is_left_out_not_zero():
     f = field([pi.Band(0.014, 0.03, 7.0, 1.0), pi.Band(0.03, 0.06, None, None)])
     d = za.zone_air_detail(f, RADII)
     assert "rotor_ends" not in d["air_zones"]["zones"] and "rotor_ends_not_modelled" in d["flags"]
-    assert d["air_zones"]["zones"]["stator_ends"] == pytest.approx(7.0) and "stator_ends_partly_modelled" in d["flags"]
+    # review 2026-11-22 H9: a partly modelled zone is reported with its coverage, not exported as the whole-zone speed
+    assert "stator_ends" not in d["air_zones"]["zones"] and "stator_ends_partly_modelled" in d["flags"]
+    assert d["partial_zones"]["stator_ends"]["axial_ms"] == pytest.approx(7.0)
+    assert d["partial_zones"]["stator_ends"]["coverage"] == d["coverage"]["stator_ends"] < za.FULL_ZONE_COVERAGE
     assert "housing_outer_not_given" in d["flags"] and "housing_outer" not in d["air_zones"]["zones"]
 
 
@@ -63,4 +66,24 @@ def test_real_bemt_field_of_the_seed_design():
     assert all(math.isfinite(v) and v >= 0 for v in z.values())
     # the seed's blade starts at 14 mm (root cut-out), so the rotor zone (r < 11.75 mm) has no modelled band
     assert "rotor_ends" not in z and "rotor_ends_not_modelled" in d["flags"]
-    assert z["stator_ends"] > 0
+    # ... and covers only part of the stator-end annulus: reported, not exported (review 2026-11-22 H9)
+    assert "stator_ends" not in z and d["partial_zones"]["stator_ends"]["axial_ms"] > 0
+
+
+def test_a_small_modelled_sliver_is_not_exported_as_the_zone_speed():
+    # review 2026-11-21 H9: a 19-20 mm band covers ~15 % of an 11.75-20 mm stator-end annulus
+    radii = dict(RADII, rotor_outer_radius_m=0.01175, stator_outer_radius_m=0.020)
+    f = field([pi.Band(0.019, 0.020, 10.0, 1.0)])
+    d = za.zone_air_detail(f, radii)
+    assert d["coverage"]["stator_ends"] < za.MIN_ZONE_COVERAGE
+    assert "stator_ends" not in d["air_zones"]["zones"] and "stator_ends_coverage_too_small" in d["flags"]
+
+
+def test_a_half_covered_zone_is_reported_not_exported():
+    # review 2026-11-22 H9: 51 % coverage still must not become the whole-zone film of the thermal request
+    r_rot, r_sta = RADII["rotor_outer_radius_m"], RADII["stator_outer_radius_m"]
+    r_in = math.sqrt(r_sta ** 2 - 0.51 * (r_sta ** 2 - r_rot ** 2))
+    d = za.zone_air_detail(field([pi.Band(r_in, 0.03, 10.0, 1.0)]), RADII)
+    assert d["coverage"]["stator_ends"] == pytest.approx(0.51, abs=1e-4)
+    assert "stator_ends" not in d["air_zones"]["zones"] and "stator_ends" not in za.zone_air(field([pi.Band(r_in, 0.03, 10.0, 1.0)]), RADII)["zones"]
+    assert d["partial_zones"]["stator_ends"] == {"axial_ms": 10.0, "coverage": d["coverage"]["stator_ends"]}

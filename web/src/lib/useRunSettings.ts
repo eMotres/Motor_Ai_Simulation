@@ -79,7 +79,8 @@ export function useRunSettings(mode: RunMode): RunSettingsState {
     if (!tab.request) return () => { live = false; };
     fetch(`${API}/api/optimization/run-settings/resolve?mode=${mode}`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ preset: tab.request.preset, overrides: tab.request.overrides }), cache: 'no-store',
+      body: JSON.stringify({ preset: tab.request.preset, overrides: tab.request.overrides,
+        ...(tab.request.magnet_temp_c != null ? { magnet_temp_c: tab.request.magnet_temp_c } : {}) }), cache: 'no-store',
     }).then(async r => {
       if (!r.ok) {
         let d = `HTTP ${r.status}`;

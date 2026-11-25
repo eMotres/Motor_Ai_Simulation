@@ -1100,7 +1100,7 @@ def adopt_entry(sa: Dict[str, Any], note: str = "") -> Tuple[str, Dict[str, Any]
         raise ValueError("the Stage A result carries no k_flux")
     # the factor the store applies is decided ONCE from the run's 2-D verdict (end3d_verdict): the real k_flux unless
     # the check failed / the 2-D leg is invalid; the real k_flux always stays beside it (k_flux_raw)
-    from motor_ai_sim.end3d_verdict import BASIS_SELF, applied_flux_factor
+    from motor_ai_sim.end3d_verdict import BASIS_SELF, applied_flux_factor, stack_mm_of_stage_a
     af = applied_flux_factor(k_raw, sa.get("k_flux_self"), sa.get("two_d"), sa.get("version"), sa.get("generated_utc"))
     k = af["value"] if af["value"] is not None else k_raw
     if not (0.5 < k <= 1.0):
@@ -1131,7 +1131,8 @@ def adopt_entry(sa: Dict[str, Any], note: str = "") -> Tuple[str, Dict[str, Any]
         "adopted_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         # the machine in the words _end3d_lookup matches an inherited passport by ("24s/20p OD 200")
         "machine": "%ds/%dp OD %g" % (slots, poles, od),
-        "stack_mm": m.get("stack_mm"),
+        # the length the scalar was measured at (the result's own, else its machine block, else the reference row): the class curve needs it
+        "stack_mm": stack_mm_of_stage_a(sa),
         "k_flux_vs_L": curve or None,
         # how the per-length rows were formed (end_effect.K_FLUX_VS_L_*); absent on a result from before the 2026-11-24 fix
         **({k_: tabs[k_] for k_ in ("k_flux_vs_L_method", "k_flux_vs_L_raw") if tabs.get(k_)}),

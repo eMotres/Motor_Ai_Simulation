@@ -37,7 +37,7 @@ def test_outside_the_measured_span_there_is_no_factor_and_the_note_names_the_spa
     env["stack"] = 25.0
     assert S._end3d_lookup("new", {}, diag=d) is None
     assert "no 3-D factor" in d["note"] and "40-200" in d["note"]
-    env["stack"] = 230.0
+    env["stack"] = 320.0                                                 # more than a factor 1.5 from 200: no factor
     assert S._end3d_lookup("new", {}) is None                           # never extrapolated
 
 
@@ -45,8 +45,10 @@ def test_a_measured_length_within_five_percent_is_used_as_it_is(env):
     env["store"] = {"old": _rec(0.95, stack=41.5)}
     r = S._end3d_lookup("new", {})
     assert r["inherited"] and r["k_flux"] == 0.95 and r["inherited_stack_basis"] == "point"
-    env["store"] = {"old": _rec(0.95, stack=43.0)}                       # 7.5 % off and a single point: no span
+    env["store"] = {"old": _rec(0.95, stack=70.0)}                       # a single point 1.75x away: no span, beyond the bound
     assert S._end3d_lookup("new", {}) is None
+    env["store"] = {"old": _rec(0.95, stack=43.0)}                       # 7.5 % off: outside the 5 % but within the bound
+    assert S._end3d_lookup("new", {})["inherited_stack_basis"] == "nearest, outside span"
 
 
 def test_one_curve_per_machine_is_merged_from_every_passport_and_interpolated(env):
@@ -65,7 +67,7 @@ def test_one_curve_per_machine_is_merged_from_every_passport_and_interpolated(en
     assert S._end3d_lookup("new", {})["k_flux"] == pytest.approx(0.96701 + (0.98768 - 0.96701) * 85.0 / 105.0)
     env["stack"] = 66.0                                                  # within 5 % of a measured length: that point
     assert S._end3d_lookup("new", {})["k_flux"] == 0.96701
-    env["stack"] = 300.0
+    env["stack"] = 320.0
     d = {}
     assert S._end3d_lookup("new", {}, diag=d) is None and "40-200" in d["note"]
 
@@ -199,9 +201,9 @@ def test_family_payload_says_why_a_passport_was_not_lent(tmp_path, monkeypatch):
     (root / "TD").mkdir(parents=True)
     (root / "TD" / "die.yaml").write_text(yaml.safe_dump({
         "name": "TD", "locked": False, "created": "2026-09-22T10:00:00",
-        "geometry": {"num_slots": 24, "num_poles": 28, "stator_diameter": 200.0, "motor_length": 300.0}}), encoding="utf-8")
+        "geometry": {"num_slots": 24, "num_poles": 28, "stator_diameter": 200.0, "motor_length": 400.0}}), encoding="utf-8")
     (root / "TD" / "C1.yaml").write_text(yaml.safe_dump({
-        "name": "C1", "die": "TD", "role": "motor", "geometry_overrides": {"motor_length": 300.0},
+        "name": "C1", "die": "TD", "role": "motor", "geometry_overrides": {"motor_length": 400.0},
         "winding": {"connection": "star"},
         "duties": [{"name": "d", "mode": "motor", "current_arms": 10.0, "rpm": 100.0,
                     "summary": {"T_em_avg_Nm": 5.0, "end3d": None}}]}), encoding="utf-8")
@@ -264,7 +266,7 @@ def test_dry_list_base_lookup_against_pr_lookup_on_a_tiny_catalog(tmp_path):
     assert desc == "24s/28p OD 200", desc
     st = tmp_path / "store.json"
     st.write_text(json.dumps({"x": _rec(0.9896, stack=200.0, desc=desc),
-                              "y": _rec(0.946, stack=60.0, desc=desc, when="2026-10-01T00:00:00Z")}), encoding="utf-8")
+                              "y": _rec(0.946, stack=80.0, desc=desc, when="2026-10-01T00:00:00Z")}), encoding="utf-8")
     base = _base_src_with_legacy_lookup(tmp_path)
     out = tmp_path / "o.json"
     cp = subprocess.run([sys.executable, str(scr), "--root", str(tmp_path / "dies"), "--store", str(st),
@@ -274,11 +276,11 @@ def test_dry_list_base_lookup_against_pr_lookup_on_a_tiny_catalog(tmp_path):
     rep = json.loads(out.read_text())
     rows = {r["config"]: r for r in rep["rows"]}
     assert rep["configs_checked"] == 2 and not rep["errors"], rep
-    # L40: the old pick was the newest passport (60 mm, 0.946); 40 mm is below the span 60-200: no factor now
+    # L40: the old pick was the newest passport (80 mm, 0.946); 40 mm is below the span 80-200 and 2x from 80: no factor now
     assert rows["L40"]["changed"] and rows["L40"]["k_flux_old"] == 0.946 and rows["L40"]["k_flux_new"] is None
-    # L150: interpolated on the 60..200 curve, not lent from the 60 mm passport
+    # L150: interpolated on the 80..200 curve, not lent from the 80 mm passport
     assert rows["L150"]["changed"] and rows["L150"]["k_flux_old"] == 0.946
-    assert rows["L150"]["k_flux_new"] == pytest.approx(0.946 + (0.9896 - 0.946) * 90.0 / 140.0)
+    assert rows["L150"]["k_flux_new"] == pytest.approx(0.946 + (0.9896 - 0.946) * 70.0 / 120.0)
     assert rows["L150"]["new_basis"] == "curve" and rows["L150"]["length_ratio"] is not None
     assert "passports in the store (2)" in cp.stdout and "L150" in cp.stdout
 
@@ -363,3 +365,68 @@ def test_charge_at_carries_the_stale_flag():
     assert c is not None and c["k_end_stale"] == 1.0
     pp["end3d"]["k_flux_vs_L_method"] = "own_mid_ratio"
     assert "k_end_stale" not in charge_at(pp, batt, 5.0, 1000.0)
+
+
+def test_outside_the_span_the_nearest_end_point_is_lent_flagged_within_a_bound(env, monkeypatch):
+    from motor_ai_sim import end3d_factors as F
+    monkeypatch.setattr(F, "_records", lambda: [
+        {"fingerprint": "g200", "k_T": 0.91, "slots": 24, "poles": 28, "od_mm": 200.0, "stack_mm": 200.0, "source": "Stage D"}])
+    env["store"] = {"a": _rec(0.946, stack=40.0), "b": _rec(0.9896, stack=200.0, when="2026-10-01T00:00:00Z"),
+                    "c": _rec(0.9896, stack=200.0, when="2026-09-01T00:00:00Z")}
+    d = {}
+    env["stack"] = 28.0                                   # shorter than the span 40-200, 40/28 = 1.43 <= 1.5: the 40 mm end point
+    r = S._end3d_lookup("new", {}, diag=d)
+    assert r["k_flux"] == 0.946 and r["inherited_stack_basis"] == "nearest, outside span"
+    assert r["inherited_flag"] == "outside the measured span: run Stage A" and d["flag"] == r["inherited_flag"]
+    assert "outside the measured span" in d["note"] and "reads high" in r["inherited_note"]
+    assert r.get("k_T") is None                           # another length: no torque factor, k_flux only
+    env["stack"] = 290.0                                  # longer: the 200 mm end point; 290/200 = 1.45
+    r = S._end3d_lookup("new", {})
+    assert r["k_flux"] == 0.9896 and r["inherited_stack_basis"] == "nearest, outside span"
+    assert r.get("k_T") is None                           # k_T measured at 200 mm is not lent at 290 mm
+    env["stack"] = 25.0                                   # 40/25 = 1.6 > 1.5: no factor, and the note says why
+    d = {}
+    assert S._end3d_lookup("new", {}, diag=d) is None
+    assert "more than a factor 1.5" in d["note"] and "flag" not in d
+    env["stack"] = 300.0                                  # exactly 1.5: still lent
+    assert S._end3d_lookup("new", {})["k_flux"] == 0.9896
+
+
+
+def test_nearest_end_point_boundaries_note_and_no_source_keys(env, monkeypatch):
+    """Port onto the applied-table era: the lent block is unverified, names the NEAREST MEASURED LENGTH and the length
+    ratio, carries none of the source's status / applied / raw / verdict / basis keys, and reads a self_applied table."""
+    from motor_ai_sim import end3d_factors as F
+    monkeypatch.setattr(F, "_records", lambda: [])
+    src = _rec(0.9600, stack=40.0, curve={"40.0": 0.9600, "60.0": 0.9700})
+    src.update({"k_flux_vs_L_method": "self_applied", "k_flux_status": "failed", "k_flux_applied": "k_flux_self",
+                "k_flux_raw": 0.94, "k_flux_verdict": "FAIL", "k_flux_vs_L_raw": {"40.0": 0.94, "60.0": 0.95},
+                "k_flux_basis": "2-D check FAIL: k_flux_self applied"})
+    env["store"] = {"a": src}
+    for stack, lent in ((40.0 / 1.5 + 1e-6, True), (40.0 / 1.5 - 1e-3, False), (60.0 * 1.5 - 1e-6, True),
+                        (60.0 * 1.5 + 1e-3, False)):
+        env["stack"] = stack
+        r = S._end3d_lookup("new", {})
+        assert (r is not None) is lent, stack
+        if r is not None:
+            end = 40.0 if stack < 40 else 60.0
+            assert r["k_flux"] == (0.96 if end == 40.0 else 0.97) and r["inherited_stack_basis"] == "nearest, outside span"
+            assert r["k_flux_status"] == "unverified" and r["inherited_from_stack_mm"] == end
+            assert r["inherited_length_ratio"] == pytest.approx(stack / end)
+            assert "NEAREST MEASURED LENGTH %g mm, not interpolated" % end in r["inherited_note"]
+            assert "length ratio of %.2f" % (stack / end) in r["inherited_note"]
+            for k in ("k_flux_applied", "k_flux_raw", "k_flux_verdict", "k_flux_vs_L_raw", "k_flux_basis"):
+                assert k not in r, k
+
+
+def test_cases_that_lent_before_are_unchanged(env, monkeypatch):
+    from motor_ai_sim import end3d_factors as F
+    monkeypatch.setattr(F, "_records", lambda: [])
+    env["store"] = {"a": _rec(0.946, stack=40.0), "b": _rec(0.9896, stack=200.0)}
+    env["stack"] = 120.0                                                  # inside the span: interpolated, as before
+    r = S._end3d_lookup("new", {})
+    assert r["inherited_stack_basis"] == "curve" and "inherited_flag" not in r and "inherited_length_ratio" not in r
+    assert r["k_flux"] == pytest.approx(0.946 + (0.9896 - 0.946) * 80.0 / 160.0)
+    env["stack"] = 40.0                                                   # an exact measured length: that point
+    r = S._end3d_lookup("new", {})
+    assert r["inherited_stack_basis"] == "point" and r["k_flux"] == 0.946 and "inherited_flag" not in r

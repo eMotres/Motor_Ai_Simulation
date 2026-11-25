@@ -1486,5 +1486,57 @@
     "noRun": "该工作点没有已保存的运行结果。",
     "loadFailed": "无法加载已保存的结果。",
     "close": "关闭"
+  },
+  "specSync": {
+    "title": "规格点",
+    "point": "工作点",
+    "state": "状态",
+    "duty": "工况",
+    "noDuty": "无工况",
+    "confirm": "确认",
+    "confirmTip": "将此点关联到“{duty}”：唯一满足其转速和转矩的工况。",
+    "check": {
+      "torque": "转矩 (N·m)",
+      "speed": "转速 (rpm)",
+      "voltage": "电压 (V)",
+      "thermal": "时间 (s)"
+    },
+    "col": {
+      "required": "要求",
+      "result": "结果",
+      "delta": "差值"
+    },
+    "stateName": {
+      "no_point": "无计算点",
+      "stale": "已过期",
+      "differs": "不符",
+      "matched": "符合"
+    },
+    "stateTip": {
+      "no_point": "此要求尚未关联已计算的点。",
+      "stale": "已存结果与当前构建或要求不再一致。",
+      "differs": "已计算的点不满足该要求。",
+      "matched": "已计算的点满足该要求。"
+    },
+    "reason": {
+      "not_linked": "此要求尚未关联工况，需工程师确认关联。",
+      "motor_unavailable": "所关联的电机不可用。",
+      "duty_gone": "所关联的工况已被删除，或在获得编号前被重命名。",
+      "not_computed": "所关联的工况尚无结果。",
+      "build_changed": "结果来自电机的旧版本构建。",
+      "requirement_changed": "关联确认后要求已被修改。",
+      "record_other_point": "某条已存记录属于其他工作点，未被采用。",
+      "record_superseded": "某条已存记录由旧版求解器生成，未被采用。",
+      "record_other_geometry": "某条已存记录属于其他几何，未被采用。",
+      "record_impossible_temperature": "某条已存记录的温度不合理，未被采用。",
+      "torque_fail": "转矩低于要求。",
+      "torque_unknown": "转矩尚未计算。",
+      "speed_fail": "转速与要求的偏差超过 1 %。",
+      "speed_unknown": "转速未知。",
+      "voltage_fail": "所需电压高于限值。",
+      "voltage_unknown": "所需电压尚未计算。",
+      "thermal_fail": "该点无法维持所需时间。",
+      "thermal_unknown": "热时间尚未计算。"
+    }
   }
 }

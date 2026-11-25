@@ -1486,5 +1486,57 @@
     "noRun": "No stored run for this point.",
     "loadFailed": "Could not load the stored results.",
     "close": "Close"
+  },
+  "specSync": {
+    "title": "Specification points",
+    "point": "Point",
+    "state": "State",
+    "duty": "Duty",
+    "noDuty": "no duty",
+    "confirm": "Confirm",
+    "confirmTip": "Link this point to \"{duty}\": the only duty that meets its speed and torque.",
+    "check": {
+      "torque": "Torque (N·m)",
+      "speed": "Speed (rpm)",
+      "voltage": "Voltage (V)",
+      "thermal": "Time (s)"
+    },
+    "col": {
+      "required": "required",
+      "result": "result",
+      "delta": "diff"
+    },
+    "stateName": {
+      "no_point": "no point",
+      "stale": "stale",
+      "differs": "differs",
+      "matched": "matched"
+    },
+    "stateTip": {
+      "no_point": "No computed point is linked to this requirement.",
+      "stale": "The stored result no longer fits the current build or requirement.",
+      "differs": "The computed point does not meet the requirement.",
+      "matched": "The computed point meets the requirement."
+    },
+    "reason": {
+      "not_linked": "No duty is linked to this requirement; an engineer confirms the link.",
+      "motor_unavailable": "The linked motor is not available.",
+      "duty_gone": "The linked duty was deleted or renamed before it had an id.",
+      "not_computed": "The linked duty has no result yet.",
+      "build_changed": "The result is of an older build of the motor.",
+      "requirement_changed": "The requirement was changed after the link was confirmed.",
+      "record_other_point": "A stored record belongs to another operating point and is not used.",
+      "record_superseded": "A stored record was made by an older solver and is not used.",
+      "record_other_geometry": "A stored record belongs to another geometry and is not used.",
+      "record_impossible_temperature": "A stored record has impossible temperatures and is not used.",
+      "torque_fail": "The torque is below the required.",
+      "torque_unknown": "The torque is not computed.",
+      "speed_fail": "The speed is not within 1 % of the required.",
+      "speed_unknown": "The speed is not known.",
+      "voltage_fail": "The voltage needed is above the limit.",
+      "voltage_unknown": "The voltage needed is not computed.",
+      "thermal_fail": "The point cannot be held for the required time.",
+      "thermal_unknown": "The thermal time is not computed."
+    }
   }
 }

@@ -699,7 +699,8 @@ def _stale_block(fp: str, entry_fp: Optional[str]) -> dict:
     if not entry_fp:
         return {"stale_geometry": None, "stale_reason": None,
                 "fingerprint_live": fp, "fingerprint_solved": None}
-    stale = entry_fp != fp
+    from motor_ai_sim.geo_fingerprint import same as _gfp_same
+    stale = not _gfp_same(entry_fp, fp)
     return {"stale_geometry": bool(stale),
             "stale_reason": ("geometry" if stale else None),
             "fingerprint_live": fp, "fingerprint_solved": entry_fp}

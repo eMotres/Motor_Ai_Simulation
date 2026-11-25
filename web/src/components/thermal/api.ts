@@ -248,6 +248,7 @@ export interface LastEntry<T> {
 export interface LastThermal {
   has_result: boolean;
   live_geometry_fingerprint: string | null;
+  live_geometry_fingerprint_aliases?: string[];
   field: LastEntry<ThermalField> | null;
   coupled: LastEntry<CoupledResult> | null;
 }
@@ -601,6 +602,7 @@ export interface DutyCycleRequest {
 export interface LastDutyCycle {
   has_result: boolean;
   live_geometry_fingerprint: string | null;
+  live_geometry_fingerprint_aliases?: string[];
   duty_cycle: {
     result: DutyCycleResult;
     params: Record<string, unknown>;

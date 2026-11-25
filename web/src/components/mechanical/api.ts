@@ -748,6 +748,8 @@ export interface LastEntry<T> {
 export interface LastMechanical {
   has_result: boolean;
   live_geometry_fingerprint: string | null;
+  /** the legacy fingerprints of the same machine (records of 2026-11-15 .. 2026-11-25): a stored one equal to any of them matches */
+  live_geometry_fingerprint_aliases?: string[];
   rotor_stress: LastEntry<RotorStress> | null;
   modes: LastEntry<ModalResult> | null;
   critical_speeds: LastEntry<RotordynamicsResult> | null;

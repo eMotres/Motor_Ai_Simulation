@@ -1515,7 +1515,34 @@ def _config_physics_fingerprint(*, with_request_materials: bool) -> str:
         return "nofp"
 
 
+def _geo_fp_module():
+    from motor_ai_sim import geo_fingerprint as _GF
+    return _GF
+
+
 def _geometry_fingerprint(geo_override: Optional[dict] = None) -> str:
+    """The CANONICAL machine fingerprint (``geo_fingerprint``): the legacy hash with the geometry keys added after the 2026-10-20
+    baseline left out while they sit at their default, so a machine at defaults has the fingerprint it had before 2026-11-15.
+    Writers store this one.  The pair (canonical, legacy49) is recorded so a reader accepts a stored legacy one
+    (``geo_fingerprint.same``)."""
+    fp = _geometry_fingerprint_impl(geo_override, True)
+    leg = _geometry_fingerprint_impl(geo_override, False)
+    _geo_fp_module().register(fp, leg)
+    return fp
+
+
+def _geometry_fingerprint_legacy(geo_override: Optional[dict] = None) -> str:
+    """Today's (2026-11-15 .. 2026-11-25) fingerprint, every key hashed: what records of that period carry (``legacy49``)."""
+    return _geometry_fingerprint_impl(geo_override, False)
+
+
+def _geometry_fingerprints(geo_override: Optional[dict] = None) -> tuple:
+    """``(canonical, legacy49)`` of a machine, the accepted set of a reader (equal when no default key was dropped)."""
+    c = _geometry_fingerprint(geo_override)
+    return c, _geometry_fingerprint_legacy(geo_override)
+
+
+def _geometry_fingerprint_impl(geo_override: Optional[dict] = None, canonical: bool = True) -> str:
     """md5 of the MACHINE alone — no operating point, no materials.
 
     `_config_physics_fingerprint` mixes geometry, winding, materials and the
@@ -1534,11 +1561,13 @@ def _geometry_fingerprint(geo_override: Optional[dict] = None) -> str:
     try:
         import hashlib as _hl, json as _jl
         from motor_ai_sim.config import get_config as _gc
-        _d = {"g": (_gc() or {}).get("geometry")}
+        _GF = _geo_fp_module()
+        _canon = _GF.canonical_geometry if canonical else (lambda g: g)
+        _d = {"g": _canon((_gc() or {}).get("geometry"))}
         try:
             from motor_ai_sim.services.geometry_service import (
                 get_current_geometry as _gcg)
-            _d["glive"] = _gcg().to_dict()
+            _d["glive"] = _canon(_gcg().to_dict())
         except Exception:
             _d["glive"] = None
         if geo_override:
@@ -1557,6 +1586,7 @@ def _geometry_fingerprint(geo_override: Optional[dict] = None) -> str:
                 if _d["glive"] is None:
                     raise ValueError("no live geometry to resolve against")
                 _merged = _mgo(dict(_d["glive"]), dict(geo_override))
+                _merged = _canon(_merged)
                 # the OD-notch flag in its stored form (absent = on), as the
                 # live object carries it: an explicit `true` is the same motor
                 from motor_ai_sim.geometry.motor_geometry import (
@@ -1573,7 +1603,7 @@ def _geometry_fingerprint(geo_override: Optional[dict] = None) -> str:
                 if _merged != _d["glive"]:
                     _d["glive"] = _merged
             except Exception:
-                _d["ov"] = dict(sorted(geo_override.items()))
+                _d["ov"] = dict(sorted(_canon(dict(geo_override)).items()))
         return _hl.md5(_jl.dumps(_d, sort_keys=True,
                                  default=str).encode()).hexdigest()[:16]
     except Exception:
@@ -5879,7 +5909,7 @@ def get_fem_transient(
             _saved_geo_fp = _out.get("geo_fingerprint")
             _out["geo_fingerprint_live"] = _live_geo_fp
             _out["stale_geometry"] = (
-                None if not _saved_geo_fp else bool(_saved_geo_fp != _live_geo_fp))
+                None if not _saved_geo_fp else (not _geo_fp_module().same(_saved_geo_fp, _live_geo_fp, _geo_ov)))
             _out["stale_reason"] = (
                 "geometry" if _out["stale_geometry"]
                 else ("inputs" if _out["stale"] else None))
@@ -6649,8 +6679,7 @@ def get_fem_transient(
         # …and a BACKGROUND solve is never "the motor on screen" even when it
         # solves the very same geometry (passport sweeps — see _BACKGROUND_RUN).
         _is_live_machine = ((not _geo_ov or
-                             _sbres.get("geo_fingerprint")
-                             == _geometry_fingerprint(None))
+                             _geo_fp_module().same(_sbres.get("geo_fingerprint"), _geometry_fingerprint(None)))
                             and not _BACKGROUND_RUN.get())
         if not _is_live_machine or ripple_refine:
             _fld_snap = None
@@ -7004,7 +7033,7 @@ def load_run_ledger_entry(key: str):
     # restore path and `_refresh_summary_shape`'s callers already follow).
     _saved_geo_fp = out.get("geo_fingerprint")
     out["stale_geometry"] = (None if not _saved_geo_fp
-                             else bool(_saved_geo_fp != _geometry_fingerprint(None)))
+                             else (not _geo_fp_module().same(_saved_geo_fp, _geometry_fingerprint(None))))
     log.info("run ledger: %s served from the History popover (computed %s)",
              key, blob.get("computed_at"))
     return out
@@ -7054,8 +7083,13 @@ def _bench_read(fp: Optional[str], conn: Optional[str],
             from motor_ai_sim.config import get_config as _gc0
             conn = (_gc0().get("winding") or {}).get("connection") or ""
         import json as _j
-        return (_j.loads(_bench_cache_path().read_text(encoding="utf-8"))
-                .get(_bench_key(fp, str(conn or ""), i_probe))) or None
+        _all = _j.loads(_bench_cache_path().read_text(encoding="utf-8"))
+        # the entry written under this fingerprint, else under its legacy49 alias (written 2026-11-15 .. 2026-11-25)
+        for _f in _geo_fp_module().accepted(fp):
+            _hit = _all.get(_bench_key(_f, str(conn or ""), i_probe))
+            if _hit:
+                return _hit
+        return None
     except Exception:
         return None
 
@@ -7770,7 +7804,9 @@ def _end3d_lookup(geo_fp: Optional[str], geo: Optional[dict] = None,
         from motor_ai_sim import end3d_store as _e3_store
         store = _e3_store.load()
         from motor_ai_sim.end3d_factors import enrich as _e3_enrich
-        rec = store.get(str(geo_fp))
+        # the passport written under this fingerprint, else under its legacy49 alias (2026-11-15 .. 2026-11-25); the geometry in
+        # hand resolves the alias when this process has not fingerprinted the machine yet
+        rec = next((store[_f] for _f in _geo_fp_module().accepted(str(geo_fp), geo) if isinstance(store.get(_f), dict)), None)
         if isinstance(rec, dict):
             # + the torque factor (measured k_T, else k_flux) — owner
             # 2026-09-30, motor_ai_sim/end3d_factors.py
@@ -8153,7 +8189,7 @@ def _mech_loss_fields(sbres: dict, *, geo_override: Optional[dict],
         # run, so the three can never disagree about which runs are the user's.
         if geo_override:
             fp = sbres.get("geo_fingerprint") or _geometry_fingerprint(geo_override)
-            if fp != _geometry_fingerprint(None):
+            if not _geo_fp_module().same(fp, _geometry_fingerprint(None)):
                 return {}
         from motor_ai_sim import mech_losses as _ml
 

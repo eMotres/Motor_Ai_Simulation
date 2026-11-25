@@ -30,6 +30,8 @@ export interface Apply3dFields {
   Km_Nm_sqrtW?: number | null;
   Km_per_mass_Nm_sqrtW_kg?: number | null;
   Km_per_mass_full_Nm_sqrtW_kg?: number | null;
+  /** the summary's own direction of power ('generator' = mechanical power comes IN; the server quotes its numbers positive) */
+  op_mode?: string | null;
   end3d?: { k_flux?: number | null; k_T?: number | null } | null;
 }
 
@@ -50,6 +52,16 @@ export function apply3dFactors(summary: Apply3dFields): Apply3dFactors {
 }
 
 const mul = (v: number | null | undefined, f: number): number | null | undefined => (v != null ? v * f : v);
+
+/** Efficiency on the scaled shaft power, the server's own arithmetic (simulation.py "WHICH WAY THE POWER FLOWS"): a MOTOR is
+ *  P / (P + losses); a GENERATOR takes the mechanical power IN, so it is (P_in - losses) / P_in (0 when the input does not
+ *  cover the losses).  The summary keeps its own value when the inputs are missing. */
+function scaledEfficiency(summary: Apply3dFields, Pm: number | null | undefined): number | null | undefined {
+  const L = summary.P_loss_total_W;
+  if (Pm == null || Pm <= 0 || L == null || L <= 0) return summary.efficiency;
+  if (summary.op_mode === 'generator') return Pm > Math.max(L, 1) ? (Pm - L) / Pm : 0;
+  return Pm / (Pm + L);
+}
 
 /** The summary with the 3-D correction applied to its flux- and torque-proportional fields (the input when there is no factor). */
 export function apply3dToSummary<T extends Apply3dFields>(summary: T): T {
@@ -82,7 +94,6 @@ export function apply3dToSummary<T extends Apply3dFields>(summary: T): T {
     Km_Nm_sqrtW: mul(summary.Km_Nm_sqrtW, kq),
     Km_per_mass_Nm_sqrtW_kg: mul(summary.Km_per_mass_Nm_sqrtW_kg, kq),
     Km_per_mass_full_Nm_sqrtW_kg: mul(summary.Km_per_mass_full_Nm_sqrtW_kg, kq),
-    efficiency: (Pm != null && Pm > 0 && summary.P_loss_total_W != null && summary.P_loss_total_W > 0)
-      ? Pm / (Pm + summary.P_loss_total_W) : summary.efficiency,
+    efficiency: scaledEfficiency(summary, Pm),
   };
 }

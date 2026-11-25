@@ -237,3 +237,41 @@ def test_approval_hash_stored_for_approve_and_reject_and_changes_with_content():
     # a plain decision carries no hash
     dd = OQ.create_item("t1", body(question="plain"))["id"]
     assert "approved_hash" not in OQ.answer_item(dd, {"option": "A"}, "o")["answer"]
+
+
+def test_priority_order_band_then_kind_then_age_and_default_normal(tmp_path):
+    items = [{"id": "low-d", "kind": "decision", "created_at": "1", "priority": "low"},
+             {"id": "norm-m", "kind": "message", "created_at": "2", "priority": "normal"},
+             {"id": "urg-m", "kind": "message", "created_at": "9", "priority": "urgent"},
+             {"id": "urg-d", "kind": "decision", "created_at": "8", "priority": "urgent"},
+             {"id": "none-d", "kind": "decision", "created_at": "3"},
+             {"id": "norm-d", "kind": "decision", "created_at": "4", "priority": "normal"}]
+    assert [i["id"] for i in OQ.queue_order(items)] == ["urg-d", "urg-m", "none-d", "norm-d", "norm-m", "low-d"]
+
+
+def test_priorities_store_default_effective_value_atomic_and_fail_closed(tmp_path):
+    a = make(project_id="p1", question="a")
+    b = make(project_id="p2", question="b")
+    c = make(question="no project")
+    assert OQ.get_priority("p1") == "normal" and OQ.get_priority(None) == "normal"
+    assert OQ.set_priority("p2", "urgent", "o@x.com", now=1000) == {"project_id": "p2", "old": "normal", "new": "urgent"}
+    assert OQ.set_priority("p2", "low", "o@x.com")["old"] == "urgent"
+    OQ.set_priority("p2", "urgent", "o@x.com")
+    rec = json.loads((tmp_path / "oq" / "priorities.json").read_text())["p2"]
+    assert rec["priority"] == "urgent" and rec["by"] == "o@x.com" and rec["at"].endswith("Z")
+    assert (tmp_path / "oq" / "priorities.json").stat().st_mode & 0o077 == 0
+    got = {i["id"]: i["priority"] for i in OQ.list_items()}
+    assert got == {a: "normal", b: "urgent", c: "normal"} and OQ.get_item(b)["priority"] == "urgent"
+    assert [i["id"] for i in OQ.list_items()][0] == b                      # urgent first although it is younger
+    cnt = OQ.counts()
+    assert cnt["open_urgent"] == 1 and cnt["open_blocking"] == 3
+    for bad in (("p1", "high"), ("", "low"), (None, "low"), ("x" * 121, "low"), ("a\nb", "low")):
+        with pytest.raises(OQ.Refused) as e:
+            OQ.set_priority(*bad, "o")
+        assert e.value.status == 422
+    p = tmp_path / "oq" / "priorities.json"
+    p.write_text("{broken")
+    for fn in (lambda: OQ.list_items(), lambda: OQ.set_priority("p1", "low", "o"), lambda: OQ.get_priority("p1")):
+        with pytest.raises(OQ.StoreDamaged):
+            fn()
+    assert p.read_text() == "{broken"

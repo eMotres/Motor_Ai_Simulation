@@ -3,27 +3,30 @@
 
 export type OqKind = 'decision' | 'question' | 'message' | 'catalog_write' | 'outside_message';
 export type OqState = 'open' | 'answered' | 'read' | 'withdrawn';
+export type OqPriority = 'urgent' | 'normal' | 'low';
+export const PRIORITIES: readonly OqPriority[] = ['urgent', 'normal', 'low'];
+export const priorityRank = (p: string | undefined | null): number => { const i = PRIORITIES.indexOf((p ?? 'normal') as OqPriority); return i < 0 ? 1 : i; };
 export interface OqOption { label: string; recommended: boolean }
 export interface OqAnswer { option: string | null; text: string | null; by: string; at: string; approved_hash?: string }
 export interface OqItem {
   id: string; kind: OqKind; project_id: string | null; asked_by: string; token_name: string; question: string; options: OqOption[];
-  detail: string | null; recipient?: string | null; blocks: string | null; created_at: string; state: OqState; answer: OqAnswer | null;
+  priority?: OqPriority; detail: string | null; recipient?: string | null; blocks: string | null; created_at: string; state: OqState; answer: OqAnswer | null;
 }
-export interface OqCount { open_blocking: number; open_messages: number; oldest_open_at: string | null }
+export interface OqCount { open_blocking: number; open_urgent?: number; open_messages: number; oldest_open_at: string | null }
 
 /** Kinds whose card shows the detail (and the recipient) in full above the buttons: an approval of exact content. */
 export const APPROVAL_KINDS: readonly OqKind[] = ['catalog_write', 'outside_message'];
 export const isApproval = (k: OqKind): boolean => APPROVAL_KINDS.includes(k);
 export const bandOf = (it: Pick<OqItem, 'kind'>): number => (it.kind === 'message' ? 2 : 1);
 
-/** Band 1 (blocking kinds) before band 2 (messages); oldest first inside a band; a tie keeps the given order. */
-export function queueOrder<T extends Pick<OqItem, 'kind' | 'created_at'>>(items: readonly T[]): T[] {
-  return items.map((it, i) => ({ it, i })).sort((a, b) => bandOf(a.it) - bandOf(b.it)
+/** Priority first (urgent, normal, low); inside it band 1 (blocking kinds) before band 2 (messages); oldest first; a tie keeps the given order. */
+export function queueOrder<T extends Pick<OqItem, 'kind' | 'created_at'> & { priority?: OqPriority }>(items: readonly T[]): T[] {
+  return items.map((it, i) => ({ it, i })).sort((a, b) => priorityRank(a.it.priority) - priorityRank(b.it.priority) || bandOf(a.it) - bandOf(b.it)
     || (a.it.created_at < b.it.created_at ? -1 : a.it.created_at > b.it.created_at ? 1 : 0) || a.i - b.i).map((x) => x.it);
 }
 
 /** The cards of this round: queue order, then the skipped ones at the end in the order they were skipped.  Client-side only. */
-export function orderCards<T extends Pick<OqItem, 'id' | 'kind' | 'created_at'>>(items: readonly T[], skipped: readonly string[]): T[] {
+export function orderCards<T extends Pick<OqItem, 'id' | 'kind' | 'created_at'> & { priority?: OqPriority }>(items: readonly T[], skipped: readonly string[]): T[] {
   const base = queueOrder(items);
   const rank = new Map(skipped.map((id, i) => [id, i]));
   const keep = base.filter((it) => !rank.has(it.id));

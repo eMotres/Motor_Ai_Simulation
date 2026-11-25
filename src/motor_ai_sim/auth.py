@@ -176,7 +176,7 @@ _NODE_AGENT_PATH = re.compile(
 
 #: Owner-queue agent routes (docs/OWNER_QUEUE.md): create / read / withdraw the agent's OWN items.
 _OWNER_QUEUE_AGENT_PATH = re.compile(
-    r"^/api/owner-queue/agent/(items|items/[A-Za-z0-9_-]+|items/[A-Za-z0-9_-]+/withdraw)$")
+    r"^/api/owner-queue/agent/(items|items/[A-Za-z0-9_-]+|items/[A-Za-z0-9_-]+/withdraw|priority)$")
 
 
 def anonymous_allowed(path: str) -> bool:

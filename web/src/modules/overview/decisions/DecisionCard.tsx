@@ -1,18 +1,21 @@
 /** One card of the owner queue: who asks, how old, the question, what waits, the detail in full, then the buttons.
  *  Presentational: all state lives in DecisionsView, so the render test can show every kind. */
 import React from 'react';
-import { Box, Button, Chip, Link, Paper, TextField, Tooltip, Typography } from '@mui/material';
+import { Box, Button, Chip, Link, Paper, TextField, ToggleButton, ToggleButtonGroup, Tooltip, Typography } from '@mui/material';
 import { useTranslation } from 'react-i18next';
 import { MiniMarkdown } from '../../designer/miniMarkdown';
-import { ageParts, isApproval, type OqItem } from './model';
+import { PRIORITIES, ageParts, isApproval, type OqItem, type OqPriority } from './model';
+import { PriorityMark } from './PriorityMark';
 
 export interface DecisionCardProps {
   item: OqItem; now: number; projectTitle?: string; projectHref?: string | null;
   text: string; onText: (v: string) => void; busy?: boolean; error?: string;
   onOption: (label: string) => void; onSend: () => void; onRead: () => void;
+  /** admin: change the priority of the card's project (the control is hidden without it) */
+  onPriority?: (p: OqPriority) => void;
 }
 
-const DecisionCard: React.FC<DecisionCardProps> = ({ item, now, projectTitle, projectHref, text, onText, busy, error, onOption, onSend, onRead }) => {
+const DecisionCard: React.FC<DecisionCardProps> = ({ item, now, projectTitle, projectHref, text, onText, busy, error, onOption, onSend, onRead, onPriority }) => {
   const { t } = useTranslation('common');
   const age = ageParts(item.created_at, now);
   const approval = isApproval(item.kind);
@@ -23,6 +26,15 @@ const DecisionCard: React.FC<DecisionCardProps> = ({ item, now, projectTitle, pr
         <Chip size="small" label={t(`ownerQueue.kind.${item.kind}`)} sx={{ height: 20, fontSize: 11 }} />
         {item.project_id && (
           <Link data-testid="oq-project" href={projectHref ?? undefined} underline="hover" sx={{ fontWeight: 700, fontSize: 13 }}>{projectTitle || item.project_id}</Link>
+        )}
+        <PriorityMark priority={item.priority} />
+        {item.project_id && onPriority && (
+          <Tooltip title={t('ownerQueue.thisProject')}>
+            <ToggleButtonGroup size="small" exclusive value={item.priority ?? 'normal'} data-testid="oq-priority"
+              onChange={(_e, v: OqPriority | null) => { if (v) onPriority(v); }} sx={{ '& .MuiToggleButton-root': { py: 0, px: 0.75, fontSize: 10.5, textTransform: 'none' } }}>
+              {PRIORITIES.map((p) => <ToggleButton key={p} value={p}>{t(`ownerQueue.priority.${p}`)}</ToggleButton>)}
+            </ToggleButtonGroup>
+          </Tooltip>
         )}
         <Tooltip title={t('ownerQueue.token', { name: item.token_name })}>
           <Typography component="span" data-testid="oq-from" sx={{ fontSize: 12, color: 'var(--text-3)' }}>{t('ownerQueue.from', { session: item.asked_by })}</Typography>

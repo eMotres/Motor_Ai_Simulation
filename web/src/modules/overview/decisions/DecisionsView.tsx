@@ -12,7 +12,7 @@ import { appLinkPath } from '../../../lib/appLink';
 import DecisionCard from './DecisionCard';
 import { OqHttpError, ownerQueueApi, type OqTokenRec } from './ownerQueueApi';
 import { NO_FILTER, NO_PROJECT, answerBody, applyFilters, clampIndex, hasUnassigned, historyOrder, keyAction, orderCards, projectChoices,
-  sessionChoices, skipCard, type Filters, type OqItem } from './model';
+  sessionChoices, skipCard, type Filters, type OqItem, type OqPriority } from './model';
 
 const SUBS = ['queue', 'history'] as const;
 type Sub = typeof SUBS[number];
@@ -66,6 +66,11 @@ const DecisionsView: React.FC<Props> = ({ projects, onChanged }) => {
       else setErr(t('ownerQueue.answerError', { why: e instanceof Error ? e.message : String(e) }));
     } finally { setBusy(false); }
   }, [card, load, onChanged, t]);
+  const setPriority = (p: OqPriority) => {
+    if (!card?.project_id) return;
+    ownerQueueApi.setPriority(card.project_id, p).then(async () => { await load(); onChanged?.(); })
+      .catch((e: unknown) => setErr(t('ownerQueue.answerError', { why: e instanceof Error ? e.message : String(e) })));
+  };
   const pick = (label: string) => { void send(answerBody(label, text)); };
 
   useEffect(() => {
@@ -139,7 +144,7 @@ const DecisionsView: React.FC<Props> = ({ projects, onChanged }) => {
         <DecisionCard key={card.id} item={card} now={now} projectTitle={title(card.project_id)}
           projectHref={card.project_id ? appLinkPath({ kind: 'project', id: card.project_id }) : null}
           text={text} onText={setText} busy={busy} onOption={pick} onSend={() => { void send(answerBody(null, text)); }}
-          onRead={() => { void send({ option: 'read' }); }} />
+          onRead={() => { void send({ option: 'read' }); }} onPriority={setPriority} />
       )}
       {sub === 'history' && (
         history.length === 0 ? <Typography sx={{ fontSize: 13, color: 'var(--text-3)' }}>{t('ownerQueue.historyEmpty')}</Typography> : (

@@ -63,3 +63,21 @@ def test_unavailable_never_breaks_the_report(monkeypatch, capsys, tmp_path):
     assert "Decisions: unavailable" in out and "AeroStator owner report" in out
     monkeypatch.setattr(OQ, "counts", lambda: (_ for _ in ()).throw(RuntimeError("boom")))
     assert M.queue_line(0.0) == "Decisions: unavailable"
+
+
+def test_urgent_items_are_named_capped_at_three_with_a_remainder():
+    now = calendar.timegm(time.strptime("2026-11-25T12:00:00Z", "%Y-%m-%dT%H:%M:%SZ"))
+    c = {"open_blocking": 4, "open_urgent": 2, "open_messages": 9, "oldest_open_at": "2026-11-23T07:00:00Z"}
+    u = [{"project_id": "Pump project", "question": "Which winding?"}, {"project_id": None, "question": "x" * 80}]
+    line = M.format_queue_line(c, now, u)
+    assert line == "Decisions: 2 urgent (Pump project: Which winding?; " + "x" * 59 + "…), 4 open, 9 messages, oldest 2 d 5 h"
+    many = [{"project_id": f"p{i}", "question": f"q{i}"} for i in range(5)]
+    assert M.format_queue_line({**c, "open_urgent": 5}, now, many).startswith("Decisions: 5 urgent (p0: q0; p1: q1; p2: q2; +2), 4 open")
+    assert M.format_queue_line({**c, "open_urgent": 0}, now, None) == LINE                    # no urgent: the old line, unchanged
+
+
+def test_main_line_names_the_urgent_item(monkeypatch, capsys, tmp_path):
+    monkeypatch.setenv("MOTRES_OWNER_QUEUE_DIR", str(tmp_path / "oq"))
+    OQ.create_item("t", {"kind": "question", "asked_by": "s", "question": "Which?", "project_id": "p1"})
+    OQ.set_priority("p1", "urgent", "o")
+    assert M.queue_line(time.time()).startswith("Decisions: 1 urgent (p1: Which?), 1 open, 0 messages")

@@ -981,6 +981,14 @@
     "tab": "Decisions",
     "tabTip": "The owner's queue: decisions, questions and messages that agent sessions post for you. {blocking} decisions, {messages} messages.",
     "countTip": "{blocking} decisions, {messages} messages",
+    "priority": {
+      "urgent": "urgent",
+      "normal": "normal",
+      "low": "low"
+    },
+    "thisProject": "This project",
+    "countTipUrgent": "{urgent} urgent, {blocking} decisions, {messages} messages",
+    "priorityMenu": "Priority: {priority}",
     "viewQueue": "Queue",
     "viewHistory": "History",
     "counter": "{n} of {total}",

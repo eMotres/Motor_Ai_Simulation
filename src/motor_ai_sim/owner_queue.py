@@ -33,6 +33,9 @@ OPTION_KINDS = ("decision",)                                    # the client sen
 APPROVAL_KINDS = ("catalog_write", "outside_message")
 APPROVAL_OPTIONS = ("Approve", "Reject")
 MAX_RECIPIENT = 500
+#: Project priority (owner 2026-11-25): the band comes before everything else in the queue order.  No entry = normal.
+PRIORITIES = ("urgent", "normal", "low")
+DEFAULT_PRIORITY = "normal"
 BLOCKING_KINDS = ("decision", "question", "catalog_write", "outside_message")
 STATES = ("open", "answered", "read", "withdrawn")
 
@@ -75,6 +78,10 @@ def _items_path() -> Path:
     return root() / "items.jsonl"
 
 
+def _priorities_path() -> Path:
+    return root() / "priorities.json"
+
+
 def _tokens_path() -> Path:
     return root() / "tokens.json"
 
@@ -100,14 +107,20 @@ def approval_hash(kind: str, detail: Optional[str], recipient: Optional[str]) ->
     return hashlib.sha256(canon.encode("utf-8")).hexdigest()
 
 
+def priority_rank(item: Dict[str, Any]) -> int:
+    p = item.get("priority")
+    return PRIORITIES.index(p) if p in PRIORITIES else PRIORITIES.index(DEFAULT_PRIORITY)
+
+
 def band_of(item: Dict[str, Any]) -> int:
     """Band 1 holds what BLOCKS something (decision, question, catalog_write, outside_message); band 2 plain messages."""
     return 2 if item.get("kind") == "message" else 1
 
 
 def queue_order(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """Band 1 first, then band 2; inside a band the oldest ``created_at`` first (a tie keeps the given order)."""
-    return sorted(items, key=lambda it: (band_of(it), str(it.get("created_at") or "")))
+    """Priority first (urgent, normal, low); inside it band 1 (blocking kinds) then band 2 (messages); inside that the oldest
+    ``created_at`` first (a tie keeps the given order).  An item without ``priority`` is normal."""
+    return sorted(items, key=lambda it: (priority_rank(it), band_of(it), str(it.get("created_at") or "")))
 
 
 def validate_new(body: Any) -> Dict[str, Any]:
@@ -257,6 +270,65 @@ def _save_tokens(tokens: List[Dict[str, Any]]) -> None:
     chmod_private(p)
 
 
+# -- project priorities ----------------------------------------------------------------------------------------------------------
+
+def _load_priorities() -> Dict[str, Dict[str, Any]]:
+    try:
+        raw = _priorities_path().read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return {}
+    except OSError as e:
+        raise StoreDamaged(f"priorities.json unreadable: {type(e).__name__}")
+    try:
+        data = json.loads(raw) if raw.strip() else {}
+    except ValueError:
+        raise StoreDamaged("priorities.json does not parse")
+    if not isinstance(data, dict) or any(not isinstance(v, dict) or v.get("priority") not in PRIORITIES for v in data.values()):
+        raise StoreDamaged("priorities.json is not {project_id: {priority, by, at}}")
+    return data
+
+
+def list_priorities() -> Dict[str, Dict[str, Any]]:
+    with _LOCK:
+        return _load_priorities()
+
+
+def get_priority(project_id: Optional[str]) -> str:
+    """The effective priority of a project; no entry and no project are normal."""
+    if not project_id:
+        return DEFAULT_PRIORITY
+    return str((list_priorities().get(project_id) or {}).get("priority") or DEFAULT_PRIORITY)
+
+
+def set_priority(project_id: Any, priority: Any, by: str, now: Optional[float] = None) -> Dict[str, str]:
+    """Set a project's priority (atomic write, fail closed).  Returns ``{project_id, old, new}``."""
+    if not isinstance(project_id, str) or not project_id.strip() or len(project_id) > MAX_PROJECT or any(ord(c) < 32 for c in project_id):
+        raise Refused(422, "project_id: 1-%d characters" % MAX_PROJECT)
+    if priority not in PRIORITIES:
+        raise Refused(422, "priority must be one of " + ", ".join(PRIORITIES))
+    with _LOCK:
+        data = _load_priorities()
+        old = str((data.get(project_id) or {}).get("priority") or DEFAULT_PRIORITY)
+        data[project_id] = {"priority": priority, "by": str(by or "")[:200], "at": _now_iso(now)}
+        ensure_private_dir(root())
+        p = _priorities_path()
+        tmp = p.with_name(p.name + ".tmp")
+        with open_private(tmp, "w") as f:
+            f.write(json.dumps(data, indent=1))
+            f.flush()
+            try:
+                os.fsync(f.fileno())
+            except OSError:
+                pass
+        os.replace(tmp, p)
+        chmod_private(p)
+    return {"project_id": project_id, "old": old, "new": priority}
+
+
+def _with_priority(rows: List[Dict[str, Any]], prios: Dict[str, Dict[str, Any]]) -> List[Dict[str, Any]]:
+    return [dict(r, priority=str((prios.get(r.get("project_id") or "") or {}).get("priority") or DEFAULT_PRIORITY)) for r in rows]
+
+
 # -- tokens ---------------------------------------------------------------------------------------------------------------------
 
 def create_token(name: str, created_by: str, now: Optional[float] = None) -> str:
@@ -359,14 +431,14 @@ def get_item(iid: str) -> Optional[Dict[str, Any]]:
     with _LOCK:
         for r in _current(_read_rows()):
             if r["id"] == iid:
-                return r
+                return _with_priority([r], _load_priorities())[0]
     return None
 
 
 def list_items(*, token_name: Optional[str] = None, state: str = "", project_id: str = "", asked_by: str = "",
                q: str = "", ordered: bool = True) -> List[Dict[str, Any]]:
     with _LOCK:
-        cur = _current(_read_rows())
+        cur = _with_priority(_current(_read_rows()), _load_priorities())
     needle = (q or "").strip().lower()
     out = []
     for r in cur:
@@ -388,6 +460,7 @@ def counts() -> Dict[str, Any]:
     """``{open_blocking, open_messages, oldest_open_at}`` for the badge and the daily report."""
     op = [r for r in list_items(state="open", ordered=False)]
     return {"open_blocking": sum(1 for r in op if band_of(r) == 1),
+            "open_urgent": sum(1 for r in op if r.get("priority") == "urgent"),
             "open_messages": sum(1 for r in op if band_of(r) == 2),
             "oldest_open_at": min((r["created_at"] for r in op), default=None)}
 

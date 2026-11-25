@@ -1,5 +1,5 @@
 /** Owner-queue calls (admin side).  The session header is added by the app's global fetch wrapper, like every other page. */
-import type { OqCount, OqItem } from './model.ts';
+import type { OqCount, OqItem, OqPriority } from './model.ts';
 
 const API = (import.meta.env.VITE_API_URL ?? 'http://localhost:8001') as string;
 
@@ -26,6 +26,8 @@ export const ownerQueueApi = {
     const qs = new URLSearchParams(Object.entries(p).filter(([, v]) => v) as [string, string][]).toString();
     return call<{ items: OqItem[] }>('GET', `/items${qs ? `?${qs}` : ''}`).then((r) => r.items);
   },
+  priorities: () => call<{ priorities: Record<string, { priority: OqPriority }> }>('GET', '/priorities').then((r) => r.priorities),
+  setPriority: (project_id: string, priority: OqPriority) => call<{ project_id: string; priority: OqPriority }>('POST', '/priority', { project_id, priority }),
   count: () => call<OqCount>('GET', '/count'),
   answer: (id: string, body: { option?: string; text?: string }) => call<OqItem>('POST', `/items/${encodeURIComponent(id)}/answer`, body),
   tokens: () => call<{ tokens: OqTokenRec[] }>('GET', '/tokens').then((r) => r.tokens),

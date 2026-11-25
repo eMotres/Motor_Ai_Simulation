@@ -78,6 +78,12 @@ def agent_withdraw(iid: str, authorization: Optional[str] = Header(default=None)
     return row
 
 
+@agent_router.get("/priority")
+def agent_priority(project: str = "", authorization: Optional[str] = Header(default=None)) -> Dict[str, Any]:
+    _agent(authorization)
+    return {"project_id": project or None, "priority": _guard(OQ.get_priority, project or None)}
+
+
 # -- owner side -------------------------------------------------------------------------------------------------------------------
 @_owner_router.get("/items")
 def items(state: str = "", project_id: str = "", asked_by: str = "", q: str = "",
@@ -98,6 +104,20 @@ def answer(iid: str, body: Any = Body(default=None), admin: dict = Depends(requi
     AUD.record(who, "owner_queue.answer", iid,
                details={"kind": row.get("kind"), "answer_kind": ans.get("option") or "text"})
     return row
+
+
+@_owner_router.get("/priorities")
+def priorities(_admin: dict = Depends(require_admin)) -> Dict[str, Any]:
+    return {"priorities": _guard(OQ.list_priorities)}
+
+
+@_owner_router.post("/priority")
+def set_priority(body: Any = Body(default=None), admin: dict = Depends(require_admin)) -> Dict[str, Any]:
+    b = body if isinstance(body, dict) else {}
+    who = AUD.actor_of(admin)
+    res = _guard(OQ.set_priority, b.get("project_id"), b.get("priority"), who)
+    AUD.record(who, "owner_queue.priority", res["project_id"], details={"project_id": res["project_id"], "old": res["old"], "new": res["new"]})
+    return {"project_id": res["project_id"], "priority": res["new"]}
 
 
 @_owner_router.get("/tokens")

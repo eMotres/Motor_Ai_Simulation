@@ -24,6 +24,7 @@ import ArchivedDies from './ArchivedDies';
 import DecisionsView from './decisions/DecisionsView';
 import { badgeTotal, type OqCount } from './decisions/model';
 import { ownerQueueApi } from './decisions/ownerQueueApi';
+import { PriorityMark } from './decisions/PriorityMark';
 import { buildView, flatProjects, headerChips, type Family, type OverviewAnswer, type OverviewProduction, type OverviewProject, type TreeDie } from './overviewModel';
 
 const API = (import.meta.env.VITE_API_URL ?? 'http://localhost:8001') as string;
@@ -52,7 +53,11 @@ const OverviewPage: React.FC = () => {
   const [reviewAnchor, setReviewAnchor] = useState<HTMLElement | null>(null);
   const [askConfirm, setAskConfirm] = useState<ConfirmState | null>(null);
   const [oq, setOq] = useState<OqCount | null>(null);
-  const loadCount = useCallback(() => { ownerQueueApi.count().then(setOq).catch(() => setOq(null)); }, []);
+  const [prio, setPrio] = useState<Record<string, { priority: string }>>({});
+  const loadCount = useCallback(() => {
+    ownerQueueApi.count().then(setOq).catch(() => setOq(null));
+    ownerQueueApi.priorities().then(setPrio).catch(() => setPrio({}));
+  }, []);
   useEffect(() => { loadCount(); const id = window.setInterval(loadCount, 60000); return () => window.clearInterval(id); }, [loadCount]);
 
   const load = useCallback(async () => {
@@ -181,7 +186,7 @@ const OverviewPage: React.FC = () => {
           <ToggleButton value="tree">{t('overview.byMotor')}</ToggleButton>
           <ToggleButton value="projects">{t('overview.projects')}</ToggleButton>
           <ToggleButton value="decisions" data-testid="overview-decisions-tab">
-            <Tooltip title={t('ownerQueue.countTip', { blocking: oq?.open_blocking ?? 0, messages: oq?.open_messages ?? 0 })}>
+            <Tooltip title={t(oq?.open_urgent ? 'ownerQueue.countTipUrgent' : 'ownerQueue.countTip', { urgent: oq?.open_urgent ?? 0, blocking: oq?.open_blocking ?? 0, messages: oq?.open_messages ?? 0 })}>
               <Badge color="warning" badgeContent={badgeTotal(oq)} sx={{ '& .MuiBadge-badge': { right: -10, top: 2 } }}><span>{t('ownerQueue.tab')}</span></Badge>
             </Tooltip>
           </ToggleButton>
@@ -250,7 +255,7 @@ const OverviewPage: React.FC = () => {
             <TableBody>
               {projectsFlat.map((p) => (
                 <TableRow key={p.id} hover>
-                  <TableCell sx={{ fontWeight: 600 }}><Link href={appLinkPath({ kind: 'project', id: p.id }) ?? undefined} underline="hover" color="inherit">{p.title}</Link></TableCell>
+                  <TableCell sx={{ fontWeight: 600 }}><Link href={appLinkPath({ kind: 'project', id: p.id }) ?? undefined} underline="hover" color="inherit">{p.title}</Link><PriorityMark priority={prio[p.id]?.priority} /></TableCell>
                   <TableCell sx={{ color: 'var(--text-2)' }}>{p.customer_org}</TableCell>
                   <TableCell>{projectLabel(p)}</TableCell>
                   <TableCell>{p.motors.length ? p.motors.map((m) => <Chip key={m} size="small" label={m} sx={{ m: 0.25, height: 20, fontSize: 11 }} />) : DASH}</TableCell>

@@ -63,3 +63,11 @@ test('age, clamp, history order, answer body, badge, approval kinds', () => {
   assert.equal(badgeTotal(null), 0);
   assert.ok(isApproval('outside_message') && isApproval('catalog_write') && !isApproval('decision'));
 });
+
+test('priority first, then blocking before messages, then oldest; a missing priority is normal', () => {
+  const items = [it('low-d', 'decision', '1', { priority: 'low' }), it('norm-m', 'message', '2', { priority: 'normal' }),
+    it('urg-m', 'message', '9', { priority: 'urgent' }), it('urg-d', 'decision', '8', { priority: 'urgent' }),
+    it('none-d', 'decision', '3'), it('norm-d', 'decision', '4', { priority: 'normal' })];
+  assert.deepEqual(queueOrder(items).map((x) => x.id), ['urg-d', 'urg-m', 'none-d', 'norm-d', 'norm-m', 'low-d']);
+  assert.deepEqual(orderCards(items, ['urg-d']).map((x) => x.id).slice(-1), ['urg-d']);
+});

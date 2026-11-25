@@ -138,6 +138,8 @@ def parse_options(raw: List[str]) -> List[Dict[str, Any]]:
 def answer_view(it: Dict[str, Any]) -> Dict[str, Any]:
     a = it.get("answer") or {}
     out = {"state": it.get("state"), "option": a.get("option"), "text": a.get("text"), "by": a.get("by"), "at": a.get("at")}
+    if it.get("priority"):
+        out["priority"] = it["priority"]
     if "approved_hash" in a:
         out["approved_hash"] = a["approved_hash"]
     return out
@@ -235,7 +237,7 @@ def run(argv: Optional[List[str]] = None, sleep=time.sleep, clock=time.monotonic
             items = c.call("GET", base + ("?state=" + urllib.parse.quote(args.state) if args.state else ""))["items"]
             for it in items:
                 a = it.get("answer") or {}
-                print("%s  %-9s %-13s %s%s" % (it["id"], it["state"], it["kind"], it["question"],
+                print("%s  %-9s %-7s %-13s %s%s" % (it["id"], it["state"], it.get("priority") or "normal", it["kind"], it["question"],
                                                ("  -> " + str(a.get("option") or a.get("text") or "")) if a else ""))
         elif args.cmd == "withdraw":
             c.call("POST", base + "/" + urllib.parse.quote(args.id, safe="") + "/withdraw")

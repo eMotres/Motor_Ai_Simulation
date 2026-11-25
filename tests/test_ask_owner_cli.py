@@ -266,3 +266,14 @@ def test_ask_outside_message_needs_recipient_and_detail_and_wait_prints_the_hash
     s.items[iid].update(state="answered", answer={"option": "Approve", "text": None, "by": "o", "at": "t", "approved_hash": "abc"})
     code, out, _ = go(capsys, base, "wait", iid)
     assert code == 0 and json.loads(out)["approved_hash"] == "abc"
+
+
+def test_list_and_wait_carry_the_priority(env, capsys):
+    s, base = env
+    iid = CLI.Client(s.url, TOKEN).call("POST", "/api/owner-queue/agent/items", {"kind": "question", "question": "Which?"})["id"]
+    s.items[iid].update(priority="urgent", question="Which?", kind="question")
+    code, out, _ = go(capsys, base, "list")
+    assert code == 0 and "urgent" in out and "Which?" in out
+    s.items[iid].update(state="answered", answer={"option": None, "text": "this", "by": "o", "at": "t"})
+    code, out, _ = go(capsys, base, "wait", iid)
+    assert code == 0 and json.loads(out)["priority"] == "urgent"

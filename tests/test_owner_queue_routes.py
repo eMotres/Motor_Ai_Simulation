@@ -50,7 +50,7 @@ def mk(t, **kw):
     return r.json()["id"]
 
 
-AGENT_ROUTES = [("POST", AG + "/items"), ("GET", AG + "/items"), ("GET", AG + "/items/oq-000000000000"),
+AGENT_ROUTES = [("GET", AG + "/priority?project=p1"), ("POST", AG + "/items"), ("GET", AG + "/items"), ("GET", AG + "/items/oq-000000000000"),
                 ("POST", AG + "/items/oq-000000000000/withdraw")]
 
 
@@ -72,11 +72,11 @@ def test_every_agent_route_is_401_without_a_good_bearer():
 
 def test_agent_routes_pass_the_closed_door_but_nothing_else_does(monkeypatch):
     monkeypatch.setenv("PUBLIC_EXHIBIT", "0")
-    for p in (AG + "/items", AG + "/items/oq-abc123", AG + "/items/oq-abc123/withdraw"):
+    for p in (AG + "/items", AG + "/items/oq-abc123", AG + "/items/oq-abc123/withdraw", AG + "/priority"):
         assert auth.anonymous_allowed(p)
     for p in ("/api/owner-queue/items", "/api/owner-queue/count", "/api/owner-queue/tokens", "/api/owner-queue/tokens/x/revoke",
               "/api/owner-queue/items/oq-abc/answer", AG + "/items/a/b/c", AG + "/answer", AG + "/items/x/answer",
-              "/api/owner-queue/agentx/items", "/api/owner-queue/agent/items/a.b"):
+              "/api/owner-queue/agentx/items", "/api/owner-queue/priority", "/api/owner-queue/priorities", AG + "/priority/x", AG + "/priorities", "/api/owner-queue/agent/items/a.b"):
         assert not auth.anonymous_allowed(p), p
     # through the real middleware: the agent route answers its own 401 (route check), the owner side is closed
     t = tok()
@@ -121,7 +121,8 @@ def test_flood_cap_429(monkeypatch):
 
 OWNER_ROUTES = [("GET", "/api/owner-queue/items"), ("GET", "/api/owner-queue/count"),
                 ("POST", "/api/owner-queue/items/oq-000000000000/answer"), ("GET", "/api/owner-queue/tokens"),
-                ("POST", "/api/owner-queue/tokens"), ("POST", "/api/owner-queue/tokens/a/revoke")]
+                ("POST", "/api/owner-queue/tokens"), ("POST", "/api/owner-queue/tokens/a/revoke"),
+                ("GET", "/api/owner-queue/priorities"), ("POST", "/api/owner-queue/priority")]
 
 
 def test_every_owner_route_is_closed_to_anonymous_and_non_admin_and_oq_tokens(monkeypatch):
@@ -235,3 +236,26 @@ def test_approval_item_over_http_422_hash_returned_to_agent_and_admin():
     assert client.get(f"{AG}/items/{iid}", headers=hdr(t)).json()["answer"]["approved_hash"] == h
     adm = client.get("/api/owner-queue/items", headers=ADM).json()["items"]
     assert adm[0]["answer"]["approved_hash"] == h and adm[0]["answer"]["text"] == "ok"
+
+
+def test_priority_routes_admin_write_agent_read_audit_and_order(tmp_path):
+    t = tok()
+    a = mk(t, project_id="p1", question="first")
+    b = mk(t, project_id="p2", question="second")
+    assert client.get(AG + "/priority", params={"project": "p2"}, headers=hdr(t)).json() == {"project_id": "p2", "priority": "normal"}
+    assert client.get(AG + "/priority", headers=hdr(t)).json()["priority"] == "normal"
+    # the agent can only read: its bearer is no admin, and a user session is no admin
+    assert client.post("/api/owner-queue/priority", json={"project_id": "p2", "priority": "urgent"}, headers=hdr(t)).status_code in (401, 403)
+    assert client.post("/api/owner-queue/priority", json={"project_id": "p2", "priority": "urgent"}, headers={"Authorization": "ua"}).status_code == 403
+    assert client.post("/api/owner-queue/priority", json={"project_id": "p2", "priority": "high"}, headers=ADM).status_code == 422
+    assert client.post("/api/owner-queue/priority", json={"project_id": "p2", "priority": "urgent"}, headers=ADM).json() == {"project_id": "p2", "priority": "urgent"}
+    assert client.get(AG + "/priority", params={"project": "p2"}, headers=hdr(t)).json()["priority"] == "urgent"
+    assert client.get("/api/owner-queue/priorities", headers=ADM).json()["priorities"]["p2"]["by"] == "z@x.com"
+    order = client.get("/api/owner-queue/items", headers=ADM).json()["items"]
+    assert [i["id"] for i in order] == [b, a] and order[0]["priority"] == "urgent"
+    assert client.get(f"{AG}/items/{b}", headers=hdr(t)).json()["priority"] == "urgent"
+    assert [i["priority"] for i in client.get(AG + "/items", headers=hdr(t)).json()["items"]] == ["urgent", "normal"]
+    assert client.get("/api/owner-queue/count", headers=ADM).json()["open_urgent"] == 1
+    rows = [r for r in AUD.read(100) if r["action"] == "owner_queue.priority"]
+    assert rows and rows[0]["details"] == {"project_id": "p2", "old": "normal", "new": "urgent"} and rows[0]["actor"] == "z@x.com"
+    assert "owner_queue.priority" in AUD.ACTIONS

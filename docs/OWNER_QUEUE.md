@@ -16,7 +16,11 @@ session reads the answer back. **The app only records answers. It never executes
 Limits: question one sentence up to 300 characters, detail up to 4000 (one report = one item, never split), blocks up to 200. A repeat
 of an identical open item of the same token and session returns the same id; at most 200 open items per token.
 
-Order: items that block something (decision, question, catalog_write, outside_message) first, then messages; oldest first in each.
+Order: project priority first (`urgent`, `normal`, `low`; a project without an entry, and an item without a project, is `normal`), then
+items that block something (decision, question, catalog_write, outside_message) before messages, oldest first in each. Every item the
+CLI or the API returns carries its effective `priority`. Only the owner sets a project's priority (on the card, or in the catalog's project
+menu); a session may read it (`GET /api/owner-queue/agent/priority?project=<id>`) but cannot change it. The priority orders the queue and
+the daily report line; it is not mapped to compute job classes.
 
 ## Token and token file
 

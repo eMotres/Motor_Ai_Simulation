@@ -22,10 +22,12 @@ import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { I18nextProvider } from 'react-i18next';
 import { createI18n } from '${rel('i18n/core.ts')}';
+import { PriorityMark } from '${rel('modules/overview/decisions/PriorityMark.tsx')}';
 import DecisionCard from '${rel('modules/overview/decisions/DecisionCard.tsx')}';
 import enCommon from '${rel('locales/en/common.json')}';
 import zhCommon from '${rel('locales/zh-CN/common.json')}';
 export const makeI18n = (lng) => createI18n({ lng, resources: { en: { common: enCommon }, 'zh-CN': { common: zhCommon } } });
+export const mark = (i18n, priority) => renderToStaticMarkup(React.createElement(I18nextProvider, { i18n }, React.createElement(PriorityMark, { priority })));
 const noop = () => {};
 export const card = (i18n, item, extra = {}) => renderToStaticMarkup(React.createElement(I18nextProvider, { i18n },
   React.createElement(DecisionCard, { item, now: Date.parse('2026-11-25T12:00:00Z'), text: '', onText: noop, onOption: noop, onSend: noop, onRead: noop, ...extra })));
@@ -96,3 +98,19 @@ test('the counter text is formatted from the real locale files', async () => {
     assert.equal(i18n.t('ownerQueue.countTip', { ns: 'common', blocking: 4, messages: 9 }), lng === 'en' ? '4 decisions, 9 messages' : '4 项决策，9 条消息');
   }
 });
+
+for (const lng of ['en', 'zh-CN']) {
+  test(`${lng}: one small mark for urgent and low, none for normal; the card carries the admin control only when it can change it`, async () => {
+    const i18n = m.makeI18n(lng); await ready(i18n);
+    const u = decode(m.mark(i18n, 'urgent')); const l = decode(m.mark(i18n, 'low'));
+    assert.ok(u.includes('data-priority="urgent"') && u.includes(lng === 'en' ? '>urgent<' : '>紧急<'), u);
+    assert.ok(l.includes('data-priority="low"') && l.includes(lng === 'en' ? '>low<' : '>低<'), l);
+    assert.equal(m.mark(i18n, 'normal'), ''); assert.equal(m.mark(i18n, undefined), '');
+    const withCtl = decode(m.card(i18n, { ...decision, priority: 'urgent' }, { onPriority: () => {} }));
+    assert.ok(withCtl.includes('data-testid="oq-priority"') && withCtl.includes('data-priority="urgent"') && !/ownerQueue\./.test(withCtl), withCtl);
+    assert.ok(!decode(m.card(i18n, decision)).includes('data-testid="oq-priority"'));
+    assert.ok(!decode(m.card(i18n, { ...decision, project_id: null }, { onPriority: () => {} })).includes('data-testid="oq-priority"'), 'no project: no control');
+    assert.equal(i18n.t('ownerQueue.countTipUrgent', { ns: 'common', urgent: 2, blocking: 4, messages: 9 }), lng === 'en' ? '2 urgent, 4 decisions, 9 messages' : '2 项紧急，4 项决策，9 条消息');
+    assert.equal(i18n.t('ownerQueue.priorityMenu', { ns: 'common', priority: i18n.t('ownerQueue.priority.urgent', { ns: 'common' }) }), lng === 'en' ? 'Priority: urgent' : '优先级：紧急');
+  });
+}

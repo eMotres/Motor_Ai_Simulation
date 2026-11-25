@@ -981,6 +981,14 @@
     "tab": "决策",
     "tabTip": "负责人队列：各代理会话发给您的决策、问题和消息。{blocking} 项决策，{messages} 条消息。",
     "countTip": "{blocking} 项决策，{messages} 条消息",
+    "priority": {
+      "urgent": "紧急",
+      "normal": "普通",
+      "low": "低"
+    },
+    "thisProject": "此项目",
+    "countTipUrgent": "{urgent} 项紧急，{blocking} 项决策，{messages} 条消息",
+    "priorityMenu": "优先级：{priority}",
     "viewQueue": "队列",
     "viewHistory": "历史",
     "counter": "第 {n} 项，共 {total} 项",

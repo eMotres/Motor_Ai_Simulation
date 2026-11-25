@@ -139,7 +139,9 @@ def measured_k_T(fingerprint: Optional[str], geo: Optional[Dict[str, Any]] = Non
         poles = int(g.get("num_poles") or 0) or ns * int(g.get("num_poles_per_segment") or 0)
         od = float(g.get("stator_diameter") or 0.0) or 2.0 * float(
             g.get("stator_outer_radius") or 0.0)
-        L = float(g.get("motor_length") or 0.0)
+        # the length the factor is wanted at (the argument) wins over the geometry's own; a geometry without
+        # motor_length still matches by the argument
+        L = float(stack_mm or 0.0) or float(g.get("motor_length") or 0.0)
     except (TypeError, ValueError):
         return None
     if not (slots and poles and od and L):

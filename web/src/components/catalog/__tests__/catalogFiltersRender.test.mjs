@@ -70,9 +70,13 @@ for (const [lng, active, running, sets] of [['en', 'Active', 'Running', 'My filt
     const admin = decode(m.filters(i18n, true));
     for (const id of ['filter-stage', 'filter-project', 'filter-running', 'filter-sets']) assert.ok(admin.includes(`data-testid="${id}"`), id);
     assert.ok(admin.includes(active) && admin.includes(running) && admin.includes(sets), admin);
+    // ONE project control (owner 2026-11-25): a member's chosen project is the first row of the Projects filter, no chip
+    S.getState().set({ onlyHighlighted: true });
     const member = decode(m.filters(i18n, false, 'Pump'));
-    for (const id of ['filter-stage', 'filter-project', 'filter-running']) assert.ok(!member.includes(`data-testid="${id}"`), id);
-    assert.ok(member.includes('data-testid="filter-highlighted"') && member.includes('Pump') && member.includes(sets), member);
+    S.getState().set({ onlyHighlighted: false });
+    for (const id of ['filter-stage', 'filter-running', 'filter-highlighted']) assert.ok(!member.includes(`data-testid="${id}"`), id);
+    assert.ok(member.includes('data-testid="filter-project"') && member.includes('>Pump<') && member.includes(sets), member);
+    assert.ok(!decode(m.filters(i18n, false)).includes('filter-project'), 'a member without a chosen project: no project control');
     assert.ok(!/byDie\.|motors:/.test(admin + member));
   });
 }

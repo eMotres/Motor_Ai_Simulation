@@ -870,17 +870,9 @@ def generate_motor_passport(motor_id: str, coarse: bool = False,
             self.estimate = estimate
 
     def _e3_applied(sa):
-        from motor_ai_sim.end3d_verdict import applied_flux_factor, applied_table, status_of
-        af = applied_flux_factor(sa.get("k_flux"), sa.get("k_flux_self"), sa.get("two_d"),
-                                 sa.get("version"), sa.get("generated_utc"))
-        # the table of what is APPLIED: k_flux_self rows ("self_applied") when the scalar is k_flux_self, raw beside it
-        tabs = applied_table(sa.get("l_stack_curve"), af, sa.get("k_flux_vs_L_method"))
-        return {"k_flux": af["value"] if af["value"] is not None else sa["k_flux"],
-                "k_flux_self": sa["k_flux_self"], "k_flux_raw": sa.get("k_flux"),
-                "k_flux_applied": af["basis"], "k_flux_verdict": af["verdict"],
-                "k_flux_status": status_of(sa.get("two_d"), af),
-                "k_flux_vs_L": tabs.get("k_flux_vs_L") or {},
-                **{k_: tabs[k_] for k_ in ("k_flux_vs_L_method", "k_flux_vs_L_raw") if tabs.get(k_)}}
+        # the applied scalar, the raw k_flux, basis / verdict / status and the applied table (end3d_verdict)
+        from motor_ai_sim.end3d_verdict import store_fields
+        return store_fields(sa)
 
     try:
         from motor_ai_sim.routes.simulation import (_geometry_fingerprint,

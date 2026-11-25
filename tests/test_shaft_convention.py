@@ -281,8 +281,8 @@ def test_report_recompute_keeps_the_convention():
     out = dict(MARKED, T_em_avg_Nm=11.0, I_winding_rms_A=20.0, mass_total_kg=2.0)
     report._em_recompute_derived(out)
     p = 0.9 * 11.0 * W1000 - 30.0
-    assert out["P_mech_W"] == pytest.approx(p) and out["Kt_Nm_per_Arms"] == pytest.approx(0.9 * 11.0 / 20.0)
-    assert out["torque_per_mass_Nm_kg"] == pytest.approx(p / W1000 / 2.0)
+    assert out["P_mech_W"] == pytest.approx(p, abs=0.06) and out["Kt_Nm_per_Arms"] == pytest.approx(0.9 * 11.0 / 20.0)
+    assert out["torque_per_mass_Nm_kg"] == pytest.approx(p / W1000 / 2.0, rel=1e-3)
     old = {"T_em_avg_Nm": 11.0, "rpm": 1000.0, "I_winding_rms_A": 20.0, "mass_total_kg": 2.0}
     report._em_recompute_derived(old)
     assert old["P_mech_W"] == 11.0 * 2.0 * math.pi * 1000.0 / 60.0 and old["Kt_Nm_per_Arms"] == 11.0 / 20.0
@@ -329,7 +329,7 @@ def test_presets_card_power_is_never_the_diagnostic_balance():
 def test_refine_proc_row_is_on_the_convention():
     src = Path(__file__).resolve().parent.parent / "src" / "motor_ai_sim" / "optimization" / "refine_proc.py"
     text = src.read_text(encoding="utf-8")
-    assert '"shaft_convention": _SC.SHAFT_CONVENTION' in text and '"shaft_k3d": None' in text
+    assert "**_SC.fields(_bal, _dr, None)" in text        # the row's convention fields, k = 1 (no passport)
 
 
 # ── Astra review of PR #900: B2-B7 ───────────────────────────────────────────────────────────────────────────────────

@@ -21,6 +21,8 @@ import { NARROW } from '../../../../lib/narrowLayout';
 import type { MissionRow } from '../../missionProfileState';
 import MissionProfileEditor from '../MissionProfileEditor';
 import { MissionProfile, SuggestField } from './SpecInputs';
+import OdSizesPicker from './OdSizesPicker';
+import { odModeOf } from '../../odSizes';
 import { hiddenAirflowModes, wizardNaturalAirflow, type WizardProfile } from './profile';
 import { answerPresent } from './steps';
 import { DecimalField, RequiredMark } from './ui';
@@ -42,6 +44,8 @@ export interface SpecFieldsContext {
   messages: ProjectThreadMessage[];
   catalog: CatalogController[];
   openFieldReview: (ref: string) => void;
+  /** the open project: the 4_1 existing-sizes list is read for it */
+  projectId?: string;
 }
 
 /** The field renderers of the specification (moved from DevelopmentPage, behaviour unchanged except where marked): the typed
@@ -203,7 +207,9 @@ export function useSpecFields(c: SpecFieldsContext) {
     const objectValue = objectOf(answer.value);
     // properties the schema keeps in the data but does not ask (`ui_hidden`) are not drawn; a field with ONE visible property
     // shows only its header (the header says what the single input is)
-    const properties = f.properties?.length ? visibleProperties(f.properties) : undefined;
+    // 4_1: the preferred diameter and the accepted existing sizes are drawn only while "existing sizes" is chosen (schema `only_when_od_mode`)
+    const odMode = f.id === '4_1' ? odModeOf(objectValue) : undefined;
+    const properties = f.properties?.length ? visibleProperties(f.properties).filter((prop) => !prop.only_when_od_mode || prop.only_when_od_mode === odMode) : undefined;
     const wide = span && ((f.properties?.length ?? 0) > 2 || !!f.multiline || f.type === 'array');
     const fallback = productionFallback(draftRef.current, f.id);
     // the stored upper bounds the page does not ask (the generator output window shows ONE worst-case value per quantity) are readable in a tooltip
@@ -216,7 +222,11 @@ export function useSpecFields(c: SpecFieldsContext) {
           <Box sx={{ ...specGridSx, [NARROW]: { gridTemplateColumns: 'minmax(0,1fr)', '& > *': { gridColumn: 'auto !important' } } }}>
             {properties.map((prop) => <Box key={prop.id} sx={{ minWidth: 0, gridColumn: prop.type === 'object' || prop.type === 'array' ? '1 / -1' : undefined }}>
               {properties.length > 1 && propLabel(prop, false, [catalogTip(`${f.id}.${prop.id}`), ...companions.filter((x) => x.low === prop.id).map((x) => tr('wizard.otherBound', { value: x.text }))].filter(Boolean).join('\n') || undefined)}
-              {renderTypedValue(f.id === '2_4' ? controllerShape(prop) : prop, objectValue[prop.id], f.id === '2_4' && prop.id === 'manufacturer_model' ? (value) => pickController(String(value ?? '')) : (value) => setProperty(f, prod, objectValue, prop.id, value), `${f.id}-${prop.id}`, unknown)}
+              {f.id === '4_1' && prop.id === 'od_accepted_sizes'
+                ? <OdSizesPicker projectId={c.projectId} preferred={objectValue.od_preferred_mm} maxOd={typeof objectValue.outer_diameter_mm === 'number' ? objectValue.outer_diameter_mm : undefined}
+                    value={objectValue.od_accepted_sizes} disabled={!canEditSpec || busy || migrationBusy || unknown} tr={tr}
+                    onChange={(next) => setProperty(f, prod, objectValue, 'od_accepted_sizes', next)} />
+                : renderTypedValue(f.id === '2_4' ? controllerShape(prop) : prop, objectValue[prop.id], f.id === '2_4' && prop.id === 'manufacturer_model' ? (value) => pickController(String(value ?? '')) : (value) => setProperty(f, prod, objectValue, prop.id, value), `${f.id}-${prop.id}`, unknown)}
             </Box>)}
           </Box>
         ) : options?.length ? (
@@ -227,6 +237,7 @@ export function useSpecFields(c: SpecFieldsContext) {
           renderTypedValue(f, answer.value, (next) => setAnswer(f, next, prod), f.id, unknown)
         )}
         {f.id === '2_4' && controllerNotes()}
+        {f.id === '4_1' && objectValue.od_mode === 'custom' && <Tooltip title={tr('odSizes.customHelp')}><Typography tabIndex={0} sx={specFieldLabelSx}>{tr('odSizes.customNote')}</Typography></Tooltip>}
         {fieldMessages(f, answer, required)}
         {answerLater(f, unknown, prod)}
       </Stack>

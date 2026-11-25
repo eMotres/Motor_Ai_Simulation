@@ -1748,11 +1748,46 @@
           "required_any": [
             [
               "outer_diameter_mm",
-              "length_mm"
+              "length_mm",
+              "od_accepted_sizes"
             ]
           ],
           "allow_not_known_yet": true,
           "properties": [
+            {
+              "id": "od_mode",
+              "label": {
+                "en": "Outer diameter",
+                "zh-CN": "外径"
+              },
+              "type": "string",
+              "unit": "",
+              "required": false,
+              "options": [
+                {
+                  "value": "existing",
+                  "label": {
+                    "en": "One of the existing sizes",
+                    "zh-CN": "现有尺寸之一"
+                  }
+                },
+                {
+                  "value": "custom",
+                  "label": {
+                    "en": "Custom diameter",
+                    "zh-CN": "自定义外径"
+                  }
+                }
+              ],
+              "short_label": {
+                "en": "Outer diameter",
+                "zh-CN": "外径"
+              },
+              "help": {
+                "en": "Pick the sizes you accept from the existing ones: the calculation starts from the closest existing size and is ready much sooner. A custom diameter takes much longer to compute, because the geometry is optimised for it. The maximum diameter stays a hard limit.",
+                "zh-CN": "从现有尺寸中勾选可接受的尺寸：计算从最接近的现有尺寸开始，完成得快得多。自定义外径需要对几何结构做优化，计算耗时长得多。最大外径仍为硬性限制。"
+              }
+            },
             {
               "id": "outer_diameter_mm",
               "label": {
@@ -1763,6 +1798,43 @@
               "unit": "mm",
               "required": false,
               "min": 0
+            },
+            {
+              "id": "od_preferred_mm",
+              "label": {
+                "en": "Preferred outer diameter",
+                "zh-CN": "偏好外径"
+              },
+              "type": "number",
+              "unit": "mm",
+              "required": false,
+              "min": 0,
+              "allow_range": true,
+              "only_when_od_mode": "existing"
+            },
+            {
+              "id": "od_accepted_sizes",
+              "label": {
+                "en": "Accepted existing sizes",
+                "zh-CN": "可接受的现有尺寸"
+              },
+              "help": {
+                "en": "Public sizes that exist, closest to your preferred diameter first, with the stack lengths available. Tick every size you accept; a calculation on an existing size is ready much sooner than a custom diameter.",
+                "zh-CN": "现有的公开尺寸，按与偏好外径的接近程度排序，并列出可用叠长。勾选所有可接受的尺寸；基于现有尺寸的计算比自定义外径快得多。"
+              },
+              "type": "array",
+              "unit": "",
+              "required": false,
+              "only_when_od_mode": "existing",
+              "required_if_value": {"property": "od_mode", "equals": "existing"},
+              "items": {
+                "type": "object",
+                "properties": [
+                  {"id": "od_mm", "type": "number", "unit": "mm", "min": 0, "required": true, "label": {"en": "Stator outer diameter", "zh-CN": "定子外径"}},
+                  {"id": "slots", "type": "number", "min": 0, "required": true, "label": {"en": "Slots", "zh-CN": "槽数"}},
+                  {"id": "poles", "type": "number", "min": 0, "required": true, "label": {"en": "Poles", "zh-CN": "极数"}}
+                ]
+              }
             },
             {
               "id": "length_mm",

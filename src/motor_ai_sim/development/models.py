@@ -434,8 +434,43 @@ def ordered_pair_errors(draft: dict) -> list[dict]:
 def _missing_any_groups(field: dict, value: dict) -> list[list[str]]:
     """`required_any` groups of which no property is filled (e.g. torque OR power)."""
     props = {p["id"]: p for p in field.get("properties", [])}
+    # a property tagged `only_when_od_mode` (the preferred diameter and the accepted existing sizes, 4_1) counts only in that mode
+    mode = od_mode_of(value)
     return [group for group in field.get("required_any", [])
-            if not any(_property_complete(value.get(pid), props[pid]) for pid in group if pid in props)]
+            if not any(_property_complete(value.get(pid), props[pid]) for pid in group
+                       if pid in props and props[pid].get("only_when_od_mode", mode) == mode)]
+
+
+#: 4_1 `od_mode`: "existing" = the customer picks from the existing sizes (the calculation starts from an existing lamination and is
+#: ready much sooner), "custom" = his own diameter (the geometry is optimised for it; takes much longer).  Owner 2026-11-25.
+#: A stored version without the property reads as "custom" with its stated diameter.
+OD_MODES = ("existing", "custom")
+
+
+def od_mode_of(envelope: Any) -> str:
+    """The diameter choice of a 4_1 value; anything absent or unknown reads as "custom"."""
+    mode = envelope.get("od_mode") if isinstance(envelope, dict) else None
+    return mode if mode in OD_MODES else "custom"
+
+
+def od_choice(draft: Any) -> dict:
+    """What the computing session needs of the diameter choice: ``{"od_mode", "od_preferred_mm", "od_max_mm", "accepted_sizes"}`` (``od_max_mm`` = the stated diameter: the hard limit in "existing", the diameter itself in "custom").
+
+    Reads the stored 4_1 answer only; an unanswered or "not known yet" 4_1 and every version written before the choice existed
+    read as "custom" with no sizes.  ``accepted_sizes`` is the list of ``{od_mm, slots, poles}`` the customer ticked (empty unless
+    the mode is "existing"); a malformed entry is left out, nothing is invented."""
+    answer = ((draft or {}).get("fields") or {}).get("4_1") if isinstance(draft, dict) else None
+    value = answer.get("value") if isinstance(answer, dict) and answer.get("status") == "filled" else None
+    value = value if isinstance(value, dict) else {}
+    mode = od_mode_of(value)
+    sizes = []
+    if mode == "existing" and isinstance(value.get("od_accepted_sizes"), list):
+        for item in value["od_accepted_sizes"]:
+            if isinstance(item, dict) and all(isinstance(item.get(k), (int, float)) and not isinstance(item.get(k), bool)
+                                              for k in ("od_mm", "slots", "poles")):
+                sizes.append({"od_mm": item["od_mm"], "slots": int(item["slots"]), "poles": int(item["poles"])})
+    return {"od_mode": mode, "od_preferred_mm": value.get("od_preferred_mm") if mode == "existing" else None,
+            "od_max_mm": value.get("outer_diameter_mm"), "accepted_sizes": sizes}
 
 
 def _answer_complete(answer: dict, field: dict) -> bool:

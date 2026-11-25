@@ -140,3 +140,8 @@ def project_productions(project_id: str, request: Request, response: Response):
         seen.add((entry["die"], entry["config"]))
         out.append(entry)
     return {"productions": out}
+
+
+# GET /api/projects/{id}/spec/existing-sizes: the public sizes the specification form offers (owner 2026-11-25)
+from motor_ai_sim.development.spec_sizes import router as _spec_sizes_router  # noqa: E402
+router.include_router(_spec_sizes_router)

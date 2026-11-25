@@ -359,8 +359,13 @@ def eigen_modes(K, M, n_modes: int, n_rigid_expected: int = 3
     k = int(n_modes) + n_exp
     k = max(1, min(k, ndof - 2))
     scale = float(K.diagonal().sum() / max(M.diagonal().sum(), 1e-300))
+    # A FIXED start vector (2026-11-25): ARPACK's default is random, so two
+    # solves of the same rotor differed in the last bits of every frequency and
+    # in the sign of every shape.  A seeded generic vector keeps the answer the
+    # same to those bits and makes it reproducible.
+    v0 = np.random.default_rng(0).standard_normal(ndof)
     vals, vecs = spla.eigsh(K.tocsc(), k=k, M=M.tocsc(),
-                            sigma=-1e-3 * scale, which="LM")
+                            sigma=-1e-3 * scale, which="LM", v0=v0)
     o = np.argsort(vals)
     vals, vecs = vals[o], vecs[:, o]
     n_rigid = 0

@@ -3657,7 +3657,12 @@ def solve_rotor_stress(polys: dict,
         rep = ctc.facet_report(cs, sol)
         forces = ctc.interface_forces(cs, sol)
         _pk_eq = None
-        if _pk_g0 is not None and rm.magnet_id_tri is not None:
+        # Only where it is valid: a separation magnet joint (a bonded one is
+        # tied, its "contact forces" are tie multipliers) on the FULL rotor (a
+        # sector's cut faces carry cyclic-tie forces this sum does not see).
+        _mr_spec = spec.get("magnet_rotor")
+        if (_pk_g0 is not None and rm.magnet_id_tri is not None and n_sym == 1
+                and _mr_spec is not None and _mr_spec.type == "separation"):
             # every magnet in a drawn clearance is held by its pairs alone:
             # its load and their forces must balance (2026-11-25)
             _f_case = f_rot * (omega ** 2 * k * float(use_centrifugal)) + f_eig
@@ -3665,6 +3670,13 @@ def solve_rotor_stress(polys: dict,
                 _f_case = _f_case + f_pull
             _pk_eq = _pkc.magnet_equilibrium(cs, sol, basis, _f_case,
                                              rm.magnet_id_tri)
+            if _pk_eq is not None and _pk_eq["max_rel"] > _pkc.EQUILIBRIUM_TOL:
+                _pk_eq["warning"] = (
+                    f"a seated magnet is out of equilibrium by "
+                    f"{100.0 * _pk_eq['max_rel']:.2g} % of its load (tolerance "
+                    f"{100.0 * _pkc.EQUILIBRIUM_TOL:.2g} %) — its contact forces "
+                    "do not carry what it is loaded with")
+                _log.warning("rotor stress %s: %s", case, _pk_eq["warning"])
         ifaces: Dict[str, Any] = {}
         cpress: Dict[str, Any] = {}
         copen: Dict[str, Any] = {}
@@ -3744,6 +3756,11 @@ def solve_rotor_stress(polys: dict,
                 "lift_off": (bool(ofrac > open_verdict) if it.unilateral
                              else bool(_pct(tn, 95) > 0.0)),
             }
+            if (_pk_g0 is not None and it.unilateral
+                    and PART_MAGNET in (it.part_a, it.part_b)):
+                # open at standstill BY DESIGN across a drawn clearance
+                ifaces[label]["lift_off"] = None
+                ifaces[label]["lift_off_note"] = "n/a: drawn clearance"
             if with_field:
                 cpress[label] = np.round(pr * MPA, 3).tolist()
                 copen[label] = np.round(d["open"], 3).tolist()

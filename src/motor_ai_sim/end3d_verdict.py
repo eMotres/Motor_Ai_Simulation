@@ -193,14 +193,29 @@ def is_silent_substitution(entry: Optional[Mapping[str, Any]], stack_mm: Optiona
     return substitution_of(entry, stack_mm) is not None
 
 
-def status_of(two_d: Optional[Mapping[str, Any]], applied: Optional[Mapping[str, Any]] = None) -> str:
-    """``verified`` / ``unverified`` / ``failed`` / ``invalid`` of a stored 3-D factor.
+#: the statuses a stored 3-D factor can carry (``status_of``); the web twin is web/src/lib/end3dStatus.ts
+STATUSES = ("verified", "unverified", "failed", "invalid", "fallback", "recompute")
 
-    With ``applied`` (:func:`applied_flux_factor`'s answer) the status follows what is APPLIED:
-    k_flux_self because the check failed (FAIL, old-rule recompute, unknown + not usable) -> failed; k_flux_self because
-    the 2-D leg is INVALID or k_flux itself is not a usable factor -> invalid; k_flux with an end-deficit PASS (an
-    ``agreement_check`` or passport version >= 3) -> verified; any other k_flux (NOT CHECKED, an old mid-plane PASS,
-    no 2-D leg) -> unverified.  Without ``applied``: from ``two_d`` alone, the same way."""
+
+def status_of(two_d: Optional[Mapping[str, Any]], applied: Optional[Mapping[str, Any]] = None) -> str:
+    """The status of a stored 3-D factor (one of :data:`STATUSES`), following what is APPLIED.
+
+    With ``applied`` (:func:`applied_flux_factor`'s answer - every writer passes it):
+
+    ===================================================  ===========
+    end-deficit FAIL (whatever is applied - also when
+    k_flux_self is missing and k_flux had to stay)       failed
+    old-rule FAIL outside the short-stack signature      recompute   (k_flux_self applied until Stage A is rerun)
+    unknown verdict with k_flux_usable False             failed
+    2-D leg INVALID                                      invalid
+    k_flux_self because k_flux is not a usable factor    fallback    (the check itself passed or was not run)
+    k_flux with an end-deficit PASS                      verified
+    any other k_flux (NOT CHECKED, an old mid-plane
+    PASS, no 2-D leg)                                    unverified
+    ===================================================  ===========
+
+    Without ``applied`` (only where no numbers exist, e.g. a bare ``two_d`` block): from the verdict alone -
+    INVALID -> invalid, an end-deficit FAIL / PASS -> failed / verified, anything else -> unverified."""
     if applied is None:
         t = two_d if isinstance(two_d, Mapping) else {}
         v = str(t.get("verdict") or "").strip().upper()
@@ -212,15 +227,31 @@ def status_of(two_d: Optional[Mapping[str, Any]], applied: Optional[Mapping[str,
         return "verified" if (new and v == "PASS") else "unverified"
     basis = applied.get("basis")
     verdict = str(applied.get("verdict") or "").upper()
-    if basis == BASIS_SELF:
-        # FAIL / old-rule recompute / unknown-not-usable: the check said no; anything else forced k_flux_self because
-        # there is no usable k_flux or no 2-D ratio
-        if verdict == "FAIL" or verdict.startswith("NOT CHECKED (OLD RULE") or verdict.startswith("UNKNOWN"):
-            return "failed"
+    if verdict == "FAIL" or verdict.startswith("UNKNOWN"):
+        return "failed"
+    if verdict == "INVALID":
         return "invalid"
+    if verdict.startswith("NOT CHECKED (OLD RULE"):
+        return "recompute"
+    if basis == BASIS_SELF:
+        return "fallback"
     if verdict == "PASS" and applied.get("rule") == RULE_END_DEFICIT:
         return "verified"
     return "unverified"
+
+
+def store_fields(sa: Mapping[str, Any]) -> Dict[str, Any]:
+    """The applied-factor fields a store entry built from a Stage A result carries (the catalogue passport's
+    ``_e3_applied``): the applied scalar, the raw k_flux, basis, verdict, status and the applied per-length table."""
+    af = applied_flux_factor(sa.get("k_flux"), sa.get("k_flux_self"), sa.get("two_d"),
+                             sa.get("version"), sa.get("generated_utc"))
+    tabs = applied_table(sa.get("l_stack_curve"), af, sa.get("k_flux_vs_L_method"))
+    return {"k_flux": af["value"] if af["value"] is not None else sa.get("k_flux"),
+            "k_flux_self": sa.get("k_flux_self"), "k_flux_raw": sa.get("k_flux"),
+            "k_flux_applied": af["basis"], "k_flux_verdict": af["verdict"],
+            "k_flux_status": status_of(sa.get("two_d"), af),
+            "k_flux_vs_L": tabs.get("k_flux_vs_L") or {},
+            **{k_: tabs[k_] for k_ in ("k_flux_vs_L_method", "k_flux_vs_L_raw") if tabs.get(k_)}}
 
 
 #: ``k_flux_vs_L_method`` of a stored table whose rows are k_flux_self (the factor applied when the check failed)

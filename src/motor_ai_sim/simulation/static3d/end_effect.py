@@ -107,6 +107,9 @@ AUTO_L_FACTORS = (1.0, 1.5, 2.0)
 #: grows little (512k -> 541k elements from 90 to 180 mm on a 400 mm machine), but every row is one more nonlinear
 #: solve of ~50 min quick / ~80 min default on such a machine.
 AUTO_LONG_STACK_POLE_PITCHES = 10.0
+#: The price of the cap: with independent per-row k errors dk the fitted eps has a standard error of about
+#: 2.2 x dk for (1, 1.5, 2) and 3.6 x dk for (1, 1.25, 1.5) - 1.6 x worse (sqrt(sum((x - xm)^2 L^2)) / Sxx, x and L in
+#: units of the stack); the rows share one cross-section mesh, so their errors are mostly correlated and smaller.
 AUTO_L_FACTORS_LONG = (1.0, 1.25, 1.5)
 #: below the end zone the first fitted row is f0 = zone / L, never closer to the reference than this
 AUTO_F0_MIN = 1.05
@@ -733,7 +736,8 @@ def run_stage_a(geo_override: Optional[dict] = None,
         l_factors.append(1.0)
     section = load_motor_section(geo_override=geo_override, n_sectors=n_sectors)
     if auto:
-        # "auto": 2-3 rows clear the end zone with span >= 1.5 (auto_l_factors); explicit factors are never touched
+        # "auto" (auto_l_factors): three fitted rows that clear the end zone with span >= 1.5 - (1, 1.5, 2), a long
+        # stack (>= 10 pole pitches) (1, 1.25, 1.5), a short one (1, f0, 1.5 f0, 2 f0); explicit factors never change
         # auto_extra: rows a reader needs that the check does not (the catalog keeps 0.75 for k(L) below the stack)
         l_factors = list(auto_l_factors(section.stack_mm,
                                         math.pi * float(section.mid_r_mm) / max(1, int(section.pole_pairs))))

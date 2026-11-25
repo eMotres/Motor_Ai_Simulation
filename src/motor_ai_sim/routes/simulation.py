@@ -7801,7 +7801,13 @@ def _end3d_lookup(geo_fp: Optional[str], geo: Optional[dict] = None,
             "k_T", "k_T_source", "k_T_inherited", "k_T_note", "k_torque", "torque_basis")
         # the source's own check (status / applied / raw / verdict) does not describe a LENT, possibly interpolated
         # factor on another geometry: dropped, and the lent factor is "unverified"
-        _drop = _drop + ("k_flux_status", "k_flux_applied", "k_flux_raw", "k_flux_verdict", "k_flux_vs_L_raw")
+        _drop = _drop + ("k_flux_status", "k_flux_applied", "k_flux_raw", "k_flux_verdict", "k_flux_vs_L_raw",
+                         "k_flux_basis")
+        # the class curve merges passports whose stored factors may rest on different bases (k_flux / k_flux_self):
+        # said in the note when it does, the lent factor stays "unverified" either way
+        _bases = {str((vv or {}).get("k_flux_applied") or "k_flux") for _kk, vv in cands}
+        _mixed = (" The machine-class curve mixes passports applied on different bases (%s)." % ", ".join(sorted(_bases))
+                  if len(_bases) > 1 else "")
         v = {kk: vv for kk, vv in v.items() if kk not in _drop}
         return _e3_enrich({**v, "k_flux": float(kf), "k_flux_passport": v.get("k_flux"), "inherited": True,
                 "k_flux_status": "unverified",
@@ -7814,7 +7820,7 @@ def _end3d_lookup(geo_fp: Optional[str], geo: Optional[dict] = None,
                     + ("(a measured length, within %d %%)" % int(_END3D_STACK_TOL * 100) if basis == "point"
                        else "(interpolated on this machine's length curve, measured %g-%g mm)" % span)
                     + " — the current geometry has no Stage A passport yet; recompute "
-                      "to confirm or replace it")}, geo_fp, geo)
+                      "to confirm or replace it" + _mixed)}, geo_fp, geo)
     except Exception:   # noqa: BLE001 — no passport is a normal state
         return None
 

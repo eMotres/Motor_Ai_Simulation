@@ -82,9 +82,10 @@ def test_status_of(two_d, st):
     ((KF, KS, {"verdict": "PASS", "agreement_check": {}}), "verified"),
     ((KF, KS, {"verdict": "PASS"}, "static3d-stageA-3"), "verified"),    # version >= 3 without agreement_check
     ((KF, KS, {"verdict": "PASS"}), "unverified"),                        # old-rule PASS
-    ((1.7, KS, {"verdict": "PASS", "agreement_check": {}}), "invalid"),   # PASS forced to k_flux_self: not verified
+    ((1.7, KS, {"verdict": "PASS", "agreement_check": {}}), "fallback"),  # PASS forced to k_flux_self: not verified
+    ((KF, None, {"verdict": "FAIL", "agreement_check": {}}), "failed"),    # FAIL even when k_flux_self is missing
     ((KF, KS, {"verdict": "FAIL", "agreement_check": {}}), "failed"),
-    ((KF, KS, {"verdict": "FAIL", "ratio_3d_mid_over_2d": 0.80, "picard_converged": True}), "failed"),
+    ((KF, KS, {"verdict": "FAIL", "ratio_3d_mid_over_2d": 0.80, "picard_converged": True}), "recompute"),
     ((KF, KS, {"verdict": "INVALID"}), "invalid"),
     ((KF, KS, None), "unverified")])
 def test_status_follows_what_is_applied(args, st):
@@ -213,3 +214,53 @@ def test_a_lent_factor_does_not_carry_the_sources_status(monkeypatch):
     assert r["inherited"] is True and r["k_flux_status"] == "unverified"
     for k in ("k_flux_applied", "k_flux_raw", "k_flux_verdict", "k_flux_vs_L_raw"):
         assert k not in r
+
+
+
+# --------------------------------------------------------------------------
+# follow-ups of the #884 review
+# --------------------------------------------------------------------------
+
+def test_the_statuses_are_the_documented_set():
+    assert V.STATUSES == ("verified", "unverified", "failed", "invalid", "fallback", "recompute")
+
+
+def test_charge_analytic_beyond_five_percent_reads_the_applied_rows_without_a_jump():
+    from motor_ai_sim.charge_analytic import k_end_info
+    _fp, e = S.adopt_entry(_sa(two_d=_two_d("FAIL", "failed")))
+    inside, _ = k_end_info({"end3d": e, "L0_mm": 12.6})                  # within 5 % of the own 12 mm: the scalar
+    beyond, _ = k_end_info({"end3d": e, "L0_mm": 12.7})                  # beyond: the (self) table at 12.7
+    assert inside == pytest.approx(KS)
+    assert beyond == pytest.approx(KS + (0.973 - KS) * 0.7 / 6.0, abs=1e-6)
+    assert abs(beyond - inside) < 1e-3                                    # no jump by the k_flux / k_flux_self gap
+
+
+def test_the_catalog_store_fields():
+    sa = _sa(two_d=_two_d("FAIL", "failed"))
+    f = V.store_fields(sa)
+    assert f["k_flux"] == KS and f["k_flux_raw"] == KF and f["k_flux_applied"] == "k_flux_self"
+    assert f["k_flux_status"] == "failed" and f["k_flux_vs_L_method"] == "self_applied"
+    assert f["k_flux_vs_L"] == {"12.0": KS, "18.0": 0.973} and f["k_flux_vs_L_raw"] == {"12.0": KF, "18.0": 0.956}
+    g = V.store_fields(_sa(two_d=_two_d("PASS", "verified")))
+    assert g["k_flux"] == KF and g["k_flux_status"] == "verified" and "k_flux_vs_L_raw" not in g
+    from pathlib import Path
+    src = (Path(__file__).resolve().parents[1] / "src/motor_ai_sim/routes/catalog.py").read_text(encoding="utf-8")
+    assert "return store_fields(sa)" in src                               # the catalogue passport uses it
+
+
+def test_a_lent_factor_drops_the_basis_label_and_says_when_bases_mix(monkeypatch):
+    from motor_ai_sim import end3d_store
+    from motor_ai_sim.routes import simulation as SIM
+    _fp, ok = S.adopt_entry(_sa(two_d=_two_d("PASS", "verified"), k_flux_basis="2-D check passed"))
+    _fp, bad = S.adopt_entry(_sa(two_d=_two_d("FAIL", "failed"), geometry_fingerprint="other0000001",
+                                 machine={"num_slots": 12, "num_poles": 14, "stator_od_mm": 40.0, "stack_mm": 30.0},
+                                 l_stack_curve=[{"stack_mm": 30.0, "k_flux": 0.95, "k_flux_self": 0.975}]))
+    monkeypatch.setattr(SIM, "_machine_desc", lambda geo=None: ok["machine"])
+    monkeypatch.setattr(SIM, "_geo_stack_mm", lambda geo=None: 15.0)
+    monkeypatch.setattr(end3d_store, "load", lambda: {"a": ok})
+    r = SIM._end3d_lookup("g", {})
+    assert "k_flux_basis" not in r and "mixes passports" not in r["inherited_note"]
+    monkeypatch.setattr(end3d_store, "load", lambda: {"a": ok, "b": bad})
+    r = SIM._end3d_lookup("g", {})
+    assert "k_flux_basis" not in r and r["k_flux_status"] == "unverified"
+    assert "mixes passports applied on different bases (k_flux, k_flux_self)" in r["inherited_note"]

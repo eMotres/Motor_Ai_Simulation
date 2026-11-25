@@ -26,6 +26,14 @@ const CatalogFilters: React.FC<{ isAdmin: boolean; highlightTitle: string | null
         <DisplayStateFilter value={filter.state} onChange={(f) => set({ state: f as StateFilter })}
           counts={{ counts: options.counts, woke: { active: 0, parked: 0, archived: 0, all: 0 } }} tip={t('motors:byDie.stateTip')} />
       )}
+      {/* owner 2026-11-25: Active shows no old motors by default; the switch brings them back (remembered with the filter) */}
+      {isAdmin && filter.state === 'active' && (options.old > 0 || filter.showOld) && (
+        <Tooltip title={t('motors:byDie.filter.showOldTip')}>
+          <Chip size="small" clickable data-testid="filter-show-old" label={t('motors:byDie.filter.showOld', { n: options.old })}
+            variant={filter.showOld ? 'filled' : 'outlined'} color={filter.showOld ? 'primary' : 'default'}
+            onClick={() => set({ showOld: !filter.showOld })} sx={{ height: 22, fontSize: 11 }} />
+        </Tooltip>
+      )}
       {isAdmin && options.stages.length > 0 && (
         <Tooltip title={t('motors:byDie.filter.stageTip')}>
           <Select multiple size="small" displayEmpty value={filter.stages} inputProps={{ 'data-testid': 'filter-stage' }} sx={ctl}

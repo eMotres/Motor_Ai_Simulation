@@ -8,7 +8,9 @@ import { NO_FILTER, parseFilter, parseSets, upsertSet, type CatalogFilter, type 
 import { readView, writeView } from '../lib/viewMemory.ts';
 
 export interface FilterOptions { stages: string[]; projects: Array<{ id: string; title: string }>;
-  counts: Record<StateFilter, number>; shown: number; total: number }
+  counts: Record<StateFilter, number>; shown: number; total: number;
+  /** the old motors the Active view leaves out (the number on "Show old") */
+  old: number }
 
 interface CatalogFilterState {
   account: string;
@@ -38,7 +40,7 @@ export const catalogFilterApi = createStore<CatalogFilterState>()((set, get) => 
   };
   return {
     account: '', filter: NO_FILTER, sets: [], activeSet: null,
-    options: { stages: [], projects: [], counts: { active: 0, parked: 0, archived: 0, all: 0 }, shown: 0, total: 0 },
+    options: { stages: [], projects: [], counts: { active: 0, parked: 0, archived: 0, all: 0 }, shown: 0, total: 0, old: 0 },
     bindAccount: (account) => {
       if (account === get().account) return;
       set({ account, filter: readView(scope(account, 'current'), parseFilter) ?? NO_FILTER,
@@ -46,7 +48,8 @@ export const catalogFilterApi = createStore<CatalogFilterState>()((set, get) => 
         activeSet: readView(scope(account, 'active'), (r) => (typeof r === 'string' && r ? r : null)) });
     },
     set: (patch) => { set({ filter: { ...get().filter, ...patch }, activeSet: null }); remember(); },
-    clear: () => { set({ filter: { ...NO_FILTER, state: get().filter.state }, activeSet: null }); remember(); },
+    // Clear empties the narrowing filters; the state tab and "Show old" are views, they stay
+    clear: () => { set({ filter: { ...NO_FILTER, state: get().filter.state, showOld: get().filter.showOld }, activeSet: null }); remember(); },
     saveSet: (name) => { set({ sets: upsertSet(get().sets, name, get().filter), activeSet: name.trim() || null }); remember(); },
     applySet: (name) => {
       const s = get().sets.find((x) => x.name === name);

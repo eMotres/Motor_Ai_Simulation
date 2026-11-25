@@ -187,7 +187,7 @@ def anonymous_allowed(path: str) -> bool:
     if p in _ANON_OK_PATHS:
         return True
     # user-owned compute nodes: own mcnode_ bearer, checked in routes/compute_nodes
-    if _NODE_AGENT_PATH.match(p):
+    if _NODE_AGENT_PATH.fullmatch(p):   # fullmatch: `$` alone accepts a trailing newline
         return True
     return any(p == pfx or p.startswith(pfx + "/") for pfx in _ANON_OK_PREFIXES)
 

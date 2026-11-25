@@ -195,7 +195,7 @@ def anonymous_allowed(path: str) -> bool:
     if _NODE_AGENT_PATH.fullmatch(p):   # fullmatch: `$` alone accepts a trailing newline
         return True
     # owner queue agents: own oq_ bearer, checked in routes/owner_queue
-    if _OWNER_QUEUE_AGENT_PATH.match(p):
+    if _OWNER_QUEUE_AGENT_PATH.fullmatch(p):
         return True
     return any(p == pfx or p.startswith(pfx + "/") for pfx in _ANON_OK_PREFIXES)
 

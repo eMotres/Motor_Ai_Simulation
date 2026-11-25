@@ -7662,6 +7662,12 @@ _SUMMARY_SHAPE_V = 21   # v21: the FULL mass of the loaded configuration + the p
 #: span of its measured lengths (interpolated, never extrapolated): the end effect of a 40 mm stack is not that of a
 #: 200 mm one.
 _END3D_STACK_TOL = 0.05
+#: Outside the measured span the NEAREST measured end point is lent, flagged, but only while the stack is within this
+#: factor (either way) of that end point's length; farther the answer is "no 3-D factor".  The end loss of a stack is
+#: roughly a constant LENGTH per machine (k = 1 - c/L): a shorter stack than the end point has a lower k than lent
+#: (the lent value reads high), a longer one a higher k (reads low); the error grows with the distance.
+_END3D_NEAREST_MAX_RATIO = 1.5
+_END3D_OUTSIDE_FLAG = "outside the measured span: run Stage A"
 
 
 def _end3d_stack_at(rec: dict, stack_mm: float):
@@ -7774,21 +7780,30 @@ def _end3d_lookup(geo_fp: Optional[str], geo: Optional[dict] = None,
         _when = lambda v: str(v.get("adopted_utc") or v.get("generated_utc") or "")  # noqa: E731
         curve = _end3d_machine_curve(cands, _when)
         hit = _end3d_curve_at([(L, k) for L, k, _ in curve], stack) if stack else None
+        nearest_end = None
+        if hit is None and stack and curve:
+            end = curve[0] if stack < curve[0][0] else curve[-1]
+            if max(stack / end[0], end[0] / stack) <= _END3D_NEAREST_MAX_RATIO:
+                hit, nearest_end = (end[1], "nearest, outside span"), end
         if hit is None:
             if diag is not None:
                 if not stack:
                     why = "this geometry has no stack length"
                 elif curve:
-                    why = ("stack %g mm is outside the measured span %g-%g mm of this machine"
-                           % (stack, curve[0][0], curve[-1][0]))
+                    why = ("stack %g mm is outside the measured span %g-%g mm of this machine and more than a factor %g "
+                           "from its nearest measured length" % (stack, curve[0][0], curve[-1][0], _END3D_NEAREST_MAX_RATIO))
                 else:
                     why = "no stack length is recorded in its passports"
                 diag["note"] = ("no 3-D factor: %s (%s); run Stage A for this geometry" % (why, desc))
             return None
         kf, basis = hit
         # the passport the value belongs to: the one owning the nearest measured length (its other fields ride along)
-        near = min(curve, key=lambda q: abs(q[0] - stack))
+        near = nearest_end or min(curve, key=lambda q: abs(q[0] - stack))
         v, k = store[near[2]], near[2]
+        if nearest_end and diag is not None:
+            diag["flag"] = _END3D_OUTSIDE_FLAG
+            diag["note"] = ("%s: stack %g mm, the factor of the nearest measured length %g mm is lent (%s)"
+                            % (_END3D_OUTSIDE_FLAG, stack, nearest_end[0], desc))
         span = (curve[0][0], curve[-1][0])
         # a torque factor stored on the source passport belongs to ITS length: enrich re-derives k_T under the length rule
         # (kept only when basis is "point" and the source passport's OWN stack length is within 5 % of this one)
@@ -7813,11 +7828,18 @@ def _end3d_lookup(geo_fp: Optional[str], geo: Optional[dict] = None,
                 "k_flux_status": "unverified",
                 "inherited_from": k, "inherited_stack_basis": basis, "inherited_for_stack_mm": float(stack),
                 "inherited_curve": {"span_mm": [span[0], span[1]], "points": len(curve)},
+                **({"inherited_flag": _END3D_OUTSIDE_FLAG, "inherited_from_stack_mm": nearest_end[0],
+                    "inherited_length_ratio": float(stack) / float(nearest_end[0])} if nearest_end else {}),
                 "inherited_note": (
                     f"coefficient taken from OTHER geometries of the machine class {desc} (same slots, poles and stator "
                     f"OD only; magnet, air gap, materials, temperature and die are NOT compared) "
                     f"at the stack length {stack:g} mm "
                     + ("(a measured length, within %d %%)" % int(_END3D_STACK_TOL * 100) if basis == "point"
+                       else "(OUTSIDE the measured span %g-%g mm: the factor of the NEAREST MEASURED LENGTH %g mm, not "
+                            "interpolated, at a length ratio of %.2f; it reads high for a shorter stack and low for a "
+                            "longer one; %s)"
+                            % (span[0], span[1], nearest_end[0], float(stack) / float(nearest_end[0]),
+                               _END3D_OUTSIDE_FLAG) if nearest_end
                        else "(interpolated on this machine's length curve, measured %g-%g mm)" % span)
                     + " — the current geometry has no Stage A passport yet; recompute "
                       "to confirm or replace it" + _mixed)}, geo_fp, geo)

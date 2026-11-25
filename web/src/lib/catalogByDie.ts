@@ -328,9 +328,29 @@ export function filterByState(groups: FamilyGroup[], filter: StateFilter): Famil
   return out;
 }
 
-/** How many motors each state choice would show (the header's counts). */
-export function stateCounts(groups: FamilyGroup[]): Record<StateFilter, number> {
-  const n = (f: StateFilter) => filterByState(groups, f).reduce((a, g) => a + g.blocks.reduce((x, b) => x + b.motors.length, 0), 0);
+/** Owner 2026-11-25 ("by default show me only the motors that are not archived and not parked"): the Active view leaves out
+ *  the motors marked old (a linked twin is current); "Show old" brings them back.  A die block left without motors BY THIS
+ *  rule goes (a block that had no motors before stays, as in filterByState); a family as well. */
+export function hideOld(groups: FamilyGroup[]): FamilyGroup[] {
+  const out: FamilyGroup[] = [];
+  for (const g of groups) {
+    const blocks = g.blocks.map((b) => ({ ...b, motors: b.motors.filter((m) => !m.old) }))
+      .filter((b, i) => b.motors.length || !g.blocks[i].motors.length);
+    if (blocks.length) out.push({ ...g, blocks });
+  }
+  return out;
+}
+/** What the Active view shows: the state rule, then the old motors left out unless `showOld`. */
+export function activeView(groups: FamilyGroup[], state: StateFilter, showOld: boolean): FamilyGroup[] {
+  const g = filterByState(groups, state);
+  return state === 'active' && !showOld ? hideOld(g) : g;
+}
+/** The old motors the Active view leaves out (the number on "Show old"). */
+export const oldInActive = (groups: FamilyGroup[]) => motorCount(filterByState(groups, 'active')) - motorCount(hideOld(filterByState(groups, 'active')));
+
+/** How many motors each state choice would show (the header's counts: Active without the old ones unless `showOld`). */
+export function stateCounts(groups: FamilyGroup[], showOld = true): Record<StateFilter, number> {
+  const n = (f: StateFilter) => motorCount(activeView(groups, f, showOld));
   return { active: n('active'), parked: n('parked'), archived: n('archived'), all: n('all') };
 }
 
@@ -356,8 +376,10 @@ export function jobChip(j: RunningJob): string {
 
 /** One filter set: the state of the linked projects, the stages, the projects, "has a running job", "only the highlighted
  *  project's motors".  Empty lists = no restriction; everything combines with AND (and with the application filter). */
-export interface CatalogFilter { state: StateFilter; stages: string[]; projects: string[]; running: boolean; onlyHighlighted: boolean }
-export const NO_FILTER: CatalogFilter = { state: 'active', stages: [], projects: [], running: false, onlyHighlighted: false };
+export interface CatalogFilter { state: StateFilter; stages: string[]; projects: string[]; running: boolean; onlyHighlighted: boolean;
+  /** the Active view shows the motors marked old too (owner 2026-11-25: hidden by default) */
+  showOld: boolean }
+export const NO_FILTER: CatalogFilter = { state: 'active', stages: [], projects: [], running: false, onlyHighlighted: false, showOld: false };
 /** Filter values that stand for more than one stage; none since 2026-11-17 (simulation and confirmation are separate). */
 export const STAGE_GROUPS: Record<string, string[]> = {};
 
@@ -418,7 +440,8 @@ export function parseFilter(raw: unknown): CatalogFilter | null {
   const r = raw as Record<string, unknown>;
   const list = (v: unknown) => (Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string').slice(0, 50) : []);
   const state = ['active', 'parked', 'archived', 'all'].includes(String(r.state)) ? r.state as StateFilter : 'active';
-  return { state, stages: list(r.stages), projects: list(r.projects), running: r.running === true, onlyHighlighted: r.onlyHighlighted === true };
+  return { state, stages: list(r.stages), projects: list(r.projects), running: r.running === true, onlyHighlighted: r.onlyHighlighted === true,
+    showOld: r.showOld === true };
 }
 export function parseSets(raw: unknown): SavedFilterSet[] | null {
   if (!Array.isArray(raw)) return null;

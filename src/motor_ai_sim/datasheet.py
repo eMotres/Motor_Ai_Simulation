@@ -2025,9 +2025,12 @@ def build_datasheet(*, die: str, cfg: str, die_doc: Dict[str, Any],
                 _rows.append(_cha(_ppass, batt, float(_I or 0.0),
                                   float(_r or 0.0), pwm=_pwm_on)
                              if _I and _r else None)
+            from motor_ai_sim.end3d_factors import STALE_KL_FLAG as _stale_kl
+            _kl_note = ((" " + _stale_kl + ".")
+                        if any(c and c.get("k_end_stale") for c in _rows) else "")
             row("Charge power (kW)",
                 [(c["P_charge_W"] / 1000.0 if c else None) for c in _rows],
-                "shaft power minus every loss the card reports; " + _dnote, 2)
+                "shaft power minus every loss the card reports; " + _dnote + _kl_note, 2)
             row("Charge current (A)",
                 [(c["I_charge_A"] if c else None) for c in _rows],
                 "P_charge / V_bus", 1)

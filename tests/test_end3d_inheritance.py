@@ -311,3 +311,55 @@ def test_k_flux_basis_label_reads_the_verdict_not_the_usable_flag():
     assert lab({"k_flux_usable": True}) == "2-D check passed"           # no verdict: as before
     assert lab({"k_flux_usable": False}).startswith("2-D check failed")
     assert lab(None).startswith("self-normalised")
+
+
+def test_a_lent_passport_keeps_its_own_k_T_only_at_its_own_length(env, monkeypatch):
+    from motor_ai_sim import end3d_factors as F
+    monkeypatch.setattr(F, "_records", lambda: [])
+    src = _rec(0.946, stack=40.0)
+    src.update({"k_T": 0.97, "k_T_source": "Stage D"})
+    env["store"] = {"a": src, "b": _rec(0.99, stack=200.0)}
+    # basis "point" and the source's own stack within 5 %: its k_T rides along (additive, was always dropped)
+    env["stack"] = 41.0
+    r = S._end3d_lookup("new", {})
+    assert r["inherited_stack_basis"] == "point"
+    assert r["k_T"] == 0.97 and r["k_T_source"] == "Stage D" and r["torque_basis"] == F.BASIS_MEASURED
+    # basis "curve": another length, the k_T is stripped and the torque factor is the flux factor
+    env["stack"] = 120.0
+    r = S._end3d_lookup("new", {})
+    assert r["inherited_stack_basis"] == "curve"
+    assert r.get("k_T") is None and r["torque_basis"] != F.BASIS_MEASURED
+    # basis "point" but the passport's own stack_mm is far from the target (its table row was measured elsewhere):
+    # the k_T belongs to ITS length and is not lent
+    far = _rec(0.99, stack=200.0, curve={"40": 0.946, "200": 0.99})
+    far.update({"k_T": 0.9})
+    env["store"] = {"c": far}
+    env["stack"] = 41.0
+    r = S._end3d_lookup("new", {})
+    assert r["inherited_stack_basis"] == "point" and r.get("k_T") is None
+
+
+def test_measured_k_T_same_machine_fallback_uses_the_stack_argument(monkeypatch):
+    from motor_ai_sim import end3d_factors as F
+    monkeypatch.setattr(F, "_records", lambda: [
+        {"fingerprint": "g200", "k_T": 0.91, "slots": 24, "poles": 28, "od_mm": 200.0, "stack_mm": 200.0, "source": "Stage D"}])
+    geo_nolen = {"num_slots": 24, "num_poles": 28, "stator_diameter": 200.0}           # no motor_length
+    assert F.measured_k_T("new", geo_nolen) is None                                     # unchanged: no length at all
+    m = F.measured_k_T("new", geo_nolen, stack_mm=201.0)
+    assert m and m["k_T"] == 0.91 and m["inherited"] is True
+    assert F.measured_k_T("new", geo_nolen, stack_mm=120.0) is None
+    # the argument wins over a stale geometry length
+    geo_len = {**geo_nolen, "motor_length": 40.0}
+    assert F.measured_k_T("new", geo_len, stack_mm=201.0)["k_T"] == 0.91
+    assert F.measured_k_T("new", geo_len) is None                                      # no argument: the geometry's own
+
+
+def test_charge_at_carries_the_stale_flag():
+    from motor_ai_sim.charge_analytic import charge_at
+    pp = {"I0_A": 10.0, "rpm0": 1000.0, "R0_ohm": 0.1, "T0_Nm": 1.0, "Vemf0_peak_V": 10.0, "L0_mm": 12,
+          "end3d": {"k_flux_vs_L": {"12": 0.938, "40": 0.95}}}
+    batt = {"cells": 12, "v_nom": 44.4, "capacity_ah": 10.0, "r_int_mohm": 10.0, "i_charge_max_a": 30.0}
+    c = charge_at(pp, batt, 5.0, 1000.0)
+    assert c is not None and c["k_end_stale"] == 1.0
+    pp["end3d"]["k_flux_vs_L_method"] = "own_mid_ratio"
+    assert "k_end_stale" not in charge_at(pp, batt, 5.0, 1000.0)

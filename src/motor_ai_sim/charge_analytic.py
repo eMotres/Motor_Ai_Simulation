@@ -388,6 +388,8 @@ def charge_at(pp: Dict[str, Any], batt: Optional[Dict[str, Any]],
         "pwm": bool(pwm), "pack": pack,
         "dP_mag_W": m["dP_mag_W"], "dP_fe_W": m["dP_fe_W"],
         "dP_cu_ac_W": m["dP_cu_ac_W"],
+        # present (1.0) only when the passport's stored k(L) table was refused as stale (see k_end_info)
+        **({"k_end_stale": m["k_end_stale"]} if m.get("k_end_stale") else {}),
     }
 
 

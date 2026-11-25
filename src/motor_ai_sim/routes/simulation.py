@@ -7791,8 +7791,15 @@ def _end3d_lookup(geo_fp: Optional[str], geo: Optional[dict] = None,
         v, k = store[near[2]], near[2]
         span = (curve[0][0], curve[-1][0])
         # a torque factor stored on the source passport belongs to ITS length: enrich re-derives k_T under the length rule
-        v = {kk: vv for kk, vv in v.items()
-             if kk not in ("k_T", "k_T_source", "k_T_inherited", "k_T_note", "k_torque", "torque_basis")}
+        # (kept only when basis is "point" and the source passport's OWN stack length is within 5 % of this one)
+        try:
+            _src_stack = float(v.get("stack_mm") or 0.0)
+        except (TypeError, ValueError):
+            _src_stack = 0.0
+        _same_len = bool(basis == "point" and _src_stack > 0 and abs(_src_stack - stack) <= _END3D_STACK_TOL * stack)
+        _drop = ("k_torque", "torque_basis") if _same_len else (
+            "k_T", "k_T_source", "k_T_inherited", "k_T_note", "k_torque", "torque_basis")
+        v = {kk: vv for kk, vv in v.items() if kk not in _drop}
         return _e3_enrich({**v, "k_flux": float(kf), "k_flux_passport": v.get("k_flux"), "inherited": True,
                 "inherited_from": k, "inherited_stack_basis": basis, "inherited_for_stack_mm": float(stack),
                 "inherited_curve": {"span_mm": [span[0], span[1]], "points": len(curve)},

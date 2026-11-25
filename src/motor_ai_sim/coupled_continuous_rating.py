@@ -432,6 +432,12 @@ def reference_point(em_summary: Mapping[str, Any],
         "T_em_avg_Nm": _num(s.get("T_em_avg_Nm")),
         "P_mech_W": _num(s.get("P_mech_W")),
         "k_flux": _num(end3d.get("k_flux")),
+        # the reference run's shaft-side convention (motor_ai_sim.shaft_convention):
+        # its torque factor and the shaft-side load the torque does not contain
+        "shaft_convention": s.get("shaft_convention"),
+        "shaft_k3d": _num(s.get("shaft_k3d")),
+        "P_shaft_drag_W": _num(s.get("P_shaft_drag_W")),
+        "op_mode": s.get("op_mode"),
         "P_cu_exact_W": _num(th.get("P_cu_exact_W")) or _num(s.get("P_stranded_W")),
         "P_fe_W": _num(s.get("P_core_W")),
         "P_solid_W": _num(s.get("P_solid_W")),
@@ -1026,6 +1032,18 @@ def _power_block(ref: Mapping[str, Any], loss: Mapping[str, Any],
     em = {"P_mech_W": p_mech, "P_loss_total_W": p_loss_em,
           "end3d": ({"k_flux": ref["k_flux"]} if _num(ref.get("k_flux"))
                     else None)}
+    from motor_ai_sim import shaft_convention as _SC
+    if _SC.has_marker(ref):
+        # the reference run's convention: k on the field part, the shaft-side load
+        # (core loss ...) held at the reference value like the other held losses
+        _gen = str(ref.get("op_mode") or mode or "") == "generator"
+        _b = _SC.balance(t_field_nm=(-1.0 if _gen else 1.0) * abs(float(out["T_em_Nm"])), rpm=float(rpm),
+                         k=ref.get("shaft_k3d"), d_w=_num(ref.get("P_shaft_drag_W")) or 0.0,
+                         p_loss_w=p_loss_em)
+        p_mech = _b["P_mech_W"]
+        em = {"P_mech_W": p_mech, "P_loss_total_W": p_loss_em, "op_mode": _b["op_mode"],
+              "shaft_convention": _SC.SHAFT_CONVENTION,
+              "end3d": ({"k_flux": ref["k_flux"]} if _num(ref.get("k_flux")) else None)}
     brg = ({"has_bearings": True, "P_mech_extra_W": _num(ref["P_mech_extra_W"])}
            if _num(ref.get("P_mech_extra_W")) is not None else None)
     sv = shaft_view(em, brg, mode)

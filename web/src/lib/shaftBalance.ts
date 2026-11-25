@@ -17,6 +17,9 @@
 // No React, no fetch: node tests import it.
 
 export interface ShaftBalanceIn {
+  /** "fe_on_shaft_k3d_v1": P_mech_W is already the shaft side (k on the field part, core loss on the shaft); a motor at no
+   *  load then carries a NEGATIVE P_mech_W (the shaft supplies the core loss) */
+  shaft_convention?: string | null;
   P_mech_W?: number | null;
   P_loss_total_W?: number | null;
   op_mode?: string | null;
@@ -46,6 +49,8 @@ export interface ShaftBalance {
   etaShaft: number | null;
   /** THE efficiency: the shaft's when known, else the electromagnetic one — a fraction */
   eta: number | null;
+  /** shaft-side convention, motor at no load: nothing is delivered at the shaft (pShaft <= 0, no efficiency) */
+  noOutput?: boolean;
 }
 
 const num = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) ? v : null);
@@ -57,6 +62,17 @@ export function shaftBalance(s: ShaftBalanceIn, extraW: number | null | undefine
   const gen = s.op_mode === 'generator';
   const x = num(extraW);
   const mechKnown = x != null;
+  // THE SHAFT-SIDE CONVENTION: a motor that delivers nothing (no load) keeps its negative shaft power - the shaft has to
+  // supply the core loss; no efficiency is made of it.
+  if (s.shaft_convention === 'fe_on_shaft_k3d_v1' && !gen && pm <= 0) {
+    const lossEm0 = num(s.P_loss_total_W);
+    return {
+      gen, mechKnown, pRotor: pm, pShaft: mechKnown ? pm - (x as number) : pm,
+      pElec: lossEm0 != null ? pm + lossEm0 : null, lossEm: lossEm0,
+      lossAll: mechKnown && lossEm0 != null ? lossEm0 + (x as number) : null,
+      xMech: null, etaEm: null, etaShaft: null, eta: null, noOutput: true,
+    };
+  }
   const pRotor = Math.abs(pm);
   const lossEm = num(s.P_loss_total_W);
   const pShaft = mechKnown ? (gen ? pRotor + x : Math.max(0, pRotor - x)) : pRotor;

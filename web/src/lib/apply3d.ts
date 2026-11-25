@@ -9,6 +9,8 @@
 
 /** The summary fields the correction reads and rewrites (every one optional: a field the run lacks is left as it is). */
 export interface Apply3dFields {
+  /** "fe_on_shaft_k3d_v1": the server already put the torque factor into the shaft-side numbers (lib/shaftConvention.ts) */
+  shaft_convention?: string | null;
   T_em_avg_Nm?: number | null;
   P_mech_W?: number | null;
   P_loss_total_W?: number | null;
@@ -53,6 +55,12 @@ export function apply3dFactors(summary: Apply3dFields): Apply3dFactors {
 
 const mul = (v: number | null | undefined, f: number): number | null | undefined => (v != null ? v * f : v);
 
+/** The marker of the shaft-side convention (src/motor_ai_sim/shaft_convention.py SHAFT_CONVENTION). */
+export const SHAFT_CONVENTION = 'fe_on_shaft_k3d_v1';
+/** True when the summary's shaft-side numbers already carry the torque factor and the core loss as a shaft load. */
+export const isShaftConvention = (s: { shaft_convention?: string | null } | null | undefined): boolean =>
+  !!s && s.shaft_convention === SHAFT_CONVENTION;
+
 /** Efficiency on the scaled shaft power, the server's own arithmetic (simulation.py "WHICH WAY THE POWER FLOWS"): a MOTOR is
  *  P / (P + losses); a GENERATOR takes the mechanical power IN, so it is (P_in - losses) / P_in (0 when the input does not
  *  cover the losses).  The summary keeps its own value when the inputs are missing. */
@@ -68,6 +76,25 @@ export function apply3dToSummary<T extends Apply3dFields>(summary: T): T {
   const { k, kq: kqRaw } = apply3dFactors(summary);
   if (k == null) return summary;
   const kq = kqRaw ?? k;
+  const flux = {
+    V_phase_peak_V: mul(summary.V_phase_peak_V, k),
+    V_phase_rms_V: mul(summary.V_phase_rms_V, k),
+    V_line_peak_V: mul(summary.V_line_peak_V, k),
+    V_line_rms_V: mul(summary.V_line_rms_V, k),
+    V_line_peak_solved_V: mul(summary.V_line_peak_solved_V, k),
+    V_line_rms_solved_V: mul(summary.V_line_rms_solved_V, k),
+    V1_LL_V: mul(summary.V1_LL_V, k),
+    KV_rpm_per_V_line: summary.KV_rpm_per_V_line != null ? summary.KV_rpm_per_V_line / k : summary.KV_rpm_per_V_line,
+    KV_noload_rpm_per_V_line: summary.KV_noload_rpm_per_V_line != null
+      ? summary.KV_noload_rpm_per_V_line / k : summary.KV_noload_rpm_per_V_line,
+    psi_pm_Wb: mul(summary.psi_pm_Wb, k),
+  };
+  // THE SHAFT-SIDE CONVENTION (owner 2026-11-25): the server already applied the torque factor to the shaft power, the
+  // efficiency, the per-mass figures, Kt and Km (field part only, the core loss on the shaft) - applying it again would
+  // double it.  Only the 2-D field torque and the flux-proportional numbers are scaled here.
+  if (isShaftConvention(summary)) {
+    return { ...summary, T_em_avg_Nm: mul(summary.T_em_avg_Nm, kq), ...flux };
+  }
   const Pm = summary.P_mech_W != null ? summary.P_mech_W * kq : summary.P_mech_W;
   return {
     ...summary,

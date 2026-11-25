@@ -1094,7 +1094,10 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
       if (drive !== 'current' || targetKind === 'off') return;
       try {
         const ls = JSON.parse(localStorage.getItem('sim.lastSummary') || 'null');
-        const Tl = Math.abs(Number(ls?.T_em_avg_Nm));
+        // a motor run on the shaft-side convention is fitted on its SHAFT torque (owner Q3, 2026-11-25); a generator on
+        // what it was fitted on before
+        const Tl = Math.abs(Number(ls?.shaft_convention === 'fe_on_shaft_k3d_v1' && ls?.op_mode !== 'generator'
+          && Number.isFinite(Number(ls?.T_shaft_Nm)) ? ls.T_shaft_Nm : ls?.T_em_avg_Nm));
         const Il = Number(ls?.I_phase_rms_A);
         if (!(Tl > 0) || !(Il > 0)) return;
         const err = (Tl - targetValue) / targetValue;

@@ -1,5 +1,7 @@
 /** Shaft efficiency from one stored duty. `pMechW` is raw rotor T*omega. */
 export function dutyEfficiencyPct(s: any, pMechW: number): number | null {
+  // shaft-side convention, motor at no load: the shaft delivers nothing (it supplies the core loss) - no efficiency
+  if (s?.shaft_convention === 'fe_on_shaft_k3d_v1' && s?.op_mode !== 'generator' && !(Number(pMechW) > 0)) return 0;
   const pm = Math.abs(Number(pMechW) || 0);
   const loss = Number(s?.P_loss_total_W);
   if (s?.P_loss_total_W == null || !Number.isFinite(loss) || loss < 0) return null;

@@ -432,7 +432,11 @@ def _eval_cache_key(overrides: Dict[str, float], current_a: float, steps: int,
         # v7 (2026-10-30): ew = 0 (auto) is the BUILT COIL's k_end per
         # candidate (#507), not the semicircle — a v6 auto entry holds the
         # semicircle's end-turn copper, loss and mass.
-        "v": 7,
+        # v8 (2026-11-25, owner): the shaft-side convention
+        # (motor_ai_sim.shaft_convention) - the core loss is a shaft load, the
+        # sleeve loss is counted; a v7 entry holds the earlier efficiency,
+        # power and torque per mass.  No conversion on read.
+        "v": 8,
         "sampling_purpose": sampling_purpose,
         # Physics the CALLER pinned for the whole run (rpm / connection / demag
         # / eddy from a descent plan).  A pinned run solves the pinned values no
@@ -2692,6 +2696,12 @@ def _cogging_refuse_demagged(points: List[Dict[str, Any]], cogging_max_nm: float
     return len(bad)
 
 
+from motor_ai_sim.shaft_convention import SHAFT_CONVENTION as _SHAFT_CONVENTION  # noqa: E402
+#: The shaft-side fields a stored sweep point carries into the eval cache with its numbers.
+_SHAFT_RES_KEYS = ("shaft_convention", "op_mode", "T_shaft_Nm", "P_mech_W", "P_shaft_drag_W",
+                   "P_shaft_drag_terms", "torque_side", "shaft_k3d", "shaft_basis_note", "P_sleeve_W")
+
+
 def _cogging_limits_ok(pt: Dict[str, Any], cogging_max_nm: float, eff_min_pct: float,
                        torque_min_nm: float) -> bool:
     """The opt-in limits of a cogging sweep on one point (a limit that is on and whose value is
@@ -2711,7 +2721,11 @@ def _cogging_limits_ok(pt: Dict[str, Any], cogging_max_nm: float, eff_min_pct: f
         if e is None or e * 100.0 < eff_min_pct:
             return False
     if torque_min_nm > 0.0:
-        t = _v("T_em_Nm")
+        # a motor point on the shaft-side convention is gated on its SHAFT torque
+        # (owner Q3, 2026-11-25); a generator on what it defined before (the
+        # field torque)
+        t = (_v("T_shaft_Nm") if (pt.get("shaft_convention") and pt.get("op_mode") != "generator"
+                                  and _v("T_shaft_Nm") is not None) else _v("T_em_Nm"))
         if t is None or abs(t) < torque_min_nm:
             return False
     return True
@@ -4285,8 +4299,12 @@ def seed_cache(req: SeedCacheRequest):
     for p in result["points"]:
         if not p.get("feasible") or p.get("current_a") is None or p.get("gamma_deg") is None:
             continue
+        # a point of the earlier shaft convention never enters the v8 cache: it
+        # would be served as a current eval (owner Q4: no conversion on read)
+        if p.get("shaft_convention") != _SHAFT_CONVENTION:
+            continue
         geo_ov = {k: v for k, v in (p.get("overrides") or {}).items() if k != "gamma_deg"}
-        res = {k: p[k] for k in _RES_KEYS if k in p}
+        res = {k: p[k] for k in _RES_KEYS + _SHAFT_RES_KEYS if k in p}
         key = _eval_cache_key(geo_ov, float(p["current_a"]), steps, coil, 1.0,
                               float(p["gamma_deg"]), mesh, mn,
                               int(sp["n_sectors"]), pc, tf, fp,

@@ -77,6 +77,8 @@ export function readSimMetrics(): Record<string, number> | undefined {
     // the phase peak stays in V_peak for reference but the card ignores it.
     set('V_line_peak_V', s.V_line_peak_V);
     set('P_mech_W', s.P_mech_W);
+    // the shaft-power convention of these numbers (1 = core loss on the shaft, lib/apply3d.ts); Compare ranks one at a time
+    if (s.shaft_convention === 'fe_on_shaft_k3d_v1') m.shaft_conv = 1;
     set('mass_total_kg', s.mass_total_kg);
     return Object.keys(m).length ? m : undefined;
   } catch { return undefined; }

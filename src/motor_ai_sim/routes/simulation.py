@@ -8023,6 +8023,12 @@ def _ripple_self_check(sbres: dict) -> dict:
     return sc if isinstance(sc, dict) else {}
 
 
+def _shaft_marker(summary: Optional[dict]) -> bool:
+    """True when a stored summary follows the current shaft convention."""
+    from motor_ai_sim.shaft_convention import has_marker
+    return has_marker(summary)
+
+
 def _refresh_summary_shape(res: dict) -> dict:
     """Rebuild a cached result's summary when its SHAPE predates the code.
 
@@ -8053,7 +8059,10 @@ def _refresh_summary_shape(res: dict) -> dict:
             coil_temp_c=float(args["coil_temp_c"]),
             geo_override=args.get("geo_override"),
             mode_requested=args.get("mode_requested"),
-            magnet_temp_c=args.get("magnet_temp_c"))
+            magnet_temp_c=args.get("magnet_temp_c"),
+            # the run keeps ITS shaft convention: a summary without the marker is
+            # rebuilt on the earlier one, never converted silently (owner Q7)
+            shaft_convention=("current" if _shaft_marker(s) else None))
         if s.get("mass_basis"):
             # a rebuild must not move the run onto whatever configuration is loaded NOW: the full-mass stamp it already
             # carries names the configuration it was taken from
@@ -8256,9 +8265,20 @@ def _build_transient_summary(
                                             # refine_proc never reads
     magnet_temp_c: Optional[float] = None,  # the run's magnet temperature: the
                                             # ψ_PM probe runs at it (2026-10-30)
+    shaft_convention: Optional[str] = "current",  # "current" = this code's
+                                            # convention (shaft_convention.py);
+                                            # None = the earlier one (a REBUILD of
+                                            # a stored summary that carries no marker)
 ) -> dict:
     """Build the Simulation summary block (masses, loss split, KV, efficiency,
     specific torque/power) from a finished transient result dict.
+
+    ``shaft_convention``: a NEW run gets the convention of
+    :mod:`motor_ai_sim.shaft_convention` (core loss on the shaft, the 3-D torque
+    factor in the shaft-side numbers) and carries its marker.  ``None`` rebuilds a
+    summary of the earlier convention bit for bit (every loss on the electrical
+    side, ``P_mech_W = T*w`` 2-D), so a stored or restored run never changes its
+    numbers silently.
 
     THE single source for the summary formula — called by BOTH the sliding-band
     path AND the legacy remesh path in get_fem_transient, AND by the kernel's
@@ -8438,6 +8458,54 @@ def _build_transient_summary(
         _Tavg = abs(_Tavg)
         _Pmech = abs(_Pmech)
 
+    # ── THE SHAFT-SIDE CONVENTION (owner 2026-11-25) ─────────────────────
+    # A new run: the core loss is a SHAFT load and the 3-D torque factor is IN
+    # the shaft-side numbers (field part only), see motor_ai_sim.shaft_convention.
+    # The earlier convention (above) is kept verbatim for a rebuild of a stored
+    # summary without the marker.  T_em_avg_Nm stays the 2-D field torque in both.
+    _e3rec = _end3d_lookup(sbres.get("geo_fingerprint"), _geo_cfg, diag=_e3diag)
+    _sc_on = shaft_convention is not None
+    _sc_fields: dict = {}
+    _Tq = _Tavg            # torque the constants (Kt, Km) are built on
+    _Tpm = _Tavg           # torque the per-mass figures are built on
+    if _sc_on:
+        from motor_ai_sim import shaft_convention as _SC
+        _kq = (float(_e3rec.get("k_torque") or _e3rec["k_flux"])
+               if _e3rec and (_e3rec.get("k_torque") or _e3rec.get("k_flux")) else None)
+        _D, _D_terms, _side = _SC.drag_of_result(
+            sbres, p_fe=_Pfe, p_mag=_Pmag, p_shaft=_Pshaft, p_sleeve=_Psleeve)
+        _bal = _SC.balance(t_field_nm=float(sbres.get("T_avg_Nm", 0.0)), rpm=_rpm,
+                           k=_kq, d_w=_D, p_loss_w=_ploss)
+        _op_mode = _bal["op_mode"]
+        _Pmech = _bal["P_mech_W"]
+        _Pelec = _bal["P_elec_W"]
+        _eff = _bal["efficiency"]
+        _Tq = _bal["T_field_k_Nm"]
+        _Tpm = _SC.per_mass_torque(_bal)
+        _sc_fields = {
+            "shaft_convention": _SC.SHAFT_CONVENTION,
+            # the 2-D field power T*w, and the field torque with the 3-D factor
+            "P_field_W": round(_bal["P_field_W"], 1),
+            "T_field_k_Nm": round(_bal["T_field_k_Nm"], 3),
+            # shaft torque: a motor's output, a generator's input (quoted positive)
+            "T_shaft_Nm": round(_bal["T_shaft_Nm"], 3),
+            "P_shaft_drag_W": round(_D, 1),
+            "P_shaft_drag_terms": list(_D_terms),
+            # the solved (in-field) copper AC the drag counts on a stator-side torque
+            "P_cu_ac_field_W": (round(float(sbres.get("P_cu_ac_solve_W") or 0.0), 1)
+                                if "cu_ac" in _D_terms else None),
+            "torque_side": _side,
+            "P_elec_W": round(_Pelec, 1),
+            "shaft_k3d": (round(_kq, 6) if _kq is not None else None),
+            "shaft_basis_note": (_SC.BASIS_NOTE if _kq is not None else _SC.BASIS_NOTE_2D),
+        }
+        # The battery and mechanical blocks below read the shaft side: a motor at
+        # no load (negative shaft power: the shaft has to supply the core loss)
+        # has no delivered output for them to bill.
+        _Pmech_out = max(_Pmech, 0.0)
+    else:
+        _Pmech_out = _Pmech
+
     # Voltage waveform quality (CIANO THD spec): V₁ + phase/line-to-line THD +
     # torque constant — first-class metrics on EVERY run so the optimizer can
     # hold THD_LL like it holds ripple.
@@ -8466,7 +8534,7 @@ def _build_transient_summary(
             _kt_I = float(fundamental_current(sbres)["I1_phase_rms_A"])
         except Exception:
             _kt_I = 0.0
-    _kt = round(_Tavg / _kt_I, 4) if _kt_I > 1e-9 else 0.0
+    _kt = round(_Tq / _kt_I, 4) if _kt_I > 1e-9 else 0.0
 
     # Coil current density J = conductor current / bare-copper cross-section.
     # The conductor carries the phase current split over the a_parallel paths
@@ -8741,6 +8809,8 @@ def _build_transient_summary(
 
     _summary_out = {
         "rpm": _rpm,
+        # the shaft-side convention (absent = the earlier one), see above
+        **_sc_fields,
         # I_phase_rms_A is the TERMINAL current — the setpoint the panel holds,
         # the three leads to the inverter — in BOTH connections.  It has to be:
         # every staleness check in the app compares this field with the panel
@@ -9204,7 +9274,7 @@ def _build_transient_summary(
                                                   or _r["k_flux"]), 3),
             "V_line_peak_corrected_V": (
                 round(_Vlpk * float(_r["k_flux"]), 2) if _Vlpk else None),
-        }))(_end3d_lookup(sbres.get("geo_fingerprint"), _geo_cfg, diag=_e3diag)),
+        }))(_e3rec),
         # said out loud when another geometry's passport was NOT lent (stack length differs): the card shows 2-D
         **({"end3d_note": _e3diag["note"]} if _e3diag.get("note") else {}),
         # Bench Ld/Lq — the LCR-meter measurement, simulated: small-signal
@@ -9229,17 +9299,17 @@ def _build_transient_summary(
         # figure of merit that survives scaling.  Computed at the SOLVED coil
         # temperature — R grows ~39 %/100 °C, so a datasheet Km at 25 °C reads
         # higher than the same machine hot.  No-load (P_cu→0) has no Km: null.
-        "Km_Nm_sqrtW": (round(_Tavg / _math.sqrt(_Pcu_dc), 4)
-                        if _Pcu_dc > 1e-9 and _Tavg > 0 else None),
+        "Km_Nm_sqrtW": (round(_Tq / _math.sqrt(_Pcu_dc), 4)
+                        if _Pcu_dc > 1e-9 and _Tq > 0 else None),
         "Km_per_mass_Nm_sqrtW_kg": (
-            round(_Tavg / _math.sqrt(_Pcu_dc) / max(_m_tot, 1e-6), 4)
-            if _Pcu_dc > 1e-9 and _Tavg > 0 else None),
+            round(_Tq / _math.sqrt(_Pcu_dc) / max(_m_tot, 1e-6), 4)
+            if _Pcu_dc > 1e-9 and _Tq > 0 else None),
         # Shape version — bumped when a NEW derived quantity is added to this
         # summary, so a cache/restore hit knows its stored summary is missing
         # cells and rebuilds it with the current code (_refresh_summary_shape).
         # v2: rotor_inertia + Km/Km-per-mass (2026-08-22).
         "summary_shape_v": _SUMMARY_SHAPE_V,
-        "torque_per_mass_Nm_kg": round(_Tavg / max(_m_tot, 1e-6), 3),
+        "torque_per_mass_Nm_kg": round(_Tpm / max(_m_tot, 1e-6), 3),
         "power_per_mass_W_kg":   round(_Pmech / max(_m_tot, 1e-6), 1),
         "loss_density_W_kg":     round(_ploss / max(_m_tot, 1e-6), 1),
         # rms terminal phase current where the current was the ANSWER (imposed
@@ -9255,14 +9325,14 @@ def _build_transient_summary(
         # so every stored case, every regression pin and every current-drive
         # run reads exactly as it did before.
         **((lambda _b: ({} if not _b else {"battery_charge": _b}))(
-            _battery_charge_block(sbres, op_mode=_op_mode, p_mech_w=_Pmech,
+            _battery_charge_block(sbres, op_mode=_op_mode, p_mech_w=_Pmech_out,
                                   p_loss_w=_ploss))),
         # ── THE MECHANICAL HALF (2026-09-08) ─────────────────────────────
         # Bearings and windage, on the RUN instead of in the browser.  Absent
         # — not zero — on a machine that names no bearings, on a background
         # solve and on a candidate geometry; see `_mech_loss_fields`.
         **_mech_loss_fields(
-            sbres, geo_override=geo_override, rpm=_rpm, p_mech_w=_Pmech,
+            sbres, geo_override=geo_override, rpm=_rpm, p_mech_w=_Pmech_out,
             p_loss_w=_ploss, efficiency=_eff, op_mode=_op_mode,
             mass_components=_masses.get("components")),
     }
@@ -9306,11 +9376,13 @@ def _build_transient_summary(
     # THE FULL MASS of what was simulated (owner 2026-10-20).  Only the live machine: an optimizer candidate is billed on
     # its own active mass and never reads the loaded configuration.
     if not skip_psi_pm_probe:
-        _stamp_full_mass(_summary_out, T=_Tavg, p_mech=_Pmech, p_cu_dc=_Pcu_dc, p_loss=_ploss)
+        _stamp_full_mass(_summary_out, T=_Tpm, p_mech=_Pmech, p_cu_dc=_Pcu_dc, p_loss=_ploss,
+                         t_km=_Tq)
     return _summary_out
 
 
-def _stamp_full_mass(summary: dict, *, T: float, p_mech: float, p_cu_dc: float, p_loss: float) -> None:
+def _stamp_full_mass(summary: dict, *, T: float, p_mech: float, p_cu_dc: float, p_loss: float,
+                     t_km: Optional[float] = None) -> None:
     """Add the FULL motor mass of the simulated geometry and the per-mass figures divided by it to ``summary`` (additive: the
     run's own ``mass_total_kg`` = EM parts + shaft tube and the active per-mass figures stay what the optimizer and every
     stored Compare point were built on).
@@ -9332,7 +9404,8 @@ def _stamp_full_mass(summary: dict, *, T: float, p_mech: float, p_cu_dc: float, 
             _mm.stamp_run_summary(
                 summary, die, cfg,
                 raw={"T_em_avg_Nm": T, "P_mech_W": p_mech, "P_loss_total_W": p_loss,
-                     "Km_Nm_sqrtW": (T / _m.sqrt(p_cu_dc) if p_cu_dc > 1e-9 and T > 0 else None)})
+                     "Km_Nm_sqrtW": ((T if t_km is None else t_km) / _m.sqrt(p_cu_dc)
+                                     if p_cu_dc > 1e-9 and (T if t_km is None else t_km) > 0 else None)})
         else:
             summary.update(mass_partial=True, mass_partial_reason="no die / configuration is loaded")
     except Exception as exc:                                    # noqa: BLE001 - a mass hiccup never fails a run

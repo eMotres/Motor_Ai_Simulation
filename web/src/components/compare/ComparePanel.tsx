@@ -36,7 +36,7 @@ import { ktFromKv } from '../../lib/kvKt';
 import { pocketWidth, POCKET_WIDTH_TIP, SLOT_WIDTH_TIP } from '../../lib/pocketWidth';
 import { nsT } from '../../i18n/nsT';
 import { coggingComparable, storedNumber } from '../../lib/coggingPp';
-import { isSweepRow, sweepMetricsComparable } from '../../lib/sweepSettings';
+import { isSweepRow, sweepMetricsComparable, shaftConventionComparable } from '../../lib/sweepSettings';
 
 const API = import.meta.env.VITE_API_URL ?? 'http://localhost:8001';
 
@@ -763,6 +763,8 @@ const ComparePanel: React.FC = () => {
   // The Δ% row and its column maxima follow the same rule as the ranking: a sweep point whose steps-and-gap identity is unknown /
   // mixed / different (or that sits beside an ordinary run) gets no delta and does not set a maximum.
   const selSweepMixed = !sweepMetricsComparable(selected.map(s => s.results as any));
+  // rows of two shaft-power conventions (owner 2026-11-25) are never ranked against each other, and get no delta
+  const selShaftMixed = !shaftConventionComparable(selected.map(s => s.results as any));
   // Cogging pp follows its own rule (known, equal settings) over the SAME selected rows as the colours of the comparison table.
   const selCoggingMixed = !coggingComparable(selected
     .filter(s => Number.isFinite(storedNumber((s.results as any)?.cogging_pp_Nm)))
@@ -771,6 +773,7 @@ const ComparePanel: React.FC = () => {
     if (r.text) return NaN;
     if (selCoggingMixed && colId(r).endsWith('cogging_pp_Nm')) return NaN;
     if (selSweepMixed && isSweepRow(s.results as any)) return NaN;
+    if (selShaftMixed) return NaN;
     const raw = resultVal(r, s);
     if (!Number.isFinite(raw)) return NaN;
     return r.activeBasis?.(resultSrc(r, s)) && selectedHasFullBasis.get(colId(r)) === true ? NaN : raw;
@@ -841,6 +844,16 @@ const ComparePanel: React.FC = () => {
       };
     });
   }
+  if (!shaftConventionComparable(scope.map(s => s.results as any))) {
+    resultModelColumns.forEach((c, i) => {
+      const base = c;
+      resultModelColumns[i] = { ...base,
+        rankValues: () => [],
+        noColor: () => true,
+        title: (v, s) => [txSim('shaftConvMixed'), base.title ? base.title(v, s) : ''].filter(Boolean).join(' ') || undefined,
+      };
+    });
+  }
   return resultModelColumns;
   };
   const resultModelColumns = buildResultModelColumns(sims, libraryHasFullBasis);
@@ -871,6 +884,7 @@ const ComparePanel: React.FC = () => {
   const colMax: Record<string, number> = {};
   resultCols.forEach(r => {
     if (selCoggingMixed && colId(r).endsWith('cogging_pp_Nm')) return;
+    if (selShaftMixed) return;
     const ns = extentVals(r, selSweepMixed ? selected.filter(s => !isSweepRow(s.results as any)) : selected);
     if (ns.length) colMax[`r:${colId(r)}`] = Math.max(...ns);
   });

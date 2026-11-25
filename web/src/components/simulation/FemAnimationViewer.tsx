@@ -66,6 +66,8 @@ interface TransientFramePayload {
   T_ripple_pct:       number;
   V_peak:             number;
   P_mech_avg_W:       number;
+  /** the run's summary: its P_mech_W is the card's power (the solver's P_mech_avg_W is a diagnostic balance) */
+  summary?:           { P_mech_W?: number | null } | null;
   frames:             FrameRaw[];
   n_frames_returned:  number;
 }
@@ -262,7 +264,7 @@ const FemAnimationViewer: React.FC<Props> = ({
       P_fe_W:          0,
       P_mag_eddy_W:    0,
       P_loss_total_W:  0,
-      P_mech_W:        data.P_mech_avg_W,
+      P_mech_W:        data.summary?.P_mech_W ?? (data.T_avg_Nm * 2 * Math.PI * data.rpm / 60),
       efficiency:      0,
       freq_Hz:         data.f_elec_Hz,
       rpm:             data.rpm,

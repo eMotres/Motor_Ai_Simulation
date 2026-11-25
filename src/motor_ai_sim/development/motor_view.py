@@ -707,8 +707,16 @@ def _rescale_to_loop(base: Dict[str, Any], before: Dict[str, Any]) -> None:
             if _num(base.get(k)) is not None:
                 base[k] = base[k] * r
 
-    scale(("P_mech_W", "torque_per_mass_Nm_kg", "power_per_mass_W_kg", "torque_per_mass_full_Nm_kg",
-           "power_per_mass_full_W_kg"), _ratio(base.get("T_em_avg_Nm"), before.get("T_em_avg_Nm")))
+    from motor_ai_sim import shaft_convention as _SC
+    if _SC.rederive(base):
+        # shaft-side convention: the shaft side is k*T*w -/+ D, not a proportion of the torque
+        def _tpm(s_: Dict[str, Any]) -> Any:
+            return s_.get("T_field_k_Nm") if s_.get("op_mode") == "generator" else s_.get("T_shaft_Nm")
+        scale(("torque_per_mass_Nm_kg", "torque_per_mass_full_Nm_kg"), _ratio(_tpm(base), _tpm(before)))
+        scale(("power_per_mass_W_kg", "power_per_mass_full_W_kg"), _ratio(base.get("P_mech_W"), before.get("P_mech_W")))
+    else:
+        scale(("P_mech_W", "torque_per_mass_Nm_kg", "power_per_mass_W_kg", "torque_per_mass_full_Nm_kg",
+               "power_per_mass_full_W_kg"), _ratio(base.get("T_em_avg_Nm"), before.get("T_em_avg_Nm")))
     e3 = base.get("end3d")
     if isinstance(e3, dict):
         r = _ratio(base.get("T_em_avg_Nm"), before.get("T_em_avg_Nm"))

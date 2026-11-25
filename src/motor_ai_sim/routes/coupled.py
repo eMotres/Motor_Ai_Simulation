@@ -1807,10 +1807,21 @@ def _cold_constants(em: Dict[str, Any], *, body: Dict[str, Any],
         two_d[key] = v
         if k3 is not None:
             k3d[key] = round(v * k3, 6)
+    # On the shaft-side convention (motor_ai_sim.shaft_convention) the summary's
+    # Kt / Km already carry the run's torque factor; their 2-D value is that
+    # divided by it, so the factor is applied once here as everywhere.
+    _sc_k = None
+    if s.get("shaft_convention") == _SHAFT_CONVENTION:
+        try:
+            _sc_k = float(s.get("shaft_k3d")) if s.get("shaft_k3d") is not None else None
+        except (TypeError, ValueError):
+            _sc_k = None
     for key in _COLD_TORQUE:
         v = _n(key)
         if v is None:
             continue
+        if _sc_k and key != "T_em_avg_Nm":
+            v = v / _sc_k
         two_d[key] = v
         if kTq is not None:
             k3d[key] = round(v * kTq, 6)
@@ -4547,6 +4558,9 @@ def _register_answer_pass(phase: str, body: Dict[str, Any],
     return rec
 
 
+from motor_ai_sim.shaft_convention import SHAFT_CONVENTION as _SHAFT_CONVENTION  # noqa: E402
+
+
 def _torque_factor_k(summary: Optional[Dict[str, Any]]) -> Optional[float]:
     """THE torque factor of a run summary: the measured k_T, else the Stage A flux factor k_flux, else None (plain 2-D), inside
     the accepted band (``end3d_factors.torque_factor``) - the one the Electromagnetic tab's tiles (``apply3d.ts``), the S1 / continuous
@@ -4573,6 +4587,19 @@ def _shaft_torque_nm(summary: Dict[str, Any]) -> tuple:
         t = None
     if t is None or not math.isfinite(t):
         return None, None
+    # THE SHAFT-SIDE CONVENTION (owner 2026-11-25, motor_ai_sim.shaft_convention):
+    # a motor's shaft torque is the field torque x k minus the core loss / w; a
+    # generator's held quantity stays what it was (field torque x k).
+    if summary.get("shaft_convention") == _SHAFT_CONVENTION:
+        _key = "T_field_k_Nm" if summary.get("op_mode") == "generator" else "T_shaft_Nm"
+        try:
+            _ts = float(summary.get(_key))
+        except (TypeError, ValueError):
+            _ts = None
+        if _ts is not None and math.isfinite(_ts):
+            return _ts, (("field torque %.4g N·m x 3-D factor" % t) if _key == "T_field_k_Nm"
+                         else ("shaft torque: field %.4g N·m x 3-D factor minus the core loss "
+                               "(and any other shaft-side load) / w" % t))
     k = _torque_factor_k(summary)
     if k is not None and abs(k - 1.0) > 1e-9:
         return t * k, ("2-D mean %.4g N·m × 3-D end-effect %.4g" % (t, k))
@@ -9346,6 +9373,11 @@ def _cr_speed_search_opts(cooling: Mapping[str, Any], summary: Mapping[str, Any]
         return opts
     t_ref = _ccr._num((summary or {}).get("T_em_avg_Nm"))
     k3d = _torque_factor_k(summary) or 1.0
+    if (summary or {}).get("shaft_convention") == _SHAFT_CONVENTION and t_ref:
+        # the shaft torque the propeller sees (field x k minus the core loss / w)
+        _ts = _shaft_torque_nm(summary or {})[0]
+        if _ts:
+            k3d = abs(float(_ts)) / abs(float(t_ref))
     if not (t_ref and abs(t_ref) > 0.0):
         log.warning("coupled: the reference run states no torque, so the S1 "
                     "speed search has no propeller load line")

@@ -21,6 +21,7 @@ import { applyDutyEverywhere } from '../../lib/dutyApply';
 import { registerSavers } from '../../lib/loadGuard';
 import { markRunsSaved } from '../../lib/unsavedWork';
 import { quotedRipple } from '../../lib/rippleAccuracy';
+import { isShaftConvention } from '../../lib/apply3d';
 import { releasedOffers, diffText, type DieDiff, type ReleasedCtxLike } from '../../lib/releasedContext';
 import HelpTip from './HelpTip';
 import { rememberDieSettings } from '../../lib/dieSettings';
@@ -447,13 +448,19 @@ const ActiveFamilyStrip: React.FC = () => {
             ? Number(s.end3d.k_flux) : null;
         } catch { return null; }
       })();
-      const Tn = Math.abs(Number(s?.T_em_avg_Nm)) * (k3d ?? 1);
+      // THE SHAFT-SIDE CONVENTION (lib/apply3d.ts isShaftConvention): the run's shaft torque and power already carry the
+      // factor on the field part and the core loss on the shaft - a motor duty stores its shaft torque, a generator its
+      // field torque x k (the quantity the torque hold matches), and the power is not scaled a second time.
+      const sc = isShaftConvention(s);
+      const Tn = sc
+        ? Math.abs(Number(mode === 'generator' ? s?.T_field_k_Nm : s?.T_shaft_Nm))
+        : Math.abs(Number(s?.T_em_avg_Nm)) * (k3d ?? 1);
       // The rotor's own T·ω (k3d-scaled), i.e. SummaryTable's `pMechAbs` —
       // the mechanical loss has NOT been applied to this yet.  Both `PmW`
       // below and `dutyEfficiencyPct` derive the shaft power from this same
       // rotor figure; feeding either of them the OTHER'S already-derived
       // shaft power double-applies bearings + windage.
-      const rotorW = Math.abs(Number(s?.P_mech_W)) * (k3d ?? 1);
+      const rotorW = sc ? Number(s?.P_mech_W) : Math.abs(Number(s?.P_mech_W)) * (k3d ?? 1);
       // The duty's kW is the SHAFT power — the number the card's "Mech power"
       // tile shows (SummaryTable `pShaft`): rotor T·ω plus the bearings and
       // windage a generator's prime mover must also supply, minus them on a

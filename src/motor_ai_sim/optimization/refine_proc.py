@@ -545,6 +545,21 @@ def run_one(overrides: Dict[str, float], current_a: float, steps: int,
     else:
         eff = 0.0
         op_mode = "motor"
+    # THE SHAFT-SIDE CONVENTION (owner 2026-11-25, motor_ai_sim.shaft_convention):
+    # the core loss is a shaft load, every loss counted (the sleeve too, as the
+    # Simulation summary does).  An optimiser candidate has no 3-D passport, so
+    # its torque stays the 2-D field torque (k = 1) and the row says so.  The
+    # legacy arithmetic above is kept only to read the power-flow sign.
+    from motor_ai_sim import shaft_convention as _SC
+    sl = float(np.mean(d.get("P_sleeve_eddy_W", [0.0]) or [0.0]))
+    ploss = cu + fe + mg + sh + sl
+    _D, _D_terms, _side = _SC.drag_of_result(d, p_fe=fe, p_mag=mg, p_shaft=sh, p_sleeve=sl)
+    _bal = _SC.balance(t_field_nm=float(d["T_avg_Nm"]), rpm=rpm, k=None, d_w=_D, p_loss_w=ploss)
+    op_mode = _bal["op_mode"]
+    eff = _bal["efficiency"]
+    pmech = _bal["P_mech_W"]
+    Tavg = abs(float(d["T_avg_Nm"]))
+    _t_pm = _SC.per_mass_torque(_bal)
     # Same k_end as the loss/R path above — a pinned end-winding factor must
     # bill the copper mass too, exactly as the Simulation summary does (it
     # passes the solver's k_end_used into compute_masses).  Unpinned, that is
@@ -616,7 +631,13 @@ def run_one(overrides: Dict[str, float], current_a: float, steps: int,
     return {
         "T_em_Nm": round(Tavg, 3), "efficiency": round(eff, 5),
         "op_mode": op_mode,     # derived from the power-flow sign (see above)
-        "torque_per_mass_Nm_kg": round(Tavg / mass, 4) if mass > 0 else 0.0,
+        "torque_per_mass_Nm_kg": round(_t_pm / mass, 4) if mass > 0 else 0.0,
+        # the shaft-side convention of this row (motor_ai_sim.shaft_convention)
+        "shaft_convention": _SC.SHAFT_CONVENTION,
+        "T_shaft_Nm": round(_bal["T_shaft_Nm"], 3),
+        "P_shaft_drag_W": round(_D, 1), "P_shaft_drag_terms": list(_D_terms),
+        "torque_side": _side, "shaft_k3d": None, "shaft_basis_note": _SC.BASIS_NOTE_2D,
+        "P_sleeve_W": round(sl, 1),
         "T_ripple_pct": (None if d.get("T_ripple_pct") is None
                          else round(float(d["T_ripple_pct"]), 2)),
         "T_ripple_pp_Nm": d.get("T_ripple_pp_Nm"),

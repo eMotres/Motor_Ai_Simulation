@@ -35,6 +35,7 @@ import { canWriteServer } from '../../lib/localAuth';
 import { useRunSettings } from '../../lib/useRunSettings';
 import { runSettingsBody } from '../../lib/runSettings';
 import RunSettingsBar from './RunSettingsBar';
+import { pointApply3dK } from '../../lib/sweepApply3d';
 import { sweepSettingsOf, sweepSettingsLabel, sweepSettingsMetrics } from '../../lib/sweepSettings';
 import { endWindingPin } from '../../lib/endWindingPin';
 import { coincidentGroups, coincidentOffsetPx } from '../../lib/coincidentPoints';
@@ -82,6 +83,11 @@ const readBool = (key: string, def: boolean): boolean => {
 // to land on 500 kW and Simulation answered 487.46 = 500 × 0.9724
 // (2026-09-08).  Same switch, same k, read from the last Simulation summary of
 // the machine; null = show 2-D (switch off, or no passport yet).
+const readApply3dOn = (): boolean => {
+  try { return localStorage.getItem('sim.apply3d') !== '0'; } catch { return true; }
+};
+// each point by its OWN k when it carries one (lib/sweepApply3d), else the loaded machine's
+const kOfPoint = (p: any, machineK: number | null): number | null => pointApply3dK(p, machineK, readApply3dOn());
 const readApply3dK = (): number | null => {
   try {
     if (localStorage.getItem('sim.apply3d') === '0') return null;
@@ -140,7 +146,8 @@ const SweepTable: React.FC<{ points: any[]; rpm: number; vdcFactor?: number; sel
                                                : (mass > 0 ? P2 / mass : 0);
       // 3-D view (same k and rule as the Simulation summary), 2-D kept under raw2d
       // so applyPoint pushes the solver's own numbers and lets the summary scale them.
-      const s3 = scale3d(k3d, Number(p.T_em_Nm) || 0, P2, Number(p.V_peak) || 0,
+      const kPt = kOfPoint(p, k3d);
+      const s3 = scale3d(kPt, Number(p.T_em_Nm) || 0, P2, Number(p.V_peak) || 0,
                          Number(p.V_line_peak_V) || 0, Number(p.KV_rpm_per_V_line) || 0,
                          td2, pd2, eff2, ploss);
       const { T, P, eff, Vpk, td, pd } = s3;
@@ -157,7 +164,7 @@ const SweepTable: React.FC<{ points: any[]; rpm: number; vdcFactor?: number; sel
         raw2d: { T: Number(p.T_em_Nm) || 0, P_mech_W: p.P_mech_W, Vpk: Number(p.V_peak) || 0,
                  V_line_peak_V: p.V_line_peak_V, KV_rpm_per_V_line: p.KV_rpm_per_V_line,
                  td: td2, power_per_mass_W_kg: p.power_per_mass_W_kg, eff: eff2 },
-        k3d,
+        k3d: kPt,
         rpm: p.rpm,   // absent today (refine result omits it) — kept for when it lands
         ripple: Number(p.T_ripple_pct) || 0, mass, td,
         // Cogging pp (opt-in no-load solve of the geometry); absent = not measured
@@ -746,7 +753,8 @@ const SweepStudyPanel: React.FC = () => {
       const massN = Number(p.mass_total_kg) || 0;
       const pd2 = p.power_per_mass_W_kg != null ? Number(p.power_per_mass_W_kg) / 1000
                                                : (massN > 0 ? P2 / massN : 0);
-      const s3 = scale3d(k3dChart, Number(p.T_em_Nm) || 0, P2, Number(p.V_peak) || 0,
+      const kPt = kOfPoint(p, k3dChart);
+      const s3 = scale3d(kPt, Number(p.T_em_Nm) || 0, P2, Number(p.V_peak) || 0,
                          Number(p.V_line_peak_V) || 0, Number(p.KV_rpm_per_V_line) || 0,
                          Number(p.torque_per_mass_Nm_kg) || 0, pd2,
                          (p.efficiency ?? 0) * 100, Number(p.P_loss_total_W) || 0);
@@ -768,7 +776,7 @@ const SweepStudyPanel: React.FC = () => {
                              V_line_peak_V: p.V_line_peak_V, KV_rpm_per_V_line: p.KV_rpm_per_V_line,
                              td: p.torque_per_mass_Nm_kg, power_per_mass_W_kg: p.power_per_mass_W_kg,
                              eff: (p.efficiency ?? 0) * 100 },
-                    k3d: k3dChart,
+                    k3d: kPt,
                     rpm: p.rpm,   // absent today (refine result omits it) — future-proof
                     ploss: p.P_loss_total_W, core: p.P_fe_W,
                     stranded: p.P_cu_W, solid: (p.P_mag_W ?? 0) + (p.P_shaft_W ?? 0),
@@ -1016,7 +1024,7 @@ const SweepStudyPanel: React.FC = () => {
       if (!v || typeof v.overrides !== 'object') {
         throw new Error('Sweep point lacks its geometry; run the Sweep again');
       }
-      const k3d = readApply3dK();
+      const k3d = kOfPoint(v, readApply3dK());
       const mass = Number(v.mass_total_kg) || 0;
       const P2 = v.P_mech_W != null ? Number(v.P_mech_W) / 1000
                                     : (Number(v.T_em_Nm) || 0) * (2 * Math.PI * (Number(v.rpm) || 0) / 60) / 1000;

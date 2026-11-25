@@ -89,3 +89,13 @@ def test_short_stack_single_reference_runs_on_the_80mm_machine():
     assert l8["eps"] == pytest.approx((12 * (1 - 0.92271) - 8 * (1 - 0.88685)) / 4, rel=1e-9)   # +0.56 %
     l12 = EE.end_deficit_check(_curve([(12.0, 0.92270), (8.0, 0.88702), (6.0, 0.85845)]), 12.0)
     assert l12["verdict"] == "NOT CHECKED"
+
+
+def test_a_long_stack_machine_passes_at_two_axial_meshes():
+    """48-slot 56-pole 400 mm machine, 90 mm reference (own-ratio rows, derived): the axial mesh n_stack 8 (90 / 135 /
+    180 mm) and n_stack 12 (90 / 180 mm) give the same eps, -0.38 %: the fit measures the machine, not the mesh."""
+    a = EE.end_deficit_check(_curve([(90.0, 0.96942381), (135.0, 0.98104254), (180.0, 0.98661238)]), 90.0)
+    b = EE.end_deficit_check(_curve([(90.0, 0.96933232), (180.0, 0.98658446)]), 90.0)
+    assert a["verdict"] == b["verdict"] == "PASS"
+    assert a["eps"] == pytest.approx(-0.0038, abs=1e-4) and b["eps"] == pytest.approx(a["eps"], abs=1e-4)
+    assert a["D0_mm"] == pytest.approx(3.09, abs=0.02)

@@ -121,9 +121,12 @@ def test_results_rows_are_unchanged_without_sync_and_carry_the_new_keys_with_it(
     stored = {"cruise": {"coupled": {"time_to_limit": {"within_limits": True}}}}
     plain = motors._results("D", "C", cfg, stored, set())[0]
     assert not {"duty_id", "build_stale", "hidden_records", "thermal_hold"} & set(plain)
-    synced = motors._results("D", "C", cfg, stored, set(), own_only=True, sync=True)[0]
+    synced = motors._results("D", "C", cfg, stored, set(), sync=True)[0]
     assert synced["duty_id"] == "d-1" and synced["thermal_hold"] == {"state": "within", "time_s": None}
-    assert {k: v for k, v in synced.items() if k in plain} == {k: v for k, v in plain.items() if k in synced} or True
+    assert {k: v for k, v in synced.items() if k in plain} == plain                 # the old keys are exactly the old values
+    own = motors._results("D", "C", cfg, stored, set(), own_only=True, sync=True)[0]
+    assert isinstance(own["hidden_records"], list)                                    # the reason a record was set aside is carried
+    assert all(h.get("reason") for h in own["hidden_records"])
 
 
 def test_thermal_hold_reads_the_time_to_limit_block():

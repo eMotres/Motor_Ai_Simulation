@@ -505,13 +505,14 @@ def stack_properties(polys: dict, assignments: Optional[dict],
     from motor_ai_sim.simulation.mechanical.rotor_stress import (
         PART_NAMES, build_rotor_mesh, resolve_part_materials)
 
+    # a pocket drawn with a clearance (2026-11-25): the magnet bonded across
+    # the clearance ring, weighing what the drawn one does (``pocket_clearance``)
+    from motor_ai_sim.simulation.mechanical import pocket_clearance as _pkc
+    polys = _pkc.bonded_variant(polys)
     rm = build_rotor_mesh(polys, mesh_size_mm=mesh_size_mm)
     mesh, part_tri = rm.mesh, rm.part_tri
     mech = resolve_part_materials(assignments, polys.get("sleeve") is not None,
                                   material_overrides)
-    # a pocket drawn with a clearance (2026-11-25): the pocket-filling magnet
-    # weighs what the drawn one does (see ``pocket_clearance``)
-    from motor_ai_sim.simulation.mechanical import pocket_clearance as _pkc
     mech = _pkc.scaled_mechs(mech, polys)
     p = mesh.p.T
     v0, v1, v2 = p[mesh.t[0]], p[mesh.t[1]], p[mesh.t[2]]
@@ -765,7 +766,7 @@ def solve_rotordynamics(polys: dict, params: dict,
     }
     # a pocket drawn with a clearance (2026-11-25, ``pocket_clearance``)
     from motor_ai_sim.simulation.mechanical import pocket_clearance as _pkc
-    _pk = _pkc.summary(polys, _pkc.RULE_MODAL)
+    _pk = _pkc.summary(_pkc.bonded_variant(polys), _pkc.RULE_MODAL)
     if _pk is not None:
         out["pocket_clearance"] = _pk
     return out

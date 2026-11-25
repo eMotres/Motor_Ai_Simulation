@@ -239,7 +239,8 @@ def test_the_magnet_seats_across_air_drawn_above_it():
     A fill limited to the clearance ring left that wall with no pair at all."""
     up = 0.1
     raw = _polys(CLR, up_gap=up)
-    mp = pkc.mechanical_polys(raw, {"magnet_pocket_clearance": CLR})
+    mp = pkc.mechanical_polys(raw, {"magnet_pocket_clearance": CLR,
+                                    "magnet_up_gap": up})
     for (fill, _p), (drawn, _q) in zip(mp["magnets"], raw["magnets"]):
         assert fill.intersection(raw["rotor"]).area < 1e-6
         assert fill.area - drawn.area == pytest.approx(
@@ -273,6 +274,7 @@ def test_torque_goes_through_the_iron_and_the_rotor_solves(rpm, loads):
 
 def test_bonded_with_a_clearance_is_the_glued_fill():
     out = _solve(_mech(CLR), typ="bonded")
+    assert out["pocket_clearance"]["fill"] == "bonded"
     c = _case(out)
     assert c["contact"]["seated"] == []
     assert c["contact"]["unretained_parts"] == []
@@ -297,10 +299,11 @@ def test_pair_gaps_are_the_drawn_clearance():
     mag = np.array([ctc.PART_MAGNET in (it.part_a, it.part_b)
                     for it in cs.interfaces])[cs.pair_iface]
     assert mag.any()
-    # flat faces at the clearance, the mitre corners at most sqrt(2) of it
+    # flat faces at the clearance; at a mitre corner the gap is measured along
+    # the corner node's (averaged) normal, a little more than the clearance
     gm = g0[mag] * 1e3
     assert np.median(gm) == pytest.approx(CLR, rel=1e-3)
-    assert gm.max() <= math.sqrt(2.0) * CLR * 1.001
+    assert gm.max() <= 2.0 * CLR
     assert gm.min() >= CLR * 0.999
     assert not g0[~mag].any()
 
@@ -351,3 +354,197 @@ def test_coupled_mechanical_failures_are_listed():
     assert "disconnected" in got[0]["error"]
     # a retention FAIL is a solved step with a verdict, not a failed step
     assert _mechanical_failures({"ok": True, "retention": {"status": "fail"}}) == []
+
+
+# ---------------------------------------------------------------------------
+# a pocket OPEN to the air gap (lips over the magnet corners)
+# ---------------------------------------------------------------------------
+
+OPEN_R1, OPEN_UP, OPEN_W = 49.6, 0.4, 0.8 * MAG_W   # magnet top 0.4 below the OD
+
+
+def _open_polys(clearance: float) -> dict:
+    """The 4-pole rotor with each magnet run up to 0.4 mm below the OD and its
+    pocket opened to the gap over the middle 80 % of the magnet — two lips over
+    the magnet corners, each belonging to a different pole piece."""
+    disk = Point(0, 0).buffer(R_OD, quad_segs=128)
+    rotor = disk.difference(Point(0, 0).buffer(R_BORE, quad_segs=96))
+    magnets = []
+    for k in range(N_POLES):
+        ang = 360.0 * k / N_POLES
+        slab = affinity.rotate(Polygon([(MAG_R0, -MAG_W / 2), (OPEN_R1, -MAG_W / 2),
+                                        (OPEN_R1, MAG_W / 2), (MAG_R0, MAG_W / 2)]),
+                               ang, origin=(0, 0))
+        pocket = slab.buffer(clearance, join_style=2) if clearance > 0 else slab
+        mouth = affinity.rotate(Polygon([(OPEN_R1, -OPEN_W / 2), (R_OD + 1, -OPEN_W / 2),
+                                         (R_OD + 1, OPEN_W / 2), (OPEN_R1, OPEN_W / 2)]),
+                                ang, origin=(0, 0))
+        rotor = rotor.difference(pocket.union(mouth))
+        magnets.append((slab, 1 if k % 2 == 0 else -1))
+    return {"rotor": rotor, "magnets": magnets, "sleeve": None, "shaft": None,
+            "sleeve_r_mm": (0.0, 0.0)}
+
+
+def _open_mech(c: float = CLR) -> dict:
+    return pkc.mechanical_polys(_open_polys(c), {"magnet_pocket_clearance": c,
+                                                 "magnet_up_gap": OPEN_UP})
+
+
+def _rmax(g) -> float:
+    xy = np.asarray(g.exterior.coords)
+    return float(np.hypot(xy[:, 0], xy[:, 1]).max())
+
+
+def _xmax_pole(g, k: int) -> float:
+    """The largest radial coordinate in pole ``k``'s own frame."""
+    loc = affinity.rotate(g, -360.0 * k / N_POLES, origin=(0, 0))
+    return float(np.asarray(loc.exterior.coords)[:, 0].max())
+
+
+def test_open_pocket_fills_stop_at_the_od_and_the_bonded_fill_is_the_ring():
+    mp = _open_mech()
+    pk = mp[pkc.POCKET_KEY]
+    for k, ((fs, _), (fb, _q), (d, _r)) in enumerate(zip(
+            mp["magnets"], pk["magnets_bonded"], pk["magnets_drawn"])):
+        assert _rmax(fs) <= R_OD + 1e-9            # never into the air gap
+        assert _rmax(fs) > R_OD - 2e-3             # …but up the opening
+        # the bonded fill is the clearance ring: no plug in the opening
+        assert _xmax_pole(fb, k) <= OPEN_R1 + CLR + 1e-6
+        assert fb.symmetric_difference(d.buffer(CLR, join_style=2)).area < 1e-6
+    assert pkc.bonded_variant(mp)["magnets"] == pk["magnets_bonded"]
+    p0 = _polys(0.0)
+    assert pkc.bonded_variant(p0) is p0
+
+
+def test_open_pocket_walls_of_the_opening_never_close():
+    mp = _open_mech()
+    rm = rs.build_rotor_mesh(mp, mesh_size_mm=0.5)
+    cs = ctc.build_contact_system(rm.mesh, rm.part_tri, dict(ctc.DEFAULT_CONTACTS),
+                                  order=1)
+    g0 = pkc.pair_gaps(cs, mp) * 1e3
+    x, y = cs.pair_pos[:, 0] * 1e3, np.abs(cs.pair_pos[:, 1] * 1e3)
+    mag = np.array([ctc.PART_MAGNET in (it.part_a, it.part_b)
+                    for it in cs.interfaces])[cs.pair_iface] & (x > 0) & (y < 6.0)
+    wall = mag & (x > OPEN_R1 + CLR + 0.01)        # up the opening, above the lips
+    assert wall.any()
+    assert (g0[wall] > 0.05 * R_OD).all()          # beyond the seating cap
+    # the lips' undersides: shut by the clearance (corners a little more)
+    lip = (mag & (x > OPEN_R1 + 0.5 * CLR) & (x < OPEN_R1 + CLR + 1e-3)
+           & (y > OPEN_W / 2) & (y < MAG_W / 2 + CLR + 1e-6))
+    assert lip.any()
+    assert (g0[lip] >= CLR * (1 - 1e-3)).all() and (g0[lip] <= 2.0 * CLR).all()
+    assert g0[lip].min() == pytest.approx(CLR, rel=1e-3)    # the flat underside
+
+
+def test_open_pocket_seats_on_the_lips():
+    c = _case(_solve(_open_mech()))
+    con = c["contact"]
+    assert con["unretained_parts"] == [] and con["converged"]
+    assert len(con["seated"]) == N_POLES
+    assert c["sf_min"] is not None
+
+
+def test_open_pocket_modes_do_not_tie_the_lips():
+    """Modes on the bonded fill (the ring) agree with the zero-clearance rotor
+    of the same drawing — a plug of magnet in the opening would stiffen the
+    lips and raise them."""
+    from motor_ai_sim.simulation.mechanical import modal
+    a = modal.solve_modes(_open_mech(), {}, ASSIGN, body="rotor", n_modes=4,
+                          mesh_size_mm=3.0, order=1, with_shapes=False)
+    b = modal.solve_modes(_open_polys(0.0), {}, ASSIGN, body="rotor", n_modes=4,
+                          mesh_size_mm=3.0, order=1, with_shapes=False)
+    assert a["pocket_clearance"]["fill"] == "bonded"
+    for x, y in zip(sorted(m["f_hz"] for m in a["modes"]),
+                    sorted(m["f_hz"] for m in b["modes"])):
+        assert x == pytest.approx(y, rel=0.05)
+
+
+# ---------------------------------------------------------------------------
+# the refusals of the fill
+# ---------------------------------------------------------------------------
+
+def test_two_magnets_sharing_pocket_air_are_refused():
+    raw = _polys(0.0)
+    a = Polygon([(MAG_R0, -4.0), (MAG_R1, -4.0), (MAG_R1, -0.05), (MAG_R0, -0.05)])
+    b = Polygon([(MAG_R0, 0.05), (MAG_R1, 0.05), (MAG_R1, 4.0), (MAG_R0, 4.0)])
+    pocket = Polygon([(MAG_R0, -4.0), (MAG_R1, -4.0), (MAG_R1, 4.0),
+                      (MAG_R0, 4.0)]).buffer(CLR, join_style=2)
+    disk = Point(0, 0).buffer(R_OD, quad_segs=128)
+    rotor = disk.difference(Point(0, 0).buffer(R_BORE, quad_segs=96)).difference(pocket)
+    polys = dict(raw, rotor=rotor, magnets=[(a, 1), (b, 1)])
+    with pytest.raises(ValueError, match="share pocket air"):
+        pkc.mechanical_polys(polys, {"magnet_pocket_clearance": CLR})
+
+
+def test_magnets_with_different_mass_scales_are_refused():
+    raw = _polys(CLR)
+    small = affinity.scale(raw["magnets"][1][0], 0.5, 0.5)
+    disk = Point(0, 0).buffer(R_OD, quad_segs=128)
+    rotor = disk.difference(Point(0, 0).buffer(R_BORE, quad_segs=96))
+    mags = [m for m, _ in raw["magnets"]]
+    mags[1] = small
+    for m in mags:
+        rotor = rotor.difference(m.buffer(CLR, join_style=2))
+    polys = dict(raw, rotor=rotor, magnets=[(m, 1) for m in mags])
+    with pytest.raises(ValueError, match="pockets differ"):
+        pkc.mechanical_polys(polys, {"magnet_pocket_clearance": CLR})
+
+
+def test_more_air_than_the_clearance_and_up_gap_explain_is_refused():
+    disk = Point(0, 0).buffer(R_OD, quad_segs=128)
+    rotor = disk.difference(Point(0, 0).buffer(R_BORE, quad_segs=96))
+    mags = []
+    for k in range(N_POLES):
+        slab = _slab(360.0 * k / N_POLES)
+        rotor = rotor.difference(slab.buffer(CLR + 0.1, join_style=2))
+        mags.append((slab, 1))
+    polys = {"rotor": rotor, "magnets": mags, "sleeve": None, "shaft": None,
+             "sleeve_r_mm": (0.0, 0.0)}
+    with pytest.raises(ValueError, match="more than the"):
+        pkc.mechanical_polys(polys, {"magnet_pocket_clearance": CLR,
+                                     "magnet_up_gap": 0.1})
+
+
+def test_pair_gaps_fail_closed_on_a_mismatched_pair_table():
+    from types import SimpleNamespace
+    cs = SimpleNamespace(n_pairs=3, pair_unilateral=np.ones(2, bool),
+                         interfaces=[], pair_iface=np.zeros(3, int))
+    with pytest.raises(ValueError, match="unilateral"):
+        pkc.pair_gaps(cs, _mech(CLR))
+
+
+# ---------------------------------------------------------------------------
+# what the answer reports
+# ---------------------------------------------------------------------------
+
+def test_lift_off_of_a_drawn_clearance_is_not_applicable(clr_out):
+    assert clr_out["lift_off_na"] == {"magnet_rotor": "n/a: drawn clearance"}
+    assert clr_out["lift_off_rpm"]["magnet_rotor"] is None
+
+
+def test_the_magnet_stresses_are_read_inside_the_drawn_magnet():
+    mp = _open_mech()                    # the plug in the opening is fill only
+    rm = rs.build_rotor_mesh(mp, mesh_size_mm=1.0)
+    mask = pkc.drawn_mask(rm.mesh, rm.part_tri, mp, ctc.PART_MAGNET)
+    mag = rm.part_tri == ctc.PART_MAGNET
+    assert (mag & ~mask).any() and (mag & mask).any()
+    assert mask[~mag].all()
+    assert pkc.drawn_mask(rm.mesh, rm.part_tri, _polys(0.0), ctc.PART_MAGNET) is None
+    out = rs.solve_rotor_stress(
+        mp, ASSIGN, RPM, 1.0, 0.0, stack_length_mm=STACK_MM, mesh_size_mm=1.0,
+        order=1, with_field=True, lift_off_solves=0, case_mode="single",
+        loads="centrifugal")
+    fld = out["field"]["cases"][out["primary_case"]]
+    assert sum(fld["pocket_fill_per_tri"]) > 0
+
+
+@pytest.mark.parametrize("which", ["closed", "open"])
+def test_every_seated_magnet_is_in_equilibrium(which, clr_out):
+    """Per magnet: |load + contact forces on it| / |load| < 1e-3 — each magnet
+    in a drawn clearance is held by its pairs alone."""
+    out = clr_out if which == "closed" else _solve(_open_mech(), cases="three")
+    for case in ("rated", "overspeed"):
+        eq = out["cases"][case]["contact"]["magnet_equilibrium"]
+        assert len(eq["per_magnet_rel"]) == N_POLES
+        assert eq["max_rel"] < 1e-3, (case, eq)
+    assert "magnet_equilibrium" not in out["cases"]["standstill"]["contact"]

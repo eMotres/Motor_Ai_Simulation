@@ -728,15 +728,17 @@ def solve_modes(polys: dict,
 
     _t_mesh = time.perf_counter()
     if body == "rotor":
+        # a pocket drawn with a clearance (2026-11-25): the magnet is bonded
+        # across the clearance ring, drawn air beyond it stays air — the same
+        # object for every other machine (see ``pocket_clearance``)
+        from motor_ai_sim.simulation.mechanical import pocket_clearance as _pkc
+        polys = _pkc.bonded_variant(polys)
         rm = build_rotor_mesh(polys, mesh_size_mm=mesh_size_mm,
                               progress=lambda d, t, ph=None, c=None: led.at(d, ph))
         mesh, part_tri, outlines = rm.mesh, rm.part_tri, rm.outlines
         mech = resolve_part_materials(assignments, polys.get("sleeve") is not None,
                                       material_overrides)
-        # a pocket drawn with a clearance (2026-11-25): the magnet is bonded at
-        # its seated position, its density scaled to the drawn magnet's mass —
-        # the same dict for every other machine (see ``pocket_clearance``)
-        from motor_ai_sim.simulation.mechanical import pocket_clearance as _pkc
+        # …its density scaled to the drawn magnet's mass
         mech = _pkc.scaled_mechs(mech, polys)
         ne = mesh.t.shape[1]
         p = mesh.p.T

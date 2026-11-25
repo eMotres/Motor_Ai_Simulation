@@ -246,6 +246,15 @@ Nothing can be seated across it, that case stays the refusal it was, and the
 route's bonded fallback (a glued magnet, which is what the built machine has)
 remains the answer to it.
 
+…UNLESS the pocket is drawn with ``geometry.magnet_pocket_clearance`` wider than
+the mesh weld (2026-11-25, ``mechanical.pocket_clearance``).  Then the magnet is
+meshed as the body that fills the pocket's air out to the clearance plus the up
+gap, so the faces DO share a boundary again, and every pair across that air
+carries the drawn distance to the magnet, along its normal, as its ``g0`` from
+the start — this machinery then seats the magnet across a drawn clearance
+exactly as it does across a created one.  Nothing here changes for it: it only
+reads ``ContactSystem.pair_g0`` and the ``closed0`` the caller passes.
+
 AND WHAT SEATING DOES NOT FIX: the G2's seated joint does not CONVERGE.  Its
 wedge stands 7.5° from the magnet's travel and mu = 0.2, so it self-locks, the
 contact patch grows and shrinks between iterations, and the active set

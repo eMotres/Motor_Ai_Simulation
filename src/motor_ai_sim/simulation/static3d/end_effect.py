@@ -41,7 +41,7 @@ import math
 import os
 import time
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Sequence, Tuple
+from typing import Dict, List, Optional, Sequence, Tuple, Union
 
 import numpy as np
 
@@ -97,6 +97,23 @@ D0_FLAG_POLE_PITCHES = 0.5
 COARSE_SCREEN_HIGH = 0.02
 COARSE_SCREEN_LOW = 0.15
 COARSE_SCREEN_TAU = 0.3
+
+
+#: the factors of a final / catalogue passport sweep when the reference stack is already outside the end zone
+AUTO_L_FACTORS = (1.0, 1.5, 2.0)
+
+
+def auto_l_factors(stack_mm: float, pole_pitch_mm: Optional[float]) -> Tuple[float, ...]:
+    """Stack-length factors that give the agreement check 2-3 usable rows: (1.0, 1.5, 2.0) when the reference stack is
+    at least ``END_ZONE_POLE_PITCHES`` pole pitches long; else (1.0, f0, 1.5 f0, 2 f0) with f0 = that length / the
+    reference, so three rows clear the end zone with a span of 2 (the 1.0 row is the reference, outside the fit)."""
+    L = float(stack_mm)
+    tau = float(pole_pitch_mm) if pole_pitch_mm and pole_pitch_mm > 0 else 0.0
+    zone = END_ZONE_POLE_PITCHES * tau
+    if L <= 0 or zone <= L * (1.0 + 1e-9):
+        return AUTO_L_FACTORS
+    f0 = zone / L
+    return (1.0, round(f0, 6), round(1.5 * f0, 6), round(2.0 * f0, 6))
 
 
 def coarse_screen_bounds(stack_mm: float, pole_pitch_mm: Optional[float]) -> Tuple[float, float]:
@@ -177,8 +194,10 @@ def end_deficit_check(curve: Sequence[dict], ref_stack_mm: float,
                        "%.1f x dk here" % ((xs_l[0] + xs_l[1]) / (xs_l[1] - xs_l[0])))
     else:
         res = ys - (d0 + eps * xs)
-        rms = float(np.sqrt(np.mean(res ** 2)))
+        # n - 2 degrees of freedom: the fit spends two on D0 and eps (with 3 rows the residual has one)
+        rms = float(np.sqrt(np.sum(res ** 2) / (len(rows) - 2)))
         out["residual_rms_mm"] = rms
+        out["residual_dof"] = len(rows) - 2
         if ym > 0 and rms / ym > MAX_REL_RESIDUAL:
             out["verdict"] = "NOT CHECKED"
             out["reason"] = ("D is not linear in L: rms residual %.3f mm = %.1f %% of the mean D (> %g %%)"
@@ -215,7 +234,9 @@ class SectorSolve:
 
 _KFLUX_FAILED_LABEL = "2-D check failed: k_flux is applied as stored (k_flux_self x mid-plane/2-D ratio); k_flux_self is the 3-D-only alternative"
 #: a FAIL of the end-deficit check (passport static3d-stageA-3): the factor to apply is k_flux_self
-_KFLUX_FAILED_NEW_LABEL = "2-D check failed: apply k_flux_self, not k_flux"
+#: in a run's own passport the scalar k_flux is the RAW value; the writers (adopt, full card) store k_flux_self and say
+#: "applied" (routes/static3d.adopt_entry, end3d_verdict.applied_flux_factor)
+_KFLUX_FAILED_NEW_LABEL = "2-D check failed: k_flux here is the raw value; the passport writers apply k_flux_self"
 _KFLUX_INVALID_LABEL = "2-D check failed: the 2-D leg is invalid (no 2-D ratio exists), k_flux = k_flux_self"
 
 
@@ -664,7 +685,7 @@ def run_stage_a(geo_override: Optional[dict] = None,
                 n_cap: int = 10,
                 tol: float = 3e-3,
                 max_iter: int = 45,
-                l_factors: Sequence[float] = (0.5, 0.75, 1.0, 1.5, 2.0),
+                l_factors: Union[Sequence[float], str] = (0.5, 0.75, 1.0, 1.5, 2.0),
                 do_bracket: bool = True,
                 do_2d: bool = True,
                 laminated_iron: bool = True,
@@ -684,7 +705,10 @@ def run_stage_a(geo_override: Optional[dict] = None,
     # solve; callers that read curve[0] still get their own first factor): a
     # per-length table without its reference row could not be anchored to the
     # passport's own k_flux.
-    l_factors = [float(f) for f in l_factors]
+    auto = isinstance(l_factors, str) and l_factors.strip().lower() == "auto"
+    if isinstance(l_factors, str) and not auto:
+        raise ValueError("l_factors must be a sequence of factors or 'auto'; got %r" % (l_factors,))
+    l_factors = [1.0] if auto else [float(f) for f in l_factors]
     bad = [f for f in l_factors if not (math.isfinite(f) and f > 0.0)]
     if bad:
         raise ValueError("l_factors must be finite and positive stack-length "
@@ -692,6 +716,10 @@ def run_stage_a(geo_override: Optional[dict] = None,
     if not any(abs(f - 1.0) < 1e-12 for f in l_factors):
         l_factors.append(1.0)
     section = load_motor_section(geo_override=geo_override, n_sectors=n_sectors)
+    if auto:
+        # "auto": 2-3 rows clear the end zone with span >= 1.5 (auto_l_factors); explicit factors are never touched
+        l_factors = list(auto_l_factors(section.stack_mm,
+                                        math.pi * float(section.mid_r_mm) / max(1, int(section.pole_pairs))))
     if verbose:
         print(section.summary(), flush=True)
 

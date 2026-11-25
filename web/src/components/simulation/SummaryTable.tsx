@@ -18,6 +18,7 @@ import { assignmentSignature } from '../../lib/dutyMaterials';
 import { fetchBearingLosses } from '../../lib/machineBearings';
 import type { BearingLosses } from '../../lib/machineBearings';
 import { useMotorStore } from '../../stores/motorStore';
+import { end3dStatusOf, end3dStatusView } from '../../lib/end3dStatus';
 import { couplingLine, couplingTooltip, coupledStateLine,
          coupledStateTip, continuousRatingLine,
          continuousRatingTip, s1ResultsAtLine,
@@ -274,6 +275,8 @@ export interface TransientSummary {
              *  same machine (slots/poles/OD) is served, flagged, until Stage A
              *  is re-run (user 2026-09-03: keep it, highlight it) */
             inherited?: boolean; inherited_from?: string; inherited_note?: string;
+            /** the Stage A 2-D check: verified / unverified / failed / invalid (2026-11-25; absent on older passports) */
+            k_flux_status?: string | null;
             machine?: string; T_corrected_Nm: number;
             V_line_peak_corrected_V?: number | null;
             /** MEASURED 3-D torque factor (Stage B), when a passport has one —
@@ -934,6 +937,19 @@ const SummaryTable: React.FC<Props> = ({ summary, loading, fromSweep, liveOp, re
             </Button>
           </span>
         </Tooltip>
+        {(() => {
+          // ONE short label + its tooltip: the 2-D check status of the 3-D factor (no caption line)
+          const st = k3d != null ? end3dStatusOf(summary.end3d) : null;
+          if (!st) return null;
+          const v = end3dStatusView(st);
+          return (
+            <Tooltip title={tx(v.tipKey)}>
+              <Typography component="span" sx={{ fontSize: 11, color: v.color, cursor: 'help' }}>
+                {tx(v.labelKey)}
+              </Typography>
+            </Tooltip>
+          );
+        })()}
         {/* R at 25 °C — bench-check view (user: "so it can be checked").
             Rescales ONLY the two R cells by the copper ρ(T) ratio; losses and
             η stay at the solve temperature — a cold loss set needs a cold

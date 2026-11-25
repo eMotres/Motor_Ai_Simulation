@@ -1095,11 +1095,21 @@ def adopt_entry(sa: Dict[str, Any], note: str = "") -> Tuple[str, Dict[str, Any]
     if not fp:
         raise ValueError("the Stage A result carries no geometry_fingerprint")
     try:
-        k = float(sa.get("k_flux"))
+        k_raw = float(sa.get("k_flux"))
     except (TypeError, ValueError):
         raise ValueError("the Stage A result carries no k_flux")
+    # the factor the store applies is decided ONCE from the run's 2-D verdict (end3d_verdict): the real k_flux unless
+    # the check failed / the 2-D leg is invalid; the real k_flux always stays beside it (k_flux_raw)
+    from motor_ai_sim.end3d_verdict import BASIS_SELF, applied_flux_factor
+    af = applied_flux_factor(k_raw, sa.get("k_flux_self"), sa.get("two_d"), sa.get("version"), sa.get("generated_utc"))
+    k = af["value"] if af["value"] is not None else k_raw
     if not (0.5 < k <= 1.0):
         raise ValueError("k_flux %.4f is outside (0.5, 1.0]" % k)
+    from motor_ai_sim.end3d_verdict import status_of
+    status = status_of(sa.get("two_d"))
+    label = sa.get("k_flux_basis")
+    if af["basis"] == BASIS_SELF:
+        label = "2-D check %s: k_flux_self applied (the real k_flux is k_flux_raw)" % af["verdict"]
     m = sa.get("machine") if isinstance(sa.get("machine"), dict) else {}
     try:
         slots, poles, od = int(m["num_slots"]), int(m["num_poles"]), float(m["stator_od_mm"])
@@ -1112,7 +1122,10 @@ def adopt_entry(sa: Dict[str, Any], note: str = "") -> Tuple[str, Dict[str, Any]
     entry = {
         "k_flux": k,
         "k_flux_self": sa.get("k_flux_self"),
-        **({"k_flux_basis": sa["k_flux_basis"]} if sa.get("k_flux_basis") else {}),
+        **({"k_flux_basis": label} if label else {}),
+        # what is applied and why (end3d_verdict); k_flux_raw is the run's own k_flux
+        "k_flux_raw": k_raw, "k_flux_applied": af["basis"], "k_flux_verdict": af["verdict"],
+        "k_flux_status": status,
         "fidelity": "standalone Stage A (adopted)",
         "generated_utc": sa.get("generated_utc"),
         "adopted_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),

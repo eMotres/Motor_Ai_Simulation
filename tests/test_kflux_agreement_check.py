@@ -216,7 +216,7 @@ def test_coarse_screen_refuses_a_ratio_above_one_on_an_uncheckable_run(stubbed, 
     _stub_2d(monkeypatch, TABLE[REF_MM][0] / 1.05)                       # mid / 2-D = 1.05 at 12 mm
     t = EE.run_stage_a(l_factors=(1.0, 0.5), do_bracket=False, do_2d=True, verbose=False)["two_d"]
     assert t["verdict"] == "FAIL" and t["agreement_check"]["coarse_screen"]["high"] == pytest.approx(1.02)
-    assert EE.k_flux_basis_label(t) == "2-D check failed: apply k_flux_self, not k_flux"
+    assert EE.k_flux_basis_label(t) == EE._KFLUX_FAILED_NEW_LABEL
 
 
 def test_coarse_screen_after_a_residual_not_checked_says_coarse_screen_not_eps(stubbed, monkeypatch):  # noqa: F811
@@ -235,7 +235,7 @@ def test_coarse_screen_after_a_residual_not_checked_says_coarse_screen_not_eps(s
 
 
 def test_labels_follow_the_verdict_and_its_reason():
-    assert EE.k_flux_basis_label({"verdict": "FAIL", "agreement_check": {}}) == "2-D check failed: apply k_flux_self, not k_flux"
+    assert EE.k_flux_basis_label({"verdict": "FAIL", "agreement_check": {}}) == EE._KFLUX_FAILED_NEW_LABEL
     assert "applied as stored" in EE.k_flux_basis_label({"verdict": "FAIL"})          # old-rule passport
     inv = EE.k_flux_basis_label({"verdict": "INVALID"})
     assert inv.startswith("2-D check failed") and "no 2-D ratio" in inv

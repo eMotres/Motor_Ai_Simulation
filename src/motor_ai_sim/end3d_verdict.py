@@ -191,3 +191,21 @@ def substitution_of(entry: Optional[Mapping[str, Any]], stack_mm: Optional[float
 def is_silent_substitution(entry: Optional[Mapping[str, Any]], stack_mm: Optional[float] = None) -> bool:
     """True when :func:`substitution_of` finds the old silent substitution in this block."""
     return substitution_of(entry, stack_mm) is not None
+
+
+def status_of(two_d: Optional[Mapping[str, Any]]) -> str:
+    """``verified`` / ``unverified`` / ``failed`` / ``invalid`` of a run's 2-D check: the run's own
+    ``two_d.k_flux_status`` (static3d-stageA-3), else from its verdict; no 2-D leg or an old-rule verdict other than
+    PASS / INVALID is ``unverified`` (the old mid-plane FAIL was not a model check)."""
+    t = two_d if isinstance(two_d, Mapping) else {}
+    st = str(t.get("k_flux_status") or "").strip().lower()
+    if st in ("verified", "unverified", "failed", "invalid"):
+        return st
+    v = str(t.get("verdict") or "").strip().upper()
+    if v == "PASS":
+        return "verified"
+    if v == "INVALID":
+        return "invalid"
+    if v == "FAIL" and isinstance(t.get("agreement_check"), Mapping):
+        return "failed"
+    return "unverified"

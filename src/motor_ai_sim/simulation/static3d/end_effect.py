@@ -84,6 +84,30 @@ class SectorSolve:
         return 0.5 * self.stack_mm * MM
 
 
+
+_KFLUX_FAILED_LABEL = "2-D check failed: k_flux is applied as stored (k_flux_self x mid-plane/2-D ratio); k_flux_self is the 3-D-only alternative"
+
+
+def k_flux_basis_label(two_d):
+    """Short honest label of how ``k_flux`` was formed, read from the 2-D agreement ``verdict`` (not from
+    ``k_flux_usable``, which is also True for a check that was NOT CHECKED).  PASS -> "2-D check passed";
+    NOT CHECKED -> the agreement was not checked; FAIL / INVALID -> failed; no verdict (older passports) -> the
+    ``k_flux_usable`` flag as before; no 2-D block at all -> self-normalised.
+
+    FAIL / INVALID: the stored ``k_flux`` is k_flux_self x the mid-plane ratio and every reader still applies it, so the
+    label says what is applied (not "use k_flux_self"); which factor to apply on a failed check is #871's decision."""
+    if two_d is None:
+        return "self-normalised (2-D check not run; k_flux = k_flux_self)"
+    v = str(two_d.get("verdict") or "").strip().upper()
+    if v == "PASS":
+        return "2-D check passed"
+    if v == "NOT CHECKED":
+        return "2-D agreement not checked (single length): k_flux = k_flux_self"
+    if v in ("FAIL", "INVALID"):
+        return _KFLUX_FAILED_LABEL
+    return "2-D check passed" if two_d.get("k_flux_usable") else _KFLUX_FAILED_LABEL
+
+
 def _regions_for(tm, section: MotorSection, linear_iron: bool = False,
                  iron_mu_r: Optional[float] = None,
                  laminated_iron: bool = True) -> List[Region]:
@@ -797,6 +821,9 @@ def run_stage_a(geo_override: Optional[dict] = None,
                 "only thing a 2D model can assume")),
         k_flux=float(k_vs2d),
         k_flux_self=float(k_self),
+        # the 2-D consistency check was not run: the ratio is NOT measured as 1.0, k_flux is the self-normalised
+        # 3-D ratio (= k_flux_self) and says so, so a reader can tell it from a checked one
+        k_flux_basis=k_flux_basis_label(two_d),
         spill_profile=dict(
             z_m=prof["z_m"], z_over_half_stack=prof["z_over_half"],
             B1_T=prof["B1_T"], B1_normalised=prof["profile"],

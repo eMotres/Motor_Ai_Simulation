@@ -22,7 +22,7 @@ import ToolingFiles from './ToolingFiles';
 import { TimelineView } from './TimelineView';
 import TestsPanel from '../../tests/components/TestsPanel';
 import { downloadFile, fetchFileBlob, ProductionApiError, productionApi } from '../api';
-import { canAckRole, canEditRole, displayText, legacyTab, plainDocuments, productionRole, unackedFiles, unackedRevisions, VIEWER_TABS, visibleProductionTabs } from '../helpers';
+import { canAckRole, canEditRole, displayText, legacyTab, modelItemOf, modelSelectionOf, plainDocuments, productionRole, unackedFiles, unackedRevisions, VIEWER_TABS, visibleProductionTabs } from '../helpers';
 import { OPEN_PRODUCTION_EVENT, type OpenProductionDetail } from '../../../lib/openProduction';
 import { shortTitle } from '../../../lib/stripContext.ts';
 import { useTabContextStore } from '../../../stores/tabContextStore';
@@ -103,21 +103,21 @@ const ProductionPage: React.FC<{ die: string; config: string; onBack: () => void
   // or a click on the graph.  While the Assembly tab shows one, the address bar carries its link, so a reload and a copy both keep it.
   const [stepSel, setStepSel] = useState<string | null>(() => (!linkProp && initialTab === 'assembly' && itemId ? itemId : null));
   const openStep = (id: string) => { setStepSel(id); setTab('assembly'); };
-  // The 3D tab's selection (a step or a part): set by "Show in 3D" on a BOM row, a part card or an assembly step.  Page state only:
-  // the address bar cannot carry a 3d link until lib/appLink.ts knows the tab (see pageAddress).
-  const [modelSel, setModelSel] = useState<Model3DSelection>({ stepId: null, partId: null });
+  // The 3D tab's selection (a step or a part): set by "Show in 3D" on a BOM row, a part card or an assembly step, or by a 3d link;
+  // while one is chosen the address bar carries it (pageAddress).
+  const [modelSel, setModelSel] = useState<Model3DSelection>(() => (!linkProp && initialTab === '3d' ? modelSelectionOf(itemId) : { stepId: null, partId: null }));
   const showStepIn3D = (id: string) => { setModelSel({ stepId: id, partId: null }); setTab('3d'); };
   const showPartIn3D = (id: string) => { setModelSel({ stepId: null, partId: id }); setTab('3d'); };
   // While the page was entered by a link its address stays that link (reload / copy from the bar both work); leaving the
   // Documents view or the link's filter returns the bar to the app root.
   useEffect(() => {
     try {
-      const want = pageAddress({ die, config, tab, stepSel, hasEntryLink: !!linkProp, link, initialTab, itemId });
+      const want = pageAddress({ die, config, tab, stepSel, hasEntryLink: !!linkProp, link, initialTab, itemId, modelItem: modelItemOf(modelSel) });
       if (want === 'ROOT') {
         if (isProductionLinkPath(window.location.pathname) || isAppLinkPath(window.location.pathname)) window.history.replaceState(window.history.state, '', '/');
       } else if (want && want !== window.location.pathname + window.location.search) window.history.replaceState(window.history.state, '', want);
     } catch { /* no history API */ }
-  }, [linkProp, tab, link, die, config, initialTab, itemId, stepSel]);
+  }, [linkProp, tab, link, die, config, initialTab, itemId, stepSel, modelSel]);
   const [loading, setLoading] = useState(true);
   const [nda, setNda] = useState(false);
   const [err, setErr] = useState<string | null>(null);

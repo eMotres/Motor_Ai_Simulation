@@ -752,6 +752,15 @@ export function modelViewFamilies(o: { electronics: boolean; steps: readonly Ass
   return all;
 }
 
+/** The 3D tab's selection as a link item and back (owner 2026-11-25): `step.<id>` or `part.<id>`; null / anything else = the whole model. */
+export function modelItemOf(sel: { stepId: string | null; partId: string | null }): string | null {
+  return sel.partId ? `part.${sel.partId}` : sel.stepId ? `step.${sel.stepId}` : null;
+}
+export function modelSelectionOf(item: string | null | undefined): { stepId: string | null; partId: string | null } {
+  const m = /^(step|part)\.(.+)$/.exec(item ?? '');
+  return { stepId: m && m[1] === 'step' ? m[2] : null, partId: m && m[1] === 'part' ? m[2] : null };
+}
+
 /** The revision / date label of a built model, from /api/model3d/models `version` (template version, build time, parameter hash). */
 export function modelRevisionLabel(v: { template?: string | null; built_at?: string | null; param_hash?: string } | null | undefined): { label: string; hash: string } {
   const day = (v?.built_at ?? '').slice(0, 10);

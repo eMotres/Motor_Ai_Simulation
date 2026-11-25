@@ -40,8 +40,20 @@ test('the Tooling files keep their own 3-D view', () => {
   assert.ok(/UnifiedViewer/.test(read('components/ToolingFiles.tsx')));
 });
 
-test('the 3d tab has no address of its own yet (appLink.ts does not know it): the bar returns to the root', () => {
-  assert.ok(/if \(i\.tab === '3d'\) return 'ROOT';/.test(read('pageAddress.ts')));
+// pageAddress.ts itself does not import under node --test here (its extensionless import); its 3d branch is checked in the source,
+// and the two pieces it combines (the item codec and appLinkPath with tab '3d') are run for real.
+const L = await import('../../../lib/appLink.ts').catch(() => null);
+(L && H ? test : test.skip)('the 3d tab with a step or part selected has its own address; the whole model alone returns to the root', () => {
+  assert.ok(/if \(i\.tab === '3d' && i\.modelItem\) return appLinkPath\(\{ kind: 'production', die: i\.die, config: i\.config, tab: '3d', item: i\.modelItem \}\);/.test(read('pageAddress.ts')));
+  const link = (sel) => L.appLinkPath({ kind: 'production', die: 'CIANO14 40 new', config: 'L20', tab: '3d', item: H.modelItemOf(sel) ?? undefined });
+  assert.equal(link({ stepId: 's3', partId: null }), '/production/CIANO14%2040%20new/L20/3d?item=step.s3');
+  assert.equal(link({ stepId: null, partId: 'p-7' }), '/production/CIANO14%2040%20new/L20/3d?item=part.p-7');
+  assert.equal(H.modelItemOf({ stepId: null, partId: null }), null);
+  const back = L.parseAppLink('/production/CIANO14%2040%20new/L20/3d', '?item=step.s3');
+  assert.deepEqual(H.modelSelectionOf(back.item), { stepId: 's3', partId: null });
+  assert.deepEqual(H.modelSelectionOf('part.p-7'), { stepId: null, partId: 'p-7' });
+  assert.deepEqual(H.modelSelectionOf('bogus'), { stepId: null, partId: null });
+  assert.deepEqual(H.modelSelectionOf(undefined), { stepId: null, partId: null });
 });
 
 t('modelViewFamilies: step, part, all, electronics', () => {

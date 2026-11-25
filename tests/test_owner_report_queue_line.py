@@ -7,7 +7,7 @@ import time
 import pytest
 
 from motor_ai_sim import owner_queue as OQ
-from motor_ai_sim.owner_report import __main__ as M
+from motor_ai_sim.owner_report import queue_line as M
 from motor_ai_sim.owner_report import build as B
 from motor_ai_sim.owner_report import run as R
 from tests.test_owner_report import DATE, empty_sources  # noqa: F401
@@ -38,29 +38,28 @@ def test_line_format():
     assert M.format_queue_line({"open_blocking": 1, "open_messages": 0, "oldest_open_at": "2026-11-25T09:30:00Z"}, now).endswith("oldest 2 h")
 
 
-def _fake_run(**kw):
-    return {"status": "dry_run", "date": DATE, "report": R.B.build(DATE, empty_sources(), base_url="https://app.example.test")}
-
-
-def test_main_adds_the_line_and_restores_build(monkeypatch, capsys, tmp_path):
+def _real(monkeypatch, tmp_path):
+    """build_report with the "real" sources path (sources=None) but the sources themselves empty, the queue in tmp."""
     monkeypatch.setenv("MOTRES_OWNER_QUEUE_DIR", str(tmp_path / "oq"))
+    monkeypatch.setattr(R.SRC, "default_sources", empty_sources)
+
+
+def test_build_report_adds_the_line_for_the_real_sources_only(monkeypatch, tmp_path):
+    # the scheduled run (__main__), the admin preview and send-now all go through build_report: the line is in all three
+    _real(monkeypatch, tmp_path)
     OQ.create_item("t", {"kind": "question", "asked_by": "s", "question": "q?"})
-    monkeypatch.setattr(R, "run_daily", _fake_run)
-    orig = R.B.build
-    assert M.main(["--dry-run"]) == 0
-    out = capsys.readouterr().out
-    assert "Decisions: 1 open, 0 messages, oldest 0 h" in out
-    assert R.B.build is orig
+    rep = R.build_report(DATE, now=time.time())
+    assert "Decisions: 1 open, 0 messages, oldest 0 h" in rep.text and rep.text.count("Decisions:") == 1
+    # injected sources (the tests of the report itself): no line, the report as before
+    assert "Decisions:" not in R.build_report(DATE, now=time.time(), sources=empty_sources()).text
 
 
-def test_unavailable_never_breaks_the_report(monkeypatch, capsys, tmp_path):
-    monkeypatch.setenv("MOTRES_OWNER_QUEUE_DIR", str(tmp_path / "oq"))
+def test_unavailable_never_breaks_the_report(monkeypatch, tmp_path):
+    _real(monkeypatch, tmp_path)
     (tmp_path / "oq").mkdir()
     (tmp_path / "oq" / "items.jsonl").write_text("garbage\n")             # a damaged store
-    monkeypatch.setattr(R, "run_daily", _fake_run)
-    assert M.main(["--dry-run"]) == 0
-    out = capsys.readouterr().out
-    assert "Decisions: unavailable" in out and "AeroStator owner report" in out
+    rep = R.build_report(DATE, now=time.time())
+    assert "Decisions: unavailable" in rep.text and "AeroStator owner report" in rep.subject
     monkeypatch.setattr(OQ, "counts", lambda: (_ for _ in ()).throw(RuntimeError("boom")))
     assert M.queue_line(0.0) == "Decisions: unavailable"
 

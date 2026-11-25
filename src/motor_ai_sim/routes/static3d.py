@@ -1105,8 +1105,8 @@ def adopt_entry(sa: Dict[str, Any], note: str = "") -> Tuple[str, Dict[str, Any]
     k = af["value"] if af["value"] is not None else k_raw
     if not (0.5 < k <= 1.0):
         raise ValueError("k_flux %.4f is outside (0.5, 1.0]" % k)
-    from motor_ai_sim.end3d_verdict import status_of
-    status = status_of(sa.get("two_d"))
+    from motor_ai_sim.end3d_verdict import applied_table, status_of
+    status = status_of(sa.get("two_d"), af)
     label = sa.get("k_flux_basis")
     if af["basis"] == BASIS_SELF:
         label = "2-D check %s: k_flux_self applied (the real k_flux is k_flux_raw)" % af["verdict"]
@@ -1115,9 +1115,9 @@ def adopt_entry(sa: Dict[str, Any], note: str = "") -> Tuple[str, Dict[str, Any]
         slots, poles, od = int(m["num_slots"]), int(m["num_poles"]), float(m["stator_od_mm"])
     except (KeyError, TypeError, ValueError):
         raise ValueError("the Stage A result's machine block needs num_slots, num_poles and stator_od_mm")
-    curve = {str(e["stack_mm"]): round(float(e["k_flux"]), 5)
-             for e in (sa.get("l_stack_curve") or [])
-             if isinstance(e, dict) and e.get("stack_mm") is not None and e.get("k_flux") is not None}
+    # the table of what is APPLIED (k_flux_self rows under "self_applied" when the scalar is k_flux_self; raw beside it)
+    tabs = applied_table(sa.get("l_stack_curve"), af, sa.get("k_flux_vs_L_method"))
+    curve = tabs.get("k_flux_vs_L")
     md = sa.get("model") if isinstance(sa.get("model"), dict) else {}
     entry = {
         "k_flux": k,
@@ -1134,7 +1134,7 @@ def adopt_entry(sa: Dict[str, Any], note: str = "") -> Tuple[str, Dict[str, Any]
         "stack_mm": m.get("stack_mm"),
         "k_flux_vs_L": curve or None,
         # how the per-length rows were formed (end_effect.K_FLUX_VS_L_*); absent on a result from before the 2026-11-24 fix
-        **({"k_flux_vs_L_method": str(sa["k_flux_vs_L_method"])} if curve and sa.get("k_flux_vs_L_method") else {}),
+        **({k_: tabs[k_] for k_ in ("k_flux_vs_L_method", "k_flux_vs_L_raw") if tabs.get(k_)}),
         "materials": m.get("materials"),
         "mesh": {kk: md.get(kk) for kk in ("h_gap_mm", 'h_solid_mm', "mesh_rule", "box_z_mm", "iron_stack_kf")
                  if kk in md} or None,

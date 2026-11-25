@@ -101,19 +101,34 @@ COARSE_SCREEN_TAU = 0.3
 
 #: the factors of a final / catalogue passport sweep when the reference stack is already outside the end zone
 AUTO_L_FACTORS = (1.0, 1.5, 2.0)
+#: a LONG stack (>= this many pole pitches) gets (1.0, 1.25, 1.5): the fit needs span (1.5 is the minimum the check
+#: is designed for), not length, and the end deficit is a small share of a long stack anyway.  This caps the longest
+#: auto model at 1.5 x the stack (a 200 mm stack solves 300 mm, not 400 mm).  Measured cost of length: the axial mesh
+#: grows little (512k -> 541k elements from 90 to 180 mm on a 400 mm machine), but every row is one more nonlinear
+#: solve of ~50 min quick / ~80 min default on such a machine.
+AUTO_LONG_STACK_POLE_PITCHES = 10.0
+AUTO_L_FACTORS_LONG = (1.0, 1.25, 1.5)
+#: below the end zone the first fitted row is f0 = zone / L, never closer to the reference than this
+AUTO_F0_MIN = 1.05
 
 
 def auto_l_factors(stack_mm: float, pole_pitch_mm: Optional[float]) -> Tuple[float, ...]:
-    """Stack-length factors that give the agreement check 2-3 usable rows: (1.0, 1.5, 2.0) when the reference stack is
-    at least ``END_ZONE_POLE_PITCHES`` pole pitches long; else (1.0, f0, 1.5 f0, 2 f0) with f0 = that length / the
-    reference, so three rows clear the end zone with a span of 2 (the 1.0 row is the reference, outside the fit)."""
+    """Stack-length factors that give the agreement check three usable rows with a span >= 1.5:
+
+    - the reference is at least ``AUTO_LONG_STACK_POLE_PITCHES`` pole pitches: (1.0, 1.25, 1.5) (capped length);
+    - it is at least ``END_ZONE_POLE_PITCHES`` pole pitches: (1.0, 1.5, 2.0);
+    - else (1.0, f0, 1.5 f0, 2 f0) with f0 = max(that end-zone length / the reference, AUTO_F0_MIN), so the three
+      rows after the reference clear the end zone (the 1.0 row is the reference, outside the fit).  f0 is NOT rounded:
+      the fit's cut-off has only 1e-9 slack, and a rounded-down f0 row would fall out of it."""
     L = float(stack_mm)
     tau = float(pole_pitch_mm) if pole_pitch_mm and pole_pitch_mm > 0 else 0.0
     zone = END_ZONE_POLE_PITCHES * tau
-    if L <= 0 or zone <= L * (1.0 + 1e-9):
+    if L <= 0 or zone <= L:
+        if tau > 0 and L >= AUTO_LONG_STACK_POLE_PITCHES * tau:
+            return AUTO_L_FACTORS_LONG
         return AUTO_L_FACTORS
-    f0 = zone / L
-    return (1.0, round(f0, 6), round(1.5 * f0, 6), round(2.0 * f0, 6))
+    f0 = max(zone / L, AUTO_F0_MIN)
+    return (1.0, f0, 1.5 * f0, 2.0 * f0)
 
 
 def coarse_screen_bounds(stack_mm: float, pole_pitch_mm: Optional[float]) -> Tuple[float, float]:
@@ -686,6 +701,7 @@ def run_stage_a(geo_override: Optional[dict] = None,
                 tol: float = 3e-3,
                 max_iter: int = 45,
                 l_factors: Union[Sequence[float], str] = (0.5, 0.75, 1.0, 1.5, 2.0),
+                auto_extra: Sequence[float] = (),
                 do_bracket: bool = True,
                 do_2d: bool = True,
                 laminated_iron: bool = True,
@@ -718,8 +734,13 @@ def run_stage_a(geo_override: Optional[dict] = None,
     section = load_motor_section(geo_override=geo_override, n_sectors=n_sectors)
     if auto:
         # "auto": 2-3 rows clear the end zone with span >= 1.5 (auto_l_factors); explicit factors are never touched
+        # auto_extra: rows a reader needs that the check does not (the catalog keeps 0.75 for k(L) below the stack)
         l_factors = list(auto_l_factors(section.stack_mm,
                                         math.pi * float(section.mid_r_mm) / max(1, int(section.pole_pairs))))
+        for f in auto_extra:
+            f = float(f)
+            if math.isfinite(f) and f > 0 and not any(abs(f - g) < 1e-9 for g in l_factors):
+                l_factors.append(f)
     if verbose:
         print(section.summary(), flush=True)
 

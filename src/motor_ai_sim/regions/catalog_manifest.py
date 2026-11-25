@@ -471,7 +471,7 @@ ROW_TEXT_PARENTS = frozenset({"text"})
 #: The only keys of an end-effect passport entry that cross (the admin ``note``, ``source`` paths ... stay on EU).
 PASSPORT_KEYS = frozenset({"k_flux", "k_flux_self", "fidelity", "generated_utc", "adopted_utc", "machine", "stack_mm",
                            "k_flux_vs_L", "k_flux_vs_L_method", "materials", "mesh", "k_torque", "k_t",
-                           "k_flux_raw", "k_flux_applied", "k_flux_verdict", "k_flux_status"})
+                           "k_flux_raw", "k_flux_applied", "k_flux_verdict", "k_flux_status", "k_flux_vs_L_raw"})
 PASSPORT_TEXT_KEYS = frozenset({"fidelity", "generated_utc", "adopted_utc", "machine", "k_flux_vs_L_method",
                                 "k_flux_applied", "k_flux_verdict", "k_flux_status"})
 PASSPORT_TEXT_PARENTS = frozenset({"materials", "mesh"})

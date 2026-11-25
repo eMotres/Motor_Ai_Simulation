@@ -66,3 +66,17 @@ test('scaleMotor: marked passport with L0 != stack_mm uses the scalar within 5 %
   // L0 == stack_mm: unchanged
   assert.equal(scaleMotor(P(marked), K(12), 14).k_end3d, 0.95183);
 });
+
+test('a failed entry (self_applied table) agrees with its k_flux_self scalar in the tuner', () => {
+  // the adopt / catalog writers store k_flux = k_flux_self and its rows under "self_applied" (raw rows beside them)
+  const failed = { k_flux: 0.96476, k_flux_self: 0.96476, k_flux_applied: 'k_flux_self', k_flux_status: 'failed',
+    k_flux_vs_L: { '12.0': 0.96476, '18.0': 0.973 }, k_flux_vs_L_method: 'self_applied',
+    k_flux_vs_L_raw: { '12.0': 0.93812, '18.0': 0.956 } };
+  const t = end3dKTable(failed);
+  assert.equal(t.stale, false);
+  assert.deepEqual(t.pts, [[12, 0.96476], [18, 0.973]]);
+  const r12 = scaleMotor(P(failed), K(12), 14);
+  assert.equal(r12.k_end3d, failed.k_flux);                 // the base row is the applied scalar, not the raw 0.93812
+  const r15 = scaleMotor(P(failed), K(15), 14);
+  assert.ok(Math.abs(r15.k_end3d - (0.96476 + (0.973 - 0.96476) * 0.5)) < 1e-12);
+});

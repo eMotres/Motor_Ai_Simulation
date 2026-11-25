@@ -39,6 +39,17 @@ export function coggingText(c: CoggingPp, rankingLabel: string): string {
   return c.final ? v : `${v} (${rankingLabel})`;
 }
 
+/** Cogging pp as a percentage of the point's own torque; undefined when the value is missing or the torque is not a positive number. */
+export function coggingPctOfTorque(c: CoggingPp, torqueNm: number): number | undefined {
+  if (c.value === undefined || !Number.isFinite(torqueNm) || Math.abs(torqueNm) <= 0) return undefined;
+  return (c.value / Math.abs(torqueNm)) * 100;
+}
+
+/** The value written to CSV / Excel: the real number, empty (null) when missing. The on-screen sort sentinel never leaves the table. */
+export function coggingExportValue(v: number | undefined): number | null {
+  return v !== undefined && Number.isFinite(v) && v < 1e9 ? v : null;
+}
+
 /** The settings two values must share to be compared (steps actually used, temperature, mesh / gap / sectors). */
 export function coggingSettingsKey(c: CoggingPp): string {
   if (c.sig !== undefined) return String(c.sig);

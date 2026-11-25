@@ -45,7 +45,7 @@ import {
 import type { RestoreVerdict } from '../../lib/sweepRestore';
 import SavedSweeps from './SavedSweeps';
 import { groupFailures, geometryGroupText } from '../../lib/sweepFailures';
-import { coggingOf, coggingText, coggingMetrics, coggingTip } from '../../lib/coggingPp';
+import { coggingOf, coggingText, coggingPctOfTorque, coggingExportValue, coggingMetrics, coggingTip } from '../../lib/coggingPp';
 
 const tx = nsT('simulation');
 const API = import.meta.env.VITE_API_URL ?? 'http://localhost:8001';
@@ -117,7 +117,7 @@ const OP_VARS = new Set(['current_a', 'gamma_deg']);
 // k_end → grows with tooth_width) and Cu AC (proximity/eddy in the strands); solid =
 // P_mag + P_shaft (eddy in solid conductors).
 interface SweepTableCol { id: string; label: string; get: (r: any) => number; fmt: (v: number) => string; vcol?: boolean;
-  fmtRow?: (r: any) => string; titleRow?: (r: any) => string | undefined }
+  fmtRow?: (r: any) => string; titleRow?: (r: any) => string | undefined; exp?: (r: any) => number | null }
 const SweepTable: React.FC<{ points: any[]; rpm: number; vdcFactor?: number; selectedPk?: string; onPick?: (r: any) => void }> =
   ({ points, rpm, vdcFactor, selectedPk, onPick }) => {
   const vdcF = vdcFactor || (1 / Math.sqrt(3));   // V_dc = V_peak / mod_factor (SVPWM → ×√3)
@@ -196,7 +196,13 @@ const SweepTable: React.FC<{ points: any[]; rpm: number; vdcFactor?: number; sel
         get: (r: any) => (r.cp.value === undefined ? 1e9 : r.cp.value),
         fmt: (v: number) => (v >= 1e9 ? '-' : String(v)),
         fmtRow: (r: any) => coggingText(r.cp, tx('coggingPpRanking')),
-        titleRow: (r: any) => coggingTip(r.cp, tx) }] : []),
+        titleRow: (r: any) => coggingTip(r.cp, tx),
+        exp: (r: any) => coggingExportValue(r.cp.value) },
+      { id: 'coggingPct', label: tx('coggingPpCol') + ' (% of T)',
+        get: (r: any) => coggingPctOfTorque(r.cp, r.T) ?? 1e9,
+        fmt: (v: number) => (v >= 1e9 ? '-' : v.toFixed(v < 10 ? 2 : 1)),
+        titleRow: (r: any) => coggingTip(r.cp, tx),
+        exp: (r: any) => coggingExportValue(coggingPctOfTorque(r.cp, r.T)) }] : []),
       { id: 'mass', label: 'active mass (kg)', get: r => r.mass, fmt: v => v.toFixed(3) },
       { id: 'td', label: 'N·m/kg (active)', get: r => r.td, fmt: v => v.toFixed(2) },
       { id: 'pd', label: 'kW/kg', get: r => r.pd, fmt: v => v.toFixed(3) },
@@ -233,7 +239,7 @@ const SweepTable: React.FC<{ points: any[]; rpm: number; vdcFactor?: number; sel
   // Export (user 2026-09-03): the table as shown — same columns, current sort,
   // FULL-precision numbers (the on-screen rounding is display only).
   const exportHeader = cols.map(c => c.label);
-  const exportRows = () => sorted.map(r => cols.map(c => { const v = c.get(r); return Number.isFinite(v) ? v : null; }));
+  const exportRows = () => sorted.map(r => cols.map(c => { if (c.exp) return c.exp(r); const v = c.get(r); return Number.isFinite(v) ? v : null; }));
   const exportName = () => stampName(`sweep_${rows.length}pts`);
   const doCopy = async () => {
     const ok = await copyTsv(exportHeader, exportRows());

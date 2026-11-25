@@ -138,3 +138,21 @@ def test_list_finds_the_substitution_and_writes_nothing(tmp_path, capsys):
 def test_list_needs_an_explicit_source():
     with pytest.raises(SystemExit):
         _script().main([])
+
+
+@pytest.mark.parametrize("kf, ks, ratio", [(0.88685, 0.96100, 0.9228),    # 28-pole 80 mm, 8 mm reference
+                                           (0.92270, 0.96404, 0.9571)])   # same machine, 12 mm reference
+def test_short_stack_runs_with_an_old_fail_flag_apply_their_real_k_flux(tmp_path, kf, ks, ratio):
+    """Two real runs after the own-ratio fix: the old flag says FAIL / k_flux_usable False on both, yet k_flux is right
+    (the 8 mm run's k_flux at 12 mm, 0.92271, matches the 12 mm run's 0.92270).  The card must carry k_flux, not
+    k_flux_self (about 8 % on T and V at 8 mm)."""
+    from motor_ai_sim.passport_v1.fullcard import stage2_block
+    d = tmp_path / "full"
+    d.mkdir()
+    (d / "stage_a_L8.json").write_text(json.dumps({
+        "k_flux": kf, "k_flux_self": ks, "two_d": {"B1_T": 1.7558, "verdict": "FAIL", "k_flux_usable": False,
+                                                    "ratio_3d_mid_over_2d": ratio, "agreement_tolerance": 0.02},
+        "spill_profile": {"B1_mid_T": 1.62}, "solves": [{"picard_converged": True}]}), encoding="utf-8")
+    kp = stage2_block(d, ROOT, 8.0)["k_psi"]
+    assert kp["value"] == kf and kp["basis"] == "k_flux" and kp["k_flux_self"] == ks
+    assert kp["verdict"] == V.VERDICT_OLD_NOT_CHECKED

@@ -57,7 +57,10 @@ def _availability(obj, name, value):
 
 def encode_record(obj):
     from .common import serialize_value
-    out = {f.name: serialize_value(getattr(obj, f.name)) for f in fields(obj)}
+    # Explicitly marked additive defaults preserve legacy canonical v1 bytes.
+    present = [f for f in fields(obj) if not (
+        f.metadata.get('omit_if_default') and getattr(obj, f.name) == f.default)]
+    out = {f.name: serialize_value(getattr(obj, f.name)) for f in present}
     if type(obj).__name__ == 'PlanetaryStageSpec': out['kind'] = obj.kind
     availability = {}
 
@@ -70,7 +73,7 @@ def encode_record(obj):
         elif value is None or isinstance(value, (float, int)) and not isinstance(value, bool):
             availability[path] = _availability(obj, field_name, value)
 
-    for f in fields(obj): visit(getattr(obj, f.name), '/'+f.name, f.name)
+    for f in present: visit(getattr(obj, f.name), '/'+f.name, f.name)
     out.update(schema_version=SCHEMA_VERSION, schema_type=type(obj).__name__, metric_availability=availability)
     return out
 
@@ -162,8 +165,10 @@ def _decode_impl(data, expected, path):
     names = {f.name for f in fields(cls)}
     extra = {'kind'} if cls.__name__ == 'PlanetaryStageSpec' else set()
     expected_names = names | META | extra
-    if set(data) != expected_names:
-        unknown, missing = set(data)-expected_names, expected_names-set(data)
+    optional_names = {f.name for f in fields(cls) if f.metadata.get('omit_if_default')}
+    unknown = set(data) - expected_names
+    missing = expected_names - optional_names - set(data)
+    if unknown or missing:
         key = sorted(unknown or missing)[0]
         raise FieldValidationError(path+'/'+_token(key), 'Unknown field' if unknown else 'Missing field',
                                    'unknown_field' if unknown else 'missing_field')
@@ -185,7 +190,7 @@ def _decode_impl(data, expected, path):
         return value
 
     hints = get_type_hints(cls)
-    kwargs = {name:_typed(restore(data[name],'/'+name),hints[name],path+'/'+name) for name in sorted(names)}
+    kwargs = {name:_typed(restore(data[name],'/'+name),hints[name],path+'/'+name) for name in sorted(names) if name in data}
     try:
         obj = cls(**kwargs)
     except FieldValidationError as exc:

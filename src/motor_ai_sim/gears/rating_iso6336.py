@@ -22,9 +22,9 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple, Literal
 
-from .common import DictResultMixin, ValidityState, worst_state
+from .common import DictResultMixin, ValidityState, worst_state, require_number, FieldValidationError
 from .geometry import GearDimensions, GearSpec, PairGeometryResult
 from .loads import MeshForces
 from .lubrication import GearLubricant, LubricationConditionResult, evaluate_mesh_lubrication
@@ -54,6 +54,18 @@ class ISO6336LoadFactors(DictResultMixin):
     missing_inputs: List[str] = field(default_factory=list)
     method: str = "ISO6336-1:2019 Method B/C"
     flags: List[str] = field(default_factory=list)
+    # Absent in legacy v1 JSON means estimated; explicit supplied source is serialized.
+    f_ma_source: Literal["estimated", "supplied"] = field(
+        default="estimated", metadata={"omit_if_default": True})
+
+    def __post_init__(self):
+        # An omitted v1 source may mean estimated only when its legacy evidence
+        # agrees. Otherwise stripping a supplied source would silently relabel it.
+        estimated = self.f_ma_source == "estimated"
+        if (self.f_ma_source not in ("estimated", "supplied")
+                or ("misalignment_f_ma_estimated_rigid_carrier_caveat" in self.flags) != estimated
+                or ("f_ma_um_including_shaft_housing_deflection" in self.missing_inputs) != estimated):
+            raise FieldValidationError("/f_ma_source", "f_ma_source contradicts misalignment estimate evidence")
 
 
 @dataclass
@@ -215,7 +227,13 @@ def compute_iso6336_load_factors(
     rho1_kg_m3: float = 7850.0,
     rho2_kg_m3: float = 7850.0,
 ) -> ISO6336LoadFactors:
-    """Compute ISO 6336-1:2019 K_v (Method B), K_Hbeta/K_Fbeta (Method C), and K_Halpha/K_Falpha (Method B)."""
+    """Compute the existing estimated Method B/C load-factor model.
+
+    f_ma_um replaces only the manufacturing/assembly misalignment estimate.
+    The separate placeholder 1.33*f_sh and running-in approximation remain;
+    do not supply a total effective F_bx/F_by or double-count shaft bending.
+    None preserves the legacy estimate; zero is an explicit supplied value.
+    """
     for name, val in (
         ("n1_rel_rpm", n1_rel_rpm),
         ("K_A", K_A),
@@ -228,7 +246,9 @@ def compute_iso6336_load_factors(
             raise ValueError(f"{name} must be finite, got {val!r}")
     if K_A <= 0.0 or E1_MPa <= 0.0 or E2_MPa <= 0.0 or rho1_kg_m3 <= 0.0 or rho2_kg_m3 <= 0.0:
         raise ValueError("K_A, E1_MPa, E2_MPa, rho1_kg_m3, and rho2_kg_m3 must be > 0")
-    for opt_name, opt_val in (("f_ma_um", f_ma_um), ("f_pt_um", f_pt_um), ("f_pb_um", f_pb_um)):
+    if f_ma_um is not None:
+        require_number("f_ma_um", f_ma_um, minimum=0.)
+    for opt_name, opt_val in (("f_pt_um", f_pt_um), ("f_pb_um", f_pb_um)):
         if opt_val is not None and (not math.isfinite(float(opt_val)) or float(opt_val) < 0.0):
             raise ValueError(f"{opt_name} must be finite and >= 0, got {opt_val!r}")
 
@@ -367,6 +387,7 @@ def compute_iso6336_load_factors(
         f_pt_um=f_pt,
         f_pb_um=f_pb,
         f_ma_um=f_ma,
+        f_ma_source="estimated" if f_ma_um is None else "supplied",
         state=state,
         applicability_evidence={
             "iso_edition": "ISO 6336-1:2019",

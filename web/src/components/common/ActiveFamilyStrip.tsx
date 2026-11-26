@@ -45,6 +45,7 @@ import { useLastMotorState } from '../../lib/lastMotor';
 import { fetchFamilyTree } from '../../lib/familyTree';
 import { modeNames, type RowDie } from '../../lib/catalogRows';
 import { dutyEfficiencyBasis, dutyEfficiencyPct } from '../../lib/dutyEfficiency';
+import { dutyDefinitionOnly, atomicDutyRunBody } from '../../lib/dutyRunSave';
 import { dutyLabel, isShortTime, type DutyClassInfo } from '../../lib/dutyClass';
 import { suggestDieName } from '../../lib/dieNames';
 import { buildClashOf, movedLine, movedSave, type BuildClash } from '../../lib/buildClash';
@@ -574,7 +575,7 @@ const ActiveFamilyStrip: React.FC = () => {
       // as having captured the point either.
       const r = await fetch(`${API}/api/family/duty`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ die: tDie, config: targetConfig, duty: dutyBody }),
+        body: JSON.stringify({ die: tDie, config: targetConfig, duty: dutyDefinitionOnly(dutyBody) }),
       });
       if (!r.ok) {
         // a structured refusal ({code, message}, e.g. new_die_requires_explicit_save) is shown by its message
@@ -693,15 +694,7 @@ const ActiveFamilyStrip: React.FC = () => {
         } catch { return null; }
       })();
       if (runMatches) {
-        const rr = await fetch(`${API}/api/family/duty_result`, {
-          method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ die: tDie, config: cfgName, duty: tDuty,
-            drive, assignment_sig: dutyBody.assignment_sig,
-            // the marker of the summary being saved: the server derives shaft_conv from a marked summary, never from the flag
-            ...(sc ? { shaft_convention: s?.shaft_convention } : {}),
-            result: { efficiency_pct: dutyEfficiencyPct(s, rotorW),
-                      // the shaft-power convention of these numbers (1 = core loss on the shaft; the catalog never ranks two)
-                      ...(sc ? { shaft_conv: 1 } : {}),
+        const result = { efficiency_pct: dutyEfficiencyPct(s, rotorW),
                       ...(dutyEfficiencyBasis(s) ? { efficiency_basis: dutyEfficiencyBasis(s) } : {}),
                       // the refined ripple when there is one (lib/rippleAccuracy)
                       ripple_pct: quotedRipple(s).value ?? s.T_ripple_pct,
@@ -721,47 +714,32 @@ const ActiveFamilyStrip: React.FC = () => {
                       ...(vw && Number.isFinite(Number(vw.KV_rpm_per_V_line))
                         ? { kv_rpm_per_v: Number(vw.KV_rpm_per_V_line),
                             kv_is_noload: vw.view_flags?.kv === 'no-load' ? 1 : 0 }
-                        : {}) } }),
-        });
-        extra += rr.ok
-          ? (k3d ? ` + run results (3D ×${k3d.toFixed(3)})` : ' + run results')
-          : ' (result recording failed)';
-        // ── the WAVEFORMS ────────────────────────────────────────────────────
-        // Stored so this run can be LOADED again instead of re-solved — twelve
-        // minutes for a PWM point.  The per-element arrays no chart reads
-        // (animation frames, the field, the demagnetisation map) are dropped
-        // here rather than shipped and dropped server-side: a 700 MB request is
-        // one nobody wants to see attempted.
-        if (tOfRun) {
-          try {
-            const HEAVY = ['frames', 'field', 'demag_field', 'demag_coef_per_tri'];
-            const payload: Record<string, unknown> = {};
-            for (const [k, v] of Object.entries(tOfRun)) {
-              if (!HEAVY.includes(k)) payload[k] = v;
-            }
-            const pr = await fetch(`${API}/api/family/duty_run`, {
-              method: 'POST', headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ die: tDie, config: cfgName, duty: tDuty,
-                drive, settings: dutyBody.mesh, summary: s,
-                assignment_sig: dutyBody.assignment_sig, payload }),
-            });
-            if (!pr.ok) {
-              let why = `HTTP ${pr.status}`;
-              try { why = (await pr.json()).detail ?? why; } catch { /* no body */ }
-              extra += ` (waveforms NOT stored: ${why})`;
-            }
-          } catch (pe: any) {
-            extra += ` (waveforms NOT stored: ${pe?.message ?? pe})`;
+                        : {}) };
+        // Summary and numbers are one save, even when this browser has no waveforms.
+        try {
+          const rr = await fetch(`${API}/api/family/duty_run`, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(atomicDutyRunBody(
+              { die: tDie, config: cfgName, duty: tDuty, drive,
+                settings: dutyBody.mesh, summary: s, result,
+                assignment_sig: dutyBody.assignment_sig }, tOfRun)),
+          });
+          if (rr.ok) {
+            const saved = await rr.json();
+            rj.primary = saved.primary;
+            extra += k3d ? ` + run results (3D \u00d7${k3d.toFixed(3)})` : ' + run results';
+            if (!tOfRun) extra += ' (waveforms NOT stored \u2014 this run\'s transient is neither in '
+              + 'this browser nor the backend\'s last run; press Run, then save again)';
+          } else {
+            let why = `HTTP ${rr.status}`;
+            try {
+              const detail = (await rr.json()).detail;
+              why = typeof detail === 'string' ? detail : detail?.message ?? why;
+            } catch { /* no body */ }
+            extra += ` (run results NOT stored: ${why})`;
           }
-        } else {
-          // SAY IT.  A save that files the numbers and drops the charts used to
-          // look exactly like a complete one, and the report's torque / phase
-          // current / line voltage figures were simply missing hours later
-          // (user 2026-09-13).  The backend drops the duty's sidecar pointer in
-          // this case rather than keep a foreign run's waveforms — correct, and
-          // worth one line on screen.
-          extra += ' (waveforms NOT stored — this run\'s transient is neither in '
-                 + 'this browser nor the backend\'s last run; press Run, then save again)';
+        } catch (err: any) {
+          extra += ` (run results NOT stored: ${err?.message ?? err})`;
         }
       } else {
         extra += ' (no matching run to record — Run, then save again)';

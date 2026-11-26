@@ -75,11 +75,11 @@ def test_unmarked_summary_and_client_flag_do_not_store_it(dies):
     assert "shaft_conv" not in _duty(dies)["result"]
 
 
-def test_result_before_run_with_marker_string_then_run_decides(dies):
+def test_result_before_run_cannot_publish_a_client_witness(dies):
     # the real order: /duty_result first (the stored summary is still the old run's), /duty_run after
     _save_duty(UNMARKED)
     assert _result(flag=1, marker=SC.SHAFT_CONVENTION).status_code == 200
-    assert _duty(dies)["result"]["shaft_conv"] == 1
+    assert "shaft_conv" not in _duty(dies)["result"]
     assert _run(MARKED).status_code == 200
     assert _duty(dies)["result"]["shaft_conv"] == 1
     assert _duty(dies)["runs"]["current"]["result"]["shaft_conv"] == 1
@@ -281,3 +281,183 @@ def test_efficiency_basis_only_on_marked_records(dies):
     client.post("/api/family/duty_result", json={**body, "shaft_convention": SC.SHAFT_CONVENTION})
     assert _run(UNMARKED).status_code == 200
     assert "efficiency_basis" not in _duty(dies)["result"]
+
+
+def test_marked_run_then_result_without_flag_keeps_derived_marker(dies):
+    # Review B(b): the second request must not undo the first request's convention.
+    _save_duty(UNMARKED)
+    assert _run(MARKED).status_code == 200
+    assert _result().status_code == 200
+    d = _duty(dies)
+    assert d["result"]["shaft_conv"] == 1
+    assert d["runs"]["current"]["result"]["shaft_conv"] == 1
+    assert d["summary"] == d["runs"]["current"]["summary"] == MARKED
+
+
+def _atomic(summary, drive="current", **extra):
+    return client.post("/api/family/duty_run", json={
+        "die": DIE, "config": CFG, "duty": DUTY, "drive": drive,
+        "summary": {**summary, "drive": drive},
+        "result": {"efficiency_pct": 87.62886597938144, "mass_kg": 1,
+                   "efficiency_basis": "coupling", "shaft_conv": 99, "untrusted": 123},
+        **extra})
+
+
+@pytest.mark.parametrize("drive", ["current", "pwm_voltage"])
+@pytest.mark.parametrize("marked", [True, False])
+def test_atomic_save_without_waveforms_publishes_one_sanitized_pair(dies, monkeypatch, drive, marked):
+    from motor_ai_sim.routes import family as fam
+    writes = []
+    save = fam._save_yaml
+    def observe(path, doc, *args, **kwargs):
+        import copy
+        writes.append(copy.deepcopy(doc))
+        return save(path, doc, *args, **kwargs)
+    monkeypatch.setattr(fam, "_save_yaml", observe)
+    summary = MARKED if marked else UNMARKED
+    r = _atomic(summary, drive)
+    assert r.status_code == 200, r.text
+    assert r.json()["primary"] is True and len(writes) == 1
+    d = _duty(dies)
+    run = d["runs"][drive]
+    assert d["summary"] == run["summary"] == {**summary, "drive": drive}
+    assert d["result"] == run["result"]
+    assert (d["result"].get("shaft_conv") == 1) == marked
+    assert "untrusted" not in d["result"]
+    assert d["result"]["efficiency_pct"] == (87.62886597938144 if marked else 87.629)
+    assert "payload_file" not in run
+
+
+@pytest.mark.parametrize("first", ["run", "result"])
+@pytest.mark.parametrize("marked", [True, False])
+def test_both_request_orders_and_interrupted_second_save(dies, first, marked):
+    _save_duty(UNMARKED if marked else MARKED)
+    summary = MARKED if marked else UNMARKED
+    calls = {"run": lambda: _atomic(summary), "result": lambda: _result(flag=1, marker=SC.SHAFT_CONVENTION)}
+    for call in [first, "result" if first == "run" else "run"]:
+        assert calls[call]().status_code == 200
+        # Check after EACH write: it is also the state if the other request never arrives.
+        d = _duty(dies)
+        for rec in [d, *d["runs"].values()]:
+            assert (rec["result"].get("shaft_conv") == 1) == SC.has_marker(rec["summary"])
+    assert SC.has_marker(_duty(dies)["summary"]) == marked
+
+
+def test_missing_other_drive_summary_never_borrows_marked_headline(dies):
+    _save_duty(MARKED)
+    before = _duty(dies)
+    r = client.post("/api/family/duty_result", json={
+        "die": DIE, "config": CFG, "duty": DUTY, "drive": "pwm_voltage",
+        "shaft_convention": SC.SHAFT_CONVENTION,
+        "result": {"efficiency_pct": 88, "shaft_conv": 1, "efficiency_basis": "coupling"}})
+    assert r.status_code == 200 and r.json()["primary"] is False
+    d = _duty(dies)
+    assert d["summary"] == before["summary"] and "result" not in d
+    assert "shaft_conv" not in d["runs"]["pwm_voltage"]["result"]
+    assert "efficiency_basis" not in d["runs"]["pwm_voltage"]["result"]
+
+
+def test_secondary_atomic_run_keeps_primary_bytes_and_current_can_take_over(dies):
+    assert _atomic(MARKED).status_code == 200
+    before = _duty(dies)
+    assert _atomic(UNMARKED, "pwm_voltage").status_code == 200
+    d = _duty(dies)
+    for key in ("summary", "result", "mesh"):
+        assert yaml.safe_dump(d.get(key)) == yaml.safe_dump(before.get(key))
+    assert "shaft_conv" not in d["runs"]["pwm_voltage"]["result"]
+
+
+@pytest.mark.parametrize("failure", ["verification", "result", "write"])
+def test_rejected_atomic_save_leaves_previous_pair_byte_identical(dies, monkeypatch, failure):
+    from fastapi import HTTPException
+    from motor_ai_sim.routes import family as fam
+    assert _atomic(UNMARKED).status_code == 200
+    p = dies / DIE / f"{CFG}.yaml"
+    before = p.read_bytes()
+    if failure == "verification":
+        response = _atomic({**MARKED, "ripple_self_check_rel": 1.016})
+        assert response.status_code == 409
+    elif failure == "result":
+        response = _atomic(MARKED, result={"mass_kg": "invalid"})
+        assert response.status_code == 422
+    else:
+        def fail(*args, **kwargs):
+            raise HTTPException(503, "injected save failure")
+        monkeypatch.setattr(fam, "_save_yaml", fail)
+        assert _atomic(MARKED).status_code == 503
+    assert p.read_bytes() == before
+
+
+@pytest.mark.parametrize("route", ["duty", "duty_run"])
+def test_summary_changes_synchronize_retained_result_and_repair_has_nothing_to_restore(dies, route):
+    assert _atomic(MARKED).status_code == 200
+    if route == "duty":
+        _save_duty(UNMARKED)
+    else:
+        assert _run(UNMARKED).status_code == 200
+    d = _duty(dies)
+    for rec in [d, d["runs"]["current"]]:
+        assert rec["summary"] == UNMARKED
+        assert "shaft_conv" not in rec["result"] and "efficiency_basis" not in rec["result"]
+    assert repair.plan_config({"duties": [d]}) == []
+
+
+def test_marked_absent_efficiency_survives_atomic_save_and_project_projection(dies):
+    assert _atomic(MARKED, result={"efficiency_pct": None, "mass_kg": 1}).status_code == 200
+    d = _duty(dies)
+    assert d["result"]["efficiency_pct"] is None
+    rows = motors._results(DIE, CFG, {"duties": [d]})
+    assert rows[0]["electromagnetic"].get("efficiency_pct") is None
+
+
+def test_overlapping_atomic_saves_keep_both_drives_and_consistent_headline(dies, monkeypatch):
+    from concurrent.futures import ThreadPoolExecutor
+    import threading
+    import time
+    from motor_ai_sim.routes import family as fam
+    load = fam._load_yaml
+    def delayed(path, what):
+        doc = load(path, what)
+        if what == "configuration":
+            time.sleep(0.03)  # overlapping read-modify-write would lose one drive without the store lock
+        return doc
+    monkeypatch.setattr(fam, "_load_yaml", delayed)
+    barrier = threading.Barrier(2)
+    def save(drive):
+        barrier.wait(timeout=5)
+        return _atomic(MARKED if drive == "current" else UNMARKED, drive)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        responses = list(pool.map(save, ["current", "pwm_voltage"]))
+    assert [r.status_code for r in responses] == [200, 200]
+    d = _duty(dies)
+    assert set(d["runs"]) == {"current", "pwm_voltage"}
+    assert d["summary"] == d["runs"]["current"]["summary"]
+    assert d["result"] == d["runs"]["current"]["result"]
+    assert d["result"]["shaft_conv"] == 1
+    assert "shaft_conv" not in d["runs"]["pwm_voltage"]["result"]
+
+
+def test_atomic_summary_keeps_the_primary_terminal_connection_and_build_statement_current(dies):
+    p = dies / DIE / f"{CFG}.yaml"
+    doc = yaml.safe_load(p.read_text(encoding="utf-8"))
+    doc["duties"][0].update(star_delta="star", solved_on={"build_sig": "old"})
+    p.write_text(yaml.safe_dump(doc), encoding="utf-8")
+    assert _atomic({**MARKED, "star_delta": "delta"}).status_code == 200
+    d = _duty(dies)
+    assert d["star_delta"] == "delta" and "solved_on" not in d
+
+
+@pytest.mark.parametrize("pct", [850 / 970 * 100, 770 / 870 * 100,
+    20.1 / 34.2 * 100, 1 / 1.1 * 100, .9 / 1.1 * 100, 80, 60, .7 / .8 * 100,
+    None, 0, 4 / 7 * 100])
+def test_page_efficiency_precision_survives_both_routes(dies, pct):
+    assert _atomic(MARKED, result={"efficiency_pct": pct, "mass_kg": 1}).status_code == 200
+    for save_again in [False, True]:
+        if save_again:
+            response = client.post("/api/family/duty_result", json={
+                "die": DIE, "config": CFG, "duty": DUTY, "drive": "current",
+                "result": {"efficiency_pct": pct, "mass_kg": 1}})
+            assert response.status_code == 200
+        saved = _duty(dies)["result"]["efficiency_pct"]
+        assert saved == pct
+        assert (None if saved is None else f"{saved:.2f}") == (None if pct is None else f"{pct:.2f}")

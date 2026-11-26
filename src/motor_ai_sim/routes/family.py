@@ -1689,8 +1689,14 @@ def _store_run(die: str, cfg: str, cfg_doc: dict, entry: dict, drive: str, *,
         rec["assignment_sig"] = str(sig)
     for k, v in (("settings", settings), ("summary", summary), ("result", result)):
         vv = v if v is not None else prev.get(k)
-        if vv:
+        if vv or v is not None:
             rec[k] = dict(vv)
+    if "summary" not in rec and drive == _primary_drive(entry) and isinstance(entry.get("summary"), dict):
+        rec["summary"] = dict(entry["summary"])
+    if summary is not None and result is None and summary != prev.get("summary"):
+        if isinstance(rec.get("result"), dict):
+            rec["result"].pop("efficiency_basis", None)
+    _sync_shaft_conv(rec.get("result"), rec.get("summary"))
     if payload is not None:
         rel = _run_rel(cfg, str(entry.get("name") or ""), drive)
         _write_run_payload(die, rel, str(entry.get("name") or ""), drive, payload)
@@ -2270,6 +2276,69 @@ def _sync_shaft_conv(result: Any, summary: Any) -> None:
         result.pop("efficiency_basis", None)
 
 
+def _matching_run_summary(entry: dict, drive: str):
+    rec = (entry.get("runs") or {}).get(drive) or {}
+    if isinstance(rec.get("summary"), dict):
+        return rec["summary"]
+    return entry.get("summary") if drive == _primary_drive(entry) else None
+
+
+def _run_is_primary(entry: dict, drive: str) -> bool:
+    return (drive == "current" or not (entry.get("summary") or entry.get("mesh"))
+            or drive == _primary_drive(entry))
+
+
+def _publish_primary_run(entry: dict, drive: str, rec: dict) -> None:
+    """Publish the headline from ONE drive record, including its convention."""
+    old_drive = _primary_drive(entry)
+    for key, run_key in (("summary", "summary"), ("result", "result"), ("mesh", "settings")):
+        if run_key in rec:
+            entry[key] = dict(rec[run_key])
+        elif old_drive != drive:
+            entry.pop(key, None)
+    if _primary_drive(entry) != drive:
+        entry["mesh"] = {**(entry.get("mesh") or {}), "sim.drive": drive}
+    sd = (rec.get("summary") or {}).get("star_delta")
+    if sd:
+        entry["star_delta"] = "delta" if str(sd).lower().startswith("d") else "star"
+    _sync_shaft_conv(entry.get("result"), entry.get("summary"))
+
+
+def _sanitize_duty_result(raw: dict, summary: Any, die: str, cfg_doc: dict) -> dict:
+    """One result contract for both save routes; the matching summary owns the marker."""
+    res = {}
+    for key in _RESULT_KEYS:
+        value = raw.get(key)
+        if value is None:
+            continue
+        try:
+            res[key] = round(float(value), 3)
+        except (TypeError, ValueError):
+            raise HTTPException(422, detail=f"result field '{key}' is not a number: {value!r}")
+    if not res:
+        raise HTTPException(422, detail=(
+            "empty result \u2014 expected at least one of: " + ", ".join(_RESULT_KEYS)))
+    _sync_shaft_conv(res, summary)
+    if _sc_has_marker(summary):
+        basis = raw.get("efficiency_basis")
+        if basis in _EFF_BASES:
+            res["efficiency_basis"] = basis
+        if "efficiency_pct" in raw:
+            value = raw["efficiency_pct"]
+            if value is None:
+                res["efficiency_pct"] = None
+            else:
+                value = float(value)
+                if value == value and abs(value) != float("inf"):
+                    res["efficiency_pct"] = value
+    res["recorded_at"] = datetime.now().isoformat(timespec="seconds")
+    try:
+        res["build_sig"] = _build_sig(_load_yaml(_die_file(die), "die"), cfg_doc)
+    except HTTPException:
+        pass
+    return res
+
+
 class DutyResult(BaseModel):
     die: str
     config: str
@@ -2280,14 +2349,10 @@ class DutyResult(BaseModel):
     # excitation is recorded under `runs[<drive>]` and leaves them alone.
     drive: Optional[str] = None
     assignment_sig: Optional[str] = None
-    # The ``shaft_convention`` marker of the run's own summary, when the caller has it.  /duty_result usually arrives BEFORE
-    # /duty_run (which files the summary), so the stored summary is still the previous run's; the marker string is the
-    # caller's witness of the summary it is saving.  /duty_run, which carries the summary itself, has the last word.
-    shaft_convention: Optional[str] = None
 
 
 class DutyRunSave(BaseModel):
-    """A finished run's WAVEFORMS, filed under one excitation of one duty."""
+    """A finished run's summary/result and optional waveforms, filed under one excitation."""
     die: str
     config: str
     duty: str
@@ -4147,6 +4212,10 @@ def _upsert_duty(req: DutyCreate, _w: dict, *, may_move: bool = True) -> dict:
         _store_run(die, cfg, c, entry, _drive,
                    settings=d.mesh, summary=d.summary,
                    assignment_sig=d.assignment_sig)
+    if d.summary is not None and _is_primary:
+        if d.summary != (prev or {}).get("summary") and isinstance(entry.get("result"), dict):
+            entry["result"].pop("efficiency_basis", None)
+        _sync_shaft_conv(entry.get("result"), entry.get("summary"))
     duties.append(entry)
     c["duties"] = duties
     # A configuration written before `star_delta` existed names no terminal
@@ -4219,84 +4288,45 @@ def record_duty_result(req: DutyResult, _w: dict = Depends(require_catalog_write
     cfg = _check_name(req.config, "configuration")
     _require_die_write(die, _w, cfg)
     p = _cfg_file(die, cfg)
-    c = _load_yaml(p, "configuration")
-    found = next((x for x in (c.get("duties") or [])
-                  if x.get("name") == req.duty), None)
-    if found is None:
-        raise HTTPException(404, detail=f"duty '{req.duty}' not found in {die}/{cfg}")
-    res = {}
-    for k in _RESULT_KEYS:
-        v = req.result.get(k)
-        if v is None:
-            continue
-        try:
-            res[k] = round(float(v), 3)
-        except (TypeError, ValueError):
-            raise HTTPException(422, detail=f"result field '{k}' is not a number: {v!r}")
-    if not res:
-        raise HTTPException(422, detail=(
-            "empty result — expected at least one of: " + ", ".join(_RESULT_KEYS)))
-    # The convention flag rides only with a marked stored summary of this excitation (the run's summary is filed by /duty_run,
-    # which also derives the flag when this call comes first); an unmarked summary never gets it, whatever the client sent.
-    _drv0 = _drive_of(req.drive)
-    _prev_run = ((found.get("runs") or {}).get(_drv0) if isinstance(found.get("runs"), dict) else None) or {}
-    _stored_sum = _prev_run.get("summary") if _prev_run.get("summary") else found.get("summary")
-    if req.result.get(_SHAFT_CONV_KEY) is not None:
-        _sync_shaft_conv(res, _stored_sum if _sc_has_marker(_stored_sum)
-                         else ({"shaft_convention": req.shaft_convention} if req.shaft_convention else None))
-    _basis = req.result.get("efficiency_basis")
-    if res.get(_SHAFT_CONV_KEY) and _basis in _EFF_BASES:
-        res["efficiency_basis"] = _basis
-    if res.get(_SHAFT_CONV_KEY) and req.result.get("efficiency_pct") is not None:
-        # a MARKED point keeps the efficiency the page showed at full precision (no round(..., 3)): one number per point
-        try:
-            _eff = float(req.result["efficiency_pct"])
-            if _eff == _eff and abs(_eff) != float("inf"):
-                res["efficiency_pct"] = _eff
-        except (TypeError, ValueError):
-            pass
-    res["recorded_at"] = datetime.now().isoformat(timespec="seconds")
-    try:
-        res["build_sig"] = _build_sig(_load_yaml(_die_file(die), "die"), c)
-    except HTTPException:
-        pass
-    # Same split as the duty save: the headline numbers the catalog row shows
-    # belong to the SINE run, and a PWM/BLDC result is recorded under its own
-    # excitation without disturbing them.  A duty with no result yet takes the
-    # first one it is given, whatever ran it.
-    _drive = _drive_of(req.drive)
-    if _drive == "current" or not found.get("result") or _drive == _primary_drive(found):
-        found["result"] = res
-        _primary = True
-    else:
-        _primary = False
-    _store_run(die, cfg, c, found, _drive, result=res,
-               assignment_sig=req.assignment_sig)
-    _save_yaml(p, c)
-    # The per-duty store keeps a POINTER at the electromagnetic column, never a
-    # copy of it (2026-09-09): the numbers above live in the configuration yaml,
-    # which is the one place a catalogue answer may live, and a second copy able
-    # to drift from it is worth less than nothing.  What is recorded here is
-    # that the column exists, when it was saved and on which build — enough for
-    # the report's Sources page to date it beside the thermal and mechanical
-    # ones.
-    if _primary:
-        try:
-            from motor_ai_sim import duty_results as _dr
-            _dr.note_em_pointer(die, cfg, req.duty, res.get("recorded_at"),
-                                res.get("build_sig"))
-        except Exception:  # noqa: BLE001 — bookkeeping never fails a save
-            log.debug("family: EM pointer not recorded for %s/%s/%s",
-                      die, cfg, req.duty, exc_info=True)
-    log.info("family: %s result recorded on '%s/%s/%s' (%s): %s",
-             _drive, die, cfg, req.duty,
-             "primary" if _primary else "beside the primary", res)
-    return {"ok": True, "drive": _drive, "primary": _primary}
+    from motor_ai_sim.json_store import lock_for
+    with lock_for(p):
+        c = _load_yaml(p, "configuration")
+        found = next((x for x in (c.get("duties") or [])
+                      if x.get("name") == req.duty), None)
+        if found is None:
+            raise HTTPException(404, detail=f"duty '{req.duty}' not found in {die}/{cfg}")
+        _drive = _drive_of(req.drive)
+        res = _sanitize_duty_result(req.result, _matching_run_summary(found, _drive), die, c)
+        _primary = _run_is_primary(found, _drive)
+        rec = _store_run(die, cfg, c, found, _drive, result=res,
+                         assignment_sig=req.assignment_sig)
+        if _primary:
+            _publish_primary_run(found, _drive, rec)
+        _save_yaml(p, c)
+        # The per-duty store keeps a POINTER at the electromagnetic column, never a
+        # copy of it (2026-09-09): the numbers above live in the configuration yaml,
+        # which is the one place a catalogue answer may live, and a second copy able
+        # to drift from it is worth less than nothing.  What is recorded here is
+        # that the column exists, when it was saved and on which build — enough for
+        # the report's Sources page to date it beside the thermal and mechanical
+        # ones.
+        if _primary:
+            try:
+                from motor_ai_sim import duty_results as _dr
+                _dr.note_em_pointer(die, cfg, req.duty, res.get("recorded_at"),
+                                    res.get("build_sig"))
+            except Exception:  # noqa: BLE001 — bookkeeping never fails a save
+                log.debug("family: EM pointer not recorded for %s/%s/%s",
+                          die, cfg, req.duty, exc_info=True)
+        log.info("family: %s result recorded on '%s/%s/%s' (%s): %s",
+                 _drive, die, cfg, req.duty,
+                 "primary" if _primary else "beside the primary", res)
+        return {"ok": True, "drive": _drive, "primary": _primary}
 
 
 @router.post("/duty_run")
 def record_duty_run(req: DutyRunSave, _w: dict = Depends(require_catalog_write)):
-    """File a finished run's WAVEFORMS under one excitation of one duty.
+    """Atomically file a run's summary and sanitized result, with optional waveforms.
 
     The yaml keeps a description (when, on which build, with which materials,
     its settings and summary); the transient itself — ~0.7 MB of per-step
@@ -4307,47 +4337,57 @@ def record_duty_run(req: DutyRunSave, _w: dict = Depends(require_catalog_write))
     _require_die_write(die, _w, cfg)
     drive = _run_drive(req.drive)
     p = _cfg_file(die, cfg)
-    c = _load_yaml(p, "configuration")
-    entry = next((x for x in (c.get("duties") or [])
-                  if x.get("name") == req.duty), None)
-    if entry is None:
-        raise HTTPException(404, detail=f"duty '{req.duty}' not found in {die}/{cfg}")
-    if req.payload is not None:
-        import json as _json
-        n = len(_json.dumps(req.payload, default=str).encode("utf-8"))
-        if n > _RUN_MAX_BYTES:
-            raise HTTPException(413, detail=(
-                f"the run payload is {n / 1e6:.1f} MB — the limit is "
-                f"{_RUN_MAX_BYTES / 1e6:.0f} MB.  Drop the per-element field "
-                f"arrays ({', '.join(_RUN_HEAVY_KEYS)}) before sending: no "
-                "chart reads them and they are what makes a run enormous."))
-    from motor_ai_sim.result_verification import assess as _assess_run
-    verdict = _assess_run(req.summary, req.payload)
-    if verdict["status"] == "reject" and not req.allow_unverified:
-        raise HTTPException(409, detail={
-            "error": "result_not_verified",
-            "message": ("this run is not verified and is not saved into the duty: "
-                        + "; ".join(verdict["reasons"])
-                        + ".  Re-run with more gap layers, or save it deliberately with allow_unverified."),
-            "verification": verdict})
-    rec = _store_run(die, cfg, c, entry, drive,
-                     settings=req.settings, summary=req.summary,
-                     result=req.result, assignment_sig=req.assignment_sig,
-                     payload=req.payload)
-    # The summary of THIS run is the authority for the convention flag of the result filed with it (and of the headline
-    # result when this excitation owns it): marked -> shaft_conv 1; unmarked -> never, a leftover flag is dropped.
-    if req.summary is not None:
-        _sync_shaft_conv(rec.get("result"), req.summary)
-        if drive == _primary_drive(entry):
-            _sync_shaft_conv(entry.get("result"), req.summary)
-    if verdict["status"] != "ok" and verdict["verified"] is False:
-        rec["verification"] = verdict          # additive: shown as "not verified", never rewrites a number
-    _save_yaml(p, c)
-    log.info("family: %s run stored on '%s/%s/%s' -> %s",
-             drive, die, cfg, req.duty, rec.get("payload_file") or "(no payload)")
-    return {"ok": True, "drive": drive,
-            "payload_file": rec.get("payload_file"),
-            "primary": drive == _primary_drive(entry)}
+    from motor_ai_sim.json_store import lock_for
+    with lock_for(p):
+        c = _load_yaml(p, "configuration")
+        entry = next((x for x in (c.get("duties") or [])
+                      if x.get("name") == req.duty), None)
+        if entry is None:
+            raise HTTPException(404, detail=f"duty '{req.duty}' not found in {die}/{cfg}")
+        if req.payload is not None:
+            import json as _json
+            n = len(_json.dumps(req.payload, default=str).encode("utf-8"))
+            if n > _RUN_MAX_BYTES:
+                raise HTTPException(413, detail=(
+                    f"the run payload is {n / 1e6:.1f} MB — the limit is "
+                    f"{_RUN_MAX_BYTES / 1e6:.0f} MB.  Drop the per-element field "
+                    f"arrays ({', '.join(_RUN_HEAVY_KEYS)}) before sending: no "
+                    "chart reads them and they are what makes a run enormous."))
+        from motor_ai_sim.result_verification import assess as _assess_run
+        verdict = _assess_run(req.summary, req.payload)
+        if verdict["status"] == "reject" and not req.allow_unverified:
+            raise HTTPException(409, detail={
+                "error": "result_not_verified",
+                "message": ("this run is not verified and is not saved into the duty: "
+                            + "; ".join(verdict["reasons"])
+                            + ".  Re-run with more gap layers, or save it deliberately with allow_unverified."),
+                "verification": verdict})
+        primary = _run_is_primary(entry, drive)
+        summary = req.summary if req.summary is not None else _matching_run_summary(entry, drive)
+        result = (_sanitize_duty_result(req.result, summary, die, c)
+                  if req.result is not None else None)
+        rec = _store_run(die, cfg, c, entry, drive,
+                         settings=req.settings, summary=req.summary,
+                         result=result, assignment_sig=req.assignment_sig,
+                         payload=req.payload)
+        if primary:
+            _publish_primary_run(entry, drive, rec)
+            if req.summary is not None:
+                entry.pop("solved_on", None)  # the new primary summary owns the solved-build statement
+        if verdict["status"] != "ok" and verdict["verified"] is False:
+            rec["verification"] = verdict          # additive: shown as "not verified", never rewrites a number
+        _save_yaml(p, c)
+        if primary and result is not None:
+            try:
+                from motor_ai_sim import duty_results as _dr
+                _dr.note_em_pointer(die, cfg, req.duty, result.get("recorded_at"), result.get("build_sig"))
+            except Exception:  # noqa: BLE001 - bookkeeping never fails a save
+                log.debug("family: EM pointer not recorded for %s/%s/%s", die, cfg, req.duty, exc_info=True)
+        log.info("family: %s run stored on '%s/%s/%s' -> %s",
+                 drive, die, cfg, req.duty, rec.get("payload_file") or "(no payload)")
+        return {"ok": True, "drive": drive,
+                "payload_file": rec.get("payload_file"),
+                "primary": drive == _primary_drive(entry)}
 
 
 def _summary_with_full_mass(summary: Any, die: str, cfg: str) -> Any:

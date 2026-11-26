@@ -25,6 +25,7 @@ import { watchChunkImport } from '../../lib/chunkReload';
 // the field viewer is three.js: fetched when a stored field map is opened, not with the Configure tab
 const StoredFieldViewer = lazy(watchChunkImport(() => import('./StoredFieldViewer')));
 import StoredPointResults from './StoredPointResults';
+import { ReadOnlySimulationView } from '../simulation/ReadOnlySimulationView';
 import StarIcon from '@mui/icons-material/Star';
 import { VariantControls } from '../../modules/development/components/VariantControls';
 import { isRecommended, flagWho } from '../../modules/development/projectFlags';
@@ -280,7 +281,11 @@ const PointsConfigure: React.FC<Props> = ({ view, loadedDuty }) => {
           </Box>
         </Box>
 
-        <Box sx={{ display: 'grid', gridTemplateColumns: 'minmax(0,1fr)', gap: 1.25 }} data-testid="tiles">
+        {/* a motor of the project in focus shows the ONE standard Simulation output (results table + the field beside it), the same
+            component the project's motor page uses (owner 2026-11-26); the own tiles and map block below serve the other motors */}
+        {focus && duty && <ReadOnlySimulationView key={`${view.die}\u0000${view.config}\u0000${duty}`} embedded withField projectId={focus.id}
+          die={view.die} config={view.config} duty={duty} showAll />}
+        {!focus && <Box sx={{ display: 'grid', gridTemplateColumns: 'minmax(0,1fr)', gap: 1.25 }} data-testid="tiles">
           {showTiles && panel && <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.75, minWidth: 0 }} data-testid="em-tiles">
             <ResultsPanel panel={panel} />
             {dcBus !== null && (
@@ -293,11 +298,11 @@ const PointsConfigure: React.FC<Props> = ({ view, loadedDuty }) => {
               </Box>
             )}
           </Box>}
-        </Box>
+        </Box>}
 
         <StoredPointResults duty={current} />
 
-        {kinds.length > 0 && <Box sx={{ ...PANEL, p: 1, display: 'flex', flexDirection: 'column', gap: 0.75 }} data-testid="stored-fields">
+        {!focus && kinds.length > 0 && <Box sx={{ ...PANEL, p: 1, display: 'flex', flexDirection: 'column', gap: 0.75 }} data-testid="stored-fields">
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
             <Typography sx={LABEL}>{t('points.fields.title')}</Typography>
             <ToggleButtonGroup exclusive size="small" value={activeKind} aria-label={t('points.fields.title')}

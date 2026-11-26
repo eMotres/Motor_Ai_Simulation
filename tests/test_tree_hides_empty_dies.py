@@ -121,3 +121,11 @@ def test_a_die_whose_only_configuration_is_private_is_hidden_from_who_may_not_se
     fam._TREE_CACHE.clear()
     assert FULL not in _names(env["a"])
     assert FULL in _names(env["admin"])
+
+
+def test_an_admin_can_still_find_an_empty_shared_die_through_the_inventory(env):
+    r = client.get("/api/family/empty-dies", headers=env["admin"])
+    assert r.status_code == 200, r.text
+    assert [d["die"] for d in r.json()["dies"]] == [EMPTY]
+    assert EMPTY not in _names(env["admin"])             # the ordinary tree stays filtered
+    assert client.get("/api/family/empty-dies", headers=env["a"]).status_code in (401, 403)

@@ -349,7 +349,9 @@ def test_b3_pwm_iron_selection_moves_the_shaft_side_with_the_losses():
 def test_b3_s1_linear_rating_rebuilds_d_from_the_same_losses():
     from motor_ai_sim import coupled_continuous_rating as CR
     src = Path(CR.__file__).read_text(encoding="utf-8")
-    assert "d_w=p_other, p_loss_w=p_loss_em" in src           # D = every held (non-copper) loss of THIS point
+    # D = every held non-copper loss of THIS point minus the bearing/windage watts the thermal nodes carry
+    # (the behaviour itself: test_r2_b3_rating_does_not_count_bearings_as_em_drag)
+    assert "d_w=_p_other_em, p_loss_w=p_loss_em" in src
 
 
 def test_b2_report_record_overlay_keeps_one_convention():
@@ -443,8 +445,11 @@ def test_r2_b2_overlay_carries_mode_and_speed():
 
 def test_r2_b2_density_rebuilt_from_the_selected_torque():
     from motor_ai_sim.development import motor_view as MV
+    # an earlier-convention saved run with its own losses (a real saved summary carries them; the loop overlay
+    # replaces them with the loop's, here the same)
     base = {"op_mode": "motor", "rpm": RPM100, "T_em_avg_Nm": 10.0, "P_mech_W": 1000.0, "mass_total_kg": 2.0,
-            "torque_per_mass_Nm_kg": 5.0, "power_per_mass_W_kg": 500.0}
+            "torque_per_mass_Nm_kg": 5.0, "power_per_mass_W_kg": 500.0, "P_core_W": 30.0, "P_mag_W": 0.0,
+            "P_shaft_W": 0.0, "P_sleeve_W": 0.0, "P_loss_total_W": 100.0}
     before = dict(base)
     SC.overlay(base, _plain_marked())
     MV._rescale_to_loop(base, before)

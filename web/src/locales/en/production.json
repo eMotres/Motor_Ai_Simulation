@@ -43,6 +43,7 @@
   "tabs": {
     "parts": "Parts",
     "bom": "BOM",
+    "3d": "3D",
     "timeline": "Timeline",
     "process": "Process",
     "documents": "Documents",
@@ -130,8 +131,6 @@
     "drawings": "Drawings",
     "noDrawings": "No drawing attached.",
     "download": "Download",
-    "model3d": "3-D model (STEP)",
-    "model3dTip": "Full motor model of this die/config; the same NDA gate as the 3-D tab.",
     "partStep": "Part STEP",
     "deleteConfirm": "Delete this part?",
     "writeLang": "Write in",
@@ -273,7 +272,6 @@
     "fit": "Fit to screen",
     "stepSectionsPick": "Process sections",
     "stepDocs": "Drawings and documents",
-    "model3d": "Assembled in this step (3-D)",
     "model3dOwn": "The parts assembled in this step.",
     "model3dGhost": "Highlighted: assembled in this step. Faint: already assembled in earlier steps.",
     "model3dUpTo": "Everything assembled up to this step.",
@@ -904,5 +902,14 @@
     },
     "move": "To Documents",
     "moveTip": "Move this file back to the Documents tab"
+  },
+  "tab3d": {
+    "all": "All",
+    "step": "Assembly step",
+    "none": "This motor has no 3-D model yet.",
+    "revision": "Model {rev}",
+    "revisionTip": "Parameter hash {hash}",
+    "download": "STEP",
+    "show": "Show in 3D"
   }
 }

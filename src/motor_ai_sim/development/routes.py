@@ -1125,6 +1125,9 @@ def submit_spec_for(user: dict, project_id: str, raw_revision: Any, *, audit_det
         # the submitter's own confirmation (owner 2026-11-12): customers and staff alike, never blocks the submit
         from motor_ai_sim.development import spec_confirmation
         spec_confirmation.notify_submitter(user, project_id, submitted["version"], store.get_project(project_id) or {})
+        # the owner-queue decision (owner 2026-11-25): every new version, customer or staff; never raises
+        from motor_ai_sim import owner_queue_events
+        owner_queue_events.spec_submitted(user, project_id, submitted["version"], store.get_project(project_id) or {})
     return submitted
 
 

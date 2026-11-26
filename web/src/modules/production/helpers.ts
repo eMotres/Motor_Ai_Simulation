@@ -284,6 +284,7 @@ export const canDownloadProductionDocuments = (role: CallerRole): boolean => rol
 
 /** The sub-tabs a project viewer may open (owner 2026-11-02): documents, tests, discussion - never BOM, costs, parts, process. */
 export const VIEWER_TABS = ['documents', 'tests', 'discussion'] as const;
+// '3d' is NOT a viewer tab (owner 2026-11-25): a project viewer never saw the motor model in Production (no model row in Documents).
 
 /** The caller's role in a production: the derived 'viewer' when the server answered through the project link. */
 export function productionRole(prod: { members: readonly Member[]; access?: 'project' } | null, email: string, isAdmin: boolean): CallerRole {
@@ -727,6 +728,44 @@ export function stepModelFamilies(steps: readonly AssemblyStep[], stepId: string
     todo.push(...s.after);
   }
   return { own, context: [...earlier].filter((f) => !own.includes(f)) };
+}
+
+/** What the "3D" tab draws (owner 2026-11-25): the whole model, one part of it, or what one assembly step assembles.
+ *  `only` = the families shown (null = everything), `highlight` = the ones that glow over faint earlier ones (null = no ghosting),
+ *  `noParts` = a step with no parts at all (nothing to draw), `explode` = the viewer's start value.  An electronics production has
+ *  no part families: always the full model.  A part with no family falls back to the full model. */
+export interface ModelViewFamilies { only: string[] | null; highlight: string[] | null; noParts: boolean; explode: number; legend: 'own' | 'ghost' | 'upTo' | null }
+export function modelViewFamilies(o: { electronics: boolean; steps: readonly AssemblyStep[]; stepId: string | null; part: { name: { en?: string } } | null }): ModelViewFamilies {
+  const all: ModelViewFamilies = { only: null, highlight: null, noParts: false, explode: 0, legend: null };
+  if (o.electronics) return all;
+  if (o.part) {
+    const fams = partFamilies(o.part.name.en || '');
+    return fams.length ? { ...all, only: fams } : all;
+  }
+  if (o.stepId && o.steps.some((s) => s.id === o.stepId)) {
+    const { own, context } = stepModelFamilies(o.steps, o.stepId);
+    const shown = [...own, ...context];
+    if (shown.length === 0) return { ...all, noParts: true };
+    return { only: shown, highlight: own.length > 0 && context.length > 0 ? own : null, noParts: false, explode: 0.25,
+      legend: own.length === 0 ? 'upTo' : context.length > 0 ? 'ghost' : 'own' };
+  }
+  return all;
+}
+
+/** The 3D tab's selection as a link item and back (owner 2026-11-25): `step.<id>` or `part.<id>`; null / anything else = the whole model. */
+export function modelItemOf(sel: { stepId: string | null; partId: string | null }): string | null {
+  return sel.partId ? `part.${sel.partId}` : sel.stepId ? `step.${sel.stepId}` : null;
+}
+export function modelSelectionOf(item: string | null | undefined): { stepId: string | null; partId: string | null } {
+  const m = /^(step|part)\.(.+)$/.exec(item ?? '');
+  return { stepId: m && m[1] === 'step' ? m[2] : null, partId: m && m[1] === 'part' ? m[2] : null };
+}
+
+/** The revision / date label of a built model, from /api/model3d/models `version` (template version, build time, parameter hash). */
+export function modelRevisionLabel(v: { template?: string | null; built_at?: string | null; param_hash?: string } | null | undefined): { label: string; hash: string } {
+  const day = (v?.built_at ?? '').slice(0, 10);
+  const label = [v?.template ? `v${v.template}` : '', day].filter(Boolean).join(' · ');
+  return { label, hash: v?.param_hash ?? '' };
 }
 
 /** The Discussion threads that HAVE messages, for the strip above the thread (owner 2026-10-28: a part thread hidden in a

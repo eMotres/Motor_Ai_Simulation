@@ -38,6 +38,17 @@ def _plain(html: str) -> str:
 
 # -- the validator ------------------------------------------------------------------------------------------------------
 
+def test_production_tabs_mirror_the_web_list():
+    """return_path.PRODUCTION_TABS and web/src/lib/appLink.ts PRODUCTION_TABS are one list (same names, same order)."""
+    import re
+    from pathlib import Path
+    from motor_ai_sim import return_path as RP
+    ts = (Path(__file__).resolve().parents[1] / "web" / "src" / "lib" / "appLink.ts").read_text(encoding="utf-8")
+    web = re.search(r"export const PRODUCTION_TABS = \[([^\]]*)\]", ts).group(1)
+    assert tuple(re.findall(r"'([^']+)'", web)) == RP.PRODUCTION_TABS
+    assert RP.safe_app_path("/production/a/b/3x") is None                                           # an unknown digit tab is refused
+
+
 @pytest.mark.parametrize("raw,expected", [
     (PATH, PATH),
     ("/production/CIANO14 40 new/L12/documents", PATH),                       # readable form is canonicalised
@@ -52,6 +63,9 @@ def _plain(html: str) -> str:
     ("/projects/erium-x1/messages?item=Ab-1_x", "/projects/erium-x1/messages?item=Ab-1_x"),
     ("/projects/erium-x1/motors?config=L12&die=CIANO28 85&verify=zz", "/projects/erium-x1/motors?die=CIANO28%2085&config=L12"),
     ("/production/SiC%20Controller%20800V/Rev%20A/documents", "/production/SiC%20Controller%20800V/Rev%20A/documents"),
+    ("/production/a/b/3d?item=step.s1", "/production/a/b/3d?item=step.s1"),                         # the 3D tab (a digit in the tab)
+    ("/production/a/b/3d?item=part.p-7", "/production/a/b/3d?item=part.p-7"),
+    ("/production/a/b/bom", "/production/a/b/bom"),                                                 # letter-only tabs unchanged
 ])
 def test_valid_paths_are_canonical(raw, expected):
     assert RP.safe_app_path(raw) == expected

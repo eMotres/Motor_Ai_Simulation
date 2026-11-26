@@ -5472,6 +5472,17 @@ def _finalize_standard_shortlist(
     initial = {"status": "failed", "reason": "", "sampling_purpose": _FINAL_PURPOSE,
                "shortlist_limit": int(limit), "validated": [], "failed": [],
                "timings": timings}
+    def _stopped() -> Optional[Dict[str, Any]]:
+        # Stop means stop (2026-11-25: a cancelled run sat 5+ min in final_validation, six paid 6x solves for a result nobody
+        # will read, holding the worker): no further final-quality solve is started once the run is cancelled.  The run ends
+        # at once; its best stays as the preliminary one (``_publish_standard_final``).
+        with _descent_lock:
+            gone = bool(_descent_state.get("cancel"))
+        return dict(initial, reason="run was cancelled", cancelled=True) if gone else None
+
+    _early = _stopped()
+    if _early is not None:
+        return _early
     _t0 = _t_fin.monotonic()
     base_a, why = checked(base_x, base_current)
     timings["baseline_a_s"] = round(_t_fin.monotonic() - _t0, 1)
@@ -5516,6 +5527,9 @@ def _finalize_standard_shortlist(
     # Job 0 is baseline B; jobs 1.. are the finalists in shortlist order.  The
     # results are gathered by index, so the winner choice below does not
     # depend on which solve finished first.
+    _early = _stopped()
+    if _early is not None:
+        return dict(_early, shortlist_count=len(shortlisted))
     jobs = [(dict(base_x), float(bump_current))] + [(dict(x), float(c))
                                                      for x, c in shortlisted]
     n_par = max(1, min(len(jobs), _job_workers()))
@@ -5578,7 +5592,7 @@ def _publish_standard_final(result: Dict[str, Any], validation: Dict[str, Any],
     """Publish a winner only after all standard-reference checks succeeded."""
     with _descent_lock:
         if _descent_state.get("cancel"):
-            validation = {"status": "failed", "reason": "run was cancelled"}
+            validation = {"status": "failed", "reason": "run was cancelled", "cancelled": True}
     public = {k: validation.get(k) for k in (
         "status", "reason", "sampling_purpose", "shortlist_limit",
         "shortlist_count", "shortlist_only", "timings")}
@@ -5615,6 +5629,13 @@ def _publish_standard_final(result: Dict[str, Any], validation: Dict[str, Any],
                                   points=list(points), final_validation=public,
                                   final_validation_status="certified",
                                   apply_eligible=True)
+    elif validation.get("cancelled"):
+        # cancelled by the user: nothing was validated and nothing is wrong; the screening best stays as the PRELIMINARY one
+        # (not apply-eligible, no error), exactly what a run that was cut before its final validation shows
+        with _descent_lock:
+            _descent_state.update(result=result, final_validation=public,
+                                  final_validation_status="preliminary",
+                                  apply_eligible=False, error=None)
     else:
         result["best"] = None
         with _descent_lock:

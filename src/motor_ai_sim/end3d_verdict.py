@@ -254,6 +254,25 @@ def store_fields(sa: Mapping[str, Any]) -> Dict[str, Any]:
             **{k_: tabs[k_] for k_ in ("k_flux_vs_L_method", "k_flux_vs_L_raw") if tabs.get(k_)}}
 
 
+def stack_mm_of_stage_a(sa: Any) -> Optional[float]:
+    """The stack length [mm] a Stage A result was solved at, the one number the length-aware readers (``_end3d_lookup``'s
+    class curve, ``applied`` tables) need beside the scalar: the result's own ``stack_mm``, else its ``machine.stack_mm``, else the
+    sweep's reference row (``factor`` 1).  ``None`` when none is stated.  Used by the adopt route; ``run_stage_a`` writes the key itself."""
+    if not isinstance(sa, Mapping):
+        return None
+    mach = sa.get("machine") if isinstance(sa.get("machine"), Mapping) else {}
+    for v in (sa.get("stack_mm"), mach.get("stack_mm")):
+        f = _num(v)
+        if f is not None and f > 0:
+            return f
+    for r in (sa.get("l_stack_curve") or []):
+        if isinstance(r, Mapping) and _num(r.get("factor")) is not None and abs(float(r["factor"]) - 1.0) < 1e-9:
+            f = _num(r.get("stack_mm"))
+            if f is not None and f > 0:
+                return f
+    return None
+
+
 #: ``k_flux_vs_L_method`` of a stored table whose rows are k_flux_self (the factor applied when the check failed)
 K_FLUX_VS_L_SELF_APPLIED = "self_applied"
 

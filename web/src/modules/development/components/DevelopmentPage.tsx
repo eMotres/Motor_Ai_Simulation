@@ -54,7 +54,6 @@ import { shownStatus } from '../projectStage';
   import { watchChunkImport as watchContractChunk } from '../../../lib/chunkReload';
   import CostEstimateWizard from './costEstimate/CostEstimateWizard';
   import ProjectQuote from './ProjectQuote';
-  import ProjectTimeline from './ProjectTimeline';
   import { hasProductionView, type ProjectProductionEntry } from '../projectProductions';
   import ProjectCover from './ProjectCover';
   import SpecView, { SpecViewSwitch, useSpecViewMode } from './specWizard/SpecView';
@@ -88,7 +87,7 @@ import { shownStatus } from '../projectStage';
   import ControllerSpecForm from './ControllerSpecForm';
 const ProjectModel3D = lazyModel3d(watchModel3dChunk(() => import('../../../components/model3d/ProjectModel3D')));   // tab "3D model" (owner 2026-11-22): the viewer loads when the tab opens
 const ProjectContract = lazyContract(watchContractChunk(() => import('../../../components/contract/ProjectContract')));   // section "Contract" (owner 2026-11-22): loads when the tab opens
-type ViewTab = 'specification' | 'motors' | 'messages' | 'documents' | 'production' | 'timeline' | 'quote' | 'cost' | 'model3d' | 'contract';
+type ViewTab = 'specification' | 'motors' | 'messages' | 'documents' | 'production' | 'quote' | 'cost' | 'model3d' | 'contract';
 const DEFAULT_DRAFT: SpecDraft = { schema_version: 2, fields: {}, mission_profile: [], production: {} };
 /** The ONE progress number everywhere (owner 2026-11-06): the required fields ANSWERED of all required.  A field marked "Answer later" is not
  *  answered; `filled_required` of the API counts it, so it is only the fallback of an answer that has no `answered`. */
@@ -764,7 +763,7 @@ export default function DevelopmentPage() {
   const reviewAudience = choiceFor(reviewAudienceState, selected?.id ?? '', user?.email ?? '');
   const reviewAudienceBlocked = audienceBlockedReason(canPostInternal, reviewAudience, reviewParent);
   const postFieldReview = async () => {    if (!selected || !reviewField || !reviewComment.trim() || reviewAudienceBlocked !== null) return;    const id = selected.id, token = projectToken.current;    const rowId = reviewField.startsWith('mission_profile:') ? reviewField.slice('mission_profile:'.length) : undefined;    setBusy(true); setError('');    try {      if (canEditSpec) await flushSave();      if (projectToken.current !== token || currentProjectRef.current !== id) return;      await developmentApi.postMessage(id, reviewComment.trim(), reviewField, { revision: revisionRef.current, row_id: rowId, reply_to: replyPayload(reviewParent, canPostInternal, reviewAudience).reply_to }, false, replyPayload(reviewParent, canPostInternal, reviewAudience).staff_only);      const thread = await developmentApi.thread(id);      if (projectToken.current === token && currentProjectRef.current === id) { setReviewComment(''); setReviewAudienceState(null); setReviewTargetId(null); setMessages(thread); }    }    catch (e) { if (projectToken.current === token && currentProjectRef.current === id) setError(e instanceof Error ? e.message : String(e)); }    finally { if (projectToken.current === token) setBusy(false); }  };  const resolveReviewMessage = async (messageId: string, resolved: boolean) => {    if (!selected) return;    const id = selected.id, token = projectToken.current;    try { await developmentApi.resolveMessage(id, messageId, resolved); const thread = await developmentApi.thread(id); if (projectToken.current === token && currentProjectRef.current === id) setMessages(thread); }    catch (e) { if (projectToken.current === token) setError(e instanceof Error ? e.message : String(e)); }  };  function reviewRefs(ref: string): string[] { const card = ref.startsWith('section:') ? sections.find((item) => stepCommentRefs(item).includes(ref)) : undefined; return card ? stepCommentRefs(card) : [ref]; }  const openFieldReview = (fieldRef: string) => {    setReviewField(fieldRef); setReviewTargetId(null); setReviewAudienceState(null);    setFieldReviewOpen(true);  };
-  const fields = useSpecFields({ tr, lang, draftRef, updateDraft, spec, steps: sections, profile, canEditSpec, busy, migrationBusy, fieldErrors: { ...fieldErrors, ...rejected }, messages, catalog, openFieldReview });
+  const fields = useSpecFields({ tr, lang, draftRef, updateDraft, spec, steps: sections, profile, canEditSpec, busy, migrationBusy, fieldErrors: { ...fieldErrors, ...rejected }, messages, catalog, openFieldReview, projectId: selected?.id });
   const { label, sectionTitle } = fields;
   // a customer never reads the name of the commercial stage (no price talk while designing)
   const statusText = (status: string, sub?: ProjectSummary['spec_submitted']) => !canManageGlobally && status === 'quote' ? tr('statusCustomerQuote') : tr(`status.${shownStatus(status, sub)}`);
@@ -811,8 +810,6 @@ export default function DevelopmentPage() {
         { id: 'model3d' as const, label: <ProjectModel3DTabLabel /> },   // the SAME viewer as Configure (owner 2026-11-22)
         ...(hasProductionView(productions) ? [{ id: 'production' as const, label: tr('tabs.production') }] : []),
         // the quote an admin shared (owner 2026-11-03): read-only, for the project's members (the server decides who may read it)
-        // the project timeline (owner 2026-11-03): read-only for the project's members, edited by admins
-        ...(selected.timeline_ready || isAdmin ? [{ id: 'timeline' as const, label: tr('tabs.timeline') }] : []),
         ...(selected.quote_shared ? [{ id: 'quote' as const, label: tr('tabs.quote') }] : []),
         // ADMIN ONLY (owner 2026-11-02): the project cost estimate; never for the customer, a viewer, the factory or an agent
         ...(contractVisible ? [{ id: 'contract' as const, label: <ContractTabLabel /> }] : []),   // next to Cost estimate (owner 2026-11-22)
@@ -893,8 +890,6 @@ export default function DevelopmentPage() {
     {view === 'model3d' && <Model3DSuspense fallback={<CircularProgress size={18} />}><ProjectModel3D projectId={selected.id} controller={isController} motors={[...motors.filter((m) => m.kind !== 'history' && m.recommended), ...motors.filter((m) => m.kind !== 'history' && !m.recommended)]} language={i18n.language} /></Model3DSuspense>}
     {view === 'contract' && contractVisible && <ContractSuspense fallback={<CircularProgress size={18} />}><ProjectContract projectId={selected.id} isAdmin={isAdmin} /></ContractSuspense>}
     {view === 'production' && <ProjectProductions projectId={selected.id} entries={productions} language={i18n.language} t={tr} />}
-    {view === 'timeline' && (selected.timeline_ready || isAdmin) && <ProjectTimeline key={selected.id} projectId={selected.id} isAdmin={isAdmin} language={i18n.language} t={tr}
-      onReady={(value) => setSelected((cur) => (cur && cur.id === selected.id && cur.timeline_ready !== value ? { ...cur, timeline_ready: value } : cur))} />}
     {view === 'quote' && selected.quote_shared && <ProjectQuote key={selected.id} projectId={selected.id} t={tr} />}
     {view === 'cost' && isAdmin && <CostEstimateWizard key={selected.id} projectId={selected.id} language={i18n.language} t={tr} who={user?.email ?? 'admin'}
       onShared={(value) => setSelected((cur) => (cur && cur.id === selected.id ? { ...cur, quote_shared: value } : cur))} />}

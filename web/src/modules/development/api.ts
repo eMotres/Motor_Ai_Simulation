@@ -4,9 +4,9 @@ import { finalComparison } from '../../lib/resultsPanel';
 import type { ProjectProductionEntry } from './projectProductions';
 import type { CostEstimate, CostEstimateAnswer, CostSnapshot, CostSuggestions } from './costEstimate';
 import type { OrderRequest } from './orderRequests';
+import type { ExistingSize } from './odSizes';
 import type { ProjectQuote, SharedQuoteMark } from './quote';
 import type { SimStoredPoints, SimStoredRun } from '../../lib/simReadOnly';
-import type { AdminTimeline, ProjectTimeline, TimelineDoc } from './timeline';
 import type { ProjectDocument, ProjectDocumentList, DevelopmentSchema, FieldKind, MotorPointsAnswer, MotorView, StoredField, ProjectSummary, ProjectThreadMessage, ProjectMotor, ProjectMotorPickerItem, ProjectSnapshot, SpecState, SpecSnapshot } from './types';
 
 const API = (import.meta.env.VITE_API_URL ?? 'http://localhost:8001') as string;
@@ -30,7 +30,6 @@ async function call<T>(method: string, path: string, body?: unknown): Promise<T>
 }
 const p = (id: string) => `/api/projects/${enc(id)}`;
 const ce = (id: string) => `/api/admin/projects/${enc(id)}/cost-estimate`;
-const tl = (id: string) => `/api/admin/projects/${enc(id)}/timeline`;
 /** `?display_currency=` - the UI language's currency, for the cost estimate's converted totals. */
 const dq = (display?: string) => (display ? `?display_currency=${enc(display)}` : '');
 
@@ -136,6 +135,11 @@ export const developmentApi = {
   snapshots: async (id: string) => (await call<{ snapshots: ProjectSnapshot[] }>('GET', `${p(id)}/snapshots`)).snapshots,
   /** The productions of the project's linked motors, as the caller may see them (owner 2026-11-02; projectProductions.ts). */
   productions: async (id: string) => (await call<{ productions: ProjectProductionEntry[] }>('GET', `${p(id)}/productions`)).productions ?? [],
+  /** The public existing sizes the specification form offers (owner 2026-11-25), closest to the preferred diameter first. */
+  existingSizes: (id: string, q: { preferredMin?: number; preferredMax?: number; max?: number } = {}) => {
+    const qs = [['preferred_min_mm', q.preferredMin], ['preferred_max_mm', q.preferredMax], ['max_mm', q.max]].filter(([, v]) => typeof v === 'number' && Number.isFinite(v) && (v as number) > 0).map(([k, v]) => `${k}=${v}`).join('&');
+    return call<{ sizes: ExistingSize[]; available: boolean }>('GET', `${p(id)}/spec/existing-sizes${qs ? `?${qs}` : ''}`);
+  },
   /** ADMIN ONLY (owner 2026-11-02): the project cost estimate (costEstimate.ts).  403 for anybody else. */
   costEstimate: (id: string, display?: string) => call<CostEstimateAnswer>('GET', ce(id) + dq(display)),
   saveCostEstimate: (id: string, estimate: CostEstimate, display?: string) => call<CostEstimateAnswer>('PUT', ce(id) + dq(display), estimate),
@@ -149,13 +153,6 @@ export const developmentApi = {
   unshareCostEstimate: (id: string) => call<{ shared: null }>('DELETE', `${ce(id)}/share`),
   /** The shared quote of a project: its members and admins only (404 for anybody else, and while nothing is shared). */
   projectQuote: (id: string) => call<ProjectQuote>('GET', `${p(id)}/quote`),
-  /** The project timeline (owner 2026-11-03): its members and admins only (404 for anybody else, and while there is none). */
-  projectTimeline: (id: string) => call<ProjectTimeline>('GET', `${p(id)}/timeline`),
-  /** ADMIN ONLY: the stored timeline, the computed lanes and the customer view; save / create from the cost estimate / freeze. */
-  adminTimeline: (id: string) => call<AdminTimeline>('GET', tl(id)),
-  saveTimeline: (id: string, body: Pick<TimelineDoc, 'revision' | 'production' | 'iterations'>) => call<AdminTimeline>('PUT', tl(id), body),
-  seedTimeline: (id: string, revision: number) => call<AdminTimeline>('POST', `${tl(id)}/seed`, { revision }),
-  timelineBaseline: (id: string, revision: number) => call<AdminTimeline>('POST', `${tl(id)}/baseline`, { revision }),
 };
 
 /** Save a response body as a file (the session header is added by the global fetch, so a plain link would 401). */

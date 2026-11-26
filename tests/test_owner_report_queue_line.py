@@ -80,3 +80,10 @@ def test_main_line_names_the_urgent_item(monkeypatch, capsys, tmp_path):
     OQ.create_item("t", {"kind": "question", "asked_by": "s", "question": "Which?", "project_id": "p1"})
     OQ.set_priority("p1", "urgent", "o")
     assert M.queue_line(time.time()).startswith("Decisions: 1 urgent (p1: Which?), 1 open, 0 messages")
+
+
+def test_spec_submits_are_named_in_the_open_count():
+    now = calendar.timegm(time.strptime("2026-11-25T12:00:00Z", "%Y-%m-%dT%H:%M:%SZ"))
+    c = {"open_blocking": 4, "open_messages": 9, "open_spec_submits": 3, "oldest_open_at": "2026-11-23T07:00:00Z"}
+    assert M.format_queue_line(c, now) == "Decisions: 4 open (3 specification submits), 9 messages, oldest 2 d 5 h"
+    assert M.format_queue_line({**c, "open_spec_submits": 0}, now) == LINE

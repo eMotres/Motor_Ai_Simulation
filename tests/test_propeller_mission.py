@@ -736,3 +736,33 @@ def test_failures_carry_parameters_for_a_translated_message():
     f = next(x for x in res["failures"] if x["rule"] == "tw_cont")
     assert f["params"]["limit"] == 9.0 and isinstance(f["params"]["value"], float)
     assert all("params" in x for x in res["failures"])
+
+
+# ================================================================ 80 mm drone (TASK_mission_drone80, 2026-11-26)
+def test_diameter_window_reaches_40_in():
+    cfg = pm.validate_inputs({"motor": {"die": "A", "config": "B"}, "airframe": {"min_diameter_in": 24.0, "max_diameter_in": 40.0}})
+    assert cfg["airframe"]["max_diameter_in"] == 40.0
+    with pytest.raises(pm.MissionError):
+        pm.validate_inputs({"motor": {"die": "A", "config": "B"}, "airframe": {"max_diameter_in": 41.0}})
+
+
+def test_catalogue_extension_below_the_test_is_opt_in_flagged_and_never_above():
+    base = {"motor": {"die": "A", "config": "B"}, "airframe": {"min_diameter_in": 24.0, "max_diameter_in": 40.0}}
+    off = pm.catalogue_candidates(pm.validate_inputs(base), 1.225)
+    on = pm.catalogue_candidates(pm.validate_inputs({**base, "candidates": {"extend_below": 0.4}}), 1.225)
+    assert off and len(off) == len(on)
+    for a, b in zip(off, on):
+        lo, hi = a["tested_rpm"]
+        assert "extrapolated_below_test" not in a["flags"] and a["rows"][0][0] == pytest.approx(lo)
+        assert "extrapolated_below_test" in b["flags"]
+        assert b["rows"][0][0] == pytest.approx(0.6 * lo) and max(r[0] for r in b["rows"]) <= hi + 1e-9
+        assert b["rows"][-len(a["rows"]):] == a["rows"]                       # the tested part is unchanged
+        r0 = b["rows"][0]                                                      # constant coefficients: T, Q ~ rpm^2
+        assert r0[1] / a["rows"][0][1] == pytest.approx(0.36) and r0[2] / a["rows"][0][2] == pytest.approx(0.36)
+
+
+def test_own_family_outside_the_window_is_reported(stub):
+    raw, _ = pma.load_raw_model("TEST DIE", "L1", ACCESS)
+    cfg = pma.validate(_body(airframe={"min_diameter_in": 24.0, "max_diameter_in": 40.0}, candidates={"catalogue": True, "own": True}))
+    res = pm.run_selection(cfg, raw)
+    assert res["own_family"]["in_window"] == 0 and res["own_family"]["requested"] is True and res["refined"] == []

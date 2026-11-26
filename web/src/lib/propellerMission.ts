@@ -53,7 +53,7 @@ export interface MissionForm {
   chemistry: string; cells: string; capacity: string; usable: string; battMass: string; vNom: string; vMin: string; vMax: string; whKg: string; rCell: string;
   dryMass: string; payload: string; dragArea: string; maxD: string; minD: string; airTemp: string; altitude: string; avionics: string;
   speedKmh: string; bestSpeed: boolean; hoverShare: string; twCont: string; twPeak: string; tipMach: string; enduranceMode: 'hover' | 'best_speed';
-  catalogue: boolean; own: boolean; pdRange: string; pdStep: string; chords: string; blades: string; allowUnverified: boolean; battCurrent: string;
+  catalogue: boolean; own: boolean; extendBelow: string; pdRange: string; pdStep: string; chords: string; blades: string; allowUnverified: boolean; battCurrent: string;
   refine: boolean; topN: string; pop: string; generations: string; seed: string; objective: Objective;
 }
 
@@ -63,7 +63,7 @@ export const DEFAULT_FORM: MissionForm = {
   chemistry: 'li-ion-21700', cells: '6', capacity: '16', usable: '85', battMass: '', vNom: '', vMin: '', vMax: '', whKg: '', rCell: '',
   dryMass: '3.5', payload: '1', dragArea: '0.05', maxD: '13', minD: '10', airTemp: '25', altitude: '0', avionics: '0',
   speedKmh: '70', bestSpeed: false, hoverShare: '0', twCont: '1.5', twPeak: '2', tipMach: '0.7', enduranceMode: 'hover',
-  catalogue: true, own: true, pdRange: '0.25-0.6', pdStep: '0.05', chords: '1, 1.15', blades: '2', allowUnverified: false, battCurrent: '',
+  catalogue: true, own: true, extendBelow: '0', pdRange: '0.25-0.6', pdStep: '0.05', chords: '1, 1.15', blades: '2', allowUnverified: false, battCurrent: '',
   refine: true, topN: '1', pop: '12', generations: '6', seed: '1', objective: 'range_km',
 };
 
@@ -80,9 +80,9 @@ export const FIELD_RULES: Partial<Record<keyof MissionForm, { min: number; max: 
   stripWidth: { min: 0.5, max: 30 }, headroom: { min: 0, max: 50 }, turnsBelow: { min: 0, max: 10, int: true }, turnsAbove: { min: 0, max: 10, int: true },
   coilTol: { min: 0, max: 50 }, cells: { min: 1, max: 30, int: true }, capacity: { min: 0.1, max: 500 }, usable: { min: 30, max: 100 }, battMass: { min: 0.01, max: 500 },
   vNom: { min: 2, max: 5 }, vMin: { min: 2, max: 5 }, vMax: { min: 2, max: 5 }, whKg: { min: 20, max: 600 }, rCell: { min: 0, max: 1 }, battCurrent: { min: 1, max: 5000 },
-  dryMass: { min: 0.05, max: 500 }, payload: { min: 0, max: 500 }, dragArea: { min: 0, max: 5 }, maxD: { min: 4, max: 30 }, minD: { min: 0, max: 30 },
+  dryMass: { min: 0.05, max: 500 }, payload: { min: 0, max: 500 }, dragArea: { min: 0, max: 5 }, maxD: { min: 4, max: 40 }, minD: { min: 0, max: 40 },
   airTemp: { min: -40, max: 60 }, altitude: { min: -500, max: 6000 }, avionics: { min: 0, max: 2000 }, speedKmh: { min: 0, max: 288 },
-  hoverShare: { min: 0, max: 95 }, twCont: { min: 1, max: 10 }, twPeak: { min: 1, max: 10 }, tipMach: { min: 0.2, max: 1 }, pdStep: { min: 0.01, max: 0.5 },
+  hoverShare: { min: 0, max: 95 }, twCont: { min: 1, max: 10 }, twPeak: { min: 1, max: 10 }, tipMach: { min: 0.2, max: 1 }, pdStep: { min: 0.01, max: 0.5 }, extendBelow: { min: 0, max: 80 },
   topN: { min: 1, max: 3, int: true }, pop: { min: 4, max: 20, int: true }, generations: { min: 1, max: 10, int: true }, seed: { min: 0, max: 4294967295, int: true },
 };
 
@@ -123,7 +123,7 @@ export function buildBody(form: MissionForm, motors: MotorEntry[]): BuildResult 
   put('airframe', 'altitude_m', 'altitude'); put('airframe', 'avionics_W', 'avionics');
   put('flight', 'cruise_speed_ms', 'speedKmh', 1 / KMH); put('flight', 'hover_share_pct', 'hoverShare'); put('flight', 'tw_cont', 'twCont');
   put('flight', 'tw_peak', 'twPeak'); put('flight', 'tip_mach', 'tipMach');
-  put('candidates', 'pd_step', 'pdStep');
+  put('candidates', 'pd_step', 'pdStep'); put('candidates', 'extend_below', 'extendBelow', 0.01);
   put('refine', 'top_n', 'topN'); put('refine', 'pop', 'pop'); put('refine', 'generations', 'generations'); put('refine', 'seed', 'seed');
   // relations between fields, checked before the request; an error on a field that is only in a tooltip goes to its visible field
   const dMin = parseNumber(form.minD), dMax = parseNumber(form.maxD);
@@ -193,7 +193,7 @@ const SERVER_FIELDS: Record<string, keyof MissionForm> = {
   'airframe.payload_kg': 'payload', 'airframe.drag_area_m2': 'dragArea', 'airframe.max_diameter_in': 'maxD', 'airframe.min_diameter_in': 'maxD',
   'airframe.air_temp_c': 'airTemp', 'airframe.altitude_m': 'altitude', 'airframe.avionics_W': 'avionics', 'flight.cruise_speed_ms': 'speedKmh',
   'flight.hover_share_pct': 'hoverShare', 'flight.tw_cont': 'twCont', 'flight.tw_peak': 'twPeak', 'flight.tip_mach': 'tipMach', 'candidates.pd_min': 'pdRange',
-  'candidates.pd_max': 'pdRange', 'candidates.pd_step': 'pdStep', 'candidates.chords': 'chords', 'candidates.blades': 'blades', 'refine.top_n': 'topN',
+  'candidates.pd_max': 'pdRange', 'candidates.pd_step': 'pdStep', 'candidates.extend_below': 'extendBelow', 'candidates.chords': 'chords', 'candidates.blades': 'blades', 'refine.top_n': 'topN',
   'refine.pop': 'pop', 'refine.generations': 'generations', 'refine.seed': 'seed', 'refine': 'pop',
 };
 export function serverFieldKey(message: string): keyof MissionForm | null {
@@ -243,7 +243,7 @@ export function failureMessage(f: Failure): { key: string; params: Record<string
 }
 export interface CandidateResult {
   id: string; name: string; source: 'own' | 'catalogue'; prop_id?: string | null; D_in: number; pitch_ratio: number | null; pitch_in?: number | null;
-  chord_scale: number | null; blades: number | null; flags?: string[]; turns?: number | null; winding_known?: boolean; strip?: { thickness_mm: number | null; width_mm: number | null; stock_kg: number | null; check: boolean; low_stock: boolean; unknown?: boolean } | null;
+  chord_scale: number | null; blades: number | null; flags?: string[]; tested_rpm?: [number, number]; turns?: number | null; winding_known?: boolean; strip?: { thickness_mm: number | null; width_mm: number | null; stock_kg: number | null; check: boolean; low_stock: boolean; unknown?: boolean } | null;
   as_built?: boolean; kv_rpm_per_V?: number | null; checks?: Record<string, string>; curve?: { source: string | null; points: number; rpm_min: number | null; rpm_max: number | null };
   vector?: Record<string, number | string> | null; objectives: Partial<Record<Objective, number | null>>; objective_value: number | null;
   tw_cont?: number; tw_peak?: number; points?: { hover: Point | null; cruise: Point | null; hover_end?: Point | null; cruise_end?: Point | null }; failures: Failure[]; passed: boolean;
@@ -255,7 +255,8 @@ export interface Refined {
   settings: { pop: number; generations: number; seed: number; free: string[] }; optimizer_run_id?: string | null;
 }
 export interface MissionResult {
-  results: CandidateResult[]; alternatives: Record<string, Alternative[]>; refined: Refined[]; note: string; stopped: boolean; stopped_stage?: string | null; complete?: boolean;
+  results: CandidateResult[]; alternatives: Record<string, Alternative[]>; refined: Refined[]; note: string;
+  own_family?: { diameters_in: [number, number] | null; in_window: number; requested: boolean }; stopped: boolean; stopped_stage?: string | null; complete?: boolean;
   provenance?: Record<string, unknown>;
   counts: { total: number; done: number; passed: number };
   mission: { mass_kg: number; weight_N: number; rho_kg_m3: number; pack: { E_usable_Wh: number; mass_kg: number } };

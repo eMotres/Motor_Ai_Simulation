@@ -243,6 +243,11 @@ export function RowDetails({ row, alternatives }: { row: CandidateResult | null;
             <Alert severity="error" sx={{ py: 0, mb: 0.5, fontSize: 12 }}>{t(`propMissionRule_${f.rule}`, { defaultValue: f.rule })}</Alert>
           </Tooltip>
         ))}
+        {(row.flags ?? []).includes('extrapolated_below_test') && (
+          <Alert severity="warning" sx={{ py: 0, mb: 0.5, fontSize: 12 }} data-testid="mission-extrapolated">
+            {t('propMissionFlag_extrapolated_below_test', { rpm: Math.round(row.tested_rpm?.[0] ?? 0) })}
+          </Alert>
+        )}
         {row.strip && (row.strip.low_stock || row.strip.check) && (
           <Alert severity="warning" sx={{ py: 0, mb: 0.5, fontSize: 11 }}>
             {[row.strip.low_stock ? t('propMissionStripLow', { kg: row.strip.stock_kg }) : '', row.strip.check ? t('propMissionStripCheck') : ''].filter(Boolean).join(' ')}

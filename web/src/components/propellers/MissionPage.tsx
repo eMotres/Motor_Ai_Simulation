@@ -225,6 +225,7 @@ export default function MissionPage() {
           <Panel title={t('propMissionCandidates')} tip={t('propMissionCandidatesTip')}>
             <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap', alignItems: 'flex-start' }}>
               <MCheck label={t('propMissionCatalogue')} tip={t('propMissionCatalogueTip')} checked={form.catalogue} onChange={(v) => set('catalogue', v)} />
+              {form.catalogue && <MField label={t('propMissionExtendBelow')} tip={t('propMissionExtendBelowTip')} value={form.extendBelow} onChange={(v) => set('extendBelow', v)} width={130} error={fe('extendBelow')} />}
               <MCheck label={t('propMissionOwn')} tip={t('propMissionOwnTip')} checked={form.own} onChange={(v) => set('own', v)} />
               <MField label={t('propMissionPdMax')} tip={t('propMissionPdMaxTip', { min: pdLow(form.pdRange) })} value={pdShown(form.pdRange)} onChange={(v) => set('pdRange', withPdHigh(form.pdRange, v))} width={110} error={fe('pdRange')} />
               <MField label={t('propMissionPdStep')} value={form.pdStep} onChange={(v) => set('pdStep', v)} width={90} error={fe('pdStep')} />
@@ -277,6 +278,11 @@ export default function MissionPage() {
               <KvGrid items={[['id', run.run_id], [t('propMissionMass'), `${res.mission.mass_kg.toFixed(2)} kg`], [t('propMissionEnergy'), `${res.mission.pack.E_usable_Wh.toFixed(0)} Wh`],
                 [t('propMissionPassing'), `${res.counts.passed} / ${res.counts.total}`]]} testId="mission-run-cells" />
               {run.motor.kind === 'estimate' && <Alert severity="warning" sx={{ py: 0, fontSize: 12 }}>{t('propMissionEstimateResult')}</Alert>}
+              {!refined && res.own_family?.requested && res.own_family.in_window === 0 && (
+                <Alert severity="info" sx={{ py: 0, fontSize: 12 }} data-testid="mission-own-outside">
+                  {t('propMissionOwnOutside', { lo: res.own_family.diameters_in?.[0] ?? '', hi: res.own_family.diameters_in?.[1] ?? '' })}
+                </Alert>
+              )}
               {refined ? <RefinedCard refined={refined} objective={objective} geo={geo} motorRadiusMm={20} onSave={onSaveDraft} saveMsg={saveMsg} busy={busy} /> : null}
               <BestCard best={best} objective={objective} seed={!!refined} />
               <ObjectiveChart rows={res.results} objective={objective} />

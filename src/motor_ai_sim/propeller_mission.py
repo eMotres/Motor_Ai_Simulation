@@ -86,7 +86,7 @@ DEFAULTS: Dict[str, Any] = {
     "flight": {"cruise_speed_ms": 70.0 / 3.6, "best_speed": False, "hover_share_pct": 0.0, "tw_cont": 1.5, "tw_peak": 2.0,
                "tip_mach": 0.7, "endurance_mode": "hover", "speed_max_ms": 50.0},
     "candidates": {"catalogue": True, "own": True, "pd_min": 0.25, "pd_max": 0.60, "pd_step": 0.05, "chords": [1.0, 1.15],
-                   "blades": [2], "rpm_step": 500.0, "max_candidates": 600},
+                   "blades": [2], "rpm_step": 500.0, "max_candidates": 600, "extend_below": 0.0},
     "refine": {"enabled": True, "top_n": 1, "pop": 12, "generations": 6, "seed": 1, "free": ["outer", "inner", "airfoil"]},
     "objective": "range_km",
 }
@@ -106,8 +106,8 @@ _SPEC: Dict[Tuple[str, str], Tuple[str, Any, Any]] = {
     ("battery", "wh_per_kg"): ("f?", 20.0, 600.0), ("battery", "r_cell_ohm_ah"): ("f?", 0.0, 1.0),
     ("battery", "usable"): ("f", 0.3, 1.0), ("battery", "mass_kg"): ("f?", 0.01, 500.0),
     ("airframe", "dry_mass_kg"): ("f", 0.05, 500.0), ("airframe", "payload_kg"): ("f", 0.0, 500.0),
-    ("airframe", "drag_area_m2"): ("f", 0.0, 5.0), ("airframe", "max_diameter_in"): ("f", 4.0, 30.0),
-    ("airframe", "min_diameter_in"): ("f", 0.0, 30.0), ("airframe", "air_temp_c"): ("f", -40.0, 60.0),
+    ("airframe", "drag_area_m2"): ("f", 0.0, 5.0), ("airframe", "max_diameter_in"): ("f", 4.0, 40.0),
+    ("airframe", "min_diameter_in"): ("f", 0.0, 40.0), ("airframe", "air_temp_c"): ("f", -40.0, 60.0),
     ("airframe", "altitude_m"): ("f", -500.0, 6000.0), ("airframe", "avionics_W"): ("f", 0.0, 2000.0),
     ("flight", "cruise_speed_ms"): ("f", 0.0, 80.0), ("flight", "best_speed"): ("b", None, None),
     ("flight", "hover_share_pct"): ("f", 0.0, 95.0), ("flight", "tw_cont"): ("f", 1.0, 10.0), ("flight", "tw_peak"): ("f", 1.0, 10.0),
@@ -115,6 +115,7 @@ _SPEC: Dict[Tuple[str, str], Tuple[str, Any, Any]] = {
     ("candidates", "catalogue"): ("b", None, None), ("candidates", "own"): ("b", None, None),
     ("candidates", "pd_min"): ("f", 0.1, 1.5), ("candidates", "pd_max"): ("f", 0.1, 1.5), ("candidates", "pd_step"): ("f", 0.01, 0.5),
     ("candidates", "chords"): ("fs", 0.5, 1.6), ("candidates", "blades"): ("is", 2, 3), ("candidates", "rpm_step"): ("f", 100.0, 2000.0),
+    ("candidates", "extend_below"): ("f", 0.0, 0.8),
     ("candidates", "max_candidates"): ("i", 1, 2000),
 }
 
@@ -1035,6 +1036,8 @@ def evaluate_candidate(cand: Mapping[str, Any], bank: MotorBank, ms: Mapping[str
     D_m = float(cand["D_in"]) * 0.0254
     rows = cut_at_mach(cand["rows"], D_m, ms["a_snd"], ms["tip_mach"])
     base = {k: cand.get(k) for k in ("id", "name", "source", "prop_id", "D_in", "pitch_ratio", "pitch_in", "chord_scale", "blades", "flags", "vector")}
+    if cand.get("tested_rpm"):
+        base["tested_rpm"] = cand["tested_rpm"]
     base["curve"] = {"source": cand.get("curve_source"), "points": len(cand["rows"]), "points_within_mach": len(rows),
                      "rpm_min": cand["rows"][0][0] if cand["rows"] else None, "rpm_max": cand["rows"][-1][0] if cand["rows"] else None}
     failures: List[Dict[str, Any]] = []
@@ -1138,6 +1141,11 @@ def evaluate_candidate(cand: Mapping[str, Any], bank: MotorBank, ms: Mapping[str
     strip = opt["strip"]
     points = {"hover": hov.get("point") if hov["ok"] else None, "cruise": cru["point"] if (cru and cru["ok"]) else None,
               "hover_end": hov_end.get("point") if hov_end["ok"] else None, "cruise_end": cru_end["point"] if (cru_end and cru_end["ok"]) else None}
+    if cand.get("tested_rpm"):                                   # a point on the extrapolated part of a catalogue curve is marked
+        lo_t = float(cand["tested_rpm"][0])
+        for pt in points.values():
+            if pt is not None:
+                pt["extrapolated"] = bool(pt.get("rpm") is not None and pt["rpm"] < lo_t - 1e-6)
     return {**base, "turns": bank.shown_turns(opt["turns"]), "strip": bank.shown_strip(strip), "as_built": bool(opt.get("as_built")),
             "winding_known": bank.winding_known, "k": ctx.k, "copper_f": ctx.f,
             "kv_rpm_per_V": ctx.kv, "R_phase_ohm": ctx.m["R_phase_ohm"], "board_cap_A": ctx.board_cap_A,
@@ -1163,8 +1171,13 @@ CATALOGUE_QUALITY = ("torque_measured", "thrust_measured_power_estimated")
 
 def catalogue_candidates(cfg: Mapping[str, Any], rho: float) -> List[Dict[str, Any]]:
     """Catalogue propellers with usable thrust AND power data inside the diameter window: their static curves from the published fit
-    over the tested rpm range (forward flight by the same energy method on the static curve)."""
+    over the tested rpm range (forward flight by the same energy method on the static curve).
+
+    Opt-in ``candidates.extend_below`` = x (0 = off, up to 0.8): the curve is continued BELOW the lowest tested rpm down to (1 - x) of it
+    with the thrust and torque coefficients of the lowest tested row held constant (T, Q ~ rpm^2), and the candidate is flagged
+    ``extrapolated_below_test`` with its tested range.  Never above the highest tested rpm.  Without it nothing changes."""
     a = cfg["airframe"]
+    ext = float(cfg["candidates"].get("extend_below") or 0.0)
     out = []
     for p in pp.list_propellers():
         if not p.selectable or p.data_quality not in CATALOGUE_QUALITY or not p.rpm_range:
@@ -1174,14 +1187,23 @@ def catalogue_candidates(cfg: Mapping[str, Any], rho: float) -> List[Dict[str, A
             continue
         lo, hi = p.rpm_range
         rows: List[Row] = []
+        flags_x: List[str] = []
+        t_lo, q_lo = pp.thrust_N(p, lo, rho), pp.torque_Nm(p, lo, rho)
+        if ext > 0 and t_lo > 0 and q_lo > 0:
+            r0 = lo * (1.0 - ext)
+            for i in range(12):                                   # constant C_T, C_Q of the lowest tested row (an extrapolation, flagged)
+                rpm = r0 + (lo - r0) * i / 12.0
+                f = (rpm / lo) ** 2
+                rows.append((rpm, t_lo * f, q_lo * f))
+            flags_x = ["extrapolated_below_test"]
         for i in range(25):
             rpm = lo + (hi - lo) * i / 24.0
             t, q = pp.thrust_N(p, rpm, rho), pp.torque_Nm(p, rpm, rho)
             if t > 0 and q > 0:
                 rows.append((rpm, t, q))
-        out.append({"id": "cat:" + p.id, "name": "%s %s" % (p.vendor, p.model), "source": "catalogue", "prop_id": p.id, "D_in": d_in,
+        out.append({"tested_rpm": [lo, hi], "id": "cat:" + p.id, "name": "%s %s" % (p.vendor, p.model), "source": "catalogue", "prop_id": p.id, "D_in": d_in,
                     "pitch_in": p.pitch_in, "pitch_ratio": (p.pitch_in / d_in) if p.pitch_in else None, "chord_scale": None,
-                    "blades": p.blades, "flags": ["static_data_only", "power_estimated" if p.power_data == "estimated" else "power_measured"],
+                    "blades": p.blades, "flags": ["static_data_only", "power_estimated" if p.power_data == "estimated" else "power_measured"] + flags_x,
                     "rows": rows})
     return out
 
@@ -1229,6 +1251,11 @@ def own_family_specs(cfg: Mapping[str, Any], design: Any) -> List[Dict[str, Any]
                                 "source": "own", "prop_id": None, "D_in": float(D), "pitch_in": pr * float(D), "pitch_ratio": pr,
                                 "chord_scale": float(cs), "blades": int(B), "vector": vec})
     return out
+
+
+def pd_family_diameters(design: Any) -> List[float]:
+    from motor_ai_sim import propeller_design as pd
+    return list(pd.family_diameters(design))
 
 
 def mission_design() -> Any:
@@ -1435,7 +1462,10 @@ def run_selection(cfg: Mapping[str, Any], raw_model: Mapping[str, Any], *, stock
     done = 0
     stage = "stage1"
     stopped = False
-    keys = ("id", "name", "source", "prop_id", "D_in", "pitch_ratio", "pitch_in", "chord_scale", "blades", "vector")
+    keys = ("id", "name", "source", "prop_id", "D_in", "pitch_ratio", "pitch_in", "chord_scale", "blades", "vector", "tested_rpm")
+    fam = [float(d) for d in pd_family_diameters(design)] if design is not None else []
+    own_family = {"diameters_in": [min(fam), max(fam)] if fam else None, "in_window": len(specs),
+                  "requested": bool(cfg["candidates"]["own"])}       # 0 in the window: stage 2 does not apply (the page says so)
     try:
         for c in cats + specs:
             _chk(ms)
@@ -1501,7 +1531,7 @@ def run_selection(cfg: Mapping[str, Any], raw_model: Mapping[str, Any], *, stock
     prov = provenance(stock_used)
     if not stopped and should_stop is not None and should_stop():
         stopped = True                                           # a stop that came too late to cut anything: complete results, terminal state stopped
-    return {"version": MODEL_VERSION, "note": NOTE, "inputs": cfg, "refined": refined,
+    return {"version": MODEL_VERSION, "note": NOTE, "inputs": cfg, "refined": refined, "own_family": own_family,
             "mission": {"mass_kg": ms["mass_kg"], "weight_N": ms["W_N"], "rho_kg_m3": ms["rho"], "pack": ms["pack"], "rotors": ms["n_rot"]},
             "winding": {"known": bank.winding_known, "turns0": bank.shown_turns(bank.n0),
                         "strip_thickness0_mm": bank.t0 if bank.winding_known else None, "strip_width_mm": bank.w0 if bank.winding_known else None,

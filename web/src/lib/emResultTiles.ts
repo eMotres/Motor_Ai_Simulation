@@ -20,6 +20,15 @@ import { coggingDigits, coggingTipParts, coggingValue, type CoggingView, type Ti
 /** The run summary, as far as these tiles read it: every field optional, nothing invented. */
 export interface EmTileSummary {
   T_em_avg_Nm?: number | null;
+  /** the shaft-side convention (src/motor_ai_sim/shaft_convention.py): the shaft torque and power already carry the 3-D
+   *  factor on the field part and the core loss as a shaft load */
+  shaft_convention?: string | null;
+  /** shaft torque: a motor's output, a generator's input (quoted positive) */
+  T_shaft_Nm?: number | null;
+  /** the field torque with the 3-D factor */
+  T_field_k_Nm?: number | null;
+  /** the shaft-side load the field torque does not contain (core loss, and on some solves the rotor eddy loss) */
+  P_shaft_drag_W?: number | null;
   T_ripple_pct?: number | null;
   /** the magnet temperature the run solved at (routes.simulation._magnet_temperature_stamp) */
   magnet_temp_used_c?: number | null;
@@ -48,9 +57,10 @@ export interface EmTileSummary {
   P_core_W?: number | null;
   /** per half (stator / rotor): the iron loss split behind the IRON LOSS tile's tooltip */
   P_core_terms?: Record<string, { hysteresis_W: number; eddy_W: number; excess_W: number; model?: string }> | null;
-  /** axial magnet slicing: the factor the 2-D magnet eddy loss was multiplied by */
+  /** axial magnet slicing: the factor applied to the magnet conductivity in the field solve
+   *  (applied_as 'field_sigma', since 2026-11-25), or, on an older run, to the 2-D magnet eddy watts */
   magnet_segmentation?: { slice_mm?: number | null; stack_mm?: number | null; width_mm?: number | null;
-    factor?: number | null } | null;
+    factor?: number | null; applied_as?: string | null } | null;
   P_stranded_W?: number | null;
   P_mag_W?: number | null;
   P_shaft_W?: number | null;
@@ -323,7 +333,18 @@ export function emTileRows(s: EmTileSummary, view: EmTileView = {}): EmTileSpec[
   const dir = bal?.gen ? '+' : '−';
 
   // ── 1 torque · power · elec power · mass · efficiency · ripple · densities ──
-  const T = num(s.T_em_avg_Nm);
+  // THE SHAFT-SIDE CONVENTION (owner 2026-11-25): the torque tile is the SHAFT torque (a motor's output, a generator's
+  // input), the field torque goes to the tooltip; a generator's power tile is the INPUT power at the shaft; a motor at no
+  // load shows "—" (the shaft has to supply the core loss) with the reason in the tooltip.
+  const sc = s.shaft_convention === 'fe_on_shaft_k3d_v1';
+  const scGen = sc && bal?.gen === true;
+  const dragW = num(s.P_shaft_drag_W);
+  // the torque at the SAME boundary as the power tile beside it: the coupling (bearings and windage included) when they
+  // are known, else the electromagnetic shaft torque
+  const wSc = 2 * Math.PI * (num((s as any).rpm) ?? 0) / 60;
+  const T = sc && num(s.T_shaft_Nm) != null
+    ? (mechKnown && bal != null && wSc > 0 ? bal.pShaft / wSc : num(s.T_shaft_Nm))
+    : num(s.T_em_avg_Nm);
   const etaPct = bal?.eta != null ? 100 * bal.eta : null;
   const partial = s.solid_loss_not_solved === true;       // magnet / shaft eddy not solved → optimistic
   const etaFlag = etaPct != null && (partial || !mechKnown);
@@ -351,13 +372,19 @@ export function emTileRows(s: EmTileSummary, view: EmTileView = {}): EmTileSpec[
       reason: s.mass_partial_reason ?? '—' },
     unit: 'kg', d: 2, value: ms.kg });
   const r1 = row(
-    tile({ id: 'torque', labelKey: 'configure.torque', tipKey: 'emTiles.torqueTip',
+    tile({ id: 'torque', labelKey: scGen ? 'configure.torqueInput' : 'configure.torque',
+      tipKey: sc ? (scGen ? 'emTiles.torqueShaftTipGen' : 'emTiles.torqueShaftTip') : 'emTiles.torqueTip',
+      tipVars: sc ? { field: _n2(num(s.T_field_k_Nm) ?? 0), drag: _n(dragW ?? 0) } : undefined,
       tipExtraKeys: torqueMethod ? [...k3d, torqueMethod] : [...k3d], unit: 'N·m',
       d: T != null && Math.abs(T) < 0.1 ? 4 : 2, value: T }),
-    tile({ id: 'power', labelKey: 'configure.power',
-      tipKey: mechKnown ? 'emTiles.powerTip' : 'emTiles.powerTipRotor',
-      tipVars: { rotor: _n2((bal?.pRotor ?? 0) / 1000), op: dir, mech: _n(mech?.extra_W ?? 0) },
-      unit: 'kW', d: 2, value: bal != null ? bal.pShaft / 1000 : null }),
+    tile({ id: 'power', labelKey: scGen ? 'configure.powerInput' : 'configure.power',
+      tipKey: bal?.noOutput ? 'emTiles.powerNoLoadTip'
+        : sc ? (scGen ? 'emTiles.powerShaftTipGen' : 'emTiles.powerShaftTip')
+          : mechKnown ? 'emTiles.powerTip' : 'emTiles.powerTipRotor',
+      tipVars: { rotor: _n2((bal?.pRotor ?? 0) / 1000), op: dir, mech: _n(mech?.extra_W ?? 0),
+        drag: _n(dragW ?? 0), p: _n(bal?.pShaft ?? 0) },
+      unit: 'kW', d: 2, value: bal != null ? bal.pShaft / 1000 : null,
+      display: bal?.noOutput ? '—' : undefined }),
     tile({ id: 'elecPower', labelKey: 'configure.elecPower',
       tipKey: bal?.gen ? 'emTiles.elecPowerTipGen' : 'emTiles.elecPowerTipMotor',
       tipExtraKeys: mechKnown ? undefined : ['emTiles.elecPowerNoMech'], unit: 'kW', d: 2,
@@ -421,7 +448,7 @@ export function emTileRows(s: EmTileSummary, view: EmTileView = {}): EmTileSpec[
       unit: 'W', d: 0, value: num(s.P_core_W) }),
     tile({ id: 'copperLoss', labelKey: 'configure.copperLoss', tipKey: 'emTiles.copperLossTip', unit: 'W', d: 0, value: num(s.P_stranded_W) }),
     tile({ id: 'magnetLoss', labelKey: 'configure.magnetLoss', tipKey: 'emTiles.magnetLossTip',
-      tipExtraKeys: [...(segSliced ? ['emTiles.magnetSeg'] : []), ...(unsettled && !notSolved ? ['emTiles.eddyUnsettled'] : [])],
+      tipExtraKeys: [...(segSliced ? [seg?.applied_as === 'field_sigma' ? 'emTiles.magnetSegSigma' : 'emTiles.magnetSeg'] : []), ...(unsettled && !notSolved ? ['emTiles.eddyUnsettled'] : [])],
       tipVars: { slice: num(seg?.slice_mm) ?? '-', stack: num(seg?.stack_mm) ?? '-', width: num(seg?.width_mm) ?? '-',
         factor: num(seg?.factor) != null ? (num(seg?.factor) as number).toPrecision(3) : '-' },
       unit: 'W', d: 0,

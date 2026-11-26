@@ -233,7 +233,7 @@ def test_model_is_registered_and_gives_the_profile_with_flags():
     assert f.air_speed_ms is not None and f.air_speed_ms > 0
     assert all(b.swirl_ms is not None and b.axial_ms is not None for b in f.bands)
     assert {"polar_estimated", "profile_at_disc", "no_wake_contraction"} <= set(f.flags)
-    assert any("not yet done" in s for s in f.assumptions)
+    assert any("UIUC" in s and "not usable" in s for s in f.assumptions)      # review 2026-11-24 (4a): the validation and its bias are named
     # the band the motor sits in: inside the hub there is no value, and it says so
     g = pi.get_model("bemt-1").evaluate(pi.InflowRequest(propeller=prop, rpm=6000.0, rho=RHO, r_min_m=0.0, r_max_m=0.01))
     assert g.air_speed_ms is None and "band_inside_hub_not_modelled" in g.flags

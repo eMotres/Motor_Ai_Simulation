@@ -6,23 +6,23 @@
  *  decides what the browser parses from the address bar, hands to the sign-up (`next`) and remembers across a sign-in.
  *
  *    /production/<die>/<config>                         the production
- *    /production/<die>/<config>/<tab>[?item=<id>]       one of its tabs (bom, tooling, assembly, timeline, documents,
+ *    /production/<die>/<config>/<tab>[?item=<id>]       one of its tabs (bom, 3d, tooling, assembly, timeline, documents,
  *                                                       discussion, proposals, changes); documents also take since= / ids=
  *    /projects/<id>[/<view>][?die=&config=&item=]       a development project, a view (specification, motors, messages, notes),
  *                                                       a motor step (die + config)
  *
  *  ONLY same-origin relative paths of these shapes are ever accepted or produced - never a URL, never `//host` (no open redirect).
  *  A link GRANTS NOTHING: the app asks the server who the caller is after sign-in. */
-import { parseProductionLink, validDay, MAX_LINK_IDS } from './productionLink.ts';
+import { parseProductionLink, validDay, knownQueryLength, MAX_LINK_IDS } from './productionLink.ts';
 
-export const PRODUCTION_TABS = ['bom', 'tooling', 'assembly', 'timeline', 'documents', 'discussion', 'proposals', 'changes', 'tests'] as const;
+export const PRODUCTION_TABS = ['bom', '3d', 'tooling', 'assembly', 'timeline', 'documents', 'discussion', 'proposals', 'changes', 'tests'] as const;
 export type ProductionTabId = (typeof PRODUCTION_TABS)[number];
 export const PROJECT_VIEWS = ['specification', 'motors', 'messages', 'notes', 'documents'] as const;
 export type ProjectViewId = (typeof PROJECT_VIEWS)[number];
 
 export type AppLink =
   | { kind: 'new'; zh: boolean; handoff?: string }
-  | { kind: 'production'; die: string; config: string; tab?: ProductionTabId; item?: string; since?: string; ids?: string[] }
+  | { kind: 'production'; die: string; config: string; tab?: ProductionTabId; item?: string; since?: string; ids?: string[]; invalidIds?: true }
   | { kind: 'project'; id: string; view?: ProjectViewId; die?: string; config?: string; item?: string };
 
 const SEG = /^[A-Za-z0-9][A-Za-z0-9 ._-]{0,79}$/;
@@ -35,7 +35,7 @@ const goodName = (s: string) => SEG.test(s) && !s.includes('..');
 
 /** Parse the address bar (`pathname` + `search`); null when it is not an app link.  Unknown query keys (`signin`, `verify`, ...) are ignored. */
 export function parseAppLink(pathname: string, search = ''): AppLink | null {
-  if (typeof pathname !== 'string' || typeof search !== 'string' || pathname.length + search.length > MAX_LEN) return null;
+  if (typeof pathname !== 'string' || typeof search !== 'string' || pathname.length + knownQueryLength(search, ['item', 'since', 'die', 'config', 'new', 'handoff']) > MAX_LEN) return null;
   if (/[\u0000-\u001f\u007f\\]/.test(pathname + search) || pathname.startsWith('//')) return null;
   const q = new URLSearchParams(search);
   const item = q.get('item');
@@ -50,7 +50,7 @@ export function parseAppLink(pathname: string, search = ''): AppLink | null {
     return { kind: 'new', zh: !!fresh[1], ...(handoff && HANDOFF.test(handoff) ? { handoff } : {}) };
   }
 
-  const prod =/^\/production\/([^/]+)\/([^/]+)(?:\/([a-z]+))?\/?$/.exec(pathname);
+  const prod =/^\/production\/([^/]+)\/([^/]+)(?:\/([a-z0-9]+))?\/?$/.exec(pathname);   // a tab may hold a digit: '3d'
   if (prod) {
     const tab = prod[3];
     if (tab !== undefined && !(PRODUCTION_TABS as readonly string[]).includes(tab)) return null;
@@ -58,7 +58,7 @@ export function parseAppLink(pathname: string, search = ''): AppLink | null {
       const link = parseProductionLink(pathname, search);
       if (!link) return null;
       return { kind: 'production', die: link.die, config: link.config, tab: 'documents', ...(link.since ? { since: link.since } : {}),
-        ...(link.ids ? { ids: link.ids } : {}), ...(item ? { item } : {}) };
+        ...(link.ids ? { ids: link.ids } : {}), ...(link.invalidIds ? { invalidIds: true as const } : {}), ...(item ? { item } : {}) };
     }
     if (q.has('since') || q.has('ids')) return null;                // those belong to the documents tab only
     let die: string; let config: string;
@@ -113,7 +113,7 @@ export function appLinkPath(link: AppLink): string | null {
 /** Is this address-bar path an app link at all (cheap test for the sign-in dialog and the router)? */
 export function isAppLinkPath(pathname: string, search = ''): boolean {
   if (/^(\/zh-cn)?\/projects\/?$/i.test(pathname)) return new URLSearchParams(search).get('new') === 'spec';
-  return /^\/(production\/[^/]+\/[^/]+(\/[a-z]+)?|projects\/[^/]+(\/[a-z]+)?)\/?$/.test(pathname);
+  return /^\/(production\/[^/]+\/[^/]+(\/[a-z0-9]+)?|projects\/[^/]+(\/[a-z]+)?)\/?$/.test(pathname);
 }
 
 /** What the Projects page does with a `/projects?new=spec` link (owner 2026-11-11): every account gets the New project dialog; a

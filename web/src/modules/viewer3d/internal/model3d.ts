@@ -1,13 +1,15 @@
 export type Axis = 'x' | 'y' | 'z';
 export type StandardView = 'front' | 'back' | 'left' | 'right' | 'top' | 'bottom'
   | 'frontTop' | 'frontBottom' | 'backTop' | 'backBottom' | 'leftTop' | 'leftBottom' | 'rightTop' | 'rightBottom'
-  | 'frontLeft' | 'frontRight' | 'backLeft' | 'backRight';
+  | 'frontLeft' | 'frontRight' | 'backLeft' | 'backRight' | 'iso';
 export type Vec3 = [number, number, number];
 export interface Box { min: Vec3; max: Vec3 }
 export interface PartGroup {
   name: string;
   family: string;
   explode: number;
+  /** the component name from the CAD file (GLB extras.label); a display name, not unique */
+  label?: string;
   children?: string[];
   colour?: string;
   explodeDirection?: Vec3;
@@ -30,7 +32,7 @@ export function standardViewDirection(view: StandardView): Vec3 {
   const c: Record<StandardView, Vec3> = {
     front:[0,-1,0],back:[0,1,0],left:[-1,0,0],right:[1,0,0],top:[0,0,1],bottom:[0,0,-1],
     frontTop:[0,-1,1],frontBottom:[0,-1,-1],backTop:[0,1,1],backBottom:[0,1,-1],leftTop:[-1,0,1],leftBottom:[-1,0,-1],
-    rightTop:[1,0,1],rightBottom:[1,0,-1],frontLeft:[-1,-1,0],frontRight:[1,-1,0],backLeft:[-1,1,0],backRight:[1,1,0],
+    rightTop:[1,0,1],rightBottom:[1,0,-1],frontLeft:[-1,-1,0],frontRight:[1,-1,0],backLeft:[-1,1,0],backRight:[1,1,0],iso:[1,-1,1],
   };
   const v = c[view], n = Math.hypot(...v);
   return [v[0]/n,v[1]/n,v[2]/n];

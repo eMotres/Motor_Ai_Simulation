@@ -16,17 +16,21 @@ import ArchiveOutlinedIcon from '@mui/icons-material/ArchiveOutlined';
 import UnarchiveOutlinedIcon from '@mui/icons-material/UnarchiveOutlined';
 import { useTranslation } from 'react-i18next';
 import HelpTip from '../common/HelpTip';
-import { UnifiedViewer } from '../../modules/viewer3d';
+import { UnifiedViewer, type PartGroup } from '../../modules/viewer3d';
 import { filenameFromDisposition, formatBytes } from '../../lib/model3d';
 import Model3DPanel from './Model3DPanel';
 import { useRememberedView } from '../../lib/useRememberedView';
 import { bool, oneOf, readView, writeView } from '../../lib/viewMemory';
+import { openingSource, sourceScope, type ModelSource } from './projectModelSource';
+import { hasFrameless, modelTree, notFrameless } from './projectModelTree';
 
 const API = ((import.meta.env.VITE_API_URL ?? 'http://localhost:8001') as string).replace(/\/$/, '');
 const enc = encodeURIComponent;
 
 export interface ProjectModelRow {
   id: string; name: string; revision: string; note: string; size: number; sha256: string; uploaded_at: string; uploader: string;
+  /** the customer side gets the component names (tree, Frameless) */
+  show_part_names?: boolean;
   /** staff only */
   visible_to_customer?: boolean; archived?: boolean; archived_at?: string | null;
 }
@@ -77,11 +81,15 @@ const UploadDialog: React.FC<{ open: boolean; busy: boolean; onClose: () => void
     );
   };
 
-const ProjectModel3D: React.FC<{ projectId: string; motors: ReadonlyArray<{ die: string; config: string }>; language?: string }> = ({ projectId, motors, language }) => {
+const ProjectModel3D: React.FC<{ projectId: string; motors: ReadonlyArray<{ die: string; config: string }>; language?: string; controller?: boolean }> = ({ projectId, motors, language, controller = false }) => {
   const { t, ready } = useTranslation('model3d');
-  // remembered across reloads (owner rule: every page remembers where the user was): the source, Show archived, and per project
-  // the revision picked; a picked revision that has gone (archived, not visible) falls back to the latest
-  const [source, setSource] = useRememberedView<'generated' | 'uploaded'>('project.model3d.source', 'generated', oneOf(['generated', 'uploaded'] as const));
+  // remembered across reloads (owner rule: every page remembers where the user was): per project the source chosen and the revision
+  // picked, and Show archived; a picked revision that has gone (archived, not visible) falls back to the latest.  With no choice made
+  // in this project the tab opens on Uploaded when an uploaded model exists (owner 2026-11-23); a controller project has no Generated.
+  const [remembered, setRemembered] = useState<ModelSource | null>(() => readView(sourceScope(projectId), oneOf(['generated', 'uploaded'] as const)));
+  const [pickedNow, setPickedNow] = useState<ModelSource | null>(null);   // a click in this visit wins (staff add the first model)
+  useEffect(() => { setRemembered(readView(sourceScope(projectId), oneOf(['generated', 'uploaded'] as const))); setPickedNow(null); }, [projectId]);
+  const setSource = (next: ModelSource) => { setPickedNow(next); setRemembered(next); writeView(sourceScope(projectId), next); };
   const [list, setList] = useState<ProjectModelList | null>(null);
   const [showArchived, setShowArchived] = useRememberedView<boolean>('project.model3d.showArchived', false, (raw) => bool(raw) ?? null);
   const pickKey = `project.model3d.pick.${projectId}`;
@@ -91,6 +99,9 @@ const ProjectModel3D: React.FC<{ projectId: string; motors: ReadonlyArray<{ die:
     if (value) writeView(pickKey, value);
     return value;
   });
+  // the components of the model on screen; Frameless hides everything that is not the stator, the coils or the rotor (owner 2026-11-24)
+  const [loaded, setLoaded] = useState<{ id: string; groups: PartGroup[] }>({ id: '', groups: [] });
+  const [frameless, setFrameless] = useRememberedView<boolean>('project.model3d.frameless', false, (raw) => bool(raw) ?? null);
   const [uploadOpen, setUploadOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -119,6 +130,11 @@ const ProjectModel3D: React.FC<{ projectId: string; motors: ReadonlyArray<{ die:
   }, [projectId, showArchived, reload]);
 
   const shown = useMemo(() => list?.models.find((m) => m.id === picked) ?? null, [list, picked]);
+  const groups = useMemo(() => (shown && loaded.id === shown.id ? loaded.groups : []), [loaded, shown]);
+  const canFrameless = useMemo(() => hasFrameless(groups), [groups]);
+  const framelessOn = frameless && canFrameless;
+  const tree = useMemo(() => modelTree(groups, framelessOn, t('project.otherParts')), [groups, framelessOn, t]);
+  const filtered = useMemo(() => (framelessOn ? notFrameless(groups) : null), [groups, framelessOn]);
   const staff = !!list?.can_upload;
   const date = (iso: string) => { try { return new Date(iso).toLocaleDateString(language || undefined); } catch { return iso.slice(0, 10); } };
 
@@ -137,7 +153,7 @@ const ProjectModel3D: React.FC<{ projectId: string; motors: ReadonlyArray<{ die:
     } catch (e: any) { setErr(e?.message ?? String(e)); } finally { setBusy(false); }
   };
 
-  const patch = useCallback(async (row: ProjectModelRow, body: { archived?: boolean; visible_to_customer?: boolean }) => {
+  const patch = useCallback(async (row: ProjectModelRow, body: { archived?: boolean; visible_to_customer?: boolean; show_part_names?: boolean }) => {
     setBusy(true); setErr(null);
     try {
       const r = await fetch(`${base(projectId)}/${enc(row.id)}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
@@ -161,14 +177,17 @@ const ProjectModel3D: React.FC<{ projectId: string; motors: ReadonlyArray<{ die:
 
   if (!ready) return <CircularProgress size={18} />;
   const live = (list?.models ?? []).filter((m) => !m.archived);
+  const source: ModelSource = openingSource({ controller, pickedNow, remembered, liveUploads: live.length });
   const btn = { textTransform: 'none', fontSize: 12.5 } as const;
   return (
     <Box data-testid="project-model3d" sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.25, flexWrap: 'wrap' }}>
-        <ToggleButtonGroup size="small" exclusive value={source} onChange={(_e, v) => v && setSource(v)} aria-label={t('project.source')}>
-          <ToggleButton value="generated" sx={btn} data-testid="project-model-generated">{t('project.generated')}</ToggleButton>
-          <ToggleButton value="uploaded" sx={btn} data-testid="project-model-uploaded">{t('project.uploaded')}{live.length ? ` (${live.length})` : ''}</ToggleButton>
-        </ToggleButtonGroup>
+        {controller
+          ? <Typography sx={{ fontSize: 13, fontWeight: 700 }}>{t('project.uploaded')}{live.length ? ` (${live.length})` : ''}</Typography>
+          : <ToggleButtonGroup size="small" exclusive value={source} onChange={(_e, v) => v && setSource(v)} aria-label={t('project.source')}>
+              <ToggleButton value="uploaded" sx={btn} data-testid="project-model-uploaded">{t('project.uploaded')}{live.length ? ` (${live.length})` : ''}</ToggleButton>
+              <ToggleButton value="generated" sx={btn} data-testid="project-model-generated">{t('project.generated')}</ToggleButton>
+            </ToggleButtonGroup>}
         <HelpTip title={t(source === 'generated' ? 'project.generatedTip' : 'project.uploadedTip')} />
         {source === 'uploaded' && live.length > 1 && (
           <Select size="small" value={picked} onChange={(e) => setPicked(String(e.target.value))} sx={{ fontSize: 13, minWidth: 200 }} aria-label={t('project.revision')}>
@@ -182,6 +201,13 @@ const ProjectModel3D: React.FC<{ projectId: string; motors: ReadonlyArray<{ die:
               </Button>
             : <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}><Typography sx={{ fontSize: 12, color: 'var(--text-3)' }}>{t('downloadLocked')}</Typography><HelpTip title={t('downloadLockedHelp')} /></Box>
         )}
+        {source === 'uploaded' && shown && canFrameless && (
+          <Tooltip title={t('project.framelessTip')}>
+            <ToggleButton size="small" value="frameless" selected={framelessOn} onChange={() => setFrameless(!framelessOn)} sx={btn} data-testid="project-model-frameless">
+              {t('project.frameless')}
+            </ToggleButton>
+          </Tooltip>
+        )}
         <Box sx={{ flex: 1 }} />
         {source === 'uploaded' && staff && (
           <Button size="small" variant="contained" sx={btn} startIcon={<UploadIcon sx={{ fontSize: 16 }} />} onClick={() => setUploadOpen(true)} data-testid="project-model-upload">
@@ -191,7 +217,7 @@ const ProjectModel3D: React.FC<{ projectId: string; motors: ReadonlyArray<{ die:
       </Box>
       {err && <Alert severity="error" onClose={() => setErr(null)} sx={{ fontSize: 12 }}>{err}</Alert>}
 
-      {source === 'generated' && (
+      {source === 'generated' && (list || err) && (   // not before the upload list is known: it may open on Uploaded
         <Box sx={{ height: { xs: 420, md: 620 }, border: '1px solid var(--line-soft)', borderRadius: 1.5, overflow: 'hidden' }}>
           {linked.length === 0
             ? <Typography sx={{ p: 2, fontSize: 13, color: 'var(--text-3)' }}>{t('project.noLinkedMotor')}</Typography>
@@ -210,8 +236,9 @@ const ProjectModel3D: React.FC<{ projectId: string; motors: ReadonlyArray<{ die:
           )}
           <Box sx={{ height: { xs: 420, md: 620 }, position: 'relative', border: '1px solid var(--line-soft)', borderRadius: 1.5, overflow: 'hidden' }}>
             {shown
-              ? <UnifiedViewer sourceKey={`project-model:${projectId}:${shown.id}`} resetKey={`project-model:${projectId}:${shown.id}`}
-                  glbUrl={`${base(projectId)}/${enc(shown.id)}/model.glb`} toolbarSpec="full" tree={null}
+              ? <UnifiedViewer sourceKey={`project-model:${projectId}:${shown.id}:${shown.show_part_names ? 'names' : ''}`} resetKey={`project-model:${projectId}:${shown.id}`}
+                  glbUrl={`${base(projectId)}/${enc(shown.id)}/model.glb`} toolbarSpec="full" tree={tree} hiddenNames={filtered}
+                  onLoaded={(r) => setLoaded({ id: shown.id, groups: r.groups })}
                   contextLostText={t('contextLost')} noViewText="" onError={(m) => m && setErr(m)} />
               : <Typography sx={{ p: 2, fontSize: 13, color: 'var(--text-3)' }}>{list ? t('project.noUpload') : ''}</Typography>}
           </Box>
@@ -225,10 +252,11 @@ const ProjectModel3D: React.FC<{ projectId: string; motors: ReadonlyArray<{ die:
               <Table size="small" data-testid="project-model-history">
                 <TableHead><TableRow>
                   <TableCell>{t('project.revision')}</TableCell><TableCell>{t('project.file')}</TableCell><TableCell>{t('project.note')}</TableCell>
-                  <TableCell>{t('project.date')}</TableCell><TableCell>{t('project.visibleShort')}</TableCell><TableCell />
+                  <TableCell>{t('project.date')}</TableCell><TableCell>{t('project.visibleShort')}</TableCell>
+                  <TableCell><Box sx={{ display: 'flex', alignItems: 'center' }}>{t('project.partNames')}<HelpTip title={t('project.partNamesTip')} /></Box></TableCell><TableCell />
                 </TableRow></TableHead>
                 <TableBody>
-                  {list!.models.length === 0 && <TableRow><TableCell colSpan={6} sx={{ fontSize: 12.5, color: 'var(--text-3)' }}>{t(showArchived ? 'project.noUpload' : 'project.noLive')}</TableCell></TableRow>}
+                  {list!.models.length === 0 && <TableRow><TableCell colSpan={7} sx={{ fontSize: 12.5, color: 'var(--text-3)' }}>{t(showArchived ? 'project.noUpload' : 'project.noLive')}</TableCell></TableRow>}
                   {list!.models.map((m) => (
                     <TableRow key={m.id} hover selected={m.id === picked} sx={{ opacity: m.archived ? 0.55 : 1, cursor: m.archived ? 'default' : 'pointer' }}
                       onClick={() => { if (!m.archived) setPicked(m.id); }}>
@@ -239,6 +267,10 @@ const ProjectModel3D: React.FC<{ projectId: string; motors: ReadonlyArray<{ die:
                       <TableCell onClick={(e) => e.stopPropagation()}>
                         <Switch size="small" checked={!!m.visible_to_customer} disabled={busy} inputProps={{ 'aria-label': t('project.visible') }}
                           onChange={(e) => void patch(m, { visible_to_customer: e.target.checked })} />
+                      </TableCell>
+                      <TableCell onClick={(e) => e.stopPropagation()}>
+                        <Switch size="small" checked={!!m.show_part_names} disabled={busy} inputProps={{ 'aria-label': t('project.partNames') }} data-testid="project-model-part-names"
+                          onChange={(e) => void patch(m, { show_part_names: e.target.checked })} />
                       </TableCell>
                       <TableCell onClick={(e) => e.stopPropagation()}>
                         <Tooltip title={t(m.archived ? 'project.restore' : 'project.archive')}>

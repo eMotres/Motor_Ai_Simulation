@@ -11,7 +11,7 @@ export type CompKey = 'stator' | 'rotor' | 'magnets' | 'coils' | 'shaft' | 'slee
 // UI State
 interface UIState {
   sidebarOpen: boolean;
-  activeTab: 'motors' | 'geometry' | 'materials' | 'mesh' | 'simulation' | 'static3d' | 'cost' | 'sweep' | 'compare' | 'model3d' | 'admin' | 'schemas' | 'propellers';
+  activeTab: 'motors' | 'geometry' | 'materials' | 'mesh' | 'simulation' | 'static3d' | 'cost' | 'sweep' | 'compare' | 'model3d' | 'admin' | 'schemas' | 'propellers' | 'gears';
   showWireframe: boolean;
   showAxes: boolean;
   showGrid: boolean;
@@ -33,7 +33,7 @@ interface UIState {
   magnetVisibility: Record<number, boolean>;
 
   toggleSidebar: () => void;
-  setActiveTab: (tab: 'motors' | 'geometry' | 'materials' | 'mesh' | 'simulation' | 'static3d' | 'cost' | 'sweep' | 'compare' | 'admin' | 'schemas') => void;
+  setActiveTab: (tab: 'motors' | 'geometry' | 'materials' | 'mesh' | 'simulation' | 'static3d' | 'cost' | 'sweep' | 'compare' | 'admin' | 'schemas' | 'gears') => void;
   toggleWireframe: () => void;
   toggleAxes: () => void;
   toggleGrid: () => void;

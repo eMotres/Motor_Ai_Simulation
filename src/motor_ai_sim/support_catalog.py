@@ -155,12 +155,30 @@ def _is_continuous(d: Dict[str, Any]) -> bool:
     return str(d.get("duty_class") or "") == "continuous"
 
 
-def _rated_lines(d: Dict[str, Any]) -> List[str]:
+def _is_marked(d: Dict[str, Any]) -> bool:
+    r = d.get("result") if isinstance(d.get("result"), dict) else {}
+    return r.get("shaft_conv") == 1
+
+
+def _shaft_basis(d: Dict[str, Any], mixed: bool = False) -> str:
+    """The basis suffix after an efficiency: always on a marked duty; on an unmarked one ONLY when the block lists
+    marked and unmarked duties together - an unmarked duty on its own keeps its earlier text exactly."""
+    if _is_marked(d):
+        return " (core loss on the shaft)"
+    return " (earlier shaft basis)" if mixed else ""
+
+
+def _quoted_duties(c: Dict[str, Any]) -> List[Dict[str, Any]]:
+    return [d for d in (c.get("duties") or []) if isinstance(d, dict) and not is_test_duty(d)
+            and _n((d.get("result") if isinstance(d.get("result"), dict) else {}).get("efficiency_pct"), 1)]
+
+
+def _rated_lines(d: Dict[str, Any], mixed: bool = False) -> List[str]:
     r = d.get("result") if isinstance(d.get("result"), dict) else {}
     cr = d.get("continuous_rating") if isinstance(d.get("continuous_rating"), dict) else {}
     st = d.get("short_time") if isinstance(d.get("short_time"), dict) else {}
     eff = _n(r.get("efficiency_pct"), 1)
-    head = _point(d) + (f", efficiency {eff} %" if eff else "")
+    head = _point(d) + (f", efficiency {eff} %{_shaft_basis(d, mixed)}" if eff else "")
     ttl = d.get("time_to_limit") if isinstance(d.get("time_to_limit"), dict) else {}
     if _is_continuous(d):
         lim = _clean(cr.get("part"), 40)
@@ -186,7 +204,7 @@ def _rated_lines(d: Dict[str, Any]) -> List[str]:
     return out
 
 
-def _other_duties(c: Dict[str, Any], rated: Dict[str, Any]) -> List[str]:
+def _other_duties(c: Dict[str, Any], rated: Dict[str, Any], mixed: bool = False) -> List[str]:
     """Peak first, then the other short-time duties, each with its time."""
     others = [d for d in (c.get("duties") or [])
               if isinstance(d, dict) and d is not rated and d.get("name") != rated.get("name")
@@ -199,7 +217,7 @@ def _other_duties(c: Dict[str, Any], rated: Dict[str, Any]) -> List[str]:
         eff = _n(r.get("efficiency_pct"), 1)
         label = "Peak" if _is_peak(d.get("name")) else f"Duty \"{_clean(d.get('name'), 40)}\""
         words = _clean(st.get("words")) if st else ""
-        out.append(f"{label}: {_point(d)}" + (f", efficiency {eff} %" if eff else "")
+        out.append(f"{label}: {_point(d)}" + (f", efficiency {eff} %{_shaft_basis(d, mixed)}" if eff else "")
                    + (f" — {words}" if words else ""))
     return out
 
@@ -281,8 +299,9 @@ def _propellers_text(cool: Optional[Dict[str, Any]]) -> Optional[str]:
 def render_config(die: Dict[str, Any], c: Dict[str, Any], *,
                   cooling: Optional[Dict[str, Any]] = None,
                   model: Optional[Dict[str, Any]] = None,
-                  mass: Optional[Dict[str, Any]] = None) -> Optional[str]:
-    """The few lines for one configuration, or None when it has no duty to quote."""
+                  mass: Optional[Dict[str, Any]] = None, mixed: Optional[bool] = None) -> Optional[str]:
+    """The few lines for one configuration, or None when it has no duty to quote.  ``mixed``: the block lists duties
+    of both shaft-power bases (None: judged on this configuration's own duties)."""
     rated = _pick_rated(c)
     if rated is None:
         return None
@@ -298,7 +317,9 @@ def render_config(die: Dict[str, Any], c: Dict[str, Any], *,
     lines = [f"- **{title}** — {geom}" + (f"; {role}" if role in ("generator", "mixed") else "")
              + (f"; {IN_PRODUCTION_TEXT}" if dia is not None and any(
                  abs(dia - d) < 0.5 for d in IN_PRODUCTION_DIAMETERS_MM) else "")]
-    for ln in _rated_lines(rated) + _other_duties(c, rated):
+    if mixed is None:
+        mixed = len({_is_marked(d) for d in _quoted_duties(c)}) > 1
+    for ln in _rated_lines(rated, mixed) + _other_duties(c, rated, mixed):
         lines.append("  " + ln)
     extra = _join([_kv_kt(rated), _mass(c, rated, mass), _battery(c)], "; ")
     if extra:
@@ -323,6 +344,9 @@ def render_block(dies: List[Dict[str, Any]], *, visitor: bool = False,
                  mass_of: Optional[Callable[[Dict[str, Any], Dict[str, Any]], Optional[Dict[str, Any]]]] = None) -> str:
     """The block for a tree already filtered to the caller's access (pure)."""
     parts: List[str] = []
+    # one list: when it quotes efficiencies of both shaft-power bases, the earlier ones say so too
+    mixed = len({_is_marked(du) for d in _shared(dies) for c in d.get("configs") or []
+                 if isinstance(c, dict) and c.get("card_date") for du in _quoted_duties(c)}) > 1
     for d in sorted(_shared(dies), key=lambda x: (_f(x.get("stator_diameter")) or 0, str(x.get("name")))):
         for c in d.get("configs") or []:
             # Same rule as the Motors tab for clients: a configuration without a catalogue
@@ -333,7 +357,8 @@ def render_block(dies: List[Dict[str, Any]], *, visitor: bool = False,
             try:
                 cool = cooling_of(name, cfg, c.get("applications")) if cooling_of else None
                 mdl = model_of(name, cfg) if model_of else None
-                text = render_config(d, c, cooling=cool, model=mdl, mass=mass_of(d, c) if mass_of else None)
+                text = render_config(d, c, cooling=cool, model=mdl, mass=mass_of(d, c) if mass_of else None,
+                                     mixed=mixed)
             except Exception as e:                           # noqa: BLE001 - one bad card never blanks the rest
                 logger.warning("support catalog: %s / %s skipped (%s: %s)", name, cfg, type(e).__name__, e)
                 continue
@@ -432,6 +457,20 @@ def _visitor_access() -> dict:
             "configs": frozenset()}
 
 
+def _archive_generation() -> tuple:
+    """The configuration archive's state as a cache key part: the store file's stamp (or "absent"); a damaged or unreachable
+    store gives a fresh key every time, so a stale digest is never reused while archive state is unknown."""
+    try:
+        from motor_ai_sim import config_archive as CA
+        st = CA.store_path().stat()
+        CA.archived_keys()                                  # raises for a damaged store
+        return (st.st_mtime_ns, st.st_size)
+    except FileNotFoundError:
+        return ("absent",)
+    except Exception:                                       # noqa: BLE001 - unknown state: never a cache hit
+        return ("unknown", time.monotonic())
+
+
 def _access_key(a: dict, visitor: bool) -> tuple:
     return ("visitor" if visitor else "user", str(a.get("mode")), bool(a.get("is_admin")),
             tuple(sorted(str(x) for x in (a.get("dies") or ()))),
@@ -460,7 +499,7 @@ def published_motors_block(authorization: Optional[str] = None, *, visitor: bool
         from motor_ai_sim import motor_access as MA
         from motor_ai_sim.routes import family as fam
         acc = _visitor_access() if visitor else MA.catalog_access(authorization)
-        key = _access_key(acc, visitor)
+        key = (_access_key(acc, visitor), _archive_generation())    # an archive change rebuilds the digest (owner 2026-11-22)
         t = time.monotonic() if now is None else now
         with _lock:
             hit = _cache.get(key)

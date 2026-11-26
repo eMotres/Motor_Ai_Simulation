@@ -40,6 +40,7 @@ CACHE_TTL_S = 300.0
 MOTOR_KEYS = ("die", "configuration", "application", "rated")
 RATED_KEYS = ("power_kw", "torque_nm", "speed_rpm", "efficiency_pct", "mass_kg",
               "mass_is_partial", "continuous")
+OPTIONAL_RATED_KEYS = ("shaft_conv",)
 
 _SAFE_WORD = re.compile(r"[^A-Za-z0-9 _.\-]+")
 #: What a catalogue die / configuration name can be (``routes.family._check_name``): a name outside it is
@@ -99,6 +100,7 @@ def build_row(die: Dict[str, Any], c: Dict[str, Any],
             "torque_nm": abs(torque) if torque is not None else None,
             "speed_rpm": _rpm(rated.get("rpm")),
             "efficiency_pct": _num(r.get("efficiency_pct"), 1),
+            **({"shaft_conv": 1} if r.get("shaft_conv") == 1 else {}),
             "mass_kg": kg,
             "mass_is_partial": bool(partial),
             "continuous": bool(SC._is_continuous(rated)),
@@ -153,7 +155,8 @@ def assert_clean(obj: Any, path: str = "$") -> None:
 
 def assert_allowlisted(rows: List[Dict[str, Any]]) -> None:
     for row in rows:
-        if set(row) != set(MOTOR_KEYS) or set(row["rated"]) != set(RATED_KEYS):
+        if (set(row) != set(MOTOR_KEYS) or not set(RATED_KEYS) <= set(row["rated"])
+                or not set(row["rated"]) <= set(RATED_KEYS + OPTIONAL_RATED_KEYS)):
             raise AssertionError(f"public motor row outside the allow-list: {sorted(row)}")
 
 
@@ -168,12 +171,18 @@ def clear_cache() -> None:
         _cache["at"], _cache["rows"] = None, None
 
 
+def _not_archived(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """A cache hit is re-filtered: a configuration archived after the cache was built leaves at once (owner 2026-11-22)."""
+    from motor_ai_sim import config_archive as CA
+    return [r for r in rows if not CA.is_archived(str(r.get("die") or ""), str(r.get("configuration") or ""))]
+
+
 def public_motors(now: Optional[float] = None) -> List[Dict[str, Any]]:
     """The public motors, cached for ``CACHE_TTL_S``.  A copy: the cache is never handed out."""
     t = time.monotonic() if now is None else now
     with _lock:
         if _cache["rows"] is not None and _cache["at"] is not None and t - _cache["at"] < CACHE_TTL_S:
-            return [{**r, "rated": dict(r["rated"])} for r in _cache["rows"]]
+            return [{**r, "rated": dict(r["rated"])} for r in _not_archived(_cache["rows"])]
     from contextlib import nullcontext
     from fastapi import Response
     from motor_ai_sim import support_catalog as SC

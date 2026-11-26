@@ -26,8 +26,10 @@ def test_zero_lift_angle_matches_thin_airfoil_theory():
 
 
 def test_camber_polar_is_the_flat_plate_shifted():
+    """In the attached range only: since review 2026-11-24 (4c) the stall stays at the generic angle in the section's own alpha (the
+    shifted flat plate stalled a 4412 at 7.85 deg); tests/test_propeller_review_2026_11_24.py pins that."""
     flat, cam = pb.FlatPlatePolar(8.0), pb.CamberedPlatePolar(8.0)
-    a = np.radians(np.array([-4.0, 0.0, 3.0, 8.0]))
+    a = np.radians(np.array([-4.0, 0.0, 3.0, 7.5]))
     a0 = cam.alpha0("naca4-4412")
     cl_c, cd_c, f = cam.eval("naca4-4412", a, 1e5, 0.2, 0.12)
     cl_f, cd_f, _ = flat.eval("naca4-4412", a - a0, 1e5, 0.2, 0.12)

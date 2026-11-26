@@ -248,9 +248,7 @@ def _jobs() -> Dict[str, Any]:
     import os
     root = (os.environ.get("WORKSPACES_ROOT") or "").strip()
     out: Dict[str, Any] = {"running": 0, "queued": 0, "kinds": {}}
-    if not root:
-        return out
-    for f in Path(root).glob("*/.jobs.json"):
+    for f in (Path(root).glob("*/.jobs.json") if root else ()):
         try:
             d = json.loads(f.read_text(encoding="utf-8"))
         except (OSError, ValueError):
@@ -264,6 +262,9 @@ def _jobs() -> Dict[str, Any]:
                 out[st] += 1
                 k = str(j.get("kind") or "?")
                 out["kinds"][k] = out["kinds"].get(k, 0) + 1
+    for r in optimizer_rows():                      # a single-process deployment runs the optimiser in this process too
+        out["running"] += 1
+        out["kinds"][r["kind"]] = out["kinds"].get(r["kind"], 0) + 1
     return out
 
 
@@ -276,7 +277,52 @@ def _jobs_memory() -> Dict[str, Any]:
     for it in snap.get("items") or []:
         k = str(it.get("kind") or "?")
         kinds[k] = kinds.get(k, 0) + 1
-    return {"running": int(snap.get("running") or 0), "queued": int(snap.get("queued") or 0), "kinds": kinds}
+    opt = optimizer_rows()
+    for r in opt:
+        kinds[r["kind"]] = kinds.get(r["kind"], 0) + 1
+    return {"running": int(snap.get("running") or 0) + len(opt), "queued": int(snap.get("queued") or 0), "kinds": kinds}
+
+
+#: (store name, kind) of the optimiser's in-memory run states (routes/optimization.py): a run sets ``running`` in its workspace's
+#: map for as long as its worker thread lives.  They are not jobs of ``jobs.queue()`` (the Optimize tab starts its own threads), so
+#: the deploy guard did not see them (measured 2026-11-25: an auto run with 6 workers read "jobs.running 0").
+_OPT_STATES = (("optimization.descent_state", "descent"), ("optimization.scan_state", "sweep"),
+               ("optimization.doe_state", "doe"), ("optimization.refine_state", "refine"))
+
+
+def optimizer_rows() -> List[Dict[str, Any]]:
+    """The running descent / auto optimisations, sweeps, DOE and refine runs of THIS process, every workspace: ``kind``, ``owner``
+    (the workspace bucket, never an e-mail), ``state`` 'running', ``progress`` (done / total, or iteration / max iterations),
+    ``phase``.  Reads the states in place: no store or workspace is created, and nothing is imported when the optimiser
+    module was never loaded (nothing can be running)."""
+    import sys
+    if "motor_ai_sim.routes.optimization" not in sys.modules:
+        return []
+    from motor_ai_sim import workspace as _WS
+    out: List[Dict[str, Any]] = []
+    for ws in _WS.live_workspaces():
+        try:
+            with ws.state.lock:
+                slots = dict(ws.state.slots)
+        except Exception:                                                    # noqa: BLE001
+            continue
+        for name, kind in _OPT_STATES:
+            st = slots.get(name)
+            try:
+                running = bool(st is not None and st.get("running"))
+            except Exception:                                                # noqa: BLE001
+                running = False
+            if not running:
+                continue
+            k = kind
+            if kind == "descent" and (st.get("auto") or st.get("algorithm") == "cmaes_auto"):
+                k = "auto"
+            done = st.get("iter") if kind == "descent" else st.get("done")
+            total = st.get("max_iters") if kind == "descent" else st.get("total")
+            out.append({"run_id": str(st.get("run_id") or ""), "kind": k, "owner": str(getattr(ws, "id", "") or "process"),
+                        "state": "running", "phase": str(st.get("phase") or "") or None,
+                        "progress": {"done": done, "total": total}})
+    return out
 
 
 def job_rows(limit: int = 50) -> List[Dict[str, Any]]:
@@ -285,6 +331,7 @@ def job_rows(limit: int = 50) -> List[Dict[str, Any]]:
     out: List[Dict[str, Any]] = []
     for it in (_J.queue().snapshot().get("items") or [])[:limit]:
         out.append({k: it.get(k) for k in ("run_id", "kind", "owner", "state", "position", "elapsed_s", "waited_s")})
+    out.extend(optimizer_rows())
     return out
 
 

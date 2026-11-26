@@ -129,3 +129,13 @@ t('geoSigsDiffer is the comparison (never !==)', async () => {
   assert.equal(G.geoSigsDiffer('a:52.95|b:1', 'a:52.94999999999999|b:1'), false);
   assert.equal(G.geoSigsDiffer(SIG, SIG_400), true);
 });
+
+test('a stored fingerprint also matches the live one through its legacy49 alias (records of 2026-11-15 .. 2026-11-25)', () => {
+  assert.equal(R.storedVerdict('old49hash', ['canonhash', 'old49hash']), 'draw');
+  assert.equal(R.storedVerdict('canonhash', ['canonhash', 'old49hash']), 'draw');
+  assert.equal(R.storedVerdict('other', ['canonhash', 'old49hash']), 'older_build');
+  assert.equal(R.storedVerdict('old49hash', []), 'unproven');
+  assert.equal(R.storedVerdict('x', ['nofp']), 'unproven');
+  assert.equal(R.storedPointVerdict({ storedFingerprint: 'old49hash', liveFingerprint: ['canonhash', 'old49hash'] }), 'draw');
+  assert.equal(R.storedVerdict('c26331a1', 'c26331a1'), 'draw');                        // the plain string still works
+});

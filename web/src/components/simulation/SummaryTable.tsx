@@ -18,6 +18,7 @@ import { assignmentSignature } from '../../lib/dutyMaterials';
 import { fetchBearingLosses } from '../../lib/machineBearings';
 import type { BearingLosses } from '../../lib/machineBearings';
 import { useMotorStore } from '../../stores/motorStore';
+import { end3dStatusOf, end3dStatusView } from '../../lib/end3dStatus';
 import { couplingLine, couplingTooltip, coupledStateLine,
          coupledStateTip, continuousRatingLine,
          continuousRatingTip, s1ResultsAtLine,
@@ -26,7 +27,7 @@ import type { CouplingBlock } from './coupledApi';
 import SineVsInverterTable from './SineVsInverterTable';
 import SaveContinuousPointButton from './SaveContinuousPointButton';
 import EmResultTiles from './EmResultTiles';
-import { apply3dToSummary } from '../../lib/apply3d';
+import { apply3dToSummary, isShaftConvention } from '../../lib/apply3d';
 import type { EmMech } from '../../lib/emResultTiles';
 import { useTranslation } from 'react-i18next';
 import { nsT } from '../../i18n/nsT';
@@ -44,6 +45,12 @@ interface BenchLdq {
 }
 
 export interface TransientSummary {
+  /** shaft-side convention marker (src/motor_ai_sim/shaft_convention.py), absent on runs before it */
+  shaft_convention?: string | null;
+  T_shaft_Nm?: number | null;
+  T_field_k_Nm?: number | null;
+  P_field_W?: number | null;
+  P_shaft_drag_W?: number | null;
   /** Backend summary-shape version — lets the restore path adopt a rebuilt
    *  summary when the code gained new derived cells (see _SUMMARY_SHAPE_V). */
   summary_shape_v?: number;
@@ -274,6 +281,8 @@ export interface TransientSummary {
              *  same machine (slots/poles/OD) is served, flagged, until Stage A
              *  is re-run (user 2026-09-03: keep it, highlight it) */
             inherited?: boolean; inherited_from?: string; inherited_note?: string;
+            /** the Stage A 2-D check: verified / unverified / failed / invalid (2026-11-25; absent on older passports) */
+            k_flux_status?: string | null;
             machine?: string; T_corrected_Nm: number;
             V_line_peak_corrected_V?: number | null;
             /** MEASURED 3-D torque factor (Stage B), when a passport has one —
@@ -687,7 +696,9 @@ const SummaryTable: React.FC<Props> = ({ summary, loading, fromSweep, liveOp, re
   const kTq = kTmeas ?? k3d;
   const ktBasis = kTmeas != null ? '3-D' : '3-D flux';
   const s = (() => {
-    if (!apply3d || k3d == null) return summary;
+    // a summary on the shaft-side convention already carries the torque factor in its shaft-side numbers (the server's,
+    // lib/apply3d.ts): the 3-D view is the only one it has, so the toggle does not take it back to 2-D
+    if ((!apply3d && !isShaftConvention(summary)) || k3d == null) return summary;
     const kq = kTq ?? k3d;
     return {
       // the flux- and torque-proportional fields: ONE function (lib/apply3d.ts), shared with the stored point's panel
@@ -698,7 +709,7 @@ const SummaryTable: React.FC<Props> = ({ summary, loading, fromSweep, liveOp, re
       // (V·(V−V_oc) = P·R) and the current/C-rate/headroom re-derived.  The
       // circuit-side numbers (switch states, i_dc) are the 2-D circuit's own
       // and stay — the balance gap is restated against the corrected headline.
-      battery_charge: summary.battery_charge ? (() => {
+      battery_charge: summary.battery_charge && !isShaftConvention(summary) ? (() => {
         const b = summary.battery_charge;
         const Pin = b.P_mech_in_W * kq;
         const Pch = Pin - b.P_loss_machine_W;
@@ -934,6 +945,19 @@ const SummaryTable: React.FC<Props> = ({ summary, loading, fromSweep, liveOp, re
             </Button>
           </span>
         </Tooltip>
+        {(() => {
+          // ONE short label + its tooltip: the 2-D check status of the 3-D factor (no caption line)
+          const st = k3d != null ? end3dStatusOf(summary.end3d) : null;
+          if (!st) return null;
+          const v = end3dStatusView(st);
+          return (
+            <Tooltip title={tx(v.tipKey)}>
+              <Typography component="span" sx={{ fontSize: 11, color: v.color, cursor: 'help' }}>
+                {tx(v.labelKey)}
+              </Typography>
+            </Tooltip>
+          );
+        })()}
         {/* R at 25 °C — bench-check view (user: "so it can be checked").
             Rescales ONLY the two R cells by the copper ρ(T) ratio; losses and
             η stay at the solve temperature — a cold loss set needs a cold

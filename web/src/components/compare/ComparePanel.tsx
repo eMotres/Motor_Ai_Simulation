@@ -33,6 +33,10 @@ import { shownMass, perMass } from '../../lib/fullMass';
 import { SharedComparisonTable, type SharedComparisonColumn } from './SharedComparisonTable';
 import { bestValueColor, buildComparisonModel, shouldSuppressMixedBasisColor } from './comparisonModel';
 import { ktFromKv } from '../../lib/kvKt';
+import { pocketWidth, POCKET_WIDTH_TIP, SLOT_WIDTH_TIP } from '../../lib/pocketWidth';
+import { nsT } from '../../i18n/nsT';
+import { coggingComparable, storedNumber } from '../../lib/coggingPp';
+import { isSweepRow, sweepMetricsComparable, shaftConventionComparable } from '../../lib/sweepSettings';
 
 const API = import.meta.env.VITE_API_URL ?? 'http://localhost:8001';
 
@@ -44,8 +48,14 @@ interface SavedSim {
   results: Record<string, any>;
 }
 
+/** A saved row with the computed pocket width beside its params (a copy; the stored row is not touched). */
+function withPocketWidth(s: SavedSim): SavedSim {
+  const pw = pocketWidth(s.params);
+  return pw == null || !s.params ? s : { ...s, params: { ...s.params, pocket_width: pw } };
+}
+
 // ── friendly labels + units for params (fallback = raw key) ─────────────────
-const PARAM_META: Record<string, { label: string; unit?: string; d?: number }> = {
+const PARAM_META: Record<string, { label: string; unit?: string; d?: number; tip?: string }> = {
   // operating point
   I_phase_rms:        { label: 'I phase',       unit: 'A',   d: 1 },
   gamma_deg:          { label: 'γ angle',       unit: '°',   d: 1 },
@@ -78,7 +88,9 @@ const PARAM_META: Record<string, { label: string; unit?: string; d?: number }> =
   magnet_height:      { label: 'Magnet h',      unit: 'mm',  d: 2 },
   magnet_down_height: { label: 'Magnet base',   unit: 'mm',  d: 2 },
   slot_height:        { label: 'Slot height',   unit: 'mm',  d: 2 },
-  slot_width:         { label: 'Slot width',    unit: 'mm',  d: 2 },
+  // The pocket CUT in the iron (computed on load from the row's wire keys; never stored) and the STORED wire pitch.
+  pocket_width:       { label: 'Pocket width',  unit: 'mm',  d: 2, tip: POCKET_WIDTH_TIP },
+  slot_width:         { label: 'Slot width (wire pitch)', unit: 'mm', d: 2, tip: SLOT_WIDTH_TIP },
   tooth_width:        { label: 'Tooth width',   unit: 'mm',  d: 2 },
   tooth2_width:       { label: 'Tooth2 width',  unit: 'mm',  d: 2 },
   motor_length:       { label: 'Stack length',  unit: 'mm',  d: 1 },
@@ -127,7 +139,7 @@ const LIB_COLS = [
   'I_phase_rms', 'gamma_deg', 'rpm', 'n_sectors',
   'num_poles', 'num_slots', 'num_wires_per_slot',
   'stator_diameter', 'stator_outer_radius', 'rotor_outer_radius', 'air_gap',
-  'magnet_height', 'slot_height', 'slot_width', 'tooth_width', 'motor_length',
+  'magnet_height', 'slot_height', 'pocket_width', 'tooth_width', 'motor_length',
   ...TAB_DEFAULT_COLS,
 ];
 
@@ -176,7 +188,9 @@ const RESULT_COLS: ResultCol[] = [
   // T, P, n, η, ripple, then the drive side (V peak, I peak, I rms, J).
   { key: 'T_em_avg_Nm',          label: 'Torque',      unit: 'N·m',    d: 3, better: 'hi' },
   { key: 'P_mech_W',             label: 'Power',       unit: 'kW',     d: 2, scale: 1e-3, better: 'hi',
-    derive: r => Number(r.T_em_avg_Nm) * 2 * Math.PI * Number(r.rpm) / 60 },
+    derive: r => r.shaft_convention === 'fe_on_shaft_k3d_v1'
+      ? (r.P_mech_W != null ? Number(r.P_mech_W) : NaN)
+      : Number(r.T_em_avg_Nm) * 2 * Math.PI * Number(r.rpm) / 60 },
   { key: 'rpm',                  label: 'Speed',       unit: 'rpm',    d: 0 },
   { key: 'efficiency',           label: 'Efficiency',  unit: '%',      d: 2, scale: 100, better: 'hi' },
   { key: 'T_ripple_pct',         label: 'Ripple',      unit: '%',      d: 2, better: 'lo' },
@@ -194,7 +208,8 @@ const RESULT_COLS: ResultCol[] = [
     derive: r => perMass(r, 'torque').value ?? NaN, activeBasis: r => !perMass(r, 'torque').full },
   { key: 'power_per_mass_W_kg',  label: 'PD',          unit: 'kW/kg',  d: 2, scale: 1e-3, better: 'hi',
     derive: r => perMass(r, 'power').value
-      ?? Number(r.T_em_avg_Nm) * 2 * Math.PI * Number(r.rpm) / 60 / Number(r.mass_total_kg),
+      ?? (r.shaft_convention === 'fe_on_shaft_k3d_v1' ? NaN
+        : Number(r.T_em_avg_Nm) * 2 * Math.PI * Number(r.rpm) / 60 / Number(r.mass_total_kg)),
     activeBasis: r => !perMass(r, 'power').full },
   { key: 'mass_full',            label: 'Mass',        unit: 'kg',     d: 3, better: 'lo', presentKey: 'mass_total_kg',
     derive: r => shownMass(r).kg ?? NaN, activeBasis: r => shownMass(r).kind !== 'full' },
@@ -281,6 +296,11 @@ const THERM_COLS: ResultCol[] = [
   { key: 'loss_source_kind', label: 'Loss source', text: true, block: 'thermal', off: true },
 ];
 
+/** Opt-in: only a row that carries a no-load cogging value (a Sweep point applied with "Cogging pp") brings the column. */
+const txSim = nsT('simulation');
+const coggingCols = (): ResultCol[] => [
+  { key: 'cogging_pp_Nm', label: txSim('coggingPpCol'), unit: 'N·m', d: 3, better: 'lo' },
+];
 const MECH_COLS: ResultCol[] = ([
   // The two safety factors first — they are the verdict; the stresses behind
   // them are how the verdict was reached.
@@ -464,7 +484,8 @@ const ComparePanel: React.FC = () => {
     fetch(`${API}/api/sims/saved`)
       .then(r => r.json())
       .then(d => {
-        const list: SavedSim[] = d.sims || [];
+        // `pocket_width` is computed here from the row's own wire keys (display only, never stored)
+        const list: SavedSim[] = ((d.sims || []) as SavedSim[]).map(withPocketWidth);
         setSims(list);
         // The selection is the USER's, and it survives reloads: no auto-ticking
         // of "the first four" (that fought every attempt to compare a different
@@ -522,6 +543,7 @@ const ComparePanel: React.FC = () => {
       'I_phase_rms', 'gamma_deg', 'rpm', 'coil_temp_c', 'end_winding_factor',
       'connection', 'steps_per_period', 'n_sectors', 'element_order',
       'mesh_size_mm', 'min_size_mm', 'gap_layers', 'frequency_hz',
+      'pocket_width',   // computed for display from the wire keys, not a geometry input
     ]);
     const geo: Record<string, number> = {};
     const mats: Record<string, string> = {};
@@ -698,6 +720,7 @@ const ComparePanel: React.FC = () => {
   const thermAvail = [...THERM_COLS, ...dynamicThermCols(sims)]
     .filter(c => colPresent(c, sims));
   const mechAvail = MECH_COLS.filter(c => colPresent(c, sims));
+  const coggingAvail = coggingCols().filter(c => colPresent(c, sims));
   const resGroups = [
     { title: 'Thermal',    cols: thermAvail },
     { title: 'Mechanical', cols: mechAvail },
@@ -707,6 +730,7 @@ const ComparePanel: React.FC = () => {
   // temperatures, then the mechanics.
   const resultCols: ResultCol[] = [
     ...RESULT_COLS,
+    ...coggingAvail,
     ...thermAvail.filter(shown),
     ...mechAvail.filter(shown),
   ];
@@ -739,8 +763,20 @@ const ComparePanel: React.FC = () => {
   const selectedHasFullBasis = new Map(resultCols.map(r => [
     colId(r), !r.activeBasis || selected.some(s => !r.activeBasis!(resultSrc(r, s))),
   ]));
+  // The Δ% row and its column maxima follow the same rule as the ranking: a sweep point whose steps-and-gap identity is unknown /
+  // mixed / different (or that sits beside an ordinary run) gets no delta and does not set a maximum.
+  const selSweepMixed = !sweepMetricsComparable(selected.map(s => s.results as any));
+  // rows of two shaft-power conventions (owner 2026-11-25) are never ranked against each other, and get no delta
+  const selShaftMixed = !shaftConventionComparable(selected.map(s => s.results as any));
+  // Cogging pp follows its own rule (known, equal settings) over the SAME selected rows as the colours of the comparison table.
+  const selCoggingMixed = !coggingComparable(selected
+    .filter(s => Number.isFinite(storedNumber((s.results as any)?.cogging_pp_Nm)))
+    .map(s => storedNumber((s.results as any)?.cogging_sig)));
   const comparisonPercentValue = (r: ResultCol, s: SavedSim): number => {
     if (r.text) return NaN;
+    if (selCoggingMixed && colId(r).endsWith('cogging_pp_Nm')) return NaN;
+    if (selSweepMixed && isSweepRow(s.results as any)) return NaN;
+    if (selShaftMixed) return NaN;
     const raw = resultVal(r, s);
     if (!Number.isFinite(raw)) return NaN;
     return r.activeBasis?.(resultSrc(r, s)) && selectedHasFullBasis.get(colId(r)) === true ? NaN : raw;
@@ -754,6 +790,10 @@ const ComparePanel: React.FC = () => {
   // `colId`, not on `key`: the EM summary and the mechanical block both carry an
   // `rpm`, and one extent shared between them would colour the hottest against
   // the fastest.
+  // The result columns for ONE scope of rows: the ranking (extents), the colour suppression and the mixed-sweep / cogging /
+  // mixed-basis rules all read the SAME set of rows.  The library table passes the whole library; the comparison table passes the
+  // SELECTED rows, so its colours and its delta row refer to one set (the rows on screen).
+  const buildResultModelColumns = (scope: SavedSim[], hasFullBasis: Map<string, boolean>): SharedComparisonColumn<SavedSim>[] => {
   const resultModelColumns: SharedComparisonColumn<SavedSim>[] = resultCols.map(r => ({ key: `r:${colId(r)}`, label: r.label, unit: r.unit, kind: 'result', better: r.better,
     value: s => r.text ? resultText(r, s) : resultVal(r, s), rankValues: rows => extentVals(r, rows),
     tolerance: 1e-9, noColor: s => {
@@ -761,13 +801,66 @@ const ComparePanel: React.FC = () => {
       const raw = resultVal(r, s);
       if (!Number.isFinite(raw)) return false;
       const activeOnly = !!r.activeBasis?.(resultSrc(r, s));
-      return shouldSuppressMixedBasisColor(raw, activeOnly, libraryHasFullBasis.get(colId(r)) ?? false);
+      return shouldSuppressMixedBasisColor(raw, activeOnly, hasFullBasis.get(colId(r)) ?? false);
     },
     cellSx: () => r.text ? { maxWidth: 170, overflow: 'hidden', textOverflow: 'ellipsis' } : {},
     cellColor: s => r.text && resultText(r, s) === '—' ? 'var(--line)' : undefined,
-    title: (_v, s) => { if (r.text) { const text = resultText(r, s); return text === '—' ? undefined : text; } return Number.isFinite(resultVal(r, s)) && r.activeBasis?.(resultSrc(r, s)) ? ACTIVE_BASIS_TIP : undefined; },
+    title: (_v, s) => { if (r.key === 'T_em_avg_Nm' && resultSrc(r, s).shaft_convention === 'fe_on_shaft_k3d_v1') return txSim('fieldTorque'); if (r.text) { const text = resultText(r, s); return text === '—' ? undefined : text; } return Number.isFinite(resultVal(r, s)) && r.activeBasis?.(resultSrc(r, s)) ? ACTIVE_BASIS_TIP : undefined; },
     format: (_v, s) => { if (r.text) return resultText(r, s); const raw = resultVal(r, s); return Number.isFinite(raw) ? `${fmtNum(raw, r.d ?? 2, r.scale ?? 1)}${r.activeBasis?.(resultSrc(r, s)) ? '*' : ''}` : '—'; },
   }));
+  // Cogging pp is compared only between values measured with KNOWN, equal settings (one signature: steps,
+  // temperature, mesh, gap, sectors, basis, eddy, build, materials); a value that is not final is labelled
+  // "ranking only" wherever it is shown, and the full-strength basis is stated whenever demag was on at load.
+  const cgNum = (s: SavedSim, k: string) => storedNumber((s.results as any)?.[k]);
+  const coggingHave = scope.filter(s => Number.isFinite(cgNum(s, 'cogging_pp_Nm')));
+  const coggingMixed = !coggingComparable(coggingHave.map(s => cgNum(s, 'cogging_sig')));
+  resultModelColumns.forEach((c, i) => {
+    if (!c.key.endsWith(':cogging_pp_Nm')) return;
+    const base = c;
+    resultModelColumns[i] = { ...base,
+      rankValues: rows => (coggingMixed ? [] : (base.rankValues ? base.rankValues(rows) : [])),
+      noColor: (s, rows) => coggingMixed || (base.noColor ? base.noColor(s, rows) : false),
+      format: (v, s) => {
+        const raw = cgNum(s, 'cogging_pp_Nm');
+        if (!Number.isFinite(raw)) return '—';
+        const fin = cgNum(s, 'cogging_final') === 1;
+        return `${fmtNum(raw, 3, 1)}${fin ? '' : ` (${txSim('coggingPpRanking')})`}`;
+      },
+      title: (v, s) => [coggingMixed ? txSim('coggingPpMixed') : '',
+          cgNum(s, 'cogging_final') === 1 ? '' : txSim('coggingPpRankingTip'),
+          cgNum(s, 'cogging_demag_at_load') === 1 ? txSim('coggingPpBasis') : '']
+        .filter(Boolean).join(' ') || undefined,
+    };
+  });
+  // A sweep point (screening resolution) is ranked only against sweep points whose steps-and-gap identity is KNOWN and equal:
+  // a 108-step and a 48-step sweep, an unknown / mixed / legacy sweep, or a sweep point beside an ordinary run are never ranked
+  // together.  Those rows lose colour and ranking (with the reason in the hover text); ordinary rows still rank each other.
+  const sweepMixed = !sweepMetricsComparable(scope.map(s => s.results as any));
+  if (sweepMixed) {
+    resultModelColumns.forEach((c, i) => {
+      if (c.key.endsWith(':cogging_pp_Nm')) return;
+      const base = c;
+      resultModelColumns[i] = { ...base,
+        rankValues: rows => (base.rankValues ? base.rankValues(rows.filter(r => !isSweepRow(r.results as any))) : []),
+        noColor: (s, rows) => isSweepRow(s.results as any) || (base.noColor ? base.noColor(s, rows) : false),
+        title: (v, s) => [isSweepRow(s.results as any) ? txSim('sweepMixedSettings') : '', base.title ? base.title(v, s) : ''].filter(Boolean).join(' ') || undefined,
+      };
+    });
+  }
+  if (!shaftConventionComparable(scope.map(s => s.results as any))) {
+    resultModelColumns.forEach((c, i) => {
+      const base = c;
+      resultModelColumns[i] = { ...base,
+        rankValues: () => [],
+        noColor: () => true,
+        title: (v, s) => [txSim('shaftConvMixed'), base.title ? base.title(v, s) : ''].filter(Boolean).join(' ') || undefined,
+      };
+    });
+  }
+  return resultModelColumns;
+  };
+  const resultModelColumns = buildResultModelColumns(sims, libraryHasFullBasis);
+  const selectedResultModelColumns = buildResultModelColumns(selected, selectedHasFullBasis);
   const selectedComparisonModel = buildComparisonModel(selected, paramModelColumns, valEq);
   const libraryComparisonModel = buildComparisonModel(sims, resultModelColumns, valEq);
   const diffKeys = selectedComparisonModel.differingInputKeys.map(k => k.slice(2)).sort((a, b) => {
@@ -793,7 +886,9 @@ const ComparePanel: React.FC = () => {
   // name can't collide).
   const colMax: Record<string, number> = {};
   resultCols.forEach(r => {
-    const ns = extentVals(r, selected);
+    if (selCoggingMixed && colId(r).endsWith('cogging_pp_Nm')) return;
+    if (selShaftMixed) return;
+    const ns = extentVals(r, selSweepMixed ? selected.filter(s => !isSweepRow(s.results as any)) : selected);
     if (ns.length) colMax[`r:${colId(r)}`] = Math.max(...ns);
   });
   /** Deviation from the column maximum, in %. 0 % = the leader. */
@@ -969,7 +1064,7 @@ const ComparePanel: React.FC = () => {
                     control={<Checkbox size="small" checked={visibleCols.includes(k)} onChange={() => toggleCol(k)}
                       sx={{ p: 0.25, mr: 0.5, color: 'var(--text-4)', '&.Mui-checked': { color: '#3b82f6' } }} />}
                     label={<Typography sx={{ fontSize: 11, color: 'var(--text-1)' }}>
-                      {paramLabel(k)}{paramUnit(k) ? <Box component="span" sx={{ color: 'var(--text-4)' }}> ({paramUnit(k)})</Box> : null}
+                      {PARAM_META[k]?.tip ? <Tooltip title={PARAM_META[k].tip!}><span>{paramLabel(k)}</span></Tooltip> : paramLabel(k)}{paramUnit(k) ? <Box component="span" sx={{ color: 'var(--text-4)' }}> ({paramUnit(k)})</Box> : null}
                     </Typography>} />
                 ))}
               </Box>
@@ -1059,7 +1154,7 @@ const ComparePanel: React.FC = () => {
                 {/* …then the inputs that produced them. */}
                 {displayCols.map(k => (
                   <Box component="th" key={k} sx={TH}>
-                    {paramLabel(k)}{paramUnit(k) ? <Box component="span" sx={{ color: 'var(--text-3)', fontWeight: 500 }}>{unitGap(paramUnit(k))}{paramUnit(k)}</Box> : null}
+                    {PARAM_META[k]?.tip ? <Tooltip title={PARAM_META[k].tip!}><span>{paramLabel(k)}</span></Tooltip> : paramLabel(k)}{paramUnit(k) ? <Box component="span" sx={{ color: 'var(--text-3)', fontWeight: 500 }}>{unitGap(paramUnit(k))}{paramUnit(k)}</Box> : null}
                   </Box>
                 ))}
                 <Box component="th" sx={{ ...TH, textAlign: 'left' }}>Saved</Box>
@@ -1106,7 +1201,7 @@ const ComparePanel: React.FC = () => {
           {selected.length < 2 ? (
             <Alert severity="info" sx={{ fontSize: 12 }}>Tick at least two rows above to compare them.</Alert>
           ) : (
-            <SharedComparisonTable rows={selected} columns={[...resultModelColumns, ...displayCols.map(k => ({ key: `p:${k}`, label: paramLabel(k), unit: paramUnit(k), kind: 'input' as const, value: (s: SavedSim) => s.params?.[k], format: (_v: unknown, s: SavedSim) => paramFmt(k, s.params?.[k]) }))]} rowKey={s => s.id} rowLabel={s => s.name} labelHeader="Simulation" sameValue={valEq} showAllInputs visibleKeys={[...resultCols.map(r => `r:${colId(r)}`), ...displayCols.map(k => `p:${k}`)]} tableSx={{ borderCollapse: 'collapse', width: '100%' }} headerCellSx={TH} labelHeaderSx={{ left: 0, zIndex: 3, position: 'sticky' }} bodyCellSx={TD} inputHeaderColor={HDR_DIFF} resultHeaderColor={HDR_RESULT} unitGap={unitGap} overflow="visible" renderLabelCell={s => <NameCell s={s} sticky />} renderCell={(s, c) => c.format?.(c.value(s), s)} renderSupplementaryRows={(s) => <Box component="tr" key={`${s.id}-pct`}><Box component="td" sx={{ ...TD, textAlign: 'right', position: 'sticky', left: 0, bgcolor: 'var(--panel-2)', zIndex: 1, color: 'var(--text-4)', fontSize: 9.5 }}>Δ% from max</Box>{resultCols.map(r => <PctCell key={`p-${colId(r)}`} v={comparisonPercentValue(r, s)} max={r.text ? undefined : colMax[`r:${colId(r)}`]} />)}{displayCols.map(k => <PctCell key={`p-${k}`} v={Number(s.params?.[k])} max={colMax[`p:${k}`]} />)}</Box>} renderAfterRows={diffKeys.length === 0 && <Box component="tr"><Box component="td" colSpan={1 + resultCols.length + displayCols.length} sx={{ ...TD, textAlign: 'left', color: 'var(--text-3)' }}>Selected runs have identical inputs — only the results differ.</Box></Box>} />
+            <SharedComparisonTable rows={selected} columns={[...selectedResultModelColumns, ...displayCols.map(k => ({ key: `p:${k}`, label: paramLabel(k), unit: paramUnit(k), kind: 'input' as const, value: (s: SavedSim) => s.params?.[k], format: (_v: unknown, s: SavedSim) => paramFmt(k, s.params?.[k]) }))]} rowKey={s => s.id} rowLabel={s => s.name} labelHeader="Simulation" sameValue={valEq} showAllInputs visibleKeys={[...resultCols.map(r => `r:${colId(r)}`), ...displayCols.map(k => `p:${k}`)]} tableSx={{ borderCollapse: 'collapse', width: '100%' }} headerCellSx={TH} labelHeaderSx={{ left: 0, zIndex: 3, position: 'sticky' }} bodyCellSx={TD} inputHeaderColor={HDR_DIFF} resultHeaderColor={HDR_RESULT} unitGap={unitGap} overflow="visible" renderLabelCell={s => <NameCell s={s} sticky />} renderCell={(s, c) => c.format?.(c.value(s), s)} renderSupplementaryRows={(s) => <Box component="tr" key={`${s.id}-pct`}><Box component="td" sx={{ ...TD, textAlign: 'right', position: 'sticky', left: 0, bgcolor: 'var(--panel-2)', zIndex: 1, color: 'var(--text-4)', fontSize: 9.5 }}>Δ% from max</Box>{resultCols.map(r => <PctCell key={`p-${colId(r)}`} v={comparisonPercentValue(r, s)} max={r.text ? undefined : colMax[`r:${colId(r)}`]} />)}{displayCols.map(k => <PctCell key={`p-${k}`} v={Number(s.params?.[k])} max={colMax[`p:${k}`]} />)}</Box>} renderAfterRows={diffKeys.length === 0 && <Box component="tr"><Box component="td" colSpan={1 + resultCols.length + displayCols.length} sx={{ ...TD, textAlign: 'left', color: 'var(--text-3)' }}>Selected runs have identical inputs — only the results differ.</Box></Box>} />
           )}
         </Box>
       </Box>

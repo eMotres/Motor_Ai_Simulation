@@ -94,16 +94,14 @@ def _staff(user: dict) -> bool:
 
 
 def may_read(user: dict, project: dict) -> bool:
-    """Staff, or whoever reads the project's prices; never a factory account.  ``access.sees_prices`` (PR #800) is the one answer
-    when it exists; before it the project owner alone stands in for it."""
-    if str(user.get("role") or "").lower() == "oem":
+    """The Contract section's price rule is the ONE central rule, ``access.sees_prices`` (identity first: never a factory account or
+    an agent, always MOTRES staff, else a project owner or a member with the flag).  A CONTROLLER project has no Contract section
+    for anybody, staff included (owner 2026-11-24: «убрать Contract у контроллеров пока»): every route answers the unknown-project
+    404 and the tab, which reads that answer, is not shown; motor projects are unchanged."""
+    from motor_ai_sim.development import project_type
+    if project_type.of(project) == project_type.CONTROLLER:
         return False
-    if _staff(user):
-        return True
-    sees = getattr(access, "sees_prices", None)
-    if callable(sees):
-        return bool(sees(user, project))
-    return access.membership(_email(user), project) == "owner"
+    return access.sees_prices(user, project)
 
 
 # ── storage ───────────────────────────────────────────────────────────────────
@@ -302,7 +300,8 @@ def _num(v: Any, lo: float, hi: float, where: str) -> float:
 
 def validate_scheme(doc: Any, strict: bool = False) -> dict:
     """The contract schemes' schema, staff and customer alike (the shape ``web/src/components/contract/contractModel.ts``
-    draws): ``nodes`` (1..20: id, label, sub?, x, y, w? / h? of at least 24 on the 1000 x 420 grid), ``edges`` (0..40: from /
+    draws): ``nodes`` (1..20: id, label, sub?, and either the grid cell col / row or - older files - x, y and w? / h? of at
+    least 24 on the 1000 x 420 drawing), ``edges`` (0..40: from /
     to an existing node, kind money | goods | documents, label?, bend?), ``notes`` (0..20 texts), optional ``version`` and
     ``audience`` (customer | staff; required on upload).  ``strict`` (an upload) adds the rules a stored file is not held to
     (boxes at least 24 px; a file stored before keeps its old minimum of 20, so it is never turned away on read).  Raises
@@ -322,14 +321,25 @@ def validate_scheme(doc: Any, strict: bool = False) -> dict:
         if n["id"] in ids:
             raise ValueError(f"{where}: id '{n['id']}' is used twice")
         ids.add(n["id"])
-        node = {"id": n["id"], "label": _scheme_text(n.get("label"), where + ".label"),
-                "x": _num(n.get("x"), 0, 1000, where + ".x"), "y": _num(n.get("y"), 0, 420, where + ".y")}
+        node = {"id": n["id"], "label": _scheme_text(n.get("label"), where + ".label")}
+        # the grid cell (col / row, the layout of the page since 2026-11-22) or, in an older file, the drawing position x / y
+        if "col" in n or "row" in n:
+            for k, hi in (("col", 8), ("row", 6)):
+                v = n.get(k)
+                if isinstance(v, bool) or not isinstance(v, int) or not 0 <= v <= hi:
+                    raise ValueError(f"{where}.{k}: a whole number from 0 to {hi}")
+                node[k] = v
+        if "x" in n or "y" in n or "col" not in node:
+            node["x"], node["y"] = _num(n.get("x"), 0, 1000, where + ".x"), _num(n.get("y"), 0, 420, where + ".y")
         if "sub" in n:
             node["sub"] = _scheme_text(n["sub"], where + ".sub")
         for k, hi in (("w", 1000), ("h", 420)):
             if k in n:
                 node[k] = _num(n[k], 24 if strict else 20, hi, f"{where}.{k}")   # an upload: at least 24 (arrow ends inside the corners)
         out_nodes.append(node)
+    cells = [(n["col"], n["row"]) for n in out_nodes if "col" in n]
+    if len(cells) != len(set(cells)):
+        raise ValueError("nodes: two boxes in one grid cell (col / row)")
     out_edges = []
     for i, e in enumerate(edges):
         where = f"edges[{i}]"
@@ -464,7 +474,7 @@ def _context(request: Request, project_id: str):
         raise HTTPException(status_code=404, detail="Project not found")
     user, project, _role = access.require_project(request, project_id)
     if not may_read(user, project):
-        raise HTTPException(status_code=404, detail="Not found")
+        raise HTTPException(status_code=404, detail="Project not found")       # the body of an unknown project: no oracle
     return user, project
 
 

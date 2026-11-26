@@ -54,7 +54,12 @@ def build_report(date: Optional[str] = None, *, now: Optional[float] = None, mak
         _rows, err = make_digest_drafts(now)
         if err:
             errors.append(err)
-    return B.build(date, sources or SRC.default_sources(), base_url=E.app_url(), extra_errors=errors)
+    # the owner-queue line (owner 2026-11-25) reads the live queue: only with the real sources, never in a test's injected ones
+    ql = None
+    if sources is None:
+        from motor_ai_sim.owner_report import queue_line as QL
+        ql = QL.queue_line(now)
+    return B.build(date, sources or SRC.default_sources(), base_url=E.app_url(), extra_errors=errors, queue_line=ql)
 
 
 # -- the "digests ready to check" notice ------------------------------------------------------------------------------------------------

@@ -90,7 +90,8 @@ def admin_subscribers(format: str = "json", _a: dict = Depends(require_admin)):
     w = csv.DictWriter(buf, fieldnames=cols)
     w.writeheader()
     for r in rows:
-        w.writerow({k: r.get(k) if r.get(k) is not None else "" for k in cols})
+        from motor_ai_sim.spreadsheet_text import csv_safe
+        w.writerow({k: csv_safe(r.get(k)) if r.get(k) is not None else "" for k in cols})
     return Response(buf.getvalue(), media_type="text/csv", headers={
         "Content-Disposition": 'attachment; filename="subscribers.csv"'})
 

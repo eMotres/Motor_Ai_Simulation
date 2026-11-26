@@ -65,12 +65,49 @@ def _summary(d: dict) -> dict:
 
 # -- settings --------------------------------------------------------------------------------------------------------------------
 
-def _settings_view(group: B.Group, *, can_edit: bool) -> dict:
+def _needs_staff(item: dict) -> bool:
+    return "staff" in (item.get("requires") or [])
+
+
+def _public_meta(group: B.Group, d: dict) -> Optional[dict]:
+    """What a reader who may not see staff-only lines is told about draft ``d``: ``{total, id, revision, created_at, updated_at}`` from the
+    PUBLIC fields stored by ``build_draft``, or None (answered exactly as "no draft") when there is nothing public.
+
+    A LEGACY draft (stored before those fields) is WITHHELD, pending and sent history alike: it is not rebuilt at read, because the
+    current activity and the current motor access could show MORE than the draft showed when it was built; and its own aggregates
+    (counts, revision, times) are never used.  A draft built from now on carries the fields."""
+    if d.get("public_hash") and all(d.get(k) is not None for k in ("public_total", "public_id", "public_revision", "public_created_at", "public_updated_at")):
+        total = int(d["public_total"])
+        return {"total": total, "id": d["public_id"], "revision": d["public_revision"], "created_at": d["public_created_at"],
+                "updated_at": d["public_updated_at"]} if total > 0 else None
+    return None
+
+
+def _viewer_summary(group: B.Group, d: dict, staff: bool) -> Optional[dict]:
+    out = _summary(d)
+    if staff:
+        return out
+    meta = _public_meta(group, d)
+    if meta is None:
+        return None                                        # as if no draft existed
+    out.update({"items": meta["total"], "id": meta["id"], "revision": meta["revision"], "created_at": meta["created_at"],
+                "updated_at": meta["updated_at"]})
+    return out
+
+
+def _settings_view(group: B.Group, *, can_edit: bool, staff: bool = True) -> dict:
+    """``staff=False`` (a project owner who is not MOTRES staff): a draft that is only staff-only lines is not shown at all and the
+    counts leave the staff-only lines out, so the metadata does not reveal an internal message."""
     s = DS.get_settings(group.scope)
     recipients, skipped = B.resolve_recipients(group, s)
     state = DS.get_state(group.scope)
     pending = DS.load_draft(state["draft_id"]) if state.get("draft_id") else None
     sent = [r for r in DS.read_log(group.scope) if r.get("event") == "sent"]
+    if not staff:
+        def internal_only(row):
+            d = DS.load_draft(row.get("draft_id")) if row.get("draft_id") else None
+            return d is None or _public_meta(group, d) is None       # a sent draft that cannot be shown publicly does not count
+        sent = [r for r in sent if not internal_only(r)]
     return {
         "scope": group.scope, "title": group.title_en, "mode": s["mode"], "frequency": s["frequency"], "recipients": s["recipients"],
         "chosen": s["chosen"], "optouts": s["optouts"], "updated_at": s.get("updated_at"), "updated_by": s.get("updated_by"),
@@ -78,7 +115,7 @@ def _settings_view(group: B.Group, *, can_edit: bool) -> dict:
         "members": [{"email": e, "role": r, "opted_out": e in s["optouts"]} for e, r in group.members],
         "will_receive": [{"email": r["email"], "role": r["role"], "lang": r["lang"]} for r in recipients],
         "not_receiving": skipped,
-        "pending": _summary(pending) if pending and pending.get("status") in DS.OPEN_STATUSES else None,
+        "pending": _viewer_summary(group, pending, staff) if pending and pending.get("status") in DS.OPEN_STATUSES else None,
         "last_sent": sent[-1]["ts"] if sent else None,
     }
 
@@ -105,25 +142,27 @@ def _production_manager(request: Request, die: str, config: str) -> tuple[dict, 
     return user, B.production_group(rec)
 
 
-async def _apply(request: Request, group: B.Group, user: dict) -> dict:
+async def _apply(request: Request, group: B.Group, user: dict, staff: bool = True) -> dict:
     try:
         body = await request.json()
         DS.set_settings(group.scope, DS.validate_settings_update(body), by=_email(user))
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc))
-    return _settings_view(group, can_edit=True)
+    return _settings_view(group, can_edit=True, staff=staff)
 
 
 @router.get("/settings/project/{project_id}")
 def get_project_settings(request: Request, project_id: str):
-    _, group = _project_manager(request, project_id)
-    return _settings_view(group, can_edit=True)
+    from motor_ai_sim.development import access as DA
+    user, group = _project_manager(request, project_id)
+    return _settings_view(group, can_edit=True, staff=DA.is_staff(user))
 
 
 @router.put("/settings/project/{project_id}")
 async def put_project_settings(request: Request, project_id: str):
+    from motor_ai_sim.development import access as DA
     user, group = _project_manager(request, project_id)
-    return await _apply(request, group, user)
+    return await _apply(request, group, user, DA.is_staff(user))
 
 
 @router.get("/settings/production/{die}/{config}")

@@ -9,9 +9,11 @@ shows it in the SAME viewer as Configure (``modules/viewer3d``) next to the gene
 * list        every project member; staff (global admin / engineer) see every row, the customer side only the rows marked
               ``visible_to_customer`` (the default of an upload is internal); archived rows only with ``?archived=1`` and only staff;
 * upload      staff only, one STEP per request (``file``, ``revision`` required, ``note``, ``visible_to_customer``);
-* patch       staff only: ``visible_to_customer`` and ``archived`` (archive / restore); a row and its file are never deleted;
+* patch       staff only: ``visible_to_customer``, ``show_part_names`` and ``archived`` (archive / restore); a row and its file are
+              never deleted;
 * model.glb   the 3-D view of one row for whoever may list it (built once by ``production/step_glb.py``, cached next to the files);
-              viewing on the page never hands out the STEP;
+              viewing on the page never hands out the STEP; the component names of the CAD are in it for staff, and on the customer side only
+  for a row whose ``show_part_names`` staff switched on (default off, also for every earlier row);
 * download    the STEP itself: staff, and on the customer side only through the applicant-verification / NDA gate of the full STEP
               (``model3d.can_download``); 403 ``nda_required`` otherwise.  Every view and download goes to the traced download log.
 
@@ -22,6 +24,7 @@ project audit row (``model3d.*``) only.
 from __future__ import annotations
 
 import datetime
+import functools
 import hashlib
 import logging
 import secrets
@@ -152,8 +155,14 @@ def models_for_project(project_id: str, *, staff: bool) -> list[dict]:
     return [{**_public(r, staff), "path": str(_file_path(project_id, str(r.get("id") or "")) or "")} for r in rows]
 
 
+def _names_shown(row: dict) -> bool:
+    """Opt-in per row: only an explicit True; a row without the key (every earlier upload) keeps its component names to staff."""
+    return row.get("show_part_names") is True
+
+
 def _public(row: dict, staff: bool) -> dict:
     out = {k: row.get(k) for k in ("id", "name", "revision", "note", "size", "sha256", "uploaded_at")}
+    out["show_part_names"] = _names_shown(row)
     if staff:
         out.update(visible_to_customer=bool(row.get("visible_to_customer")), archived=bool(row.get("archived")),
                    archived_at=row.get("archived_at"), uploader=str(row.get("uploader_email") or ""))
@@ -166,7 +175,7 @@ def _public(row: dict, staff: bool) -> dict:
 
 def _details(row: dict, extra: dict | None = None) -> dict:
     details = {"name": row.get("name"), "revision": row.get("revision"), "sha256": row.get("sha256"),
-               "visible_to_customer": bool(row.get("visible_to_customer"))}
+               "visible_to_customer": bool(row.get("visible_to_customer")), "show_part_names": _names_shown(row)}
     details.update(extra or {})
     return details
 
@@ -335,7 +344,8 @@ async def _upload(project_id: str, user: dict, form) -> dict:
 
 @router.patch("/{project_id}/model3d/{model_id}")
 async def patch_model(request: Request, project_id: str, model_id: str):
-    """Staff only: ``visible_to_customer`` (bool) and ``archived`` (true = archive, false = restore).  Nothing is deleted."""
+    """Staff only: ``visible_to_customer``, ``show_part_names`` (bool) and ``archived`` (true = archive, false = restore).  Nothing is
+    deleted."""
     user, _project, _role, staff = _context(request, project_id)
     _require_staff(staff)
     try:
@@ -343,8 +353,8 @@ async def patch_model(request: Request, project_id: str, model_id: str):
     except Exception:                                       # noqa: BLE001
         body = None
     if not isinstance(body, dict) or not body:
-        raise HTTPException(status_code=422, detail="Send visible_to_customer and / or archived")
-    unknown = sorted(set(body) - {"visible_to_customer", "archived"})
+        raise HTTPException(status_code=422, detail="Send visible_to_customer, show_part_names and / or archived")
+    unknown = sorted(set(body) - {"visible_to_customer", "show_part_names", "archived"})
     if unknown:
         raise HTTPException(status_code=422, detail="Unknown field(s): " + ", ".join(unknown))
     for key in body:
@@ -360,6 +370,9 @@ async def patch_model(request: Request, project_id: str, model_id: str):
                 if "visible_to_customer" in body and bool(r.get("visible_to_customer")) != body["visible_to_customer"]:
                     r["visible_to_customer"] = body["visible_to_customer"]
                     changes["visible_to_customer"] = body["visible_to_customer"]
+                if "show_part_names" in body and _names_shown(r) != body["show_part_names"]:
+                    r["show_part_names"] = body["show_part_names"]
+                    changes["show_part_names"] = body["show_part_names"]
                 if "archived" in body and bool(r.get("archived")) != body["archived"]:
                     r["archived"] = body["archived"]
                     r["archived_at"] = _now() if body["archived"] else None
@@ -368,6 +381,8 @@ async def patch_model(request: Request, project_id: str, model_id: str):
                     _queue(doc, user, "model3d.archive" if changes["archived"] else "model3d.restore", r)
                 if "visible_to_customer" in changes:
                     _queue(doc, user, "model3d.visibility", r)
+                if "show_part_names" in changes:
+                    _queue(doc, user, "model3d.part_names", r)
                 return dict(r)
         return None
 
@@ -391,7 +406,9 @@ async def model_view(request: Request, project_id: str, model_id: str):
         raise HTTPException(status_code=413, detail="This STEP file is too large for the 3-D view; download it instead.")
     await run_in_threadpool(_trace, request, user, project_id, row, "project_model3d_view")
     try:
-        glb = await run_in_threadpool(step_glb.glb_for_step, path, model_id, store.path_for(project_id) / VIEW_CACHE_DIR)
+        # the component names (supplier names, part numbers) reach the customer side only where staff published them for this row
+        glb = await run_in_threadpool(functools.partial(step_glb.glb_for_step, path, model_id, store.path_for(project_id) / VIEW_CACHE_DIR,
+                                                        labels=staff or _names_shown(row)))
     except step_glb.StepConversionError as ex:
         raise HTTPException(status_code=ex.status, detail=ex.detail)
     return Response(content=glb, media_type="model/gltf-binary", headers={"Cache-Control": "no-store"})

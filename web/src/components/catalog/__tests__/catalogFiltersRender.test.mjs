@@ -23,6 +23,7 @@ import { I18nextProvider } from 'react-i18next';
 import { createI18n } from '${rel('i18n/core.ts')}';
 import CatalogFilters from '${rel('components/catalog/CatalogFilters.tsx')}';
 import CatalogByDie from '${rel('components/catalog/CatalogByDie.tsx')}';
+export { projectStateItems } from '${rel('components/catalog/CatalogByDie.tsx')}';
 export { useCatalogFilterStore, catalogFilterApi } from '${rel('stores/catalogFilterStore.ts')}';
 import enCommon from '${rel('locales/en/common.json')}';
 import zhCommon from '${rel('locales/zh-CN/common.json')}';
@@ -69,9 +70,13 @@ for (const [lng, active, running, sets] of [['en', 'Active', 'Running', 'My filt
     const admin = decode(m.filters(i18n, true));
     for (const id of ['filter-stage', 'filter-project', 'filter-running', 'filter-sets']) assert.ok(admin.includes(`data-testid="${id}"`), id);
     assert.ok(admin.includes(active) && admin.includes(running) && admin.includes(sets), admin);
+    // ONE project control (owner 2026-11-25): a member's chosen project is the first row of the Projects filter, no chip
+    S.getState().set({ onlyHighlighted: true });
     const member = decode(m.filters(i18n, false, 'Pump'));
-    for (const id of ['filter-stage', 'filter-project', 'filter-running']) assert.ok(!member.includes(`data-testid="${id}"`), id);
-    assert.ok(member.includes('data-testid="filter-highlighted"') && member.includes('Pump') && member.includes(sets), member);
+    S.getState().set({ onlyHighlighted: false });
+    for (const id of ['filter-stage', 'filter-running', 'filter-highlighted']) assert.ok(!member.includes(`data-testid="${id}"`), id);
+    assert.ok(member.includes('data-testid="filter-project"') && member.includes('>Pump<') && member.includes(sets), member);
+    assert.ok(!decode(m.filters(i18n, false)).includes('filter-project'), 'a member without a chosen project: no project control');
     assert.ok(!/byDie\.|motors:/.test(admin + member));
   });
 }
@@ -92,4 +97,57 @@ test('the table applies the store: stage, running; the count "N of M" and Clear 
   assert.ok(line.includes('1 of 3 motors') && line.includes('data-testid="filter-clear"'), line);
   S.getState().clear();
   assert.ok(!decode(m.filters(i18n, true)).includes('filter-count'));
+});
+
+// ── owner 2026-11-25: Active shows no old motors by default; archive / park findable on the row ──
+const oldDies = [{ name: 'D', slots: 12, poles: 14, stator_diameter: 40, layer: 'shared',
+  configs: [cfg('A', 'CIANO14 40_10 7F2SY'), cfg('B', 'CIANO14 40_10 7F2SY'), cfg('C', 'CIANO14 40_11 7F2SY')] }];
+const oldOverview = { items: { 'D/A': { projects: [{ id: 'p1', link_status: 'current' }], productions: [] } },
+  projects: { p1: { id: 'p1', title: 'Pump', status: 'design', stage: 'design' } }, productions: {} };
+const rowsOf = (html) => [...decode(html).matchAll(/data-testid="by-die-motor"[^>]*>[\s\S]*?>(CIANO14 40_1\d 7F2SY)</g)].length;
+
+for (const [lng, showOld] of [['en', 'Show old (1)'], ['zh-CN', '显示旧版本（1）']]) {
+  test(`${lng}: Active hides the old copy, "Show old (n)" brings it back with its Archive arrow`, async () => {
+    const i18n = m.makeI18n(lng); await ready(i18n);
+    S.getState().bindAccount(`old-${lng}@example.test`);
+    S.getState().set({ state: 'active', showOld: false });
+    const hidden = decode(m.table(i18n, { dies: oldDies, isAdmin: true, overview: oldOverview, jobs: null }));
+    assert.equal(rowsOf(hidden), 2);
+    assert.ok(!hidden.includes('data-old="true"'), 'the old copy is not in the Active view');
+    // (a server render runs no effects: the options the table reports are set here; the counts rule is in catalogByDie.test.mjs)
+    S.setState({ options: { stages: [], projects: [], counts: { active: 2, parked: 0, archived: 0, all: 3 }, shown: 2, total: 3, old: 1 } });
+    const line = decode(m.filters(i18n, true));
+    assert.ok(line.includes('data-testid="filter-show-old"') && line.includes(showOld), line);
+    assert.ok(!decode(m.filters(i18n, false)).includes('filter-show-old'), 'a member has no state view and no switch');
+    S.getState().set({ showOld: true });
+    const shown = decode(m.table(i18n, { dies: oldDies, isAdmin: true, overview: oldOverview, jobs: null }));
+    assert.equal(rowsOf(shown), 3);
+    assert.equal((shown.match(/data-old="true"/g) || []).length, 1);
+    assert.ok(shown.includes('data-testid="by-die-old-open"'), 'an admin opens Archive from the "old" chip');
+    S.getState().clear();
+    assert.equal(S.getState().filter.showOld, true, 'Clear keeps the view switch');
+    // a member's catalog is unchanged: no state filter, the old copy stays (muted), no archive arrow
+    const member = decode(m.table(i18n, { dies: oldDies, isAdmin: false, canWrite: false, overview: null, jobs: null }));
+    assert.ok(!member.includes('by-die-old-open'));
+    S.getState().set({ showOld: false });
+    assert.ok(!/byDie\.|motors:/.test(hidden + line));
+  });
+}
+
+test('the Projects column stands before Stage and Running (header and row); the motor menu parks / archives its projects', async () => {
+  const i18n = m.makeI18n('en'); await ready(i18n);
+  S.getState().set({ state: 'active', showOld: true });
+  const html = decode(m.table(i18n, { dies: oldDies, isAdmin: true, overview: oldOverview, jobs: null }));
+  const hdr = html.slice(html.indexOf('data-testid="by-die-header"'));
+  assert.ok(hdr.indexOf('>Projects<') < hdr.indexOf('>Stage<') && hdr.indexOf('>Stage<') < hdr.indexOf('>Running<'), 'header order');
+  const row = html.slice(html.indexOf('data-testid="by-die-motor"'));
+  assert.ok(row.indexOf('by-die-projects') < row.indexOf('by-die-stage') && row.indexOf('by-die-stage') < row.indexOf('by-die-jobs'), 'row order');
+  const calls = [];
+  const t = (k, o) => (k === 'byDie.projectMenu.item' ? `${o.project}: ${o.action}` : k.split('.').pop());
+  const items = m.projectStateItems({ projects: [{ id: 'p1', title: 'Pump', state: 'active' }] }, t, (id, st) => calls.push([id, st]));
+  assert.deepEqual(items.map((i) => i.label), ['Pump: parked', 'Pump: archived']);
+  items.forEach((i) => i.run());
+  assert.deepEqual(calls, [['p1', 'parked'], ['p1', 'archived']]);
+  assert.equal(i18n.t('motors:byDie.projectMenu.item', { project: 'Pump', action: i18n.t('motors:byDie.projectMenu.parked') }), 'Pump: Park');
+  S.getState().set({ showOld: false });
 });

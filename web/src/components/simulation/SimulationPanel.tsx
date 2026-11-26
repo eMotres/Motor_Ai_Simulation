@@ -56,6 +56,8 @@ import {
   controllerSavedFieldsLine, getResolvedPoint, type ControllerSettings,
 } from '../controller/controllerApi';
 import { syncActiveMotor, getActiveMotor } from '../common/motorSettings';
+import { useHelpContext } from '../support/useHelpContext';
+import { simulationHelp } from '../../lib/helpContexts';
 import BatteryDialog, { type BatteryValue } from '../catalog/BatteryDialog';
 import {
   packFromCells, machineKey, readLocalBattery, writeLocalBattery,
@@ -1094,7 +1096,9 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
       if (drive !== 'current' || targetKind === 'off') return;
       try {
         const ls = JSON.parse(localStorage.getItem('sim.lastSummary') || 'null');
-        const Tl = Math.abs(Number(ls?.T_em_avg_Nm));
+        // a motor run on the shaft-side convention is fitted on its SHAFT torque (owner Q3, 2026-11-25); a generator on
+        // what it was fitted on before
+        const Tl = Math.abs(fitTorqueOf(ls));
         const Il = Number(ls?.I_phase_rms_A);
         if (!(Tl > 0) || !(Il > 0)) return;
         const err = (Tl - targetValue) / targetValue;
@@ -1177,8 +1181,8 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
       try {
         const raw = localStorage.getItem('sim.lastSummary');
         const ls = raw ? JSON.parse(raw) : null;
-        if (ls && Math.abs(Number(ls.T_em_avg_Nm)) > 0 && Number(ls.I_phase_rms_A) > 0) {
-          I = Ttar * Number(ls.I_phase_rms_A) / Math.abs(Number(ls.T_em_avg_Nm));
+        if (ls && Math.abs(fitTorqueOf(ls)) > 0 && Number(ls.I_phase_rms_A) > 0) {
+          I = Ttar * Number(ls.I_phase_rms_A) / Math.abs(fitTorqueOf(ls));
         }
       } catch { /* seed stays */ }
       // NEAR the last run's torque?  Within ±2 % the T(I) curve is straight
@@ -1189,7 +1193,7 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
       try {
         const raw = localStorage.getItem('sim.lastSummary');
         const ls = raw ? JSON.parse(raw) : null;
-        const Tl = ls ? Math.abs(Number(ls.T_em_avg_Nm)) : NaN;
+        const Tl = ls ? Math.abs(fitTorqueOf(ls)) : NaN;
         const Il = ls ? Number(ls.I_phase_rms_A) : NaN;
         if (Number.isFinite(Tl) && Tl > 0 && Il > 0
             && Math.abs(Tl - Ttar) / Ttar < 0.02) {
@@ -1865,6 +1869,13 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
   };
 
   const isRunning = job?.status === 'queued' || job?.status === 'running';
+
+  // the window the help assistant sees (modes and chips only, no numbers)
+  useHelpContext(simulationHelp({
+    opMode, drive, targetKind, coupled, coupledDrive, solveTo,
+    running: !!simBusy || isRunning, stopped: cancelledRun, failed: !!srvErr || job?.status === 'error', ran: runNonce > 0 || job?.status === 'done',
+    hasNotice: runNotice?.kind === 'error' || !!srvErr,
+  }));
 
   // ─────────────────────────────────────────────────────────────────────────
   return (
@@ -3462,5 +3473,12 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
     </Box>
   );
 };
+
+
+/** The torque the target fit and the Kt seed read (owner Q3, 2026-11-25): a motor run on the shaft-side convention by its
+ *  SHAFT torque, a generator and an earlier run by the field torque they were fitted on before. */
+const fitTorqueOf = (ls: any): number =>
+  Number(ls?.shaft_convention === 'fe_on_shaft_k3d_v1' && ls?.op_mode !== 'generator'
+    && Number.isFinite(Number(ls?.T_shaft_Nm)) ? ls.T_shaft_Nm : ls?.T_em_avg_Nm);
 
 export default SimulationPanel;

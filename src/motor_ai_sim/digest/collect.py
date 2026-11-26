@@ -31,6 +31,8 @@ from motor_ai_sim.digest import store as DS
 #: Capability names (see module docstring).
 INTERNAL = "internal"
 COSTS = "costs"
+STAFF = "staff"            # a staff-only (internal) project message: only recipients whose ACCOUNT is MOTRES staff (owner 2026-11-24)
+PRICES = "prices"          # a price-restricted project message: only recipients who see the prices (owner 2026-11-22)
 
 EXCERPT = 90
 
@@ -79,6 +81,24 @@ class Item:
 
 
 # -- small helpers ---------------------------------------------------------------------------------------------------------
+
+def _marked_thread_ids(rows: list, flag: str) -> set:
+    """Ids of the messages carrying ``flag`` and of every reply (any depth) to one: the digest treats a reply to a hidden message as hidden."""
+    out = {str(m.get("id") or "") for m in rows if m.get(flag)}
+    parent = {str(m.get("id") or ""): str(m.get("reply_to") or "") for m in rows}
+    grew = True
+    while grew:
+        grew = False
+        for mid, par in parent.items():
+            if par and par in out and mid not in out:
+                out.add(mid)
+                grew = True
+    return out
+
+
+def _restricted_thread_ids(rows: list) -> set:
+    return _marked_thread_ids(rows, "price_restricted")
+
 
 def excerpt(text: Any, n: int = EXCERPT) -> str:
     s = re.sub(r"\s+", " ", str(text or "")).strip()
@@ -230,12 +250,13 @@ def _is_test_result(duty: str, tests: set) -> bool:
     return str(duty) in tests or n.startswith("test ") or n.startswith("noload_")
 
 
-def headline(kinds: dict) -> str:
+def headline(kinds: dict, mixed: bool = False) -> str:
     """The few numbers worth a line (the owner report's own lines): torque, power, efficiency, hottest winding / magnet, rotor SF.
 
     Plain notation (``1 770 N·m``, never ``1.77e+03``); the customer digest writes full sentences with
-    :func:`motor_ai_sim.digest.readable.result_line` instead."""
-    return RD.headline(kinds)
+    :func:`motor_ai_sim.digest.readable.result_line` instead.  ``mixed``: listed with lines of the other shaft-power
+    basis (see :func:`motor_ai_sim.digest.readable.result_line`)."""
+    return RD.headline(kinds, mixed=mixed)
 
 
 def _motor_key(die: Any, config: Any) -> str:
@@ -310,9 +331,10 @@ def collect_project(project: dict, start: float, end: float, *,
             if public:
                 items.append(Item("project", ts, "Project details updated (" + ", ".join(public) + ")",
                                   "项目信息已更新（" + ", ".join(public) + "）", RP.project_path(pid), frozenset(), key="project"))
-    for m in _read_jsonl(PS.path_for(pid) / "thread.jsonl"):
-        if m.get("kind") == "resolution":
-            continue
+    thread_rows = [m for m in _read_jsonl(PS.path_for(pid) / "thread.jsonl") if m.get("kind") != "resolution"]
+    restricted_ids = _restricted_thread_ids(thread_rows)
+    staff_ids = _marked_thread_ids(thread_rows, "staff_only")
+    for m in thread_rows:
         ts = DS.parse_ts(m.get("created_at"))
         if not _in(ts, start, end):
             continue
@@ -320,7 +342,9 @@ def collect_project(project: dict, start: float, end: float, *,
         text = excerpt(m.get("text"))
         mid = str(m.get("id") or "")
         items.append(Item("message", ts, f"New message from {who_en}: {text}", f"{who_zh} 的新留言：{text}",
-                          RP.project_path(pid, "messages", item=mid) or RP.project_path(pid, "messages"), frozenset(), key=f"msg:{mid}"))
+                          RP.project_path(pid, "messages", item=mid) or RP.project_path(pid, "messages"),
+                          (frozenset({PRICES}) if mid in restricted_ids else frozenset())
+                          | (frozenset({STAFF}) if mid in staff_ids else frozenset()), key=f"msg:{mid}"))
     # new computed points of the project's motors
     for link in links.values():
         die, config = str(link.get("die") or ""), str(link.get("config") or "")
@@ -331,6 +355,7 @@ def collect_project(project: dict, start: float, end: float, *,
         except Exception:                                    # noqa: BLE001 - a broken ledger must not stop the digest
             by_duty = {}
         test_names = tests(die, config) if by_duty else set()
+        group = []
         for duty, kinds in sorted(by_duty.items()):
             if _is_test_result(duty, test_names):
                 continue                                     # a bench-test point: Production -> Tests only
@@ -341,10 +366,13 @@ def collect_project(project: dict, start: float, end: float, *,
                     ts = DS.parse_ts(row.get("computed_at") or row.get("recorded_at"))
                     if _in(ts, start, end):
                         fresh[k] = (row, ts)
-            if not fresh:
-                continue
+            if fresh:
+                group.append((duty, fresh))
+        # the lines of one variant are listed together: when they mix shaft-power bases, the earlier ones say so too
+        mixed = len({RD.line_basis({k: r for k, (r, _) in f.items()}, result=True) for _, f in group} - {None}) > 1
+        for duty, fresh in group:
             ts = max(t for _, t in fresh.values())
-            en, zh = RD.result_line(duty, {k: r for k, (r, _) in fresh.items()})
+            en, zh = RD.result_line(duty, {k: r for k, (r, _) in fresh.items()}, mixed=mixed)
             items.append(Item("results", ts, en, zh, motor_link(die, config), motor_req(die, config),
                               key=f"res:{die}/{config}/{duty}", motor=(die, config),
                               group=(f"New results, {die} / {config}", f"新计算结果，{die} / {config}")))

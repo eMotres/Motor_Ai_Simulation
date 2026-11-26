@@ -4,9 +4,9 @@ import { finalComparison } from '../../lib/resultsPanel';
 import type { ProjectProductionEntry } from './projectProductions';
 import type { CostEstimate, CostEstimateAnswer, CostSnapshot, CostSuggestions } from './costEstimate';
 import type { OrderRequest } from './orderRequests';
+import type { ExistingSize } from './odSizes';
 import type { ProjectQuote, SharedQuoteMark } from './quote';
 import type { SimStoredPoints, SimStoredRun } from '../../lib/simReadOnly';
-import type { AdminTimeline, ProjectTimeline, TimelineDoc } from './timeline';
 import type { ProjectDocument, ProjectDocumentList, DevelopmentSchema, FieldKind, MotorPointsAnswer, MotorView, StoredField, ProjectSummary, ProjectThreadMessage, ProjectMotor, ProjectMotorPickerItem, ProjectSnapshot, SpecState, SpecSnapshot } from './types';
 
 const API = (import.meta.env.VITE_API_URL ?? 'http://localhost:8001') as string;
@@ -30,7 +30,6 @@ async function call<T>(method: string, path: string, body?: unknown): Promise<T>
 }
 const p = (id: string) => `/api/projects/${enc(id)}`;
 const ce = (id: string) => `/api/admin/projects/${enc(id)}/cost-estimate`;
-const tl = (id: string) => `/api/admin/projects/${enc(id)}/timeline`;
 /** `?display_currency=` - the UI language's currency, for the cost estimate's converted totals. */
 const dq = (display?: string) => (display ? `?display_currency=${enc(display)}` : '');
 
@@ -75,25 +74,30 @@ export const developmentApi = {
   thread: async (id: string) => (await call<{ messages: ProjectThreadMessage[] }>('GET', `${p(id)}/thread`)).messages,
   /** The caller has seen the thread up to message `upTo` (the server never moves the mark back). */
   markThreadRead: (id: string, upTo: string) => call<{ last_read_id: string; unread: number }>('POST', `${p(id)}/thread/read`, { up_to: upTo }),
-  postMessage: (id: string, text: string, field_ref?: string, scope: { version?: number; revision?: number; row_id?: string } = {}) => call<ProjectThreadMessage>('POST', `${p(id)}/thread`, { text, ...(field_ref ? { field_ref } : {}), ...scope }),
+  postMessage: (id: string, text: string, field_ref?: string, scope: { version?: number; revision?: number; row_id?: string; reply_to?: string } = {}, price_restricted = false, staff_only = false) => call<ProjectThreadMessage>('POST', `${p(id)}/thread`, { text, ...(field_ref ? { field_ref } : {}), ...scope, ...(price_restricted ? { price_restricted: true } : {}), ...(staff_only ? { staff_only: true } : {}) }),
   resolveMessage: (id: string, messageId: string, resolved: boolean) => call<ProjectThreadMessage>('POST', `${p(id)}/thread/${enc(messageId)}/resolve`, { resolved }),
   /** Documents of a project (production package files): KiCad, fabrication, BOM, 3-D models, drawings. */
   documents: (id: string, archived = false) => call<ProjectDocumentList>('GET', `${p(id)}/documents${archived ? '?archived=true' : ''}`),
-  uploadDocument: (id: string, file: File, o: { folder?: string; revision?: string; internal?: boolean } = {}) => {
+  uploadDocument: (id: string, file: File, o: { folder?: string; revision?: string; internal?: boolean; priceRestricted?: boolean } = {}) => {
     const form = new FormData();
     form.append('file', file, file.name);
     if (o.folder) form.append('folder', o.folder);
     if (o.revision) form.append('revision', o.revision);
     if (o.internal) form.append('internal', 'true');
+    if (o.priceRestricted) form.append('price_restricted', 'true');
     return call<ProjectDocument>('POST', `${p(id)}/documents`, form);
   },
-  patchDocument: (id: string, docId: string, v: Partial<Pick<ProjectDocument, 'internal' | 'folder' | 'revision'>> | { archived: false }) =>
+  patchDocument: (id: string, docId: string, v: Partial<Pick<ProjectDocument, 'internal' | 'price_restricted' | 'folder' | 'revision'>> | { archived: false }) =>
     call<ProjectDocument>('PATCH', `${p(id)}/documents/${enc(docId)}`, v),
   archiveDocument: (id: string, docId: string) => call<ProjectDocument>('DELETE', `${p(id)}/documents/${enc(docId)}`),
+  /** Choose the current release (a revision label), or null for the default (the newest group). */
+  setDocumentRelease: (id: string, revision: string | null) => call<{ current: string | null }>('PUT', `${p(id)}/documents/release`, { revision }),
   /** Make an image of the project's documents the cover (the server makes the thumbnail) / remove the cover. */
   setCover: (id: string, documentId: string) => call<{ document_id: string; cover_version: string }>('PUT', `${p(id)}/cover`, { document_id: documentId }),
   clearCover: (id: string) => call<{ cover_version: null }>('DELETE', `${p(id)}/cover`),
-  invite: (id: string, email: string, role: string) => call<unknown>('POST', `${p(id)}/members`, { email, role }),
+  invite: (id: string, email: string, role: string, seesPrices?: boolean) => call<unknown>('POST', `${p(id)}/members`, { email, role, ...(seesPrices === undefined ? {} : { sees_prices: seesPrices }) }),
+  /** a project owner (or an admin) switches who sees the prices: the shared quote and the price-restricted documents / messages */
+  setSeesPrices: (id: string, email: string, value: boolean) => call<{ email: string; sees_prices: boolean }>('PATCH', `${p(id)}/members/sees_prices`, { email, sees_prices: value }),
   motors: async (id: string, showAll = false) => (await call<{ motors: ProjectMotor[] }>('GET', `${p(id)}/motors${showAll ? '?show_all=true' : ''}`)).motors,
   /** Live runs on the project's motors (one request per project; polled every 30 s while the page is visible). */
   activity: async (id: string, since?: string | null) => parseActivity(await call<unknown>('GET', `${p(id)}/activity${since ? `?since=${encodeURIComponent(since)}` : ''}`)),
@@ -131,6 +135,11 @@ export const developmentApi = {
   snapshots: async (id: string) => (await call<{ snapshots: ProjectSnapshot[] }>('GET', `${p(id)}/snapshots`)).snapshots,
   /** The productions of the project's linked motors, as the caller may see them (owner 2026-11-02; projectProductions.ts). */
   productions: async (id: string) => (await call<{ productions: ProjectProductionEntry[] }>('GET', `${p(id)}/productions`)).productions ?? [],
+  /** The public existing sizes the specification form offers (owner 2026-11-25), closest to the preferred diameter first. */
+  existingSizes: (id: string, q: { preferredMin?: number; preferredMax?: number; max?: number } = {}) => {
+    const qs = [['preferred_min_mm', q.preferredMin], ['preferred_max_mm', q.preferredMax], ['max_mm', q.max]].filter(([, v]) => typeof v === 'number' && Number.isFinite(v) && (v as number) > 0).map(([k, v]) => `${k}=${v}`).join('&');
+    return call<{ sizes: ExistingSize[]; available: boolean }>('GET', `${p(id)}/spec/existing-sizes${qs ? `?${qs}` : ''}`);
+  },
   /** ADMIN ONLY (owner 2026-11-02): the project cost estimate (costEstimate.ts).  403 for anybody else. */
   costEstimate: (id: string, display?: string) => call<CostEstimateAnswer>('GET', ce(id) + dq(display)),
   saveCostEstimate: (id: string, estimate: CostEstimate, display?: string) => call<CostEstimateAnswer>('PUT', ce(id) + dq(display), estimate),
@@ -144,13 +153,6 @@ export const developmentApi = {
   unshareCostEstimate: (id: string) => call<{ shared: null }>('DELETE', `${ce(id)}/share`),
   /** The shared quote of a project: its members and admins only (404 for anybody else, and while nothing is shared). */
   projectQuote: (id: string) => call<ProjectQuote>('GET', `${p(id)}/quote`),
-  /** The project timeline (owner 2026-11-03): its members and admins only (404 for anybody else, and while there is none). */
-  projectTimeline: (id: string) => call<ProjectTimeline>('GET', `${p(id)}/timeline`),
-  /** ADMIN ONLY: the stored timeline, the computed lanes and the customer view; save / create from the cost estimate / freeze. */
-  adminTimeline: (id: string) => call<AdminTimeline>('GET', tl(id)),
-  saveTimeline: (id: string, body: Pick<TimelineDoc, 'revision' | 'production' | 'iterations'>) => call<AdminTimeline>('PUT', tl(id), body),
-  seedTimeline: (id: string, revision: number) => call<AdminTimeline>('POST', `${tl(id)}/seed`, { revision }),
-  timelineBaseline: (id: string, revision: number) => call<AdminTimeline>('POST', `${tl(id)}/baseline`, { revision }),
 };
 
 /** Save a response body as a file (the session header is added by the global fetch, so a plain link would 401). */
@@ -170,8 +172,10 @@ async function saveResponse(r: Response, fallbackName: string): Promise<void> {
 export const downloadProjectDocument = async (id: string, doc: Pick<ProjectDocument, 'id' | 'name'>): Promise<void> =>
   saveResponse(await fetch(`${API}${p(id)}/documents/${enc(doc.id)}/download`), doc.name);
 
-export const downloadProjectDocumentsZip = async (id: string): Promise<void> =>
-  saveResponse(await fetch(`${API}${p(id)}/documents.zip`), `${id}_documents.zip`);
+/** One release (`revision`: its label, '' = the unlabelled documents) or, without it, every group (MOTRES staff only). */
+export const downloadProjectDocumentsZip = async (id: string, revision?: string): Promise<void> =>
+  saveResponse(await fetch(`${API}${p(id)}/documents.zip${revision === undefined ? '' : `?revision=${encodeURIComponent(revision)}`}`),
+    revision ? `${id}_${revision}_documents.zip` : `${id}_documents.zip`);
 
 const coverCache = new Map<string, Promise<string>>();
 /** The cover thumbnail as an object URL (the session header is added by the global fetch, so a plain <img src> would 401).

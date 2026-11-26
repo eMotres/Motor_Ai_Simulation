@@ -65,8 +65,8 @@ test('Development remembers project, tab and card per account; a stale card or t
   V.writeView(scope, { project: 'alpha', view: 'nonsense', step: 2 }, s);
   assert.equal(V.readView(scope, parseDevelopmentView, s), null);
   assert.deepEqual(restorableView({ project: 'a', view: 'specification', step: 9 }, 4, true), { view: 'specification', step: 3 });
-  assert.deepEqual(restorableView({ project: 'a', view: 'notes', step: 0 }, 4, false), { view: 'specification', step: 0 });
-  assert.deepEqual(restorableView({ project: 'a', view: 'notes', step: 0 }, 4, true), { view: 'notes', step: 0 });
+  assert.deepEqual(restorableView({ project: 'a', view: 'notes', step: 0 }, 4, false), { view: 'messages', step: 0 });   // the Notes tab is gone: an old remembered view opens Messages
+  assert.deepEqual(restorableView({ project: 'a', view: 'notes', step: 0 }, 4, true), { view: 'messages', step: 0 });
   assert.ok(DEVELOPMENT_VIEWS.includes('motors'));
 });
 

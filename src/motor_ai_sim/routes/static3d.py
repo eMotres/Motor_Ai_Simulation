@@ -699,7 +699,8 @@ def _stale_block(fp: str, entry_fp: Optional[str]) -> dict:
     if not entry_fp:
         return {"stale_geometry": None, "stale_reason": None,
                 "fingerprint_live": fp, "fingerprint_solved": None}
-    stale = entry_fp != fp
+    from motor_ai_sim.geo_fingerprint import same as _gfp_same
+    stale = not _gfp_same(entry_fp, fp)
     return {"stale_geometry": bool(stale),
             "stale_reason": ("geometry" if stale else None),
             "fingerprint_live": fp, "fingerprint_solved": entry_fp}
@@ -1095,30 +1096,47 @@ def adopt_entry(sa: Dict[str, Any], note: str = "") -> Tuple[str, Dict[str, Any]
     if not fp:
         raise ValueError("the Stage A result carries no geometry_fingerprint")
     try:
-        k = float(sa.get("k_flux"))
+        k_raw = float(sa.get("k_flux"))
     except (TypeError, ValueError):
         raise ValueError("the Stage A result carries no k_flux")
+    # the factor the store applies is decided ONCE from the run's 2-D verdict (end3d_verdict): the real k_flux unless
+    # the check failed / the 2-D leg is invalid; the real k_flux always stays beside it (k_flux_raw)
+    from motor_ai_sim.end3d_verdict import BASIS_SELF, applied_flux_factor, stack_mm_of_stage_a
+    af = applied_flux_factor(k_raw, sa.get("k_flux_self"), sa.get("two_d"), sa.get("version"), sa.get("generated_utc"))
+    k = af["value"] if af["value"] is not None else k_raw
     if not (0.5 < k <= 1.0):
         raise ValueError("k_flux %.4f is outside (0.5, 1.0]" % k)
+    from motor_ai_sim.end3d_verdict import applied_table, status_of
+    status = status_of(sa.get("two_d"), af)
+    label = sa.get("k_flux_basis")
+    if af["basis"] == BASIS_SELF:
+        label = "2-D check %s: k_flux_self applied (the real k_flux is k_flux_raw)" % af["verdict"]
     m = sa.get("machine") if isinstance(sa.get("machine"), dict) else {}
     try:
         slots, poles, od = int(m["num_slots"]), int(m["num_poles"]), float(m["stator_od_mm"])
     except (KeyError, TypeError, ValueError):
         raise ValueError("the Stage A result's machine block needs num_slots, num_poles and stator_od_mm")
-    curve = {str(e["stack_mm"]): round(float(e["k_flux"]), 5)
-             for e in (sa.get("l_stack_curve") or [])
-             if isinstance(e, dict) and e.get("stack_mm") is not None and e.get("k_flux") is not None}
+    # the table of what is APPLIED (k_flux_self rows under "self_applied" when the scalar is k_flux_self; raw beside it)
+    tabs = applied_table(sa.get("l_stack_curve"), af, sa.get("k_flux_vs_L_method"))
+    curve = tabs.get("k_flux_vs_L")
     md = sa.get("model") if isinstance(sa.get("model"), dict) else {}
     entry = {
         "k_flux": k,
         "k_flux_self": sa.get("k_flux_self"),
+        **({"k_flux_basis": label} if label else {}),
+        # what is applied and why (end3d_verdict); k_flux_raw is the run's own k_flux
+        "k_flux_raw": k_raw, "k_flux_applied": af["basis"], "k_flux_verdict": af["verdict"],
+        "k_flux_status": status,
         "fidelity": "standalone Stage A (adopted)",
         "generated_utc": sa.get("generated_utc"),
         "adopted_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         # the machine in the words _end3d_lookup matches an inherited passport by ("24s/20p OD 200")
         "machine": "%ds/%dp OD %g" % (slots, poles, od),
-        "stack_mm": m.get("stack_mm"),
+        # the length the scalar was measured at (the result's own, else its machine block, else the reference row): the class curve needs it
+        "stack_mm": stack_mm_of_stage_a(sa),
         "k_flux_vs_L": curve or None,
+        # how the per-length rows were formed (end_effect.K_FLUX_VS_L_*); absent on a result from before the 2026-11-24 fix
+        **({k_: tabs[k_] for k_ in ("k_flux_vs_L_method", "k_flux_vs_L_raw") if tabs.get(k_)}),
         "materials": m.get("materials"),
         "mesh": {kk: md.get(kk) for kk in ("h_gap_mm", 'h_solid_mm', "mesh_rule", "box_z_mm", "iron_stack_kf")
                  if kk in md} or None,

@@ -1,0 +1,165 @@
+// The controller specification (controller PR2): its schema is a data file on the server (`controller_schema.json`); this
+// module is the pure part of the form - reading and writing one answer, per build or not, and what a save changed.
+const API = (import.meta.env?.VITE_API_URL ?? 'http://localhost:8001') as string;
+
+export type Lang = { en: string; 'zh-CN'?: string };
+export type ValueStatus = 'requirement' | 'model' | 'measured';
+export type FieldKind = 'text' | 'longtext' | 'number' | 'range' | 'choice' | 'multi' | 'list' | 'thresholds' | 'rows';
+export interface CtlOption { value: string; label: Lang }
+export interface CtlField {
+  id: string; label: Lang; kind: FieldKind; unit?: string; per_build?: boolean; tip?: Lang;
+  /** which side of the requirement is the limit (a plain number only): a model / measured value beyond it is marked */
+  limit?: 'max' | 'min';
+  options?: CtlOption[]; columns?: { id: string; label: Lang; unit?: string }[];
+}
+export interface CtlSchema { schema_version: number; title: Lang; statuses: CtlOption[]; sections: { id: string; title: Lang; fields: CtlField[] }[] }
+/** One of the three values of a numeric answer and its source. */
+export interface CtlCell { value: unknown; ref?: string }
+export type CtlColumns = Partial<Record<ValueStatus, CtlCell>>;
+/** A numeric answer (number, range) holds `values` - requirement / model / measured side by side; every other kind `value`. */
+export interface CtlAnswer { value?: unknown; values?: CtlColumns }
+/** One protection: its unit and its threshold in each column. */
+export interface CtlThreshold { unit?: string; values?: CtlColumns }
+export const COLUMNS: readonly ValueStatus[] = ['requirement', 'model', 'measured'];
+export type CtlStored = CtlAnswer | { builds: Record<string, CtlAnswer> };
+export interface CtlChange { field: string; before: unknown; after: unknown; columns?: string[] }
+export interface CtlSpec {
+  schema_version: number; revision: number; updated_at: string | null; updated_by: string | null;
+  fields: Record<string, CtlStored>; schema: CtlSchema; can_edit: boolean;
+  /** MOTRES staff: the model / measured results of the Controller sim tab */
+  can_edit_results?: boolean;
+  history: { revision: number; at: string; by: string; changes: CtlChange[] }[]; changed?: string[];
+}
+
+export const localized = (l: Lang | undefined, lang: string): string => (l ? (lang.startsWith('zh') && l['zh-CN']) || l.en : '');
+
+/** The kinds whose answer is three columns (requirement / model / measured), each with a source. */
+export const hasColumns = (kind: FieldKind): boolean => kind === 'number' || kind === 'range';
+
+/** One column of a numeric answer (or of one protection). */
+export const cellOf = (holder: { values?: CtlColumns } | undefined, col: ValueStatus): CtlCell => holder?.values?.[col] ?? { value: null, ref: '' };
+
+/** A copy with one column replaced; an empty column (no value, no source) is dropped. */
+export function withCell<H extends { values?: CtlColumns }>(holder: H, col: ValueStatus, cell: CtlCell): H {
+  const values: CtlColumns = { ...(holder.values ?? {}) };
+  const empty = (cell.value === null || cell.value === undefined || (typeof cell.value === 'object' && Object.values(cell.value as object).every((v) => v === null || v === undefined))) && !cell.ref;
+  if (empty) delete values[col]; else values[col] = cell;
+  return { ...holder, values };
+}
+
+/** The builds named in the Supply step ("6S", "12S" ...): the per-build fields hold one answer for each. */
+export function buildsOf(fields: Record<string, CtlStored>): string[] {
+  const v = (fields.builds as CtlAnswer | undefined)?.value;
+  return Array.isArray(v) ? v.filter((b): b is string => typeof b === 'string' && !!b.trim()) : [];
+}
+
+/** One answer: the field's own, or the one of `build` for a per-build field. */
+export function answerOf(fields: Record<string, CtlStored>, field: CtlField, build?: string): CtlAnswer {
+  const stored = fields[field.id];
+  if (field.per_build) {
+    // a single answer kept from before the field became per build (or before any build existed) reads for every build
+    if (stored && !('builds' in stored)) return stored;
+    return (stored && 'builds' in stored ? stored.builds[build ?? ''] : undefined) ?? (hasColumns(field.kind) ? { values: {} } : { value: null });
+  }
+  return (stored && !('builds' in stored) ? stored : undefined) ?? (hasColumns(field.kind) ? { values: {} } : { value: null });
+}
+
+/** A copy of `fields` with one answer replaced (per build when the field is per build). */
+export function withAnswer(fields: Record<string, CtlStored>, field: CtlField, answer: CtlAnswer, build?: string): Record<string, CtlStored> {
+  if (!field.per_build) return { ...fields, [field.id]: answer };
+  const stored = fields[field.id];
+  // a single earlier answer becomes the answer of every build first, so editing one build keeps it for the others
+  const builds = stored && 'builds' in stored ? stored.builds
+    : stored ? Object.fromEntries(buildsOf(fields).map((b) => [b, structuredClone(stored)])) : {};
+  return { ...fields, [field.id]: { builds: { ...builds, [build ?? '']: answer } } };
+}
+
+/** The builds a new builds list removes that still hold answers, with how many answers each (the form asks before dropping them). */
+export function buildsWithAnswers(fields: Record<string, CtlStored>, schema: CtlSchema, nextBuilds: readonly string[]): { build: string; answers: number }[] {
+  const next = new Set(nextBuilds);
+  const perBuild = schema.sections.flatMap((s) => s.fields).filter((f) => f.per_build);
+  return buildsOf(fields).filter((b) => !next.has(b)).map((build) => ({
+    build, answers: perBuild.filter((f) => { const st = fields[f.id]; return st && 'builds' in st && build in st.builds; }).length,
+  })).filter((x) => x.answers > 0);
+}
+
+/** `fields` with the builds list replaced and the answers of the removed builds dropped (after the user said yes). */
+export function withBuilds(fields: Record<string, CtlStored>, schema: CtlSchema, nextBuilds: string[]): Record<string, CtlStored> {
+  const keep = new Set(nextBuilds);
+  const out: Record<string, CtlStored> = { ...fields, builds: { value: nextBuilds } };
+  for (const f of schema.sections.flatMap((s) => s.fields).filter((x) => x.per_build)) {
+    const st = fields[f.id];
+    if (st && 'builds' in st) out[f.id] = { builds: Object.fromEntries(Object.entries(st.builds).filter(([b]) => keep.has(b))) };
+  }
+  return out;
+}
+
+/** What is sent: every answer as the form holds it - nothing is dropped silently (Astra on #834).  The answers of a removed build
+ *  leave only through `withBuilds`, after the user confirmed; the server refuses an answer for a build not in the list. */
+export function payloadFields(fields: Record<string, CtlStored>, _schema: CtlSchema): Record<string, CtlStored> {
+  return { ...fields };
+}
+
+/** A number typed in a field: `null` for empty, the number, or `undefined` for text that is not a number (kept out). */
+export function parseNumber(text: string): number | null | undefined {
+  const t = text.trim().replace(',', '.');
+  if (!t) return null;
+  const n = Number(t);
+  return Number.isFinite(n) ? n : undefined;
+}
+
+async function call<T>(method: string, path: string, body?: unknown): Promise<T> {
+  const r = await fetch(`${API}${path}`, { method, headers: body === undefined ? undefined : { 'Content-Type': 'application/json' }, body: body === undefined ? undefined : JSON.stringify(body) });
+  const data = await r.json().catch(() => null);
+  if (!r.ok) {
+    const detail = (data as { detail?: unknown } | null)?.detail;
+    const message = typeof detail === 'string' ? detail : typeof (detail as { message?: unknown } | null)?.message === 'string' ? (detail as { message: string }).message : `HTTP ${r.status}`;
+    throw Object.assign(new Error(message), { status: r.status });
+  }
+  return data as T;
+}
+const at = (id: string) => `/api/projects/${encodeURIComponent(id)}/controller-spec`;
+export const controllerSpecApi = {
+  get: (projectId: string) => call<CtlSpec>('GET', at(projectId)),
+  save: (projectId: string, fields: Record<string, CtlStored>, revision: number) => call<CtlSpec>('PUT', at(projectId), { fields, revision }),
+};
+
+/** The form after a successful save (Astra round 1 of #832): fields AND revision from the SAME answer, so the next save is
+ *  checked against what this form really holds.  An edit typed while the save was in flight is kept on top (still unsaved). */
+export function afterSave(local: Record<string, CtlStored>, saved: Pick<CtlSpec, 'fields' | 'revision'>, editedWhileSaving: boolean):
+  { fields: Record<string, CtlStored>; revision: number; dirty: boolean } {
+  return editedWhileSaving
+    ? { fields: local, revision: saved.revision, dirty: true }
+    : { fields: saved.fields ?? {}, revision: saved.revision, dirty: false };
+}
+
+/** Is this error the server's "somebody saved in between" (409)? */
+export const isConflict = (e: unknown): boolean => (e as { status?: unknown } | null)?.status === 409;
+
+
+/** A model / measured value that breaks its requirement - only where the comparison is plain: a number against a number, on a field
+ *  whose schema names the limit side (max: the value must not be above the requirement; min: not below). */
+export function breachOf(field: CtlField, answer: CtlAnswer, col: ValueStatus): { limit: 'max' | 'min'; requirement: number; value: number } | null {
+  if (field.kind !== 'number' || (field.limit !== 'max' && field.limit !== 'min') || col === 'requirement') return null;
+  const req = cellOf(answer, 'requirement').value;
+  const v = cellOf(answer, col).value;
+  if (typeof req !== 'number' || typeof v !== 'number') return null;
+  return (field.limit === 'max' ? v > req : v < req) ? { limit: field.limit, requirement: req, value: v } : null;
+}
+
+/** The steps of a tab: the Specification shows every field; Controller sim only the ones with results (numbers, ranges, protections). */
+export function sectionsFor(schema: CtlSchema, mode: 'requirements' | 'results'): CtlSchema['sections'] {
+  if (mode === 'requirements') return schema.sections;
+  return schema.sections.map((s) => ({ ...s, fields: s.fields.filter((f) => hasColumns(f.kind) || f.kind === 'thresholds') }))
+    .filter((s) => s.fields.length > 0);
+}
+
+// ── the records of the Controller sim tab: board revisions and test results (staff enter them, members read) ──────────────────
+export interface SimRevision { rev: string; status: '' | 'draft' | 'frozen' | 'released'; date: string; documents: string; note: string }
+export interface SimTest { date: string; revision: string; name: string; value: string; result: '' | 'pass' | 'fail'; ref: string }
+export interface SimRecords { revision: number; updated_at: string | null; updated_by: string | null; revisions: SimRevision[]; tests: SimTest[]; can_edit: boolean; changed?: string[] }
+const simAt = (id: string) => `/api/projects/${encodeURIComponent(id)}/controller-sim`;
+export const controllerSimApi = {
+  get: (projectId: string) => call<SimRecords>('GET', simAt(projectId)),
+  save: (projectId: string, r: Pick<SimRecords, 'revisions' | 'tests'>, revision: number) => call<SimRecords>('PUT', simAt(projectId), { revisions: r.revisions, tests: r.tests, revision }),
+};

@@ -63,7 +63,7 @@ ACTIONS = frozenset({
     "support.requests.status", "support.requests.delete",
     "support.chats.read", "support.config",
     # catalog / workspaces
-    "die.access", "die.rename", "die.retire", "die.restore", "die.archive", "die.unarchive", "production.lifecycle", "workspace.read", "workspace.export",
+    "die.access", "die.rename", "die.retire", "die.restore", "die.archive", "die.unarchive", "config.archive", "config.unarchive", "config.archive_recover", "production.lifecycle", "workspace.read", "workspace.export",
     "config.applications", "config.cad_mass",
     # config_move.py: a configuration moved / copied to another die, or renamed (every store keyed by the pair follows)
     "config.move", "config.copy", "config.rename",
@@ -87,6 +87,8 @@ ACTIONS = frozenset({
     "user.region", "regions.classify", "regions.directory_sync", "regions.remote_read",
     # regions stage 2: mail / LLM relayed for the peer (no content, hashed recipients only)
     "relay.mail", "relay.llm",
+    # owner queue (owner_queue.py, 2026-11-25): what agents post for the owner, his answers, the agent tokens (never a token, never the detail text)
+    "owner_queue.create", "owner_queue.answer", "owner_queue.withdraw", "owner_queue.token_create", "owner_queue.token_revoke", "owner_queue.priority",
 })
 
 _SECRETISH = ("password", "secret", "token", "key", "authorization", "cookie",

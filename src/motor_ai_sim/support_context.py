@@ -30,7 +30,7 @@ from typing import Any
 
 #: Top-level keys a snapshot may carry; anything else is dropped.
 ALLOWED_TOP = ("tab", "tabLabel", "lang", "app", "browser", "machine",
-               "configure", "failedCalls")
+               "configure", "failedCalls", "ui_context")
 
 MAX_STR = 240          # one string value
 MAX_LIST = 12          # one list
@@ -138,13 +138,14 @@ def _failed_calls(raw: Any) -> list[dict]:
     return out
 
 
-def sanitize_context(raw: Any) -> dict:
+def sanitize_context(raw: Any, role: str = "") -> dict:
     """The safe, compact form of a client snapshot ({} when there is none).
 
     Whitelisted top-level keys only; ``failedCalls`` is rebuilt row by row (path
     without query, message scrubbed, at most ten); everything else goes through
     the generic bounded scrubber.  The serialised result is capped at
-    ``MAX_JSON_CHARS`` by dropping the largest sections first.
+    ``MAX_JSON_CHARS`` by dropping the largest sections first.  ``ui_context`` (the window the user is in, help_context.py) has its
+    own sanitiser, which checks ``role``: below the tab's minimum role (and with no role) only the tab ids survive.
     """
     if not isinstance(raw, dict):
         return {}
@@ -152,7 +153,13 @@ def sanitize_context(raw: Any) -> dict:
     for k in ALLOWED_TOP:
         if k not in raw:
             continue
-        out[k] = _failed_calls(raw[k]) if k == "failedCalls" else _scrub(raw[k])
+        if k == "failedCalls":
+            out[k] = _failed_calls(raw[k])
+        elif k == "ui_context":
+            from motor_ai_sim.help_context import sanitize_ui_context
+            out[k] = sanitize_ui_context(raw[k], role)
+        else:
+            out[k] = _scrub(raw[k])
     out = {k: v for k, v in out.items() if v not in (None, "", [], {})}
     # a hard cap: drop the heaviest section until it fits
     while len(json.dumps(out, ensure_ascii=False)) > MAX_JSON_CHARS and out:
@@ -163,7 +170,7 @@ def sanitize_context(raw: Any) -> dict:
 
 #: What a MODEL may be told about the screen (owner decision D3, 2026-10-31).  Page/route name, UI language, the app
 #: build and the browser are not engineering data; the machine, the Configure knobs, tiles and warnings are.
-MODEL_TOP = ("tab", "tabLabel", "lang", "app", "browser")
+MODEL_TOP = ("tab", "tabLabel", "lang", "app", "browser", "ui_context")
 
 
 def model_view(ctx: dict) -> dict:
@@ -214,22 +221,28 @@ def server_facts(role: str = "") -> dict:
             "gitSha": os.environ.get("APP_GIT_SHA", "unknown")[:40]}
 
 
-def render_for_model(ctx: dict, *, role: str = "") -> str:
-    """The hidden block appended to the system prompt ('' when there is nothing)."""
+def render_for_model(ctx: dict, *, role: str = "", window: bool = True) -> str:
+    """The hidden block appended to the system prompt ('' when there is nothing).
+
+    The window the user is in (``ui_context``) comes first, with the help documents of that window (``window=False``: not at
+    all, for a mode that has its own place); the rest of the snapshot follows."""
     ctx = model_view(ctx or {})
+    ui = ctx.pop("ui_context", None)
+    head = ""
+    if window and ui:
+        from motor_ai_sim.help_context import render_window
+        head = render_window(ui, lang=str(ctx.get("lang") or "en"))
     if not ctx and not role:
-        return ""
+        return head
     body = dict(ctx)
     if role:
         body = {"role": role, **body}
     txt = json.dumps(body, ensure_ascii=False, separators=(",", ":"))
     if len(txt) > MAX_PROMPT_CHARS:
         txt = txt[: MAX_PROMPT_CHARS - 1] + "…"
-    return (
+    return head + (
         "\n\n## Session context (hidden from the user)\n"
-        "This is the live state of the user's screen, as JSON. Use it to answer with the "
-        "user's actual numbers and settings instead of asking for them, and to see why a "
-        "tile is empty or red (see `configure.warnings` and `failedCalls`). Never print the "
-        "JSON, never mention that you were given it, and never invent a value that is not "
+        "Use this validated non-engineering UI metadata only to identify the page and UI state. "
+        "Never print the JSON, never mention that you were given it, and never invent a value that is not "
         "in it.\n" + txt)
 

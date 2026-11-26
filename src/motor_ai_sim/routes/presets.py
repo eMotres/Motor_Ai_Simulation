@@ -240,7 +240,8 @@ def _last_transient_summary():
             from motor_ai_sim.routes.simulation import _geometry_fingerprint
             live = _geometry_fingerprint()
             saved = r.get("geo_fingerprint")
-            if saved != live:
+            from motor_ai_sim.geo_fingerprint import same as _gfp_same
+            if not _gfp_same(saved, live):
                 log.info("card metrics: ignoring the last transient — it was "
                          "solved on %s, the loaded machine is %s",
                          saved or "an unstamped machine", live)
@@ -303,7 +304,15 @@ def _enrich_card_entry(entry: dict, geo: dict, sim: dict, met: dict) -> None:
     vpk = _pick("V_line_peak_V", "v_line_peak_v")
     rip = _pick("T_ripple_pct", "ripple_pct", "ripple")
     rpm = _num(sim.get("rpm")) or 0.0
-    pmech = _pick("P_mech_avg_W", "P_mech_W", "power_w")
+    # the card's power: the run's own P_mech_W (shaft side on the shaft-side
+    # convention), never the solver's diagnostic balance P_mech_avg_W (it
+    # subtracted the in-field rotor drag a second time and is signed);
+    # generators are quoted positive
+    pmech = _pick("P_mech_W", "power_w")
+    # quoted positive for a generator; a marked motor at no load keeps its negative shaft power
+    if pmech is not None and not (mm.get("shaft_convention") == "fe_on_shaft_k3d_v1"
+                                  and mm.get("op_mode") != "generator"):
+        pmech = abs(pmech)
     pelec = _pick("P_elec_in_W")
     eff = _pick("efficiency", "efficiency_pct")
     if eff is None and pmech and pelec and pelec > 0:
@@ -1117,11 +1126,29 @@ def _applied_metrics(raw: Optional[dict]) -> dict:
         ("mass_total_kg", ("mass_total_kg", "mass_kg", "mass")),
         ("torque_per_mass", ("torque_per_mass", "torque_per_mass_Nm_kg", "td")),
         ("V_line_peak_V", ("V_line_peak_V", "v_line_peak_v")),
-        ("P_mech_W", ("P_mech_W", "P_mech_avg_W")),
+        ("P_mech_W", ("P_mech_W",)),
+        # the shaft-power convention of the numbers above (1 = core loss on the
+        # shaft; absent = earlier); Compare refuses to rank a mix
+        ("shaft_conv", ("shaft_conv",)),
+        # opt-in Sweep "Cogging pp" and the settings it was measured with (Compare ranks only equal ones)
+        ("cogging_pp_Nm", ("cogging_pp_Nm",)), ("cogging_final", ("cogging_final",)),
+        ("cogging_steps", ("cogging_steps",)), ("cogging_temp_c", ("cogging_temp_c",)),
+        ("cogging_mesh_mm", ("cogging_mesh_mm",)), ("cogging_gap_layers", ("cogging_gap_layers",)),
+        ("cogging_sectors", ("cogging_sectors",)), ("cogging_basis_code", ("cogging_basis_code",)),
+        ("cogging_demag_at_load", ("cogging_demag_at_load",)), ("cogging_sig", ("cogging_sig",)),
+        # the settings the sweep point was SOLVED with (Compare refuses to rank sweeps computed at different ones)
+        ("sweep_origin", ("sweep_origin",)), ("sweep_sig", ("sweep_sig",)),
+        ("sweep_sig_scope", ("sweep_sig_scope",)),
+        ("sweep_steps", ("sweep_steps",)), ("sweep_gap_layers", ("sweep_gap_layers",)),
     ):
         v = _pick(*names)
         if v is not None:
             out[key] = v
+    # an applied point that carries the convention's marker string says so in the
+    # numbers-only form Compare reads
+    from motor_ai_sim.shaft_convention import SHAFT_CONVENTION, SHAFT_CONVENTION_CODE
+    if m.get("shaft_convention") == SHAFT_CONVENTION:
+        out["shaft_conv"] = SHAFT_CONVENTION_CODE
     # The card's own key for ripple (it reads `ripple_pct`), kept in step with
     # the solver dialect above rather than left for a reader to translate.
     if "T_ripple_pct" in out:

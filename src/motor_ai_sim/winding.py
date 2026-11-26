@@ -99,7 +99,8 @@ __all__ = ["k_end_by_turns", "wire_bore_margin_mm", "wire_height_bound_mm", "bor
            "n_parallel_effective", "conductors_per_slot", "strip_width_mm",
            "strip_gap_mm", "winding_footprint_mm", "STRIP_GAP_FACTOR",
            "coils_per_phase", "connection_options", "connection_error",
-           "n_parallel_error", "repick_connection", "slot_pole_counts"]
+           "n_parallel_error", "repick_connection", "slot_pole_counts",
+           "derived_n_coils_per_phase", "with_derived_coil_count"]
 
 #: How many ``wire_spacing_x`` layers sit between two strips of the SAME row.
 #: TWO, not one (user 2026-09-08: *"I'd make the gap between wires 2·Wire
@@ -493,6 +494,38 @@ def coils_per_phase(num_slots: int) -> int:
     return max(1, int(round(int(num_slots or 0) / 6)))
 
 
+def derived_n_coils_per_phase(winding: Optional[Mapping[str, Any]], num_slots: int) -> int:
+    """What the field ``n_coils_per_phase`` must hold: ``coils_per_phase(num_slots)``, the count the connection rules
+    in force require (``n_series x n_parallel`` = this).  ONE definition: it does not look at ``layers`` (the rules
+    do not, see the note of the pull request about a real double-layer winding); ``winding`` is accepted so a
+    caller never has to change when that is decided."""
+    return coils_per_phase(num_slots)
+
+
+def with_derived_coil_count(winding: Optional[Mapping[str, Any]], num_slots: int) -> Tuple[dict, Optional[int]]:
+    """``(winding_copy, old_value)``: the block with a stored ``n_coils_per_phase`` that differs from the derived
+    one replaced by the derived value; ``old_value`` is the stale number (None when nothing changed).  A block
+    without the key is left without it (nothing is added), and a block of any phase layout the formula does not
+    cover (anything but 3-phase: six-phase counts per set are not decided here) is left as stored."""
+    w = dict(winding or {})
+    if "n_coils_per_phase" not in w or w.get("n_coils_per_phase") is None:
+        return w, None
+    try:
+        if int(float(w.get("phases") or 3)) != 3:
+            return w, None
+    except (TypeError, ValueError):                 # an unreadable phase layout: not covered, left as stored
+        return w, None
+    try:
+        old = int(float(w["n_coils_per_phase"]))
+    except (TypeError, ValueError):
+        old = None
+    want = derived_n_coils_per_phase(w, num_slots)
+    if old == want:
+        return w, None
+    w["n_coils_per_phase"] = want
+    return w, (old if old is not None else -1)
+
+
 def coil_count(num_slots: int, layers: int) -> int:
     """Number of coils (= end-turn bundles) of a concentrated tooth-coil winding as actually wound.
 
@@ -548,6 +581,18 @@ def n_parallel_error(n_parallel: int, num_slots: int) -> Optional[str]:
 
 
 def repick_connection(winding: Optional[Mapping[str, Any]],
+                      num_slots: int) -> Tuple[dict, Optional[str]]:
+    """:func:`_repick_connection` plus the heal of a stale ``n_coils_per_phase`` (derived from the slot count; no
+    note, the machine did not change).  Every other rule is in :func:`_repick_connection`."""
+    w, note = _repick_connection(winding, num_slots)
+    w, old = with_derived_coil_count(w, num_slots)
+    if old is not None:
+        log.warning("winding: stored n_coils_per_phase %s corrected to the derived %s (%d slots)",
+                    old, w["n_coils_per_phase"], int(num_slots))
+    return w, note
+
+
+def _repick_connection(winding: Optional[Mapping[str, Any]],
                       num_slots: int) -> Tuple[dict, Optional[str]]:
     """``(winding, note)``: a COPY of the winding block whose connection is
     valid for ``num_slots``, and a one-line note when it had to be re-picked

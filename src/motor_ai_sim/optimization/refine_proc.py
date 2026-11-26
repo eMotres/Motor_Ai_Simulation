@@ -127,6 +127,52 @@ def _coil_fit(geo: Dict[str, float]) -> tuple:
     return n_fit, nw
 
 
+def _eff_mesh_mm(base_geo, overrides, mesh_size_mm, min_size_mm, hi_fidelity):
+    """The iron mesh size the solver refines a request to.  The solver first merges the request's
+    override into the config geometry with ITS OWN ``merge_geo_override`` (which recomputes the derived
+    fields - slot_width, radii, angles - from the primaries) and only then applies
+    ``mesh_feature_floor_mm``; the same two steps here, so the recorded value is the solver's."""
+    try:
+        from motor_ai_sim.simulation.fem_solver_2d import mesh_feature_floor_mm
+        from motor_ai_sim.simulation.geometry_2d import merge_geo_override
+        geo = merge_geo_override(dict(base_geo or {}), dict(overrides or {}))
+        floor = mesh_feature_floor_mm(geo, min_size_mm, hi_fidelity)
+        return float(min(float(mesh_size_mm), floor)) if floor is not None else float(mesh_size_mm)
+    except Exception:                                   # noqa: BLE001
+        return None
+
+
+def _eff_magnet_temp_c(magnet_temp_c):
+    """The magnet temperature a run solves at (the request's, else the assigned card's own)."""
+    try:
+        from motor_ai_sim.simulation.fem_solver_2d import _run_magnet_temp_c
+        return _run_magnet_temp_c(magnet_temp_c)
+    except Exception:                                   # noqa: BLE001
+        return None
+
+
+def _component_mesh_for_run(cfg) -> Dict[str, Any]:
+    """The machine's stored per-part mesh block, with the wire cell (``coil_rel``) of THIS run when the run carries one
+    (``MOTRES_RUN_COIL_REL``, set by the route for a preset run whose wire cell is not the stored one; the stored settings are
+    not written).  Absent or unreadable = the stored block, exactly as before."""
+    cm = dict((cfg.get("mesh", {}) or {}).get("component_mesh") or {})
+    raw = os.environ.get("MOTRES_RUN_COIL_REL")
+    if raw:
+        try:
+            v = float(raw)
+        except ValueError:
+            v = 0.0
+        if v > 0.0:
+            cm["coil_rel"] = v
+    return cm
+
+
+def _coil_rel_solved(cfg) -> float:
+    from motor_ai_sim.simulation.geo_mesh import snap_coil_rel
+    v = snap_coil_rel(_component_mesh_for_run(cfg).get("coil_rel"))
+    return float(v) if v > 0.0 else 1.0
+
+
 def run_one(overrides: Dict[str, float], current_a: float, steps: int,
             coil_temp_c: float, n_periods: float = 1.0,
             gamma_deg: float = 0.0, mesh_size_mm: float = 4.0,
@@ -143,7 +189,9 @@ def run_one(overrides: Dict[str, float], current_a: float, steps: int,
             magnet_temp_c: float | None = None,
             sampling_purpose: Literal["standard", "optimization", "cogging_quality"] =
             "optimization",
-            optimizer_candidate: bool = False) -> Dict[str, Any]:
+            optimizer_candidate: bool = False,
+            no_load: bool = False,
+            report_demag_loss: bool = False) -> Dict[str, Any]:
     """Run the sliding-band transient for one candidate and return mean
     performance metrics (torque, efficiency, ripple, losses, mass).
 
@@ -233,6 +281,8 @@ def run_one(overrides: Dict[str, float], current_a: float, steps: int,
     # window holds exactly ``steps`` frames.
     nper = max(1e-3, float(n_periods))
     nspp = max(4, int(round(int(steps) / nper)))
+    if no_load and abs(float(current_a)) > 0.0:
+        raise ValueError("no_load needs a zero current")
     # P2 "high-fidelity ripple" self-consistency — MIRRORS the Simulation route
     # (routes/simulation.py get_fem_transient): element_order=2 needs the merged
     # structured belt and current-drive magnetostatics, so coerce the incompatible
@@ -356,11 +406,13 @@ def run_one(overrides: Dict[str, float], current_a: float, steps: int,
         # (see routes/simulation.SimConfigPatch) — so a candidate falls back to
         # the sinusoidal current drive and SAYS SO in the log, rather than
         # inventing a waveform or failing the whole study.
-        **_excitation_args(_sim),
-        "v_phase_peak": float(_sim.get("v_phase_peak", 0.0) or 0.0),
-        "v_delta_deg": float(_sim.get("v_delta_deg", 0.0) or 0.0),
+        # NO-LOAD (opt-in, the sweep's "Cogging pp"): an UNEXCITED sinusoidal CURRENT
+        # drive whatever the config says - no block current, no applied voltage, no PWM.
+        **({"drive": "current"} if no_load else _excitation_args(_sim)),
+        "v_phase_peak": (0.0 if no_load else float(_sim.get("v_phase_peak", 0.0) or 0.0)),
+        "v_delta_deg": (0.0 if no_load else float(_sim.get("v_delta_deg", 0.0) or 0.0)),
         "demag": bool(_demag),   # per-element irreversible demag (doubles the frames)
-        "component_mesh": json.dumps(cfg.get("mesh", {}).get("component_mesh") or {}),
+        "component_mesh": json.dumps(_component_mesh_for_run(cfg)),
         "sliding_band": True, "fresh": True, "geo": json.dumps(overrides),
     })
     _fs_cand._OPT_CANDIDATE.reset(_cand_tok)
@@ -493,6 +545,21 @@ def run_one(overrides: Dict[str, float], current_a: float, steps: int,
     else:
         eff = 0.0
         op_mode = "motor"
+    # THE SHAFT-SIDE CONVENTION (owner 2026-11-25, motor_ai_sim.shaft_convention):
+    # the core loss is a shaft load, every loss counted (the sleeve too, as the
+    # Simulation summary does).  An optimiser candidate has no 3-D passport, so
+    # its torque stays the 2-D field torque (k = 1) and the row says so.  The
+    # legacy arithmetic above is kept only to read the power-flow sign.
+    from motor_ai_sim import shaft_convention as _SC
+    sl = float(np.mean(d.get("P_sleeve_eddy_W", [0.0]) or [0.0]))
+    ploss = cu + fe + mg + sh + sl
+    _dr = _SC.drag_of_result(d, p_fe=fe, p_mag=mg, p_shaft=sh, p_sleeve=sl)
+    _bal = _SC.balance_of(_dr, t_field_nm=float(d["T_avg_Nm"]), rpm=rpm, k=None, p_loss_w=ploss)
+    op_mode = _bal["op_mode"]
+    eff = _bal["efficiency"]
+    pmech = _bal["P_mech_W"]
+    Tavg = abs(float(d["T_avg_Nm"]))
+    _t_pm = _SC.per_mass_torque(_bal)
     # Same k_end as the loss/R path above — a pinned end-winding factor must
     # bill the copper mass too, exactly as the Simulation summary does (it
     # passes the solver's k_end_used into compute_masses).  Unpinned, that is
@@ -564,7 +631,10 @@ def run_one(overrides: Dict[str, float], current_a: float, steps: int,
     return {
         "T_em_Nm": round(Tavg, 3), "efficiency": round(eff, 5),
         "op_mode": op_mode,     # derived from the power-flow sign (see above)
-        "torque_per_mass_Nm_kg": round(Tavg / mass, 4) if mass > 0 else 0.0,
+        "torque_per_mass_Nm_kg": round(_t_pm / mass, 4) if mass > 0 else 0.0,
+        # the shaft-side convention of this row (motor_ai_sim.shaft_convention)
+        **_SC.fields(_bal, _dr, None),
+        "P_sleeve_W": round(sl, 1),
         "T_ripple_pct": (None if d.get("T_ripple_pct") is None
                          else round(float(d["T_ripple_pct"]), 2)),
         "T_ripple_pp_Nm": d.get("T_ripple_pp_Nm"),
@@ -648,6 +718,12 @@ def run_one(overrides: Dict[str, float], current_a: float, steps: int,
         # ripple, and the winner's final re-solve applies the gap rule).
         "torque_method": d.get("torque_method"),
         "gap_layers_per_side": d.get("gap_layers_effective"),
+        # the wire cell the mesher was given (snapped to its rungs; 1h when the block carries none): the sweep stamps from this
+        "coil_rel_solved": _coil_rel_solved(cfg),
+        # what the solver REALLY used (it snaps the step count to whole mesh nodes and raises the gap rows for some
+        # options): the provenance a sweep stamps comes from these, not from the request
+        "n_steps_per_period_solved": d.get("n_steps_per_period"),
+        "steps_snapped": bool(d.get("steps_snapped", False)),
         "ripple_self_check_rel": (((d.get("coulomb_torque") or {})
                                    .get("layer_self_check") or {})
                                   .get("rel_to_ripple_scale")),
@@ -683,6 +759,8 @@ def run_one(overrides: Dict[str, float], current_a: float, steps: int,
         "eddy_method": d.get("eddy_method"),
         "eddy_method_requested": d.get("eddy_method_requested"),
         "eddy_method_note": d.get("eddy_method_note"),
+        **({"eddy_method_fallback_reason": str(d["eddy_method_fallback_reason"])}
+           if d.get("eddy_method_fallback_reason") else {}),
         "tdm_experimental": bool(d.get("tdm_experimental", False)),
         "qualified": (None if d.get("qualified") is None else bool(d["qualified"])),
         "eddy_settle_residual": d.get("eddy_settle_residual"),
@@ -712,6 +790,26 @@ def run_one(overrides: Dict[str, float], current_a: float, steps: int,
         "daxis_policy": d.get("daxis_policy"),
         "psi_pm_probe_skipped": bool((d.get("summary") or {})
                                      .get("psi_pm_probe_skipped", False)),
+        # Opt-in (the Sweep's "Cogging pp" on a demag-on sweep): the irreversible magnet loss of THIS
+        # loaded point, % of the Br volume (solver `demag_summary.loss_pct`).  Absent otherwise.
+        **({"demag_loss_pct": (d.get("demag_summary") or {}).get("loss_pct")}
+           if report_demag_loss else {}),
+        # What a no-load run REALLY solved (the solver may snap the steps); absent otherwise,
+        # so every loaded point's payload is what it always was.
+        **({"no_load_provenance": {
+            "drive": "current", "current_a": 0.0,
+            "n_steps_reported": int(d.get("n_steps") or 0),
+            "n_periods": float(nper),
+            "steps_per_period_effective": (int(round(int(d.get("n_steps") or 0) / nper))
+                                           if int(d.get("n_steps") or 0) > 0 else None),
+            "rotor_eddy": bool(rotor_eddy), "demag": bool(_demag),
+            "eddy": bool(_sim.get("eddy", False)),
+            "gap_layers_effective": d.get("gap_layers_effective"),
+            "n_sectors": int(_ns), "mesh_size_mm": float(mesh_size_mm),
+            # The mesh and magnet temperature the solve USED, from the solver's own helpers (the
+            # solve does not return them): the iron mesh it refines to, the resolved temperature.
+            "mesh_size_effective_mm": _eff_mesh_mm(cfg.get("geometry"), overrides, mesh_size_mm, min_size_mm, hi_fidelity),
+            "magnet_temp_c_effective": _eff_magnet_temp_c(magnet_temp_c)}} if no_load else {}),
     }
 
 
@@ -744,7 +842,9 @@ if __name__ == "__main__":
                       magnet_temp_c=spec.get("magnet_temp_c"),
                       sampling_purpose=spec.get("sampling_purpose", "optimization"),
                       optimizer_candidate=bool(spec.get("optimizer_candidate",
-                                                        False)))
+                                                        False)),
+                      no_load=bool(spec.get("no_load", False)),
+                      report_demag_loss=bool(spec.get("report_demag_loss", False)))
         sys.stdout.write("@@RESULT@@" + json.dumps({"ok": True, "res": res}))
     except Exception as e:  # noqa: BLE001
         sys.stdout.write("@@RESULT@@" + json.dumps(

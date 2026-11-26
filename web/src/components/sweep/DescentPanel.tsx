@@ -1,5 +1,10 @@
+import { nsT } from '../../i18n/nsT';
+import { useTranslation } from 'react-i18next';
+import { anyMarked, basisTag } from '../../lib/shaftBasisLabel';
 import React, { useState, useEffect, useRef } from 'react';
-import MeshPresetSelect from '../mesh/MeshPresetSelect';
+import { useRunSettings } from '../../lib/useRunSettings';
+import { runSettingsBody } from '../../lib/runSettings';
+import RunSettingsBar from './RunSettingsBar';
 import { whenVisible } from '../../lib/pageVisible';
 import {
   Box, Typography, Button, TextField, Tooltip, Divider, Chip,
@@ -36,6 +41,8 @@ import SavedRuns from './SavedRuns';
 /** Top of the chart's ripple-trim slider, in per cent.  Nothing above this is
  *  a machine anyone would build, so the track spends its whole length on the
  *  range where candidates are actually chosen. */
+const shaftTx = nsT('simulation');
+const loadLineBasis = (p: any) => p?.shaft_conv === 1 || p?.shaft_convention === 'fe_on_shaft_k3d_v1';
 const RIPPLE_SLIDER_MAX = 30;
 
 const fmtPct  = (v?: number) => (v == null ? '—' : `${(v * 100).toFixed(2)}%`);
@@ -85,7 +92,13 @@ const Group: React.FC<{ label: string; children: React.ReactNode }> = ({ label, 
   </Box>
 );
 
+const RS_STALE = 'The run settings changed since they were shown. Check the line above and press Run again.';
+
 const DescentPanel: React.FC<{ chartsOnly?: boolean }> = ({ chartsOnly = false }) => {
+  useTranslation('simulation');
+  // the run settings of THIS panel (preset button + overrides, resolved by the server); the ordinary-run settings are never touched
+  const rs = useRunSettings('descent');
+  const [rsStale, setRsStale] = useState<string | null>(null);   // Run / Draw baseline refused because the tabs changed since the line was shown
   const {
     sweepConfig, connectedToApi, parameterSchema, materials,
     updateRippleThreshold,
@@ -159,9 +172,22 @@ const DescentPanel: React.FC<{ chartsOnly?: boolean }> = ({ chartsOnly = false }
   // Distinct from the scatter's own colors (green feasible / red infeasible /
   // blue descent path / yellow best) so the overlaid finalist segments read clearly.
   const LL_PALETTE = ['#f97316', '#a855f7', '#22d3ee', '#ec4899', '#fb923c', '#c084fc'];
-  const loadLineDesigns: [string, any[]][] = loadLines
+  // The basis words appear on this chart only when a marked design is on it (then an earlier one says so too); a chart
+  // of earlier designs alone keeps its earlier names, legend and tooltips.
+  const _ds: any = descentState || {};
+  const chartMarked = anyMarked([
+    ...Object.values(loadLines || {}).flatMap((a) => (Array.isArray(a) ? a : [])),
+    ...((_ds.points || []) as any[]), ...((_ds.history || []) as any[]),
+    ...(_ds.best?.metrics ? [_ds.best.metrics] : []),
+    ...[_ds.baseline_line, _ds.result?.baseline_line, baselineLine].filter(Boolean),
+  ].map(loadLineBasis));
+  const chartTag = (p: any) => (chartMarked ? basisTag(loadLineBasis(p), true) : null);
+  const loadLineDesigns: [string, any[]][] = !loadLines ? [] : !chartMarked
     ? Object.entries(loadLines).filter(([, a]) => Array.isArray(a) && a.length > 0)
-    : [];
+    : Object.entries(loadLines).flatMap(([name, a]) => !Array.isArray(a) ? [] : [false, true].flatMap(marked => {
+        const rows = a.filter(p => loadLineBasis(p) === marked);
+        return rows.length ? [[`${name} (${shaftTx(marked ? 'shaftBasisCurrent' : 'shaftBasisEarlier')})`, rows] as [string, any[]]] : [];
+      }));
 
   const [maxIters, setMaxIters] = useState(10);
   const [wEff, setWEff] = useState(1);
@@ -218,12 +244,8 @@ const DescentPanel: React.FC<{ chartsOnly?: boolean }> = ({ chartsOnly = false }
   // efficiency^w_eff · (T/mass)^w_td.
   const [objective, setObjective] = useState<'baseline_line' | 'product'>('baseline_line');
   const [currentBump, setCurrentBump] = useState(10);   // 2nd baseline current = I·(1+pct/100)
-  // FEM frames/period = the Simulation tab's "Steps per period" (single source) —
-  // so the optimizer evaluates ripple at the SAME resolution you simulate at.
-  const [steps] = useState(() => {
-    try { return Math.max(8, Math.min(180, Number(JSON.parse(localStorage.getItem('sim.stepsPP') ?? '72')) || 72)); }
-    catch { return 72; }
-  });
+  // FEM frames/period and every other solve setting: the run settings above (server-resolved), the SAME the run receives.
+  const steps = rs.resolved?.settings.steps_per_period ?? 0;
   const [applied, setApplied] = useState(false);
   // Algorithm: CMA-ES (derivative-free, noise-robust, default) vs the original
   // finite-difference gradient descent.
@@ -231,10 +253,7 @@ const DescentPanel: React.FC<{ chartsOnly?: boolean }> = ({ chartsOnly = false }
   // FEM symmetry = the Mesh tab's sector count (single source) — the optimizer
   // builds the disk EXACTLY like Simulation does, so optimizer ripple ==
   // Simulation ripple (no opt↔Sim mismatch).  Set it on the Mesh tab; read-only here.
-  const nSectors = (() => {
-    try { return Math.max(1, Math.round(Number(JSON.parse(localStorage.getItem('mesh.nSectors') ?? '1')) || 1)); }
-    catch { return 4; }
-  })();
+  const nSectors = Math.max(1, Number(rs.resolved?.settings.n_sectors ?? 1));
   // Box-walking: keep re-centering the ±deviation window on the optimum until
   // every variable settles inside its window (or hits a physical limit).
   // Default ON (per Vadim): a variable pinned at its window edge auto-extends /
@@ -283,7 +302,7 @@ const DescentPanel: React.FC<{ chartsOnly?: boolean }> = ({ chartsOnly = false }
             const a = pts[j], b = pts[j + 1], f = (ratedTorque - a.T) / ((b.T - a.T) || 1);
             return { name, color: LL_PALETTE[i % LL_PALETTE.length], z: 6,
                      td: a.td + f * (b.td - a.td), eff: a.eff + f * (b.eff - a.eff),
-                     I: Math.round(a.I + f * (b.I - a.I)) };
+                     I: Math.round(a.I + f * (b.I - a.I)), shaft_conv: loadLineBasis(a) ? 1 : undefined };
           }
         }
         return null;
@@ -296,7 +315,14 @@ const DescentPanel: React.FC<{ chartsOnly?: boolean }> = ({ chartsOnly = false }
   const best = st.best?.metrics;
   const certified = st.final_validation_status === 'certified' && st.apply_eligible === true;
   const history: any[] = st.history || [];
-  const chartData = history.map((h: any) => ({ ...h, eff_pct: (h.efficiency ?? 0) * 100 }));
+  const chartData = history.map((h: any) => ({ ...h, eff_pct: (h.efficiency ?? (loadLineBasis(h) ? NaN : 0)) * 100 }));
+
+  const historyTooltipProps = anyMarked(chartData.map(loadLineBasis)) ? {
+    labelFormatter: (label: any, payload: any[]) => {
+      const tag = basisTag(loadLineBasis(payload?.[0]?.payload), true);
+      return `${label} — ${shaftTx(tag === 'current' ? 'shaftBasisCurrent' : 'shaftBasisEarlier')}`;
+    },
+  } : {};
 
   // Descent direction per variable (−∂cost/∂var): >0 → optimizer raises the
   // variable, <0 → lowers it.  Visualises what the optimizer is doing right now.
@@ -389,8 +415,8 @@ const DescentPanel: React.FC<{ chartsOnly?: boolean }> = ({ chartsOnly = false }
   // points are simply out; the count next to the slider says how many.
   const sliderMax = Math.min(Math.max(Math.ceil(_dataMaxRipple), 10), RIPPLE_SLIDER_MAX);
   const effCut = displayCut ?? sliderMax;
-  const toXY = (p: any) => ({ td: p.td, eff: (p.eff ?? 0) * 100, ripple: p.ripple, z: 1,
-                              torque: p.torque, mass: p.mass,
+  const toXY = (p: any) => ({ td: p.td, eff: (p.eff ?? (loadLineBasis(p) ? NaN : 0)) * 100, ripple: p.ripple, z: 1,
+                              torque: p.torque, mass: p.mass, shaft_conv: p.shaft_conv, P_mech_W: p.P_mech_W,
                               // Pareto flags from the backend (optimization/pareto.py):
                               // computed against THIS run's baseline at THIS run's
                               // operating point — never across runs.
@@ -426,23 +452,25 @@ const DescentPanel: React.FC<{ chartsOnly?: boolean }> = ({ chartsOnly = false }
   const nonPhysicalPts = points.length - totalValidPts;
   const trajPts = history
     .filter((h: any) => h.torque_per_mass != null)
-    .map((h: any) => ({ td: h.torque_per_mass, eff: (h.efficiency ?? 0) * 100, ripple: h.T_ripple_pct, iter: h.iter, z: 2 }));
+    .map((h: any) => ({ td: h.torque_per_mass, eff: (h.efficiency ?? (loadLineBasis(h) ? NaN : 0)) * 100, ripple: h.T_ripple_pct, iter: h.iter, z: 2,
+      shaft_conv: h.shaft_convention === 'fe_on_shaft_k3d_v1' ? 1 : h.shaft_conv }));
   // The ★ best carries its geometry + operating point too, so it is click-selectable
   // and "Apply picked point" works on it exactly like any other scatter point.
   const _bestX = st.best?.x || st.result?.best?.overrides;
   const _bestG = (typeof st.mtpa_gamma_deg === 'number') ? st.mtpa_gamma_deg
                : (typeof best?.gamma_deg === 'number' ? best.gamma_deg : undefined);
   const bestPt = best?.torque_per_mass != null
-    ? [{ td: best.torque_per_mass, eff: (best.efficiency ?? 0) * 100, ripple: best.T_ripple_pct, z: 6,
+    ? [{ td: best.torque_per_mass, eff: (best.efficiency ?? (loadLineBasis(best) ? NaN : 0)) * 100, ripple: best.T_ripple_pct, z: 6,
           overrides: _bestX, current_a: best.current_a, gamma_deg: _bestG,
+          shaft_conv: best.shaft_convention === 'fe_on_shaft_k3d_v1' ? 1 : best.shaft_conv,
           sampling_quality: st.final_validation_status === 'certified' ? 'standard' : 'preliminary' }] : [];
 
   // ── Baseline (current-only) line A–B ── from a run (st.baseline_line) OR the
   // standalone "Draw baseline" button (baselineLine). Computed here so the axes
   // can frame it even before any optimization point exists.
   const bline: any = st.baseline_line || st.result?.baseline_line || baselineLine || null;
-  const blA = bline ? { td: bline.td_a, eff: (bline.eff_a ?? 0) * 100, tag: `${Math.round(bline.current_a)}A` } : null;
-  const blB = bline ? { td: bline.td_b, eff: (bline.eff_b ?? 0) * 100, tag: `${Math.round(bline.current_b)}A` } : null;
+  const blA = bline ? { td: bline.td_a, eff: (bline.eff_a ?? (loadLineBasis(bline) ? NaN : 0)) * 100, tag: `${Math.round(bline.current_a)}A`, shaft_conv: bline.shaft_conv } : null;
+  const blB = bline ? { td: bline.td_b, eff: (bline.eff_b ?? (loadLineBasis(bline) ? NaN : 0)) * 100, tag: `${Math.round(bline.current_b)}A`, shaft_conv: bline.shaft_conv } : null;
 
   // Y (efficiency) axis domain: Manual = fixed [yMin, yMax]; Auto = fit to the
   // MEANINGFUL designs (descent path + best + feasible), padded — re-zooms as the
@@ -490,17 +518,23 @@ const DescentPanel: React.FC<{ chartsOnly?: boolean }> = ({ chartsOnly = false }
   // on its own (the tab can be closed — the live mirror reattaches). runDescent
   // resolves when the whole sequence finishes.
   const launch = async () => {
+    if (!rs.ready || !rs.resolved) return;
+    const rsReq = rs.verify();        // the tabs may have changed since the line was shown: the run uses what the line shows
+    if (!rsReq) { setRsStale(RS_STALE); return; }
+    setRsStale(null);
     setApplied(false);
     setLastOptSnapshot(optInputs);   // snapshot the inputs this run launches with
     localRun.current = true;
     try {
       await runDescent({ rippleMax, maxIters, wEff, wTd, steps, algorithm, nSectors,
+                         runSettings: runSettingsBody(rsReq, rs.resolved!),
                          targetTorque: 0, vPeakLimit: 1e9, optimizeGamma: false,   // fixed Simulation current, no voltage limit
                          autoExpand: autoWalk, maxRounds, surrogateSeed,
                          objective, currentBumpPct: currentBump,
                          ripplePenaltyLambda: rippleLam,
                          thdPenaltyLambda: thdLam, thdMaxPct: thdMax });
     } finally {
+      rs.refresh();   // a refused run (settings changed) shows the current answer next
       localRun.current = false;
     }
   };
@@ -540,7 +574,7 @@ const DescentPanel: React.FC<{ chartsOnly?: boolean }> = ({ chartsOnly = false }
           skipped; the data sections below read the same store the auto run
           writes, so they visualise auto runs too. */}
       {!chartsOnly && (<>
-      <Box sx={{ mb: 1 }}><MeshPresetSelect dense readOnly /></Box>
+      <RunSettingsBar rs={rs} />
       {/* ── Header: title + Run ── */}
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1.5 }}>
         <TrendingDownIcon sx={{ fontSize: 18 }} />
@@ -554,7 +588,7 @@ const DescentPanel: React.FC<{ chartsOnly?: boolean }> = ({ chartsOnly = false }
           </Button>
         ) : (
           <Button variant="contained" size="small" startIcon={<PlayArrowIcon />}
-            disabled={activeVars.length === 0 || !connectedToApi}
+            disabled={activeVars.length === 0 || !connectedToApi || !rs.ready}
             onClick={launch}>
             Run descent
           </Button>
@@ -583,8 +617,8 @@ const DescentPanel: React.FC<{ chartsOnly?: boolean }> = ({ chartsOnly = false }
               inputProps={{ min: 1, max: 40, style: { fontSize: 11, padding: '3px 6px', width: 40 } }}
               InputLabelProps={{ sx: { fontSize: 10 } }} />
           </Tooltip>
-          <Tooltip title="FEM frames per electrical period — taken from the Simulation tab (Steps per period), single source. Read-only here so the optimizer evaluates ripple at the resolution you simulate at." placement="top">
-            <TextField label="steps/T (sim)" type="number" size="small" value={steps} disabled
+          <Tooltip title="FEM frames per electrical period — from the run settings above (edit them there)." placement="top">
+            <TextField label="steps/T" type="number" size="small" value={steps} disabled
               inputProps={{ style: { fontSize: 11, padding: '3px 6px', width: 40 } }}
               InputLabelProps={{ sx: { fontSize: 10 } }} />
           </Tooltip>
@@ -644,8 +678,8 @@ const DescentPanel: React.FC<{ chartsOnly?: boolean }> = ({ chartsOnly = false }
               <Tooltip title="Run the 2 baseline sims now (at I and +X% I) and draw the current-only line on the chart below — see the reference before launching the full optimization." placement="top">
                 <span>
                   <Button size="small" variant="outlined"
-                    onClick={() => computeBaselineLine({ currentBumpPct: currentBump, steps, nSectors })}
-                    disabled={!connectedToApi || baselineBusy || descentRunning}
+                    onClick={() => { const q = rs.verify(); setRsStale(q ? null : RS_STALE); if (q && rs.ready && rs.resolved) void computeBaselineLine({ currentBumpPct: currentBump, request: q, resolved: rs.resolved }).then(r => { if (r.stale) rs.refresh(); }); }}
+                    disabled={!connectedToApi || !rs.ready || baselineBusy || descentRunning}
                     startIcon={baselineBusy ? <CircularProgress size={12} color="inherit" /> : undefined}
                     sx={{ textTransform: 'none', fontSize: 10, height: 26 }}>
                     {baselineBusy ? 'Computing…' : 'Draw baseline'}
@@ -718,6 +752,9 @@ const DescentPanel: React.FC<{ chartsOnly?: boolean }> = ({ chartsOnly = false }
             : 'NOT constrained — trimmed on the chart only; set ripple λ > 0 to enforce the limit'}. Only whitelisted geometry variables are varied.`} />
       </Box>
 
+      {rsStale && (
+        <Typography color="error" sx={{ display: 'block', mb: 1, fontSize: 11 }} role="alert">{rsStale}</Typography>
+      )}
       {descentError && (
         <Typography color="error" variant="caption" sx={{ display: 'block', mb: 1 }}>
           Descent error: {descentError}
@@ -909,7 +946,7 @@ const DescentPanel: React.FC<{ chartsOnly?: boolean }> = ({ chartsOnly = false }
                   <XAxis dataKey="iter" tick={{ fontSize: 10 }} />
                   <YAxis yAxisId="l" tick={{ fontSize: 10 }} width={42} domain={['auto', 'auto']} />
                   <YAxis yAxisId="r" orientation="right" tick={{ fontSize: 10 }} width={42} domain={['auto', 'auto']} />
-                  <RTooltip contentStyle={{ fontSize: 11 }} />
+                  <RTooltip contentStyle={{ fontSize: 11 }} {...historyTooltipProps} />
                   <Legend wrapperStyle={{ fontSize: 10 }} />
                   <Line yAxisId="l" type="monotone" dataKey="torque_per_mass" name="Nm/kg" stroke="#3b82f6" dot={{ r: 0.5 }} strokeWidth={1.25} isAnimationActive={false} />
                   <Line yAxisId="r" type="monotone" dataKey="eff_pct" name="Eff %" stroke="#22c55e" dot={{ r: 0.5 }} strokeWidth={1.25} isAnimationActive={false} />
@@ -931,7 +968,9 @@ const DescentPanel: React.FC<{ chartsOnly?: boolean }> = ({ chartsOnly = false }
               <span style={{ color: '#ef4444' }}>ripple&gt;limit</span> ·{' '}
               <span style={{ color: '#3b82f6' }}>descent path</span> ·{' '}
               <span style={{ color: '#fbbf24' }}>★ best</span>
-              {bline && <> · <span style={{ color: '#f59e0b' }}>— baseline</span></>}
+              {bline && <> · {chartTag(bline)
+                ? <Tooltip title={shaftTx(chartTag(bline) === 'current' ? 'shaftBasisCurrent' : 'shaftBasisEarlier')}><span style={{ color: '#f59e0b' }}>— baseline</span></Tooltip>
+                : <span style={{ color: '#f59e0b' }}>— baseline</span>}</>}
             </Typography>
             <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75, flexWrap: 'wrap' }}>
               <Tooltip title="2-D = efficiency vs torque/mass. 3-D lifts ripple onto the height (z) axis, with a translucent plane at the ripple gate — see the eff×td-vs-ripple trade-off at a glance. Drag to rotate." placement="top">
@@ -1063,7 +1102,8 @@ const DescentPanel: React.FC<{ chartsOnly?: boolean }> = ({ chartsOnly = false }
             {view3d ? (
               <Scatter3D points={points.filter((p: any) => p.ripple == null || p.ripple <= effCut)} rippleMax={effCut}
                 best={best && best.torque_per_mass != null
-                  ? { td: best.torque_per_mass, eff: best.efficiency, ripple: best.T_ripple_pct } : null} />
+                  ? { td: best.torque_per_mass, eff: best.efficiency, ripple: best.T_ripple_pct,
+                    shaft_conv: best.shaft_convention === 'fe_on_shaft_k3d_v1' ? 1 : best.shaft_conv } : null} />
             ) : (
             <ResponsiveContainer width="100%" height="100%">
               <ScatterChart margin={{ top: 8, right: 24, left: 8, bottom: 18 }}>
@@ -1081,6 +1121,7 @@ const DescentPanel: React.FC<{ chartsOnly?: boolean }> = ({ chartsOnly = false }
                       <div style={{ background: 'var(--app-bg)', border: '1px solid var(--line)', borderRadius: 4,
                                     padding: '6px 9px', fontSize: 11, lineHeight: 1.6 }}>
                         {p.eff != null && <div style={{ color: '#22c55e' }}>Eff %: {Number(p.eff).toFixed(3)}</div>}
+                        {chartTag(p) && <div>{shaftTx(chartTag(p) === 'current' ? 'shaftBasisCurrent' : 'shaftBasisEarlier')}</div>}
                         {p.td  != null && <div style={{ color: '#3b82f6' }}>Nm/kg: {Number(p.td).toFixed(3)}</div>}
                         {p.ripple != null && (
                           <div style={{ color: '#22c55e' }}>
@@ -1129,12 +1170,12 @@ const DescentPanel: React.FC<{ chartsOnly?: boolean }> = ({ chartsOnly = false }
                 <Scatter name="★ best" data={bestPt} fill="#fbbf24" shape="star" isAnimationActive={false}
                   cursor="pointer" onClick={(d: any) => d && setSelectedPt(d.payload ?? d)} />
                 {selectedPt && selectedPt.td != null && (
-                  <Scatter name="● picked" data={[{ td: selectedPt.td, eff: selectedPt.eff, z: 9 }]}
+                  <Scatter name="● picked" data={[{ td: selectedPt.td, eff: selectedPt.eff, z: 9, shaft_conv: loadLineBasis(selectedPt) ? 1 : undefined }]}
                     fill="none" stroke="#e879f9" strokeWidth={1.25} shape="circle" isAnimationActive={false} />
                 )}
                 {showLoadLines && loadLineDesigns.map(([name, arr], i) => (
                   <Scatter key={'ll-' + name} name={name}
-                    data={arr.map((p: any) => ({ td: p.td, eff: p.eff, z: 1, I: p.I }))}
+                    data={arr.map((p: any) => ({ td: p.td, eff: p.eff, z: 1, I: p.I, shaft_conv: loadLineBasis(p) ? 1 : undefined }))}
                     fill={LL_PALETTE[i % LL_PALETTE.length]}
                     line={{ stroke: LL_PALETTE[i % LL_PALETTE.length], strokeWidth: 2.5 }} lineType="joint" isAnimationActive={false}>
                     <LabelList dataKey="I" position="top" formatter={(v: any) => `${v}A`} fill={LL_PALETTE[i % LL_PALETTE.length]} fontSize={9} />
@@ -1142,7 +1183,7 @@ const DescentPanel: React.FC<{ chartsOnly?: boolean }> = ({ chartsOnly = false }
                 ))}
                 {showLoadLines && ratedMarkers.map((rp: any) => (
                   <Scatter key={'rated-' + rp.name} name={`◆ ${rp.name} @ ${ratedTorque} Nm`}
-                    data={[{ td: rp.td, eff: rp.eff, z: rp.z, I: rp.I }]}
+                    data={[{ td: rp.td, eff: rp.eff, z: rp.z, I: rp.I, shaft_conv: rp.shaft_conv }]}
                     fill={rp.color} shape="diamond" isAnimationActive={false}>
                     <LabelList dataKey="I" position="right" formatter={(v: any) => `${v}A`} fill={rp.color} fontSize={9} />
                   </Scatter>

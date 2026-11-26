@@ -1,0 +1,32 @@
+# airfoil: naca4-0012
+# re: 450000
+# mach: 0
+# ncrit: 9
+# source: mfoil v2023-06-28 (K. J. Fidkowski, MIT licence), coupled panel / integral boundary layer, free transition e^N; computed by MOTRES 2026-11-19/20 on the NACA 4-digit formula section (mfoil naca_points, standard open trailing edge); a model, not a measurement
+# kept: converged points -8..16 deg; unconverged inside (bridged by linear interpolation): none; beyond the ends the BEMT table provider extends by Viterna
+alpha_deg,cl,cd
+-8,-0.88297,0.015262
+-7,-0.80419,0.013476
+-6,-0.72342,0.011969
+-5,-0.63958,0.010646
+-4,-0.49254,0.009295
+-3,-0.34398,0.008178
+-2,-0.21098,0.007234
+-1,-0.10324,0.006595
+0,0.00000,0.006367
+1,0.10324,0.006595
+2,0.21098,0.007234
+3,0.34398,0.008178
+4,0.49254,0.009295
+5,0.63958,0.010646
+6,0.72342,0.011969
+7,0.80419,0.013476
+8,0.88297,0.015262
+9,0.96072,0.017323
+10,1.03632,0.019896
+11,1.10249,0.023370
+12,1.15830,0.026624
+13,1.18172,0.032383
+14,1.19346,0.039770
+15,1.18683,0.050927
+16,1.15458,0.067808

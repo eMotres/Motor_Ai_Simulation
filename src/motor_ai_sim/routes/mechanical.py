@@ -122,6 +122,26 @@ def _live_polys(geo: Optional[str]):
     return motor.get_2d_polygons(0.0), motor, ov
 
 
+def _live_mech_polys(geo: Optional[str]):
+    """``_live_polys`` as the MECHANICAL solvers mesh it (2026-11-25).
+
+    The same cross-section, except that a magnet pocket DRAWN with a clearance
+    wider than the rotor mesher's weld (``geometry.magnet_pocket_clearance``)
+    has its magnet meshed as the body that fills the clearance ring, with the
+    drawn clearance carried as the contact's stress-free gap — see
+    ``simulation.mechanical.pocket_clearance``.  Every other machine gets the
+    very same polygons object ``_live_polys`` returns.  A pocket that is not the
+    magnet offset by the clearance is a 422 naming it, never a silent solve.
+    """
+    from motor_ai_sim.simulation.mechanical import pocket_clearance as _pkc
+    polys, motor, ov = _live_polys(geo)
+    try:
+        polys = _pkc.mechanical_polys(polys, getattr(motor, "parameters", None))
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    return polys, motor, ov
+
+
 def _assignments() -> Dict[str, str]:
     """part -> material name: the config's ``materials:`` block, then this
     request's override.  Same precedence the solver uses."""
@@ -241,6 +261,20 @@ def _torque_of_block(block: Any) -> Optional[float]:
     block has one (what the Electromagnetic tab shows), else the plain mean.  ``None`` when there is none."""
     if not isinstance(block, dict):
         return None
+    # the shaft-side convention (motor_ai_sim.shaft_convention): the torque the shaft carries is the run's own
+    # shaft torque - a motor's output, a generator's input - already with its 3-D factor and the core loss on it
+    if block.get("shaft_convention") == "fe_on_shaft_k3d_v1":
+        # the LOAD the shaft carries: the torque at the coupling, bearings and windage included when the run names
+        # them (a stress magnitude - its sign says nothing about the stress)
+        from motor_ai_sim.shaft_convention import coupling_torque
+        ts = coupling_torque(block)
+        if ts is None:
+            try:
+                ts = float(block.get("T_shaft_Nm"))
+            except (TypeError, ValueError):
+                ts = None
+        if ts is not None and math.isfinite(ts) and ts != 0.0:
+            return abs(ts)
     t = None
     for key in ("T_em_avg_Nm", "T_avg_Nm"):
         try:
@@ -604,6 +638,9 @@ def _remember_last(kind: str, result: Dict[str, Any], params: Dict[str, Any],
             log.debug("mechanical: per-duty field not stored", exc_info=True)
 
 
+from motor_ai_sim import geo_fingerprint as _GFP  # noqa: E402  (a stored fingerprint also matches its legacy49 alias)
+
+
 def _live_fingerprint(geo_ov) -> Optional[str]:
     try:
         from motor_ai_sim.routes.simulation import _geometry_fingerprint
@@ -708,7 +745,7 @@ def _resolve_pull(pull: Optional[str], pull_duty: Optional[str],
     live1 = _live_fingerprint(geo_ov)
     rec1 = meta.get("geometry_fingerprint")
     geometry = "unverified"
-    if rec1 and live1 and rec1 == live1:
+    if rec1 and live1 and _GFP.same(rec1, live1, geo_ov):
         geometry = "match"
     else:
         try:
@@ -1139,7 +1176,7 @@ def rotor_stress(
     try:
         t0 = time.time()
         try:
-            polys, motor, geo_ov = _live_polys(geo)
+            polys, motor, geo_ov = _live_mech_polys(geo)
         except HTTPException:
             raise
         except Exception as exc:  # noqa: BLE001
@@ -1618,7 +1655,7 @@ def limit_speed(
     try:
         t0 = time.time()
         try:
-            polys, motor, geo_ov = _live_polys(geo)
+            polys, motor, geo_ov = _live_mech_polys(geo)
         except HTTPException:
             raise
         except Exception as exc:  # noqa: BLE001
@@ -1975,7 +2012,7 @@ def _auto_limit_speed(out: Dict[str, Any],
         _progress.start(total=max_solves, phase="geometry build",
                         kind="limit_speed", composition="")
         try:
-            polys, motor, geo_ov = _live_polys(geo)
+            polys, motor, geo_ov = _live_mech_polys(geo)
             assign = _assignments()
             stack_mm = float(motor.parameters.get("motor_length") or 0.0)
             n_poles = _num_poles(motor)
@@ -2412,7 +2449,7 @@ def modes(
     try:
         t0 = time.time()
         try:
-            polys, motor, geo_ov = _live_polys(geo)
+            polys, motor, geo_ov = _live_mech_polys(geo)
         except HTTPException:
             raise
         except Exception as exc:  # noqa: BLE001
@@ -2549,7 +2586,7 @@ def critical_speeds(
     try:
         t0 = time.time()
         try:
-            polys, motor, geo_ov = _live_polys(geo)
+            polys, motor, geo_ov = _live_mech_polys(geo)
         except HTTPException:
             raise
         except Exception as exc:  # noqa: BLE001
@@ -2743,14 +2780,15 @@ def last(
             res = {k: v for k, v in res.items() if k != "field"}
         fp = e.get("geometry_fingerprint")
         stale = (None if (not fp or not live or live == "nofp")
-                 else bool(fp != live))
+                 else (not _GFP.same(fp, live, geo_ov)))
         return {"result": res, "params": e.get("params") or {},
                 "geometry_fingerprint": fp, "computed_at": e.get("computed_at"),
                 "stale_geometry": stale,
                 # the point it was solved for (second witness); ``None`` = unknown
                 "context": e.get("context")}
 
-    out: Dict[str, Any] = {"live_geometry_fingerprint": live}
+    out: Dict[str, Any] = {"live_geometry_fingerprint": live,
+                           "live_geometry_fingerprint_aliases": list(_GFP.aliases(live))}
     for kind in _LAST_KINDS:
         out[kind] = _entry(kind)
     # 200 with `has_result: false` rather than a 404: "nothing solved yet" is the
@@ -2792,7 +2830,7 @@ def mesh(
     try:
         t0 = time.time()
         try:
-            polys, _motor, geo_ov = _live_polys(geo)
+            polys, _motor, geo_ov = _live_mech_polys(geo)
         except HTTPException:
             raise
         except Exception as exc:  # noqa: BLE001
@@ -2860,6 +2898,12 @@ def mesh(
             "geo_fingerprint": fp,
             "cached": False,
         }
+        # a pocket drawn with a clearance: the view shows the SEATING fill (what
+        # a separation solve meshes); modes and bonded solves mesh the ring
+        from motor_ai_sim.simulation.mechanical import pocket_clearance as _pkc
+        _pk = _pkc.summary(polys, _pkc.RULE_STRESS)
+        if _pk is not None:
+            out["pocket_clearance"] = _pk
         out["elapsed_s"] = _elapsed(t0)
         if len(_MESH_CACHE) >= _MESH_CACHE_MAX:
             _MESH_CACHE.popitem(last=False)

@@ -14,6 +14,8 @@ import { useRememberedView } from '../../lib/useRememberedView';
 import { catalogRows } from '../../lib/propellersCatalog';
 import type { Quality } from '../../lib/propellersCatalog';
 import DesignerPage from './DesignerPage';
+import { useHelpContext } from '../support/useHelpContext';
+import { propellersHelp } from '../../lib/helpContexts';
 
 const API = (import.meta.env.VITE_API_URL ?? 'http://localhost:8001') as string;
 
@@ -37,6 +39,7 @@ export default function PropellersPanel() {
   }, []);
 
   const rows = useMemo(() => catalogRows(resp), [resp]);
+  useHelpContext(propellersHelp({ view, rows: rows.length, failed: !!error }));
   const head = (label: string, tip: string) => (
     <TableCell sx={{ fontSize: 12, whiteSpace: 'nowrap' }}><Tooltip title={tip}><span>{label}</span></Tooltip></TableCell>
   );

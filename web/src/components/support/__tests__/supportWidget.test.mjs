@@ -56,7 +56,8 @@ test('the draft card: editable type, title and description; Send and Dismiss', (
 test('Send goes through the confirm flow with the context; nothing is filed from the chat call', () => {
   assert.match(widget, /runConfirm\(flowRef\.current, submitTicket, context\(\), setFlow\)/);
   // ONE assistant (2026-11-11): the context rides only for a signed-in caller; inside a Specification the place (project, fill mode) too
-  assert.match(widget, /askAssistant\(msgs, user \? context\(\) : undefined, lang, spec \? \{ projectId: spec\.projectId, fill: fill && canApply \} : undefined\)/);
+  // a visitor sends only the language and the validated tab / sub ids (buildAnonContext), never the snapshot
+  assert.match(widget, /askAssistant\(msgs, user \? context\(\) : buildAnonContext\(\{ tab: activeTab, lang: [^)]*\), lang, spec \? \{ projectId: spec\.projectId, fill: fill && canApply \} : undefined\)/);
   assert.match(widget, /await ask\(next\.msgs\)/);
   assert.doesNotMatch(widget, /t\('demo'\)/);
   assert.match(widget, /installFailedCallRecorder\(/);
@@ -74,9 +75,14 @@ test('assistant answers are rendered as sanitised markdown, user text as plain t
 });
 
 test('every t() key the components use exists in EN and in ZH', () => {
-  const keys = new Set([...(widget + card).matchAll(/\bt\('([A-Za-z0-9_.]+)'/g)].map((m) => m[1]));
+  // a call with { ns: 'common' } reads the common namespace, not support.json
+  const calls = [...(widget + card).matchAll(/\bt\('([A-Za-z0-9_.]+)'(,\s*\{[^}]*ns:\s*'common'[^}]*\})?/g)];
+  const keys = new Set(calls.filter((m) => !m[2]).map((m) => m[1]));
+  const commonKeys = calls.filter((m) => m[2]).map((m) => m[1]);
   const enMap = new Map(flat(en));
   const zhMap = new Map(flat(zh));
+  const common = (lg) => new Map(flat(JSON.parse(readFileSync(new URL(`../../../locales/${lg}/common.json`, import.meta.url), 'utf8'))));
+  for (const k of commonKeys) assert.ok(common('en').has(k) && common('zh-CN').has(k), `common.json missing ${k}`);
   for (const k of keys) {
     assert.ok(enMap.has(k), `EN missing ${k}`);
     assert.ok(zhMap.has(k), `ZH missing ${k}`);
@@ -95,7 +101,7 @@ test('ZH is a full mirror: same keys, same placeholders, Chinese text, no mixed 
   for (const [k, v] of zhMap) {
     assert.deepEqual(ph(v), ph(enMap.get(k)), `${k}: placeholders`);
     assert.ok(CJK.test(v), `${k}: the ZH string has no Chinese`);
-    const latin = (v.replace(/\{\w+\}/g, '').match(LATIN_WORD) ?? []).filter((w) => !allowedLatin.has(w));
+    const latin = (v.replace(/\{\w+\}/g, '').replace(/[\w.+-]+@[\w-]+(\.[\w-]+)+/g, '').match(LATIN_WORD) ?? []).filter((w) => !allowedLatin.has(w));
     assert.deepEqual(latin, [], `${k}: English words inside the ZH string`);
   }
   for (const [k, v] of enMap) assert.ok(!CJK.test(v), `${k}: Chinese inside the EN string`);
@@ -115,5 +121,5 @@ test('no user-visible English is hard-coded in the components, and no small prin
 
 test('the namespace is registered, so the lazy loader finds support.json', () => {
   const core = read('i18n', 'core.ts');
-  assert.match(core, /'support'\] as const/);
+  assert.match(core, /NAMESPACES = \[[^\]]*'support'[^\]]*\] as const/);
 });

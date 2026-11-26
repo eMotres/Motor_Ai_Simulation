@@ -108,14 +108,14 @@ test('Projects tab: exactly ONE return to the project list, for every role and e
 
 // Width budget of the open-project header row (PanelHeader: px 3 each side, gap 8, the panel label, then the tabs slot with the
 // button).  The row wraps (flexWrap), so if label + button + all tabs are wider than the row, the tabs drop to a second line.
-// Worst case: an admin with every tab (production, notes, timeline, quote, cost) and an unread chip on Messages.  Text widths are
+// Worst case: an admin with every tab (production, notes, quote, cost) and an unread chip on Messages.  Text widths are
 // a deliberate OVER-estimate (Latin 0.62 em per character, CJK 1 em) so a pass here leaves room in the browser.
 const EM_TAB = 12.8;                                     // SUB_TAB_SX fontSize 0.8rem
 const EM_LABEL = 14;                                     // the panel label, subtitle2 0.875rem
 const textW = (s, em) => [...s].reduce((w, ch) => w + (/[\u3000-\u9fff\uff00-\uffef]/.test(ch) ? 1 : 0.62) * em, 0);
 const rowNeeds = (lang) => {
   const tabs = locale(lang).tabs;
-  const order = ['specification', 'motors', 'messages', 'documents', 'production', 'notes', 'timeline', 'quote', 'cost'];
+  const order = ['specification', 'motors', 'messages', 'documents', 'production', 'quote', 'cost'];   // no project Timeline (owner 2026-11-25)
   const tabsW = order.reduce((w, id) => w + textW(tabs[id], EM_TAB) + 20, 0) + 36;    // px 1.25 each side; unread chip + margin
   const backW = textW(locale(lang).back, EM_TAB) + 18 + 8 - 4 + 20 + 2 + 12;           // icon, its margins, padding, border, mr 1.5
   return textW(commonLocale(lang).tabs.development, EM_LABEL) + 8 + backW + tabsW;

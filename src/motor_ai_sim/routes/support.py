@@ -1089,6 +1089,12 @@ def _is_anonymous(authorization: Optional[str]) -> bool:
     return _caller_role(authorization) == "anon"
 
 
+def _window_block(ui: Any, lang: Any) -> str:
+    """The "user is here" part for a caller with no session snapshot (a visitor: the tab ids only)."""
+    from motor_ai_sim.help_context import render_window
+    return render_window(ui, lang=str(lang or "en")) if isinstance(ui, dict) and ui else ""
+
+
 def build_system_prompt(role: str, *, anon: bool, context: Optional[dict] = None,
                         authorization: Optional[str] = None, spec: bool = False) -> str:
     """Everything the model is told for one call.
@@ -1107,7 +1113,8 @@ def build_system_prompt(role: str, *, anon: bool, context: Optional[dict] = None
         block = support_catalog.published_motors_block(None, visitor=True)
         sp = _effective_prompt("anon")
         return (sp + VISITOR_NOTE + ("" if NO_PRICE_RULE in sp else "\n" + NO_PRICE_RULE) + ("\n\n" + block if block else "")
-                + "\n\n" + DATA_RULES + "\n\n" + CREATE_SPEC_PROTOCOL + "\n" + VISITOR_CREATE_NOTE)
+                + "\n\n" + DATA_RULES + "\n\n" + CREATE_SPEC_PROTOCOL + "\n" + VISITOR_CREATE_NOTE
+                + _window_block((context or {}).get("ui_context"), (context or {}).get("lang")))
     sp = _effective_prompt(role)
     if NO_PRICE_RULE not in sp and str(role or "").lower() not in FULL_UI_ROLES:
         sp += "\n\n" + NO_PRICE_RULE
@@ -1118,7 +1125,7 @@ def build_system_prompt(role: str, *, anon: bool, context: Optional[dict] = None
         sp += "\n\n" + block
     if not spec:                                 # spec mode adds the data rules and the spec section itself (spec_assistant.turn)
         sp += "\n\n" + DATA_RULES + "\n\n" + CREATE_SPEC_PROTOCOL
-    return sp + support_context.render_for_model(context or {}, role=role)
+    return sp + support_context.render_for_model(context or {}, role=role, window=not spec)
 
 
 #: A visitor has no account to create a project in: the server keeps the values and shows a sign-up button that carries them.
@@ -1329,7 +1336,7 @@ def _spec_chat(request: Request, body: dict, authorization: Optional[str], role:
     if not A.may_use(user, project):
         return None
     can_apply = DA.can_edit_spec(user, project)
-    ctx = support_context.sanitize_context(body.get("context"))
+    ctx = support_context.sanitize_context(body.get("context"), role)
     base = build_system_prompt(role, anon=False, context=ctx, authorization=authorization, spec=True)
     ident = str(user.get("email") or "").lower()
     web = web_search_budget(ident)
@@ -1424,7 +1431,10 @@ def chat(request: Request, body: dict = Body(default={}),
     except Exception as exc:                                  # noqa: BLE001 - no estimate is not a failed answer
         logger.warning("support: propeller estimate failed (%s: %s)", type(exc).__name__, str(exc)[:160])
     web = 0 if anon else web_search_budget(ident)
-    ctx = {} if anon else support_context.sanitize_context(body.get("context"))
+    # a visitor keeps the tab ids of the window only (no session snapshot); a signed-in caller's ui_context is checked against the role
+    raw_ctx = body.get("context") if isinstance(body.get("context"), dict) else {}
+    ctx = (support_context.sanitize_context({k: raw_ctx[k] for k in ("ui_context", "lang") if k in raw_ctx}, "anon") if anon
+           else support_context.sanitize_context(raw_ctx, role))
     sp = build_system_prompt(role, anon=anon, context=ctx, authorization=authorization)
     sp += "\n\n" + web_search_note(web) + ("\n\n" + E.render_for_model(est) if est else "")
     try:
@@ -1540,7 +1550,7 @@ def create_ticket(body: dict = Body(default={}),
     from motor_ai_sim import ticket_store as T
     email = _ticket_caller(authorization)
     body = body if isinstance(body, dict) else {}
-    ctx = support_context.sanitize_context(body.get("context"))
+    ctx = support_context.sanitize_context(body.get("context"), _caller_role(authorization))
     ctx["server"] = support_context.server_facts(_caller_role(authorization))
     try:
         t = T.create(email, body.get("type"), body.get("title"),

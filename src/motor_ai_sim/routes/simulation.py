@@ -1515,7 +1515,68 @@ def _config_physics_fingerprint(*, with_request_materials: bool) -> str:
         return "nofp"
 
 
+def _geo_fp_module():
+    from motor_ai_sim import geo_fingerprint as _GF
+    return _GF
+
+
 def _geometry_fingerprint(geo_override: Optional[dict] = None) -> str:
+    """The machine fingerprint WRITERS store and readers compare against (``geo_fingerprint``, staged rollout).
+
+    Stage 1 (``geo_fingerprint.WRITE_CANONICAL`` False, this build): the legacy49 hash, every key kept - bit-identical to the
+    print of the build before, so an API and a worker of the previous build that run beside this one during a deploy keep
+    understanding every record this build writes.  Stage 2 (a later deploy, after no process of the old build is left): the
+    canonical hash (post-baseline keys at their default left out = the pre-2026-11-15 print of a machine at defaults).
+    Both prints are derived from ONE snapshot of the geometry and recorded as equivalents, so a reader accepts a stored
+    record carrying either (``geo_fingerprint.same`` / ``accepted``)."""
+    c, leg = _geometry_fingerprint_pair(geo_override)
+    return c if _geo_fp_module().WRITE_CANONICAL else leg
+
+
+def _geometry_fingerprint_legacy(geo_override: Optional[dict] = None) -> str:
+    """The 2026-11-15 .. fingerprint with every key hashed (``legacy49``)."""
+    return _geometry_fingerprint_pair(geo_override)[1]
+
+
+def _geometry_fingerprints(geo_override: Optional[dict] = None) -> tuple:
+    """``(canonical, legacy49)`` of a machine from ONE snapshot of its geometry (equal when no default key was dropped)."""
+    return _geometry_fingerprint_pair(geo_override)
+
+
+def _geometry_snapshot():
+    """``(config geometry block, live geometry dict or None)`` read ONCE and copied, so every print derived from it describes
+    the same machine even when the geometry changes while they are computed (no alias between two different machines)."""
+    import copy as _cp
+    from motor_ai_sim.config import get_config as _gc
+    g = (_gc() or {}).get("geometry")
+    try:
+        from motor_ai_sim.services.geometry_service import (
+            get_current_geometry as _gcg)
+        glive = _gcg().to_dict()
+    except Exception:
+        glive = None
+    try:
+        g, glive = _cp.deepcopy(g), _cp.deepcopy(glive)
+    except Exception:                                             # noqa: BLE001 - uncopyable value: hash the objects read
+        pass
+    return g, glive
+
+
+def _geometry_fingerprint_pair(geo_override: Optional[dict] = None) -> tuple:
+    """``(canonical, legacy49)`` hashed from one snapshot; the pair is registered as equivalent prints of one machine."""
+    try:
+        snap = _geometry_snapshot()
+    except Exception:
+        return "nofp", "nofp"
+    c = _geometry_fingerprint_impl(geo_override, True, snap)
+    leg = _geometry_fingerprint_impl(geo_override, False, snap)
+    if c != "nofp" and leg != "nofp":
+        _geo_fp_module().register(c, leg)
+    return c, leg
+
+
+def _geometry_fingerprint_impl(geo_override: Optional[dict] = None, canonical: bool = True,
+                               snapshot: Optional[tuple] = None) -> str:
     """md5 of the MACHINE alone — no operating point, no materials.
 
     `_config_physics_fingerprint` mixes geometry, winding, materials and the
@@ -1533,14 +1594,11 @@ def _geometry_fingerprint(geo_override: Optional[dict] = None) -> str:
     """
     try:
         import hashlib as _hl, json as _jl
-        from motor_ai_sim.config import get_config as _gc
-        _d = {"g": (_gc() or {}).get("geometry")}
-        try:
-            from motor_ai_sim.services.geometry_service import (
-                get_current_geometry as _gcg)
-            _d["glive"] = _gcg().to_dict()
-        except Exception:
-            _d["glive"] = None
+        _GF = _geo_fp_module()
+        _canon = _GF.canonical_geometry if canonical else (lambda g: g)
+        _g, _glive = snapshot if snapshot is not None else _geometry_snapshot()
+        _d = {"g": _canon(_g)}
+        _d["glive"] = None if _glive is None else _canon(dict(_glive) if canonical else _glive)
         if geo_override:
             # Resolve the override into the machine it PRODUCES instead of
             # hashing the raw dict: a kernel run sends the on-screen machine
@@ -1557,6 +1615,7 @@ def _geometry_fingerprint(geo_override: Optional[dict] = None) -> str:
                 if _d["glive"] is None:
                     raise ValueError("no live geometry to resolve against")
                 _merged = _mgo(dict(_d["glive"]), dict(geo_override))
+                _merged = _canon(_merged)
                 # the OD-notch flag in its stored form (absent = on), as the
                 # live object carries it: an explicit `true` is the same motor
                 from motor_ai_sim.geometry.motor_geometry import (
@@ -1573,7 +1632,7 @@ def _geometry_fingerprint(geo_override: Optional[dict] = None) -> str:
                 if _merged != _d["glive"]:
                     _d["glive"] = _merged
             except Exception:
-                _d["ov"] = dict(sorted(geo_override.items()))
+                _d["ov"] = dict(sorted(_canon(dict(geo_override)).items()))
         return _hl.md5(_jl.dumps(_d, sort_keys=True,
                                  default=str).encode()).hexdigest()[:16]
     except Exception:
@@ -3547,6 +3606,11 @@ def _append_run_journal(result: Dict) -> None:
                    "demag": result.get("demag"), "eddy": result.get("eddy_coupled")},
             "metrics": {k: _num(s.get(k)) for k in _mkeys if s.get(k) is not None},
             "end3d_k": _num((s.get("end3d") or {}).get("k_flux")) if isinstance(s.get("end3d"), dict) else None,
+            # the shaft-power convention of P / eta / densities above (1 = core loss on the shaft, the factor on the
+            # converted power; absent = an earlier row) and where its losses sit
+            **({"shaft_conv": 1, "shaft_basis": {k: s.get(k) for k in (
+                "shaft_k3d", "torque_side", "shaft_rotor_in_field", "P_torque_embedded_W", "P_shaft_drag_W",
+                "T_shaft_Nm", "T_field_k_Nm")}} if _shaft_marker(s) else {}),
             "n_frames_solved": result.get("n_frames_solved"),
             "wall_s": _num(result.get("wall_s") or result.get("elapsed_s")),
         }
@@ -5780,6 +5844,20 @@ def get_fem_transient(
         _sb_key_fields["geo_ov"] = tuple(sorted(_geo_ov.items()))
     if ripple_refine:   # may step past the requested layers: never a plain entry
         _sb_key_fields["ripple_refine"] = ("ripple_refine", 1)
+    # SLICED MAGNETS (2026-11-25): solved with sigma x factor in the field, so a
+    # ledger / cache entry of a sliced machine from the scaled-watts code is
+    # other physics.  Only a machine with magnet_lamination > 0 carries it.
+    try:
+        from motor_ai_sim.simulation.fem_solver_2d import (
+            magnet_segmentation_cache_tag as _mseg_tag)
+        from motor_ai_sim.config import get_config as _get_cfg_k
+        _geo_eff_k = dict((_get_cfg_k().get("geometry") or {}))
+        _geo_eff_k.update(_geo_ov or {})
+        _mseg = _mseg_tag(_geo_eff_k)
+    except Exception:  # noqa: BLE001 — the key never fails a run
+        _mseg = None
+    if _mseg is not None:
+        _sb_key_fields["magnet_segmentation"] = ("mseg", _mseg)
     _sb_key = tuple(_sb_key_fields.values())
     # Key of the field snapshot this run's last frame belongs under — built ONCE
     # here and used both to store it after the solve and to tell a cache hit
@@ -5865,7 +5943,7 @@ def get_fem_transient(
             _saved_geo_fp = _out.get("geo_fingerprint")
             _out["geo_fingerprint_live"] = _live_geo_fp
             _out["stale_geometry"] = (
-                None if not _saved_geo_fp else bool(_saved_geo_fp != _live_geo_fp))
+                None if not _saved_geo_fp else (not _geo_fp_module().same(_saved_geo_fp, _live_geo_fp, _geo_ov)))
             _out["stale_reason"] = (
                 "geometry" if _out["stale_geometry"]
                 else ("inputs" if _out["stale"] else None))
@@ -6635,8 +6713,7 @@ def get_fem_transient(
         # …and a BACKGROUND solve is never "the motor on screen" even when it
         # solves the very same geometry (passport sweeps — see _BACKGROUND_RUN).
         _is_live_machine = ((not _geo_ov or
-                             _sbres.get("geo_fingerprint")
-                             == _geometry_fingerprint(None))
+                             _geo_fp_module().same(_sbres.get("geo_fingerprint"), _geometry_fingerprint(None)))
                             and not _BACKGROUND_RUN.get())
         if not _is_live_machine or ripple_refine:
             _fld_snap = None
@@ -6990,7 +7067,7 @@ def load_run_ledger_entry(key: str):
     # restore path and `_refresh_summary_shape`'s callers already follow).
     _saved_geo_fp = out.get("geo_fingerprint")
     out["stale_geometry"] = (None if not _saved_geo_fp
-                             else bool(_saved_geo_fp != _geometry_fingerprint(None)))
+                             else (not _geo_fp_module().same(_saved_geo_fp, _geometry_fingerprint(None))))
     log.info("run ledger: %s served from the History popover (computed %s)",
              key, blob.get("computed_at"))
     return out
@@ -7040,8 +7117,13 @@ def _bench_read(fp: Optional[str], conn: Optional[str],
             from motor_ai_sim.config import get_config as _gc0
             conn = (_gc0().get("winding") or {}).get("connection") or ""
         import json as _j
-        return (_j.loads(_bench_cache_path().read_text(encoding="utf-8"))
-                .get(_bench_key(fp, str(conn or ""), i_probe))) or None
+        _all = _j.loads(_bench_cache_path().read_text(encoding="utf-8"))
+        # the entry written under this fingerprint, else under its legacy49 alias (written 2026-11-15 .. 2026-11-25)
+        for _f in _geo_fp_module().accepted(fp):
+            _hit = _all.get(_bench_key(_f, str(conn or ""), i_probe))
+            if _hit:
+                return _hit
+        return None
     except Exception:
         return None
 
@@ -7657,8 +7739,117 @@ _SUMMARY_SHAPE_V = 21   # v21: the FULL mass of the loaded configuration + the p
 # every result solved since carries the verdict from its own solve.
 
 
+#: A passport measured on an earlier geometry is lent to another geometry of the same machine only at a stack length
+#: this machine has been measured at (the same 5 % `end3d_factors.measured_k_T` uses for "the same length") or inside the
+#: span of its measured lengths (interpolated, never extrapolated): the end effect of a 40 mm stack is not that of a
+#: 200 mm one.
+_END3D_STACK_TOL = 0.05
+#: Outside the measured span the NEAREST measured end point is lent, flagged, but only while the stack is within this
+#: factor (either way) of that end point's length; farther the answer is "no 3-D factor".  The end loss of a stack is
+#: roughly a constant LENGTH per machine (k = 1 - c/L): a shorter stack than the end point has a lower k than lent
+#: (the lent value reads high), a longer one a higher k (reads low); the error grows with the distance.
+_END3D_NEAREST_MAX_RATIO = 1.5
+_END3D_OUTSIDE_FLAG = "outside the measured span: run Stage A"
+
+
+def _end3d_stack_at(rec: dict, stack_mm: float):
+    """``(k_flux at stack_mm, basis)`` from ONE stored passport, or ``(None, why)`` when it was measured at a different
+    stack length: its own table entry for the length (interpolated inside its span), else its scalar when its own stack
+    is within 5 %.  (The lookup itself uses the whole machine's curve, `_end3d_machine_curve`.)"""
+    pts = _end3d_rec_points(rec)
+    k = _end3d_curve_at(pts, stack_mm)
+    if k is not None:
+        return k[0], k[1]
+    if pts:
+        return None, "its stack lengths %g-%g mm do not cover %g mm" % (pts[0][0], pts[-1][0], stack_mm)
+    return None, "its stack length is not recorded"
+
+
+def _end3d_rec_points(rec: dict) -> list:
+    """The ``(stack_mm, k_flux)`` points ONE passport measured: its `k_flux_vs_L` table plus its scalar at its own
+    `stack_mm` when that is recorded, sorted by length."""
+    from motor_ai_sim.end3d_factors import k_flux_table
+    pts = {}
+    # A multi-row table without the stack-length marker contributes only its reference row (stale table guard).
+    curve = k_flux_table(rec)[0]
+    if isinstance(curve, dict):
+        for a_, b_ in curve.items():
+            try:
+                pts[float(a_)] = float(b_)
+            except (TypeError, ValueError):
+                continue
+    try:
+        own = float(rec.get("stack_mm"))
+        if own > 0 and rec.get("k_flux") is not None:
+            pts.setdefault(own, float(rec["k_flux"]))
+    except (TypeError, ValueError):
+        pass
+    return sorted(pts.items())
+
+
+def _end3d_curve_at(pts: list, stack_mm: float):
+    """``(k, basis)`` at ``stack_mm`` on a length curve ``[(L, k), ...]`` (sorted): the measured point itself when one lies
+    within 5 % of the length (``"point"``), else linear interpolation between its neighbours inside the span
+    (``"curve"``); ``None`` outside the span - never extrapolated."""
+    if not pts or not stack_mm:
+        return None
+    near = min(pts, key=lambda q: abs(q[0] - stack_mm))
+    if abs(near[0] - stack_mm) <= _END3D_STACK_TOL * stack_mm:
+        return near[1], "point"
+    if stack_mm < pts[0][0] or stack_mm > pts[-1][0]:
+        return None
+    for (x0, y0), (x1, y1) in zip(pts, pts[1:]):
+        if x0 <= stack_mm <= x1:
+            return (y0 if x1 == x0 else y0 + (y1 - y0) * (stack_mm - x0) / (x1 - x0)), "curve"
+    return None
+
+
+def _end3d_machine_curve(cands: list, when) -> list:
+    """ONE length curve per machine from every passport of it (``cands`` = ``[(key, record), ...]``): all their table
+    entries and own-stack scalars merged, the newest passport winning where two measured the same length.
+    ``[(L, k, key), ...]`` sorted by length."""
+    best = {}
+    for key, rec in sorted(cands, key=lambda kv: when(kv[1])):          # oldest first, the newest overwrites
+        for L, k in _end3d_rec_points(rec):
+            best[L] = (k, key)
+    return [(L, k, key) for L, (k, key) in sorted(best.items())]
+
+
+def _end3d_pick(store: dict, geo_fp: str, geo: Optional[dict] = None) -> Optional[dict]:
+    """The passport of ``geo_fp`` in the merged store (``end3d_store.load``), the same answer whichever of the machine's
+    equivalent prints (canonical / legacy49) is asked, so switching writers (``geo_fingerprint.WRITE_CANONICAL``) does not
+    change it.  ONE rule, the store's own: the WORKSPACE layer wins over the shared one (a local re-measurement), now across
+    the alias group too; inside a layer the literal print first (the answer of the build before), then the equivalent prints
+    in ``accepted`` order."""
+    if isinstance(store.get(geo_fp), dict):
+        lit = store[geo_fp]
+    else:
+        lit = None
+    prints = None
+    try:
+        from motor_ai_sim import end3d_store as _e3s
+        ws_path = _e3s.workspace_path()
+        ws = {} if ws_path == _e3s.shared_path() else _e3s._read(ws_path)
+    except Exception:                                             # noqa: BLE001 - no workspace layer
+        ws = {}
+    # a workspace entry counts only as the merged store holds it (the store in hand is the source of truth)
+    ws = {k: v for k, v in ws.items() if isinstance(store.get(k), dict) and store.get(k) == v}
+    if ws:
+        if geo_fp in ws:
+            return ws[geo_fp]
+        prints = _geo_fp_module().accepted(geo_fp, geo)
+        for _f in prints[1:]:
+            if _f in ws:
+                return ws[_f]
+    if lit is not None:
+        return lit
+    if prints is None:
+        prints = _geo_fp_module().accepted(geo_fp, geo)
+    return next((store[_f] for _f in prints[1:] if isinstance(store.get(_f), dict)), None)
+
+
 def _end3d_lookup(geo_fp: Optional[str], geo: Optional[dict] = None,
-                  exact: bool = False) -> Optional[dict]:
+                  exact: bool = False, diag: Optional[dict] = None) -> Optional[dict]:
     """The Stage A end-effect passport for THIS machine, or None.
 
     config/end_effect_passports.json is keyed by the same `_geometry_fingerprint`
@@ -7666,7 +7857,13 @@ def _end3d_lookup(geo_fp: Optional[str], geo: Optional[dict] = None,
     different motor than the one on screen.  A 2-D transient overestimates the
     flux of a short stack (the field spills axially past the laminations); the
     3-D static Stage A measures the factor once per machine — 0.952 on the
-    40 mm, 0.927 on the 85 mm (stack 13 mm on Ø85 spills hard)."""
+    40 mm, 0.927 on the 85 mm (stack 13 mm on Ø85 spills hard).
+
+    The passports of EARLIER geometries of the same machine (slots / poles / OD) form ONE length curve k_flux(L) (their
+    table entries and own-stack scalars, the newest winning a repeated length).  A geometry without a passport of its own
+    takes the measured point within 5 % of its stack length, else the curve interpolated between its neighbours inside the
+    measured span - never extrapolated.  Outside the span the answer is None and, if `diag` is given, `diag["note"]` names
+    the span ("no 3-D factor", never a silent borrow)."""
     if not geo_fp:
         return None
     try:
@@ -7674,7 +7871,9 @@ def _end3d_lookup(geo_fp: Optional[str], geo: Optional[dict] = None,
         from motor_ai_sim import end3d_store as _e3_store
         store = _e3_store.load()
         from motor_ai_sim.end3d_factors import enrich as _e3_enrich
-        rec = store.get(str(geo_fp))
+        # the passport written under this fingerprint or under an equivalent print (canonical <-> legacy49); the geometry in
+        # hand resolves the alias when this process has not fingerprinted the machine yet
+        rec = _end3d_pick(store, str(geo_fp), geo)
         if isinstance(rec, dict):
             # + the torque factor (measured k_T, else k_flux) — owner
             # 2026-09-30, motor_ai_sim/end3d_factors.py
@@ -7694,16 +7893,87 @@ def _end3d_lookup(geo_fp: Optional[str], geo: Optional[dict] = None,
                  and v.get("k_flux") is not None]
         if not cands:
             return None
+        stack = _geo_stack_mm(geo)
         _when = lambda v: str(v.get("adopted_utc") or v.get("generated_utc") or "")  # noqa: E731
-        k, v = max(cands, key=lambda kv: _when(kv[1]))
-        return _e3_enrich({**v, "inherited": True, "inherited_from": k,
+        curve = _end3d_machine_curve(cands, _when)
+        hit = _end3d_curve_at([(L, k) for L, k, _ in curve], stack) if stack else None
+        nearest_end = None
+        if hit is None and stack and curve:
+            end = curve[0] if stack < curve[0][0] else curve[-1]
+            if max(stack / end[0], end[0] / stack) <= _END3D_NEAREST_MAX_RATIO:
+                hit, nearest_end = (end[1], "nearest, outside span"), end
+        if hit is None:
+            if diag is not None:
+                if not stack:
+                    why = "this geometry has no stack length"
+                elif curve:
+                    why = ("stack %g mm is outside the measured span %g-%g mm of this machine and more than a factor %g "
+                           "from its nearest measured length" % (stack, curve[0][0], curve[-1][0], _END3D_NEAREST_MAX_RATIO))
+                else:
+                    why = "no stack length is recorded in its passports"
+                diag["note"] = ("no 3-D factor: %s (%s); run Stage A for this geometry" % (why, desc))
+            return None
+        kf, basis = hit
+        # the passport the value belongs to: the one owning the nearest measured length (its other fields ride along)
+        near = nearest_end or min(curve, key=lambda q: abs(q[0] - stack))
+        v, k = store[near[2]], near[2]
+        if nearest_end and diag is not None:
+            diag["flag"] = _END3D_OUTSIDE_FLAG
+            diag["note"] = ("%s: stack %g mm, the factor of the nearest measured length %g mm is lent (%s)"
+                            % (_END3D_OUTSIDE_FLAG, stack, nearest_end[0], desc))
+        span = (curve[0][0], curve[-1][0])
+        # a torque factor stored on the source passport belongs to ITS length: enrich re-derives k_T under the length rule
+        # (kept only when basis is "point" and the source passport's OWN stack length is within 5 % of this one)
+        try:
+            _src_stack = float(v.get("stack_mm") or 0.0)
+        except (TypeError, ValueError):
+            _src_stack = 0.0
+        _same_len = bool(basis == "point" and _src_stack > 0 and abs(_src_stack - stack) <= _END3D_STACK_TOL * stack)
+        _drop = ("k_torque", "torque_basis") if _same_len else (
+            "k_T", "k_T_source", "k_T_inherited", "k_T_note", "k_torque", "torque_basis")
+        # the source's own check (status / applied / raw / verdict) does not describe a LENT, possibly interpolated
+        # factor on another geometry: dropped, and the lent factor is "unverified"
+        _drop = _drop + ("k_flux_status", "k_flux_applied", "k_flux_raw", "k_flux_verdict", "k_flux_vs_L_raw",
+                         "k_flux_basis")
+        # the class curve merges passports whose stored factors may rest on different bases (k_flux / k_flux_self):
+        # said in the note when it does, the lent factor stays "unverified" either way
+        _bases = {str((vv or {}).get("k_flux_applied") or "k_flux") for _kk, vv in cands}
+        _mixed = (" The machine-class curve mixes passports applied on different bases (%s)." % ", ".join(sorted(_bases))
+                  if len(_bases) > 1 else "")
+        v = {kk: vv for kk, vv in v.items() if kk not in _drop}
+        return _e3_enrich({**v, "k_flux": float(kf), "k_flux_passport": v.get("k_flux"), "inherited": True,
+                "k_flux_status": "unverified",
+                "inherited_from": k, "inherited_stack_basis": basis, "inherited_for_stack_mm": float(stack),
+                "inherited_curve": {"span_mm": [span[0], span[1]], "points": len(curve)},
+                **({"inherited_flag": _END3D_OUTSIDE_FLAG, "inherited_from_stack_mm": nearest_end[0],
+                    "inherited_length_ratio": float(stack) / float(nearest_end[0])} if nearest_end else {}),
                 "inherited_note": (
-                    f"coefficient of an EARLIER geometry of this machine "
-                    f"({desc}, passport {_when(v)[:10] or 'undated'}) — the "
-                    f"current geometry has no Stage A passport yet; recompute "
-                    f"to confirm or replace it")}, geo_fp, geo)
+                    f"coefficient taken from OTHER geometries of the machine class {desc} (same slots, poles and stator "
+                    f"OD only; magnet, air gap, materials, temperature and die are NOT compared) "
+                    f"at the stack length {stack:g} mm "
+                    + ("(a measured length, within %d %%)" % int(_END3D_STACK_TOL * 100) if basis == "point"
+                       else "(OUTSIDE the measured span %g-%g mm: the factor of the NEAREST MEASURED LENGTH %g mm, not "
+                            "interpolated, at a length ratio of %.2f; it reads high for a shorter stack and low for a "
+                            "longer one; %s)"
+                            % (span[0], span[1], nearest_end[0], float(stack) / float(nearest_end[0]),
+                               _END3D_OUTSIDE_FLAG) if nearest_end
+                       else "(interpolated on this machine's length curve, measured %g-%g mm)" % span)
+                    + " — the current geometry has no Stage A passport yet; recompute "
+                      "to confirm or replace it" + _mixed)}, geo_fp, geo)
     except Exception:   # noqa: BLE001 — no passport is a normal state
         return None
+
+
+def _geo_stack_mm(geo: Optional[dict] = None) -> float:
+    """Stack length [mm] of the live config geometry with an optional per-request override on top (0 when unknown)."""
+    try:
+        from motor_ai_sim.config import get_config as _gc
+        g = dict((_gc().get("geometry") or {}))
+        if geo:
+            g.update({kk: vv for kk, vv in dict(geo).items() if vv is not None})
+        return float(g.get("motor_length") or 0.0)
+    except Exception:   # noqa: BLE001
+        return 0.0
 
 
 def _machine_desc(geo: Optional[dict] = None) -> Optional[str]:
@@ -7856,6 +8126,12 @@ def _ripple_self_check(sbres: dict) -> dict:
     return sc if isinstance(sc, dict) else {}
 
 
+def _shaft_marker(summary: Optional[dict]) -> bool:
+    """True when a stored summary follows the current shaft convention."""
+    from motor_ai_sim.shaft_convention import has_marker
+    return has_marker(summary)
+
+
 def _refresh_summary_shape(res: dict) -> dict:
     """Rebuild a cached result's summary when its SHAPE predates the code.
 
@@ -7886,7 +8162,10 @@ def _refresh_summary_shape(res: dict) -> dict:
             coil_temp_c=float(args["coil_temp_c"]),
             geo_override=args.get("geo_override"),
             mode_requested=args.get("mode_requested"),
-            magnet_temp_c=args.get("magnet_temp_c"))
+            magnet_temp_c=args.get("magnet_temp_c"),
+            # the run keeps ITS shaft convention: a summary without the marker is
+            # rebuilt on the earlier one, never converted silently (owner Q7)
+            shaft_convention=("current" if _shaft_marker(s) else None))
         if s.get("mass_basis"):
             # a rebuild must not move the run onto whatever configuration is loaded NOW: the full-mass stamp it already
             # carries names the configuration it was taken from
@@ -7936,7 +8215,8 @@ def _round_w(value: float, nd: int) -> float:
 def _mech_loss_fields(sbres: dict, *, geo_override: Optional[dict],
                       rpm: float, p_mech_w: float, p_loss_w: float,
                       efficiency: float, op_mode: str,
-                      mass_components: Optional[list] = None) -> dict:
+                      mass_components: Optional[list] = None,
+                      signed: bool = False) -> dict:
     """The MECHANICAL half of this run's loss picture, or ``{}``.
 
     User, 2026-09-08: *"all losses should be passed into the electromagnetic
@@ -7986,7 +8266,7 @@ def _mech_loss_fields(sbres: dict, *, geo_override: Optional[dict],
         # run, so the three can never disagree about which runs are the user's.
         if geo_override:
             fp = sbres.get("geo_fingerprint") or _geometry_fingerprint(geo_override)
-            if fp != _geometry_fingerprint(None):
+            if not _geo_fp_module().same(fp, _geometry_fingerprint(None)):
                 return {}
         from motor_ai_sim import mech_losses as _ml
 
@@ -8018,7 +8298,15 @@ def _mech_loss_fields(sbres: dict, *, geo_override: Optional[dict],
     p_mech = abs(float(p_mech_w or 0.0))
     gen = str(op_mode) == "generator"
     x = (p_extra / p_mech) if p_mech > 0.0 else None
-    if x is None:
+    if signed and not gen:
+        # the shaft-side convention (motor_ai_sim.shaft_convention): a motor's shaft power is SIGNED - at no load
+        # the shaft supplies the core loss - and the coupling sees it minus the friction, still signed; there is
+        # a shaft efficiency only for a delivered output
+        p_s = float(p_mech_w or 0.0)
+        p_shaft_net = p_s - p_extra
+        _pe = p_s + float(p_loss_w or 0.0)
+        eta_shaft = (p_shaft_net / _pe) if (p_shaft_net > 0.0 and _pe > 1.0) else 0.0
+    elif x is None:
         eta_shaft = None
         p_shaft_net = None
     elif gen:
@@ -8089,9 +8377,20 @@ def _build_transient_summary(
                                             # refine_proc never reads
     magnet_temp_c: Optional[float] = None,  # the run's magnet temperature: the
                                             # ψ_PM probe runs at it (2026-10-30)
+    shaft_convention: Optional[str] = "current",  # "current" = this code's
+                                            # convention (shaft_convention.py);
+                                            # None = the earlier one (a REBUILD of
+                                            # a stored summary that carries no marker)
 ) -> dict:
     """Build the Simulation summary block (masses, loss split, KV, efficiency,
     specific torque/power) from a finished transient result dict.
+
+    ``shaft_convention``: a NEW run gets the convention of
+    :mod:`motor_ai_sim.shaft_convention` (core loss on the shaft, the 3-D torque
+    factor in the shaft-side numbers) and carries its marker.  ``None`` rebuilds a
+    summary of the earlier convention bit for bit (every loss on the electrical
+    side, ``P_mech_W = T*w`` 2-D), so a stored or restored run never changes its
+    numbers silently.
 
     THE single source for the summary formula — called by BOTH the sliding-band
     path AND the legacy remesh path in get_fem_transient, AND by the kernel's
@@ -8206,6 +8505,7 @@ def _build_transient_summary(
     _Vpk = float(sbres.get("V_peak", 0.0))
     _Vrms = _Vpk / _math.sqrt(2)
     _Vlpk = _Vpk * (1.0 if _is_delta else _sq3)
+    _e3diag: dict = {}
     _Vlrms = _Vlpk / _math.sqrt(2)
     _vs = [sbres.get(k) for k in ("V_A", "V_B", "V_C")]
     if all(isinstance(v, (list, tuple)) and len(v) == len(_vs[0]) and len(v) >= 4
@@ -8270,6 +8570,39 @@ def _build_transient_summary(
         _Tavg = abs(_Tavg)
         _Pmech = abs(_Pmech)
 
+    # ── THE SHAFT-SIDE CONVENTION (owner 2026-11-25) ─────────────────────
+    # A new run: the core loss is a SHAFT load and the 3-D torque factor is IN
+    # the shaft-side numbers (field part only), see motor_ai_sim.shaft_convention.
+    # The earlier convention (above) is kept verbatim for a rebuild of a stored
+    # summary without the marker.  T_em_avg_Nm stays the 2-D field torque in both.
+    _e3rec = _end3d_lookup(sbres.get("geo_fingerprint"), _geo_cfg, diag=_e3diag)
+    _sc_on = shaft_convention is not None
+    _sc_fields: dict = {}
+    _Tq = _Tavg            # torque the constants (Kt, Km) are built on
+    _Tpm = _Tavg           # torque the per-mass figures are built on
+    if _sc_on:
+        from motor_ai_sim import shaft_convention as _SC
+        _kq = (float(_e3rec.get("k_torque") or _e3rec["k_flux"])
+               if _e3rec and (_e3rec.get("k_torque") or _e3rec.get("k_flux")) else None)
+        _dr = _SC.drag_of_result(sbres, p_fe=_Pfe, p_mag=_Pmag, p_shaft=_Pshaft, p_sleeve=_Psleeve)
+        _bal = _SC.balance_of(_dr, t_field_nm=float(sbres.get("T_avg_Nm", 0.0)), rpm=_rpm,
+                              k=_kq, p_loss_w=_ploss)
+        _op_mode = _bal["op_mode"]
+        _Pmech = _bal["P_mech_W"]
+        _Pelec = _bal["P_elec_W"]
+        _eff = _bal["efficiency"]
+        _Tq = _bal["T_field_k_Nm"]
+        _Tpm = _SC.per_mass_torque(_bal)
+        # the 2-D field power T*w, the field torque with the 3-D factor, the shaft
+        # torque (a motor's output, a generator's input), where each loss sits
+        _sc_fields = _SC.fields(_bal, _dr, _kq)
+        # The battery and mechanical blocks below read the shaft side: a motor at
+        # no load (negative shaft power: the shaft has to supply the core loss)
+        # has no delivered output for them to bill.
+        _Pmech_out = max(_Pmech, 0.0)
+    else:
+        _Pmech_out = _Pmech
+
     # Voltage waveform quality (CIANO THD spec): V₁ + phase/line-to-line THD +
     # torque constant — first-class metrics on EVERY run so the optimizer can
     # hold THD_LL like it holds ripple.
@@ -8298,7 +8631,7 @@ def _build_transient_summary(
             _kt_I = float(fundamental_current(sbres)["I1_phase_rms_A"])
         except Exception:
             _kt_I = 0.0
-    _kt = round(_Tavg / _kt_I, 4) if _kt_I > 1e-9 else 0.0
+    _kt = round(_Tq / _kt_I, 4) if _kt_I > 1e-9 else 0.0
 
     # Coil current density J = conductor current / bare-copper cross-section.
     # The conductor carries the phase current split over the a_parallel paths
@@ -8573,6 +8906,8 @@ def _build_transient_summary(
 
     _summary_out = {
         "rpm": _rpm,
+        # the shaft-side convention (absent = the earlier one), see above
+        **_sc_fields,
         # I_phase_rms_A is the TERMINAL current — the setpoint the panel holds,
         # the three leads to the inverter — in BOTH connections.  It has to be:
         # every staleness check in the app compares this field with the panel
@@ -9036,7 +9371,9 @@ def _build_transient_summary(
                                                   or _r["k_flux"]), 3),
             "V_line_peak_corrected_V": (
                 round(_Vlpk * float(_r["k_flux"]), 2) if _Vlpk else None),
-        }))(_end3d_lookup(sbres.get("geo_fingerprint"), _geo_cfg)),
+        }))(_e3rec),
+        # said out loud when another geometry's passport was NOT lent (stack length differs): the card shows 2-D
+        **({"end3d_note": _e3diag["note"]} if _e3diag.get("note") else {}),
         # Bench Ld/Lq — the LCR-meter measurement, simulated: small-signal
         # values at the I≈0 iron state, per machine + connection.  Cache READ
         # only (this builder also runs on restore rebuilds); the live-machine
@@ -9059,17 +9396,17 @@ def _build_transient_summary(
         # figure of merit that survives scaling.  Computed at the SOLVED coil
         # temperature — R grows ~39 %/100 °C, so a datasheet Km at 25 °C reads
         # higher than the same machine hot.  No-load (P_cu→0) has no Km: null.
-        "Km_Nm_sqrtW": (round(_Tavg / _math.sqrt(_Pcu_dc), 4)
-                        if _Pcu_dc > 1e-9 and _Tavg > 0 else None),
+        "Km_Nm_sqrtW": (round(_Tq / _math.sqrt(_Pcu_dc), 4)
+                        if _Pcu_dc > 1e-9 and _Tq > 0 else None),
         "Km_per_mass_Nm_sqrtW_kg": (
-            round(_Tavg / _math.sqrt(_Pcu_dc) / max(_m_tot, 1e-6), 4)
-            if _Pcu_dc > 1e-9 and _Tavg > 0 else None),
+            round(_Tq / _math.sqrt(_Pcu_dc) / max(_m_tot, 1e-6), 4)
+            if _Pcu_dc > 1e-9 and _Tq > 0 else None),
         # Shape version — bumped when a NEW derived quantity is added to this
         # summary, so a cache/restore hit knows its stored summary is missing
         # cells and rebuilds it with the current code (_refresh_summary_shape).
         # v2: rotor_inertia + Km/Km-per-mass (2026-08-22).
         "summary_shape_v": _SUMMARY_SHAPE_V,
-        "torque_per_mass_Nm_kg": round(_Tavg / max(_m_tot, 1e-6), 3),
+        "torque_per_mass_Nm_kg": round(_Tpm / max(_m_tot, 1e-6), 3),
         "power_per_mass_W_kg":   round(_Pmech / max(_m_tot, 1e-6), 1),
         "loss_density_W_kg":     round(_ploss / max(_m_tot, 1e-6), 1),
         # rms terminal phase current where the current was the ANSWER (imposed
@@ -9085,16 +9422,17 @@ def _build_transient_summary(
         # so every stored case, every regression pin and every current-drive
         # run reads exactly as it did before.
         **((lambda _b: ({} if not _b else {"battery_charge": _b}))(
-            _battery_charge_block(sbres, op_mode=_op_mode, p_mech_w=_Pmech,
+            _battery_charge_block(sbres, op_mode=_op_mode, p_mech_w=_Pmech_out,
                                   p_loss_w=_ploss))),
         # ── THE MECHANICAL HALF (2026-09-08) ─────────────────────────────
         # Bearings and windage, on the RUN instead of in the browser.  Absent
         # — not zero — on a machine that names no bearings, on a background
         # solve and on a candidate geometry; see `_mech_loss_fields`.
         **_mech_loss_fields(
-            sbres, geo_override=geo_override, rpm=_rpm, p_mech_w=_Pmech,
+            sbres, geo_override=geo_override, rpm=_rpm,
+            p_mech_w=(_Pmech if _sc_on else _Pmech_out),
             p_loss_w=_ploss, efficiency=_eff, op_mode=_op_mode,
-            mass_components=_masses.get("components")),
+            mass_components=_masses.get("components"), signed=_sc_on),
     }
     # NET FORCE ON THE ROTOR (the bearing load of an unbalanced field): the
     # means on the summary, the per-frame Fx/Fy beside them.  Full ring only.
@@ -9136,11 +9474,13 @@ def _build_transient_summary(
     # THE FULL MASS of what was simulated (owner 2026-10-20).  Only the live machine: an optimizer candidate is billed on
     # its own active mass and never reads the loaded configuration.
     if not skip_psi_pm_probe:
-        _stamp_full_mass(_summary_out, T=_Tavg, p_mech=_Pmech, p_cu_dc=_Pcu_dc, p_loss=_ploss)
+        _stamp_full_mass(_summary_out, T=_Tpm, p_mech=_Pmech, p_cu_dc=_Pcu_dc, p_loss=_ploss,
+                         t_km=_Tq)
     return _summary_out
 
 
-def _stamp_full_mass(summary: dict, *, T: float, p_mech: float, p_cu_dc: float, p_loss: float) -> None:
+def _stamp_full_mass(summary: dict, *, T: float, p_mech: float, p_cu_dc: float, p_loss: float,
+                     t_km: Optional[float] = None) -> None:
     """Add the FULL motor mass of the simulated geometry and the per-mass figures divided by it to ``summary`` (additive: the
     run's own ``mass_total_kg`` = EM parts + shaft tube and the active per-mass figures stay what the optimizer and every
     stored Compare point were built on).
@@ -9162,7 +9502,8 @@ def _stamp_full_mass(summary: dict, *, T: float, p_mech: float, p_cu_dc: float, 
             _mm.stamp_run_summary(
                 summary, die, cfg,
                 raw={"T_em_avg_Nm": T, "P_mech_W": p_mech, "P_loss_total_W": p_loss,
-                     "Km_Nm_sqrtW": (T / _m.sqrt(p_cu_dc) if p_cu_dc > 1e-9 and T > 0 else None)})
+                     "Km_Nm_sqrtW": ((T if t_km is None else t_km) / _m.sqrt(p_cu_dc)
+                                     if p_cu_dc > 1e-9 and (T if t_km is None else t_km) > 0 else None)})
         else:
             summary.update(mass_partial=True, mass_partial_reason="no die / configuration is loaded")
     except Exception as exc:                                    # noqa: BLE001 - a mass hiccup never fails a run

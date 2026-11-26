@@ -545,7 +545,9 @@ def _build_calculator(wb, *, pp: Dict[str, Any], geo: Dict[str, Any],
     ldq = pp.get("ldq0") or {}
     cur = pp.get("current") or {}
     lg = pp.get("loss_grid") or {}
-    kvL = (pp.get("end3d") or {}).get("k_flux_vs_L") or {}
+    # a multi-row k(L) table written before the 2026-11-24 fix is refused (stale): the scalar k_flux is used
+    from motor_ai_sim.end3d_factors import STALE_KL_FLAG, k_flux_table
+    kvL, kvL_stale = k_flux_table(pp.get("end3d"))
     T_ref = float(_g(duties[0], "summary.coil_temp_C") or 120) if duties else 120.0
 
     ws.cell(row=1, column=1, value="Recalculate this motor").font = \
@@ -808,7 +810,8 @@ def _build_calculator(wb, *, pp: Dict[str, Any], geo: Dict[str, Any],
              "3-D switch in the inputs is off", None, "0.0000")
     else:
         k1 = float((pp.get("end3d") or {}).get("k_flux") or 1.0)
-        line(R_K3, "3-D factor k(L)", k1, "", "single measured point", None, "0.0000")
+        line(R_K3, "3-D factor k(L)", k1, "", (STALE_KL_FLAG if kvL_stale else "single measured point"),
+             None, "0.0000")
         line(R_FE, "Flux factor applied", f"=IF({B(R_K3ON)}=1,{B(R_K3)},1)", "",
              "", None, "0.0000")
 
@@ -953,6 +956,10 @@ def _build_calculator(wb, *, pp: Dict[str, Any], geo: Dict[str, Any],
         pts = sorted((float(a), float(b)) for a, b in kvL.items())
         hrow(ROW_KL, "stack length, mm", [p[0] for p in pts], 2, bold=True)
         hrow(ROW_KK, "k_flux", [p[1] for p in pts], 4)
+    elif kvL_stale:
+        ws.cell(row=ROW_KL - 1, column=1, value="3-D end effect vs stack length")\
+            .font = Font(bold=True, size=10)
+        ws.cell(row=ROW_KL, column=1, value=STALE_KL_FLAG)
 
     ws.cell(row=ROW_KK + 2, column=1, value=(
         "Validity: this is a first-order rescaling around the measured point. "
@@ -1258,7 +1265,13 @@ def build_datasheet(*, die: str, cfg: str, die_doc: Dict[str, Any],
         if v is not None:
             return float(v)
         w = _g(d, "summary.P_mech_W")
-        return abs(float(w)) / 1000.0 if w is not None else None
+        if w is None:
+            return None
+        # shaft-side convention: a motor at no load keeps its negative shaft power (the shaft SUPPLIES the core loss);
+        # generators are quoted positive in both conventions (motor_ai_sim.shaft_convention)
+        if _g(d, "summary.shaft_convention") == "fe_on_shaft_k3d_v1":
+            return float(w) / 1000.0
+        return abs(float(w)) / 1000.0
 
     P_kw = [_pkw(d) for d in duties]
     T_nm = [_g(d, "torque_nm", "summary.T_em_avg_Nm") for d in duties]
@@ -1273,6 +1286,14 @@ def build_datasheet(*, die: str, cfg: str, die_doc: Dict[str, Any],
     mass_full_for_km = float(_mi["full_kg"]) if (not _partial and _mi.get("full_kg")) else None
 
     row("Power (kW)", P_kw, "shaft power at this point", 2, bold=True)
+    # WHICH SHAFT-POWER CONVENTION EACH COLUMN IS ON (owner 2026-11-25, motor_ai_sim.shaft_convention): a duty solved
+    # before it keeps its numbers, so its power and efficiency put every loss on the electrical side
+    _conv = [_g(d, "summary.shaft_convention") == "fe_on_shaft_k3d_v1" for d in duties]
+    if any(_conv):
+        row("Shaft-power basis", ["core loss on the shaft" if c else "earlier run: all losses electrical"
+                                  for c in _conv],
+            "on the current basis the core and rotor losses are shaft loads and the 3-D factor applies to the "
+            "converted power only; an earlier run is not comparable with it", 0)
     row("Torque (N·m)", T_nm,
         "average electromagnetic torque over one electrical period", 2, bold=True)
     row("Speed (rpm)", [_g(d, "rpm") for d in duties], "", 0, bold=True)
@@ -2018,9 +2039,12 @@ def build_datasheet(*, die: str, cfg: str, die_doc: Dict[str, Any],
                 _rows.append(_cha(_ppass, batt, float(_I or 0.0),
                                   float(_r or 0.0), pwm=_pwm_on)
                              if _I and _r else None)
+            from motor_ai_sim.end3d_factors import STALE_KL_FLAG as _stale_kl
+            _kl_note = ((" " + _stale_kl + ".")
+                        if any(c and c.get("k_end_stale") for c in _rows) else "")
             row("Charge power (kW)",
                 [(c["P_charge_W"] / 1000.0 if c else None) for c in _rows],
-                "shaft power minus every loss the card reports; " + _dnote, 2)
+                "shaft power minus every loss the card reports; " + _dnote + _kl_note, 2)
             row("Charge current (A)",
                 [(c["I_charge_A"] if c else None) for c in _rows],
                 "P_charge / V_bus", 1)
@@ -2196,12 +2220,22 @@ def build_datasheet(*, die: str, cfg: str, die_doc: Dict[str, Any],
                     Font(size=9, color=_NOTE, italic=True)
                 rc += 3
 
-        e3d = (pp.get("end3d") or {}).get("k_flux_vs_L") or {}
+        from motor_ai_sim.end3d_factors import STALE_KL_FLAG, k_flux_table
+        e3d, e3d_stale = k_flux_table(pp.get("end3d"))
+        if e3d_stale and not e3d:
+            wsc.cell(row=rc, column=1, value="3-D end effect vs stack length").font = \
+                Font(bold=True)
+            rc += 1
+            wsc.cell(row=rc, column=1, value=STALE_KL_FLAG).border = border
+            rc += 1
         if e3d:
             pts = sorted((float(a), float(b)) for a, b in e3d.items())
             wsc.cell(row=rc, column=1, value="3-D end effect vs stack length").font = \
                 Font(bold=True)
             rc += 1
+            if e3d_stale:
+                wsc.cell(row=rc, column=1, value=STALE_KL_FLAG).border = border
+                rc += 1
             wsc.cell(row=rc, column=1, value="Stack length, mm").border = border
             for i, (L_, _k) in enumerate(pts):
                 cell = wsc.cell(row=rc, column=2 + i, value=L_)
@@ -2245,6 +2279,8 @@ def build_datasheet(*, die: str, cfg: str, die_doc: Dict[str, Any],
     ws2.cell(row=r2, column=1, value="Duty").font = Font(bold=True)
     for i, d in enumerate(duties):
         c = ws2.cell(row=r2, column=2 + i, value=str(d.get("name") or ""))
+        from motor_ai_sim.spreadsheet_text import force_text_cell
+        force_text_cell(c)                      # a duty name is user text on a sheet that also carries real formulas
         c.font = Font(bold=True)
         c.alignment = right
     r2 += 1

@@ -1,3 +1,7 @@
+import { autoPointFieldTorque } from '../../lib/autoPointPower';
+import { anyMarked, basesMixed, basisTag, isMarked } from '../../lib/shaftBasisLabel';
+import { nsT } from '../../i18n/nsT';
+import { useTranslation } from 'react-i18next';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { whenVisible } from '../../lib/pageVisible';
 import {
@@ -16,7 +20,9 @@ import {
   ResponsiveContainer, ReferenceLine, ScatterChart, Scatter,
 } from 'recharts';
 import { useMotorStore } from '../../stores/motorStore';
-import MeshPresetSelect from '../mesh/MeshPresetSelect';
+import { useRunSettings } from '../../lib/useRunSettings';
+import { runSettingsBody } from '../../lib/runSettings';
+import RunSettingsBar from './RunSettingsBar';
 import { appliedSaveLine } from '../../lib/appliedAutoSave';
 
 /**
@@ -48,20 +54,8 @@ function humanSeconds(s: number): string {
   return `${Math.floor(m / 60)} h ${m % 60} m`;
 }
 
-/**
- * Shaft torque of a cloud point, DERIVED when it was not stored.
- *
- * Points published before the backend's `_pt` carried T_em_Nm hold only torque
- * density and mass — and torque = td · mass exactly, it is the same measurement.
- * Reading `p.torque` alone silently emptied this card's cloud for every run that
- * finished before 2026-08-05.
- */
-const ptTorque = (p: any): number => {
-  const t = Number(p?.torque);
-  if (Number.isFinite(t)) return t;
-  const td = Number(p?.td); const m = Number(p?.mass);
-  return (Number.isFinite(td) && Number.isFinite(m)) ? td * m : NaN;
-};
+const ptTorque = autoPointFieldTorque;
+const shaftTx = nsT('simulation');
 
 /** Signed delta with its sign always shown — a "+0.02 Nm" reads as a gain. */
 function delta(now?: number, was?: number, d = 3, unit = ''): string {
@@ -88,6 +82,10 @@ type Plan = {
 };
 
 const AutoOptimizePanel: React.FC = () => {
+  useTranslation('simulation');
+  // the run settings of THIS panel: read-only, the values of the Mesh / Simulation tabs resolved by the server
+  const rs = useRunSettings('auto');
+  const rsKey = JSON.stringify(rs.request?.overrides ?? null);
   const { connectedToApi, descentState, loadLastDescent, applyDescentBest, cancelDescent,
           appliedSave, verifyAndApplyDescentPoint } = useMotorStore();
   const [verifying, setVerifying] = useState(false);
@@ -124,6 +122,11 @@ const AutoOptimizePanel: React.FC = () => {
   const best = st.best?.metrics;
   const certified = st.final_validation_status === 'certified' && st.apply_eligible === true;
   const base = st.baseline;
+  // the current-vs-optimized table names a basis only for a marked design, and for an earlier one next to a marked one
+  const baseMarked = isMarked(base), bestMarked = isMarked(best);
+  const pairMixed = basesMixed([baseMarked, bestMarked]);
+  const baseTag = basisTag(baseMarked, pairMixed), bestTag = basisTag(bestMarked, pairMixed);
+  const tagTx = (tag: 'current' | 'earlier') => shaftTx(tag === 'current' ? 'shaftBasisCurrent' : 'shaftBasisEarlier');
   // Pareto-dominance over the run's OWN cloud, at the run's OWN operating point
   // (backend: motor_ai_sim/optimization/pareto.py).
   const pareto = st.pareto || null;
@@ -151,13 +154,13 @@ const AutoOptimizePanel: React.FC = () => {
   // Project rule: a run says what it costs before it starts.  So the card fetches
   // the plan as soon as the number changes and shows it next to the Run button —
   // the estimate is not an afterthought printed once the FEM is already burning.
-  const fetchPlan = useCallback(async (ripple: number, m: string) => {
-    if (!connectedToApi) return;
+  const fetchPlan = useCallback(async (ripple: number, m: string, rec: { preset: string; overrides: Record<string, unknown>; magnet_temp_c?: number } | null) => {
+    if (!connectedToApi || !rec) return;
     setPlanBusy(true); setPlanError(null);
     try {
       const r = await fetch(`${API}/api/optimization/auto/plan`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ max_ripple_pct: ripple, mode: m }),
+        body: JSON.stringify({ max_ripple_pct: ripple, mode: m, run_settings: { preset: rec.preset, overrides: rec.overrides, ...(rec.magnet_temp_c != null ? { magnet_temp_c: rec.magnet_temp_c } : {}) } }),
       });
       const j = await r.json().catch(() => null);
       if (!r.ok) throw new Error(j?.detail ?? `HTTP ${r.status}`);
@@ -170,9 +173,10 @@ const AutoOptimizePanel: React.FC = () => {
   }, [connectedToApi]);
 
   useEffect(() => {
-    const t = setTimeout(() => { void fetchPlan(maxRipple, mode); }, 350);
+    setPlan(null);   // a plan belongs to the settings it was built with
+    const t = setTimeout(() => { void fetchPlan(maxRipple, mode, rs.request); }, 350);
     return () => clearTimeout(t);
-  }, [maxRipple, mode, fetchPlan]);
+  }, [maxRipple, mode, fetchPlan, rsKey, rs.resolved?.sig]);   // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Live progress ─────────────────────────────────────────────────────────
   // Poll here rather than leaning on the Advanced panel's mirror: this card is
@@ -197,15 +201,19 @@ const AutoOptimizePanel: React.FC = () => {
   }, [connectedToApi]);
 
   const launch = async () => {
+    if (!rs.ready || !rs.resolved) return;
+    const rsReq = rs.verify();        // the tabs may have changed since the line was shown: the run uses what the line shows
+    if (!rsReq) { setLaunchError('The run settings changed since they were shown. Check the line above and press Run again.'); return; }
     setLaunchError(null); setApplied(false); setSavedPoint(null);
     startedAt.current = Date.now();
     try {
       const r = await fetch(`${API}/api/optimization/auto`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ max_ripple_pct: maxRipple, mode }),
+        body: JSON.stringify({ max_ripple_pct: maxRipple, mode,
+                               run_settings: runSettingsBody(rsReq, rs.resolved!) }),
       });
       const j = await r.json().catch(() => null);
-      if (!r.ok) throw new Error(j?.detail ?? `HTTP ${r.status}`);
+      if (!r.ok) { if (r.status === 409) rs.refresh(); throw new Error(j?.detail ?? `HTTP ${r.status}`); }
       await loadLastDescent();
     } catch (e: any) {
       setLaunchError(String(e?.message ?? e));
@@ -291,7 +299,7 @@ const AutoOptimizePanel: React.FC = () => {
             </Button>
           ) : (
             <Button variant="contained" color="success" size="small" startIcon={<PlayArrowIcon />}
-              disabled={!connectedToApi || !plan} onClick={launch}>
+              disabled={!connectedToApi || !plan || !rs.ready || (plan as any).run_settings?.sig !== rs.resolved?.sig} onClick={launch}>
               Run
             </Button>
           )}
@@ -323,7 +331,7 @@ const AutoOptimizePanel: React.FC = () => {
           </Typography>
         )}
 
-        <Box sx={{ mt: 1.25 }}><MeshPresetSelect dense readOnly /></Box>
+        <Box sx={{ mt: 1.25 }}><RunSettingsBar rs={rs} /></Box>
         {plan && !running && (
           <Box sx={{ mt: 1.25, display: 'flex', gap: 0.75, flexWrap: 'wrap', alignItems: 'center' }}>
             <Chip size="small" variant="outlined" sx={{ height: 22, fontSize: 10.5 }}
@@ -336,15 +344,6 @@ const AutoOptimizePanel: React.FC = () => {
               label={`obj: above baseline · ripple ≤ ${fmt(plan.ripple_max_pct, 1)}% (λ ${plan.ripple_penalty_lambda})`} />
             <Chip size="small" variant="outlined" sx={{ height: 22, fontSize: 10.5 }}
               label={`P2 · ${plan.eval.steps_per_period} steps/T · ${plan.eval.n_sectors <= 0 ? 'full ring' : `1/${plan.eval.n_sectors}`}`} />
-            {plan.eval.steps_per_period_source === 'optimizer' && (
-              <Tooltip placement="top" title={
-                `The Simulation tab holds its eddy-run default (${plan.eval.steps_per_period_tab} steps/period), `
-                + `not a count you picked, so screening keeps its own ${plan.eval.steps_per_period}. `
-                + 'Pick a count on the Simulation tab to screen at that count instead.'}>
-                <Chip size="small" variant="outlined" sx={{ height: 22, fontSize: 10.5 }}
-                  label={`screening ${plan.eval.steps_per_period} (tab default ${plan.eval.steps_per_period_tab} not used)`} />
-              </Tooltip>
-            )}
             {plan.eval.steps_per_period_requested
               && plan.eval.steps_per_period_requested < plan.eval.steps_per_period && (
               <Tooltip placement="top" title={
@@ -504,7 +503,7 @@ const AutoOptimizePanel: React.FC = () => {
           // run — the card read "0 designs measured" over a cloud of 87.
           const cloud = ((st.points || []) as any[])
             .map((p) => ({ torque: ptTorque(p), ripple: p.ripple, td: p.td,
-                           eff: (p.eff ?? 0) * 100, kind: p.kind,
+                           eff: (p.eff ?? (p.shaft_conv === 1 ? NaN : 0)) * 100, kind: p.kind, shaft_conv: p.shaft_conv,
                            dominates: !!p.dominates, front: !!p.pareto_front }))
             .filter((p) => Number.isFinite(p.torque) && Number.isFinite(p.ripple));
           const nUnderGate = cloud.filter((p) => p.ripple <= gate).length;
@@ -512,9 +511,14 @@ const AutoOptimizePanel: React.FC = () => {
           // efficiency — the answer F cannot give (see the verdict tooltip).
           const domPts = cloud.filter((p) => p.dominates);
           const bestPt = best && Number.isFinite(best.T_em_Nm)
-            ? [{ ripple: best.T_ripple_pct, torque: best.T_em_Nm }] : [];
+            ? [{ ripple: best.T_ripple_pct, torque: best.T_em_Nm, shaft_conv: best.shaft_convention === 'fe_on_shaft_k3d_v1' ? 1 : best.shaft_conv }] : [];
           const basePt = base && Number.isFinite(base.T_em_Nm)
-            ? [{ ripple: base.T_ripple_pct, torque: base.T_em_Nm }] : [];
+            ? [{ ripple: base.T_ripple_pct, torque: base.T_em_Nm, shaft_conv: base.shaft_convention === 'fe_on_shaft_k3d_v1' ? 1 : base.shaft_conv }] : [];
+          // the basis words only when a marked design is on these charts (then an earlier one says so too); charts of
+          // earlier designs alone keep their earlier labels
+          const chartMarked = anyMarked([...cloud, ...bestPt, ...basePt, ...((st.history || []) as any[])]
+            .map((p: any) => isMarked(p)));
+          const tLabel = chartMarked ? `${shaftTx('fieldTorque')} [N·m]` : 'T [N·m]';
           return (
           <Box sx={{ mt: 1.5, display: 'flex', gap: 2, flexWrap: 'wrap' }}>
             {/* Trajectory: what the search did over time */}
@@ -532,7 +536,7 @@ const AutoOptimizePanel: React.FC = () => {
                     border: '1px solid var(--line-soft)', fontSize: 11 }} />
                   <ReferenceLine yAxisId="r" y={gate} stroke="#f59e0b"
                     strokeDasharray="4 3" label={{ value: `≤${fmt(gate, 1)}%`, fontSize: 10, fill: '#f59e0b' }} />
-                  <Line yAxisId="t" dataKey="torque" name="T [N·m]" dot={false}
+                  <Line yAxisId="t" dataKey="torque" name={tLabel} dot={false}
                     stroke="#60a5fa" strokeWidth={2} isAnimationActive={false} />
                   <Line yAxisId="r" dataKey="ripple" name="ripple [%]" dot={false}
                     stroke="#f87171" strokeWidth={1.5} isAnimationActive={false} />
@@ -570,8 +574,10 @@ const AutoOptimizePanel: React.FC = () => {
                   <YAxis type="number" dataKey="torque" name="T"
                     tick={{ fontSize: 10, fill: 'var(--text-2)' }} width={44}
                     domain={['auto', 'auto']}
-                    label={{ value: 'T [N·m]', angle: -90, position: 'insideLeft', fontSize: 10, fill: 'var(--text-3)' }} />
+                    label={{ value: tLabel, angle: -90, position: 'insideLeft', fontSize: 10, fill: 'var(--text-3)' }} />
                   <RTooltip cursor={{ strokeDasharray: '3 3' }}
+                    {...(chartMarked ? { labelFormatter: (_label: any, payload: any) =>
+                      shaftTx(payload?.[0]?.payload?.shaft_conv === 1 ? 'shaftBasisCurrent' : 'shaftBasisEarlier') } : {})}
                     contentStyle={{ background: 'var(--app-bg)',
                       border: '1px solid var(--line-soft)', fontSize: 11 }} />
                   <ReferenceLine x={gate} stroke="#f59e0b" strokeDasharray="4 3"
@@ -680,7 +686,7 @@ const AutoOptimizePanel: React.FC = () => {
               <TableHead>
                 <TableRow>
                   <TableCell sx={{ fontSize: 10, color: 'text.secondary' }}>—</TableCell>
-                  <TableCell align="right" sx={{ fontSize: 10, color: 'text.secondary' }}>Torque</TableCell>
+                  <TableCell align="right" sx={{ fontSize: 10, color: 'text.secondary' }}>{baseMarked || bestMarked ? shaftTx('fieldTorque') : 'Torque'}</TableCell>
                   <TableCell align="right" sx={{ fontSize: 10, color: 'text.secondary' }}>Ripple</TableCell>
                   <TableCell align="right" sx={{ fontSize: 10, color: 'text.secondary' }}>Efficiency</TableCell>
                   <TableCell align="right" sx={{ fontSize: 10, color: 'text.secondary' }}>N·m/kg</TableCell>
@@ -688,14 +694,14 @@ const AutoOptimizePanel: React.FC = () => {
               </TableHead>
               <TableBody>
                 <TableRow>
-                  <TableCell sx={{ fontSize: 11 }}>Current design</TableCell>
+                  <TableCell sx={{ fontSize: 11 }}>{baseTag ? <Tooltip title={tagTx(baseTag)}><span>Current design</span></Tooltip> : 'Current design'}</TableCell>
                   <TableCell align="right" sx={{ fontSize: 11 }}>{fmt(base.T_em_Nm, 3)}</TableCell>
                   <TableCell align="right" sx={{ fontSize: 11 }}>{fmt(base.T_ripple_pct, 2)}%</TableCell>
                   <TableCell align="right" sx={{ fontSize: 11 }}>{pct(base.efficiency)}</TableCell>
                   <TableCell align="right" sx={{ fontSize: 11 }}>{fmt(base.torque_per_mass, 3)}</TableCell>
                 </TableRow>
                 <TableRow>
-                  <TableCell sx={{ fontSize: 11, fontWeight: 700 }}>Optimized</TableCell>
+                  <TableCell sx={{ fontSize: 11, fontWeight: 700 }}>{bestTag ? <Tooltip title={tagTx(bestTag)}><span>Optimized</span></Tooltip> : 'Optimized'}</TableCell>
                   <TableCell align="right" sx={{ fontSize: 11, fontWeight: 700 }}>
                     {fmt(best.T_em_Nm, 3)}
                     <Typography component="span" sx={{ fontSize: 10, ml: 0.5, color: 'text.secondary' }}>
@@ -712,7 +718,7 @@ const AutoOptimizePanel: React.FC = () => {
                   <TableCell align="right" sx={{ fontSize: 11, fontWeight: 700 }}>
                     {pct(best.efficiency)}
                     <Typography component="span" sx={{ fontSize: 10, ml: 0.5, color: 'text.secondary' }}>
-                      {delta((best.efficiency ?? 0) * 100, (base.efficiency ?? 0) * 100, 2, ' pp')}
+                      {delta((best.efficiency ?? (best.shaft_convention === 'fe_on_shaft_k3d_v1' ? NaN : 0)) * 100, (base.efficiency ?? (base.shaft_convention === 'fe_on_shaft_k3d_v1' ? NaN : 0)) * 100, 2, ' pp')}
                     </Typography>
                   </TableCell>
                   <TableCell align="right" sx={{ fontSize: 11, fontWeight: 700 }}>

@@ -156,6 +156,36 @@ export function buildConfigureSnapshot(i: ConfigureSnapshotInput): { machine: Sn
   };
 }
 
+// ── the window the user is in (owner 2026-11-26) ───────────────────────────
+// Each page declares what it is doing through `useHelpContext` (components/support/useHelpContext.ts): the sub-tab, flags,
+// bounded counts, status chips and a known error code.  No value of a
+// geometry or of a result, no price, no name or free text a user typed (owner decision D3, Astra review of #910): flags, bounded counts, known
+// codes and values from exact lists.  The server re-validates everything against its own allowlists and the role (help_context.py).
+export type HelpValue = string | boolean | number | string[];
+export interface HelpContext { tab: string; sub?: string; [key: string]: HelpValue | undefined }
+
+const helpEntries = new Map<string, HelpContext>();
+
+/** Register (or clear, with null) the context of one mounted piece of a page. */
+export const setHelpContext = (id: string, ctx: HelpContext | null): void => {
+  if (ctx) helpEntries.set(id, ctx); else helpEntries.delete(id);
+};
+
+/** The context of `tab`: the registered entries of that tab merged in registration order (a later one wins), tab ids only
+ *  when nothing is registered.  Entries of another tab (a page that stays mounted behind) are ignored. */
+export function helpContextFor(tab: string): Record<string, unknown> {
+  const out: Record<string, unknown> = { tab };
+  for (const e of helpEntries.values()) {
+    if (e.tab !== tab) continue;
+    for (const [k, v] of Object.entries(e)) {
+      if (v === undefined || v === '' || (Array.isArray(v) && v.length === 0)) continue;
+      out[k] = v;
+    }
+  }
+  return out;
+}
+export const clearHelpContexts = (): void => helpEntries.clear();
+
 // ── the whole context ────────────────────────────────────────────────────────
 /** English names of the tabs (the model is told them in English). */
 export const TAB_LABELS: Record<string, string> = {
@@ -168,6 +198,12 @@ export const TAB_LABELS: Record<string, string> = {
 export interface ContextInputs {
   tab: string; lang: string; appVersion: string; appGitSha: string; userAgent: string;
   now?: number;
+}
+
+/** What a visitor's question carries: the language and the tab ids of the window (the server keeps nothing more for a visitor). */
+export function buildAnonContext(i: Pick<ContextInputs, 'tab' | 'lang'>): Record<string, unknown> {
+  const { tab, sub } = helpContextFor(i.tab) as { tab: string; sub?: string };
+  return { lang: i.lang, ui_context: sub ? { tab, sub } : { tab } };
 }
 
 /** The snapshot sent with a chat message or a ticket. */
@@ -183,6 +219,7 @@ export function buildSupportContext(i: ContextInputs): Record<string, unknown> {
     if (snap.machine) out.machine = snap.machine;
     if (snap.configure) out.configure = snap.configure;
   }
+  out.ui_context = helpContextFor(i.tab);
   const fc = failedCalls(i.now);
   if (fc.length) out.failedCalls = fc;
   return out;

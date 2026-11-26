@@ -83,6 +83,9 @@ export function finalComparison(panel: StoredPanel | null | undefined, stored: R
   }
   const mass = one(panelRows(panel), 'mass');
   if (mass && mass.value != null) out.mass_partial = mass.labelKey !== 'configure.mass';
+  // the convention of the panel's numbers rides with them (the steps table never ranks two conventions together)
+  if ((panel?.summary as any)?.shaft_convention === 'fe_on_shaft_k3d_v1') out.shaft_conv = 1;
+  else if (panel?.summary) delete out.shaft_conv;
   return out;
 }
 

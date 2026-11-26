@@ -138,7 +138,7 @@ def _count(section_id: str, rows: list) -> int:
     return len(rows)
 
 
-def build(date: str, sources: Sources, *, base_url: str = "", extra_errors: Optional[list] = None) -> Report:
+def build(date: str, sources: Sources, *, base_url: str = "", extra_errors: Optional[list] = None, queue_line: Optional[str] = None) -> Report:
     start, end = window_for(date)
     errors: list = list(extra_errors or [])
     sections: list[Section] = []
@@ -153,8 +153,8 @@ def build(date: str, sources: Sources, *, base_url: str = "", extra_errors: Opti
         sections.append(Section(sid, TITLES[sid], _count(sid, rows), rows, NO_DIGESTS if sid == "digests" else NO_CHANGES, err))
     summary = summary_line(sections)
     subject = f"AeroStator owner report {date}" + digests_subject_tail(sections)
-    text = render_text(date, start, end, summary, sections, base_url, errors)
-    body = render_html(date, start, end, summary, sections, base_url, errors, subject)
+    text = render_text(date, start, end, summary, sections, base_url, errors, queue_line)
+    body = render_html(date, start, end, summary, sections, base_url, errors, subject, queue_line)
     return Report(date, start, end, subject, summary, sections, text, body, errors)
 
 
@@ -259,10 +259,11 @@ def _line_text(ln: Line, base: str) -> str:
     return f"- {local_stamp(ln.ts)} {_side(ln.side)}{ln.text}{who}" + (f" -> {url}" if url else "")
 
 
-def render_text(date: str, start: float, end: float, summary: str, sections: list, base: str, errors: list) -> str:
+def render_text(date: str, start: float, end: float, summary: str, sections: list, base: str, errors: list,
+                queue_line: Optional[str] = None) -> str:
     out = [f"AeroStator owner report {date}",
            f"Window: {local_stamp(start)} .. {local_stamp(end)} Europe/Ljubljana (last 24 h before 06:00). Internal: for the owner only.",
-           "", summary, ""]
+           "", summary] + ([queue_line] if queue_line else []) + [""]
     for n, s in enumerate(sections, 1):
         out += ["=" * 60, f"{n}. {s.title}" + (f" ({s.count})" if s.count else ""), ""]
         if s.error:
@@ -367,12 +368,16 @@ def _a(base: str, path: str, label: str = "open") -> str:
     return f' <a href="{html.escape(url, quote=True)}" style="color:#2563eb">{html.escape(label)}</a>' if url else ""
 
 
-def render_html(date: str, start: float, end: float, summary: str, sections: list, base: str, errors: list, subject: str) -> str:
+def render_html(date: str, start: float, end: float, summary: str, sections: list, base: str, errors: list, subject: str,
+                queue_line: Optional[str] = None) -> str:
     h: list[str] = []
     h.append(f'<h1 style="margin:0 0 4px;font-size:19px;color:#0f172a">AeroStator owner report {html.escape(date)}</h1>'
              f'<p style="margin:0 0 12px;font-size:12px;color:#6b7280">{html.escape(local_stamp(start))} .. {html.escape(local_stamp(end))} '
              'Europe/Ljubljana (last 24 h before 06:00). Internal, for the owner only.</p>'
              f'<p style="margin:0 0 16px;font-size:14px;font-weight:bold;color:#0f172a">{html.escape(summary)}</p>')
+    if queue_line:                                   # owner queue (2026-11-25): ONE line right under the summary
+        h[-1] = h[-1].replace('margin:0 0 16px;font-size:14px;font-weight:bold', 'margin:0 0 4px;font-size:14px;font-weight:bold')
+        h.append(f'<p style="margin:0 0 16px;font-size:14px;color:#0f172a">{html.escape(queue_line)}</p>')
     for n, s in enumerate(sections, 1):
         h.append(f'<h2 style="margin:20px 0 6px;font-size:16px;color:#0f172a;border-top:1px solid #e5e7eb;padding-top:12px">'
                  f'{n}. {html.escape(s.title)}{f" ({s.count})" if s.count else ""}</h2>')

@@ -6,7 +6,8 @@
 // the optimizer's surrogate data.
 // ─────────────────────────────────────────────────────────────────────────────
 import React, { useEffect, useRef, useState } from 'react';
-import { Box, Typography, TextField, Button, LinearProgress, Divider } from '@mui/material';
+import { Alert, Box, Typography, TextField, Button, LinearProgress, Divider } from '@mui/material';
+import { useTranslation } from 'react-i18next';
 import HelpTip from '../common/HelpTip';
 
 const API = import.meta.env.VITE_API_URL ?? 'http://localhost:8001';
@@ -40,6 +41,7 @@ const NumField: React.FC<{ label: string; value: number; onChange: (v: number) =
   };
 
 const DOEPanel: React.FC = () => {
+  const { t } = useTranslation('simulation');
   const [n, setN] = useLS('n', 60);
   const current = readNum('sim.current', 100);   // single source: Simulation tab's current
   const [band, setBand] = useLS('band', 0.3);
@@ -136,11 +138,13 @@ const DOEPanel: React.FC = () => {
         value={progress ? (100 * progress.done) / Math.max(1, progress.total) : 0}
         sx={{ mb: 1.5, height: 4, borderRadius: 2 }} />}
 
-      {imp && !imp.ok && (
+      {imp && !imp.ok && (imp.reason === 'mixed_shaft_conventions' ? (
+        <Alert severity="error">{t('mixedShaftTraining')}</Alert>
+      ) : (
         <Typography sx={{ fontSize: 11, color: '#fca5a5' }}>
           Not enough successful points to fit the model ({imp.n}/{imp.need}). Increase samples.
         </Typography>
-      )}
+      ))}
       {targets.length > 0 && (
         <>
           <Divider sx={{ borderColor: 'var(--panel)', my: 1 }} />

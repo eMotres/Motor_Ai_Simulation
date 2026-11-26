@@ -6,6 +6,8 @@
  * number is worth, and a sleeve sized off a number whose provenance is hidden
  * is a sleeve sized off nothing.
  */
+import { shaftCouplingTorqueNm } from '../../lib/shaftCoupling';
+export { shaftCouplingTorqueNm };
 const API = (import.meta.env.VITE_API_URL ?? 'http://localhost:8001') as string;
 const BASE = `${API.replace(/\/$/, '')}/api/mechanical`;
 
@@ -748,6 +750,8 @@ export interface LastEntry<T> {
 export interface LastMechanical {
   has_result: boolean;
   live_geometry_fingerprint: string | null;
+  /** the legacy fingerprints of the same machine (records of 2026-11-15 .. 2026-11-25): a stored one equal to any of them matches */
+  live_geometry_fingerprint_aliases?: string[];
   rotor_stress: LastEntry<RotorStress> | null;
   modes: LastEntry<ModalResult> | null;
   critical_speeds: LastEntry<RotordynamicsResult> | null;
@@ -816,7 +820,10 @@ export function readSimTorqueNm(): number | null {
   try {
     const raw = localStorage.getItem('sim.lastTransient');
     if (!raw) return null;
-    const v = (JSON.parse(raw) as { T_avg_Nm?: number })?.T_avg_Nm;
+    const tr = JSON.parse(raw) as { T_avg_Nm?: number; summary?: Record<string, unknown> };
+    const sc = shaftCouplingTorqueNm(tr?.summary);
+    if (sc !== null || tr?.summary?.shaft_convention === 'fe_on_shaft_k3d_v1') return sc;
+    const v = tr?.T_avg_Nm;
     return typeof v === 'number' && Number.isFinite(v) && v !== 0
       ? Math.abs(v) : null;
   } catch { return null; }
@@ -837,8 +844,12 @@ export function coupledPoint(): { on: boolean; rpm: number | null; torque: numbe
   const on = readSimSetting<unknown>('coupled', false) === true;
   if (!on) return { on: false, rpm: null, torque: null };
   const rpm = Number(readSimSetting('rpm', 0));
+  let shownMarked = false;
+  try {
+    shownMarked = JSON.parse(localStorage.getItem('sim.lastSummary') || 'null')?.shaft_convention === 'fe_on_shaft_k3d_v1';
+  } catch { /* unreadable saved summary */ }
   return { on: true, rpm: Number.isFinite(rpm) && rpm > 0 ? rpm : null,
-           torque: readShownTorqueNm() ?? readSimTorqueNm() };
+           torque: shownMarked ? readShownTorqueNm() : (readShownTorqueNm() ?? readSimTorqueNm()) };
 }
 
 /** The torque the Electromagnetic tab SHOWS, |T| in N·m — its summary card
@@ -850,11 +861,16 @@ export function readShownTorqueNm(): number | null {
   try {
     const raw = localStorage.getItem('sim.lastSummary');
     if (!raw) return null;
-    const v = (JSON.parse(raw) as { T_em_avg_Nm?: number })?.T_em_avg_Nm;
+    const ls = JSON.parse(raw) as Record<string, unknown>;
+    // a run on the shaft-side convention: the torque the shaft carries (at the coupling), never the field torque
+    const sc = shaftCouplingTorqueNm(ls);
+    if (sc !== null || ls.shaft_convention === 'fe_on_shaft_k3d_v1') return sc;
+    const v = (ls as { T_em_avg_Nm?: number })?.T_em_avg_Nm;
     return typeof v === 'number' && Number.isFinite(v) && v !== 0
       ? Math.abs(v) : null;
   } catch { return null; }
 }
+
 
 export const fmt = (v: number | null | undefined, d = 1): string =>
   (v === null || v === undefined || !Number.isFinite(v)) ? '—' : v.toFixed(d);
@@ -1267,4 +1283,3 @@ export async function fetchHolderStrength(params: {
     return null;
   }
 }
-

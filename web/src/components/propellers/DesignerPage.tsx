@@ -9,17 +9,21 @@ import { frontCost, paretoFront, round2, runLabel, toRun } from '../../lib/prope
 import type { EvalRecord, RunRecord, Vector } from '../../lib/propellerDesign';
 import { oneOf } from '../../lib/viewMemory';
 import { useRememberedView } from '../../lib/useRememberedView';
+import { useHelpContext } from '../support/useHelpContext';
+import { designerHelp } from '../../lib/helpContexts';
 import * as api from '../../lib/propellerDesignApi';
 import { CurveChart, Panel, PlanformChart, ProfileChart, ParetoView, ResultTiles, VariablesPanel, ZoneTable } from './DesignerParts';
+import { StoredRunsPanel } from './StoredRuns';
 
 const MAX_RUNS = 200;
 
 export default function DesignerPage() {
   const { t } = useTranslation('simulation');
-  const [diameter, setDiameter] = useRememberedView<string>('propellers.designer.diameter', '10', oneOf(['10', '11', '12', '13']));
+  const [diameter, setDiameter] = useRememberedView<string>('propellers.designer.diameter', '10', oneOf(['10', '10.5', '11', '11.5', '12', '12.5', '13', '13.5', '14']));
   const [blades, setBlades] = useRememberedView<string>('propellers.designer.blades', '2', oneOf(['2', '3']));
   const [op, setOp] = useRememberedView<string>('propellers.designer.op', 'L12', oneOf(['L12', 'L20']));
-  const [polar, setPolar] = useRememberedView<string>('propellers.designer.polar', 'flatplate_model', oneOf(['flatplate_model', 'camber_model']));
+  const [polar, setPolar] = useRememberedView<string>('propellers.designer.polar', 'mfoil_table',   // default since 2026-11-24 (owner); flat plate stays selectable
+    oneOf(['flatplate_model', 'camber_model', 'mfoil_table']));
   useEffect(() => { api.setPolarSource(polar === 'flatplate_model' ? null : polar); }, [polar]);
   const [family, setFamily] = useState<api.Family | null>(null);
   const [vector, setVector] = useState<Vector | null>(null);
@@ -81,11 +85,11 @@ export default function DesignerPage() {
 
   const addRun = useCallback((v: Vector, r: EvalRecord) => {
     const id = nextId.current++;
-    const run = toRun(id, runLabel(lastRunVector.current, v), v, r);
+    const run = toRun(id, runLabel(lastRunVector.current, v), v, r, polar);
     lastRunVector.current = { ...v };
     setRuns((rs) => [...rs, run].slice(-MAX_RUNS));
     setSelected(id);
-  }, []);
+  }, [polar]);
 
   const onEvaluate = async () => {
     if (!vector) return;
@@ -111,7 +115,7 @@ export default function DesignerPage() {
         const id = nextId.current++;
         setRuns((rs) => [...rs, { id, label: `${sweepVar}=${typeof row.value === 'number' ? round2(row.value) : row.value}`, vector: v, designId: row.design_id ?? '',
           op, rpm: row.rpm ?? 0, thrust_per_shaft_W: row.objectives!.thrust_per_shaft_W, air_ms: row.objectives!.cooling_air_axial_ms,
-          constraintsMet: row.constraints_met === true, tipMach: row.tip_mach ?? 0 }].slice(-MAX_RUNS));
+          constraintsMet: row.constraints_met === true, tipMach: row.tip_mach ?? 0, polar }].slice(-MAX_RUNS));
       }
       setError(null);
     } catch (e) { setError(t('propError', { error: (e as Error).message })); } finally { setBusy(false); }
@@ -129,7 +133,7 @@ export default function DesignerPage() {
       const fresh: RunRecord[] = res.evaluations.map((e) => ({
         id: nextId.current++, label: `g${e.generation} #${e.index}${e.note ? ' (' + e.note.split(':')[0] + ')' : ''}`, vector: e.vector, designId: e.design_id ?? '', op,
         rpm: e.rpm ?? 0, thrust_per_shaft_W: e.objectives.thrust_per_shaft_W ?? null, air_ms: e.objectives.cooling_air_axial_ms ?? null,
-        constraintsMet: e.constraints_met, tipMach: e.tip_mach ?? 0,
+        constraintsMet: e.constraints_met === true, tipMach: e.tip_mach ?? 0, polar,
       }));
       setRuns((rs) => [...rs, ...fresh].slice(-MAX_RUNS));
       setOptMsg(t('propOptDone', { n: res.evaluations.length, front: res.front.length, s: res.elapsed_s }));
@@ -142,6 +146,12 @@ export default function DesignerPage() {
     setVector({ ...r.vector }); setSelected(r.id);
     if (r.vector.diameter_in != null) setDiameter(String(r.vector.diameter_in));
     if (r.vector.blades != null) setBlades(String(r.vector.blades));
+  };
+
+  const loadVector = (v: Vector) => {
+    setVector({ ...v });
+    if (v.diameter_in != null) setDiameter(String(v.diameter_in));
+    if (v.blades != null) setBlades(String(v.blades));
   };
 
   const saveDraft = async () => {
@@ -159,9 +169,12 @@ export default function DesignerPage() {
   };
   const removeDraft = async (name: string) => { try { await api.deleteDraft(name); refreshDrafts(); } catch (e) { setError(t('propError', { error: (e as Error).message })); } };
 
-  const front = paretoFront(runs.filter((r) => r.op === op));
-  const opRuns = runs.filter((r) => r.op === op);
+  // one calculation context per front: the same operating point AND the same polar source (review 2026-11-22 H3)
+  const opRuns = runs.filter((r) => r.op === op && (r.polar ?? 'flatplate_model') === polar);
+  const front = paretoFront(opRuns);
   const cost = frontCost(opRuns, front);
+
+  useHelpContext(designerHelp({ polar, ran: !!result, busy, runs: runs.length, drafts: drafts.length, optimised: optMsg !== null, failed: !!error }));
 
   if (!family || !vector) return <Box sx={{ p: 2 }}>{error ? <Alert severity="error">{error}</Alert> : <CircularProgress size={20} />}</Box>;
 
@@ -264,6 +277,7 @@ export default function DesignerPage() {
           <ParetoView runs={opRuns} selectedId={selected} onPick={onPick} onClear={() => { setRuns([]); setSelected(null); lastRunVector.current = null; }} cost={cost} />
         </Box>
       </Box>
+      <StoredRunsPanel op={op} onLoad={loadVector} />
     </Box>
   );
 }

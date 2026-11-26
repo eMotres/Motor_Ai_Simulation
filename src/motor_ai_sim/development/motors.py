@@ -441,6 +441,17 @@ def _mark_removal_candidates(project: dict, motor_key: str, *, reason: str,
 
 
 def link_motor(project_id: str, die: str, config: str, request: Request) -> dict:
+    """Link a motor to a project - under the configuration archive's lifecycle lock (owner 2026-11-22): an archived
+    configuration is not linked, and an archive that checked "no project links it" can never interleave with this link."""
+    from motor_ai_sim import config_archive as _CA
+    try:
+        with _CA.admission(str(die or "").strip(), str(config or "").strip()):
+            return _link_motor_unlocked(project_id, die, config, request)
+    except _CA.Archived:
+        raise HTTPException(409, detail="This configuration is archived; restore it in the catalog before linking it")
+
+
+def _link_motor_unlocked(project_id: str, die: str, config: str, request: Request) -> dict:
     die = str(die or "").strip(); config = str(config or "").strip()
     if not die or not config or any(x in die + config for x in ("/", "\\", "..")):
         raise HTTPException(422, detail="Invalid motor identity")
@@ -749,16 +760,20 @@ def _comparison_projection(duty: dict, stored: dict) -> dict:
     coupled_em = _metric_projection(coupled_em_raw)
     thermal = _metric_projection(thermal_raw)
     primary = [result, summary]
+    from motor_ai_sim.shaft_convention import has_marker
+    mixed_old = (bool(summary_raw or result_raw) and not has_marker(summary_raw)
+                 and result_raw.get("shaft_conv") != 1 and has_marker(coupled_em_raw))
+    mech_cp, mech_em = ({}, {}) if mixed_old else (coupled, coupled_em)
     comparison: dict[str, Any] = {}
 
     # DutySpec.torque_nm / power_kw are requested rated targets.  Comparison
     # result columns are populated only from solved result/summary records.
-    torque = _first(primary + [coupled_em], "t_em_avg_nm", "t_em_nm",
+    torque = _first(primary + [mech_em], "t_em_avg_nm", "t_em_nm",
                     "t_avg_nm", "torque_avg_nm", "torque_nm")
     if torque is not None:
         comparison["torque_nm"] = torque
 
-    power = _first(primary + [coupled_em], "p_mech_w", "p_mech_avg_w", "p_out_w",
+    power = _first(primary + [mech_em], "p_mech_w", "p_out_w",
         "p_shaft_out_w", "p_shaft_w", "power_w")
     if power is not None:
         comparison["power_w"] = power
@@ -770,10 +785,10 @@ def _comparison_projection(duty: dict, stored: dict) -> dict:
 
     efficiency_pct = _first(primary, "efficiency_pct", "efficiency_percent", "eta_pct")
     if efficiency_pct is None:
-        efficiency_ratio = _first([summary, coupled], "efficiency_shaft", "eta_shaft",
+        efficiency_ratio = _first([summary, mech_cp], "efficiency_shaft", "eta_shaft",
                                   "eta_shaft_est")
         if efficiency_ratio is None:
-            efficiency_ratio = _first([summary, coupled_em], "efficiency", "eta_em")
+            efficiency_ratio = _first([summary, mech_em], "efficiency", "eta_em")
         if efficiency_ratio is not None:
             # These named fields are fractions by contract.  Never infer a unit
             # from the numeric magnitude of an ambiguous field.
@@ -996,6 +1011,40 @@ def _comparison_projection(duty: dict, stored: dict) -> dict:
     demag = _demag_flag(result_raw, summary_raw, coupled_em_raw)
     if demag is not None:
         comparison["demag"] = demag
+    # THE SHAFT-POWER CONVENTION (owner 2026-11-25, motor_ai_sim.shaft_convention): the headline torque, power,
+    # efficiency and torque density of a row come from ONE source and carry that source's convention.  A marked summary
+    # (or, without a summary, a marked coupled run) gives them at the coupling, its 3-D factor already inside: they are
+    # never scaled again below.  A marked result block alone gives its own numbers.  Anything else is the earlier
+    # convention, as it always was.
+    from motor_ai_sim import shaft_convention as _SC
+    _msrc = (summary_raw if _SC.has_marker(summary_raw)
+             else coupled_em_raw if (not summary_raw and not result_raw and _SC.has_marker(coupled_em_raw)) else None)
+    _sc_row = False
+    if _msrc is not None or result_raw.get("shaft_conv") == 1:
+        # missing stays missing: a value the marked source does not carry is never inherited from an older source
+        _sc_row = True
+        _keys = ("torque_nm", "power_w", "efficiency_pct", "torque_to_mass_nm_kg")
+        for key in _keys:
+            comparison.pop(key, None)
+        if _msrc is not None:
+            _s = dict(_msrc)
+            if _msrc is coupled_em_raw:
+                # a coupled run's friction and shaft efficiency sit on the coupled record itself
+                _s.update({k: coupled_raw[k] for k in ("P_mech_extra_W", "efficiency_shaft")
+                           if coupled_raw.get(k) is not None})
+            _p, _t = _SC.coupling_power(_s), _SC.coupling_torque(_s)
+            _eta = _number(_s.get("efficiency_shaft"))
+            if _eta is None and _s.get("P_mech_extra_W") is None:
+                _eta = _number(_s.get("efficiency"))
+            _m = _number(comparison.get("mass_kg"))
+            _td = _number(_s.get("T_field_k_Nm") if _s.get("op_mode") == "generator" else _s.get("T_shaft_Nm"))
+            _vals = (_t, _p, None if _eta is None else _eta * 100.0,
+                     _td / _m if (_td is not None and _m and _m > 0) else None)
+            comparison.update({k: v for k, v in zip(_keys, _vals) if v is not None})
+        else:
+            # a result block on the convention with no marked summary beside it: only its own numbers
+            comparison.update({k: v for k in _keys if (v := _number(result_raw.get(k))) is not None})
+        comparison["shaft_conv"] = 1
     # 3-D END EFFECT (owner 2026-10-25: the project table shows the same corrected numbers as the report): when the
     # run carries its Stage-A 3-D factor (``end3d.k_flux``, the report's k_3d), torque, power, torque/mass and the
     # voltage peaks are scaled by it, exactly as report.py does; the 2-D values stay beside them.
@@ -1010,8 +1059,10 @@ def _comparison_projection(duty: dict, stored: dict) -> dict:
         except Exception:  # noqa: BLE001 - k_flux is the documented fallback
             kt = k3
         comparison["k_3d"] = k3
-        for key, factor in (("torque_nm", kt), ("power_w", kt), ("torque_to_mass_nm_kg", kt),
-                            ("v_phase_peak_v", k3), ("v_line_peak_v", k3)):
+        _scaled = ((("v_phase_peak_v", k3), ("v_line_peak_v", k3)) if _sc_row else
+                   (("torque_nm", kt), ("power_w", kt), ("torque_to_mass_nm_kg", kt),
+                    ("v_phase_peak_v", k3), ("v_line_peak_v", k3)))
+        for key, factor in _scaled:
             if isinstance(comparison.get(key), (int, float)) and not isinstance(comparison.get(key), bool):
                 comparison[key + "_2d"] = comparison[key]
                 comparison[key] = comparison[key] * factor

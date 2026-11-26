@@ -298,7 +298,8 @@ def bearing_temp_from_thermal(geometry_fingerprint: Optional[str] = None
         if not isinstance(res, dict):
             return None
         fp = entry.get("geometry_fingerprint") or res.get("geometry_fingerprint")
-        if geometry_fingerprint and fp and str(fp) != str(geometry_fingerprint):
+        from motor_ai_sim.geo_fingerprint import same as _gfp_same
+        if geometry_fingerprint and fp and not _gfp_same(str(fp), str(geometry_fingerprint)):
             return None
         if geometry_fingerprint and not fp:
             return None          # UNKNOWN machine is not "this machine"

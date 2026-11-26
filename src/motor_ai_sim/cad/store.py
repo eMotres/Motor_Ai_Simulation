@@ -369,7 +369,8 @@ def fusion_csv(rows, path):
     for key, fname, v, unit, desc in rows:
         comment = (("motor_ai_sim:" + key + " ") if fname != key else "") + desc
         num = "%g" % v
-        w.writerow([fname, unit, num, num, comment.strip(), "False"])
+        from motor_ai_sim.spreadsheet_text import csv_safe_row
+        w.writerow(csv_safe_row([fname, unit, num, num, comment.strip(), "False"]))
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
     with open(path, "wb") as fh:
         fh.write(buf.getvalue().encode("utf-8-sig"))
@@ -884,8 +885,9 @@ def back(eff, mp, cells, out_dir, propose=False, origin="?", base_profile=None):
         w = csv.writer(fh)
         w.writerow(["parameter", "sim_key", "simulation", "freecad", "delta", "unit", "freecad_expression", "where in the simulation"])
         for d in diff:
-            w.writerow([d["name"], d["sim_key"], "%g" % d["sim"], "%g" % d["freecad"], "%g" % d["delta"], d["unit"],
-                        d["expression"], d["target"]])
+            from motor_ai_sim.spreadsheet_text import csv_safe_row
+            w.writerow(csv_safe_row([d["name"], d["sim_key"], "%g" % d["sim"], "%g" % d["freecad"], "%g" % d["delta"], d["unit"],
+                                     d["expression"], d["target"]]))
     res["files"] = [stem + ".json", stem + ".csv"]
     if propose and (diff or mechanics):
         prow = [(k, f, (vals[f] if f in vals else v), u, d) for k, f, v, u, d in rows]

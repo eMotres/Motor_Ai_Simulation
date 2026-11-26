@@ -21,6 +21,7 @@ import { useTranslation } from 'react-i18next';
 import { headlineRows, parsePublicMotors, rememberLandingMotor, type PublicMotor }
   from '../../lib/landingMotors';
 import { DroneIcon, RobotIcon } from './landingIcons';
+import { basesMixed, basisTag } from '../../lib/shaftBasisLabel';
 import { useSignUp } from './landingSignUp';
 
 const API = (import.meta.env.VITE_API_URL ?? 'http://localhost:8001').replace(/\/$/, '');
@@ -37,8 +38,11 @@ const AppIcon: React.FC<{ application: string | null }> = ({ application }) => {
   return null;
 };
 
-const MotorCard: React.FC<{ motor: PublicMotor; onOpen: (m: PublicMotor) => void }> = ({ motor, onOpen }) => {
+const MotorCard: React.FC<{ motor: PublicMotor; onOpen: (m: PublicMotor) => void; mixed: boolean }> =
+  ({ motor, onOpen, mixed }) => {
   const { t } = useTranslation('landing');
+  // the basis is named on a marked motor, and on an earlier one only when the list shows both kinds
+  const tag = basisTag(motor.rated.shaft_conv === 1, mixed);
   const app = motor.application;
   const appLabel = app ? t(`motors.app.${app}`, { defaultValue: app }) : null;
   return (
@@ -56,7 +60,8 @@ const MotorCard: React.FC<{ motor: PublicMotor; onOpen: (m: PublicMotor) => void
           )}
         </Box>
       </Box>
-      <Tooltip title={t('motors.ratedHint')} arrow>
+      <Tooltip title={tag ? `${t('motors.ratedHint')} ${t(tag === 'current' ? 'common:shaftBasisCurrent' : 'common:shaftBasisEarlier')}`
+        : t('motors.ratedHint')} arrow>
         <Box component="dl" sx={{
           m: 0, display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 0.75, columnGap: 2,
         }}>
@@ -107,6 +112,7 @@ const PublicMotors: React.FC = () => {
   }, []);
 
   if (motors.length === 0) return null;
+  const mixed = basesMixed(motors.map((m) => m.rated.shaft_conv === 1));
 
   const open = (m: PublicMotor) => {
     rememberLandingMotor({ die: m.die, config: m.configuration });
@@ -132,7 +138,7 @@ const PublicMotors: React.FC = () => {
         listStyle: 'none', m: 0, p: 0, display: 'grid', gap: 2,
         gridTemplateColumns: { xs: '1fr', sm: 'repeat(2, 1fr)', md: 'repeat(auto-fit, minmax(230px, 1fr))' },
       }}>
-        {motors.map((m) => <MotorCard key={`${m.die}/${m.configuration}`} motor={m} onOpen={open} />)}
+        {motors.map((m) => <MotorCard key={`${m.die}/${m.configuration}`} motor={m} onOpen={open} mixed={mixed} />)}
       </Box>
     </Box>
   );

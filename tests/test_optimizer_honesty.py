@@ -134,9 +134,13 @@ def test_efficiency_divides_by_every_loss_the_row_reports(fake_solver):
     raw.update({"P_elec_in_W": 200.0, "P_mech_avg_W": 190.0})
     fake_solver(raw)
     res = refine_proc.run_one({}, current_a=60.0, steps=12, coil_temp_c=120.0)
-    pmech = 0.4174 * _OMEGA
+    # the shaft-side convention (motor_ai_sim.shaft_convention): the core loss is a
+    # shaft load (this raw names no torque method and no coupled eddy, so the drag
+    # is the core loss + the post-processed rotor losses, 0 here)
+    pmech = 0.4174 * _OMEGA - 3.12
     ploss = 91.2 + 3.12                     # cu + fe (+ mag/shaft, both 0 here)
     assert res["efficiency"] == pytest.approx(pmech / (pmech + ploss), rel=1e-4)
+    assert res["shaft_convention"] == "fe_on_shaft_k3d_v1" and res["shaft_k3d"] is None
     assert res["P_loss_total_W"] == pytest.approx(ploss, abs=0.05)
     # …and specifically NOT the old solved-terminal ratio.
     assert abs(res["efficiency"] - 190.0 / 200.0) > 0.2
@@ -151,8 +155,9 @@ def test_mech_power_is_torque_times_speed_and_the_balance_stays_as_a_diagnostic(
     beside it, named for what it is."""
     fake_solver(_raw(converged=True))
     res = refine_proc.run_one({}, current_a=60.0, steps=12, coil_temp_c=120.0)
-    pmech = 0.4174 * _OMEGA
+    pmech = 0.4174 * _OMEGA - 3.12          # shaft side: T*w minus the core loss (no 3-D passport: k = 1)
     assert res["P_mech_W"] == pytest.approx(pmech, abs=0.05)
+    assert res["T_shaft_Nm"] == pytest.approx(pmech / _OMEGA, abs=1e-3)
     assert res["P_mech_balance_W"] == pytest.approx(165.0, abs=0.05)
     assert res["P_elec_in_solved_W"] == pytest.approx(260.0, abs=0.05)
     # the row reproduces its own efficiency (to the rounding it is stored at)

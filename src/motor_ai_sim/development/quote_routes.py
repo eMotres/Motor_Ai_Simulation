@@ -37,12 +37,9 @@ def _refuse(status: int, detail: str) -> HTTPException:
 
 
 def can_read_quote(user: Optional[dict], project: dict) -> bool:
-    """A global admin, or a member of this project (any role).  Never a global engineer who is not a member."""
-    if not user:
-        return False
-    if str(user.get("role") or "").lower() == "admin":
-        return True
-    return access.membership(str(user.get("email") or ""), project) is not None
+    """A global admin, a project owner, or a member the owner switched ``sees_prices`` on for (owner 2026-11-22; the default of a
+    member is OFF).  Never a global engineer who is not a member."""
+    return access.sees_prices(user, project)
 
 
 def quote_shared(user: Optional[dict], project: dict) -> bool:

@@ -703,6 +703,15 @@ class PwmModel:
 #  variants
 # ─────────────────────────────────────────────────────────────────────────────
 
+def _coils_of(g: Mapping[str, Any], w: Mapping[str, Any]):
+    """Coils per phase derived from the snapshot geometry and winding; the stored value when the geometry gives
+    no slot count."""
+    from motor_ai_sim.winding import derived_n_coils_per_phase, slot_pole_counts
+    if not (g.get("num_slots") or g.get("num_seg")):
+        return w.get("n_coils_per_phase")
+    return derived_n_coils_per_phase(w, slot_pole_counts(g)[0])
+
+
 def build_variants(*, machine: str, rec, snap, hm, rows_grid, pwm_fem: Mapping[str, Any],
                    variants: Sequence[Mapping[str, Any]], r_g_si: float, build: str,
                    si_part: str, n_par: int = 1, board_scale: float = 1.0) -> Dict[str, Any]:
@@ -731,7 +740,9 @@ def build_variants(*, machine: str, rec, snap, hm, rows_grid, pwm_fem: Mapping[s
     fingerprint = {
         "turns_per_coil": ss.get("turns_per_coil"),
         "wires_per_slot": g.get("num_wires_per_slot"),
-        "coils_per_phase": w.get("n_coils_per_phase"),
+        # DERIVED from the snapshot's slot count and layers (the stored copy can lag behind the machine); the
+        # snapshot itself, and so snapshot_sha256, is not touched: this is a read of it
+        "coils_per_phase": _coils_of(g, w),
         "length_mm": float(g["motor_length"]),
         "wire": {"width_mm": g.get("wire_width"), "height_mm": g.get("wire_height"),
                  "split": g.get("wire_split"), "parallel": g.get("wire_parallel")},

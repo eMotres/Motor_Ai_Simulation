@@ -1,0 +1,1 @@
+{"detail":{"error":"validation","errors":[{"code":"invalid_value","message":"z must be a positive integer, got -1","path":"/stages/0/sun/z"}]}}

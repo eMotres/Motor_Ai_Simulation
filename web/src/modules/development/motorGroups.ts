@@ -50,12 +50,17 @@ export function headerFlags(motors: ProjectMotor[], index: number): { group: boo
 export type VersionView = 'latest' | 'all';
 const isCurrent = (m: ProjectMotor) => m.kind !== 'history' && m.status !== 'trial';
 const finite = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) ? v : null);
-/** A variant's average efficiency (%) over its duties that have a stored result; null when it has none. */
+/** A variant's average efficiency (%) over its duties that have a stored result; null when it has none, and null when its duties
+ *  carry two shaft-power conventions (an average across them reads as neither; src/motor_ai_sim/shaft_convention.py). */
 export function averageEfficiency(motor: ProjectMotor): number | null {
+  const conv = new Set<number>();
   const values = (motor.results ?? []).map((r) => {
     const c = (r as { comparison?: Record<string, unknown> }).comparison ?? {};
-    return finite(c.efficiency_pct) ?? finite(r.efficiency_pct);
+    const v = finite(c.efficiency_pct) ?? finite(r.efficiency_pct);
+    if (v !== null) conv.add(Number(c.shaft_conv ?? (r as { shaft_conv?: unknown }).shaft_conv) === 1 ? 1 : 0);
+    return v;
   }).filter((v): v is number => v !== null);
+  if (conv.size > 1) return null;
   return values.length ? values.reduce((a, b) => a + b, 0) / values.length : null;
 }
 const linkedMs = (m: ProjectMotor): number | null => { const t = Date.parse(String(m.linked_at ?? '')); return Number.isFinite(t) ? t : null; };

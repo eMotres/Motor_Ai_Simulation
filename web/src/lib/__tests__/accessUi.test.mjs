@@ -108,7 +108,7 @@ t('card summary: none / partial / all', () => {
 // -- role "engineer" (owner 2026-10-14): Configure only, or the whole simulation ------------------------------------------
 
 const ALL_TABS = ['motors', 'geometry', 'materials', 'mesh', 'simulation', 'static3d', 'mechanical',
-  'thermal', 'controller', 'schemas', 'propellers', 'sweep', 'comparePoints', 'cost', 'compare', 'model3d', 'production', 'development', 'designer', 'overview', 'admin'];
+  'thermal', 'controller', 'schemas', 'propellers', 'gears', 'sweep', 'comparePoints', 'cost', 'compare', 'model3d', 'production', 'development', 'designer', 'overview', 'admin'];
 
 // what App.tsx computes for a session: signedIn, fullUI (hasSimulationUI) and isAdmin
 const visible = (enforced, isAdmin, role) => {
@@ -122,7 +122,7 @@ t('role user: Motors, Configure, 3D model - nothing else', () => {
 
 t('role engineer: the whole simulation UI, no admin sections, and NO separate 3D model tab (it is Geometry > Full)', () => {
   assert.deepEqual(visible(true, false, 'engineer'), ['motors', 'geometry', 'materials', 'mesh', 'simulation', 'mechanical',
-    'thermal', 'controller', 'schemas', 'propellers', 'comparePoints', 'compare', 'production', 'development']);
+    'thermal', 'controller', 'schemas', 'propellers', 'gears', 'comparePoints', 'compare', 'production', 'development']);
   assert.equal(visible(true, false, 'engineer').includes('model3d'), false);
   for (const id of ['admin', 'sweep', 'cost', 'static3d']) assert.equal(visible(true, false, 'engineer').includes(id), false, id);
 });

@@ -364,6 +364,8 @@ def _validate_typed_item(value: Any, spec: dict, path: str, *, require_complete:
             raise ValueError(f"{path}: finite number required")
         if ("min" in spec and value < spec["min"]) or ("max" in spec and value > spec["max"]):
             raise ValueError(f"{path}: value outside allowed range")
+        if spec.get("integer") and value != int(value):
+            raise ValueError(f"{path}: whole number required")
     elif typ == "boolean":
         if not isinstance(value, bool):
             raise ValueError(f"{path}: boolean required")
@@ -434,8 +436,67 @@ def ordered_pair_errors(draft: dict) -> list[dict]:
 def _missing_any_groups(field: dict, value: dict) -> list[list[str]]:
     """`required_any` groups of which no property is filled (e.g. torque OR power)."""
     props = {p["id"]: p for p in field.get("properties", [])}
+    # a property tagged `only_when_od_mode` (the preferred diameter and the accepted existing sizes, 4_1) counts only in that mode
+    mode = od_mode_of(value)
     return [group for group in field.get("required_any", [])
-            if not any(_property_complete(value.get(pid), props[pid]) for pid in group if pid in props)]
+            if not any(_property_complete(value.get(pid), props[pid]) for pid in group
+                       if pid in props and props[pid].get("only_when_od_mode", mode) == mode)]
+
+
+#: 4_1 `od_mode`: "existing" = the customer picks from the existing sizes (the calculation starts from an existing lamination and is
+#: ready much sooner), "custom" = his own diameter (the geometry is optimised for it; takes much longer).  Owner 2026-11-25.
+#: A stored version without the property reads as "custom" with its stated diameter.
+OD_MODES = ("existing", "custom")
+
+
+def od_mode_of(envelope: Any) -> str:
+    """The diameter choice of a 4_1 value; anything absent or unknown reads as "custom"."""
+    mode = envelope.get("od_mode") if isinstance(envelope, dict) else None
+    return mode if mode in OD_MODES else "custom"
+
+
+def _valid_size(item: Any) -> bool:
+    """One accepted existing size: a positive finite diameter and positive whole slot and pole counts (nothing is truncated)."""
+    def num(v: Any) -> bool:
+        return isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v) and v > 0
+    return (isinstance(item, dict) and num(item.get("od_mm"))
+            and all(num(item.get(k)) and item[k] == int(item[k]) for k in ("slots", "poles")))
+
+
+def od_size_errors(draft: dict) -> list[dict]:
+    """4_1 in "existing" mode: every accepted size must fit the stated maximum diameter (``outer_diameter_mm``, a hard limit).
+    The contradictory entry is reported on its own path so the form can show it; nothing is rewritten.  Invalid entries are
+    refused by the schema check (positive diameter, whole positive slots and poles)."""
+    answer = ((draft or {}).get("fields") or {}).get("4_1")
+    value = answer.get("value") if isinstance(answer, dict) and answer.get("status") == "filled" else None
+    if not isinstance(value, dict) or od_mode_of(value) != "existing":
+        return []
+    limit = value.get("outer_diameter_mm")
+    sizes = value.get("od_accepted_sizes")
+    if isinstance(limit, bool) or not isinstance(limit, (int, float)) or not math.isfinite(limit) or not isinstance(sizes, list):
+        return []
+    return [{"field": f"4_1.od_accepted_sizes[{i}].od_mm", "section": "4",
+             "message": f"Accepted size {item['od_mm']:g} mm is above the maximum outer diameter {limit:g} mm"}
+            for i, item in enumerate(sizes) if _valid_size(item) and item["od_mm"] > limit]
+
+
+def od_choice(draft: Any) -> dict:
+    """What the computing session needs of the diameter choice: ``{"od_mode", "od_preferred_mm", "od_max_mm", "accepted_sizes"}`` (``od_max_mm`` = the stated diameter: the hard limit in "existing", the diameter itself in "custom").
+
+    Reads the stored 4_1 answer only; an unanswered or "not known yet" 4_1 and every version written before the choice existed
+    read as "custom" with no sizes.  ``accepted_sizes`` is the list of ``{od_mm, slots, poles}`` the customer ticked (empty unless
+    the mode is "existing"); a malformed entry is left out, nothing is invented."""
+    answer = ((draft or {}).get("fields") or {}).get("4_1") if isinstance(draft, dict) else None
+    value = answer.get("value") if isinstance(answer, dict) and answer.get("status") == "filled" else None
+    value = value if isinstance(value, dict) else {}
+    mode = od_mode_of(value)
+    sizes = []
+    if mode == "existing" and isinstance(value.get("od_accepted_sizes"), list):
+        for item in value["od_accepted_sizes"]:
+            if _valid_size(item):
+                sizes.append({"od_mm": item["od_mm"], "slots": int(item["slots"]), "poles": int(item["poles"])})
+    return {"od_mode": mode, "od_preferred_mm": value.get("od_preferred_mm") if mode == "existing" else None,
+            "od_max_mm": value.get("outer_diameter_mm"), "accepted_sizes": sizes}
 
 
 def _answer_complete(answer: dict, field: dict) -> bool:
@@ -1227,6 +1288,7 @@ def validation_errors(draft: dict) -> list[dict]:
                         errors.append({"field": fid, "section": sid, "message": "Enter at least one relevant value"})
     errors.extend(cooling_load_errors(draft))
     errors.extend(ordered_pair_errors(draft))
+    errors.extend(od_size_errors(draft))
     for sim in simulation_minimum_errors(draft):  # the simulation minimum: "not known yet" is refused here
         # a filled but incomplete answer already carries its own, more exact errors (`2_1.voltage_nominal_V`, `key_points[0].name`)
         if any(str(e.get("field", "")).startswith((sim["field"] + ".", sim["field"] + "[")) for e in errors):
@@ -1338,13 +1400,14 @@ def clean_document_label(value: Any, limit: int, field: str) -> str:
 
 
 def normalize_document(file_id: str, uploader_email: str, name: str, *, folder: str | None = None, revision: str = "",
-                       internal: bool = False, size: int = 0, sha256: str = "", content_type: str = "") -> dict:
+                       internal: bool = False, size: int = 0, sha256: str = "", content_type: str = "",
+                       price_restricted: bool = False) -> dict:
     """One project document row.  The file itself lives under ``documents/files/<file_id>``; the row is never deleted
     (``archived`` hides it), so the audit trail and the stored file always match."""
     name = clean_document_label(Path(str(name or "").replace("\\", "/")).name, 200, "name") or "unnamed"
     if folder not in DOCUMENT_FOLDERS:
         folder = guess_document_folder(name)
     return {"id": "doc-" + __import__("secrets").token_urlsafe(9), "file_id": file_id, "name": name, "folder": folder,
-            "revision": revision, "internal": bool(internal), "size": int(size), "sha256": sha256,
+            "revision": revision, "internal": bool(internal), "price_restricted": bool(price_restricted), "size": int(size), "sha256": sha256,
             "content_type": str(content_type or "")[:100], "uploader_email": str(uploader_email or "").strip().lower(),
             "uploaded_at": now(), "archived": False, "archived_at": None, "archived_by": None}

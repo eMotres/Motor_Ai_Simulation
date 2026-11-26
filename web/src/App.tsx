@@ -64,6 +64,7 @@ import { barEntries, isSimulationTab, barValue, simulationsTarget, SIMULATIONS_B
 import { oneOf } from './lib/viewMemory';
 import { useRememberedView } from './lib/useRememberedView';
 import { resolveSchemasRoute } from './lib/schemasRoute';
+import { isGearsRoute } from './lib/gearsRoute';
 import RefusedNotice from './components/common/RefusedNotice';
 import { hasOwnConfigureChoice } from './components/compare/configureChoice';
 import { consumeOpenInConfigure } from './lib/landingMotors';
@@ -97,6 +98,7 @@ const ThermalPanel = lazy(watchChunkImport(() => import('./components/thermal/Th
 const ControllerPanel = lazy(watchChunkImport(() => import('./components/controller/ControllerPanel')));
 const SystemPanel = lazy(watchChunkImport(() => import('./components/system/SystemPanel')));
 const PropellersPanel = lazy(watchChunkImport(() => import('./components/propellers/PropellersPanel')));
+const GearsPage = lazy(watchChunkImport(() => import('./modules/gears/GearsPage')));
 const SweepConfigPanel = lazy(watchChunkImport(() => import('./components/sweep/SweepConfigPanel')));
 const ComparePanel = lazy(watchChunkImport(() => import('./components/compare/ComparePanel')));
 const CostPanel = lazy(watchChunkImport(() => import('./components/cost/CostPanel')));
@@ -269,6 +271,7 @@ function App() {
     const route = resolveSchemasRoute(window.location.href);
     if (route.redirected) window.history.replaceState(null, '', route.href);
     if (route.activeTab) setActiveTab(route.activeTab);
+    else if (isGearsRoute(window.location.href)) setActiveTab('gears');   // direct link /gears (owner 2026-11-26)
   }, [setActiveTab]);
   const { user, isAdmin, role, enforced, defaultMotor, canSolve, resolved: authResolved } = useAuth();
   // Interface language (docs/I18N.md): adopt the signed-in user's stored choice.
@@ -497,7 +500,7 @@ function App() {
     if (!signedIn) return;
     try {
       const q = new URLSearchParams(window.location.search);
-      if (resolveSchemasRoute(window.location.href).activeTab === 'schemas') return;
+      if (resolveSchemasRoute(window.location.href).activeTab === 'schemas' || isGearsRoute(window.location.href)) return;
       if (q.get('tab') === 'configure' || q.get('design')) setActiveTab('compare');
     } catch { /* ignore */ }
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -658,6 +661,10 @@ function App() {
       render: () => <PropellersPanel /> },
     { id: 'schemas', label: 'Schemas', order: 61, gate: TAB_GATES.schemas, showViewer: false,
       render: () => <SystemPanel /> },
+    // Gears (owner 2026-11-26, gear module stage 5): a member of the Simulations tab (lib/simulationsMenu), before Schemas; staff with the
+    // simulation UI, the /api/gears routes are engineer/admin only.  showViewer false: no motor viewer / point bar for this page.
+    { id: 'gears', label: 'Gears', order: 62, gate: TAB_GATES.gears, showViewer: false,
+      render: () => <GearsPage /> },
     { id: 'sweep', label: 'Optimization', order: 60, panelId: 'optimization', gate: TAB_GATES.sweep, showViewer: false,
       render: () => <SweepConfigPanel /> },
     // Compare writes the SHARED saved-sims store and Cost studies run on the

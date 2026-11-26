@@ -2283,6 +2283,8 @@ ${s1Text.text}` : '';
               {!draftOpen && tx('configure.bannerOpenHint', { button: tx('configure.openInTuner') })}
               {draftOpen && draftTarget && tx('configure.bannerOpened')}
               {draftHeadline && (
+                // a marked headline names its basis; an earlier one keeps its earlier (tooltip-less) line
+                <Tooltip title={draftHeadline.shaft_conv === 1 ? tx('configure.femShaftBasis') : ''}>
                 <Box sx={{ mt: 0.5 }}>
                   {tx('configure.femOnFile', {
                     what: ({ coupled: tx('configure.whatCoupled'), thermal: tx('configure.whatThermal'),
@@ -2290,6 +2292,7 @@ ${s1Text.text}` : '';
                     T: fmt(draftHeadline.torque_nm ?? NaN, 1), P: fmt(draftHeadline.power_kw ?? NaN, 2),
                     eta: fmt(draftHeadline.efficiency_shaft_pct ?? NaN, 1) })}
                 </Box>
+                </Tooltip>
               )}
             </>
           )}
@@ -2691,6 +2694,15 @@ ${s1Text.text}` : '';
               color: '#f87171', mb: -0.5 }} title={propLine ? `${propLine.text}. ${propLine.tip}` : undefined}>
               {propLine ? `⚠ ${propLine.text}` : ''}
             </Typography>
+          )}
+          {/* ONE flag, admins only (clients get no 3-D provenance line, owner 2026-08-24): the passport's k(L)
+              table predates the 2026-11-24 fix, so only its reference value is used (motorScaling.end3dKTable) */}
+          {isAdmin && result.k_end3d_stale && (
+            <Tooltip title={tx('configure.kLStaleTip')}>
+              <Typography sx={{ ...LABEL, fontSize: 11, lineHeight: '16px', color: '#fbbf24', alignSelf: 'flex-start' }}>
+                {`⚑ ${tx('configure.kLStale')}`}
+              </Typography>
+            </Tooltip>
           )}
           <Box sx={{ display: 'flex', gap: 0.75, flexWrap: 'wrap' }}>
             <MetricTile label={tx('configure.torque')} value={pointGate.accepted ? result.T_Nm : null} unit="N·m" d={1} base={baseRes.T_Nm} goodHi

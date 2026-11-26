@@ -43,6 +43,7 @@
   "tabs": {
     "parts": "Parts",
     "bom": "BOM",
+    "3d": "3D",
     "timeline": "Timeline",
     "process": "Process",
     "documents": "Documents",
@@ -51,7 +52,47 @@
     "assembly": "Assembly process",
     "tooling": "Tooling",
     "tests": "Tests",
-    "certification": "Certification"
+    "certification": "Certification",
+    "checklist": "Checklist"
+  },
+  "checklist": {
+    "tip": "The mass-production checklist is generated from this production: assembly steps, process requirements and test limits, parts, open discussion and missing certification evidence. Only the status and the evidence of an item are kept here; an item whose requirement changed returns to To confirm.",
+    "revision": "Revision {rev}",
+    "openCount": "{open} open of {total}",
+    "openOnly": "Open items only",
+    "download": "Excel (EN + 中文)",
+    "downloadTip": "Download the checklist as Excel with the main list, the open-items tracker and the statistics. It is an export only: change statuses and requirements in the system.",
+    "none": "No items.",
+    "status": "Status",
+    "evidence": "Evidence",
+    "noEvidence": "No evidence",
+    "changed": "Changed",
+    "changedTip": "The requirement changed after the status was set. Confirm it again.",
+    "uploadTip": "Upload a new document as the evidence of this item",
+    "byTip": "Set by {by} at {at}",
+    "statuses": {
+      "to_do": "To do",
+      "to_confirm": "To confirm",
+      "missing_info": "Missing info",
+      "optional": "Optional",
+      "done": "Done"
+    },
+    "responsible": {
+      "factory": "Factory",
+      "supplier": "Supplier",
+      "MOTRES": "MOTRES"
+    },
+    "categories": {
+      "assembly": "Assembly steps",
+      "checks": "Checks in the process",
+      "process": "Process requirements",
+      "tests": "Test limits",
+      "parts": "Parts, materials and finish",
+      "fasteners": "Fasteners",
+      "packaging": "Packaging",
+      "discussion": "Open discussion items",
+      "certification": "Certification evidence"
+    }
   },
   "bilingual": {
     "machine": "Machine translation, not verified",
@@ -90,8 +131,6 @@
     "drawings": "Drawings",
     "noDrawings": "No drawing attached.",
     "download": "Download",
-    "model3d": "3-D model (STEP)",
-    "model3dTip": "Full motor model of this die/config; the same NDA gate as the 3-D tab.",
     "partStep": "Part STEP",
     "deleteConfirm": "Delete this part?",
     "writeLang": "Write in",
@@ -233,7 +272,6 @@
     "fit": "Fit to screen",
     "stepSectionsPick": "Process sections",
     "stepDocs": "Drawings and documents",
-    "model3d": "Assembled in this step (3-D)",
     "model3dOwn": "The parts assembled in this step.",
     "model3dGhost": "Highlighted: assembled in this step. Faint: already assembled in earlier steps.",
     "model3dUpTo": "Everything assembled up to this step.",
@@ -253,7 +291,10 @@
     "pdfUnavailable": "PDF generation is unavailable. Please try again later.",
     "pdfTooLarge": "The document or its images are too large to prepare as a PDF. Download files individually or use View.",
     "editSections": "Edit process sections",
-    "hideSections": "Hide sections"
+    "hideSections": "Hide sections",
+    "stepDocsPick": "Documents",
+    "stepDocsPickTip": "Files shown in this step besides the drawings of its parts.",
+    "stepDocsTooMany": "This step names more documents than the limit of {max} ({n}). Remove some before saving."
   },
   "access": {
     "none": "You are not on this production.",
@@ -299,7 +340,34 @@
     "superseded": "Superseded",
     "supersededBy": "Superseded by {name} (revision {rev})",
     "supersededTip": "Replaced in a published revision. Do not make parts to it; the file is kept for reference.",
-    "changedUnacked": "Changed in revision {rev} - not acknowledged"
+    "changedUnacked": "Changed in revision {rev} - not acknowledged",
+    "search": "Search by name or part",
+    "noMatch": "No document matches.",
+    "topicLabel": "Topic",
+    "topicAuto": "Auto: {topic}",
+    "stepChipTip": "Open this assembly step",
+    "topic": {
+      "process": "Process & assembly",
+      "drawings": "Part drawings & 3-D",
+      "tooling": "Tooling",
+      "tests": "Tests & measurements",
+      "packaging": "Packaging & labels",
+      "photos": "Photos",
+      "general": "General",
+      "superseded": "Superseded"
+    },
+    "topicTip": {
+      "process": "Instructions and files named by an assembly step.",
+      "drawings": "Drawings, 3-D and CAD files of the parts.",
+      "tooling": "Files of the parts on the tooling order list.",
+      "tests": "Test sheets, measurements and files named by a check step.",
+      "packaging": "Packaging, labels and stickers.",
+      "photos": "Pictures that belong to no part, and pictures posted to a step.",
+      "general": "Everything else.",
+      "superseded": "Replaced by a newer file. Kept for reference; do not build to them.",
+      "select": "The topic this file is listed under. Auto picks it from the part, the assembly steps and the file type."
+    },
+    "linkInvalid": "This link is not valid: its document list is empty, too long or malformed."
   },
   "unread": {
     "tip": "{count} unread messages",
@@ -834,5 +902,14 @@
     },
     "move": "To Documents",
     "moveTip": "Move this file back to the Documents tab"
+  },
+  "tab3d": {
+    "all": "All",
+    "step": "Assembly step",
+    "none": "This motor has no 3-D model yet.",
+    "revision": "Model {rev}",
+    "revisionTip": "Parameter hash {hash}",
+    "download": "STEP",
+    "show": "Show in 3D"
   }
 }

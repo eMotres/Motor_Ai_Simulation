@@ -384,7 +384,8 @@ def last(geo: Optional[str] = Query(default=None)) -> Dict[str, Any]:
         return {"has_result": False, "result": None,
                 "live_geometry_fingerprint": live}
     fp = _LAST.get("geometry_fingerprint")
-    stale = None if (not fp or not live or live == "nofp") else bool(fp != live)
+    from motor_ai_sim.geo_fingerprint import same as _gfp_same
+    stale = None if (not fp or not live or live == "nofp") else (not _gfp_same(fp, live))
     _snap = getattr(_LAST, "snapshot", None)
     return {"has_result": True,
             # Under the store's lock: a coupled run finishing while this GET
@@ -1219,6 +1220,11 @@ _EM_FACE_KEYS = ("T_em_avg_Nm", "T_ripple_pct", "P_stranded_W", "P_core_W",
                  "THD_I_pct", "THD_LL_pct", "V_line_peak_V",
                  "n_steps_per_period")
 
+#: The shaft-power convention of the last run (motor_ai_sim.shaft_convention), copied
+#: whole into the record's ``em`` block with the shaft power and the mode it belongs to.
+_EM_SHAFT_KEYS = ("P_mech_W", "op_mode", "rpm") + tuple(__import__(
+    "motor_ai_sim.shaft_convention", fromlist=["CONVENTION_KEYS"]).CONVENTION_KEYS)
+
 #: The EM run's own verdict on its steady state (Codex review 2026-10-04): the
 #: eddy method used, why a TDM request was marched, and whether the reported
 #: window is a steady state at all.  Carried on every history row and on the
@@ -1807,10 +1813,21 @@ def _cold_constants(em: Dict[str, Any], *, body: Dict[str, Any],
         two_d[key] = v
         if k3 is not None:
             k3d[key] = round(v * k3, 6)
+    # On the shaft-side convention (motor_ai_sim.shaft_convention) the summary's
+    # Kt / Km already carry the run's torque factor; their 2-D value is that
+    # divided by it, so the factor is applied once here as everywhere.
+    _sc_k = None
+    if s.get("shaft_convention") == _SHAFT_CONVENTION:
+        try:
+            _sc_k = float(s.get("shaft_k3d")) if s.get("shaft_k3d") is not None else None
+        except (TypeError, ValueError):
+            _sc_k = None
     for key in _COLD_TORQUE:
         v = _n(key)
         if v is None:
             continue
+        if _sc_k and key != "T_em_avg_Nm":
+            v = v / _sc_k
         two_d[key] = v
         if kTq is not None:
             k3d[key] = round(v * kTq, 6)
@@ -4547,12 +4564,25 @@ def _register_answer_pass(phase: str, body: Dict[str, Any],
     return rec
 
 
+from motor_ai_sim.shaft_convention import SHAFT_CONVENTION as _SHAFT_CONVENTION  # noqa: E402
+
+
+def _torque_factor_k(summary: Optional[Dict[str, Any]]) -> Optional[float]:
+    """THE torque factor of a run summary: the measured k_T, else the Stage A flux factor k_flux, else None (plain 2-D), inside
+    the accepted band (``end3d_factors.torque_factor``) - the one the Electromagnetic tab's tiles (``apply3d.ts``), the S1 / continuous
+    power blocks and the report (``report.torque_factor_3d``) apply.  The torque hold, the mechanical step and the propeller
+    load line use it too (they used the flux factor alone: the same number while no k_T is measured, another one the day one is)."""
+    from motor_ai_sim.end3d_factors import torque_factor
+    e3 = (summary or {}).get("end3d")
+    return torque_factor(e3 if isinstance(e3, dict) else None)[0]
+
+
 def _shaft_torque_nm(summary: Dict[str, Any]) -> tuple:
     """The run's shaft torque for the mechanical step, and how it was made.
 
     ``(torque_or_None, note_or_None)``.  The 2-D mean ``T_em_avg_Nm`` times
-    the run's 3-D end-effect factor ``end3d.k_flux`` when the summary carries
-    one — the same product the Electromagnetic tab's tiles show — else the 2-D
+    the run's 3-D torque factor (``_torque_factor_k``: k_T else k_flux) when the
+    summary carries one — the same product the Electromagnetic tab's tiles show — else the 2-D
     mean itself.  A run with no torque at all gives ``None`` (the hook then
     falls back the way the route does).
     """
@@ -4563,13 +4593,21 @@ def _shaft_torque_nm(summary: Dict[str, Any]) -> tuple:
         t = None
     if t is None or not math.isfinite(t):
         return None, None
-    e3 = summary.get("end3d")
-    k = (e3 or {}).get("k_flux") if isinstance(e3, dict) else None
-    try:
-        k = None if k is None else float(k)
-    except (TypeError, ValueError):
-        k = None
-    if k is not None and math.isfinite(k) and k > 0.0 and abs(k - 1.0) > 1e-9:
+    # THE SHAFT-SIDE CONVENTION (owner 2026-11-25, motor_ai_sim.shaft_convention):
+    # a motor's shaft torque is the field torque x k minus the core loss / w; a
+    # generator's held quantity stays what it was (field torque x k).
+    if summary.get("shaft_convention") == _SHAFT_CONVENTION:
+        _key = "T_field_k_Nm" if summary.get("op_mode") == "generator" else "T_shaft_Nm"
+        try:
+            _ts = float(summary.get(_key))
+        except (TypeError, ValueError):
+            _ts = None
+        if _ts is not None and math.isfinite(_ts):
+            return _ts, (("field torque %.4g N·m x 3-D factor" % t) if _key == "T_field_k_Nm"
+                         else ("shaft torque: field %.4g N·m x 3-D factor minus the core loss "
+                               "(and any other shaft-side load) / w" % t))
+    k = _torque_factor_k(summary)
+    if k is not None and abs(k - 1.0) > 1e-9:
         return t * k, ("2-D mean %.4g N·m × 3-D end-effect %.4g" % (t, k))
     return t, None
 
@@ -5111,6 +5149,32 @@ def _mechanical_step(body: Dict[str, Any], field: Dict[str, Any], *,
         out["retention"] = r["retention"]
     if temps_note:
         out["temps_note"] = temps_note
+    return out
+
+
+def _mechanical_failures(block: Optional[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Every mechanical step of a coupled run that did NOT solve, as
+    ``[{"step", "error"}]`` — the rotor stress (the block itself), the ring
+    modes and the critical speeds (its two sub-blocks).  Empty when they all
+    solved or when the run did not ask for the mechanics (``block`` None).
+
+    Owner 2026-11-25: a coupled run whose mechanical step failed must say so in
+    its RESULT, not only inside ``coupling.mechanical`` — the run used to read
+    ``ok`` with the refusal visible only to somebody who opened the nested
+    block.  A retention FAIL is not in this list: that step solved, and its
+    verdict rides in the block's ``retention``.
+    """
+    if not isinstance(block, dict):
+        return []
+    out: List[Dict[str, Any]] = []
+    if block.get("ok") is False:
+        out.append({"step": "rotor_stress",
+                    "error": str(block.get("error") or "the step did not solve")})
+    for key in ("modes", "critical_speeds"):
+        sub = block.get(key)
+        if isinstance(sub, dict) and sub.get("ok") is False:
+            out.append({"step": key,
+                        "error": str(sub.get("error") or "the step did not solve")})
     return out
 
 
@@ -7405,7 +7469,7 @@ def _run(body: Dict[str, Any],
                         _sv_v = shaft_view(_s_v, _brg_v,
                                            str(body.get("mode") or "motor"))
                         continuous_rating["power"] = {
-                            "T_em_Nm": _t_v, "P_mech_W": _sv_v.get("P_mech_W"),
+                            "T_em_Nm": _t_v, "P_mech_W": _sv_v.get("P_rotor_W"),
                             "P_rotor_W": _sv_v.get("P_rotor_W"),
                             "P_shaft_W": _sv_v.get("P_shaft_W"),
                             "eta_em": _sv_v.get("eta_em"),
@@ -8030,6 +8094,10 @@ def _run(body: Dict[str, Any],
         # print the one row the whole exercise is about (the carrier's cost).
         "em": {**{k: _last_summary.get(k) for k in _EM_FACE_KEYS
                   if _last_summary.get(k) is not None},
+               # the run's shaft-power convention, all of it (motor_ai_sim.shaft_convention):
+               # a reader of this block must not inherit another run's
+               **{k: _last_summary.get(k) for k in _EM_SHAFT_KEYS
+                  if _last_summary.get(k) is not None},
                # the verdict keys ALWAYS (None = the run did not say)
                **{k: _last_summary.get(k) for k in _EM_VERDICT_KEYS}},
         # every EM pass of the loop a steady state?  (False on any transient
@@ -8185,6 +8253,16 @@ def _run(body: Dict[str, Any],
         "computed_at": em.get("computed_at"),
         "elapsed_s": round(max(time.time() - t0, 1e-3), 2),
     }
+    # The mechanical steps' outcome at the TOP of the result (2026-11-25), only
+    # when the run asked for them: a run without the mechanics reads exactly as
+    # it always did.
+    if mech_block is not None:
+        _mfail = _mechanical_failures(mech_block)
+        out["mechanical_ok"] = not _mfail
+        if _mfail:
+            out["mechanical_failures"] = _mfail
+            out["mechanical_warning"] = "mechanical step failed: " + "; ".join(
+                f"{f['step']}: {f['error']}" for f in _mfail)
     # /last keeps everything but the two heavy payloads: it answers "what did the
     # loop last conclude", and shipping a transient plus a temperature-per-node
     # map to do it is how a lookup becomes a download.
@@ -8992,7 +9070,7 @@ def _cp_verify_continuous_point(body: Dict[str, Any],
                      if x_v is not None else None)
             sv = shaft_view(summ, brg_v, str(body.get("mode") or "motor"))
             cp["power"] = {
-                "T_em_Nm": t_v, "P_mech_W": sv.get("P_mech_W"),
+                "T_em_Nm": t_v, "P_mech_W": sv.get("P_rotor_W"),
                 "P_shaft_W": sv.get("P_shaft_W"),
                 "eta_shaft": sv.get("eta_shaft"),
                 "basis": ("real electromagnetic pass at %.0f rpm, %.1f A — "
@@ -9304,7 +9382,12 @@ def _cr_speed_search_opts(cooling: Mapping[str, Any], summary: Mapping[str, Any]
                         "propeller's load line" % (pid, exc))
         return opts
     t_ref = _ccr._num((summary or {}).get("T_em_avg_Nm"))
-    k3d = _ccr._num(((summary or {}).get("end3d") or {}).get("k_flux")) or 1.0
+    k3d = _torque_factor_k(summary) or 1.0
+    if (summary or {}).get("shaft_convention") == _SHAFT_CONVENTION and t_ref:
+        # the shaft torque the propeller sees (field x k minus the core loss / w)
+        _ts = _shaft_torque_nm(summary or {})[0]
+        if _ts:
+            k3d = abs(float(_ts)) / abs(float(t_ref))
     if not (t_ref and abs(t_ref) > 0.0):
         log.warning("coupled: the reference run states no torque, so the S1 "
                     "speed search has no propeller load line")

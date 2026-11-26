@@ -270,6 +270,7 @@
     "incompleteTip": "标准名称不完整；缺少：{missing}",
     "old": "旧",
     "oldTip": "另一台同名且同一应用的电机已被项目或生产引用；此副本为旧版本",
+    "oldArchiveTip": "点击归档此副本",
     "production": "生产 {rev}",
     "computed": "已计算",
     "loadTip": "以默认工况加载此电机",
@@ -352,7 +353,8 @@
       "open": "打开项目",
       "active": "设为进行中",
       "parked": "暂停",
-      "archived": "归档"
+      "archived": "归档",
+      "item": "{project}：{action}"
     },
     "recordTip": "存储记录 {name}：此冲片的 {n} 台电机；其锁定和菜单在旁边",
     "newestShort": "最新",
@@ -363,8 +365,9 @@
       "projectTip": "仅显示这些项目引用的电机",
       "running": "运行中",
       "runningTip": "仅显示当前有计算或优化在运行的电机",
-      "onlyHighlighted": "仅 {project}",
-      "onlyHighlightedTip": "仅显示在项目选择器中所选项目的电机",
+      "highlightedRow": "★ {project}",
+      "showOld": "显示旧版本（{n}）",
+      "showOldTip": "“进行中”默认隐藏标记为旧版本的电机（项目或生产引用了其同名电机）；打开以显示",
       "sets": "我的筛选",
       "setsTip": "已保存的筛选组：选择一组，或以名称保存当前筛选（在此浏览器中为您的账户保存）",
       "deleteSet": "删除筛选组 {name}",
@@ -374,6 +377,19 @@
       "saveCurrent": "＋ 保存当前筛选…",
       "count": "{total} 台电机中的 {shown} 台",
       "clear": "清除"
-    }
+    },
+    "archiveMotor": "归档"
+  },
+  "configArchive": {
+    "title": "归档“{die} / {config}”",
+    "reason": "原因",
+    "hint": "它将从所有人的列表中移除；不会删除任何内容，“恢复”即可找回。若有项目关联、已有生产记录或有任务在运行则无法归档。",
+    "confirm": "归档",
+    "done": "“{die} / {config}”已归档",
+    "restored": "“{die} / {config}”已恢复",
+    "show": "显示已归档（{n}）",
+    "open": "打开",
+    "restore": "恢复",
+    "reasonRequired": "必须填写原因"
   }
 }

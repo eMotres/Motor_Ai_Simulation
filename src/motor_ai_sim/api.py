@@ -190,6 +190,13 @@ async def _lifespan(_app):
     _log = logging.getLogger(__name__)
     _log.info("process role: %s (instance %s, build %s)", _roles.role(), _roles.instance() or "-",
               _roles.build_id() or "-")
+    try:
+        from motor_ai_sim.routes.optimization import cogging_identity_status as _cis
+        _st = _cis(0.0)
+        (_log.info if _st["ok"] else _log.error)(
+            "cogging identity: %s", "can be formed" if _st["ok"] else "CANNOT be formed (%s): Cogging pp returns no value" % _st["reason"])
+    except Exception as _e:                                 # noqa: BLE001
+        _log.error("cogging identity check failed: %s", _e)
     if _roles.serves_compute():
         if _roles.is_worker():
             # Nothing can be running in a process that has just started: records left "queued"/"running" by a crash
@@ -392,6 +399,13 @@ app.include_router(wire_stock_router)
 # /api/propellers — the propeller catalogue + slipstream cooling air (read-only,
 # closed-form; docs/PROPELLER_CATALOG_2026-10-05.md)
 app.include_router(propellers_router)
+# Gear and gearbox module, stage 2 (2026-11-26): /api/gears/* calculation routes, staff only, no storage
+from motor_ai_sim.routes.gears import router as gears_router
+app.include_router(gears_router)
+from motor_ai_sim.routes.gears_store import router as gears_store_router   # stage 3: saved gearbox records
+app.include_router(gears_store_router)
+from motor_ai_sim.routes.gears_drivetrain import router as gears_drivetrain_router   # stage 4: gearbox + motor saved points
+app.include_router(gears_drivetrain_router)
 app.include_router(optimization_router)
 app.include_router(optimization_runs_router)   # /api/optimization/runs: saved optimisation runs per motor
 app.include_router(display_state_router)   # /api/display-state: Active / Parked / Archived for staff lists
@@ -399,6 +413,8 @@ app.include_router(overview_router)   # /api/overview: the owner's Overview (adm
 app.include_router(job_status_router)   # /api/catalog/jobs: running work per motor and server (admins, read-only)
 app.include_router(production_lifecycle_router)   # /api/production-lifecycle: prepared / in production / finished (admins set)
 app.include_router(die_archive_router)   # /api/die-archive: archive a workspace / published die (admins)
+from motor_ai_sim.routes.config_archive import router as config_archive_router
+app.include_router(config_archive_router)   # /api/config-archive: archive / restore ONE configuration (admins, owner 2026-11-22)
 app.include_router(designation_router)   # /api/designation: the standard motor name, from the parameters
 app.include_router(presets_router)
 app.include_router(catalog_cards_router)   # before the motor catalog: /api/catalog/cards/*
@@ -474,6 +490,7 @@ app.include_router(agent_designs_router)
 from motor_ai_sim.production.routes import router as production_router
 from motor_ai_sim.production.admin_routes import router as production_admin_router
 app.include_router(production_router)
+from motor_ai_sim.production.checklist_routes import router as production_checklist_router; app.include_router(production_checklist_router)   # mass-production checklist
 app.include_router(production_admin_router)
 # Development projects share the Production module's authentication conventions.
 from motor_ai_sim.development.routes import router as development_router
@@ -510,6 +527,9 @@ app.include_router(digest_admin_router)
 # Owner's daily report (owner 2026-10-27): preview + send-now, admin only, to the owner's address only
 from motor_ai_sim.owner_report.routes import router as owner_report_router
 app.include_router(owner_report_router)
+# Owner queue (2026-11-25): decisions / questions / messages agents post for the owner; agent side = own oq_ bearer
+from motor_ai_sim.routes.owner_queue import router as owner_queue_router
+app.include_router(owner_queue_router)
 # Tests (owner 2026-10-26): measured data per configuration, compared with the simulation of the same point -
 # /api/motor-tests/{die}/{config} (production side) and /api/projects/{id}/motors/tests (read-only project view)
 from motor_ai_sim.motor_tests.routes import router as motor_tests_router, project_router as motor_tests_project_router
@@ -581,8 +601,15 @@ def health_check():
         pardiso_threading_status, libiomp5_mapped)
     status = pardiso_threading_status()
     from motor_ai_sim import roles as _roles
+    try:
+        from motor_ai_sim.routes.optimization import cogging_identity_status as _cis
+        _cog = _cis()
+    except Exception as _e:                                 # noqa: BLE001
+        logging.getLogger(__name__).error("cogging identity status failed: %s", _e)
+        _cog = {"ok": False, "reason": "error"}
     return {
         "status": "healthy",
+        "cogging_identity": _cog,
         # deploy stage 2: which process answered (the blue-green switch and the worker update check these)
         "role": _roles.role(), "instance": _roles.instance(), "build": _roles.build_id(),
         "mkl": {
@@ -1492,6 +1519,7 @@ def update_winding_config(patch: WindingConfigPatch):
 
 def _apply_winding_patch(patch: WindingConfigPatch) -> dict:
     updates: dict = {}
+    _coil_fix = None
     if patch.connection is not None:
         try:
             n_par, n_ser = _parse_connection(patch.connection)
@@ -1508,7 +1536,26 @@ def _apply_winding_patch(patch: WindingConfigPatch) -> dict:
         updates["n_parallel"]  = str(n_par)
         updates["n_series"]    = str(n_ser)
     if patch.n_coils_per_phase is not None:
-        updates["n_coils_per_phase"] = str(patch.n_coils_per_phase)
+        # The count is DERIVED from the slots: a differing value on a 3-phase winding is corrected to the derived
+        # one, logged, and the correction is returned in the response.  A winding of another phase layout (six-phase)
+        # is not covered by the formula: its value is stored as sent.
+        _ns_c, _ = _current_winding_layout()
+        _ph_c = patch.phases if patch.phases is not None else (get_config().get("winding") or {}).get("phases")
+        _val_c = int(patch.n_coils_per_phase)
+        try:
+            _three = int(float(_ph_c or 3)) == 3
+        except (TypeError, ValueError):
+            _three = False
+        if _three:
+            _want_c = _coils_per_phase(_ns_c)
+            if _val_c != _want_c:
+                _coil_fix = {"requested": _val_c, "stored": _want_c,
+                             "reason": f"{_ns_c} slots give {_want_c} coils per phase"}
+                logging.getLogger("motor_ai_sim.winding").warning(
+                    "winding: n_coils_per_phase %s corrected to the derived %s (%s)",
+                    _val_c, _want_c, _coil_fix["reason"])
+                _val_c = _want_c
+        updates["n_coils_per_phase"] = str(_val_c)
     if patch.layers is not None:
         if int(patch.layers) not in (1, 2):
             raise HTTPException(status_code=400, detail="layers must be 1 or 2")
@@ -1561,7 +1608,10 @@ def _apply_winding_patch(patch: WindingConfigPatch) -> dict:
             raise HTTPException(status_code=422, detail=_e6)
 
     _write_winding_updates(updates)
-    return {"status": "ok", "updated": {k: v.strip('"') for k, v in updates.items()}}
+    out = {"status": "ok", "updated": {k: v.strip('"') for k, v in updates.items()}}
+    if _coil_fix:
+        out["n_coils_per_phase_corrected"] = _coil_fix
+    return out
 
 
 # ── Mesh ──────────────────────────────────────────────────────────────────────

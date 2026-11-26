@@ -242,7 +242,7 @@ export const productionApi = {
   documents: async (die: string, config: string) => unwrapList<DocumentRec>(await call('GET', `${base(die, config)}/documents`), 'documents'),
   /** staff: move a document between Documents and Certification, or set its group label / certification status */
   updateDocument: (die: string, config: string, docId: string,
-    patch: { internal?: boolean; section?: 'certification' | null; group?: string; cert_status?: CertStatus }) =>
+    patch: { internal?: boolean; section?: 'certification' | null; group?: string; cert_status?: CertStatus; topic?: DocumentRec['topic'] | null }) =>
     call<DocumentRec>('PATCH', `${base(die, config)}/documents/${enc(docId)}`, patch),
   uploadDocument: (die: string, config: string, file: File, partId: string | null, stepId: string | null = null,
     cert?: { group: string; internal: boolean }) => {

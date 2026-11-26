@@ -133,9 +133,10 @@ export function answerComplete(a: FieldAnswer): boolean {
 }
 
 /** Groups of `required_any` with no complete property: e.g. S1 needs torque OR power. */
-export function missingAnyGroups(field: { required_any?: string[][]; properties?: Array<{ id: string; type?: string; min?: number; max?: number; allow_range?: boolean }> }, value: unknown): string[][] {
+export function missingAnyGroups(field: { required_any?: string[][]; properties?: Array<{ id: string; type?: string; min?: number; max?: number; allow_range?: boolean; only_when_od_mode?: string }> }, value: unknown): string[][] {
   const record = value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
-  return (field.required_any ?? []).filter((group) => !group.some((id) => { const property = field.properties?.find((p) => p.id === id); return !!property && schemaValueComplete(property, record[id]); }));
+  const mode = record.od_mode === 'existing' ? 'existing' : 'custom';   // a property tagged `only_when_od_mode` counts in that mode only (same as the backend)
+  return (field.required_any ?? []).filter((group) => !group.some((id) => { const property = field.properties?.find((p) => p.id === id); return !!property && (property.only_when_od_mode ?? mode) === mode && schemaValueComplete(property, record[id]); }));
 }
 
 export function schemaValueComplete(schema: { type?: string; min?: number; max?: number; required?: boolean; allow_range?: boolean; required_any?: string[][]; properties?: Array<{ id: string; required?: boolean; required_flag?: string; required_if_value?: ChoiceRule; required_unless_value?: ChoiceRule; type?: string; min?: number; max?: number; allow_range?: boolean; properties?: any[]; items?: any }>; items?: { type?: string; properties?: Array<{ id: string; required?: boolean; type?: string; min?: number; max?: number; allow_range?: boolean; properties?: any[]; items?: any }> }, min_filled_properties?: number }, value: unknown): boolean {

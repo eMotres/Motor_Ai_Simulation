@@ -6,10 +6,10 @@ import { shouldSuppressMixedBasisColor } from '../comparisonModel.ts';
 
 const panel = fs.readFileSync(new URL('../ComparePanel.tsx', import.meta.url), 'utf8');
 const adapterSource = panel.slice(panel.indexOf('  const fullBasisRows ='), panel.indexOf('  const selectedComparisonModel ='));
-const adapterJs = ts.transpileModule(`${adapterSource}\nreturn { resultModelColumns, comparisonPercentValue };`, {
+const adapterJs = ts.transpileModule(`${adapterSource}\nreturn { resultModelColumns, selectedResultModelColumns, comparisonPercentValue };`, {
   compilerOptions: { target: ts.ScriptTarget.ES2022 },
 }).outputText;
-const makeAdapter = new Function('sims', 'selected', 'resultCols', 'resultSrc', 'resultVal', 'colId', 'shouldSuppressMixedBasisColor', adapterJs);
+const makeAdapter = new Function('sims', 'selected', 'resultCols', 'resultSrc', 'resultVal', 'colId', 'shouldSuppressMixedBasisColor', 'sweepMetricsComparable', 'isSweepRow', 'coggingComparable', 'storedNumber', 'txSim', 'shaftConventionComparable', adapterJs);
 
 function measure(rowsCount, mixed) {
   let basisReads = 0;
@@ -18,7 +18,7 @@ function measure(rowsCount, mixed) {
     key, label: key, activeBasis: row => { basisReads++; return row.active; },
   }));
   const { resultModelColumns: columns, comparisonPercentValue } = makeAdapter(sims, sims, resultCols, (_col, row) => row, (_col, row) => row.value,
-    col => col.key, shouldSuppressMixedBasisColor);
+    col => col.key, shouldSuppressMixedBasisColor, () => true, () => false, () => true, Number, k => k, () => true);
   const suppressed = columns[0].noColor(sims[0], sims);
   const fullRow = sims.find(row => !row.active);
   const fullNotSuppressed = fullRow ? !columns[0].noColor(fullRow, sims) : true;
@@ -55,4 +55,10 @@ test('Compare model callers compute only the extents and keys they consume', () 
     'selected model supplies differing input keys only');
   assert.match(panel, /buildComparisonModel\(sims, resultModelColumns, valEq\)/,
     'library model supplies result extents only');
+});
+
+test('Compare table ranks and deltas read the SAME rows (the selected ones)', () => {
+  assert.match(panel, /buildResultModelColumns\(selected, selectedHasFullBasis\)/);
+  assert.match(panel, /columns=\{\[\.\.\.selectedResultModelColumns,/, 'the comparison table uses the selected-scope columns');
+  assert.match(panel, /buildResultModelColumns\(sims, libraryHasFullBasis\)/, 'the library table keeps the library scope');
 });

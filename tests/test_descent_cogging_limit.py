@@ -74,7 +74,8 @@ def test_min_cogging_ranks_by_cogging_relative_to_the_start():
     lo, F_lo = _cost(_m(cogging_pp_Nm=0.5, efficiency=0.96), mode="min_cogging")
     hi, F_hi = _cost(_m(cogging_pp_Nm=1.5, efficiency=0.99), mode="min_cogging")
     assert lo < hi and F_lo > F_hi
-    assert lo == pytest.approx(0.25) and F_lo == pytest.approx(-0.25)    # 0.5 / start 2.0
+    # the cost is the torque / efficiency ranking (product F vs the start) PLUS cogging / start (0.5 / 2.0)
+    assert lo == pytest.approx(-(0.96 / 0.97) + 0.25) and F_lo == pytest.approx(0.96 / 0.97 - 0.25)
 
 
 def test_min_cogging_keeps_the_efficiency_floor_and_never_takes_a_missing_value():
@@ -83,7 +84,7 @@ def test_min_cogging_keeps_the_efficiency_floor_and_never_takes_a_missing_value(
     low_eff, _ = _cost(_m(cogging_pp_Nm=0.1, efficiency=0.95), mode="min_cogging")
     assert good < 1.0 < 900 < low_eff
     missing, _ = _cost(_m(), mode="min_cogging")
-    assert missing >= 1e6
+    assert missing > 9e5
 
 
 def test_the_plan_carries_the_cogging_settings_and_begin_installs_then_clears_them():

@@ -3607,6 +3607,38 @@ def _br_withheld_across_steps(wc, wmeta) -> bool:
 _SEED_FIELD_FREE_META = ("temp",)
 
 
+def _wmeta_with_segmentation(wmeta: dict, seg_k: float) -> dict:
+    """Add the magnet-sigma mode of a SLICED machine to the warm-seed meta.
+
+    ``msig`` = the segmentation factor (6 significant digits) the magnet
+    conductivity was multiplied by in the field.  It is a field-state term
+    (not in ``_SEED_FIELD_FREE_META``), so it reaches the legacy meta
+    comparison and the warm library's machine key alike.  ``seg_k == 1``
+    (no slicing) leaves ``wmeta`` untouched."""
+    if float(seg_k) < 1.0:
+        wmeta["msig"] = float("%.6g" % float(seg_k))
+    return wmeta
+
+
+#: The magnet-segmentation physics of this solver (2026-11-25: sliced magnets
+#: are solved with sigma x factor IN the field).  Cache keys of SLICED machines
+#: carry it (`magnet_segmentation_cache_tag`) so an evaluation stored by the
+#: old scaled-watts code is never served for them; unsliced keys never do.
+MAGNET_SEGMENTATION_PHYSICS = "field_sigma_v1"
+
+
+def magnet_segmentation_cache_tag(geo: Optional[Mapping]) -> Optional[str]:
+    """``MAGNET_SEGMENTATION_PHYSICS`` for a machine whose effective
+    ``magnet_lamination`` is a positive (or non-finite) number, else None."""
+    try:
+        lam = float((geo or {}).get("magnet_lamination") or 0.0)
+    except (TypeError, ValueError):
+        return MAGNET_SEGMENTATION_PHYSICS
+    if not math.isfinite(lam) or lam > 0.0:
+        return MAGNET_SEGMENTATION_PHYSICS
+    return None
+
+
 def _seed_field_identity(meta) -> Optional[dict]:
     """The seed meta without the terms that do not change the field state."""
     if not isinstance(meta, Mapping):
@@ -3661,6 +3693,23 @@ def _br_carry_hot_refusal(parent_tmax_c: Optional[float],
                 "temperature, not to this one" % (float(parent_tmax_c),
                                                   float(run_temp_c)))
     return None
+
+
+def _run_magnet_card_name() -> Optional[str]:
+    """The name of the magnet card a run solves with: the machine's assignment with the request's own override on top - the same sources
+    ``_run_magnet_temp_c`` reads (``None`` when no magnet is assigned)."""
+    try:
+        from motor_ai_sim.config import get_material_assignments as _gma_n
+        asg = dict(_gma_n() or {})
+    except Exception:       # noqa: BLE001
+        asg = {}
+    try:
+        from motor_ai_sim.material_context import get_request_materials as _grm_n
+        asg.update({k: v for k, v in ((_grm_n() or {}).get("assignment") or {}).items() if v})
+    except Exception:       # noqa: BLE001
+        pass
+    name = asg.get("magnet")
+    return str(name) if name else None
 
 
 def _run_magnet_temp_c(magnet_temp_c: Optional[float]) -> Optional[float]:
@@ -4351,8 +4400,12 @@ class TdmAttemptFailed(RuntimeError):
     owner's-terms stop, else (and then) as a march."""
 
     def __init__(self, stage: str, reason: str, info: Optional[Dict] = None,
-                 retry_residual: bool = False, retry_full: bool = False) -> None:
+                 retry_residual: bool = False, retry_full: bool = False,
+                 code: Optional[str] = None) -> None:
         super().__init__("%s: %s" % (stage, reason))
+        # plain-language reason code of the march that replaces this attempt
+        # ("memory_guard"); None = no code (the free-text note says it)
+        self.code = (str(code) if code else None)
         self.stage = str(stage)
         self.reason = str(reason)
         self.info = info
@@ -4439,10 +4492,12 @@ def fem_transient_sliding_band(*args, **kwargs) -> dict:
     kw.pop("_tdm_ctl", None)
     attempts: List[Dict[str, Any]] = []
     _msg = ""
+    _code: Optional[str] = None
     _hint: Dict[str, Any] = {"retry": False}
     try:
         return _fem_transient_sliding_band_once(**kw)
     except TdmAttemptFailed as _e1:
+        _code = getattr(_e1, "code", None)
         _r1, _msg, _hint = _drop_attempt(_e1)
         attempts.append(_r1)
         log.warning("SB TDM attempt 1 rejected (%s) — %s", _msg,
@@ -4455,6 +4510,7 @@ def fem_transient_sliding_band(*args, **kwargs) -> dict:
                 **kw, _tdm_ctl={"stop": "residual", "period": "full",
                                 "attempts": list(attempts)})
         except TdmAttemptFailed as _e2:
+            _code = getattr(_e2, "code", None) or _code
             _r2, _msg, _ = _drop_attempt(_e2)
             attempts.append(_r2)
             log.warning("SB TDM attempt 2 rejected (%s) — marching instead", _msg)
@@ -4462,7 +4518,8 @@ def fem_transient_sliding_band(*args, **kwargs) -> dict:
     note = ("march: TDM failed (%s) — marched instead" % (_msg,))
     return _fem_transient_sliding_band_once(
         **dict(kw, eddy_method="march"),
-        _tdm_ctl={"fallback": {"note": note, "attempts": attempts}})
+        _tdm_ctl={"fallback": {"note": note, "attempts": attempts,
+                               "code": _code}})
 
 
 def _ring_on_24_grid(req_steps: int, nodes_per_period: int, pole_pairs: int,
@@ -6050,12 +6107,95 @@ def _fem_transient_sliding_band_once(
     # eddy currents and report a P_shaft_eddy_W — air that dissipates.
     _ex_parts = _excluded_parts()
 
+    # AXIAL magnet segmentation (geo `magnet_lamination`, mm) enters the FIELD
+    # as an effective magnet conductivity sigma_eff = seg_k * sigma (owner
+    # 2026-11-25, audit AUDIT_p_mech_double_count A3).  Until then the field
+    # was solved at the full library sigma and only the reported watts were
+    # multiplied by seg_k, so the coupled field carried the eddy currents,
+    # screening and drag of an axially INFINITE magnet (the Coulomb torque
+    # held that drag) while the reported loss was the scaled solid-block one.
+    # The factor is computed below, from the rotor half's mesh, BEFORE any
+    # sigma is assembled; `_sigma_mag_eff` stays the library value bit for bit
+    # when there is no slicing (seg_k == 1.0 is never multiplied in).
+    # VALIDITY: scaling sigma is the resistance-limited end-effect model.  It
+    # holds while a slice is well below the skin depth of the magnet at the
+    # frequencies that drive its eddy current; in the skin-limited regime the
+    # loss is sub-linear in sigma (measured on a 20 000 rpm point: loss x 8.8
+    # for sigma x 9.1 between 0.022 and 0.2 of sigma, but x 3.5 for x 5 between
+    # 0.2 and 1), so a scaled-sigma solve and a scaled-watts solve differ there
+    # and neither is a 3-D answer.  The R-N factor itself stays a lumped MODEL
+    # pending 3-D validation (simulation/losses.magnet_segmentation).
+    _seg_k, _seg_rep = 1.0, {}
+    _sigma_mag_eff = _sigma_mag_lib
+
+    def _magnet_segmentation_of(_rm_seg, _cells_seg):
+        """(factor, report) of the rotor magnets — see losses.magnet_segmentation.
+
+        The factor is computed ONCE, from the magnet bodies' own mesh nodes
+        and CAD outlines.  0 (solid) returns exactly 1.0, so an unsegmented
+        run is bit-identical.  A failure on a SLICED machine (or a slice
+        length that is not a finite number) is reported as an error in the
+        block, never as an empty block that reads as "solid"."""
+        _lam_raw = (geo or {}).get("magnet_lamination", 0.0)
+        try:
+            _lam_seg = float(_lam_raw or 0.0)
+        except (TypeError, ValueError):
+            _lam_seg = float("nan")
+        if not math.isfinite(_lam_seg):
+            log.warning("magnet segmentation: magnet_lamination %r is not a "
+                        "finite number - solved as a solid magnet", _lam_raw)
+            return 1.0, {"factor": 1.0, "slice_mm": None,
+                         "error": "magnet_lamination is not a finite number "
+                                  "(%r); solved as a solid magnet" % (_lam_raw,)}
+        try:
+            _pt_seg = np.asarray(_rm_seg.p, float)
+            _tt_seg = np.asarray(_rm_seg.t, int)
+            _mag_items_seg = [(int(_tg), np.asarray(_e, int))
+                              for _tg, _e in _cells_seg.items()
+                              if int(_tg) >= DOM_MAG_BASE and np.size(_e)]
+            _bodies_seg = [_pt_seg[:, np.unique(_tt_seg[:, _e])]
+                           for _tg, _e in _mag_items_seg]
+            # The loop width comes from the magnet's CAD OUTLINE — the polygon
+            # the mesher tagged this body from — so it is a property of the
+            # geometry, not of where Triangle put the nodes (2026-09-25; the
+            # node cloud moved the reported loss −1 % under remeshing).  A body
+            # is matched to the outline that CONTAINS its area centroid (the
+            # tag index is tried first); a magnet cut by the sector boundary
+            # therefore gets its WHOLE outline, which is the physical block.
+            _polys_seg = []
+            try:
+                from motor_ai_sim.simulation.cut_bodies import (
+                    match_outlines as _match_ol)
+                _ol_seg = _match_ol(
+                    _pt_seg, _tt_seg, [_e for _tg, _e in _mag_items_seg],
+                    [mp for mp, _pl in (polys.get("magnets") or [])],
+                    tags=[_tg for _tg, _e in _mag_items_seg],
+                    tag_base=int(DOM_MAG_BASE))
+                _polys_seg = [None if _g is None else
+                              np.asarray(_g.exterior.coords, float).T * 1e-3
+                              for _g in _ol_seg]
+            except Exception as _e_pl:     # noqa: BLE001 — node fallback, said so
+                log.warning("magnet segmentation: CAD outlines unavailable "
+                            "(%s) — width from the mesh nodes", _e_pl)
+                _polys_seg = []
+            _k, _rep = _magnet_segmentation(
+                geo, _bodies_seg, float(p.stack_length),
+                polygons_by_body=_polys_seg)
+            return float(_k), _rep
+        except Exception as _e_seg:      # noqa: BLE001 — no factor, not no run
+            log.warning("magnet segmentation factor unavailable: %s", _e_seg)
+            if _lam_seg > 0.0:
+                return 1.0, {"factor": 1.0, "slice_mm": _lam_seg,
+                             "error": "segmentation factor unavailable (%s); "
+                                      "solved as a SOLID magnet" % (_e_seg,)}
+            return 1.0, {}
+
     def _sigma_of_tag(t: int) -> float:
         t = int(t)
         if t >= DOM_COIL_BASE or t == DOM_COIL:
             return 0.0 if "slot" in _ex_parts else _sig_cu_T
         if t >= DOM_MAG_BASE or t in (DOM_MAG_N, DOM_MAG_S):
-            return 0.0 if "magnet" in _ex_parts else _sigma_mag_lib
+            return 0.0 if "magnet" in _ex_parts else _sigma_mag_eff
         if t == DOM_SHAFT:
             return 0.0 if "shaft" in _ex_parts else _sigma_shaft_lib
         if t == DOM_SLEEVE:
@@ -6067,6 +6207,31 @@ def _fem_transient_sliding_band_once(
         ("s", (Ps, Tts, ts, None)), ("r", (Pr, Ttr, tr, matr0))):
         mesh = MeshTri(P, T); b = Basis(mesh, ElementTriP1()); nh = b.N
         K0 = {}; cells = {}; mu0 = {}
+        if name == "r":
+            # the segmentation factor BEFORE the first magnet sigma is used
+            _seg_k, _seg_rep = _magnet_segmentation_of(
+                mesh, {int(_tg): np.where(tags == _tg)[0]
+                       for _tg in np.unique(tags)})
+            if _seg_k < 1.0:
+                _sigma_mag_eff = float(_sigma_mag_lib) * float(_seg_k)
+                _seg_rep = dict(_seg_rep)
+                _seg_rep["applied_as"] = "field_sigma"
+                _seg_rep["sigma_lib_S_per_m"] = float(_sigma_mag_lib)
+                _seg_rep["sigma_eff_S_per_m"] = float(_sigma_mag_eff)
+                _seg_rep["model"] = (
+                    str(_seg_rep.get("model") or "")
+                    + "; applied as magnet conductivity x factor IN the field "
+                      "solve (valid while a slice is well below the skin "
+                      "depth; sub-linear, skin-limited above)")
+                log.info("magnet segmentation | %.4g mm slices of a %.4g mm "
+                         "stack, loop width %.4g mm (%d bodies) -> magnet "
+                         "sigma x %.4g in the field (%.4g -> %.4g S/m; MODEL, "
+                         "pending 3-D validation)",
+                         _seg_rep.get("slice_mm", 0.0),
+                         _seg_rep.get("stack_mm", 0.0),
+                         _seg_rep.get("width_mm", 0.0),
+                         _seg_rep.get("n_bodies", 0), _seg_k,
+                         _sigma_mag_lib, _sigma_mag_eff)
         Msig = _csr((nh, nh))            # σ-weighted mass (eddy term), 0 in air/iron
         for tag in np.unique(tags):
             idx = np.where(tags == tag)[0]; cells[int(tag)] = idx
@@ -6285,14 +6450,14 @@ def _fem_transient_sliding_band_once(
                 "half": is_half,
             })
             nds = np.unique(tri)
-            _rot_sig_nodes.append((nds + nsn, _sigma_mag_lib))
+            _rot_sig_nodes.append((nds + nsn, _sigma_mag_eff))
             if is_half:
                 _n_halves += 1               # edge half-magnet → U = 0
                 continue
             _n_interior += 1
             # ∫J=0 constraint row — used only by the coupled eddy J-VIEW mode.
             sb = Basis(half["r"]["mesh"], ElementTriP1(), elements=idx)
-            g_r = np.asarray((asm(_massform, sb) * _sigma_mag_lib) @ _ones_r)
+            g_r = np.asarray((asm(_massform, sb) * _sigma_mag_eff) @ _ones_r)
             _rot_con.append({"tag": int(t),     # see _coil_con["tag"] — the P2
                                                 # branch reads the INTERIOR-magnet
                                                 # tag set from here (the cut halves
@@ -6308,8 +6473,8 @@ def _fem_transient_sliding_band_once(
             _shaftnode_glob = _shaftnode_loc + nsn
             _rot_sig_nodes.append((_shaftnode_glob, _sigma_shaft_lib))
         log.info("rotor-eddy: %d interior magnets (∫J=0), %d edge halves (U=0) | "
-                 "σ_mag=%.3g σ_shaft=%.3g S/m (library)",
-                 _n_interior, _n_halves, _sigma_mag_lib, _sigma_shaft_lib)
+                 "σ_mag=%.3g σ_shaft=%.3g S/m (in the field)",
+                 _n_interior, _n_halves, _sigma_mag_eff, _sigma_shaft_lib)
 
     # ── Loss bookkeeping — iron Bertotti from the ACTUAL B(t) ────────────────
     # The sliding-band run gives a clean B(t) per element over a full electrical
@@ -6461,6 +6626,13 @@ def _fem_transient_sliding_band_once(
               "conn": "np%d" % int(n_parallel),
               "temp": round(float(coil_temp_c), 1),
               "mscale": float(magnet_scale), "wind": _wind_fp}
+    # A SLICED machine's field state is solved with sigma x seg_k in the
+    # magnets (2026-11-25): its seeds (legacy slot, warm library and catalog
+    # states, and with them a carried Br map) must never match a state solved
+    # at the full sigma, nor one at another factor.  Only on sliced machines:
+    # an unsliced machine's meta, library machine key and op digest stay
+    # byte-identical.
+    _wmeta_with_segmentation(_wmeta, _seg_k)
     if _safe_warm_cache_enabled():
         try:
             _safe_s_tags = [int(t) for t in half["s"]["cells"]
@@ -7961,7 +8133,7 @@ def _fem_transient_sliding_band_once(
                  "σ_shaft=%.3g S/m",
                  len(_ed_con), sum(1 for c in _ed_con if c["key"] == "cu"),
                  sum(1 for c in _ed_con if c["key"] != "cu"), _n_free_b,
-                 _sig_cu_T, _sigma_mag_lib, _sigma_shaft_lib)
+                 _sig_cu_T, _sigma_mag_eff, _sigma_shaft_lib)
         if not _ed_con:
             raise RuntimeError(
                 "eddy=True but no solid conductor was found on the P2 mesh "
@@ -10340,9 +10512,18 @@ def _fem_transient_sliding_band_once(
             if _tdm_info is not None:
                 _tdm_info["failed"] = "%s: %s" % (type(_e_tdm).__name__, _e_tdm)
                 _tdm_info.pop("t_report_start", None)
+            _mem_code = None
+            _c_ = _e_tdm
+            for _ in range(8):           # the guard may sit under a wrapper
+                if type(_c_).__name__ == "TdmMemoryExceeded":
+                    _mem_code = "memory_guard"
+                    break
+                _c_ = getattr(_c_, "__cause__", None) or getattr(_c_, "__context__", None)
+                if _c_ is None:
+                    break
             raise TdmAttemptFailed(
                 _td_stage[0], "%s: %s" % (type(_e_tdm).__name__, _e_tdm),
-                info=_tdm_info) from _e_tdm
+                info=_tdm_info, code=_mem_code) from _e_tdm
     # Cross-run warm seed (see _SB_WARM_CACHE above).  The cached frame is the
     # one at electrical angle ≡ −3 steps, i.e. EXACTLY the one-dt-old history
     # the first probe frame (k = −2) wants.  The meshes differ between runs
@@ -13981,60 +14162,11 @@ def _fem_transient_sliding_band_once(
             pass
 
     # ── AXIAL magnet segmentation (geo `magnet_lamination`, mm) ───────────
-    # BOTH routes to the magnet eddy loss below are 2-D, i.e. they solve an
-    # axially INFINITE magnet whose induced current never has to turn round.
-    # Slicing the magnet axially is the standard cure for that loss and nothing
-    # here could see it.  The factor is computed ONCE, from the magnet bodies'
-    # own mesh nodes, and applied to whichever route ends up reporting — see
-    # simulation/losses.magnet_segmentation for the model and its caveats.
-    # 0 (solid) returns exactly 1.0, so an unsegmented run is bit-identical.
-    _seg_k, _seg_rep = 1.0, {}
-    if half.get("r") is not None:
-        try:
-            _rm_seg = half["r"]["mesh"]
-            _pt_seg = np.asarray(_rm_seg.p, float)
-            _tt_seg = np.asarray(_rm_seg.t, int)
-            _mag_items_seg = [(int(_tg), np.asarray(_e, int))
-                              for _tg, _e in half["r"]["cells"].items()
-                              if int(_tg) >= DOM_MAG_BASE and np.size(_e)]
-            _bodies_seg = [_pt_seg[:, np.unique(_tt_seg[:, _e])]
-                           for _tg, _e in _mag_items_seg]
-            # The loop width comes from the magnet's CAD OUTLINE — the polygon
-            # the mesher tagged this body from — so it is a property of the
-            # geometry, not of where Triangle put the nodes (2026-09-25; the
-            # node cloud moved the reported loss −1 % under remeshing).  A body
-            # is matched to the outline that CONTAINS its area centroid (the
-            # tag index is tried first); a magnet cut by the sector boundary
-            # therefore gets its WHOLE outline, which is the physical block.
-            _polys_seg = []
-            try:
-                from motor_ai_sim.simulation.cut_bodies import (
-                    match_outlines as _match_ol)
-                _ol_seg = _match_ol(
-                    _pt_seg, _tt_seg, [_e for _tg, _e in _mag_items_seg],
-                    [mp for mp, _pl in (polys.get("magnets") or [])],
-                    tags=[_tg for _tg, _e in _mag_items_seg],
-                    tag_base=int(DOM_MAG_BASE))
-                _polys_seg = [None if _g is None else
-                              np.asarray(_g.exterior.coords, float).T * 1e-3
-                              for _g in _ol_seg]
-            except Exception as _e_pl:     # noqa: BLE001 — node fallback, said so
-                log.warning("magnet segmentation: CAD outlines unavailable "
-                            "(%s) — width from the mesh nodes", _e_pl)
-                _polys_seg = []
-            _seg_k, _seg_rep = _magnet_segmentation(
-                geo, _bodies_seg, float(p.stack_length),
-                polygons_by_body=_polys_seg)
-            if _seg_k < 1.0:
-                log.info("magnet segmentation | %.4g mm slices of a %.4g mm "
-                         "stack, loop width %.4g mm (%d bodies) -> magnet eddy "
-                         "loss x %.4g (MODEL, pending 3-D validation)",
-                         _seg_rep.get("slice_mm", 0.0), _seg_rep.get("stack_mm", 0.0),
-                         _seg_rep.get("width_mm", 0.0), _seg_rep.get("n_bodies", 0),
-                         _seg_k)
-        except Exception as _e_seg:      # noqa: BLE001 — no factor, not no run
-            log.warning("magnet segmentation factor unavailable: %s", _e_seg)
-            _seg_k, _seg_rep = 1.0, {}
+    # The factor (_seg_k, _seg_rep) was computed from the rotor half's mesh
+    # BEFORE the sigma map was assembled, and it is IN the field: every magnet
+    # body was solved with sigma_eff = _seg_k * sigma (see `_sigma_of_tag`).
+    # Both magnet routes below (coupled and frequency-domain) therefore
+    # already report the SLICED magnet's watts and are not multiplied again.
     # magnet + shaft eddy: honest (reaction-included) rotor solve on the
     # rotor-frame A(t) history — the SAME function the P1 path uses.
     # The history is the COMMENSURATE rotor window (rotor_window.py), the same
@@ -14187,17 +14319,11 @@ def _fem_transient_sliding_band_once(
                       "estimate, not a check — no μ(B) modulation)"
                       if _P_rot_eddy_window.get("shaft_is_linear_estimate")
                       else ""))
-    # The segmentation factor multiplies whichever magnet number is REPORTED —
-    # coupled or frequency-domain — and the other one too, because they are two
-    # routes to the same physical watts and are read against each other.  The
-    # SHAFT is untouched: it is one continuous conductor, not a stack of slices.
-    if _seg_k < 1.0:
-        _P_mag_solid2 = float(P_mag_avg2)
-        P_mag_ser2 = [float(v) * _seg_k for v in P_mag_ser2]
-        P_mag_avg2 = float(P_mag_avg2) * _seg_k
-        P_mag_prox_avg2 = float(P_mag_prox_avg2) * _seg_k
-        log.info("magnet segmentation | P_mag %.4g -> %.4g W (x %.4g)",
-                 _P_mag_solid2, P_mag_avg2, _seg_k)
+    # Axial segmentation is IN the field (magnet sigma x _seg_k, both routes),
+    # so the magnet watts above are the sliced magnet's and are NOT scaled
+    # again (until 2026-11-25 they were multiplied by _seg_k here, after a
+    # full-sigma solve).  The SHAFT and the sleeve are untouched: each is one
+    # continuous conductor, not a stack of slices.
     P_tot_ser2 = [c + f + m + s + sl for c, f, m, s, sl in
                   zip(P_cu_ser2, P_fe_ser2, P_mag_ser2, P_shaft_ser2,
                       P_sleeve_ser2)]
@@ -14371,15 +14497,9 @@ def _fem_transient_sliding_band_once(
                 _sol_dens = np.zeros(int(mesh_all.t.shape[1]))
                 _sol_dens[_ed_elems] = np.mean(
                     np.asarray(_ed_dens_hist, float), axis=0)
-                # Axial segmentation scales the magnet WATTS above; the map is
-                # the same watts per m³, so it has to carry the same factor or
-                # the picture stops integrating to the number beside it.  The
-                # SHAPE is left alone — this factor is a lumped end-resistance
-                # correction and knows nothing about where in the block the
-                # current crowds.
-                if _seg_k < 1.0 and _ed_gmask.get("mag") is not None \
-                        and _ed_gmask["mag"].any():
-                    _sol_dens[_ed_elems[_ed_gmask["mag"]]] *= _seg_k
+                # Axial segmentation is in the solved sigma (sigma x _seg_k),
+                # so this sigma*E^2 map already integrates to the reported
+                # sliced-magnet watts; it is not scaled a second time.
                 _sol_elems = {_k: _ed_elems[_m]
                               for _k, _m in _ed_gmask.items() if _m.any()}
                 _sol_groups = tuple(_sol_elems.keys())
@@ -15352,6 +15472,10 @@ def _fem_transient_sliding_band_once(
         **({} if not eddy else {
             "eddy_method": _eddy_method,
             "eddy_method_requested": _eddy_method_requested,
+            # the march that replaced a TDM attempt, as a plain code (only
+            # present then; never a path or an exception text)
+            **({"eddy_method_fallback_reason": _tdm_fb["code"]}
+               if (_tdm_fb and _tdm_fb.get("code")) else {}),
             "eddy_method_note": ("; ".join(_n for _n in (
                 _tdm_note, (_tdm_demag_note if (demag and _eddy_method == "tdm")
                             else None)) if _n) or None),

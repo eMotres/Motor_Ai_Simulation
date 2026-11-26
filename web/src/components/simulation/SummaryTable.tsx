@@ -32,6 +32,7 @@ import type { EmMech } from '../../lib/emResultTiles';
 import { useTranslation } from 'react-i18next';
 import { nsT } from '../../i18n/nsT';
 import SolveGate from '../common/SolveGate';
+import { SIM_BLOCK_SX } from './simLayout';
 
 // UI strings: locales/<lng>/results.json (docs/I18N.md).
 const tx = nsT('results');
@@ -909,7 +910,7 @@ const SummaryTable: React.FC<Props> = ({ summary, loading, fromSweep, liveOp, re
   const matStale = matDiffs.length > 0;
   const stale = opStale || geoStale || matStale;
   return (
-    <Paper sx={{ bgcolor: 'var(--panel-2)', border: '1px solid var(--line-soft)', p: 2,
+    <Paper sx={{ ...SIM_BLOCK_SX, bgcolor: 'var(--panel-2)', border: '1px solid var(--line-soft)', p: 2,
       display: 'flex', flexDirection: 'column', gap: 1 }}>
       {/* The shouting red STALE banner is gone (user: "drop it").  Staleness
           still shows two quieter ways that survive: the whole card dims to

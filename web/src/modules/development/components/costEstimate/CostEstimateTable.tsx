@@ -13,9 +13,9 @@ import EditNoteIcon from '@mui/icons-material/EditNote';
 import AddIcon from '@mui/icons-material/Add';
 import LocalShippingOutlinedIcon from '@mui/icons-material/LocalShippingOutlined';
 import {
-  acceptSuggestion, addIteration as addIterationOf, dhlDetails, dhlOrigin, editLine, formatMoney, iterationWeeks, lineNeeded, originChip, setIterationField, setLineWeeks, setSetting,
+  acceptSuggestion, blankLine, addIteration as addIterationOf, dhlDetails, dhlOrigin, editLine, formatMoney, iterationWeeks, lineNeeded, originChip, setIterationField, setLineWeeks, setSetting,
   removeIteration as removeIterationOf, setWeeksOverride, suggestionAt, tableModel, txt, weeksText, WEEKS_MAX, WEEKS_OVERRIDE_MAX,
-  type Bench, type CostEstimate, type CostLang, type CostSchema, type CostSuggestions, type LineId, type LineRef, type SuggestionCell, type T,
+  type Bench, type CostEstimate, type CostLang, type CostSchema, type CostSuggestions, type AnyLineId, type LineRef, type SuggestionCell, type T,
 } from '../../costEstimate';
 
 const money = (v: number | null | undefined): string => (v === null || v === undefined ? '' : formatMoney({ EUR: v }));
@@ -75,7 +75,7 @@ export interface CellCtx { estimate: CostEstimate; schema: CostSchema; lang: Cos
 function cellTip(ctx: CellCtx, ref: LineRef, sug: SuggestionCell | undefined): string[] {
   const { estimate, t, schema, lang } = ctx;
   const it = estimate.iterations.find((x) => x.index === ref.iteration)!;
-  const line = it.lines[ref.line];
+  const line = it.lines[ref.line] ?? blankLine(estimate.settings.currency);
   const chip = originChip(line, it, ref.line, t);
   const excluded = txt(schema.shipping?.excluded, lang);
   const out: string[] = [];
@@ -99,7 +99,7 @@ function LineCell({ ctx, at, label, perMotor = false, disabled }: { ctx: CellCtx
   const { estimate, t, who, today, change, suggestions } = ctx;
   const [anchor, setAnchor] = useState<HTMLElement | null>(null);
   const it = estimate.iterations.find((x) => x.index === at.iteration)!;
-  const line = it.lines[at.line];
+  const line = it.lines[at.line] ?? blankLine(estimate.settings.currency);
   const sug = suggestionAt(suggestions, at);
   const tip = cellTip(ctx, at, sug);
   const accept = () => change(acceptSuggestion(estimate, at, sug, who, today));
@@ -139,7 +139,7 @@ export default function CostEstimateTable({ ctx, displayCurrency, onDisplayCurre
 }) {
   const { estimate, schema, lang, t, change } = ctx;
   const model = tableModel(estimate, displayCurrency);
-  const lineLabel = (id: LineId) => txt(schema.lines.find((l) => l.id === id)?.label, lang);
+  const lineLabel = (id: AnyLineId) => txt(schema.lines.find((l) => l.id === id)?.label, lang);
   const benchField = schema.iteration_fields.find((f) => f.id === 'bench');
   const lastRow = useRef<number>(model.rows.length);
   const tableRef = useRef<HTMLDivElement | null>(null);
@@ -153,8 +153,8 @@ export default function CostEstimateTable({ ctx, displayCurrency, onDisplayCurre
   const num = { fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap', textAlign: 'right' } as const;
   const durTip = (r: (typeof model.rows)[number]) => {
     const w = r.weeks;
-    return ([['tooling', w.tooling], ['manufacturing', w.manufacturing], ['testing', w.testing], ['shipping', w.shipping]] as Array<[LineId, number | null]>)
-      .filter(([id]) => id !== 'testing' || r.testingNeeded)
+    return ([['tooling', w.tooling], ['manufacturing', w.manufacturing], ['testing', w.testing], ['shipping', w.shipping], ['development', w.development ?? null]] as Array<[AnyLineId, number | null]>)
+      .filter(([id]) => (id !== 'testing' || r.testingNeeded) && (id !== 'development' || w.development !== undefined))
       .map(([id, v]) => `${t(`costEstimate.durations.${id}`)}: ${v === null ? '—' : t('costEstimate.weeksN', { n: weeksText(v) })}`)
       .concat([t('costEstimate.durationSum', { n: weeksText(w.sum) }), w.override !== null ? t('costEstimate.weeksOverridden', { n: weeksText(w.override) }) : t('costEstimate.weeksOverrideTip')])
       .concat(w.missing.length > 0 ? [t('costEstimate.weeksMissing', { count: w.missing.length })] : []).join('\n');
@@ -162,15 +162,15 @@ export default function CostEstimateTable({ ctx, displayCurrency, onDisplayCurre
 
   return <Box data-testid="cost-table" sx={{ bgcolor: 'var(--panel)', border: '1px solid var(--line)', borderRadius: '14px', p: { xs: 1, md: 2 }, minWidth: 0 }}>
     <Box ref={tableRef} sx={{ overflowX: 'auto', minWidth: 0 }}>
-      <Table size="small" sx={{ minWidth: 960, '& td, & th': { px: 0.75, borderColor: 'var(--line-soft)' } }}>
+      <Table size="small" sx={{ minWidth: 1060, '& td, & th': { px: 0.75, borderColor: 'var(--line-soft)' } }}>
         <TableHead><TableRow>
           {head('iteration')}{head('tooling', txt(schema.lines[0].help, lang))}{head('motors', txt(schema.lines[1].help, lang))}{head('testing', txt(schema.lines[2].help, lang))}
-          {head('shipping', txt(schema.lines[3].help, lang) + ' ' + txt(schema.shipping?.excluded, lang))}{head('duration', txt(schema.durations?.help, lang))}{head('total')}
+          {head('shipping', txt(schema.lines[3].help, lang) + ' ' + txt(schema.shipping?.excluded, lang))}{head('development', txt(schema.lines.find((l) => l.id === 'development')?.help, lang))}{head('duration', txt(schema.durations?.help, lang))}{head('total')}
         </TableRow></TableHead>
         <TableBody>
           {model.rows.map((r) => {
             const it = estimate.iterations.find((x) => x.index === r.index)!;
-            const at = (line: LineId): LineRef => ({ iteration: r.index, line });
+            const at = (line: AnyLineId): LineRef => ({ iteration: r.index, line });
             const w = iterationWeeks(it);
             return <TableRow key={r.index} data-row={r.index}>
               <TableCell sx={{ whiteSpace: 'nowrap' }}>
@@ -201,6 +201,7 @@ export default function CostEstimateTable({ ctx, displayCurrency, onDisplayCurre
                 </Stack>
               </TableCell>
               <TableCell><LineCell ctx={ctx} at={at('shipping')} label={lineLabel('shipping')} /></TableCell>
+              <TableCell><LineCell ctx={ctx} at={at('development')} label={lineLabel('development')} /></TableCell>
               <TableCell>
                 <Tooltip title={<Box sx={{ whiteSpace: 'pre-line' }}>{durTip(r)}</Box>} placement="top" enterDelay={300}>
                   <span><NumCell value={it.weeks_override} max={WEEKS_OVERRIDE_MAX} width={92} unit={t('costEstimate.weeksUnit')} suggestion={weeksText(w.sum)}
@@ -214,18 +215,18 @@ export default function CostEstimateTable({ ctx, displayCurrency, onDisplayCurre
             </TableRow>;
           })}
           <TableRow>
-            <TableCell colSpan={7} sx={{ borderBottom: 'none' }}>
+            <TableCell colSpan={8} sx={{ borderBottom: 'none' }}>
               <Tooltip title={t('costEstimate.table.addTip')}><span><Button size="small" startIcon={<AddIcon />} disabled={!model.canAdd} onClick={() => change(addIterationOf(estimate, schema))}
                 sx={{ textTransform: 'none' }}>{t('costEstimate.table.add')}</Button></span></Tooltip>
             </TableCell>
           </TableRow>
           <TableRow>
-            <TableCell colSpan={5} sx={{ fontWeight: 600 }}>{t('costEstimate.subtotal')}</TableCell>
+            <TableCell colSpan={6} sx={{ fontWeight: 600 }}>{t('costEstimate.subtotal')}</TableCell>
             <TableCell sx={num}>{t('costEstimate.weeksN', { n: weeksText(model.weeksTotal) })}</TableCell>
             <TableCell sx={{ ...num, fontWeight: 600 }} data-testid="table-subtotal">{money(model.subtotal)}</TableCell>
           </TableRow>
           <TableRow>
-            <TableCell colSpan={5}>
+            <TableCell colSpan={6}>
               <Stack direction="row" spacing={1} alignItems="center">
                 <Tooltip title={txt(schema.settings.find((f) => f.id === 'contingency_pct')?.help, lang)}><Typography sx={{ fontSize: 13, fontWeight: 600 }}>{t('costEstimate.table.contingency')}</Typography></Tooltip>
                 <NumCell value={model.contingencyPct} max={100} width={76} unit="%" ariaLabel={t('costEstimate.table.contingency')}
@@ -236,7 +237,7 @@ export default function CostEstimateTable({ ctx, displayCurrency, onDisplayCurre
             <TableCell sx={num}>{money(model.contingency)}</TableCell>
           </TableRow>
           <TableRow>
-            <TableCell colSpan={5}>
+            <TableCell colSpan={6}>
               <Stack direction="row" spacing={1} alignItems="center">
                 <Typography sx={{ fontSize: 14, fontWeight: 700 }}>{t('costEstimate.total')}</Typography>
                 <Tooltip title={t('costEstimate.table.currencyTip')}>

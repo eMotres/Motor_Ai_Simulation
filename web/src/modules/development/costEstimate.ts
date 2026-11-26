@@ -12,13 +12,17 @@ export type CostLang = 'en' | 'zh-CN';
 export type Bilingual = Record<CostLang, string>;
 export type LineId = 'tooling' | 'manufacturing' | 'testing' | 'shipping';
 export const LINE_IDS: LineId[] = ['tooling', 'manufacturing', 'testing', 'shipping'];
+/** Lines an iteration may NOT have (owner 2026-11-26): the development services.  Absent = 0, never missing; admin only, never in the customer's quote. */
+export type OptionalLineId = 'development';
+export const OPTIONAL_LINE_IDS: OptionalLineId[] = ['development'];
+export type AnyLineId = LineId | OptionalLineId;
 export type LineStatus = 'filled' | 'missing';
 export type LineSource = 'production' | 'estimate' | 'manual' | 'converted' | 'rule' | 'dhl';
 export type Bench = 'dyno' | 'propeller' | 'both' | 'none';
 export type Money = Record<string, number>;
 
 export interface CostField { id: string; type: 'bool' | 'int' | 'number' | 'enum' | 'text' | 'place' | 'box'; min?: number; max?: number; options?: string[]; option_labels?: Record<string, Bilingual>; default?: unknown; label: Bilingual; help: Bilingual }
-export interface CostLineDef { id: LineId; label: Bilingual; help: Bilingual; per_motor?: boolean }
+export interface CostLineDef { id: AnyLineId; optional?: boolean; label: Bilingual; help: Bilingual; per_motor?: boolean }
 /** One dated DHL quote: the shipping suggestion scales its price per kg to the shipment's weight. */
 export interface DhlLane {
   from: string; to_country: string; mode: string; quoted_on: string; weight_kg: number; price: number; currency: string;
@@ -49,7 +53,7 @@ export interface CostLine {
   /** the stage's duration in weeks (tooling lead time, manufacturing, testing, shipping transit); null = not given */
   weeks?: number | null;
 }
-export interface CostIteration { index: number; motors: number; bench: Bench; lines: Record<LineId, CostLine>; weeks_override?: number | null }
+export interface CostIteration { index: number; motors: number; bench: Bench; lines: Record<LineId, CostLine> & Partial<Record<OptionalLineId, CostLine>>; weeks_override?: number | null }
 export interface ShipTo { country: string; city: string; postal?: string }
 export interface CostSettings {
   complex: boolean; iterations: number; currency: string; contingency_pct: number; display_currency?: string | null; target_motor: { die: string; config: string } | null;
@@ -79,14 +83,15 @@ export interface CostEstimate {
 export interface LineResult { amount: Money | null; origin: string }
 export interface IterationResult {
   index: number; motors: number; bench: Bench; tooling: Money | null; manufacturing: Money | null; testing: Money | null; shipping: Money | null;
-  subtotal: Money; lines: Record<LineId, LineResult>; weeks?: WeeksBreakdown;
+  development?: Money | null;
+  subtotal: Money; lines: Record<LineId, LineResult> & Partial<Record<OptionalLineId, LineResult>>; weeks?: WeeksBreakdown;
 }
 export interface MissingLine { iteration: number; line: LineId; reason: string }
 /** The lines and totals in the display currency; `available` is false when a rate is unknown (`missing_rates`): the
  *  per-currency figures are then the only totals.  A line / total that cannot be converted is null. */
 export interface CostConverted {
   currency: string; available: boolean; missing_rates: string[];
-  iterations: Array<{ index: number; lines: Record<LineId, number | null>; subtotal: number | null }>;
+  iterations: Array<{ index: number; lines: Record<LineId, number | null> & Partial<Record<OptionalLineId, number | null>>; subtotal: number | null }>;
   subtotal: number | null; contingency: number | null; total: number | null;
 }
 export interface CostComputed {
@@ -102,7 +107,7 @@ export interface SuggestionCell { amount?: number; source?: LineSource; source_r
 /** What the server would make of an AUTOMATIC DHL shipping line now (`hint` = why it could not be recomputed: it keeps its last value). */
 export interface AutoCell { amount: number | null; weeks: number | null; source_ref: SourceRef | null; hint: string }
 export interface CostSuggestions {
-  cells: Record<string, Partial<Record<LineId, SuggestionCell>>>; motor_mass_kg: number | null; motor_mass_basis: string;
+  cells: Record<string, Partial<Record<AnyLineId, SuggestionCell>>>; motor_mass_kg: number | null; motor_mass_basis: string;
   /** per iteration: the automatic DHL line as the server would recompute it (only the lines that differ) */
   auto?: Record<string, AutoCell>;
   analogs?: Record<string, { ref: string | null; factor?: number; reason?: string }>; notes?: string[];
@@ -195,7 +200,7 @@ export function buildCostSteps(estimate: CostEstimate): CostStep[] {
 }
 
 /** Lines that count: testing is not needed when the iteration has no bench. */
-export const lineNeeded = (it: CostIteration, id: LineId): boolean => !(id === 'testing' && it.bench === 'none');
+export const lineNeeded = (it: CostIteration, id: AnyLineId): boolean => !(id === 'testing' && it.bench === 'none');
 
 export type StepState = 'done' | 'partial' | 'empty';
 export function stepState(step: CostStep, estimate: CostEstimate): { state: StepState; missing: number } {
@@ -206,9 +211,18 @@ export function stepState(step: CostStep, estimate: CostEstimate): { state: Step
   return { state: missing === 0 ? 'done' : missing < ids.length ? 'partial' : 'empty', missing };
 }
 
-export interface LineRef { iteration: number; line: LineId }
+export interface LineRef { iteration: number; line: AnyLineId }
 const clone = (e: CostEstimate): CostEstimate => JSON.parse(JSON.stringify(e)) as CostEstimate;
-const lineAt = (e: CostEstimate, ref: LineRef): CostLine | undefined => e.iterations.find((it) => it.index === ref.iteration)?.lines[ref.line];
+/** The line at `ref`.  An optional line that the iteration does not have yet is created blank when `create` is set (an edit); the server drops it again while it has no content. */
+const lineAt = (e: CostEstimate, ref: LineRef, create = false): CostLine | undefined => {
+  const it = e.iterations.find((x) => x.index === ref.iteration);
+  if (!it) return undefined;
+  if (ref.line === 'development') {
+    if (!it.lines.development && create) it.lines.development = blankLine(e.settings.currency);
+    return it.lines.development;
+  }
+  return it.lines[ref.line];
+};
 
 export function blankLine(currency: string): CostLine {
   return { status: 'missing', amount: null, currency, pct: null, source: null, source_ref: null, factor: null, date: null, by: null, note: '', hint: '', weeks: null };
@@ -219,7 +233,7 @@ export function blankLine(currency: string): CostLine {
  *  choice, a typed amount makes the line EUR (an old converted CNY line included). */
 export function editLine(e: CostEstimate, ref: LineRef, patch: { amount?: number | null; note?: string }, who: string, today: string): CostEstimate {
   const next = clone(e);
-  const line = lineAt(next, ref);
+  const line = lineAt(next, ref, true);
   if (!line) return e;
   if (patch.note !== undefined) line.note = patch.note;
   if (!('amount' in patch)) return next;
@@ -266,7 +280,7 @@ export function formatMoney(m: Money | null | undefined, empty = '—'): string 
 const num = (x: number | null | undefined): number => Number(Number(x ?? 0).toFixed(3));
 
 /** The chip of a line: which source (or missing) and the one-line "where it came from" for its tooltip. */
-export function originChip(line: CostLine, it: CostIteration, lineId: LineId, t: T): { kind: LineSource | 'missing' | 'none'; label: string; tip: string } {
+export function originChip(line: CostLine, it: CostIteration, lineId: AnyLineId, t: T): { kind: LineSource | 'missing' | 'none'; label: string; tip: string } {
   if (!lineNeeded(it, lineId)) return { kind: 'none', label: t('costEstimate.noBench'), tip: t('costEstimate.noBenchTip') };
   if (line.status === 'missing') return { kind: 'missing', label: t('costEstimate.status.missing'), tip: line.hint || t('costEstimate.status.missingTip') };
   const src = (line.source ?? 'manual') as LineSource;
@@ -327,7 +341,7 @@ export type FieldRef =
   | { kind: 'setting'; id: string }
   | { kind: 'iterField'; iteration: number; id: 'motors' | 'bench' | 'weeks_override' }
   | { kind: 'lanes' }
-  | { kind: 'line'; iteration: number; line: LineId }
+  | { kind: 'line'; iteration: number; line: AnyLineId }
   | { kind: 'fx'; currency: string };
 
 const same = (a: unknown, b: unknown): boolean => JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
@@ -361,6 +375,10 @@ export function mergeEdits(synced: CostEstimate, mine: CostEstimate, latest: Cos
     if (edited(S?.bench, M.bench, L.bench, { kind: 'iterField', iteration: index, id: 'bench' })) L.bench = M.bench;
     if (edited(S?.weeks_override ?? null, M.weeks_override ?? null, L.weeks_override ?? null, { kind: 'iterField', iteration: index, id: 'weeks_override' })) L.weeks_override = M.weeks_override ?? null;
     for (const id of LINE_IDS) if (edited(S?.lines[id], M.lines[id], L.lines[id], { kind: 'line', iteration: index, line: id })) L.lines[id] = copy(M.lines[id]);
+    for (const id of OPTIONAL_LINE_IDS) {
+      if (!edited(S?.lines[id], M.lines[id], L.lines[id], { kind: 'line', iteration: index, line: id })) continue;
+      if (M.lines[id]) L.lines[id] = copy(M.lines[id]); else delete L.lines[id];
+    }
     return L;
   });
   if (edited(synced.dhl_lanes, mine.dhl_lanes, latest.dhl_lanes, { kind: 'lanes' })) merged.dhl_lanes = copy(mine.dhl_lanes);
@@ -401,7 +419,7 @@ export const WEEKS_OVERRIDE_MAX = 416;   // per iteration
 /** A duration the server accepts: null (cleared) or a finite number of weeks 0..max. */
 export const validWeeks = (v: number | null | undefined, max = WEEKS_MAX): boolean => v === null || v === undefined || (Number.isFinite(v) && v >= 0 && v <= max);
 
-export interface WeeksBreakdown { tooling: number | null; manufacturing: number | null; testing: number | null; shipping: number | null; sum: number; override: number | null; total: number; missing: LineId[] }
+export interface WeeksBreakdown { tooling: number | null; manufacturing: number | null; testing: number | null; shipping: number | null; development?: number | null; sum: number; override: number | null; total: number; missing: LineId[] }
 /** One iteration's duration: the four stages in SEQUENCE (their sum), testing not counted without a bench; the owner's
  *  override wins.  `missing` = the needed stages without a duration (0 in the sum).  Same rule as the server. */
 export function iterationWeeks(it: CostIteration): WeeksBreakdown {
@@ -413,9 +431,16 @@ export function iterationWeeks(it: CostIteration): WeeksBreakdown {
     per[id] = w === null || w === undefined ? null : Number(w);
     if (per[id] === null) missing.push(id);
   }
-  const sum = Number(LINE_IDS.reduce((a, id) => a + (per[id] ?? 0), 0).toFixed(2));
+  // the optional development stage is one more stage of the sequence when the iteration has it; never "missing"
+  const extra = {} as Partial<Record<OptionalLineId, number | null>>;
+  for (const id of OPTIONAL_LINE_IDS) {
+    const line = it.lines[id];
+    if (!line) continue;
+    extra[id] = line.weeks === null || line.weeks === undefined ? null : Number(line.weeks);
+  }
+  const sum = Number((LINE_IDS.reduce((a, id) => a + (per[id] ?? 0), 0) + OPTIONAL_LINE_IDS.reduce((a, id) => a + (extra[id] ?? 0), 0)).toFixed(2));
   const override = it.weeks_override === null || it.weeks_override === undefined ? null : Number(it.weeks_override);
-  return { ...per, sum, override, total: override ?? sum, missing };
+  return { ...per, ...extra, sum, override, total: override ?? sum, missing };
 }
 /** The project's duration: the sum of the iterations. */
 export const projectWeeks = (e: CostEstimate): number => Number(e.iterations.reduce((a, it) => a + iterationWeeks(it).total, 0).toFixed(2));
@@ -424,7 +449,7 @@ export const weeksText = (w: number | null | undefined): string => (w === null |
 export function setLineWeeks(e: CostEstimate, ref: LineRef, weeks: number | null): CostEstimate {
   if (!validWeeks(weeks)) return e;
   const next = clone(e);
-  const line = lineAt(next, ref);
+  const line = lineAt(next, ref, true);
   if (line) line.weeks = weeks;
   return next;
 }
@@ -471,6 +496,7 @@ const r2 = (x: number): number => Math.round(x * 100) / 100;
 export interface TableRow {
   index: number; motors: number; bench: Bench; testingNeeded: boolean;
   tooling: number | null; perMotor: number | null; manufacturing: number | null; testing: number | null; shipping: number | null;
+  /** the optional development line: null when the iteration has none (0 in the total, never missing) */ development: number | null;
   weeks: WeeksBreakdown; total: number; missing: number;
 }
 export interface TableModel {
@@ -486,9 +512,10 @@ export function tableModel(e: CostEstimate, displayCurrency = 'EUR'): TableModel
     const testingNeeded = lineNeeded(it, 'testing');
     const perMotor = eur(it.lines.manufacturing);
     const vals = { tooling: eur(it.lines.tooling), manufacturing: perMotor === null ? null : r2(perMotor * (it.motors || 0)), testing: testingNeeded ? eur(it.lines.testing) : 0, shipping: eur(it.lines.shipping) };
+    const development = eur(it.lines.development);
     const missing = LINE_IDS.filter((id) => lineNeeded(it, id) && it.lines[id].status === 'missing').length;
-    return { index: it.index, motors: it.motors, bench: it.bench, testingNeeded, perMotor, ...vals,
-      weeks: iterationWeeks(it), total: r2((vals.tooling ?? 0) + (vals.manufacturing ?? 0) + (vals.testing ?? 0) + (vals.shipping ?? 0)), missing };
+    return { index: it.index, motors: it.motors, bench: it.bench, testingNeeded, perMotor, ...vals, development,
+      weeks: iterationWeeks(it), total: r2((vals.tooling ?? 0) + (vals.manufacturing ?? 0) + (vals.testing ?? 0) + (vals.shipping ?? 0) + (development ?? 0)), missing };
   });
   const subtotal = r2(rows.reduce((a, r) => a + r.total, 0));
   const contingencyPct = Number(e.settings.contingency_pct) || 0;

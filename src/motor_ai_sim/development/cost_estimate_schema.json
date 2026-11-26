@@ -41,7 +41,11 @@
    "help": {"en": "One amount for the bench work of this iteration.", "zh-CN": "本轮台架测试的总金额。"}},
   {"id": "shipping",
    "label": {"en": "Shipping (DHL)", "zh-CN": "运输（DHL）"},
-   "help": {"en": "One amount for the shipments of this iteration.", "zh-CN": "本轮运输的总金额。"}}
+   "help": {"en": "One amount for the shipments of this iteration.", "zh-CN": "本轮运输的总金额。"}},
+  {"id": "development", "optional": true,
+   "label": {"en": "Development", "zh-CN": "开发"},
+   "help": {"en": "Development services of this iteration: one amount, admin only, never shown to the customer. Empty = 0.",
+            "zh-CN": "本轮的开发服务：一个金额，仅管理员可见，不向客户显示。留空 = 0。"}}
  ],
  "durations": {"unit": "weeks", "line_min": 0, "line_max": 104, "override_max": 416,
   "label": {"en": "Duration", "zh-CN": "工期"},

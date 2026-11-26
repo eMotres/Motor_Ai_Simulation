@@ -302,6 +302,11 @@ async def share_quote(project_id: str, request: Request, response: Response, adm
         raise HTTPException(status_code=409, detail={
             "code": "quote_incomplete", "missing": missing,
             "message": "Fill every line before sharing: %d line(s) have no amount." % len(missing)})
+    development = Q.development_iterations(estimate)
+    if development:
+        raise HTTPException(status_code=409, detail={
+            "code": "development_not_shareable", "iterations": development,
+            "message": "The development line is admin-only: clear it before sharing a quote."})
     stale = CE.next_unit_shipping_stale(estimate, (estimate.get("next_unit") or {}).get("shipping") or {})
     if stale and (estimate.get("next_unit") or {}).get("price") is None:
         raise HTTPException(status_code=409, detail={"code": "next_unit_shipping_stale", "message": stale[:200]})

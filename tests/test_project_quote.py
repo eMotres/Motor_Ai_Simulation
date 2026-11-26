@@ -825,3 +825,46 @@ def test_a_failed_index_write_undoes_only_its_own_change(client, monkeypatch):
     _flush("alpha")
     assert "viewer@example.test" in [r["entity_id"] for r in _events()]            # the PATCH's audit intent survives
     assert [r["entity_id"] for r in _events(action="sees_prices_undone")] == ["late@example.test"]   # a flushed row of the undone POST is answered
+
+
+# ── the admin-only Development line (owner 2026-11-26) never reaches the customer ──────────────────────────────────────
+
+def _with_development(client, est, amount=1500.0, weeks=4):
+    est["iterations"][0]["lines"]["development"] = {"amount": amount, "weeks": weeks, "note": "synthetic internal note"}
+    resp = client.put("/api/admin/projects/alpha/cost-estimate", json=est, headers=_h("admin"))
+    assert resp.status_code == 200, resp.text
+    return resp.json()["estimate"]
+
+
+def test_an_estimate_with_a_development_line_cannot_be_shared_or_quoted(client):
+    est = _complete(client)
+    saved = _with_development(client, est)
+    assert saved["iterations"][0]["lines"]["development"]["amount"] == 1500.0
+    resp = _share(client, revision=saved["revision"])
+    assert resp.status_code == 409 and resp.json()["detail"]["code"] == "development_not_shareable"
+    assert resp.json()["detail"]["iterations"] == [1]
+    assert _quote(client, "owner").status_code == 404                       # nothing was shared
+    with pytest.raises(Q.QuoteError, match="admin-only"):
+        Q.build_quote(CE.from_stored(saved, CE.load_schema(), "alpha"), CE.load_schema(), "2026-11-26")
+
+
+def test_a_quote_shared_before_the_development_line_carries_nothing_of_it(client):
+    est = _complete(client)
+    assert _share(client, revision=est["revision"]).status_code == 200
+    before = _quote(client, "owner").json()
+    _with_development(client, est)                                          # added to the LIVE estimate afterwards
+    for who in ("owner", "admin"):                                          # members without the price flag get 404 anyway
+        after = _quote(client, who)
+        assert after.status_code == 200
+        assert after.json() == before                                       # same numbers, same total, same weeks
+        assert "development" not in json.dumps(after.json()).lower()
+        assert "development" not in _keys(after.json())
+    assert before["total_price"] == _quote(client, "owner").json()["total_price"]
+
+
+def test_the_quote_of_an_estimate_without_the_line_is_unchanged_by_the_change(client):
+    est = _complete(client)
+    assert _share(client, revision=est["revision"]).status_code == 200
+    quote = _quote(client, "owner").json()
+    assert list(quote["iterations"][0]["lines"]) == ["tooling", "manufacturing", "testing", "shipping"]
+    assert set(quote) == set(Q.QUOTE_KEYS)

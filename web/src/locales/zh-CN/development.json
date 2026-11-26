@@ -1137,10 +1137,7 @@
   },
   "report": {
     "word": "报告（Word）",
-    "pdf": "报告（PDF）",
-    "reviewed": "报告已审核",
-    "reviewedTip": "报告已由我们的工程师审核：项目成员可以下载。工程师随时可以生成。",
-    "notReviewedTip": "报告正在由我们的工程师审核。"
+    "pdf": "报告（PDF）"
   },
   "motorTests": {
     "button": "测试",

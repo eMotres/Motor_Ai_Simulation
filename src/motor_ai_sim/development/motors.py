@@ -1514,37 +1514,21 @@ def report_link_state(die: str, config: str) -> dict | None:
         return None
 
 
-def require_report_reviewed(die: str, config: str, authorization: str | None) -> None:
-    """The review gate of the report: a variant that belongs to a project is built for a non-staff caller only after an
-    admin / engineer marked its report reviewed.  Staff always build; a motor outside every project is not gated."""
-    from motor_ai_sim.auth import caller_identity
-    if _is_staff_identity(caller_identity(authorization)):
-        return
-    state = report_link_state(die, config)
-    if state is None:
-        return
-    if not isinstance((state["link"] or {}).get("report_reviewed"), dict):
-        raise HTTPException(403, detail={"code": "report_not_reviewed",
-                                         "message": "The report is being checked by our engineers."})
-
-
 @router.get("/report")
 def project_motor_report(project_id: str, request: Request, die: str, config: str, format: str = "docx",
                          show_all: bool = False, run_id: Optional[str] = None):
     """The motor report of one project variant (every computed duty), for project members.
 
     Same ``_require_die_access`` gate and CAD-cooling NDA gate as ``GET /api/family/report`` (both go through
-    ``routes.report.build_for``).  Staff always; a non-staff member only after the report was marked reviewed.  A variant with
-    results missing is built all the same - the report lists what is still to compute.  Every non-staff download is audited.
+    ``routes.report.build_for``).  Every project member may download it at any time (owner 2026-11-26: the "report reviewed" gate is
+    gone; a stored ``report_reviewed`` stamp is ignored).  A variant with results missing is built all the same - the report lists
+    what is still to compute.  Every non-staff download is audited.
     """
     from fastapi.responses import Response
     from motor_ai_sim.routes import report as report_routes
     user, role, open_die, cfg_name, _path, _cfg, link = _project_motor(project_id, request, die, config, show_all)
     authorization = request.headers.get("authorization")
     staff = access.is_engineer(user)
-    if not staff and not isinstance(link.get("report_reviewed"), dict):
-        raise HTTPException(403, detail={"code": "report_not_reviewed",
-                                         "message": "The report is being checked by our engineers."})
     # run_id: the id the page polls GET /api/family/report/progress with - the same progress ring as the catalogue (owner 2026-10-27)
     blob, fname, rid = report_routes.build_for(open_die, cfg_name, format, authorization, run_id=run_id)
     fmt = str(format or "").strip().lower()

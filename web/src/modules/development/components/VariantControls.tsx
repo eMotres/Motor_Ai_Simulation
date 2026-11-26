@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Box, Button, Checkbox, Chip, CircularProgress, FormControlLabel, IconButton, Stack, Tooltip } from '@mui/material';
+import { Box, Button, Chip, CircularProgress, IconButton, Stack, Tooltip } from '@mui/material';
 import StarIcon from '@mui/icons-material/Star';
 import StarBorderIcon from '@mui/icons-material/StarBorder';
 import { downloadExport } from '../../../lib/exportDownload';
@@ -63,7 +63,6 @@ export function VariantControls({ projectId, motor, staff, busy = false, t, onCh
     if (problem) setError(problem);
     setWorking(false);
   };
-  const disabledTip = access.enabled ? '' : t('report.notReviewedTip');
   return (
     <Stack direction="row" spacing={0.5} alignItems="center" flexWrap="wrap" useFlexGap data-testid="variant-controls">
       {staff
@@ -76,25 +75,16 @@ export function VariantControls({ projectId, motor, staff, busy = false, t, onCh
           <Chip size="small" icon={<StarIcon sx={{ fontSize: 14, color: '#f59e0b !important' }} />} label={t('recommended.label')} data-testid="recommended-chip" sx={{ height: 20, fontSize: 11 }} />
         </Tooltip>}
       {staff && recommended && <Chip size="small" label={t('recommended.label')} data-testid="recommended-chip" sx={{ height: 20, fontSize: 11, color: '#b45309', bgcolor: 'rgba(245,158,11,0.15)' }} />}
-      <Tooltip title={disabledTip}>
-        <span>
-          <Button size="small" disabled={!access.enabled || busy || working} onClick={() => void download('docx')}>{t('report.word')}</Button>
-          <Button size="small" disabled={!access.enabled || busy || working} onClick={() => void download('pdf')}>{t('report.pdf')}</Button>
-        </span>
-      </Tooltip>
+      <span>
+        <Button size="small" disabled={!access.enabled || busy || working} onClick={() => void download('docx')}>{t('report.word')}</Button>
+        <Button size="small" disabled={!access.enabled || busy || working} onClick={() => void download('pdf')}>{t('report.pdf')}</Button>
+      </span>
       {ring.runId && !ring.notice && (
         <Tooltip title={ringTip(ring)}>
           <Box component="span" data-testid="report-ring" sx={{ display: 'inline-flex', alignItems: 'center', gap: 0.45, fontSize: 11, color: 'var(--text-2)' }}>
             <CircularProgress variant={ring.pct == null ? 'indeterminate' : 'determinate'} value={ring.pct ?? 0} size={15} thickness={6} sx={{ color: 'inherit' }} />
             {ring.pct != null && <span>{ring.pct} %</span>}
           </Box>
-        </Tooltip>
-      )}
-      {staff && (
-        <Tooltip title={motor.report_reviewed ? `${t('report.reviewedTip')} ${flagWho(motor.report_reviewed)}` : t('report.reviewedTip')}>
-          <FormControlLabel sx={{ m: 0 }} control={<Checkbox size="small" checked={!!motor.report_reviewed} disabled={busy || working}
-            onChange={(e) => void run(() => developmentApi.setReportReviewed(projectId, die, motor.config, e.target.checked))} />}
-            label={<span style={{ fontSize: 11 }}>{t('report.reviewed')}</span>} />
         </Tooltip>
       )}
       {revisionButton === 'assign' && (

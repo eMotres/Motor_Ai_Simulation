@@ -1281,11 +1281,11 @@ def test_project_motor_read_refuses_anonymous(env, project, route):
         _same_as_missing(r, _motor_get(route, NOSUCH, {}), cfg)
 
 
-#: what an account that may see the motor is answered on the test catalog (no field map stored; for a customer, the report
-#: not yet reviewed and the tests not yet shown)
+#: what an account that may see the motor is answered on the test catalog (no field map stored; for a customer, the tests not yet
+#: shown; the report is open to every member since 2026-11-26)
 _ALLOWED = {"view": (200, None), "field": (404, "Not computed"), "report": (200, None), "points": (200, None),
             "tests": (200, None)}
-_CUSTOMER = {**_ALLOWED, "report": (403, None), "tests": (404, "No tests")}
+_CUSTOMER = {**_ALLOWED, "tests": (404, "No tests")}
 
 
 def _assert_answer(resp, want, who) -> None:
@@ -1303,8 +1303,6 @@ def test_project_motor_read_serves_the_accounts_that_may_see_the_configuration(e
     _assert_answer(_motor_get(route, PUB, env["eng"]), _ALLOWED[route], "eng")
     r = _motor_get(route, PUB, env["plain"])
     _assert_answer(r, _CUSTOMER[route], "plain")
-    if route == "report":
-        assert r.json()["detail"]["code"] == "report_not_reviewed"
 
 
 # ── 3-D model ────────────────────────────────────────────────────────────────

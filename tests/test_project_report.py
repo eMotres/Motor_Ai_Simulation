@@ -2,9 +2,9 @@
 
   (a) ``PATCH /motors/report_reviewed`` and ``PATCH /motors/recommended`` are staff only (a global admin / engineer); a project
       engineer who is not staff, a customer and a stranger are refused; the recommended flag is exclusive.
-  (b) ``GET /motors/report``: staff always; a project member (customer or project engineer) only for a variant marked reviewed,
-      otherwise 403 ``report_not_reviewed``; a non-member gets 404; every non-staff download is audited.
-  (c) the generic ``GET /api/family/report/{die}/{cfg}`` cannot be used to go round the review gate for a project motor.
+  (b) ``GET /motors/report``: every project member (customer or project engineer) at any time (owner 2026-11-26: the review gate
+      is gone, a stored ``report_reviewed`` stamp is ignored); a non-member gets 404; every non-staff download is audited.
+  (c) the generic ``GET /api/family/report/{die}/{cfg}`` is not gated by a review mark either.
   (d) ``report_missing.still_to_compute`` lists what a partly computed variant still needs and flags stale mechanics.
 """
 from __future__ import annotations
@@ -119,18 +119,14 @@ def test_a_the_review_stamp_names_who_when_and_which_code(client):
 
 # ── (b) the project report route ─────────────────────────────────────────────
 
-def test_b_staff_always_build_a_member_only_after_review(client):
-    assert get_report(client, "admin").status_code == 200                       # staff, not reviewed
+def test_b_every_member_builds_the_report_at_any_time_a_stranger_gets_404(client):
+    assert get_report(client, "admin").status_code == 200
     assert get_report(client, "engineer", fmt="docx").status_code == 200
     for who in ("customer", "pengineer"):
-        r = get_report(client, who)
-        assert r.status_code == 403 and r.json()["detail"]["code"] == "report_not_reviewed", who
-    assert client.built == [(DIE, CFG, "pdf"), (DIE, CFG, "docx")]              # nothing was built for the refused callers
-    assert patch(client, "admin", "report_reviewed").status_code == 200
-    for who in ("customer", "pengineer"):
-        assert get_report(client, who).status_code == 200, who
-    assert get_report(client, "customer", config=CFG2).status_code == 403          # another variant stays closed
+        assert get_report(client, who).status_code == 200, who                      # not reviewed, still built
+        assert get_report(client, who, config=CFG2).status_code == 200, who         # every variant
     assert get_report(client, "stranger").status_code == 404                       # a non-member does not even learn it exists
+    assert (DIE, CFG, "pdf") in client.built and (DIE, CFG2, "pdf") in client.built
 
 
 def test_b_every_member_download_is_audited_staff_ones_are_not(client):
@@ -142,22 +138,19 @@ def test_b_every_member_download_is_audited_staff_ones_are_not(client):
     assert "motor.report.download" in text and "customer@example.test" in text and f"{DIE}/{CFG}" in text
 
 
-def test_b_un_marking_closes_the_report_again(client):
+def test_b_a_review_mark_changes_nothing_for_the_download(client):
     patch(client, "admin", "report_reviewed")
     assert get_report(client, "customer").status_code == 200
     patch(client, "admin", "report_reviewed", value=False)
-    assert get_report(client, "customer").status_code == 403
+    assert get_report(client, "customer").status_code == 200
 
 
-# ── (c) no way round the gate ────────────────────────────────────────────────
+# ── (c) the generic route is not gated either ────────────────────────────────
 
-def test_c_the_generic_report_route_keeps_the_review_gate_for_project_motors(client):
+def test_c_the_generic_report_route_has_no_review_gate_for_project_motors(client):
     url = f"/api/family/report/{DIE}/{CFG}"
-    assert client.get(url, params={"format": "pdf"}, headers={"authorization": "Bearer customer"}).status_code == 403
-    assert client.get(url, params={"format": "pdf"}, headers={"authorization": "Bearer admin"}).status_code == 200
-    assert client.get(url, params={"format": "pdf"}, headers={"authorization": "Bearer engineer"}).status_code == 200
-    patch(client, "admin", "report_reviewed")
-    assert client.get(url, params={"format": "pdf"}, headers={"authorization": "Bearer customer"}).status_code == 200
+    for who in ("customer", "admin", "engineer"):
+        assert client.get(url, params={"format": "pdf"}, headers={"authorization": f"Bearer {who}"}).status_code == 200, who
 
 
 def test_c_a_motor_outside_every_project_is_not_gated(client):

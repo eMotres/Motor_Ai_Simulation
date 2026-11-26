@@ -1,0 +1,20 @@
+{
+  "_comment": "ONE registry of the windows the help assistant knows (tab id -> sub-views, documents, the keys its ui_context may carry). The server (help_context.py) and the web tests read this file; every document id listed here needs <id>.en.md and <id>.zh-CN.md next to it. min_role: the lowest account role that may send more than the tab ids (the server re-checks).",
+  "gears": {
+    "min_role": "engineer",
+    "subs": ["point", "spectrum", "assembly", "motor"],
+    "docs": ["gears", "gears.point", "gears.spectrum", "gears.assembly", "gears.motor", "gears.saved"],
+    "keys": {
+      "preset": "name",
+      "stageKinds": "enums",
+      "stageCount": "count",
+      "calculated": "flag",
+      "stale": "flag",
+      "die": "name",
+      "configuration": "name",
+      "source": "enum",
+      "rows": "count",
+      "record": "flag"
+    }
+  }
+}

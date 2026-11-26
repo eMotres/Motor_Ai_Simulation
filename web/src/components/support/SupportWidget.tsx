@@ -30,7 +30,7 @@ import {
   initialFlow, addUserMessage, receiveReply, editDraft, dismissDraft, runConfirm, nextStep, updateCard,
   type ChatReply, type FlowState, type SpecCard,
 } from '../../lib/supportFlow';
-import { buildSupportContext, installFailedCallRecorder } from '../../lib/supportContext';
+import { buildAnonContext, buildSupportContext, installFailedCallRecorder } from '../../lib/supportContext';
 import { useAssistantPlace } from '../../lib/assistantPlace';
 import { projectOpenEvent, projectOpenStorageKey } from '../../modules/development/projectOpenIntent';
 import { specAssistantApi } from '../../modules/development/specAssistantApi';
@@ -89,6 +89,7 @@ const SupportWidget: React.FC = () => {
     tab: activeTab, lang: i18n.resolvedLanguage ?? i18n.language ?? 'en',
     appVersion: APP_VERSION, appGitSha: APP_GIT_SHA,
     userAgent: typeof navigator !== 'undefined' ? navigator.userAgent : '',
+    route: typeof window !== 'undefined' ? window.location.pathname : '',
   });
 
   useEffect(() => {
@@ -144,7 +145,7 @@ const SupportWidget: React.FC = () => {
     else if (step?.kind === 'reload') spec?.onChanged?.();
   };
   const ask = async (msgs: FlowState['msgs']) => {
-    const reply = await askAssistant(msgs, user ? context() : undefined, lang, spec ? { projectId: spec.projectId, fill: fill && canApply } : undefined);
+    const reply = await askAssistant(msgs, user ? context() : buildAnonContext({ tab: activeTab, lang: i18n.resolvedLanguage ?? i18n.language ?? 'en' }), lang, spec ? { projectId: spec.projectId, fill: fill && canApply } : undefined);
     setFlow((f) => receiveReply(f, reply));
     await afterReply(reply);
   };

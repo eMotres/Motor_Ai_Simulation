@@ -25,6 +25,7 @@ import { PointChips, RunChips } from './SimChips';
 import SummaryTable, { type TransientSummary } from './SummaryTable';
 import TransientCharts from './TransientCharts';
 import PointFieldPane from './PointFieldPane';
+import { SIM_BLOCK_SX } from './simLayout';
 
 interface Props {
   projectId: string;
@@ -103,7 +104,7 @@ export const ReadOnlySimulationView: React.FC<Props> = ({ projectId, die, config
   const runs = useMemo(() => runMetasOf(here), [here]);
 
   return (
-    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+    <Box sx={{ ...SIM_BLOCK_SX, display: 'flex', flexDirection: 'column', gap: 2 }}>
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, flexWrap: 'wrap' }}>
         {!embedded && <Typography variant="h6" sx={{ color: 'var(--text-0)', fontWeight: 700 }}>{t('simView.title')}</Typography>}
         {!embedded && <Tooltip title={t('simView.viewOnlyTip')}>

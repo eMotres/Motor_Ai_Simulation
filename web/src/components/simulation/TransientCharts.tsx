@@ -41,6 +41,7 @@ import {
 } from './coupledApi';
 import HelpTip from '../common/HelpTip';
 import SolveGate from '../common/SolveGate';
+import { SIM_BLOCK_SX } from './simLayout';
 
 interface TransientPayload {
   // Frontend-only stamp: the geometry signature this run was computed for.
@@ -1491,7 +1492,7 @@ const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onS
   }, [data]);
 
   return (
-    <Paper sx={{ bgcolor: 'var(--panel-2)', border: '1px solid var(--line-soft)', p: 2,
+    <Paper sx={{ ...SIM_BLOCK_SX, bgcolor: 'var(--panel-2)', border: '1px solid var(--line-soft)', p: 2,
       display: 'flex', flexDirection: 'column', gap: 1.5 }}>
       {/* Stale-graph marker.  TWO severities, because they are not the same
           mistake.  A different OPERATING POINT is a hint: same motor, other

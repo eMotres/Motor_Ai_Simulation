@@ -667,3 +667,102 @@ def test_controller_torque_on_a_marked_record_is_the_coupling_torque(monkeypatch
     old = {"T_em_avg_Nm": 10.0, "P_loss_total_W": 100.0}
     node["coupled"]["em"] = old
     assert rc._duty_defaults("DIE", "CFG", "rated")["torque_Nm"] == pytest.approx(10.0)
+
+
+# ── Astra review round 4 (each example with its numbers) ──────────────────────────────────────────────────────────────
+def test_r4_c1_compact_record_keeps_the_convention_context():
+    from motor_ai_sim import duty_results as DR
+    from motor_ai_sim.motor_tests import model_source
+    for mode, t_exp in (("motor", 8.7), ("generator", 9.3)):
+        s = _plain_marked(op_mode=mode, mass_total_kg=2.0)
+        row = DR.compact_em_run({"summary": s})
+        ctx = row["shaft_context"]
+        assert ctx["shaft_convention"] == SC.SHAFT_CONVENTION and ctx["shaft_rotor_in_field"] is False
+        assert ctx["op_mode"] == mode and isinstance(ctx["torque_side"], str)
+        back = SC.summary_from_compact(row)
+        assert SC.coupling_power(back) == pytest.approx(SC.coupling_power(s))
+        doc = {"winding": {"star_delta": "star"}, "duties": [{"name": "rated", "rpm": RPM100, "current_arms": 100}]}
+        m = model_source.from_docs({}, doc, {"rated": {"em_run": row}}, {}, end3d={"k_flux": 0.9})
+        d = m["duties"][0]
+        if mode == "motor":
+            assert d["torque_nm"] == pytest.approx(t_exp, abs=1e-3)      # not 9 N*m (a second k on 870 W)
+            assert d["eff_pct"] == pytest.approx(100.0 * 870.0 / 970.0, abs=0.01)   # not 88.67 %
+        assert d["shaft_conv"] == 1 and d["shaft_k3d"] == pytest.approx(0.9)
+    # an unmarked compact row is filed exactly as before (no context key)
+    assert "shaft_context" not in DR.compact_em_run({"summary": {"T_em_avg_Nm": 10.0, "P_mech_W": 1000.0}})
+    # a marked compact row WITHOUT the context is unreadable, never "old"
+    bare = {"numbers": {"T_em_avg_Nm": 10.0, "P_mech_W": 870.0, "shaft_conv": 1.0}}
+    assert SC.summary_from_compact(bare) == {}
+    doc = {"winding": {"star_delta": "star"}, "duties": [{"name": "rated", "rpm": RPM100, "current_arms": 100}]}
+    m2 = model_source.from_docs({}, doc, {"rated": {"em_run": bare}}, {}, end3d={"k_flux": 0.9})
+    assert all(x.get("torque_nm") is None for x in m2.get("duties") or [])
+
+
+def test_r4_c1_light_panel_from_a_compact_record_is_marked():
+    from motor_ai_sim import duty_results as DR
+    from motor_ai_sim.development import motor_view as MV
+    row = DR.compact_em_run({"summary": _plain_marked(mass_total_kg=2.0)})
+    blk = MV.em_run_block({"em_run": row})
+    assert blk["shaft_context"]["shaft_convention"] == SC.SHAFT_CONVENTION
+    panel = MV.build_panel(None, {}, None, blk)
+    summ = panel["summary"]
+    assert SC.has_marker(summ) and summ["T_shaft_Nm"] == pytest.approx(8.7, abs=1e-3)
+    assert MV.em_run_block({"em_run": {"numbers": {"T_em_avg_Nm": 10.0, "shaft_conv": 1.0}}}) is None
+
+
+def test_r4_c2_zero_shaft_efficiency_stays_zero():
+    from motor_ai_sim.motor_tests import model_source
+    s = {"shaft_convention": SC.SHAFT_CONVENTION, "op_mode": "motor", "rpm": RPM100, "I_phase_rms_A": 100,
+         "T_em_avg_Nm": 1.0, "P_mech_W": 6.0, "P_loss_total_W": 31.0, "P_mech_extra_W": 20.0, "P_shaft_net_W": -14.0,
+         "efficiency_shaft": 0.0, "efficiency": 6.0 / 37.0}
+    doc = {"winding": {"star_delta": "star"}, "duties": [{"name": "rated", "rpm": RPM100, "current_arms": 100,
+                                                           "summary": s}]}
+    d = model_source.from_docs({}, doc, {}, {})["duties"][0]
+    assert d["eff_pct"] == 0.0                                              # not 16.22 %
+    assert d["torque_nm"] == pytest.approx(-0.14, abs=1e-6)
+
+
+def test_r4_c3_projection_one_source_missing_stays_missing():
+    from motor_ai_sim.development import motors as DM
+    em = _plain_marked(mass_total_kg=2.0)
+    c = DM._comparison_projection({}, {"coupled": {"em": em, "P_mech_extra_W": 20.0, "efficiency_shaft": 850.0 / 970.0}})
+    assert c["power_w"] == pytest.approx(850.0, abs=0.06) and c["torque_nm"] == pytest.approx(8.5, abs=1e-3)
+    assert c["efficiency_pct"] == pytest.approx(87.628866, abs=1e-4) and c["shaft_conv"] == 1
+    # a marked source without an efficiency (friction known): no efficiency, never the old result's 95 %
+    m = _plain_marked(P_mech_extra_W=20.0)
+    m.pop("efficiency_shaft", None)
+    c2 = DM._comparison_projection({"summary": m, "result": {"efficiency_pct": 95.0}}, {})
+    assert "efficiency_pct" not in c2
+    # a marked result without torque density: none, never the old summary's 5 N*m/kg
+    c3 = DM._comparison_projection({"result": {"shaft_conv": 1, "power_w": 870.0},
+                                    "summary": {"T_em_avg_Nm": 10.0, "mass_total_kg": 2.0}}, {})
+    assert "torque_to_mass_nm_kg" not in c3 and c3["power_w"] == 870.0
+
+
+def test_r4_c4_digest_headline_from_one_record():
+    from motor_ai_sim.digest import readable as RD
+    kinds = {"em_run": {"numbers": {"P_mech_W": 1000.0, "T_em_avg_Nm": 10.0}},
+             "coupled": {"em": _plain_marked(), "efficiency_shaft": 0.876289}}
+    mech = RD.mechanical_numbers(kinds)
+    assert mech["T"] == 10.0 and mech["P"] == 1000.0 and mech["eta"] is None and mech["basis"] == "earlier"
+    h = RD.headline(kinds)
+    assert "87.6" not in h and "earlier shaft basis" in h
+    k2 = {"coupled": {"em": _plain_marked(), "efficiency_shaft": 0.876289}}
+    m2 = RD.mechanical_numbers(k2)
+    assert m2["basis"] == "shaft" and m2["eta"] == pytest.approx(87.6289, abs=1e-3)
+
+
+def test_r4_c6_agent_headline_keeps_the_convention():
+    from motor_ai_sim import agent_designs as AD
+    d = {"params": {"speed_rpm": RPM100, "mode": "generator", "current_a_rms": 100.0}}
+    out = AD.headline({"em": _plain_marked(op_mode="generator"), "P_mech_extra_W": 20.0}, d, "coupled")
+    assert out["torque_nm"] == pytest.approx(10.0) and out["torque_basis"] == "2-D field"
+    assert out["power_kw"] == pytest.approx(0.93, abs=1e-3) and out["shaft_conv"] == 1
+    assert out["efficiency_shaft_pct"] == pytest.approx(87.37, abs=0.01)    # not 91.21 %
+
+
+def test_r4_snapshot_carries_the_convention_only_when_marked():
+    import inspect
+    from motor_ai_sim.passport_v1 import snapshot as SN
+    src = inspect.getsource(SN)
+    assert '("shaft_convention", "shaft_k3d", "op_mode")' in src

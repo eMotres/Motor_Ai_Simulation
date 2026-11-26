@@ -1016,35 +1016,30 @@ def _comparison_projection(duty: dict, stored: dict) -> dict:
     _msrc = (summary_raw if _SC.has_marker(summary_raw)
              else coupled_em_raw if (not summary_raw and _SC.has_marker(coupled_em_raw)) else None)
     _sc_row = False
-    if _msrc is not None:
+    if _msrc is not None or result_raw.get("shaft_conv") == 1:
+        # missing stays missing: a value the marked source does not carry is never inherited from an older source
         _sc_row = True
-        _gen = str(_msrc.get("op_mode") or "") == "generator"
-        _t = _SC.coupling_torque(_msrc)
-        _p = _SC.coupling_power(_msrc)
-        for key, v in (("torque_nm", _t), ("power_w", _p)):
-            if v is not None:
-                comparison[key] = v
-            else:
-                comparison.pop(key, None)
-        _eta = _number(_msrc.get("efficiency_shaft"))
-        if _eta is None:
-            _eta = _number(_msrc.get("efficiency"))
-        if _eta is not None:
-            comparison["efficiency_pct"] = _eta * 100.0
-        _tpm = _number(_msrc.get("T_field_k_Nm") if _gen else _msrc.get("T_shaft_Nm"))
-        _m = _number(comparison.get("mass_kg"))
-        if _tpm is not None and _m and _m > 0:
-            comparison["torque_to_mass_nm_kg"] = _tpm / _m
-        comparison["shaft_conv"] = 1
-    elif result_raw.get("shaft_conv") == 1:
-        # a result block on the convention with no summary beside it: only its own numbers, never another source's
-        _sc_row = True
-        for key, rk in (("torque_nm", "torque_nm"), ("power_w", "power_w"), ("efficiency_pct", "efficiency_pct")):
-            v = _number(result_raw.get(rk))
-            if v is not None:
-                comparison[key] = v
-            else:
-                comparison.pop(key, None)
+        _keys = ("torque_nm", "power_w", "efficiency_pct", "torque_to_mass_nm_kg")
+        for key in _keys:
+            comparison.pop(key, None)
+        if _msrc is not None:
+            _s = dict(_msrc)
+            if _msrc is coupled_em_raw:
+                # a coupled run's friction and shaft efficiency sit on the coupled record itself
+                _s.update({k: coupled_raw[k] for k in ("P_mech_extra_W", "efficiency_shaft")
+                           if coupled_raw.get(k) is not None})
+            _p, _t = _SC.coupling_power(_s), _SC.coupling_torque(_s)
+            _eta = _number(_s.get("efficiency_shaft"))
+            if _eta is None and _s.get("P_mech_extra_W") is None:
+                _eta = _number(_s.get("efficiency"))
+            _m = _number(comparison.get("mass_kg"))
+            _td = _number(_s.get("T_field_k_Nm") if _s.get("op_mode") == "generator" else _s.get("T_shaft_Nm"))
+            _vals = (_t, _p, None if _eta is None else _eta * 100.0,
+                     _td / _m if (_td is not None and _m and _m > 0) else None)
+            comparison.update({k: v for k, v in zip(_keys, _vals) if v is not None})
+        else:
+            # a result block on the convention with no marked summary beside it: only its own numbers
+            comparison.update({k: v for k in _keys if (v := _number(result_raw.get(k))) is not None})
         comparison["shaft_conv"] = 1
     # 3-D END EFFECT (owner 2026-10-25: the project table shows the same corrected numbers as the report): when the
     # run carries its Stage-A 3-D factor (``end3d.k_flux``, the report's k_3d), torque, power, torque/mass and the

@@ -622,7 +622,14 @@ def em_run_block(stored: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     if not row:
         return None
     nums = row.get("numbers") if isinstance(row.get("numbers"), dict) else {}
+    # a marked compact row carries the shaft context it was filed with (duty_results.compact_em_run); one that says it
+    # is marked but lacks the context is unreadable on either convention -> nothing to show, re-solve
+    from motor_ai_sim.shaft_convention import summary_from_compact
+    ctx = row.get("shaft_context") if isinstance(row.get("shaft_context"), dict) else None
+    if (ctx or _num(nums.get("shaft_conv")) == 1) and not summary_from_compact(row):
+        return None
     return {"numbers": {k: v for k, v in nums.items() if _num(v) is not None},
+            **({"shaft_context": dict(ctx)} if ctx else {}),
             "provenance": provenance(row)}
 
 
@@ -816,7 +823,7 @@ def build_panel(duty_summary: Any, kept: Dict[str, Any], thermal: Optional[Dict[
         base = _panel_plain(duty_summary) or {}
         em_from = "summary"
     elif em_run and em_run.get("numbers"):
-        base = dict(em_run["numbers"])
+        base = {**em_run["numbers"], **(em_run.get("shaft_context") or {})}
         em_from = "em_run"
     cp = kept.get("coupled") if isinstance(kept.get("coupled"), dict) else None
     cl = kept.get("coupled_limit") if isinstance(kept.get("coupled_limit"), dict) else None

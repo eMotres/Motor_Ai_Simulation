@@ -1153,6 +1153,23 @@ def headline(answer: Any, d: Dict[str, Any], what: str) -> Dict[str, Any]:
             out["limits"] = {"within_limits": ttl.get("within_limits"),
                              "time_to_limit_s": _r(_num(ttl.get("cold_s")), 1),
                              "limiting_part": ttl.get("part")}
+    # THE SHAFT-POWER CONVENTION (motor_ai_sim.shaft_convention): a marked run keeps its convention here.  The torque stays
+    # the 2-D FIELD torque and the power the shaft power before bearings / windage, each labelled; the shaft efficiency
+    # is formed at the coupling (motor: (P - X) / E; generator: E / (P + X)).
+    from motor_ai_sim import shaft_convention as _SC
+    run = em or s or a
+    if _SC.has_marker(run):
+        run = dict(run)
+        if em and a.get("P_mech_extra_W") is not None:
+            run["P_mech_extra_W"] = a["P_mech_extra_W"]
+        p, loss, net = _num(run.get("P_mech_W")), _num(run.get("P_loss_total_W")), _SC.coupling_power(run)
+        gen = run.get("op_mode") == "generator"
+        e = None if (p is None or loss is None) else (p - loss if gen else p + loss)
+        eta = ((e / net if gen else net / e) if (e is not None and net is not None and e > 0 and net > 0) else 0.0)
+        out.update(torque_nm=_r(_num(run.get("T_em_avg_Nm"))),
+                   power_kw=_r(p / 1000.0) if p is not None else None,
+                   efficiency_shaft_pct=_r(100.0 * eta, 2) if (e is not None and net is not None) else None,
+                   shaft_conv=1, torque_basis="2-D field", power_basis="shaft before bearings/windage")
     return out
 
 

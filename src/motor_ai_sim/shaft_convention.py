@@ -281,6 +281,18 @@ def coupling_power(summary: Mapping[str, Any]) -> Optional[float]:
     return p + _f(x) if str(summary.get("op_mode") or "") == "generator" else p - _f(x)
 
 
+def summary_from_compact(row: Optional[Mapping[str, Any]]) -> Dict[str, Any]:
+    """A summary-like dict from a compact stored EM row (``duty_results.compact_em_run``): its numbers, its text and the
+    shaft context it was filed with.  A row that says it is on this convention (``shaft_conv`` 1) but lacks the context
+    is returned EMPTY - it cannot be read on either convention, so the reader asks for a re-solve; it is never taken
+    for an earlier-convention row."""
+    r = row if isinstance(row, Mapping) else {}
+    s: Dict[str, Any] = {**(r.get("numbers") or {}), **(r.get("text") or {}), **(r.get("shaft_context") or {})}
+    if _f(s.get("shaft_conv")) == 1.0 and not has_marker(s):
+        return {}
+    return s
+
+
 def coupling_torque(summary: Mapping[str, Any]) -> Optional[float]:
     """The torque at the coupling of a marked summary (power / w): a motor's output, a
     generator's input; None without a marker, a power or a speed."""

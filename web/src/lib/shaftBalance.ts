@@ -75,17 +75,21 @@ export function shaftBalance(s: ShaftBalanceIn, extraW: number | null | undefine
   }
   const pRotor = Math.abs(pm);
   const lossEm = num(s.P_loss_total_W);
-  const pShaft = mechKnown ? (gen ? pRotor + x : Math.max(0, pRotor - x)) : pRotor;
+  // shaft-side convention: the net shaft power is SIGNED (0 < P < X leaves the shaft driven: P - X < 0, never clamped)
+  const signed = s.shaft_convention === 'fe_on_shaft_k3d_v1';
+  const net = pRotor - (x ?? 0);
+  const pShaft = mechKnown ? (gen ? pRotor + (x as number) : signed ? net : Math.max(0, net)) : pRotor;
   const pElec = lossEm != null ? (gen ? Math.max(0, pRotor - lossEm) : pRotor + lossEm) : null;
   const etaEm = pRotor > 0 && lossEm != null
     ? (gen ? Math.max(0, pRotor - lossEm) / pRotor : pRotor / (pRotor + lossEm))
     : num(s.efficiency);
   const etaShaft = !mechKnown || pElec == null ? null
-    : (gen ? (pShaft > 0 ? pElec / pShaft : 0) : (pElec > 0 ? pShaft / pElec : 0));
+    : (gen ? (pShaft > 0 ? pElec / pShaft : 0) : (pElec > 0 ? Math.max(0, pShaft) / pElec : 0));
   return {
     gen, mechKnown, pRotor, pShaft, pElec, lossEm,
     lossAll: mechKnown && lossEm != null ? lossEm + (x as number) : null,
     xMech: mechKnown && pRotor > 0 ? (x as number) / pRotor : null,
     etaEm, etaShaft, eta: etaShaft ?? etaEm,
+    ...(signed ? { noOutput: !gen && pShaft <= 0 } : {}),
   };
 }

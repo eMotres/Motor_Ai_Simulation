@@ -910,7 +910,8 @@ def _load(rec: Dict[str, Any], model: Dict[str, Any], die: str, config: str) -> 
         if d.get("shaft_conv") == 1:
             # shaft-side convention: the stored torque, power and efficiency already carry the 3-D factor (k on the
             # converted power, core loss on the shaft) - applied ONCE, never again here (shaft_convention)
-            kt_in, kt_src = kt, "applied once in the solve (shaft-side convention)"
+            # the run's OWN factor (shaft_k3d), never the current passport's; absent -> no k is quoted
+            kt_in, kt_src = num(d.get("shaft_k3d")), "applied once in the solve (shaft-side convention)"
             kt, kt_clause = None, "shaft-side convention: the 3-D factor is already in the stored shaft numbers"
         else:
             kt_in = kt

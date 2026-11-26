@@ -1503,7 +1503,9 @@ const SweepStudyPanel: React.FC = () => {
             </Typography>
           )}
           {(() => { const cs = new Set((result?.points || []).filter((q: any) => q?.feasible).map((q: any) => (q.shaft_convention === 'fe_on_shaft_k3d_v1' ? 1 : 0)));
-            return cs.size > 1 ? <Typography role="alert" sx={{ fontSize: 11, color: 'warning.main', mb: 0.5 }}>{tx('shaftConvMixed')}</Typography> : null; })()}
+            // a short label (the visible basis) with the explanation in its tooltip - no caption line (owner UI rules)
+            return cs.size > 1 ? <MuiTooltip title={tx('shaftConvMixed')}><Chip size="small" color="warning" variant="outlined"
+              data-testid="sweep-shaft-basis-mixed" label={`${tx('shaftConvCol')} †`} sx={{ mb: 0.5, cursor: 'help' }} /></MuiTooltip> : null; })()}
           <Box ref={chartBoxRef} onDoubleClick={() => setZoom(null)} sx={{ height: 340 }}>
             <ResponsiveContainer width="100%" height="100%">
               <ScatterChart margin={{ top: 8, right: 24, left: 8, bottom: 24 }}>

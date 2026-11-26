@@ -224,3 +224,19 @@ test('a variant whose duties carry two conventions has no average efficiency', a
   const mixed = { results: [{ comparison: { efficiency_pct: 90, shaft_conv: 1 } }, { comparison: { efficiency_pct: 95 } }] };
   assert.equal(G.averageEfficiency(mixed), null);
 });
+
+test('shaftBalance (r4 C2): a marked motor with 0 < P < X keeps the signed net, -14 W, efficiency 0', () => {
+  const b = B.shaftBalance({ shaft_convention: 'fe_on_shaft_k3d_v1', op_mode: 'motor', P_mech_W: 6, P_loss_total_W: 31 }, 20);
+  near(b.pShaft, -14, 'net'); near(b.pShaft / 100, -0.14, 'torque at 100 rad/s');
+  assert.equal(b.etaShaft, 0); assert.equal(b.noOutput, true);
+  const old = B.shaftBalance({ op_mode: 'motor', P_mech_W: 6, P_loss_total_W: 31 }, 20);
+  assert.equal(old.pShaft, 0); assert.equal(old.noOutput, undefined);
+});
+
+test('dutyLocalApply (r4 C5): a marked duty row without its summary is never rebuilt from requested targets', () => {
+  const src = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', 'dutyLocalApply.ts'), 'utf8');
+  const guard = src.indexOf('if (Number((rr as any).shaft_conv) === 1) {');
+  const fallback = src.indexOf('if (rr.efficiency_pct != null || dd.torque_nm != null) {');
+  assert.ok(guard > 0 && fallback > guard, 'the marked guard precedes the target fallback');
+  assert.ok(!src.includes("shaft_convention: 'fe_on_shaft_k3d_v1', T_shaft_Nm: T"), 'no marker is stamped on targets');
+});

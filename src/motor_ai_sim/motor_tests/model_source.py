@@ -33,7 +33,10 @@ def _summary_numbers(duty: Dict[str, Any], stored: Dict[str, Any]) -> Tuple[Dict
         return s, "saved"
     run = (stored or {}).get("em_run")
     if isinstance(run, dict) and isinstance(run.get("numbers"), dict) and run["numbers"]:
-        return {**run["numbers"], **(run.get("text") or {})}, "em_run"
+        # with the shaft context it was filed with; a marked row without it reads as nothing stored (re-solve)
+        from motor_ai_sim.shaft_convention import summary_from_compact
+        cs = summary_from_compact(run)
+        return (cs, "em_run") if cs else ({}, "")
     return {}, ""
 
 
@@ -214,7 +217,13 @@ def from_docs(die_doc: Dict[str, Any], cfg_doc: Dict[str, Any], stored_by_duty: 
         if magnet is None and card:
             magnet = mag
         temps = _temps(stored)
-        eff = num(s.get("efficiency_shaft")) or num(s.get("efficiency"))
+        # a marked duty's zero shaft efficiency (a driven shaft) is a value, not a missing one
+        if s.get("shaft_convention") == "fe_on_shaft_k3d_v1":
+            eff = num(s.get("efficiency_shaft"))
+            if eff is None:
+                eff = num(s.get("efficiency"))
+        else:
+            eff = num(s.get("efficiency_shaft")) or num(s.get("efficiency"))
         # DC link in, shaft out: the controller record's wall-to-shaft efficiency (inverter x motor), when stored
         ctrl = (stored or {}).get("controller")
         eff_sys = num(((ctrl or {}).get("efficiency") or {}).get("wall_to_shaft")) if isinstance(ctrl, dict) else None
@@ -235,6 +244,8 @@ def from_docs(die_doc: Dict[str, Any], cfg_doc: Dict[str, Any], stored_by_duty: 
                "connection": conn, "torque_nm": torque,
                "torque_kind": "shaft" if (p_shaft is not None or shaft_conv) else "em",
                "shaft_conv": shaft_conv,
+               # the factor the run itself applied (a marked duty only): the comparison quotes it, never today's passport
+               **({"shaft_k3d": num(s.get("shaft_k3d"))} if shaft_conv else {}),
                "eff_pct": None if eff is None else 100.0 * eff,
                "eff_system_pct": None if eff_sys is None else 100.0 * eff_sys, "winding_c": temps["winding_c"],
                "magnet_c": temps["magnet_c"], "temps_source": temps["source"], "magnet_temp_c": mag_t,

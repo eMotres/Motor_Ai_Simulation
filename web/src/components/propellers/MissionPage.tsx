@@ -3,12 +3,12 @@
  *  with the Kv chosen per propeller, stage 2 refines the best own propeller with the Designer's optimiser against the mission objective.
  *  A run is a job of the server's queue; the page polls its state.  Everything is an estimate and the page says so. */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Alert, Box, Button, Chip, CircularProgress, LinearProgress, MenuItem, Select, Table, TableBody, TableCell, TableHead, TableRow, Typography } from '@mui/material';
+import { Alert, Box, Button, Chip, CircularProgress, LinearProgress, MenuItem, Select, Table, TableBody, TableCell, TableHead, TableRow, Tooltip, Typography } from '@mui/material';
 import { useTranslation } from 'react-i18next';
 
 import { Panel } from './DesignerParts';
 import { BestCard, KvGrid, MCheck, MField, MotorPicker, ObjectiveChart, RefinedCard, ResultTable, RowDetails } from './MissionParts';
-import { DEFAULT_FORM, DRAFT_PREFIX, OBJECTIVES, buildBody, draftName, errorKey, motorKey, pickRow, sanitizeForm, serverFieldKey, sortRows, statusKey, validRunId } from '../../lib/propellerMission';
+import { DEFAULT_FORM, DRAFT_PREFIX, OBJECTIVES, buildBody, draftName, errorKey, motorKey, pdLow, pdShown, pickRow, sanitizeForm, serverFieldKey, sortRows, statusKey, validRunId, withPdHigh } from '../../lib/propellerMission';
 import type { MissionForm, SortKey } from '../../lib/propellerMission';
 import type { Vector } from '../../lib/propellerDesign';
 import * as api from '../../lib/propellerMissionApi';
@@ -26,6 +26,7 @@ export default function MissionPage() {
   const [form, setForm] = useState<MissionForm>(() => sanitizeForm(readView<unknown>(FORM_KEY, (v) => (v && typeof v === 'object' ? v : null))));
   const [opts, setOpts] = useState<api.MissionOptions | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [errorDetail, setErrorDetail] = useState<string>('');   // the server's own (English) text: only in the tooltip
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
   const [run, setRun] = useState<api.MissionRun | null>(null);
   const [runs, setRuns] = useState<api.RunSummary[]>([]);
@@ -45,7 +46,8 @@ export default function MissionPage() {
   const showError = useCallback((e: unknown) => {
     const err = e as { status?: number; message?: string };
     const text = String(err?.message ?? e);
-    setError(`${t(errorKey(err?.status ?? 0))}${text ? `: ${text}` : ''}`);
+    setError(t(errorKey(err?.status ?? 0)));
+    setErrorDetail(text);
     const key = serverFieldKey(text);
     if (key) setFieldErrors((f) => ({ ...f, [key]: 'range' }));
   }, [t]);
@@ -88,6 +90,8 @@ export default function MissionPage() {
   }, [refreshRuns, follow, showError]);
 
   const motor = useMemo(() => opts?.motors.find((m) => motorKey(m) === form.motorKey) ?? null, [opts, form.motorKey]);
+  // a remembered motor that is no longer offered (removed, access withdrawn) is cleared silently
+  useEffect(() => { if (opts && form.motorKey && !opts.motors.some((m) => motorKey(m) === form.motorKey)) setForm((f) => ({ ...f, motorKey: '' })); }, [opts, form.motorKey]);
   const preset = opts?.batteries[form.chemistry];
 
   const onRun = async () => {
@@ -143,7 +147,7 @@ export default function MissionPage() {
   return (
     <Box sx={{ p: 2, display: 'flex', flexDirection: 'column', gap: 1.25 }} data-testid="prop-mission">
       <Alert severity="info" sx={{ py: 0, fontSize: 12 }} data-testid="mission-note">{t('propMissionNote')}</Alert>
-      {error && <Alert severity="error" data-testid="mission-error" onClose={() => setError(null)}>{error}</Alert>}
+      {error && <Tooltip title={errorDetail} disableHoverListener={!errorDetail}><Alert severity="error" data-testid="mission-error" onClose={() => { setError(null); setErrorDetail(''); }}>{error}</Alert></Tooltip>}
       <Box sx={{ display: 'grid', gridTemplateColumns: { xs: 'minmax(0,1fr)', lg: 'minmax(340px, 0.9fr) minmax(0, 2fr)' }, gap: 1.25, alignItems: 'start' }}>
         <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.25, minWidth: 0 }}>
           <Panel title={t('propMissionMotor')} tip={t('propMissionMotorTip')}>
@@ -224,7 +228,7 @@ export default function MissionPage() {
             <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap', alignItems: 'flex-start' }}>
               <MCheck label={t('propMissionCatalogue')} tip={t('propMissionCatalogueTip')} checked={form.catalogue} onChange={(v) => set('catalogue', v)} />
               <MCheck label={t('propMissionOwn')} tip={t('propMissionOwnTip')} checked={form.own} onChange={(v) => set('own', v)} />
-              <MField label={t('propMissionPdRange')} tip={t('propMissionPdRangeTip')} value={form.pdRange} onChange={(v) => set('pdRange', v)} width={110} error={fe('pdRange')} />
+              <MField label={t('propMissionPdMax')} tip={t('propMissionPdMaxTip', { min: pdLow(form.pdRange) })} value={pdShown(form.pdRange)} onChange={(v) => set('pdRange', withPdHigh(form.pdRange, v))} width={110} error={fe('pdRange')} />
               <MField label={t('propMissionPdStep')} value={form.pdStep} onChange={(v) => set('pdStep', v)} width={90} error={fe('pdStep')} />
               <MField label={t('propMissionChords')} tip={t('propMissionChordsTip')} value={form.chords} onChange={(v) => set('chords', v)} width={120} error={fe('chords')} />
               <MField label={t('propMissionBlades')} tip={t('propMissionBladesTip')} value={form.blades} onChange={(v) => set('blades', v)} width={90} error={fe('blades')} />
@@ -262,7 +266,7 @@ export default function MissionPage() {
         </Box>
 
         <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.25, minWidth: 0 }}>
-          {run && run.status === 'failed' && <Alert severity="error">{t('propMissionRunFailed')}: {run.error}</Alert>}
+          {run && run.status === 'failed' && <Tooltip title={run.error ?? ''}><Alert severity="error">{t('propMissionRunFailed')}</Alert></Tooltip>}
           {run && run.status === 'interrupted' && <Alert severity="warning">{t('propMissionInterrupted')}</Alert>}
           {run && run.status === 'stopped' && !res && <Alert severity="info">{t('propMissionStoppedEarly')}</Alert>}
           {res && run && (

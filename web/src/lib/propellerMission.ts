@@ -125,6 +125,12 @@ export function buildBody(form: MissionForm, motors: MotorEntry[]): BuildResult 
   put('flight', 'tw_peak', 'twPeak'); put('flight', 'tip_mach', 'tipMach');
   put('candidates', 'pd_step', 'pdStep');
   put('refine', 'top_n', 'topN'); put('refine', 'pop', 'pop'); put('refine', 'generations', 'generations'); put('refine', 'seed', 'seed');
+  // relations between fields, checked before the request; an error on a field that is only in a tooltip goes to its visible field
+  const dMin = parseNumber(form.minD), dMax = parseNumber(form.maxD);
+  if (dMin !== null && dMax !== null && dMin > dMax && !errors.maxD) errors.maxD = 'order';
+  for (const [hidden, shown] of Object.entries(HIDDEN_FIELD)) {
+    if (errors[hidden]) { if (!errors[shown]) errors[shown] = errors[hidden]; delete errors[hidden]; }
+  }
   const range = parseRange(form.pdRange);
   if (!range || range[0] < 0.1 || range[1] > 1.5) errors.pdRange = 'range';
   const chords = list(form.chords);
@@ -143,6 +149,24 @@ export function buildBody(form: MissionForm, motors: MotorEntry[]): BuildResult 
   Object.assign(body.refine as object, { enabled: form.refine });
   body.objective = form.objective;
   return { ok: true, body };
+}
+
+/** Fields shown only in a tooltip (owner rule: one value on screen, the other bound in the tooltip) and the visible field that carries
+ *  their errors. */
+export const HIDDEN_FIELD: Record<string, keyof MissionForm> = { minD: 'maxD' };
+
+/** P/D: the screen shows ONE value, the upper bound of the grid (pdRange 'lo-hi' is kept as stored, the lower bound is in the tooltip). */
+export function pdShown(pdRange: string): string {
+  const r = parseRange(pdRange);
+  return r ? String(r[1]) : pdRange;
+}
+export function pdLow(pdRange: string): string {
+  const r = parseRange(pdRange);
+  return r ? String(r[0]) : '';
+}
+export function withPdHigh(pdRange: string, text: string): string {
+  const r = parseRange(pdRange);
+  return `${r ? r[0] : 0.25}-${text.trim()}`;
 }
 
 /** The form as it was remembered: only the known keys, each with the type of its default (a stale or edited store never injects anything). */
@@ -166,7 +190,7 @@ const SERVER_FIELDS: Record<string, keyof MissionForm> = {
   'kv.headroom': 'headroom', 'kv.turns_below': 'turnsBelow', 'kv.turns_above': 'turnsAbove', 'kv.coil_height_tol': 'coilTol', 'battery.cells_s': 'cells',
   'battery.capacity_ah': 'capacity', 'battery.usable': 'usable', 'battery.mass_kg': 'battMass', 'battery.v_nom': 'vNom', 'battery.v_min': 'vMin',
   'battery.v_max': 'vMax', 'battery.wh_per_kg': 'whKg', 'battery.r_cell_ohm_ah': 'rCell', 'battery.cont_current_A': 'battCurrent', 'airframe.dry_mass_kg': 'dryMass',
-  'airframe.payload_kg': 'payload', 'airframe.drag_area_m2': 'dragArea', 'airframe.max_diameter_in': 'maxD', 'airframe.min_diameter_in': 'minD',
+  'airframe.payload_kg': 'payload', 'airframe.drag_area_m2': 'dragArea', 'airframe.max_diameter_in': 'maxD', 'airframe.min_diameter_in': 'maxD',
   'airframe.air_temp_c': 'airTemp', 'airframe.altitude_m': 'altitude', 'airframe.avionics_W': 'avionics', 'flight.cruise_speed_ms': 'speedKmh',
   'flight.hover_share_pct': 'hoverShare', 'flight.tw_cont': 'twCont', 'flight.tw_peak': 'twPeak', 'flight.tip_mach': 'tipMach', 'candidates.pd_min': 'pdRange',
   'candidates.pd_max': 'pdRange', 'candidates.pd_step': 'pdStep', 'candidates.chords': 'chords', 'candidates.blades': 'blades', 'refine.top_n': 'topN',
@@ -206,7 +230,7 @@ export interface Point {
 export interface Failure { rule: string; detail: string }
 export interface CandidateResult {
   id: string; name: string; source: 'own' | 'catalogue'; prop_id?: string | null; D_in: number; pitch_ratio: number | null; pitch_in?: number | null;
-  chord_scale: number | null; blades: number | null; flags?: string[]; turns?: number; strip?: { thickness_mm: number; width_mm: number; stock_kg: number | null; check: boolean; low_stock: boolean };
+  chord_scale: number | null; blades: number | null; flags?: string[]; turns?: number | null; winding_known?: boolean; strip?: { thickness_mm: number | null; width_mm: number | null; stock_kg: number | null; check: boolean; low_stock: boolean; unknown?: boolean } | null;
   as_built?: boolean; kv_rpm_per_V?: number | null; checks?: Record<string, string>; curve?: { source: string | null; points: number; rpm_min: number | null; rpm_max: number | null };
   vector?: Record<string, number | string> | null; objectives: Partial<Record<Objective, number | null>>; objective_value: number | null;
   tw_cont?: number; tw_peak?: number; points?: { hover: Point | null; cruise: Point | null; hover_end?: Point | null; cruise_end?: Point | null }; failures: Failure[]; passed: boolean;
@@ -267,7 +291,7 @@ export function tableRow(r: CandidateResult): TableRow {
   const top = r.objectives.top_speed_ms;
   return {
     id: r.id, name: r.name, source: r.source, D_in: r.D_in, pitch: r.pitch_ratio, blades: r.blades, turns: r.turns ?? null,
-    strip: s ? `${s.thickness_mm} x ${s.width_mm}` : '', kv: r.kv_rpm_per_V ?? null, objective: r.objective_value,
+    strip: s && s.thickness_mm != null && s.width_mm != null ? `${s.thickness_mm} x ${s.width_mm}` : '', kv: r.kv_rpm_per_V ?? null, objective: r.objective_value,
     range_km: r.objectives.range_km ?? null, endurance_min: r.objectives.endurance_min ?? null,
     top_speed_kmh: top === null || top === undefined ? null : msToKmh(top), hover_g_per_w: r.objectives.hover_g_per_w ?? null,
     tw_cont: r.tw_cont ?? null, tw_peak: r.tw_peak ?? null, passed: r.passed, reasons: r.failures.map((f) => f.rule),
@@ -311,3 +335,9 @@ export function draftName(prefix: string, runId: string, rank: number): string {
 }
 
 export const DRAFT_PREFIX = 'mission';
+
+/** The strip of a result as text; null when the winding of the model is unknown (the server sends null sizes, never placeholders). */
+export function stripText(s: { thickness_mm: number | null; width_mm: number | null } | null | undefined): string | null {
+  if (!s || s.thickness_mm == null || s.width_mm == null) return null;
+  return `${s.thickness_mm} × ${s.width_mm} mm`;
+}

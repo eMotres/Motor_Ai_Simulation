@@ -175,3 +175,19 @@ t('statuses and errors map to translation keys; an unknown status never shows as
   assert.equal(M.serverFieldKey('candidates.pd_max must be at least pd_min'), 'pdRange');
   assert.equal(M.serverFieldKey('something else'), null);
 });
+
+test('second review: hidden-bound errors land on the visible field, order is checked, one P/D value on screen, unknown strip is empty', () => {
+  const motors = [{ id: 'cat_a', name: 'A', kind: 'full' }];
+  const r = M.buildBody({ ...M.DEFAULT_FORM, motorKey: 'cat_a', maxD: '9', minD: '10' }, motors);
+  assert.equal(r.ok, false);
+  assert.equal(r.errors.maxD, 'order');
+  assert.equal(r.errors.minD, undefined);
+  const r2 = M.buildBody({ ...M.DEFAULT_FORM, motorKey: 'cat_a', minD: 'x' }, motors);
+  assert.equal(r2.errors.maxD, 'number');
+  assert.equal(M.serverFieldKey('airframe.min_diameter_in must be at most max'), 'maxD');
+  assert.equal(M.pdShown('0.25-0.6'), '0.6');
+  assert.equal(M.pdLow('0.25-0.6'), '0.25');
+  assert.equal(M.withPdHigh('0.25-0.6', '0.5'), '0.25-0.5');
+  assert.equal(M.stripText({ thickness_mm: null, width_mm: null }), null);
+  assert.equal(M.stripText({ thickness_mm: 0.45, width_mm: 2.5 }), '0.45 × 2.5 mm');
+});

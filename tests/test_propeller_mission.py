@@ -373,6 +373,13 @@ class FakeBank:
         self._c = ctx
         self.options = [{"turns": 7, "strip": {"thickness_mm": 0.6, "width_mm": 2.5, "stock_kg": None, "check": False, "low_stock": False}, "as_built": True}]
         self.n0 = 7
+        self.winding_known = True
+
+    def shown_turns(self, t):
+        return t
+
+    def shown_strip(self, s):
+        return s
 
     def ctx(self, n):
         return self._c
@@ -599,3 +606,101 @@ def test_retention_keeps_the_last_100_and_delete_is_refused_while_running(stub, 
     with pytest.raises(ApiProblem) as e:
         pma.delete_run(rid_of(5))
     assert e.value.status == 409
+
+
+# ================================================================ second review (#922): loaded bus voltage, unknown winding
+def test_controller_bus_window_is_checked_at_the_loaded_voltage_not_the_open_circuit():
+    # the review's case: controller minimum 18.06 V; the open-circuit end voltage passes, the LOADED end voltage (~17.9 V) does not
+    cfg, ms = _ms()
+    ms["n_rot"] = 1
+    ms["avionics_W"] = 0.0
+    ms["pack"] = {**ms["pack"], "V_mean_open": 18.5, "V_end_open": 18.5, "R_pack_ohm": 0.05}
+    q = 200.0 / (2 * math.pi * 6000 / 60.0)
+    ctx = FakeCtx(eff=0.8)
+    ctx.drive = {"bus_v": {"min": 18.06, "nom": 22.2, "max": 30.0}}
+    sp = pm.solve_pack_point(ctx, ms, 6000.0, q, 5.0, "end")
+    assert not sp["ok"] and sp["reason"] == "drive_bus_window" and sp["last_V"] < 18.06
+    # a valid window passes at the same point
+    ctx.drive = {"bus_v": {"min": 16.0, "nom": 22.2, "max": 30.0}}
+    ok = pm.solve_pack_point(ctx, ms, 6000.0, q, 5.0, "end")
+    assert ok["ok"] and 16.0 < ok["pack"]["V_V"] < 18.5
+
+
+def test_open_circuit_pass_loaded_fail_fails_the_candidate_and_marks_the_check():
+    cfg, ms = _ms()
+    rows = _curve(0.3, 0.10, 0.045, 12000.0)
+    cand = {"id": "x", "name": "x", "source": "own", "D_in": 0.3 / 0.0254, "blades": 2, "rows": rows, "curve_source": "t"}
+    v_end_open = ms["pack"]["V_end_open"]
+    ctx = FakeCtx(v_ok=0.0)
+    ctx.drive = {"bus_v": {"min": v_end_open * 0.999, "nom": v_end_open, "max": ms["pack"]["S"] * 4.2}}   # open circuit just inside
+    res = pm.evaluate_candidate(cand, FakeBank(ctx), ms, cfg)
+    rules = {f["rule"] for f in res["failures"]}
+    assert not res["passed"] and res["checks"]["bus_window"] == "fail"
+    assert "hover_end_drive_bus_window" in rules or "drive_bus_window" in rules
+
+
+def test_unknown_winding_is_saved_as_null_never_as_placeholders(stub):
+    raw, _ = pma.load_raw_model("TEST DIE", "L1", ACCESS)
+    raw = {k: v for k, v in raw.items() if k != "winding"}
+    cfg = pma.validate(_body(kv={"mode": "as_built", "turns0": None, "strip_thickness0_mm": None, "strip_width_mm": None}))
+    res = pm.run_selection(cfg, raw)
+    r0 = res["results"][0]
+    assert r0["turns"] is None and r0["winding_known"] is False
+    assert r0["strip"]["thickness_mm"] is None and r0["strip"]["width_mm"] is None
+    w = res["winding"]
+    assert w["known"] is False and w["turns0"] is None and w["strip_thickness0_mm"] is None and w["strip_width_mm"] is None
+    assert all(o["turns"] is None for o in w["options"])
+    json.dumps(res)                                                            # serialisable as saved
+
+
+def test_progress_only_ended_records_count_in_retention_and_active_ones_never(stub, monkeypatch):
+    import os
+    folder = stub / "runs"
+    folder.mkdir()
+    for i in range(105):                                                       # e.g. cancelled while queued: progress files only
+        rid = "msn-%010x" % i
+        f = folder / (rid + ".progress.json")
+        f.write_text(json.dumps({"run_id": rid, "status": "queued"}))
+        os.utime(f, (1000 + i, 1000 + i))
+    active = "msn-%010x" % 0                                                   # the oldest is still an active job
+    monkeypatch.setattr(pma, "_effective", lambda rid, st: "queued" if rid == active else "stopped")
+    assert pma.prune(folder, 100) == 4
+    assert (folder / (active + ".progress.json")).exists()
+    assert len(list(folder.glob("msn-*.progress.json"))) == 101
+
+
+def test_a_failed_terminal_write_keeps_the_run_discoverable(stub, monkeypatch):
+    folder = stub / "runs"
+    real = pma._write_json
+
+    def flaky(path, doc):
+        if str(path).endswith(".run.json"):
+            raise OSError("disk full")
+        real(path, doc)
+    monkeypatch.setattr(pma, "_write_json", flaky)
+    monkeypatch.setattr(pma, "_effective", lambda rid, st: st)
+    cfg = pma.validate(_body())
+    raw, _ = pma.load_raw_model("TEST DIE", "L1", ACCESS)
+    head = {"run_id": "msn-00000000aa", "inputs": cfg}
+    pma._work("msn-00000000aa", folder, cfg, raw, head, 3)
+    assert not (folder / "msn-00000000aa.run.json").exists()
+    run = pma.get_run("msn-00000000aa")
+    assert run["status"] == "failed" and "terminal write failed" in run["error"]
+
+
+def test_a_refused_admission_does_not_prune_history(stub, monkeypatch):
+    import os
+    folder = stub / "runs"
+    folder.mkdir()
+    for i in range(100):
+        rid = "msn-%010x" % (0x100 + i)
+        f = folder / (rid + ".run.json")
+        f.write_text(json.dumps({"run_id": rid, "status": "done"}))
+        os.utime(f, (1000 + i, 1000 + i))
+
+    def refuse(*a, **k):
+        raise J.WorkerDraining("draining")
+    monkeypatch.setattr(pma._J, "run_job", refuse)
+    with pytest.raises(J.WorkerDraining):
+        pma.start_run(_body(), [], ACCESS)
+    assert len(list(folder.glob("msn-*.run.json"))) == 100

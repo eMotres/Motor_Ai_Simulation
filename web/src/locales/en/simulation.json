@@ -621,8 +621,6 @@
   "propMissionVMinTip": "Lowest cell voltage. Preset nominal {nom} V, maximum {max} V, minimum {min} V; the other voltages follow the chemistry preset.",
   "propMissionBattCurrent": "Battery current limit, A",
   "propMissionBattCurrentTip": "Continuous current the battery may deliver. Empty = not limited (the result then lists the check as unavailable).",
-  "propMissionPdRange": "P/D range",
-  "propMissionPdRangeTip": "Pitch to diameter ratio of the own family, from - to, for example 0.25-0.6.",
   "propMissionReset": "Reset",
   "propMissionDone": "Done",
   "propMissionPosition": "Queue position",
@@ -657,5 +655,12 @@
   "propMissionRule_cruise_end_headroom": "cruise at the end of discharge: voltage headroom",
   "propMissionRule_cruise_end_battery_current": "cruise at the end of discharge: battery current limit",
   "propMissionRule_hover_battery_current": "hover: battery current limit",
-  "propMissionRule_cruise_battery_current": "cruise: battery current limit"
+  "propMissionRule_cruise_battery_current": "cruise: battery current limit",
+  "propMissionFieldErr_order": "Larger than the smallest diameter needed",
+  "propMissionPdMax": "P/D, largest",
+  "propMissionPdMaxTip": "Largest pitch to diameter ratio of the own family grid. The smallest tried is {min}.",
+  "propMissionRule_hover_drive_bus_window": "hover: loaded voltage outside the controller bus window",
+  "propMissionRule_cruise_drive_bus_window": "cruise: loaded voltage outside the controller bus window",
+  "propMissionRule_hover_end_drive_bus_window": "hover at the end of discharge: loaded voltage outside the controller bus window",
+  "propMissionRule_cruise_end_drive_bus_window": "cruise at the end of discharge: loaded voltage outside the controller bus window"
 }

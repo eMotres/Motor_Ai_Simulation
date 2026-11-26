@@ -7,7 +7,7 @@ import { useTranslation } from 'react-i18next';
 
 import { fmt } from '../../lib/propellerDesign';
 import type { Geometry } from '../../lib/propellerDesignApi';
-import { chartData, motorGroups, motorKey, msToKmh, tableRow } from '../../lib/propellerMission';
+import { chartData, motorGroups, motorKey, msToKmh, stripText, tableRow } from '../../lib/propellerMission';
 import type { Alternative, CandidateResult, MotorEntry, Objective, Point, Refined, SortKey } from '../../lib/propellerMission';
 import { PlanformChart, ZoneTable } from './DesignerParts';
 import { Panel } from './DesignerParts';
@@ -48,9 +48,10 @@ export function CheckList({ checks }: { checks: Record<string, string> | undefin
   const bad = (v: string) => v === 'unverified' || v === 'unknown' || v === 'fail';
   return (
     <Box sx={{ mt: 1 }} data-testid="mission-checks">
-      <Typography sx={{ fontSize: 12, fontWeight: 600 }}>{t('propMissionChecks')}</Typography>
+      <Tooltip title={Object.values(checks).some(bad) ? t('propMissionChecksUnavailable') : ''}>
+        <Typography sx={{ fontSize: 12, fontWeight: 600, color: Object.values(checks).some(bad) ? 'var(--warn, #ed6c02)' : undefined }}>{t('propMissionChecks')}</Typography>
+      </Tooltip>
       <KvGrid items={Object.entries(checks).map(([k, v]) => [t(`propMissionCheck_${k}`, { defaultValue: k }), t(`propMissionCheckVal_${v}`, { defaultValue: v })] as [string, string])} />
-      {Object.values(checks).some(bad) && <Typography sx={{ fontSize: 11, color: 'var(--warn, #ed6c02)' }}>{t('propMissionChecksUnavailable')}</Typography>}
     </Box>
   );
 }
@@ -123,7 +124,7 @@ export function BestCard({ best, objective, seed }: { best: CandidateResult | nu
         <Typography sx={{ fontSize: 13 }}>{best.name}</Typography>
       </Box>
       <KvGrid testId="mission-best-cells" items={[['D, in', fmt(best.D_in, 1)], ['P/D', best.pitch_ratio != null ? fmt(best.pitch_ratio, 2) : null], [t('propMissionTurns'), best.turns ?? null],
-        [t('propMissionStrip'), s ? `${s.thickness_mm} × ${s.width_mm} mm` : null], ['Kv', best.kv_rpm_per_V != null ? fmt(best.kv_rpm_per_V, 0) : null],
+        [t('propMissionStrip'), stripText(s)], ['Kv', best.kv_rpm_per_V != null ? fmt(best.kv_rpm_per_V, 0) : null],
         [t('propMissionColTwC'), best.tw_cont != null ? fmt(best.tw_cont, 2) : null], [t('propMissionColTwP'), best.tw_peak != null ? fmt(best.tw_peak, 2) : null]]} />
       <CheckList checks={best.checks} />
     </Panel>
@@ -237,7 +238,11 @@ export function RowDetails({ row, alternatives }: { row: CandidateResult | null;
   return (
     <Panel title={`${t('propMissionDetails')}: ${row.name}`}>
       <Box data-testid="mission-details">
-        {row.failures.map((f, i) => <Alert key={i} severity="error" sx={{ py: 0, mb: 0.5, fontSize: 11 }}>{t(`propMissionRule_${f.rule}`, { defaultValue: f.rule })}: {f.detail}</Alert>)}
+        {row.failures.map((f, i) => (
+          <Tooltip key={i} title={f.detail ?? ''}>
+            <Alert severity="error" sx={{ py: 0, mb: 0.5, fontSize: 12 }}>{t(`propMissionRule_${f.rule}`, { defaultValue: f.rule })}</Alert>
+          </Tooltip>
+        ))}
         {row.strip && (row.strip.low_stock || row.strip.check) && (
           <Alert severity="warning" sx={{ py: 0, mb: 0.5, fontSize: 11 }}>
             {[row.strip.low_stock ? t('propMissionStripLow', { kg: row.strip.stock_kg }) : '', row.strip.check ? t('propMissionStripCheck') : ''].filter(Boolean).join(' ')}
@@ -301,7 +306,7 @@ export function RefinedCard({ refined, objective, geo, motorRadiusMm, onSave, sa
               <Chip size="small" color={(refined.gain_pct ?? 0) > 0 ? 'success' : 'default'} label={refined.gain_pct === null ? '-' : `${refined.gain_pct >= 0 ? '+' : ''}${fmt(refined.gain_pct, 1)} %`} data-testid="mission-gain" />
             </Box>
             {r && (
-              <KvGrid testId="mission-refined-cells" items={[[t('propMissionTurns'), r.turns ?? null], [t('propMissionStrip'), s ? `${s.thickness_mm} × ${s.width_mm} mm` : null],
+              <KvGrid testId="mission-refined-cells" items={[[t('propMissionTurns'), r.turns ?? null], [t('propMissionStrip'), stripText(s)],
                 ['Kv', r.kv_rpm_per_V != null ? fmt(r.kv_rpm_per_V, 0) : null], [t('propMissionColTwC'), r.tw_cont != null ? fmt(r.tw_cont, 2) : null],
                 [t('propMissionColTwP'), r.tw_peak != null ? fmt(r.tw_peak, 2) : null], [t('propMissionStage1'), fv(refined.seed_value)],
                 [t('propMissionEvaluated'), refined.n_evaluations], [t('propMissionFeasible'), refined.n_feasible], [t('propMissionPop'), refined.settings.pop], [t('propMissionGen'), refined.settings.generations]]} />

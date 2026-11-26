@@ -765,6 +765,8 @@ class MotorBank:
         if kv["mode"] == "free" and not (n0 and t0 and w0):
             raise MissionError("the model carries no winding data (turns, strip thickness and width): enter kv.turns0, "
                                "kv.strip_thickness0_mm and kv.strip_width_mm, or use kv.mode 'as_built'")
+        # unknown winding (as-built mode only): identity scaling inside, null in every result (review #922 E)
+        self.winding_known = bool(n0 and t0 and w0)
         self.n0 = int(n0 or 1)
         self.t0 = float(t0 or 1.0)
         self.w0 = float(w0 or 0.0)
@@ -778,6 +780,14 @@ class MotorBank:
             self.options = [{"turns": self.n0, "strip": {"thickness_mm": self.t0, "width_mm": self.w0, "stock_kg": None, "check": False,
                                                          "low_stock": False}, "as_built": True}]
         self._ctx: Dict[int, MotorCtx] = {}
+
+    def shown_turns(self, turns: Any) -> Optional[int]:
+        return int(turns) if self.winding_known and turns is not None else None
+
+    def shown_strip(self, strip: Optional[Mapping[str, Any]]) -> Optional[Dict[str, Any]]:
+        if strip is None:
+            return None
+        return dict(strip) if self.winding_known else {**strip, "thickness_mm": None, "width_mm": None, "unknown": True}
 
     def ctx(self, turns: int) -> MotorCtx:
         if turns not in self._ctx:
@@ -822,6 +832,11 @@ def solve_pack_point(ctx: MotorCtx, ms: Mapping[str, Any], rpm: float, q_Nm: flo
             return {"ok": False, "reason": "pack_cannot_deliver", "detail": "the pack cannot supply this power at %s of discharge" % which, "iterations": it}
         last = (mp, st)
         if abs(st["V_V"] - v) <= 1e-4 * max(v, 1.0):
+            bus = ctx.drive.get("bus_v")                         # the LOADED bus voltage against the controller's window (review #922 B)
+            if bus and not (bus["min"] * 0.999 <= st["V_V"] <= bus["max"] * 1.001):
+                return {"ok": False, "reason": "drive_bus_window",
+                        "detail": "loaded pack voltage %.2f V at %s of discharge is outside the controller's bus range %.2f-%.2f V"
+                                  % (st["V_V"], which, bus["min"], bus["max"]), "iterations": it, "last_V": st["V_V"]}
             return {"ok": True, "mp": mp, "pack": st, "V_used": v, "iterations": it}
         v = 0.5 * v + 0.5 * st["V_V"]
     return {"ok": False, "reason": "nonconverged", "detail": "motor and pack voltage did not converge in 40 iterations", "iterations": 40,
@@ -1039,7 +1054,9 @@ def evaluate_candidate(cand: Mapping[str, Any], bank: MotorBank, ms: Mapping[str
         pk_info = peak_headroom(ctx, rows, ms, cfg)
         held = bool(pk_info["held"])
     if not held:
-        if pk_info.get("reason") == "voltage_unverified":
+        if pk_info.get("reason") == "drive_bus_window":
+            _fail(failures, "drive_bus_window", "peak point: the loaded pack voltage at the end of discharge is outside the controller's bus range")
+        elif pk_info.get("reason") == "voltage_unverified":
             _fail(failures, "voltage_unverified", "the voltage check of this motor model is unverified: headroom cannot be asserted")
         else:
             _fail(failures, "headroom", "the peak point is not reachable with %.0f %% voltage headroom at the end-of-discharge voltage"
@@ -1064,7 +1081,8 @@ def evaluate_candidate(cand: Mapping[str, Any], bank: MotorBank, ms: Mapping[str
         if fp is None:
             continue
         if not fp["ok"]:
-            _fail(failures, name, fp.get("detail") or fp.get("reason") or "no point")
+            _fail(failures, name + "_drive_bus_window" if fp.get("reason") == "drive_bus_window" else name,
+                  fp.get("detail") or fp.get("reason") or "no point")
         else:
             for r in fp["reasons"]:
                 if r == "voltage_unverified":
@@ -1083,7 +1101,10 @@ def evaluate_candidate(cand: Mapping[str, Any], bank: MotorBank, ms: Mapping[str
     if fits is False:
         _fail(failures, "drive_bus_window", "the pack voltage window %.1f-%.1f V is outside the controller's bus range" % (pack_win["v_min"], pack_win["v_max"]))
     demag = {bool(fp.get("demag_known")) for fp in (hov, cru, hov_end, cru_end) if fp and fp.get("ok")}
-    checks = {"voltage": level, "bus_window": "unknown" if fits is None else ("ok" if fits else "fail"),
+    loaded_bus_fail = any(fp is not None and not fp.get("ok") and fp.get("reason") == "drive_bus_window" for fp in (hov, cru, hov_end, cru_end)) \
+        or pk_info.get("reason") == "drive_bus_window"
+    bus_state = "unknown" if fits is None else ("ok" if fits and not loaded_bus_fail else "fail")
+    checks = {"voltage": level, "bus_window": bus_state,
               "board_current": "set" if ctx.board_cap_A is not None else "unknown", "battery_current": "set" if ms.get("batt_cont_A") else "unknown",
               "demagnetisation": "known" if (demag and all(demag)) else "unknown"}
 
@@ -1114,7 +1135,8 @@ def evaluate_candidate(cand: Mapping[str, Any], bank: MotorBank, ms: Mapping[str
     strip = opt["strip"]
     points = {"hover": hov.get("point") if hov["ok"] else None, "cruise": cru["point"] if (cru and cru["ok"]) else None,
               "hover_end": hov_end.get("point") if hov_end["ok"] else None, "cruise_end": cru_end["point"] if (cru_end and cru_end["ok"]) else None}
-    return {**base, "turns": int(opt["turns"]), "strip": strip, "as_built": bool(opt.get("as_built")), "k": ctx.k, "copper_f": ctx.f,
+    return {**base, "turns": bank.shown_turns(opt["turns"]), "strip": bank.shown_strip(strip), "as_built": bool(opt.get("as_built")),
+            "winding_known": bank.winding_known, "k": ctx.k, "copper_f": ctx.f,
             "kv_rpm_per_V": ctx.kv, "R_phase_ohm": ctx.m["R_phase_ohm"], "board_cap_A": ctx.board_cap_A,
             "objectives": obj, "objective_value": value, "tw_cont": tw_cont, "tw_peak": tw_peak, "limits": lim, "peak_point": pk_info,
             "points": points, "best_speed": {"range": scan["best_range"], "endurance": scan["best_endurance"]}, "checks": checks,
@@ -1478,7 +1500,9 @@ def run_selection(cfg: Mapping[str, Any], raw_model: Mapping[str, Any], *, stock
         stopped = True                                           # a stop that came too late to cut anything: complete results, terminal state stopped
     return {"version": MODEL_VERSION, "note": NOTE, "inputs": cfg, "refined": refined,
             "mission": {"mass_kg": ms["mass_kg"], "weight_N": ms["W_N"], "rho_kg_m3": ms["rho"], "pack": ms["pack"], "rotors": ms["n_rot"]},
-            "winding": {"turns0": bank.n0, "strip_thickness0_mm": bank.t0, "strip_width_mm": bank.w0, "kv_bench_rpm_per_V": bank.kv_bench,
-                        "options": [{"turns": o["turns"], "strip": o["strip"]} for o in bank.options]},
+            "winding": {"known": bank.winding_known, "turns0": bank.shown_turns(bank.n0),
+                        "strip_thickness0_mm": bank.t0 if bank.winding_known else None, "strip_width_mm": bank.w0 if bank.winding_known else None,
+                        "kv_bench_rpm_per_V": bank.kv_bench,
+                        "options": [{"turns": bank.shown_turns(o["turns"]), "strip": bank.shown_strip(o["strip"])} for o in bank.options]},
             "results": ranked, "alternatives": alternatives, "counts": {"total": total, "done": done, "passed": sum(1 for r in results if r.get("passed"))},
             "stopped": stopped, "stopped_stage": stage if stopped else None, "complete": stage == "done", "provenance": prov}

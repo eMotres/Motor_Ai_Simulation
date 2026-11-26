@@ -15,13 +15,14 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import os
 import re
 import shutil
 import time
 import uuid
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from motor_ai_sim import jobs as _J
 from motor_ai_sim import motor_access as ma
@@ -29,6 +30,8 @@ from motor_ai_sim import propeller_mission as pm
 from motor_ai_sim import propeller_s1 as s1
 from motor_ai_sim import workspace
 from motor_ai_sim.propeller_design_api import ApiProblem
+
+log = logging.getLogger(__name__)
 
 RUN_SCHEMA = "propeller-mission-run-2"
 RUN_KIND = "propeller_mission"
@@ -170,15 +173,34 @@ def _remove_run(folder: Path, run_id: str) -> None:
     shutil.rmtree(folder / (run_id + ".opt"), ignore_errors=True)
 
 
+def _terminal_runs(folder: Path) -> List[Tuple[float, str]]:
+    """``(mtime, run_id)`` of every ENDED run of the folder, one per run id: a ``.run.json``, or a progress-only record whose effective state
+    is terminal (stopped / interrupted / failed: cancelled while queued, a restart, a failed terminal write).  Active jobs are excluded."""
+    seen: Dict[str, float] = {}
+    for f in folder.glob("msn-*.run.json"):
+        seen[f.name[: -len(".run.json")]] = f.stat().st_mtime
+    for f in folder.glob("msn-*.progress.json"):
+        rid = f.name[: -len(".progress.json")]
+        if rid in seen:
+            continue
+        try:
+            st = str(json.loads(f.read_text(encoding="utf-8")).get("status"))
+        except (OSError, ValueError):
+            st = "failed"
+        if _effective(rid, st) in ("stopped", "interrupted", "failed"):
+            seen[rid] = f.stat().st_mtime
+    return sorted((t, rid) for rid, t in seen.items())
+
+
 def prune(folder: Path, keep: int = KEEP_RUNS) -> int:
-    """Retention: keep the newest ``keep`` finished runs of the workspace, remove the oldest (files and optimiser records).  A run that is
-    still queued or running has no ``.run.json`` and is never removed.  Returns how many were removed."""
+    """Retention: keep the newest ``keep`` ENDED runs of the workspace (stored runs and terminal progress-only records, review #922 A),
+    remove the oldest (files and optimiser records).  A queued or running job is never counted or removed.  Returns how many were removed."""
     if not folder.is_dir():
         return 0
-    done = sorted(folder.glob("msn-*.run.json"), key=lambda f: (f.stat().st_mtime, f.name))
-    old = done[: max(0, len(done) - int(keep))]
-    for f in old:
-        _remove_run(folder, f.name[: -len(".run.json")])
+    ended = _terminal_runs(folder)
+    old = ended[: max(0, len(ended) - int(keep))]
+    for _, rid in old:
+        _remove_run(folder, rid)
     return len(old)
 
 
@@ -200,8 +222,7 @@ def start_run(body: Any, cards: List[Dict[str, Any]], access: Dict[str, Any], *,
         raise ApiProblem(422, str(exc))
     _J.require_solve_allowed()
     _J.require_agreement_at_simulation()
-    folder = _runs_dir()
-    prune(folder, KEEP_RUNS - 1)              # room for the new one
+    folder = _runs_dir()                      # no pruning before admission: a refused job must not cost stored history (review #922 A)
     run_id = _J.new_run_id("msn")
     head = {"schema": RUN_SCHEMA, "run_id": run_id, "created_utc": _utc(), "inputs": cfg, "motor": motor, "version": pm.MODEL_VERSION, "s1_schema": s1.SCHEMA}
     _write_json(folder / (run_id + ".progress.json"), {**head, "status": "queued", "done": 0, "total": total, "line": "queued", "updated_at": _utc()})
@@ -237,15 +258,20 @@ def _work(run_id: str, folder: Path, cfg: Dict[str, Any], raw: Dict[str, Any], h
         doc = {**head, "status": "stopped" if res.get("stopped") else "done", "elapsed_s": round(time.time() - t0, 1), "finished_utc": _utc(), "result": res}
     except Exception as exc:                                            # noqa: BLE001 - the run is stored as failed with the reason
         doc = {**head, "status": "failed", "elapsed_s": round(time.time() - t0, 1), "finished_utc": _utc(), "error": "%s: %s" % (type(exc).__name__, exc)}
-    finally:
-        pass
     try:
         _write_json(folder / (run_id + ".run.json"), doc)
-    finally:
+    except Exception as exc:                                            # noqa: BLE001 - keep the run discoverable: the progress file says why
+        log.warning("mission %s: terminal write failed", run_id, exc_info=True)
         try:
-            prog.unlink()
-        except OSError:
+            _write_json(prog, {**head, "status": "failed", "done": None, "total": total, "line": "terminal write failed",
+                               "error": "terminal write failed: %s: %s" % (type(exc).__name__, exc), "updated_at": _utc()})
+        except Exception:                                               # noqa: BLE001
             pass
+        return
+    try:
+        prog.unlink()                                                   # only after the terminal file is in place
+    except OSError:
+        pass
     prune(folder, KEEP_RUNS)
 
 
@@ -306,7 +332,11 @@ def list_runs() -> Dict[str, Any]:
     """Stored and running mission runs of the caller's workspace, newest first (summary only)."""
     folder = _runs_dir()
     out: List[Dict[str, Any]] = []
-    for f in sorted(folder.glob("msn-*.json")) if folder.is_dir() else []:
+    files = sorted(folder.glob("msn-*.json")) if folder.is_dir() else []
+    stored = {f.name[: -len(".run.json")] for f in files if f.name.endswith(".run.json")}
+    for f in files:
+        if f.name.endswith(".progress.json") and f.name[: -len(".progress.json")] in stored:
+            continue                                                    # one row per run: the stored run wins
         try:
             j = json.loads(f.read_text(encoding="utf-8"))
         except (OSError, ValueError):

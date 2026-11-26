@@ -44,7 +44,7 @@ def allowed_addresses() -> set:
     out = {default_owner()}
     try:
         from motor_ai_sim import auth as A
-        out |= {e.lower() for e in A._ADMIN_EMAILS}
+        out |= {e.lower() for e in A._ADMIN_EMAILS if A.allowlist_elevates(e)}   # a stored factory (oem) or disabled address is not an admin recipient
     except Exception:                                        # noqa: BLE001
         pass
     try:

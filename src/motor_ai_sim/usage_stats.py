@@ -209,8 +209,9 @@ def account_attrs(email: str, registry: Optional[Dict[str, Dict[str, Any]]] = No
     reg = registry if registry is not None else _registry()
     u = reg.get(e) or {}
     try:
-        from motor_ai_sim.auth import _ADMIN_EMAILS, ADMIN_OWNER
-        is_admin = e in _ADMIN_EMAILS or e == (ADMIN_OWNER or "").lower() or u.get("role") == "admin"
+        from motor_ai_sim.auth import _ADMIN_EMAILS, ADMIN_OWNER, allowlist_elevates
+        is_admin = ((e in _ADMIN_EMAILS and allowlist_elevates(e, u or {}))
+                    or e == (ADMIN_OWNER or "").lower() or u.get("role") == "admin")
     except Exception:                                   # noqa: BLE001
         is_admin = u.get("role") == "admin"
     return {"role": "admin" if is_admin else ("engineer" if u.get("role") == "engineer" else "user"),

@@ -95,7 +95,10 @@ def _check_role_change(users: dict, email: str, new_role: str) -> None:
     if (users.get(email) or {}).get("role") != "admin":
         return
     others = [e for e, r in users.items() if e != email and r.get("role") == "admin" and not r.get("disabled")]
-    others += [e for e in _auth._ADMIN_EMAILS if e != email and e not in others]
+    # an allowlisted address is a backup admin only while its loaded record is neither disabled nor a factory (oem) identity
+    # (the registry snapshot under the lock; a listed address without a record counts, as before)
+    others += [e for e in _auth._ADMIN_EMAILS if e != email and e not in others
+               and not (users.get(e) or {}).get("disabled") and (users.get(e) or {}).get("role") != "oem"]
     if not others:
         raise RoleProtected("this is the last admin; make another account admin first")
 

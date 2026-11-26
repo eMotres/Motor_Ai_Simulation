@@ -239,11 +239,30 @@ def principal_is_admin(email: str) -> bool:
     try:                                    # a read-only look: never provision an account from a permission question
         from motor_ai_sim import users as _users
         rec = _users._load().get(ident)
-    except Exception:                       # noqa: BLE001 - unreadable registry = not an admin (fail closed), the allowlist as before
-        return ident in _ADMIN_EMAILS
-    if ident in _ADMIN_EMAILS:              # the allowlist raises a tier, but a stored factory (oem) identity is never elevated
-        return not (isinstance(rec, dict) and str(rec.get("role") or "") == "oem")
-    return bool(rec) and str(rec.get("role") or "") == "admin" and not rec.get("disabled")
+    except Exception:                       # noqa: BLE001 - an unreadable registry cannot prove an admin: fail CLOSED (never the allowlist alone)
+        return False
+    if isinstance(rec, dict) and (rec.get("disabled") or str(rec.get("role") or "") == "oem"):
+        return False                        # a disabled or stored factory (oem) identity is never an admin, listed or not
+    if ident in _ADMIN_EMAILS:              # the allowlist raises a tier (a missing record is the owner's own, as before)
+        return True
+    return isinstance(rec, dict) and str(rec.get("role") or "") == "admin"
+
+
+def allowlist_elevates(email: str, rec=None) -> bool:
+    """Does ``ADMIN_EMAILS`` raise this address to admin?  Only when its stored record is not a disabled or factory (oem)
+    identity: the allowlist raises a tier, it never re-enables an account and never turns a factory identity into staff.
+    ``rec`` is the stored record when the caller already holds it; otherwise it is read once, and an unreadable registry
+    answers False (the helper is for labels, counts, quotas and recipients, never a way in)."""
+    ident = (email or "").strip().lower()
+    if not ident or ident not in _ADMIN_EMAILS:
+        return False
+    if rec is None:
+        try:
+            from motor_ai_sim import users as _users
+            rec = _users._load().get(ident)
+        except Exception:                   # noqa: BLE001
+            return False
+    return not (isinstance(rec, dict) and (rec.get("disabled") or str(rec.get("role") or "") == "oem"))
 
 
 def solve_refusal_body(your_role: str = "") -> dict:
@@ -730,44 +749,35 @@ def _registry_role(email: str, fallback: str = "user", fail_closed: bool = False
     a file lock.  On a read failure we keep the tier the caller already proved
     (the `fallback`, which for a verified token is its own claim) and provision
     nothing."""
-    if email and email in _ADMIN_EMAILS:
-        # the allowlist raises a tier, it never re-enables an account: a DISABLED record stays disabled (also on the raw Google path),
-        # and a stored factory (oem) identity is never elevated: it keeps its role below
-        stored_oem = False
-        try:
-            from motor_ai_sim import users as _u
-            rec = _u._load().get(email.strip().lower())
-            if isinstance(rec, dict) and rec.get("disabled"):
-                return "__disabled__"
-            stored_oem = isinstance(rec, dict) and str(rec.get("role") or "") == "oem"
-        except Exception:                                   # noqa: BLE001
-            if fail_closed:
-                return "__unavailable__"            # cannot tell whether the allowlisted account is disabled
-        if not stored_oem:
-            return "admin"
+    ident = (email or "").strip().lower()
+    allowed = bool(ident) and ident in _ADMIN_EMAILS
     try:
         from motor_ai_sim import users as _users
+        store = _users._load()
+    except Exception as e:                                  # noqa: BLE001
+        logger.error("auth: registry unreadable while resolving the tier of "
+                     "%r (%s: %s) — keeping %r, provisioning nothing",
+                     email, type(e).__name__, e, fallback)
+        # never an unchecked allowlist elevation: the allowlist cannot tell a disabled or factory (oem) account
+        return "__unavailable__" if fail_closed else fallback
+    u = store.get(ident) if ident else None
+    if isinstance(u, dict):
+        # one snapshot, in this order: disabled, then a stored factory (oem) identity (never elevated), then the allowlist
+        if u.get("disabled"):
+            return "__disabled__"
+        if str(u.get("role") or "") == "oem":
+            return "oem"
+        if allowed:
+            return "admin"
+        return u.get("role", fallback)
+    if allowed:
+        return "admin"                                      # a listed address without a record is the owner's own
+    if email:
         try:
-            store = _users._load()
-        except Exception as e:
-            logger.error("auth: registry unreadable while resolving the tier of "
-                         "%r (%s: %s) — keeping %r, provisioning nothing",
-                         email, type(e).__name__, e, fallback)
-            return "__unavailable__" if fail_closed else fallback
-        u = store.get((email or "").strip().lower())
-        if u is None and email:
-            try:
-                import secrets as _sec
-                _users.create_user(email, _sec.token_hex(16), role=fallback)
-            except Exception:
-                pass
-            return fallback
-        if u is not None:
-            if u.get("disabled"):
-                return "__disabled__"
-            return u.get("role", fallback)
-    except Exception:
-        pass
+            import secrets as _sec
+            _users.create_user(email, _sec.token_hex(16), role=fallback)
+        except Exception:                                   # noqa: BLE001
+            pass
     return fallback
 
 
@@ -1100,9 +1110,9 @@ def agent_user_for(email: str) -> Optional[dict]:
     ident = (email or "").strip().lower()
     if not ident or ident == ADMIN_OWNER:
         return {}
-    role = _registry_role(ident)
-    if role == "__disabled__":
-        return None
+    role = _registry_role(ident, fail_closed=True)
+    if role in ("__disabled__", "__unavailable__"):
+        return None                                         # disabled, or the registry cannot be read: never an elevated principal
     return {"uid": ident, "email": ident, "role": role}
 
 

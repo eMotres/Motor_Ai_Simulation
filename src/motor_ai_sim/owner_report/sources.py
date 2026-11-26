@@ -63,7 +63,7 @@ def side_of(email: str) -> str:
         return ""
     try:
         from motor_ai_sim import auth as A
-        if email in A._ADMIN_EMAILS:
+        if A.allowlist_elevates(email):
             return "staff"
     except Exception:                                        # noqa: BLE001
         pass

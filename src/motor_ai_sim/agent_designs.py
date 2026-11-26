@@ -895,7 +895,7 @@ def daily_limit(p: Principal) -> Optional[int]:
     email = (p.email or "").strip().lower()
     extra = {e.strip().lower() for e in os.environ.get("MCP_SIMULATE_UNLIMITED", "").split(",")
              if e.strip()}
-    if email in extra or email == _auth.ADMIN_OWNER or email in _auth._ADMIN_EMAILS:
+    if email in extra or email == _auth.ADMIN_OWNER or _auth.allowlist_elevates(email):
         return None
     try:
         return max(0, int(os.environ.get("MCP_SIMULATE_PER_DAY", "5")))

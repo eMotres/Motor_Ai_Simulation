@@ -920,8 +920,11 @@ def subject_may_see_full_construction(email: Optional[str]) -> bool:
         from motor_ai_sim import users as _U
         rec = _U.get_user(ident) or {}
         admins = getattr(_auth, "_ADMIN_EMAILS", None) or set()
-        is_admin = (ident in {str(a).strip().lower() for a in admins}
-                    or str(rec.get("role") or "") == "admin")
+        # the allowlist raises a tier, but a stored factory (oem) or disabled identity is never an admin (the hardened
+        # predicate of auth.principal_is_admin, without its unconfigured-local-dev shortcut): an OEM keeps only its own grants
+        barred = bool(rec.get("disabled")) or str(rec.get("role") or "") == "oem"
+        is_admin = (not barred) and (ident in {str(a).strip().lower() for a in admins}
+                                     or str(rec.get("role") or "") == "admin")
         return may_see_full_construction(identity={"id": ident,
                                                    "is_admin": is_admin})
     except Exception:  # noqa: BLE001

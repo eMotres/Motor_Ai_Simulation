@@ -1069,7 +1069,9 @@ def google_login(req: GoogleReq, request: Request):
     topics = _comm_prefs_ticked(req.comm_prefs) if first_sign_in else {}
     if first_sign_in:
         _require_terms(req)                                          # BEFORE _registry_role: that call provisions the account
-    role = _registry_role(email)
+    role = _registry_role(email, fail_closed=True)
+    if role == "__unavailable__":                            # the registry cannot be read: no session, no link, try again
+        raise HTTPException(503, detail="auth store busy", headers={"Retry-After": "2"})
     if role == "__disabled__":
         raise HTTPException(403, detail="this account is disabled")
     # Same address by password and by Google = one account.  Google's proof

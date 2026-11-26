@@ -12,6 +12,11 @@ The CONTINGENCY is folded into the prices and never named: each line is ``line x
 the iterations are rounded the same way and the largest one adjusted so they sum exactly to the rounded total; inside
 each iteration the largest line is adjusted so the lines sum exactly to the iteration price.
 
+The NEXT UNIT (owner 2026-11-22) is one more figure, ``next_unit: {price, weeks}`` (a repeat order of the same motor: one motor's
+manufacturing + testing when ticked + shipping of one motor, the contingency folded in like everywhere), and ``excluded`` says that
+duties and import VAT are not included (DAP).  Both are ``None`` for a snapshot whose estimate has no computable next unit, so a quote
+shared before this change reads exactly as it did.
+
 Never sent: notes, hints, sources and source references (DHL lane, analog production, weight basis), factors, percentages,
 who/when per line, manual exchange rates, DHL lanes, analog or BOM references, the revision history, other snapshots."""
 from __future__ import annotations
@@ -22,11 +27,15 @@ from typing import Any, Dict, List, Optional
 from motor_ai_sim.development import cost_estimate as CE
 
 QUOTE_KEYS = ("currency", "iterations", "total_price", "total_weeks", "exchange_rates", "delivery", "payment_terms",
-              "shared_on")
+              "shared_on", "next_unit", "excluded")
+#: the payload of a snapshot frozen BEFORE the next unit existed (``terms`` 1, also a snapshot without the mark): exactly the old whitelist
+QUOTE_KEYS_V1 = ("currency", "iterations", "total_price", "total_weeks", "exchange_rates", "delivery", "payment_terms", "shared_on")
+NEXT_UNIT_KEYS = ("price", "weeks")
 ITERATION_KEYS = ("index", "motors", "bench", "lines", "price", "weeks")
 LINE_KEYS = ("price", "weeks")
 RATE_KEYS = ("date", "per_eur")
 CURRENCY = "EUR"
+TERMS = 2          # snapshot version: 2 = the DAP exclusion sentence follows the shipping amounts, not the next unit
 
 
 class QuoteError(ValueError):
@@ -98,8 +107,10 @@ def exchange_rates(fx: Optional[dict], schema: dict) -> Optional[dict]:
     return {"date": str(ecb.get("date") or "") or None, "per_eur": rates}
 
 
-def build_quote(estimate: dict, schema: dict, shared_on: str) -> dict:
-    """The customer payload of a frozen ``estimate`` (see the module doc).  ``QuoteError`` when a line has no amount."""
+def build_quote(estimate: dict, schema: dict, shared_on: str, terms: int = TERMS) -> dict:
+    """The customer payload of a frozen ``estimate`` (see the module doc).  ``QuoteError`` when a line has no amount.  ``terms`` is the
+    snapshot's version (``TERMS`` for a snapshot written now, 1 for one frozen before it existed): from version 2 on the quote says
+    that duties and import VAT are not included whenever it carries a shipping amount, next unit or not."""
     missing = missing_lines(estimate)
     if missing:
         raise QuoteError("%d line(s) without an amount" % len(missing))
@@ -117,9 +128,29 @@ def build_quote(estimate: dict, schema: dict, shared_on: str) -> dict:
             "index": int(it["index"]), "motors": int(it.get("motors") or 0), "bench": str(it.get("bench") or "none"),
             "lines": {lid: {"price": p, "weeks": _weeks(weeks.get(lid))} for lid, p in zip(CE.LINES, line_prices)},
             "price": price, "weeks": _weeks(weeks["total"])})
+    if terms < 2:                                       # an old shared quote keeps its old shape: no new key, whatever the estimate holds
+        quote = {"currency": CURRENCY, "iterations": out_iters, "total_price": total,
+                 "total_weeks": _weeks(sum(float(it["weeks"] or 0) for it in out_iters)),
+                 "exchange_rates": exchange_rates(estimate.get("fx"), schema), "delivery": delivery_text(settings),
+                 "payment_terms": str(settings.get("payment_terms") or ""), "shared_on": str(shared_on or "")[:10]}
+        assert tuple(quote) == QUOTE_KEYS_V1
+        return quote
+    stale = CE.stale_shipping_lines(estimate)
+    if stale:                                           # a new snapshot never carries freight computed for another destination / origin
+        raise QuoteError("a shipping line is out of date: %s" % stale[0]["reason"])
+    nu = CE.next_unit_of(estimate, schema)
+    next_unit = None
+    excluded = None
+    if nu["available"] and nu["total"] is not None:
+        next_unit = {"price": _whole(_dec(nu["total"]) * k), "weeks": _weeks(nu["weeks"])}
+        assert tuple(next_unit) == NEXT_UNIT_KEYS
+    if (nu["available"] and nu["total"] is not None) or (terms >= 2 and any(
+            ((it.get("lines") or {}).get("shipping") or {}).get("amount") for it in iterations)):
+        excluded = str(((schema.get("shipping") or {}).get("excluded") or {}).get("en") or "") or None
     quote = {"currency": CURRENCY, "iterations": out_iters, "total_price": total,
              "total_weeks": _weeks(sum(float(it["weeks"] or 0) for it in out_iters)),
              "exchange_rates": exchange_rates(estimate.get("fx"), schema), "delivery": delivery_text(settings),
-             "payment_terms": str(settings.get("payment_terms") or ""), "shared_on": str(shared_on or "")[:10]}
+             "payment_terms": str(settings.get("payment_terms") or ""), "shared_on": str(shared_on or "")[:10],
+             "next_unit": next_unit, "excluded": excluded}
     assert tuple(quote) == QUOTE_KEYS
     return quote

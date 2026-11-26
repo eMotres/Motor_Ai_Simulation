@@ -13,6 +13,10 @@ export interface ProjectQuote {
   /** units of each currency per 1 EUR (ECB reference rates of `date`); null = EUR only */
   exchange_rates: { date: string | null; per_eur: Record<string, number> } | null;
   delivery: string | null; payment_terms: string; shared_on: string;
+  /** the price of one more unit of the same motor (owner 2026-11-22): whole EUR with the contingency folded in; null = not part of this quote */
+  next_unit?: { price: number; weeks: number | null } | null;
+  /** "Duties and import VAT are not included." - present when the quote has a next unit (DAP) */
+  excluded?: string | null;
 }
 /** The admin's view of what is shared (cost estimate answer `shared`). */
 export interface SharedQuoteMark { snapshot_n: number; revision: number | null; shared_at: string; shared_by: string }

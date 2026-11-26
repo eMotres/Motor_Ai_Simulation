@@ -1215,6 +1215,8 @@
     "readinessTip": "已到货的装配零件。"
   },
   "customerQuote": {
+    "nextUnit": "下一台",
+    "nextUnitTip": "同一设计在首台之后再增加一台电机：无工装、无开发。",
     "col": {
       "iteration": "轮次",
       "motors": "电机",
@@ -1253,6 +1255,7 @@
       "statusTip": "项目成员在“报价”标签中看到这份冻结的副本。之后的修改在再次共享前不会显示。",
       "shareTip": "冻结当前版本，并作为报价向项目成员显示。",
       "confirm": "项目成员将看到第 {rev} 版作为报价：已含不可预见费的价格、周数、交货地点和付款条件。备注和来源仅内部可见。",
+      "ackShipping": "我确认：运费金额基于运费表估算（超出其校准点）。",
       "notShared": "未与客户共享"
     },
     "paymentTerms": "付款条件",
@@ -1310,7 +1313,25 @@
       "rule": "规则",
       "dhl": "DHL 报价"
     },
+    "nextUnit": {
+      "title": "下一台",
+      "tip": "首台之后再多一台电机的价格（重复订单：无工装、无开发）：一台电机的制造 + 勾选时的测试 + 一台电机的运费。填入数值可覆盖推算值。",
+      "manufacturing": "制造（一台）",
+      "testing": "含测试",
+      "shipping": "运费（一台，欧元）",
+      "auto": "自动",
+      "parcels": "包裹数（留空 = 一个）",
+      "box": "箱体（厘米；留空 = 按重量推算）",
+      "weeksMissing": "工期未知：缺少以下阶段的周数：{parts}",
+      "price": "价格（欧元）",
+      "priceTip": "推算值：{derived}。在此填写将替换推算价格。",
+      "weeks": "周数",
+      "total": "下一台（未含不可预见费）",
+      "unavailable": "暂时无法计算。",
+      "invalid": "数值无效，未保存"
+    },
     "origin": {
+      "dhlTable": "运费表 {date}，区域 {zone}（{basis}），{from}→{to}，计费重 {weight} kg，+{margin} %",
       "production": "取自生产 {ref}，按有效质量 ×{factor}",
       "estimate": "取自项目 {ref} 的估算，第 {iteration} 轮",
       "converted": "由旧的详细估算转换。{note}",
@@ -1394,6 +1415,18 @@
       "noRate": "没有 {currency} 汇率：合计仍为欧元。"
     },
     "dhl": {
+      "table": "运费表 {date}：区域 {zone}（{basis}），{parcels} 个包裹，计费重 {kg} kg（体积重 = 长×宽×高 / 5000），燃油附加 +{fuel} %，{days} 天。",
+      "postal": "邮编",
+      "perMotor": "每台电机 1 个",
+      "zoneBasis": {
+        "calibrated": "已按真实报价校准",
+        "estimate": "估算，尚无真实报价",
+        "extrapolated": "估算，由一份空运报价外推（快递没有单独报价）"
+      },
+      "service": {
+        "express": "快递",
+        "air_freight": "空运"
+      },
       "title": "运输（DHL）",
       "country": "国家（ISO）",
       "city": "城市",

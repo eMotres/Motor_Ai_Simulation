@@ -17,7 +17,7 @@ export type LineSource = 'production' | 'estimate' | 'manual' | 'converted' | 'r
 export type Bench = 'dyno' | 'propeller' | 'both' | 'none';
 export type Money = Record<string, number>;
 
-export interface CostField { id: string; type: 'bool' | 'int' | 'number' | 'enum' | 'text' | 'place'; min?: number; max?: number; options?: string[]; option_labels?: Record<string, Bilingual>; default?: unknown; label: Bilingual; help: Bilingual }
+export interface CostField { id: string; type: 'bool' | 'int' | 'number' | 'enum' | 'text' | 'place' | 'box'; min?: number; max?: number; options?: string[]; option_labels?: Record<string, Bilingual>; default?: unknown; label: Bilingual; help: Bilingual }
 export interface CostLineDef { id: LineId; label: Bilingual; help: Bilingual; per_motor?: boolean }
 /** One dated DHL quote: the shipping suggestion scales its price per kg to the shipment's weight. */
 export interface DhlLane {
@@ -39,6 +39,8 @@ export interface DhlRef {
   weight_kg?: number; margin_pct?: number; price?: number; rate?: number; motor_mass_kg?: number; mass_basis?: string; transit_days?: number; source?: string;
   /** the EUR price before it was rounded up to a multiple of `round_eur` (0 / absent = not rounded) */
   price_eur_unrounded?: number; round_eur?: number;
+  /** `rate_table` = the shipping rate table (zone, whether the zone is `calibrated` on a real quote or an `estimate`), else a real lane quote */
+  basis?: 'rate_table' | 'lane quote'; table_date?: string; zone?: string; zone_basis?: 'calibrated' | 'extrapolated' | 'estimate'; service?: string; chargeable_kg?: number; parcels?: number; fuel_pct?: number;
 }
 export interface SourceRef { production?: string; project?: string; title?: string; iteration?: string; analog_mass_kg?: number; target_mass_kg?: number; dhl?: DhlRef }
 export interface CostLine {
@@ -48,10 +50,12 @@ export interface CostLine {
   weeks?: number | null;
 }
 export interface CostIteration { index: number; motors: number; bench: Bench; lines: Record<LineId, CostLine>; weeks_override?: number | null }
-export interface ShipTo { country: string; city: string }
+export interface ShipTo { country: string; city: string; postal?: string }
 export interface CostSettings {
   complex: boolean; iterations: number; currency: string; contingency_pct: number; display_currency?: string | null; target_motor: { die: string; config: string } | null;
   ship_from?: string; ship_to?: ShipTo | null; ship_margin_pct?: number; ship_round_eur?: number;
+  /** the rate table's parcels (null = one per motor), box [L, W, H] cm (null = from the weight) and service (owner 2026-11-22) */
+  ship_parcels?: number | null; ship_box_cm?: [number, number, number] | null; ship_service?: 'express' | 'air_freight';
   /** one short EN line the customer sees with a shared quote (owner 2026-11-03) */
   payment_terms?: string; [key: string]: unknown;
 }
@@ -62,9 +66,17 @@ export interface CostFx {
   ecb: { date: string | null; rates: Record<string, number> } | null; manual: Record<string, number>; manual_date: string | null;
 }
 export interface FxStatus { state: 'ok' | 'stale' | 'none'; date: string | null; manual: string[]; error: string | null }
+/** The price of the NEXT unit (owner 2026-11-22): one motor's manufacturing + testing when ticked + shipping of one motor. `price` / `weeks` are the admin's overrides. */
+export type NextUnitField = 'include_testing' | 'price' | 'weeks' | 'note' | 'parcels' | 'box_cm' | 'shipping';
+export const NEXT_UNIT_FIELDS: NextUnitField[] = ['include_testing', 'price', 'weeks', 'note', 'parcels', 'box_cm', 'shipping'];
+export interface CostNextUnit { include_testing: boolean; price: number | null; weeks: number | null; shipping: CostLine; note: string; parcels: number | null; box_cm: number[] | null }
+export interface NextUnitResult {
+  available: boolean; reason: string; basis_iteration: number | null; include_testing: boolean; manufacturing: number | null; testing: number | null;
+  shipping: number | null; derived: number | null; total: number | null; weeks: number | null; overridden: boolean; currency: string; weeks_missing?: string[]; shipping_stale?: boolean;
+}
 export interface CostEstimate {
   version: number; schema_version: number; project_id: string; revision: number; settings: CostSettings; fx?: CostFx | null;
-  iterations: CostIteration[]; dhl_lanes?: DhlLane[]; migration: CostMigration | null; updated_at: string | null; updated_by: string | null;
+  iterations: CostIteration[]; dhl_lanes?: DhlLane[]; next_unit?: CostNextUnit; migration: CostMigration | null; updated_at: string | null; updated_by: string | null;
 }
 export interface LineResult { amount: Money | null; origin: string }
 export interface IterationResult {
@@ -83,6 +95,7 @@ export interface CostComputed {
   iterations: IterationResult[]; subtotal: Money; contingency_pct: number; contingency: Money; total: Money; currencies: string[];
   converted?: CostConverted; missing: MissingLine[]; missing_count: number; warnings: string[];
   weeks_total?: number; weeks_missing?: Array<{ iteration: number; line: LineId }>;
+  next_unit?: NextUnitResult;
 }
 export interface CostSnapshot { id: string; n: number; note: string; created_at: string; created_by: string; revision: number; parent: string | null; totals: { total: Money; converted?: CostConverted; missing_count: number; weeks_total?: number }; diff: Array<{ path: string; was: unknown; now: unknown }> }
 /** What Suggest WOULD put in an empty cell (a grey placeholder): an amount with its source, or why there is none; and a
@@ -316,6 +329,7 @@ export type FieldRef =
   | { kind: 'setting'; id: string }
   | { kind: 'iterField'; iteration: number; id: 'motors' | 'bench' | 'weeks_override' }
   | { kind: 'lanes' }
+  | { kind: 'nextUnit'; field: NextUnitField }
   | { kind: 'line'; iteration: number; line: LineId }
   | { kind: 'fx'; currency: string };
 
@@ -353,6 +367,17 @@ export function mergeEdits(synced: CostEstimate, mine: CostEstimate, latest: Cos
     return L;
   });
   if (edited(synced.dhl_lanes, mine.dhl_lanes, latest.dhl_lanes, { kind: 'lanes' })) merged.dhl_lanes = copy(mine.dhl_lanes);
+  // the next unit (owner 2026-11-22): field by field, like the iterations; an absent block on both sides stays absent.  An absent block
+  // is compared as the blank one, so an untouched field never overwrites another session's value.
+  if (synced.next_unit || mine.next_unit || latest.next_unit) {
+    const blank = blankNextUnit();
+    const S = synced.next_unit ?? blank, M = mine.next_unit ?? blank, Lt = latest.next_unit ?? blank;
+    for (const field of NEXT_UNIT_FIELDS) {
+      if (!edited(S[field], M[field], Lt[field], { kind: 'nextUnit', field })) continue;
+      merged.next_unit = merged.next_unit ?? copy(blank);
+      (merged.next_unit as unknown as Record<string, unknown>)[field] = copy(M[field]);
+    }
+  }
   for (const cur of new Set([...Object.keys(synced.fx?.manual ?? {}), ...Object.keys(mine.fx?.manual ?? {})])) {
     if (edited(synced.fx?.manual?.[cur], mine.fx?.manual?.[cur], latest.fx?.manual?.[cur], { kind: 'fx', currency: cur })) merged = setManualRate(merged, cur, mine.fx?.manual?.[cur] ?? null);
   }
@@ -377,6 +402,10 @@ export function fieldLabel(ref: FieldRef, schema: Pick<CostSchema, 'settings' | 
     return f ? txt(f.label, lang) : ship ? txt(ship.label, lang) : ref.id === 'target_motor' ? t('costEstimate.targetMotor') : ref.id === 'display_currency' ? t('costEstimate.displayCurrency') : ref.id === 'payment_terms' ? t('costEstimate.paymentTerms') : ref.id;
   }
   if (ref.kind === 'lanes') return t('costEstimate.dhl.lanes');
+  if (ref.kind === 'nextUnit') {
+    const key = ref.field === 'include_testing' ? 'testing' : ref.field === 'box_cm' ? 'box' : ref.field === 'note' ? 'title' : ref.field;
+    return `${t('costEstimate.nextUnit.title')}${key === 'title' ? '' : ` · ${t(`costEstimate.nextUnit.${key}`)}`}`;
+  }
   if (ref.kind === 'iterField' && ref.id === 'weeks_override') return `${it(ref.iteration)} · ${t('costEstimate.weeksOverride')}`;
   if (ref.kind === 'iterField') return `${it(ref.iteration)} · ${txt(schema.iteration_fields.find((x) => x.id === ref.id)?.label, lang) || ref.id}`;
   if (ref.kind === 'line') return `${it(ref.iteration)} · ${txt(schema.lines.find((x) => x.id === ref.line)?.label, lang) || ref.line}`;
@@ -511,6 +540,7 @@ export const suggestionAt = (s: CostSuggestions | null | undefined, ref: LineRef
 
 /** "DHL quote 2026-11-02, CN Shanghai→AR, 85 kg, +20 %" */
 export function dhlOrigin(d: DhlRef | undefined, t: T): string {
+  if (d?.basis === 'rate_table') return t('costEstimate.origin.dhlTable', { date: d.table_date ?? '?', zone: d.zone ?? '?', basis: t(`costEstimate.dhl.zoneBasis.${d.zone_basis ?? 'estimate'}`), from: d.from ?? '?', to: d.to ?? '?', weight: weeksText(d.chargeable_kg ?? null), margin: weeksText(d.margin_pct ?? 0) });
   return t('costEstimate.origin.dhl', { date: d?.quoted_on ?? '?', from: d?.from ?? '?', to: d?.to ?? '?', weight: weeksText(d?.weight_kg ?? null), margin: weeksText(d?.margin_pct ?? 0) });
 }
 /** The extra tooltip lines of a DHL suggestion: the weight and how it was made, the quote, and what is NOT included. */
@@ -518,7 +548,8 @@ export function dhlDetails(d: DhlRef | undefined, motors: number, t: T, excluded
   if (!d) return [excluded];
   const out: string[] = [];
   if (d.weight_kg !== undefined) out.push(t('costEstimate.dhl.weight', { weight: weeksText(d.weight_kg), motors, mass: weeksText(d.motor_mass_kg ?? null), basis: d.mass_basis ?? '' }));
-  if (d.lane_price !== undefined) out.push(t('costEstimate.dhl.quote', { price: String(Number(Number(d.lane_price).toFixed(2))), currency: d.currency ?? '', weight: weeksText(d.lane_weight_kg ?? null), days: d.transit_days ?? '—', mode: d.mode ?? '' }));
+  if (d.basis === 'rate_table') out.push(t('costEstimate.dhl.table', { date: d.table_date ?? '?', zone: d.zone ?? '?', basis: t(`costEstimate.dhl.zoneBasis.${d.zone_basis ?? 'estimate'}`), kg: weeksText(d.chargeable_kg ?? null), parcels: d.parcels ?? '?', fuel: weeksText(d.fuel_pct ?? 0), days: d.transit_days ?? '—' }));
+  else if (d.lane_price !== undefined) out.push(t('costEstimate.dhl.quote', { price: String(Number(Number(d.lane_price).toFixed(2))), currency: d.currency ?? '', weight: weeksText(d.lane_weight_kg ?? null), days: d.transit_days ?? '—', mode: d.mode ?? '' }));
   if (d.price_eur_unrounded !== undefined && Number(d.round_eur) > 0) out.push(t('costEstimate.dhl.rounded', { price: String(Number(Number(d.price_eur_unrounded).toFixed(2))), step: String(Number(d.round_eur)) }));
   out.push(excluded);
   return out;
@@ -529,14 +560,17 @@ export function dhlDetails(d: DhlRef | undefined, motors: number, t: T, excluded
 // preview endpoint (`/suggestions`, field `auto`) gives the same numbers at once so the cell changes the moment the motors do.
 
 /** The automatic DHL lines (filled, source `dhl`) of an estimate. */
+const isAutoLine = (l: CostLine | undefined): boolean => !!l && l.status === 'filled' && l.source === 'dhl';
+/** The iterations whose shipping is automatic DHL; 0 stands for the next unit's own shipping line. */
 export const autoDhlIterations = (e: CostEstimate): number[] =>
-  e.iterations.filter((it) => it.lines.shipping.status === 'filled' && it.lines.shipping.source === 'dhl').map((it) => it.index);
+  [...e.iterations.filter((it) => isAutoLine(it.lines.shipping)).map((it) => it.index), ...(isAutoLine(e.next_unit?.shipping) ? [0] : [])];
 
 /** What an automatic line depends on: refetch the preview only when this changes (amounts of the automatic lines are NOT part of it). */
 export function autoKey(e: CostEstimate): string {
   const s = e.settings;
-  return JSON.stringify([s.target_motor, s.ship_from, s.ship_to, s.ship_margin_pct, s.ship_round_eur, e.fx?.manual ?? {}, e.dhl_lanes ?? [],
-    e.iterations.map((it) => [it.index, it.motors, it.lines.shipping.status === 'filled' && it.lines.shipping.source === 'dhl'])]);
+  return JSON.stringify([s.target_motor, s.ship_from, s.ship_to, s.ship_margin_pct, s.ship_round_eur, s.ship_parcels, s.ship_box_cm, s.ship_service, e.fx?.manual ?? {}, e.dhl_lanes ?? [],
+    e.iterations.map((it) => [it.index, it.motors, it.lines.shipping.status === 'filled' && it.lines.shipping.source === 'dhl']),
+    isAutoLine(e.next_unit?.shipping), e.next_unit?.parcels ?? null, e.next_unit?.box_cm ?? null]);
 }
 
 /** Lay the server's recomputed automatic DHL lines over the estimate on screen.  Only a line that is still automatic is
@@ -547,14 +581,14 @@ export function applyAuto(e: CostEstimate, auto: Record<string, AutoCell> | unde
   let next: CostEstimate | null = null;
   for (const [key, cell] of Object.entries(auto)) {
     const idx = e.iterations.findIndex((it) => String(it.index) === key);
-    const cur = idx < 0 ? undefined : e.iterations[idx].lines.shipping;
+    const cur = key === 'next_unit' ? e.next_unit?.shipping : idx < 0 ? undefined : e.iterations[idx].lines.shipping;
     if (!cur || cur.status !== 'filled' || cur.source !== 'dhl') continue;
     const patch: Partial<CostLine> = { hint: cell.hint ?? '' };
     if (cell.amount !== null && cell.amount !== undefined) { patch.amount = cell.amount; patch.source_ref = cell.source_ref ?? null; patch.currency = 'EUR'; }
     if (cell.weeks !== null && cell.weeks !== undefined) patch.weeks = cell.weeks;
     if ((Object.keys(patch) as Array<keyof CostLine>).every((k) => same(cur[k], patch[k]))) continue;
     next = next ?? clone(e);
-    Object.assign(next.iterations[idx].lines.shipping, patch);
+    Object.assign(key === 'next_unit' ? next.next_unit!.shipping : next.iterations[idx].lines.shipping, patch);
   }
   return next ?? e;
 }
@@ -572,7 +606,39 @@ export function setDhlAuto(e: CostEstimate, ref: LineRef): CostEstimate {
 export function setShipTo(e: CostEstimate, country: string, city: string): CostEstimate {
   const next = clone(e);
   const c = country.trim().toUpperCase();
-  next.settings.ship_to = /^[A-Z]{2}$/.test(c) ? { country: c, city: city.trim().slice(0, 80) } : null;
+  const postal = e.settings.ship_to?.postal;
+  next.settings.ship_to = /^[A-Z]{2}$/.test(c) ? { country: c, city: city.trim().slice(0, 80), ...(postal ? { postal } : {}) } : null;
+  return next;
+}
+
+/** The postal code of the destination (kept with the country and the city). */
+export function setShipPostal(e: CostEstimate, postal: string): CostEstimate {
+  const next = clone(e);
+  const to = next.settings.ship_to;
+  if (to) next.settings.ship_to = { ...to, postal: postal.trim().slice(0, 20) };
+  return next;
+}
+
+export const blankNextUnit = (): CostNextUnit => ({
+  include_testing: false, price: null, weeks: null, note: '', parcels: null, box_cm: null,
+  shipping: { status: 'missing', amount: null, currency: 'EUR', pct: null, source: null, source_ref: null, factor: null, date: null, by: null, note: '', hint: '', weeks: null },
+});
+
+/** One field of the next-unit block (include_testing / price / weeks / note); the block is created when an older estimate has none. */
+export function setNextUnit(e: CostEstimate, patch: Partial<Omit<CostNextUnit, 'shipping'>>): CostEstimate {
+  const next = clone(e);
+  next.next_unit = { ...(next.next_unit ?? blankNextUnit()), ...patch };
+  return next;
+}
+
+/** The next unit's own shipping amount, typed by hand (source `manual`); null clears it. */
+export function setNextUnitShipping(e: CostEstimate, amount: number | null, today: string, who: string): CostEstimate {
+  const next = clone(e);
+  const nu = next.next_unit ?? blankNextUnit();
+  nu.shipping = amount === null
+    ? { ...nu.shipping, status: 'missing', amount: null, source: null, source_ref: null, hint: '' }
+    : { ...nu.shipping, status: 'filled', amount, currency: 'EUR', source: 'manual', source_ref: null, date: today, by: who, hint: '' };
+  next.next_unit = nu;
   return next;
 }
 export const shipToText = (s: ShipTo | null | undefined): string => (s?.country ? `${s.country}${s.city ? ` ${s.city}` : ''}` : '');
@@ -608,7 +674,7 @@ export function upsertLane(e: CostEstimate, lane: DhlLane, index: number | null,
  *  lanes, the manual rates, the motors / bench of each iteration, which cells are empty). */
 export function suggestionKey(e: CostEstimate): string {
   const s = e.settings;
-  return JSON.stringify([s.target_motor, s.ship_from, s.ship_to, s.ship_margin_pct, s.ship_round_eur, e.fx?.manual ?? {}, e.dhl_lanes ?? [],
+  return JSON.stringify([s.target_motor, s.ship_from, s.ship_to, s.ship_margin_pct, s.ship_round_eur, s.ship_parcels, s.ship_box_cm, s.ship_service, e.fx?.manual ?? {}, e.dhl_lanes ?? [],
     e.iterations.map((it) => [it.index, it.motors, it.bench, LINE_IDS.map((id) => [it.lines[id].status === 'missing', it.lines[id].weeks === null || it.lines[id].weeks === undefined])])]);
 }
 

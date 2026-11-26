@@ -22,6 +22,10 @@ export interface PlainStage {
   name: string;
   n_planets?: number;
   fixed_member?: string;
+  /** misalignment f_ma, micrometres: absent = the core's own estimate, 0 = "supplied" (core PR #930); per pair, or per mesh of a planetary stage */
+  f_ma_um?: number;
+  sun_planet_f_ma_um?: number;
+  planet_ring_f_ma_um?: number;
   gears: Partial<Record<GearRole, PlainGear>>;
   bearings: Record<string, string>;
 }

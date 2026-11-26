@@ -109,7 +109,10 @@
     "dtMotorMass": "Motor mass",
     "dtGearboxMass": "Gearbox mass",
     "dtTotalMass": "Total mass",
-    "dtTorquePerMass": "Torque per mass"
+    "dtTorquePerMass": "Torque per mass",
+    "f_ma_um": "f_ma, µm",
+    "sun_planet_f_ma_um": "f_ma sun-planet, µm",
+    "planet_ring_f_ma_um": "f_ma planet-ring, µm"
   },
   "tip": {
     "presetJoint": "Two planetary stages, 12.884:1: 9.8 N*m at 247 rpm at the output.",
@@ -223,7 +226,10 @@
     "dtMotorMass": "Saved motor mass.",
     "dtGearboxMass": "Analytical gearbox mass.",
     "dtTotalMass": "Motor plus gearbox.",
-    "dtTorquePerMass": "Output torque per total mass."
+    "dtTorquePerMass": "Output torque per total mass.",
+    "f_ma_um": "Mesh misalignment f_ma of this pair in micrometres, as the engineer states it. Empty = the core estimates it (flagged as estimated); 0 means supplied: no misalignment.",
+    "sun_planet_f_ma_um": "Mesh misalignment f_ma of the sun-planet mesh in micrometres, as the engineer states it. Empty = the core estimates it (flagged as estimated); 0 means supplied: no misalignment.",
+    "planet_ring_f_ma_um": "Mesh misalignment f_ma of the planet-ring mesh in micrometres, as the engineer states it. Empty = the core estimates it (flagged as estimated); 0 means supplied: no misalignment."
   },
   "gear": {
     "z": "Teeth",

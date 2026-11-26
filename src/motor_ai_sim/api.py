@@ -404,6 +404,8 @@ from motor_ai_sim.routes.gears import router as gears_router
 app.include_router(gears_router)
 from motor_ai_sim.routes.gears_store import router as gears_store_router   # stage 3: saved gearbox records
 app.include_router(gears_store_router)
+from motor_ai_sim.routes.gears_drivetrain import router as gears_drivetrain_router   # stage 4: gearbox + motor saved points
+app.include_router(gears_drivetrain_router)
 app.include_router(optimization_router)
 app.include_router(optimization_runs_router)   # /api/optimization/runs: saved optimisation runs per motor
 app.include_router(display_state_router)   # /api/display-state: Active / Parked / Archived for staff lists

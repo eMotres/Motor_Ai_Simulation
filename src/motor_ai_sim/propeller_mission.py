@@ -37,10 +37,9 @@ from motor_ai_sim import propeller_s1 as s1
 MODEL_VERSION = "propeller-mission-1"
 G0 = 9.80665
 KAPPA = 1.15                    # induced-power factor of the momentum / energy method (the study's value)
-#: The study's code reads ``rpm_h * math.sqrt(P / P_h) ** (1 / 3)``, i.e. rpm ~ P^(1/6) in forward flight, while its comment says
-#: P^(1/3).  The executed behaviour is kept (the study's numbers were produced with it); change the exponent here only together
-#: with a re-run of the study.
-RPM_POWER_EXP = 1.0 / 6.0
+#: Forward flight: the same propeller at another shaft power turns at rpm ~ P^(1/3) (constant C_T / C_P, P ~ n^3; an estimate).
+#: The 2026-11-24/26 study scripts meant this but executed P^(1/6) (sqrt applied twice); corrected here by US · propeller 2026-11-26.
+RPM_POWER_EXP = 1.0 / 3.0
 NOTE = ("Estimate: forward flight by momentum/energy method, no edgewise BEMT; numbers rank candidates, absolute values are "
         "not measured.")
 OBJECTIVES = ("range_km", "endurance_min", "top_speed_ms", "hover_g_per_w")

@@ -30,6 +30,8 @@ import {
 } from '../../lib/mechThermalTemps';
 import { historyNoticeFor } from '../../lib/historyNotice';
 import { useMotorStore } from '../../stores/motorStore';
+import { useHelpContext } from '../support/useHelpContext';
+import { mechanicalHelp } from '../../lib/helpContexts';
 import AddResultToCompareButton from '../compare/AddResultToCompareButton';
 import { MAX_LOCAL_ROWS, localMechanicalRow } from '../compare/resultRows';
 import LocalCompareTable from '../common/LocalCompareTable';
@@ -727,6 +729,11 @@ const MechanicalPanel: React.FC = () => {
         emptyHint={<>Press <b>Add to comparison</b> above to stack rotor variants here — what differs becomes the columns.</>} />
     </Paper>
   ) : null;
+
+  // the window the help assistant sees (modes and chips only, no numbers)
+  useHelpContext(mechanicalHelp({
+    loads: String(loads), symmetry: String(st.symmetry), busy, ran: !!res, stale, failed: !!err,
+  }));
 
   return (
     <Box sx={{ height: '100%', overflow: 'auto', p: 1.5 }}>

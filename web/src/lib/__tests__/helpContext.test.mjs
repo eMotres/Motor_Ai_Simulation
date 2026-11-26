@@ -86,3 +86,46 @@ t('every id the web declares is in the shared registry with its documents, and t
   }
   assert.deepEqual(entry.keys.stageKinds.enums, ['planetary', 'compound_planetary', 'pair']);
 });
+
+// ── the Simulations pages (lib/helpContexts.ts) ──────────────────────────────
+let H = null;
+try { H = await import('../helpContexts.ts'); } catch (e) { if (process.env.HELP_STRICT === '1') throw e; }
+const th = C && H ? test : test.skip;
+
+th('Electromagnetic context: lists, flags and codes only; a typed value is not forwarded', () => {
+  const ctx = H.simulationHelp({ opMode: 'motor', drive: 'current', targetKind: 'nm', coupled: true, coupledDrive: 'inverter',
+    solveTo: 'limits', running: false, stopped: false, failed: true, ran: true, hasNotice: true });
+  assert.deepEqual(ctx, { tab: 'simulation', opMode: 'motor', input: 'target_torque', coupled: true, coupledDrive: 'inverter',
+    solveTo: 'limits', calculated: true, status: ['error'], error: 'run_failed' });
+  const hostile = H.simulationHelp({ opMode: 'rpm 9000', drive: 'pwm_voltage', targetKind: 'off', coupled: true, coupledDrive: 'price EUR 12', solveTo: 'x',
+    running: true, stopped: false, failed: false, ran: false, hasNotice: false });
+  assert.deepEqual(hostile, { tab: 'simulation', input: 'other_drive', coupled: true, calculated: false, status: ['running'] });
+  const idle = H.simulationHelp({ opMode: 'generator', drive: 'current', targetKind: 'off', coupled: false, coupledDrive: 'sine', solveTo: 'steady',
+    running: false, stopped: false, failed: false, ran: false, hasNotice: false });
+  assert.equal(idle.input, 'sine_current'); assert.deepEqual(idle.status, ['not_run']); assert.ok(!('solveTo' in idle) && !('motor' in idle));
+});
+
+th('Thermal and Mechanical contexts carry listed modes and flags only', () => {
+  const t = H.thermalHelp({ coolMode: 'robotics', boreMode: 'still', outerSource: 'manual', busy: false, ran: true, stale: true, emMissing: false, compareRows: 3, invalid: false });
+  assert.deepEqual(t, { tab: 'thermal', coolMode: 'robotics', boreMode: 'still', outerSource: 'manual', calculated: true, stale: true, emMissing: false, compareRows: 3, status: ['done'] });
+  assert.ok(!('coolMode' in H.thermalHelp({ coolMode: 'liquid 12 L/min', boreMode: 'x', outerSource: 'y', busy: true, ran: false, stale: false, emMissing: true, compareRows: 0, invalid: true })));
+  const m = H.mechanicalHelp({ loads: 'both', symmetry: 'sector', busy: true, ran: false, stale: false, failed: true });
+  assert.deepEqual(m, { tab: 'mechanical', loads: 'both', symmetry: 'sector', calculated: false, stale: false, status: ['solving'], error: 'run_failed' });
+});
+
+th('every Simulations tab declared by the web is in the registry, with documents and the same allowed values', () => {
+  const reg = JSON.parse(readFileSync(`${DOCS}registry.json`, 'utf8'));
+  for (const id of H.HELP_TABS) {
+    assert.ok(reg[id], `${id} registered`);
+    for (const d of reg[id].docs) for (const lg of ['en', 'zh-CN']) assert.ok(existsSync(`${DOCS}${d}.${lg}.md`), `${d}.${lg}.md`);
+    for (const sub of reg[id].subs) assert.ok(reg[id].docs.includes(`${id}.${sub}`));
+  }
+  assert.deepEqual(reg.simulation.keys.opMode.enum, [...H.SIM_OP_MODES]);
+  assert.deepEqual(reg.simulation.keys.coupledDrive.enum, [...H.SIM_COUPLED_DRIVES]);
+  assert.deepEqual(reg.simulation.keys.solveTo.enum, [...H.SIM_SOLVE_TO]);
+  assert.deepEqual(reg.thermal.keys.coolMode.enum, [...H.COOL_MODES]);
+  assert.deepEqual(reg.thermal.keys.boreMode.enum, [...H.BORE_MODES]);
+  assert.deepEqual(reg.thermal.keys.outerSource.enum, [...H.OUTER_SOURCES]);
+  assert.deepEqual(reg.mechanical.keys.loads.enum, [...H.LOADS]);
+  assert.deepEqual(reg.mechanical.keys.symmetry.enum, [...H.SYMMETRIES]);
+});

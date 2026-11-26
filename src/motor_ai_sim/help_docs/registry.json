@@ -58,5 +58,126 @@
         ]
       }
     }
+  },
+  "simulation": {
+    "min_role": "engineer",
+    "subs": [],
+    "docs": [
+      "simulation"
+    ],
+    "keys": {
+      "opMode": {
+        "enum": [
+          "motor",
+          "generator"
+        ]
+      },
+      "input": {
+        "enum": [
+          "sine_current",
+          "target_torque",
+          "target_power",
+          "other_drive"
+        ]
+      },
+      "coupled": "flag",
+      "coupledDrive": {
+        "enum": [
+          "sine",
+          "inverter"
+        ]
+      },
+      "solveTo": {
+        "enum": [
+          "steady",
+          "limits",
+          "continuous"
+        ]
+      },
+      "calculated": "flag",
+      "status": {
+        "enums": [
+          "running",
+          "stopped",
+          "done",
+          "error",
+          "not_run"
+        ]
+      }
+    }
+  },
+  "thermal": {
+    "min_role": "engineer",
+    "subs": [],
+    "docs": [
+      "thermal"
+    ],
+    "keys": {
+      "coolMode": {
+        "enum": [
+          "air",
+          "liquid",
+          "manual",
+          "none",
+          "robotics"
+        ]
+      },
+      "boreMode": {
+        "enum": [
+          "none",
+          "air",
+          "liquid",
+          "still"
+        ]
+      },
+      "outerSource": {
+        "enum": [
+          "manual",
+          "propeller"
+        ]
+      },
+      "calculated": "flag",
+      "stale": "flag",
+      "emMissing": "flag",
+      "compareRows": "count",
+      "status": {
+        "enums": [
+          "solving",
+          "done",
+          "not_solved"
+        ]
+      }
+    }
+  },
+  "mechanical": {
+    "min_role": "engineer",
+    "subs": [],
+    "docs": [
+      "mechanical"
+    ],
+    "keys": {
+      "loads": {
+        "enum": [
+          "centrifugal",
+          "torque",
+          "both"
+        ]
+      },
+      "symmetry": {
+        "enum": [
+          "full",
+          "sector"
+        ]
+      },
+      "calculated": "flag",
+      "stale": "flag",
+      "status": {
+        "enums": [
+          "solving",
+          "done",
+          "not_solved"
+        ]
+      }
+    }
   }
 }

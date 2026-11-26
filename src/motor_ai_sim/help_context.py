@@ -27,7 +27,7 @@ MAX_LIST = 8
 MAX_JSON_CHARS = 1000   # the whole sanitised ui_context, serialised
 MAX_DOC_CHARS = 5500    # the help documents injected into one request (about 1300 tokens in English)
 
-_ID = re.compile(r"[a-z][a-z0-9_]{0,23}")
+_ID = re.compile(r"[a-z][A-Za-z0-9_]{0,23}")
 _ROLE_RANK = {"anon": -1, "": -1, "user": 0, "oem": 1, "engineer": 2, "admin": 3, "staff": 3}
 #: These roles never get more than the tab id, whatever a registry entry says.
 ID_ONLY_ROLES = frozenset({"anon", "", "user", "oem"})

@@ -140,9 +140,9 @@ def axes_of_point(p: Dict[str, Any]) -> Dict[str, Optional[float]]:
     t = _f(p.get("torque"))
     td = _f(p.get("td"))
     m = _f(p.get("mass"))
-    if t is None and td is not None and m is not None:
+    if p.get("shaft_conv") != 1 and t is None and td is not None and m is not None:
         t = td * m
-    if td is None and t is not None and m not in (None, 0.0):
+    if p.get("shaft_conv") != 1 and td is None and t is not None and m not in (None, 0.0):
         td = t / m
     return {"torque": t, "td": td,
             "ripple": _f(p.get("ripple")), "eff": _f(p.get("eff"))}
@@ -157,9 +157,10 @@ def axes_of_metrics(m: Dict[str, Any]) -> Dict[str, Optional[float]]:
     if td is None:
         td = _f(m.get("torque_per_mass_Nm_kg"))
     mass = _f(m.get("mass_total_kg"))
-    if t is None and td is not None and mass is not None:
+    marked = m.get("shaft_convention") == "fe_on_shaft_k3d_v1" or m.get("shaft_conv") == 1
+    if not marked and t is None and td is not None and mass is not None:
         t = td * mass
-    if td is None and t is not None and mass not in (None, 0.0):
+    if not marked and td is None and t is not None and mass not in (None, 0.0):
         td = t / mass
     return {"torque": t, "td": td, "ripple": _f(m.get("T_ripple_pct")),
             "eff": _f(m.get("efficiency"))}
@@ -267,7 +268,8 @@ def report(points: List[Dict[str, Any]], baseline: Dict[str, Any],
         q["pareto_front"] = False
         q["pareto_front_td"] = False
         out.append(q)
-        if match:
+        base_marked = baseline.get("shaft_convention") == "fe_on_shaft_k3d_v1" or baseline.get("shaft_conv") == 1
+        if match and (q.get("shaft_conv") == 1) == base_marked:
             cand_i.append(i)
 
     axes = [axes_of_point(out[i]) for i in cand_i]

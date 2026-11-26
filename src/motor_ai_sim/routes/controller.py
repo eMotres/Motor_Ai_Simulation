@@ -401,6 +401,8 @@ def _duty_defaults(die: Optional[str], cfg: Optional[str],
     # coupling, the same boundary as its power - not the 2-D field torque
     from motor_ai_sim.shaft_convention import coupling_torque as _ct, has_marker as _hm
     if _hm(em):
+        out["shaft_conv"] = 1
+        out.pop("torque_Nm", None)
         _tc = _ct({**em, "P_mech_extra_W": p_extra if p_extra is not None else em.get("P_mech_extra_W"),
                    "rpm": em.get("rpm") or rpm})
         if _tc is not None:
@@ -1202,6 +1204,8 @@ def _build_request(body: Dict[str, Any],
     # WHY, when it stays absent: the one case ``_duty_defaults`` could not
     # form even the electromagnetic shaft efficiency (no bearings AND no
     # rotor power/loss to balance) — never left for the panel to guess at.
+    if duty.get("shaft_conv") == 1 and body.get("efficiency_shaft") is None:
+        sources["shaft_convention"] = "fe_on_shaft_k3d_v1"
     if req.get("efficiency_shaft") is None and duty.get("efficiency_shaft_note"):
         req["_efficiency_shaft_note"] = duty["efficiency_shaft_note"]
     # the duty decides the direction of a machine run — never the form

@@ -38,10 +38,10 @@ export interface TreeDuty {
   torque_nm?: number | null; power_kw?: number | null;
   star_delta?: string | null;
   result?: { efficiency_pct?: number | null; v_ll_peak_v?: number | null;
-             build_sig?: string | null } | null;
+             build_sig?: string | null; shaft_conv?: number | null } | null;
   /** Lead / phase-board loss as its own term and the efficiency AT THE TERMINALS (fractions); only when the configuration
    *  states a `terminals:` block. The duty's own `result.efficiency_pct` is never replaced by it. */
-  terminal_loss?: { P_leads_board_W?: number | null; efficiency_at_terminals?: number | null } | null;
+  terminal_loss?: { P_leads_board_W?: number | null; efficiency_at_terminals?: number | null; shaft_conv?: number } | null;
   primary_drive?: string;
   runs?: TreeRun[];
   duty_cycle?: Record<string, unknown> | null;
@@ -115,7 +115,7 @@ export function isStale(d: TreeDuty, cfg: TreeCfg): boolean {
  *  `driveName` turns a drive id into its chip word ("pwm_voltage" → "PWM");
  *  `extra` adds one more phrase (the duty-cycle chip, behind its feature gate). */
 export function pointTip(d: TreeDuty, cfg: TreeCfg, driveName: (id: string) => string,
-                         extra?: (d: TreeDuty) => string | null): string {
+                         extra?: (d: TreeDuty) => string | null, basis?: (marked: boolean) => string): string {
   const sets = setsOf({ phases: cfg.phases });
   const cur = num(d.current_arms);
   const bits = [
@@ -125,8 +125,8 @@ export function pointTip(d: TreeDuty, cfg: TreeCfg, driveName: (id: string) => s
     num(d.rpm) == null ? '' : `${f(d.rpm, 0)} rpm`,
     cur == null ? '' : `${f(perSetFromTotal(cur, sets))} A${sets === 2 ? '/set' : ''}`,
     num(d.gamma_deg) == null ? '' : `γ ${f(d.gamma_deg, 1)}°`,
-    num(d.result?.efficiency_pct) == null ? '' : `η ${f(d.result?.efficiency_pct, 1)} %`,
-    num(d.terminal_loss?.efficiency_at_terminals) == null ? '' : `η at terminals ${f(num(d.terminal_loss?.efficiency_at_terminals)! * 100, 1)} % (leads + board ${f(d.terminal_loss?.P_leads_board_W, 1)} W)`,
+    num(d.result?.efficiency_pct) == null ? '' : `η ${f(d.result?.efficiency_pct, 1)} % (${basis?.(d.result?.shaft_conv === 1) ?? (d.result?.shaft_conv === 1 ? "core loss on the shaft" : "earlier shaft basis")})`,
+    num(d.terminal_loss?.efficiency_at_terminals) == null ? '' : `η at terminals ${f(num(d.terminal_loss?.efficiency_at_terminals)! * 100, 1)} % (leads + board ${f(d.terminal_loss?.P_leads_board_W, 1)} W; ${basis?.(d.terminal_loss?.shaft_conv === 1) ?? (d.terminal_loss?.shaft_conv === 1 ? "core loss on the shaft" : "earlier shaft basis")})`,
   ].filter(Boolean);
   const drives = drivesOf(d);
   if (drives.length) bits.push(drives.map(driveName).join(' + '));
@@ -143,7 +143,7 @@ export function pointTip(d: TreeDuty, cfg: TreeCfg, driveName: (id: string) => s
  */
 export function pointsOf(cfg: TreeCfg | null | undefined, canWrite: boolean,
                          driveName: (id: string) => string = (x) => x,
-                         extra?: (d: TreeDuty) => string | null): Point[] {
+                         extra?: (d: TreeDuty) => string | null, basis?: (marked: boolean) => string): Point[] {
   if (!cfg) return [];
   const list = canWrite ? (cfg.duties ?? []) : shownDuties(cfg.duties);
   const def = defaultDutyOf(cfg as never)?.name ?? null;
@@ -155,7 +155,7 @@ export function pointsOf(cfg: TreeCfg | null | undefined, canWrite: boolean,
       return {
         name: d.name, isDefault: d.name === def, stale: isStale(d, cfg), drives,
         primaryDrive: d.primary_drive ?? drives[0] ?? 'current',
-        tip: pointTip(d, cfg, driveName, extra),
+        tip: pointTip(d, cfg, driveName, extra, basis),
       };
     });
 }

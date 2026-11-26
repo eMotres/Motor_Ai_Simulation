@@ -1,4 +1,7 @@
 {
+  "shaftEfficiencyBasisTip": "Inverter efficiency × this duty's shaft efficiency",
+  "shaftBasisCurrent": "Core loss on the shaft",
+  "shaftBasisEarlier": "Earlier shaft basis",
   "fromHistory": "from history",
   "runWithoutAMotor": "Run without a motor",
   "inverters": "Inverters",
@@ -264,6 +267,8 @@
     "referenceDesign": "reference design"
   },
   "configure": {
+    "femShaftBasis": "Field torque; power before bearings/windage; efficiency at coupling",
+    "femEarlierBasis": "Earlier shaft basis",
     "loadedMotor": "the loaded motor",
     "loadedMotorDetail": "the loaded motor ({slots}-slot / {poles}-pole{od})",
     "loadedOd": ", {od} mm OD",

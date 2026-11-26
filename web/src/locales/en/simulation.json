@@ -1,4 +1,10 @@
 {
+  "shaftBasisCurrent": "Core loss on the shaft",
+  "shaftBasisEarlier": "Earlier shaft basis",
+  "shaftPowerMissing": "Shaft power missing; run Simulation again",
+  "mixedShaftTraining": "These results use different shaft-power conventions. Select results with one basis before training.",
+  "fieldTorque": "Field torque",
+  "shaftPower": "Shaft power",
   "set1Paths": "Set 1 paths",
   "firstHalf": "first half",
   "iBlockFlatTopA": "I block, flat top (A)",

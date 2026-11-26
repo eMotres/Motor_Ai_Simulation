@@ -1,4 +1,10 @@
 {
+  "shaftBasisCurrent": "铁损计入轴侧",
+  "shaftBasisEarlier": "较早轴功率口径",
+  "shaftPowerMissing": "缺少轴功率；请重新运行仿真",
+  "mixedShaftTraining": "这些结果采用不同的轴功率口径。训练前请选择口径一致的结果。",
+  "fieldTorque": "电磁转矩",
+  "shaftPower": "轴功率",
   "set1Paths": "第 1 组支路",
   "firstHalf": "前半部分",
   "iBlockFlatTopA": "方波电流 I，平顶 (A)",

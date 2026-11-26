@@ -5030,10 +5030,11 @@ def _pt(out: Dict[str, Any], kind: str):
     ov = out.get("overrides") or r.get("overrides") or {}
     return {"td": r.get("torque_per_mass_Nm_kg"), "eff": r.get("efficiency"),
             "ripple": r.get("T_ripple_pct"), "kind": kind,
-            # Shaft torque — the number the user judges a design by.  Without it
+            # Field torque; shaft power travels separately on marked results.  Without it
             # the auto card's torque×ripple cloud could only plot the per-generation
             # BEST history (6 rows), not the run's 50+ measured designs.
             "torque": r.get("T_em_Nm"),
+            **({"P_mech_W": r.get("P_mech_W")} if r.get("shaft_convention") == _SHAFT_CONVENTION else {}),
             "T_shaft_Nm": r.get("T_shaft_Nm"),
             "shaft_conv": 1 if r.get("shaft_convention") == _SHAFT_CONVENTION else None,
             # Mass travels with the point too: torque and torque density differ
@@ -5154,7 +5155,8 @@ def _make_bline(base_m: Dict[str, Any], bump_m: Dict[str, Any],
             "w_td": w_td, "w_eff": w_eff, "norm": norm,
             "bump_pct": float(bump_pct),
             "current_a": float(base_m.get("current_a", 0.0) or 0.0),
-            "current_b": float(bump_m.get("current_a", 0.0) or 0.0)}
+            "current_b": float(bump_m.get("current_a", 0.0) or 0.0),
+            **({"shaft_conv": 1} if base_m.get("shaft_convention") == "fe_on_shaft_k3d_v1" else {})}
 
 
 _RIPPLE_PEN_LAM = {"v": 0.0, "v0": 0.0}

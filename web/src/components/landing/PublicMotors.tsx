@@ -56,7 +56,7 @@ const MotorCard: React.FC<{ motor: PublicMotor; onOpen: (m: PublicMotor) => void
           )}
         </Box>
       </Box>
-      <Tooltip title={t('motors.ratedHint')} arrow>
+      <Tooltip title={`${t('motors.ratedHint')} ${t(motor.rated.shaft_conv === 1 ? 'common:shaftBasisCurrent' : 'common:shaftBasisEarlier')}`} arrow>
         <Box component="dl" sx={{
           m: 0, display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 0.75, columnGap: 2,
         }}>

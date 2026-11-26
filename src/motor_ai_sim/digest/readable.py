@@ -135,6 +135,18 @@ def mechanical_numbers(kinds: dict) -> dict:
     p_in = _first((r,), ("P_elec_in_W", "P_elec_in_solved_W"))
     basis = ("shaft" if (num(r.get("shaft_conv")) == 1 or r.get("shaft_convention") == "fe_on_shaft_k3d_v1")
              else "earlier")
+    if basis == "shaft":
+        from motor_ai_sim import shaft_convention as SC
+        s = SC.summary_from_compact(kinds.get("em_run")) if idx == 0 else dict(r)
+        if not SC.has_marker(s):
+            return dict(T=None, P=None, eta=None, P_out=None, basis="shaft")
+        s.update({k: parent[k] for k in ("P_mech_extra_W", "efficiency_shaft") if parent.get(k) is not None})
+        e = num(s.get("efficiency_shaft"))
+        if e is None and s.get("P_mech_extra_W") is None:
+            e = num(s.get("efficiency"))
+        return dict(T=SC.coupling_torque(s), P=SC.coupling_power(s),
+                    eta=None if e is None else (100 * e if e <= 1.5 else e),
+                    P_out=num(s.get("P_elec_W")) if s.get("op_mode") == "generator" else None, basis="shaft")
     return {"T": _first((r,), ("T_avg_Nm", "T_em_avg_Nm", "torque_nm")), "P": num(r.get("P_mech_W")), "eta": eta,
             "P_out": -p_in if p_in is not None and p_in < 0 else None, "basis": basis}
 
@@ -272,8 +284,11 @@ def result_line(duty: str, kinds: dict) -> tuple:
     # to state, not the electromagnetic run's (owner 2026-10-28: one torque per line, the held one).  The power
     # follows at the same speed.
     held = _d(rec[3].get("hold_torque")) if rec is not None else {}
+    from motor_ai_sim import shaft_convention as SC
+    if rec is not None and held.get("basis") == "held_torque" and SC.has_marker(_d(rec[3].get("em"))):
+        mech = mechanical_numbers({"coupled": rec[3]})
     got = num(held.get("torque_nm"))
-    if str(held.get("basis") or "") == "held_torque" and got is not None:
+    if mech["basis"] != "shaft" and str(held.get("basis") or "") == "held_torque" and got is not None:
         if mech["P"] is not None and mech["T"]:
             mech = {**mech, "P": mech["P"] * got / mech["T"]}
         mech = {**mech, "T": got}
@@ -282,17 +297,20 @@ def result_line(duty: str, kinds: dict) -> tuple:
     if mech.get("P_out") is not None:
         # a GENERATOR (owner 2026-10-28): the electrical power it delivers and the shaft torque it takes, never a negative
         # torque or the shaft power read as an output
-        first.append(f"generator {fmt_power(mech['P_out'])} out" + (f", shaft torque {fmt_num(abs(mech['T']))} N·m" if mech["T"] is not None else ""))
-        first_zh.append(f"发电 {fmt_power(mech['P_out'])}" + (f"，轴转矩 {fmt_num(abs(mech['T']))} N·m" if mech["T"] is not None else ""))
+        first.append(f"generator {fmt_power(mech['P_out'])} out" + (f", {'shaft torque' if mech['basis'] == 'shaft' else 'field torque'} {fmt_num(abs(mech['T']))} N·m" if mech["T"] is not None else ""))
+        first_zh.append(f"发电 {fmt_power(mech['P_out'])}" + (f"，{'轴转矩' if mech['basis'] == 'shaft' else '电磁转矩'} {fmt_num(abs(mech['T']))} N·m" if mech["T"] is not None else ""))
     elif mech["T"] is not None:
-        first.append(f"{fmt_num(mech['T'])} N·m" + (f" at {fmt_power(mech['P'])}" if mech["P"] is not None else ""))
-        first_zh.append(f"{fmt_num(mech['T'])} N·m" + (f"，{fmt_power(mech['P'])}" if mech["P"] is not None else ""))
+        first.append(f"{'shaft torque' if mech['basis'] == 'shaft' else 'field torque'} {fmt_num(mech['T'])} N·m" + (f" at {fmt_power(mech['P'])}" if mech["P"] is not None else ""))
+        first_zh.append(f"{'轴转矩' if mech['basis'] == 'shaft' else '电磁转矩'} {fmt_num(mech['T'])} N·m" + (f"，{fmt_power(mech['P'])}" if mech["P"] is not None else ""))
     elif mech["P"] is not None:
         first.append(fmt_power(mech["P"]))
         first_zh.append(fmt_power(mech["P"]))
     if mech["eta"] is not None:
         first.append(f"efficiency {fmt_num(mech['eta'])} %")
         first_zh.append(f"效率 {fmt_num(mech['eta'])} %")
+    if mech["P"] is not None or mech["eta"] is not None:
+        first.append("core loss on the shaft" if mech["basis"] == "shaft" else "earlier shaft basis")
+        first_zh.append("铁损计入轴侧" if mech["basis"] == "shaft" else "较早轴功率口径")
     parts_en = [", ".join(first)] if first else []
     parts_zh = ["，".join(first_zh)] if first_zh else []
 

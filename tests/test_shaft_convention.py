@@ -664,6 +664,9 @@ def test_controller_torque_on_a_marked_record_is_the_coupling_torque(monkeypatch
     monkeypatch.setattr(fam, "duty_entry", lambda die, cfg, duty: {})
     out = rc._duty_defaults("DIE", "CFG", "rated")
     assert out["torque_Nm"] == pytest.approx(8.5, abs=1e-3)          # (870 - 20) W / 100 rad/s, not the 10 N*m field torque
+    assert out["shaft_conv"] == 1
+    em.pop("P_mech_W")
+    assert "torque_Nm" not in rc._duty_defaults("DIE", "CFG", "rated")
     old = {"T_em_avg_Nm": 10.0, "P_loss_total_W": 100.0}
     node["coupled"]["em"] = old
     assert rc._duty_defaults("DIE", "CFG", "rated")["torque_Nm"] == pytest.approx(10.0)
@@ -766,3 +769,93 @@ def test_r4_snapshot_carries_the_convention_only_when_marked():
     from motor_ai_sim.passport_v1 import snapshot as SN
     src = inspect.getsource(SN)
     assert '("shaft_convention", "shaft_k3d", "op_mode")' in src
+
+
+def test_r5_r1_old_primary_never_borrows_marked_efficiency():
+    from motor_ai_sim.development.motors import _comparison_projection
+    cp = {"coupled": {"em": _plain_marked(), "P_mech_extra_W": 20, "efficiency_shaft": 850 / 970}}
+    for duty in ({"summary": {"T_em_avg_Nm": 10, "P_mech_W": 1000, "mass_total_kg": 2}},
+                 {"result": {"torque_nm": 10, "power_w": 1000}}):
+        out = _comparison_projection(duty, cp)
+        assert out["torque_nm"] == 10 and out["power_w"] == 1000
+        assert "efficiency_pct" not in out and "shaft_conv" not in out
+    old = {"summary": {"T_em_avg_Nm": 10, "P_mech_W": 1000, "efficiency": .9}}
+    assert _comparison_projection(old, cp)["efficiency_pct"] == 90
+
+
+@pytest.mark.parametrize("mode,power,torque", [("motor", 850, 8.5), ("generator", 950, 9.5)])
+def test_r5_r2_bilingual_result_uses_coupling_power(mode, power, torque):
+    from motor_ai_sim.digest.readable import mechanical_numbers, result_line
+    from motor_ai_sim.duty_results import compact_em_run
+    em = _plain_marked(op_mode=mode)
+    eta = 850 / 970 if mode == "motor" else 830 / 950
+    cp = {"em": em, "P_mech_extra_W": 20, "efficiency_shaft": eta,
+          "coil_temp_c": 60, "magnet_temp_c": 50, "converged": True,
+          "hold_torque": {"basis": "held_torque", "torque_nm": torque, "target_nm": torque, "held": True}}
+    m = mechanical_numbers({"coupled": cp})
+    assert m["P"] == pytest.approx(power) and m["T"] == pytest.approx(torque)
+    assert m["eta"] == pytest.approx(eta * 100)
+    # An old standalone EM row must not override the selected marked held record.
+    en, zh = result_line("rated", {"em_run": {"numbers": {"P_mech_W": 1000, "T_em_avg_Nm": 10}}, "coupled": cp})
+    assert str(torque) in en and str(torque) in zh
+    assert "core loss on the shaft" in en and "铁损计入轴侧" in zh
+    if mode == "motor":
+        assert "850 W" in en and "850 W" in zh and "740 W" not in en
+    else:
+        assert "shaft torque 9.5" in en and "轴转矩 9.5" in zh
+    compact = mechanical_numbers({"em_run": compact_em_run({"summary": em})})
+    assert compact["T"] == pytest.approx(8.7 if mode == "motor" else 9.3, abs=.001)
+
+
+def test_r5_r2_digest_missing_context_and_legacy_omission():
+    from motor_ai_sim.digest.readable import mechanical_numbers, result_line
+    assert mechanical_numbers({"em_run": {"numbers": {"P_mech_W": 870, "shaft_conv": 1}}})["P"] is None
+    old = {"em_run": {"numbers": {"P_mech_W": 1000, "T_em_avg_Nm": 10}},
+           "coupled": {"em": {"efficiency": .9}, "efficiency_shaft": .88}}
+    assert mechanical_numbers(old)["eta"] is None
+    en, zh = result_line("rated", {"em_run": {"numbers": {"T_em_avg_Nm": 10, "P_elec_in_W": -800}}})
+    assert "field torque" in en and "电磁转矩" in zh
+
+
+def test_r5_r3_rebuild_keeps_marker_and_refuses_wrong_cache():
+    from motor_ai_sim.sweep_rebuild import build_result, _metric_key
+    row = {"status": "ok", "current_a": 10, "torque": 10, "eff": .8969,
+           "mass": 2, "td": 4.35, "p_loss": 100, "shaft_conv": 1}
+    key = _metric_key(10, .8969, 2, 100)
+    for cache in ({}, {key: {"P_mech_W": 1000, "efficiency": .8969}}):
+        result = build_result("synthetic", [row], cache)
+        p = result["points"][0]
+        assert p["shaft_convention"] == SC.SHAFT_CONVENTION
+        assert p["torque_per_mass_Nm_kg"] == 4.35 and p["efficiency"] == .8969
+        assert "P_mech_W" not in p
+        assert result["rebuilt"]["points_with_full_result"] == 0
+    old = {k: v for k, v in row.items() if k != "shaft_conv"}
+    assert "shaft_convention" not in build_result("synthetic", [old])["points"][0]
+
+
+def test_r5_r4_optimizer_compact_power_is_stored_not_synthesised():
+    from motor_ai_sim.routes.optimization import _pt
+    r = {"shaft_convention": SC.SHAFT_CONVENTION, "T_em_Nm": 10, "T_shaft_Nm": 8.7, "P_mech_W": 870}
+    out = _pt({"ok": True, "res": r}, "test")
+    assert out["P_mech_W"] == 870 and out["torque"] == 10 and out["shaft_conv"] == 1
+    r.pop("P_mech_W")
+    assert _pt({"ok": True, "res": r}, "test")["P_mech_W"] is None
+    r.pop("shaft_convention")
+    assert "P_mech_W" not in _pt({"ok": True, "res": r}, "test")
+
+
+def test_r5_r5_point_metadata_and_parent_mechanical_losses():
+    from types import SimpleNamespace
+    from motor_ai_sim.development.sim_view import _duty_row
+    from motor_ai_sim.agent_designs import headline
+    family = SimpleNamespace(_primary_drive=lambda d: "current", _RUN_DRIVES=[], build_sig_moved=lambda a,b: False)
+    for marked in (False, True):
+        res = {"efficiency_pct": 89.69, **({"shaft_conv": 1} if marked else {})}
+        projected = _duty_row({"result": res}, family, None)["result"]
+        assert (projected.get("shaft_conv") == 1) is marked
+        if not marked:
+            assert projected == {"efficiency_pct": 89.69, "v_ll_peak_v": None}
+    d = {"params": {"speed_rpm": RPM100, "mode": "generator", "current_a_rms": 100}}
+    h = headline({"em": _plain_marked(op_mode="generator"), "P_mech_extra_W": 20}, d, "coupled")
+    assert h["mechanical_losses_included"] is True and h["losses_w"]["mechanical"] == 20
+    assert h["efficiency_shaft_pct"] == pytest.approx(87.37, abs=.01)

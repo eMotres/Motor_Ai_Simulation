@@ -220,7 +220,7 @@ def from_docs(die_doc: Dict[str, Any], cfg_doc: Dict[str, Any], stored_by_duty: 
         # a marked duty's zero shaft efficiency (a driven shaft) is a value, not a missing one
         if s.get("shaft_convention") == "fe_on_shaft_k3d_v1":
             eff = num(s.get("efficiency_shaft"))
-            if eff is None:
+            if eff is None and s.get("P_mech_extra_W") is None:
                 eff = num(s.get("efficiency"))
         else:
             eff = num(s.get("efficiency_shaft")) or num(s.get("efficiency"))
@@ -233,6 +233,9 @@ def from_docs(die_doc: Dict[str, Any], cfg_doc: Dict[str, Any], stored_by_duty: 
         shaft_conv = 1 if s.get("shaft_convention") == "fe_on_shaft_k3d_v1" else 0
         t_plain = num(s.get("T_shaft_Nm")) if (shaft_conv and num(s.get("T_shaft_Nm")) is not None) else num(s.get("T_em_avg_Nm"))
         torque = (p_shaft / (rpm * 3.141592653589793 / 30.0)) if (p_shaft is not None and rpm) else t_plain
+        if shaft_conv:
+            from motor_ai_sim.shaft_convention import coupling_torque
+            torque = coupling_torque({**s, "rpm": rpm})
         # what the corrected efficiency is formed from (the stored rotor power and losses; nothing recomputed here)
         inv = num(((ctrl or {}).get("efficiency") or {}).get("inverter")) if isinstance(ctrl, dict) else None
         op_mode = str(s.get("op_mode") or d.get("mode") or "motor").lower()

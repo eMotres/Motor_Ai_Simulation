@@ -1,4 +1,6 @@
 {
+  "shaftBasisCurrent": "铁损计入轴侧",
+  "shaftBasisEarlier": "较早轴功率口径",
   "shaftConvOld": "较早的运行：全部损耗计入电气侧，铁损未计入轴侧；不与当前口径的运行一起排名。",
   "aiNotice": "人工智能助手——回答可能有误。",
   "assistantUnavailable": "助手暂时无法使用。",

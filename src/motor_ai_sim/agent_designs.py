@@ -1162,6 +1162,8 @@ def headline(answer: Any, d: Dict[str, Any], what: str) -> Dict[str, Any]:
         run = dict(run)
         if em and a.get("P_mech_extra_W") is not None:
             run["P_mech_extra_W"] = a["P_mech_extra_W"]
+        out["mechanical_losses_included"] = run.get("P_mech_extra_W") is not None
+        out["losses_w"]["mechanical"] = _r(_num(run.get("P_mech_extra_W")), 1)
         p, loss, net = _num(run.get("P_mech_W")), _num(run.get("P_loss_total_W")), _SC.coupling_power(run)
         gen = run.get("op_mode") == "generator"
         e = None if (p is None or loss is None) else (p - loss if gen else p + loss)

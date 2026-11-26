@@ -242,7 +242,8 @@ const FemFieldChart: React.FC<Props> = ({ gamma_deg = 0, rotor_angle_deg = 0,
         A_z_min: 0, A_z_max: 0, B_mag_max: 0,
         T_em_Nm: Number(t.summary?.T_em_avg_Nm ?? 0), P_cu_W: computedNumber(t.summary?.P_stranded_W),
         P_fe_W: computedNumber(t.summary?.P_core_W), P_mag_eddy_W: computedNumber(t.summary?.P_solid_W),
-        P_loss_total_W: computedNumber(t.summary?.P_loss_total_W), P_mech_W: Number(t.summary?.P_mech_W ?? 0),
+        P_loss_total_W: computedNumber(t.summary?.P_loss_total_W), P_mech_W: Number(t.summary?.P_mech_W ?? (t.summary?.shaft_convention === 'fe_on_shaft_k3d_v1' ? NaN : 0)),
+        ...(t.summary?.shaft_convention === 'fe_on_shaft_k3d_v1' ? { shaft_convention: t.summary.shaft_convention } : {}),
         efficiency: computedNumber(t.summary?.efficiency), freq_Hz: 0, rpm: Number(t.summary?.rpm ?? 0),
         source: 'transient-snapshot', from_transient: true,
         source_label: `simulation run${when ? ` ${when}` : ''}`
@@ -801,7 +802,7 @@ const FemFieldChart: React.FC<Props> = ({ gamma_deg = 0, rotor_angle_deg = 0,
                 { label: 'Copper loss', value: payload.P_cu_W == null ? '—' : `${payload.P_cu_W.toFixed(0)} W`, tip: payload.P_cu_W == null ? tx('lossNotComputed') : undefined },
                 { label: 'Iron loss', value: payload.P_fe_W == null ? '—' : `${payload.P_fe_W.toFixed(0)} W`, tip: payload.P_fe_W == null ? tx('lossNotComputed') : undefined },
                 { label: 'Magnet eddy', value: payload.P_mag_eddy_W == null ? '—' : `${payload.P_mag_eddy_W.toFixed(1)} W`, tip: payload.P_mag_eddy_W == null ? tx('lossNotComputed') : undefined },
-                { label: 'Efficiency', value: payload.efficiency == null ? '—' : `${(payload.efficiency * 100).toFixed(1)} %`, tip: payload.efficiency == null ? tx('lossNotComputed') : undefined },
+                { label: 'Efficiency', value: payload.efficiency == null ? '—' : `${(payload.efficiency * 100).toFixed(1)} %`, tip: payload.efficiency == null ? tx('lossNotComputed') : tx(payload.shaft_convention === 'fe_on_shaft_k3d_v1' ? 'shaftBasisCurrent' : 'shaftBasisEarlier') },
               ]
             : [
                 { label: 'Mesh vertices',  value: payload.n_vertices.toLocaleString() },

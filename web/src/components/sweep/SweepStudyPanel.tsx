@@ -139,6 +139,7 @@ const SweepTable: React.FC<{ points: any[]; rpm: number; vdcFactor?: number; sel
       // at) — the T·ω fallback uses the CURRENT sim.rpm, which drifts if the user
       // changed rpm after the sweep, so it only covers pre-P_mech_W stored results.
       const P2 = p.P_mech_W != null ? Number(p.P_mech_W) / 1000
+        : p.shaft_convention === 'fe_on_shaft_k3d_v1' ? NaN
                                     : (Number(p.T_em_Nm) || 0) * omega / 1000;   // kW, 2-D
       const mass = Number(p.mass_total_kg) || 0;
       const td2 = Number(p.torque_per_mass_Nm_kg) || 0;
@@ -294,7 +295,7 @@ const SweepTable: React.FC<{ points: any[]; rpm: number; vdcFactor?: number; sel
                 style={{ background: sel ? 'var(--line-accent)' : (i % 2 ? 'var(--panel-2)' : 'var(--line-soft)'), cursor: onPick ? 'pointer' : 'default' }}>
                 {cols.map(c => (
                   <td key={c.id} title={c.titleRow ? c.titleRow(r) : undefined} style={{ padding: '3px 7px', textAlign: 'right', whiteSpace: 'nowrap', color: 'var(--text-0)', borderBottom: '1px solid var(--line-soft)' }}>
-                    {c.fmtRow ? c.fmtRow(r) : c.fmt(c.get(r))}
+                    {c.fmtRow ? c.fmtRow(r) : (Number.isFinite(c.get(r)) ? c.fmt(c.get(r)) : '—')}
                   </td>))}
               </tr>); })}
           </tbody>
@@ -759,6 +760,7 @@ const SweepStudyPanel: React.FC = () => {
       // 3-D view of the point (same k and rule as the table and the Simulation
       // summary); the solver's 2-D numbers stay under raw2d for applyPoint.
       const P2 = p.P_mech_W != null ? Number(p.P_mech_W) / 1000
+        : p.shaft_convention === 'fe_on_shaft_k3d_v1' ? NaN
                                     : (Number(p.T_em_Nm) || 0) * omegaNow / 1000;
       const massN = Number(p.mass_total_kg) || 0;
       const pd2 = p.power_per_mass_W_kg != null ? Number(p.power_per_mass_W_kg) / 1000
@@ -1034,9 +1036,13 @@ const SweepStudyPanel: React.FC = () => {
       if (!v || typeof v.overrides !== 'object') {
         throw new Error('Sweep point lacks its geometry; run the Sweep again');
       }
+      if (v.shaft_convention === 'fe_on_shaft_k3d_v1' && v.P_mech_W == null) {
+        throw new Error(tx('shaftPowerMissing'));
+      }
       const k3d = kOfPoint(v, readApply3dK());
       const mass = Number(v.mass_total_kg) || 0;
       const P2 = v.P_mech_W != null ? Number(v.P_mech_W) / 1000
+        : v.shaft_convention === 'fe_on_shaft_k3d_v1' ? NaN
                                     : (Number(v.T_em_Nm) || 0) * (2 * Math.PI * (Number(v.rpm) || 0) / 60) / 1000;
       const pd2 = v.power_per_mass_W_kg != null ? Number(v.power_per_mass_W_kg) / 1000
                                                : (mass > 0 ? P2 / mass : 0);
@@ -1133,7 +1139,7 @@ const SweepStudyPanel: React.FC = () => {
         // sinusoid approximations (the refine result carries peaks only).
         const Vlpk = Number(r2.V_line_peak_V) || Vpk * Math.sqrt(3);
         const Vrms = Vpk / Math.SQRT2, Vlrms = Vlpk / Math.SQRT2;
-        const Pmech = Number(r2.P_mech_W) || T * omega;
+        const Pmech = r2.P_mech_W != null ? Number(r2.P_mech_W) : T * omega;
         const ploss = Number(p.ploss) || 0;
         const summary = {
           ...(p.k3d != null ? { end3d: { k_flux: p.k3d, source: 'machine passport, carried from the sweep view' } } : {}),

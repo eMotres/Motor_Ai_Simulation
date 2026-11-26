@@ -155,12 +155,17 @@ def _is_continuous(d: Dict[str, Any]) -> bool:
     return str(d.get("duty_class") or "") == "continuous"
 
 
+def _shaft_basis(d: Dict[str, Any]) -> str:
+    r = d.get("result") or {}
+    return ("core loss on the shaft" if r.get("shaft_conv") == 1 else "earlier shaft basis")
+
+
 def _rated_lines(d: Dict[str, Any]) -> List[str]:
     r = d.get("result") if isinstance(d.get("result"), dict) else {}
     cr = d.get("continuous_rating") if isinstance(d.get("continuous_rating"), dict) else {}
     st = d.get("short_time") if isinstance(d.get("short_time"), dict) else {}
     eff = _n(r.get("efficiency_pct"), 1)
-    head = _point(d) + (f", efficiency {eff} %" if eff else "")
+    head = _point(d) + (f", efficiency {eff} % ({_shaft_basis(d)})" if eff else "")
     ttl = d.get("time_to_limit") if isinstance(d.get("time_to_limit"), dict) else {}
     if _is_continuous(d):
         lim = _clean(cr.get("part"), 40)
@@ -199,7 +204,7 @@ def _other_duties(c: Dict[str, Any], rated: Dict[str, Any]) -> List[str]:
         eff = _n(r.get("efficiency_pct"), 1)
         label = "Peak" if _is_peak(d.get("name")) else f"Duty \"{_clean(d.get('name'), 40)}\""
         words = _clean(st.get("words")) if st else ""
-        out.append(f"{label}: {_point(d)}" + (f", efficiency {eff} %" if eff else "")
+        out.append(f"{label}: {_point(d)}" + (f", efficiency {eff} % ({_shaft_basis(d)})" if eff else "")
                    + (f" — {words}" if words else ""))
     return out
 

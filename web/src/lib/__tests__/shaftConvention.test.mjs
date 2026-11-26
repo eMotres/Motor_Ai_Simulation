@@ -7,6 +7,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { stripTypeScriptTypes } from 'node:module';
 
 try {
   const m = await import('node:module');
@@ -239,4 +240,80 @@ test('dutyLocalApply (r4 C5): a marked duty row without its summary is never reb
   const fallback = src.indexOf('if (rr.efficiency_pct != null || dd.torque_nm != null) {');
   assert.ok(guard > 0 && fallback > guard, 'the marked guard precedes the target fallback');
   assert.ok(!src.includes("shaft_convention: 'fe_on_shaft_k3d_v1', T_shaft_Nm: T"), 'no marker is stamped on targets');
+});
+
+test('r5 R3/R4: rebuilt and compact points never invent shaft power or receive another k', async () => {
+  const S = await import('../sweepApply3d.ts');
+  const P = await import('../autoPointPower.ts');
+  const rebuilt = { shaft_convention: 'fe_on_shaft_k3d_v1', torque_per_mass_Nm_kg: 4.35, efficiency: .8969 };
+  assert.equal(S.pointApply3dK(rebuilt, .9, true), null);
+  const marked = { shaft_conv: 1, torque: 10, T_shaft_Nm: 8.7, P_mech_W: 870 };
+  assert.equal(P.autoPointPowerKw(marked, 100), .87);
+  assert.equal(P.autoPointFieldTorque(marked), 10);
+  assert.ok(Number.isNaN(P.autoPointPowerKw({ ...marked, P_mech_W: null }, 100)));
+  assert.ok(Number.isNaN(P.autoPointFieldTorque({ shaft_conv: 1, td: 4.35, mass: 2 })));
+  assert.equal(P.autoPointPowerKw({ torque: 10 }, 100), 1);
+  assert.equal(P.autoPointPowerKw({ ...marked, P_mech_W: 0 }, 100), 0);
+  const panel = read('components/sweep/SweepStudyPanel.tsx');
+  assert.equal((panel.match(/shaft_convention === 'fe_on_shaft_k3d_v1' \? NaN/g) || []).length, 3);
+  assert.match(panel, /throw new Error\(tx\('shaftPowerMissing'\)\)/);
+});
+
+test('r5 R5: point efficiency tooltip names its convention; targets remain targets', async () => {
+  const S = await import('../simPoints.ts');
+  for (const lang of ['en', 'zh-CN']) {
+    const c = JSON.parse(read(`locales/${lang}/common.json`));
+    const basis = (marked) => c[marked ? 'shaftBasisCurrent' : 'shaftBasisEarlier'];
+    for (const marked of [false, true]) {
+      const d = { name: 'rated', power_kw: 1, torque_nm: 10, result: { efficiency_pct: 89.69, ...(marked ? { shaft_conv: 1 } : {}) } };
+      const tip = S.pointTip(d, { duties: [d] }, x => x, undefined, basis);
+      assert.ok(tip.includes(basis(marked)));
+      assert.ok(tip.includes('10 N·m') && tip.includes('1.0 kW'));
+    }
+    const different = S.pointTip({ name: 'rated', result: { efficiency_pct: 90 },
+      terminal_loss: { efficiency_at_terminals: .85, shaft_conv: 1, P_leads_board_W: 10 } }, {}, x => x, undefined, basis);
+    assert.ok(different.includes(basis(false)) && different.includes(basis(true)));
+    const sim = JSON.parse(read(`locales/${lang}/simulation.json`));
+    for (const key of ['fieldTorque', 'shaftPower', 'shaftPowerMissing', 'mixedShaftTraining']) assert.ok(sim[key]);
+    const ctrl = JSON.parse(read(`locales/${lang}/controller.json`));
+    for (const key of ['femShaftBasis', 'femEarlierBasis']) assert.ok(ctrl.configure[key]);
+  }
+  assert.match(read('components/compare/ConfiguratorPanel.tsx'), /<Tooltip title=\{draftHeadline.shaft_conv === 1/);
+});
+
+test('audit: mechanical readers keep missing marked torque missing across stored sources', async () => {
+  const { shaftCouplingTorqueNm } = await import('../shaftCoupling.ts');
+  const source = read('components/mechanical/api.ts');
+  const names = ['readSimSetting', 'readSimTorqueNm', 'readShownTorqueNm', 'coupledPoint'];
+  const selected = names.map(name => {
+    const match = source.match(new RegExp(`export function ${name}\\b[\\s\\S]*?^}`, 'm'));
+    assert.ok(match, name);
+    return match[0].replace(/^export /, '');
+  }).join('\n');
+  const compiled = stripTypeScriptTypes(selected);
+  const saved = new Map();
+  const localStorage = { getItem: k => saved.get(k) ?? null };
+  const exports = {};
+  new Function('exports', 'localStorage', 'shaftCouplingTorqueNm', compiled + `\nObject.assign(exports, {${names.join(',')}});`)(exports, localStorage, shaftCouplingTorqueNm);
+  saved.set('sim.coupled', JSON.stringify(true));
+  saved.set('sim.rpm', '1000');
+  saved.set('sim.lastTransient', JSON.stringify({ T_avg_Nm: 10 }));
+  const marked = { shaft_convention: 'fe_on_shaft_k3d_v1', T_em_avg_Nm: 10, rpm: 1000 };
+  saved.set('sim.lastSummary', JSON.stringify(marked));
+  assert.equal(exports.readShownTorqueNm(), null);
+  assert.equal(exports.coupledPoint().torque, null);
+  saved.set('sim.lastTransient', JSON.stringify({ summary: marked, T_avg_Nm: 10 }));
+  assert.equal(exports.readSimTorqueNm(), null);
+  saved.set('sim.lastSummary', JSON.stringify({ T_em_avg_Nm: 10 }));
+  assert.equal(exports.coupledPoint().torque, 10);
+});
+
+test('audit: bilingual basis labels exist in every namespace used by the readers', () => {
+  for (const ns of ['common', 'controller', 'simulation']) {
+    const en = JSON.parse(read(`locales/en/${ns}.json`));
+    const zh = JSON.parse(read(`locales/zh-CN/${ns}.json`));
+    for (const k of ['shaftBasisCurrent', 'shaftBasisEarlier']) {
+      assert.ok(en[k]); assert.match(zh[k], /[\u3400-\u9fff]/);
+    }
+  }
 });

@@ -78,7 +78,8 @@ def list_motors(application: str = "any", max_diameter_mm: Optional[float] = Non
             "dc_bus_nominal_v": m.get("dc_bus_nominal_v"), "dc_bus_min_v": m.get("dc_bus_min_v"),
             "dc_bus_max_v": m.get("dc_bus_max_v"),
             "default_duty": c.get("default_duty"),
-            "duties": [{k: x.get(k) for k in ("duty", "mode", "speed_rpm", "torque_nm", "power_kw", "efficiency_pct")}
+            "duties": [{**{k: x.get(k) for k in ("duty", "mode", "speed_rpm", "torque_nm", "power_kw", "efficiency_pct")},
+                        **({"shaft_conv": x["shaft_conv"]} if "shaft_conv" in x else {})}
                        for x in m.get("duties") or []],
             "propellers": props, "default_propeller": co.get("default_propeller"),
             "propeller_s1_available": bool(props) and _has_s1(dn, cn),
@@ -253,8 +254,8 @@ def _compact_fit(res: Dict[str, Any]) -> Dict[str, Any]:
     keep = ("die", "config", "duty", "torque_nm", "speed_rpm", "power_kw", "efficiency_pct", "mass_kg",
             "outer_diameter_mm", "active_length_mm", "unverified", "reasons")
     visible = {(r["die"].get("name"), r["config"].get("name")) for r in _visible_configs()}
-    fits = [{k: f.get(k) for k in keep} for f in res.get("fits") or [] if (f["die"], f["config"]) in visible]
-    rej = [{k: f.get(k) for k in keep} for f in res.get("rejected") or [] if (f["die"], f["config"]) in visible]
+    fits = [{**{k: f.get(k) for k in keep}, **({"shaft_convention": f["shaft_convention"]} if "shaft_convention" in f else {})} for f in res.get("fits") or [] if (f["die"], f["config"]) in visible]
+    rej = [{**{k: f.get(k) for k in keep}, **({"shaft_convention": f["shaft_convention"]} if "shaft_convention" in f else {})} for f in res.get("rejected") or [] if (f["die"], f["config"]) in visible]
     return {"requirements": res.get("requirements"), "rule": res.get("rule"), "fits": fits[:8],
             "rejected": rej[:5]}
 

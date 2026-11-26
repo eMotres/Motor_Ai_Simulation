@@ -189,11 +189,15 @@ def build_result(campaign_id: str, rows: List[Dict[str, Any]],
             continue
         mk = _metric_key(r.get("torque"), r.get("eff"), r.get("mass"), r.get("p_loss"))
         full = cache_by_key.get(mk) if seen_keys[mk] == 1 else None
+        if full is not None and (r.get("shaft_conv") == 1) != (full.get("shaft_convention") == "fe_on_shaft_k3d_v1"):
+            full = None
         if full is not None:
             n_full += 1
             res = dict(full)
         else:
             res = {pk: r[rk] for rk, pk in _ROW_TO_POINT if r.get(rk) is not None}
+        if r.get("shaft_conv") == 1:
+            res["shaft_convention"] = "fe_on_shaft_k3d_v1"
         ripple = _num(res.get("T_ripple_pct"))
         points.append({**res, **base, "feasible": True,
                        "final_validation_status": "preliminary", "apply_eligible": False,
@@ -205,9 +209,13 @@ def build_result(campaign_id: str, rows: List[Dict[str, Any]],
             if _num(points[i].get("torque_per_mass_Nm_kg")) is not None
             and _num(points[i].get("efficiency")) is not None]
     from motor_ai_sim.optimization.optimizer import _pareto_front
-    front = _pareto_front([(points[i]["torque_per_mass_Nm_kg"], points[i]["efficiency"])
-                           for i, _ in pool]) if pool else []
-    pareto = sorted((pool[k][0] for k in front),
+    # Rank within each convention; a reconstructed campaign can span a software upgrade.
+    front_indices = []
+    for marked in (False, True):
+        group = [(i, p) for i, p in pool if (p.get("shaft_convention") == "fe_on_shaft_k3d_v1") == marked]
+        front = _pareto_front([(p["torque_per_mass_Nm_kg"], p["efficiency"]) for _, p in group]) if group else []
+        front_indices.extend(group[k][0] for k in front)
+    pareto = sorted(front_indices,
                     key=lambda i: points[i]["torque_per_mass_Nm_kg"])
 
     by_geom: Dict[int, List[int]] = {}

@@ -2283,6 +2283,8 @@ ${s1Text.text}` : '';
               {!draftOpen && tx('configure.bannerOpenHint', { button: tx('configure.openInTuner') })}
               {draftOpen && draftTarget && tx('configure.bannerOpened')}
               {draftHeadline && (
+                <Tooltip title={draftHeadline.shaft_conv === 1
+                  ? tx('configure.femShaftBasis') : tx('configure.femEarlierBasis')}>
                 <Box sx={{ mt: 0.5 }}>
                   {tx('configure.femOnFile', {
                     what: ({ coupled: tx('configure.whatCoupled'), thermal: tx('configure.whatThermal'),
@@ -2290,6 +2292,7 @@ ${s1Text.text}` : '';
                     T: fmt(draftHeadline.torque_nm ?? NaN, 1), P: fmt(draftHeadline.power_kw ?? NaN, 2),
                     eta: fmt(draftHeadline.efficiency_shaft_pct ?? NaN, 1) })}
                 </Box>
+                </Tooltip>
               )}
             </>
           )}

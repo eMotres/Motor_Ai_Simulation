@@ -760,16 +760,20 @@ def _comparison_projection(duty: dict, stored: dict) -> dict:
     coupled_em = _metric_projection(coupled_em_raw)
     thermal = _metric_projection(thermal_raw)
     primary = [result, summary]
+    from motor_ai_sim.shaft_convention import has_marker
+    mixed_old = (bool(summary_raw or result_raw) and not has_marker(summary_raw)
+                 and result_raw.get("shaft_conv") != 1 and has_marker(coupled_em_raw))
+    mech_cp, mech_em = ({}, {}) if mixed_old else (coupled, coupled_em)
     comparison: dict[str, Any] = {}
 
     # DutySpec.torque_nm / power_kw are requested rated targets.  Comparison
     # result columns are populated only from solved result/summary records.
-    torque = _first(primary + [coupled_em], "t_em_avg_nm", "t_em_nm",
+    torque = _first(primary + [mech_em], "t_em_avg_nm", "t_em_nm",
                     "t_avg_nm", "torque_avg_nm", "torque_nm")
     if torque is not None:
         comparison["torque_nm"] = torque
 
-    power = _first(primary + [coupled_em], "p_mech_w", "p_out_w",
+    power = _first(primary + [mech_em], "p_mech_w", "p_out_w",
         "p_shaft_out_w", "p_shaft_w", "power_w")
     if power is not None:
         comparison["power_w"] = power
@@ -781,10 +785,10 @@ def _comparison_projection(duty: dict, stored: dict) -> dict:
 
     efficiency_pct = _first(primary, "efficiency_pct", "efficiency_percent", "eta_pct")
     if efficiency_pct is None:
-        efficiency_ratio = _first([summary, coupled], "efficiency_shaft", "eta_shaft",
+        efficiency_ratio = _first([summary, mech_cp], "efficiency_shaft", "eta_shaft",
                                   "eta_shaft_est")
         if efficiency_ratio is None:
-            efficiency_ratio = _first([summary, coupled_em], "efficiency", "eta_em")
+            efficiency_ratio = _first([summary, mech_em], "efficiency", "eta_em")
         if efficiency_ratio is not None:
             # These named fields are fractions by contract.  Never infer a unit
             # from the numeric magnitude of an ambiguous field.
@@ -1014,7 +1018,7 @@ def _comparison_projection(duty: dict, stored: dict) -> dict:
     # convention, as it always was.
     from motor_ai_sim import shaft_convention as _SC
     _msrc = (summary_raw if _SC.has_marker(summary_raw)
-             else coupled_em_raw if (not summary_raw and _SC.has_marker(coupled_em_raw)) else None)
+             else coupled_em_raw if (not summary_raw and not result_raw and _SC.has_marker(coupled_em_raw)) else None)
     _sc_row = False
     if _msrc is not None or result_raw.get("shaft_conv") == 1:
         # missing stays missing: a value the marked source does not carry is never inherited from an older source

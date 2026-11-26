@@ -1,4 +1,7 @@
 {
+  "shaftEfficiencyBasisTip": "逆变器效率 × 此工况的轴效率",
+  "shaftBasisCurrent": "铁损计入轴侧",
+  "shaftBasisEarlier": "较早轴功率口径",
   "fromHistory": "来自历史记录",
   "runWithoutAMotor": "无电机独立运行",
   "inverters": "逆变器数量",
@@ -264,6 +267,8 @@
     "referenceDesign": "参考设计"
   },
   "configure": {
+    "femShaftBasis": "电磁转矩；轴承及风阻前功率；联轴器处效率",
+    "femEarlierBasis": "较早轴功率口径",
     "loadedMotor": "已加载的电机",
     "loadedMotorDetail": "已加载的电机（{slots} 槽 / {poles} 极{od}）",
     "loadedOd": "，外径 {od} mm",

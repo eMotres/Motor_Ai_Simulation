@@ -96,6 +96,10 @@ def filter_operating(recs: List[Dict[str, Any]], min_torque_frac: float = 0.6) -
     return [r for r in recs if r.get("torque") is not None and float(r["torque"]) >= cut]
 
 
+def _mixed_conventions(recs: List[Dict[str, Any]]) -> bool:
+    return len({r.get("shaft_conv") == 1 for r in recs if all(r.get(t) is not None for t in TARGETS)}) > 1
+
+
 def build_matrix(
     recs: List[Dict[str, Any]],
 ) -> Tuple[np.ndarray, List[str], Dict[str, np.ndarray]]:
@@ -105,6 +109,8 @@ def build_matrix(
     importance and break the surrogate's relative comparisons).  Missing keys
     in a record are imputed with that column's median.
     """
+    if _mixed_conventions(recs):
+        raise ValueError("Mixed shaft conventions: select a dataset with one power basis")
     # Union of override keys across all records (+ the load angle γ, an operating
     # variable that also affects ripple/torque).
     keys: set = set()
@@ -161,6 +167,9 @@ def variable_importance(
     robust to the correlated features a guided search produces).  filter_op drops
     the low-torque MTPA-probe rows (off for a fixed-current DOE, where torque
     legitimately varies across samples)."""
+    if _mixed_conventions(recs):
+        return {"ok": False, "reason": "mixed_shaft_conventions", "n": 0,
+                "note": "Earlier and core-loss-on-shaft results cannot train one surrogate"}
     X, feat_keys, ys = build_matrix(filter_operating(recs) if filter_op else recs)
     if len(X) < min_samples:
         return {"ok": False, "n": len(X), "need": min_samples, "features": feat_keys}
@@ -199,6 +208,9 @@ def suggest(
     candidates within ``bounds`` (default = observed min/max per variable), predict,
     and return the top-``n`` by acquisition = td̂ × eff̂ among those with ripplê ≤
     gate.  Adds an exploration bonus from the RF prediction spread (uncertainty)."""
+    if _mixed_conventions(recs):
+        return {"ok": False, "reason": "mixed_shaft_conventions", "n": 0,
+                "note": "Earlier and core-loss-on-shaft results cannot train one surrogate"}
     X, feat_keys, ys = build_matrix(filter_operating(recs))
     if len(X) < 20:
         return {"ok": False, "n": len(X), "need": 20}

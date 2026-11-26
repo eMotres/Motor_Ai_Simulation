@@ -1,3 +1,6 @@
+import { autoPointFieldTorque } from '../../lib/autoPointPower';
+import { nsT } from '../../i18n/nsT';
+import { useTranslation } from 'react-i18next';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { whenVisible } from '../../lib/pageVisible';
 import {
@@ -50,20 +53,8 @@ function humanSeconds(s: number): string {
   return `${Math.floor(m / 60)} h ${m % 60} m`;
 }
 
-/**
- * Shaft torque of a cloud point, DERIVED when it was not stored.
- *
- * Points published before the backend's `_pt` carried T_em_Nm hold only torque
- * density and mass — and torque = td · mass exactly, it is the same measurement.
- * Reading `p.torque` alone silently emptied this card's cloud for every run that
- * finished before 2026-08-05.
- */
-const ptTorque = (p: any): number => {
-  const t = Number(p?.torque);
-  if (Number.isFinite(t)) return t;
-  const td = Number(p?.td); const m = Number(p?.mass);
-  return (Number.isFinite(td) && Number.isFinite(m)) ? td * m : NaN;
-};
+const ptTorque = autoPointFieldTorque;
+const shaftTx = nsT('simulation');
 
 /** Signed delta with its sign always shown — a "+0.02 Nm" reads as a gain. */
 function delta(now?: number, was?: number, d = 3, unit = ''): string {
@@ -90,6 +81,7 @@ type Plan = {
 };
 
 const AutoOptimizePanel: React.FC = () => {
+  useTranslation('simulation');
   // the run settings of THIS panel: read-only, the values of the Mesh / Simulation tabs resolved by the server
   const rs = useRunSettings('auto');
   const rsKey = JSON.stringify(rs.request?.overrides ?? null);
@@ -505,7 +497,7 @@ const AutoOptimizePanel: React.FC = () => {
           // run — the card read "0 designs measured" over a cloud of 87.
           const cloud = ((st.points || []) as any[])
             .map((p) => ({ torque: ptTorque(p), ripple: p.ripple, td: p.td,
-                           eff: (p.eff ?? 0) * 100, kind: p.kind,
+                           eff: (p.eff ?? (p.shaft_conv === 1 ? NaN : 0)) * 100, kind: p.kind, shaft_conv: p.shaft_conv,
                            dominates: !!p.dominates, front: !!p.pareto_front }))
             .filter((p) => Number.isFinite(p.torque) && Number.isFinite(p.ripple));
           const nUnderGate = cloud.filter((p) => p.ripple <= gate).length;
@@ -513,9 +505,9 @@ const AutoOptimizePanel: React.FC = () => {
           // efficiency — the answer F cannot give (see the verdict tooltip).
           const domPts = cloud.filter((p) => p.dominates);
           const bestPt = best && Number.isFinite(best.T_em_Nm)
-            ? [{ ripple: best.T_ripple_pct, torque: best.T_em_Nm }] : [];
+            ? [{ ripple: best.T_ripple_pct, torque: best.T_em_Nm, shaft_conv: best.shaft_convention === 'fe_on_shaft_k3d_v1' ? 1 : best.shaft_conv }] : [];
           const basePt = base && Number.isFinite(base.T_em_Nm)
-            ? [{ ripple: base.T_ripple_pct, torque: base.T_em_Nm }] : [];
+            ? [{ ripple: base.T_ripple_pct, torque: base.T_em_Nm, shaft_conv: base.shaft_convention === 'fe_on_shaft_k3d_v1' ? 1 : base.shaft_conv }] : [];
           return (
           <Box sx={{ mt: 1.5, display: 'flex', gap: 2, flexWrap: 'wrap' }}>
             {/* Trajectory: what the search did over time */}
@@ -533,7 +525,7 @@ const AutoOptimizePanel: React.FC = () => {
                     border: '1px solid var(--line-soft)', fontSize: 11 }} />
                   <ReferenceLine yAxisId="r" y={gate} stroke="#f59e0b"
                     strokeDasharray="4 3" label={{ value: `≤${fmt(gate, 1)}%`, fontSize: 10, fill: '#f59e0b' }} />
-                  <Line yAxisId="t" dataKey="torque" name="T [N·m]" dot={false}
+                  <Line yAxisId="t" dataKey="torque" name={`${shaftTx('fieldTorque')} [N·m]`} dot={false}
                     stroke="#60a5fa" strokeWidth={2} isAnimationActive={false} />
                   <Line yAxisId="r" dataKey="ripple" name="ripple [%]" dot={false}
                     stroke="#f87171" strokeWidth={1.5} isAnimationActive={false} />
@@ -571,8 +563,9 @@ const AutoOptimizePanel: React.FC = () => {
                   <YAxis type="number" dataKey="torque" name="T"
                     tick={{ fontSize: 10, fill: 'var(--text-2)' }} width={44}
                     domain={['auto', 'auto']}
-                    label={{ value: 'T [N·m]', angle: -90, position: 'insideLeft', fontSize: 10, fill: 'var(--text-3)' }} />
+                    label={{ value: `${shaftTx('fieldTorque')} [N·m]`, angle: -90, position: 'insideLeft', fontSize: 10, fill: 'var(--text-3)' }} />
                   <RTooltip cursor={{ strokeDasharray: '3 3' }}
+                    labelFormatter={(_label: any, payload: any) => shaftTx(payload?.[0]?.payload?.shaft_conv === 1 ? 'shaftBasisCurrent' : 'shaftBasisEarlier')}
                     contentStyle={{ background: 'var(--app-bg)',
                       border: '1px solid var(--line-soft)', fontSize: 11 }} />
                   <ReferenceLine x={gate} stroke="#f59e0b" strokeDasharray="4 3"
@@ -681,7 +674,7 @@ const AutoOptimizePanel: React.FC = () => {
               <TableHead>
                 <TableRow>
                   <TableCell sx={{ fontSize: 10, color: 'text.secondary' }}>—</TableCell>
-                  <TableCell align="right" sx={{ fontSize: 10, color: 'text.secondary' }}>Torque</TableCell>
+                  <TableCell align="right" sx={{ fontSize: 10, color: 'text.secondary' }}>{shaftTx('fieldTorque')}</TableCell>
                   <TableCell align="right" sx={{ fontSize: 10, color: 'text.secondary' }}>Ripple</TableCell>
                   <TableCell align="right" sx={{ fontSize: 10, color: 'text.secondary' }}>Efficiency</TableCell>
                   <TableCell align="right" sx={{ fontSize: 10, color: 'text.secondary' }}>N·m/kg</TableCell>
@@ -689,14 +682,14 @@ const AutoOptimizePanel: React.FC = () => {
               </TableHead>
               <TableBody>
                 <TableRow>
-                  <TableCell sx={{ fontSize: 11 }}>Current design</TableCell>
+                  <TableCell sx={{ fontSize: 11 }}><Tooltip title={shaftTx(base.shaft_convention === 'fe_on_shaft_k3d_v1' || base.shaft_conv === 1 ? 'shaftBasisCurrent' : 'shaftBasisEarlier')}><span>Current design</span></Tooltip></TableCell>
                   <TableCell align="right" sx={{ fontSize: 11 }}>{fmt(base.T_em_Nm, 3)}</TableCell>
                   <TableCell align="right" sx={{ fontSize: 11 }}>{fmt(base.T_ripple_pct, 2)}%</TableCell>
                   <TableCell align="right" sx={{ fontSize: 11 }}>{pct(base.efficiency)}</TableCell>
                   <TableCell align="right" sx={{ fontSize: 11 }}>{fmt(base.torque_per_mass, 3)}</TableCell>
                 </TableRow>
                 <TableRow>
-                  <TableCell sx={{ fontSize: 11, fontWeight: 700 }}>Optimized</TableCell>
+                  <TableCell sx={{ fontSize: 11, fontWeight: 700 }}><Tooltip title={shaftTx(best.shaft_convention === 'fe_on_shaft_k3d_v1' || best.shaft_conv === 1 ? 'shaftBasisCurrent' : 'shaftBasisEarlier')}><span>Optimized</span></Tooltip></TableCell>
                   <TableCell align="right" sx={{ fontSize: 11, fontWeight: 700 }}>
                     {fmt(best.T_em_Nm, 3)}
                     <Typography component="span" sx={{ fontSize: 10, ml: 0.5, color: 'text.secondary' }}>
@@ -713,7 +706,7 @@ const AutoOptimizePanel: React.FC = () => {
                   <TableCell align="right" sx={{ fontSize: 11, fontWeight: 700 }}>
                     {pct(best.efficiency)}
                     <Typography component="span" sx={{ fontSize: 10, ml: 0.5, color: 'text.secondary' }}>
-                      {delta((best.efficiency ?? 0) * 100, (base.efficiency ?? 0) * 100, 2, ' pp')}
+                      {delta((best.efficiency ?? (best.shaft_convention === 'fe_on_shaft_k3d_v1' ? NaN : 0)) * 100, (base.efficiency ?? (base.shaft_convention === 'fe_on_shaft_k3d_v1' ? NaN : 0)) * 100, 2, ' pp')}
                     </Typography>
                   </TableCell>
                   <TableCell align="right" sx={{ fontSize: 11, fontWeight: 700 }}>

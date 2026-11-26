@@ -30,7 +30,6 @@ import {
 } from '../../lib/mechThermalTemps';
 import { historyNoticeFor } from '../../lib/historyNotice';
 import { useMotorStore } from '../../stores/motorStore';
-import { getActiveMotor } from '../common/motorSettings';
 import { useHelpContext } from '../support/useHelpContext';
 import { mechanicalHelp } from '../../lib/helpContexts';
 import AddResultToCompareButton from '../compare/AddResultToCompareButton';
@@ -733,7 +732,7 @@ const MechanicalPanel: React.FC = () => {
 
   // the window the help assistant sees (modes and chips only, no numbers)
   useHelpContext(mechanicalHelp({
-    motorName: getActiveMotor()?.name, loads: String(loads), symmetry: String(st.symmetry), busy, ran: !!res, stale, error: err ? String(err) : null,
+    loads: String(loads), symmetry: String(st.symmetry), busy, ran: !!res, stale, failed: !!err,
   }));
 
   return (

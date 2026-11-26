@@ -89,7 +89,6 @@ const SupportWidget: React.FC = () => {
     tab: activeTab, lang: i18n.resolvedLanguage ?? i18n.language ?? 'en',
     appVersion: APP_VERSION, appGitSha: APP_GIT_SHA,
     userAgent: typeof navigator !== 'undefined' ? navigator.userAgent : '',
-    route: typeof window !== 'undefined' ? window.location.pathname : '',
   });
 
   useEffect(() => {

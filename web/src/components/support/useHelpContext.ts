@@ -2,7 +2,7 @@
 // cleared when it unmounts; read by lib/supportContext.buildSupportContext.  Same pattern as useConfigureSnapshot: the context is
 // compared by its JSON, so a re-render with the same values does nothing.  Pass null to publish nothing.
 //
-// What may go in: ids, names the user already sees, modes, status chips, small counts, the last visible error.  Never a value of a
+// What may go in: flags, bounded counts, known codes and values from exact lists (see help_docs/registry.json); no name or typed text.  Never a value of a
 // geometry or of a result, a price or customer data (the server drops anything else and re-checks the role).
 import { useEffect, useId } from 'react';
 import { setHelpContext, type HelpContext } from '../../lib/supportContext';

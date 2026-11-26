@@ -1,5 +1,5 @@
 {
-  "_comment": "ONE registry of the windows the help assistant knows (tab id -> sub-views, documents, the keys its ui_context may carry). The server (help_context.py) and the web tests read this file; every document id listed here needs <id>.en.md and <id>.zh-CN.md next to it. min_role: the lowest account role that may send more than the tab ids (the server re-checks).",
+  "_comment": "ONE registry of the windows the help assistant knows (tab id -> sub-views, documents, the keys its ui_context may carry). The server (help_context.py) and the web tests read this file; every document id listed here needs <id>.en.md and <id>.zh-CN.md next to it. Key kinds: \"flag\", \"count\", \"code\" (a known validation code, help_context.ERROR_CODES), {\"enum\": [...]} and {\"enums\": [...]} with EXACT allowed values. Nothing a user typed is ever forwarded: no names, no free text. min_role is the lowest role that gets more than nothing for this tab; anon, user and oem never get more than the tab id (help_context.ID_ONLY_ROLES).",
   "gears": {
     "min_role": "engineer",
     "subs": [
@@ -17,16 +17,46 @@
       "gears.saved"
     ],
     "keys": {
-      "preset": "name",
-      "stageKinds": "enums",
+      "preset": {
+        "enum": [
+          "humanoid_robot_joint",
+          "standard"
+        ]
+      },
+      "stageKinds": {
+        "enums": [
+          "planetary",
+          "compound_planetary",
+          "pair"
+        ]
+      },
       "stageCount": "count",
       "calculated": "flag",
       "stale": "flag",
-      "die": "name",
-      "configuration": "name",
-      "source": "enum",
+      "source": {
+        "enum": [
+          "inline",
+          "record"
+        ]
+      },
       "rows": "count",
-      "record": "flag"
+      "record": "flag",
+      "status": {
+        "enums": [
+          "state_ok",
+          "state_estimated",
+          "state_unsupported",
+          "state_failed",
+          "state_unknown",
+          "state_valid",
+          "passed",
+          "not_passed",
+          "inputs_changed",
+          "row_ok",
+          "row_missing",
+          "row_gearbox_failed"
+        ]
+      }
     }
   },
   "simulation": {
@@ -36,13 +66,44 @@
       "simulation"
     ],
     "keys": {
-      "opMode": "enum",
-      "input": "enum",
-      "connection": "enum",
+      "opMode": {
+        "enum": [
+          "motor",
+          "generator"
+        ]
+      },
+      "input": {
+        "enum": [
+          "sine_current",
+          "target_torque",
+          "target_power",
+          "other_drive"
+        ]
+      },
       "coupled": "flag",
-      "coupledDrive": "enum",
-      "solveTo": "enum",
-      "calculated": "flag"
+      "coupledDrive": {
+        "enum": [
+          "sine",
+          "inverter"
+        ]
+      },
+      "solveTo": {
+        "enum": [
+          "steady",
+          "limits",
+          "continuous"
+        ]
+      },
+      "calculated": "flag",
+      "status": {
+        "enums": [
+          "running",
+          "stopped",
+          "done",
+          "error",
+          "not_run"
+        ]
+      }
     }
   },
   "thermal": {
@@ -52,13 +113,40 @@
       "thermal"
     ],
     "keys": {
-      "coolMode": "enum",
-      "boreMode": "enum",
-      "outerSource": "enum",
+      "coolMode": {
+        "enum": [
+          "air",
+          "liquid",
+          "manual",
+          "none",
+          "robotics"
+        ]
+      },
+      "boreMode": {
+        "enum": [
+          "none",
+          "air",
+          "liquid",
+          "still"
+        ]
+      },
+      "outerSource": {
+        "enum": [
+          "manual",
+          "propeller"
+        ]
+      },
       "calculated": "flag",
       "stale": "flag",
       "emMissing": "flag",
-      "compareRows": "count"
+      "compareRows": "count",
+      "status": {
+        "enums": [
+          "solving",
+          "done",
+          "not_solved"
+        ]
+      }
     }
   },
   "mechanical": {
@@ -68,10 +156,28 @@
       "mechanical"
     ],
     "keys": {
-      "loads": "enum",
-      "symmetry": "enum",
+      "loads": {
+        "enum": [
+          "centrifugal",
+          "torque",
+          "both"
+        ]
+      },
+      "symmetry": {
+        "enum": [
+          "full",
+          "sector"
+        ]
+      },
       "calculated": "flag",
-      "stale": "flag"
+      "stale": "flag",
+      "status": {
+        "enums": [
+          "solving",
+          "done",
+          "not_solved"
+        ]
+      }
     }
   }
 }

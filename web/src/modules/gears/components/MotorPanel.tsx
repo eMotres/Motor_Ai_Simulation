@@ -38,7 +38,7 @@ export default function MotorPanel({ buildInline, saved }: { buildInline: () => 
   const fieldErr = useMemo(() => errorMap(errors.map((e) => ({ path: drivetrainErrorKey(e.path), code: '', message: e.message }))), [errors]);
 
   useHelpContext(motorPanelHelp({
-    die: die ? mem.die : '', configuration: cfg ? mem.configuration : '', source: sourceNow(mem, saved), rows: mem.rows.length,
+    source: sourceNow(mem, saved), rows: mem.rows.length,
     statuses: result ? result.rows.map((r) => r.status) : null, errors, failure,
   }));
 

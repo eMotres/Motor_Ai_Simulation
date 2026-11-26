@@ -6,8 +6,8 @@ The page has two columns.
 
 Left column, the design (always visible):
 - Saved gearboxes: see the separate document.
-- Operating point: preset (acceptance limits and required life; the "Humanoid robot joint" preset fills a two-stage example), lubricant, torque and which shaft it acts on (input or output), input speed, direction (forward or reverse), temperature.
-- Stages, in order from the input: add a Planetary, Compound planetary or Gear pair stage; give each a unique name, its gears (teeth, module, width, shift, helix, tooth-thickness allowance), planets and the fixed member, and optional catalogue bearings. Up, Down and Remove reorder or delete a stage.
+- Operating point: Preset (selects the acceptance limits and the required life), lubricant, torque and the boundary it acts on (input or output), input speed, direction (forward or reverse), temperature.
+- Stages, in order from the input: the Humanoid joint button loads the two-stage example; add a Planetary, Compound planetary or Gear pair stage; give each a unique name, its gears (teeth, module, width, shift, helix, tooth-thickness allowance), planets and the fixed member, and optional catalogue bearings. Move up, Move down and Remove reorder or delete a stage.
 
 Right column, the result:
 - Four sub-tabs: Point, Duty spectrum, 3-D, With motor. Calculate (or Build 3-D) runs the open sub-tab; the first three use the design on the left.

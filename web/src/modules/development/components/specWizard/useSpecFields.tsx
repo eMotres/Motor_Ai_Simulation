@@ -221,7 +221,7 @@ export function useSpecFields(c: SpecFieldsContext) {
         {properties?.length ? (
           <Box sx={{ ...specGridSx, [NARROW]: { gridTemplateColumns: 'minmax(0,1fr)', '& > *': { gridColumn: 'auto !important' } } }}>
             {properties.map((prop) => <Box key={prop.id} sx={{ minWidth: 0, gridColumn: prop.type === 'object' || prop.type === 'array' ? '1 / -1' : undefined }}>
-              {properties.length > 1 && propLabel(prop, false, [catalogTip(`${f.id}.${prop.id}`), ...companions.filter((x) => x.low === prop.id).map((x) => tr('wizard.otherBound', { value: x.text }))].filter(Boolean).join('\n') || undefined)}
+              {properties.length > 1 && propLabel(prop, false, [catalogTip(`${f.id}.${prop.id}`), ...(f.id === '4_1' && prop.id === 'outer_diameter_mm' && objectValue.od_mode === 'custom' ? [tr('odSizes.customHelp')] : []), ...companions.filter((x) => x.low === prop.id).map((x) => tr('wizard.otherBound', { value: x.text }))].filter(Boolean).join('\n') || undefined)}
               {f.id === '4_1' && prop.id === 'od_accepted_sizes'
                 ? <OdSizesPicker projectId={c.projectId} preferred={objectValue.od_preferred_mm} maxOd={typeof objectValue.outer_diameter_mm === 'number' ? objectValue.outer_diameter_mm : undefined}
                     value={objectValue.od_accepted_sizes} disabled={!canEditSpec || busy || migrationBusy || unknown} tr={tr}
@@ -237,7 +237,6 @@ export function useSpecFields(c: SpecFieldsContext) {
           renderTypedValue(f, answer.value, (next) => setAnswer(f, next, prod), f.id, unknown)
         )}
         {f.id === '2_4' && controllerNotes()}
-        {f.id === '4_1' && objectValue.od_mode === 'custom' && <Tooltip title={tr('odSizes.customHelp')}><Typography tabIndex={0} sx={specFieldLabelSx}>{tr('odSizes.customNote')}</Typography></Tooltip>}
         {fieldMessages(f, answer, required)}
         {answerLater(f, unknown, prod)}
       </Stack>

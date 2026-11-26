@@ -13,8 +13,6 @@ no project, owner, customer, geometry or result is in an answer, and the answer 
 from __future__ import annotations
 
 import logging
-import threading
-import time
 from typing import Any, Dict, Iterable, List, Optional
 
 from fastapi import APIRouter, HTTPException, Request
@@ -25,7 +23,6 @@ log = logging.getLogger(__name__)
 
 #: The ONLY keys of one size row.
 SIZE_KEYS = ("od_mm", "slots", "poles", "stack_mm")
-CACHE_TTL_S = 300.0
 
 #: Mounted by ``productions.router`` (prefix ``/api/projects/{project_id}``): the same project-member gate as the specification.
 router = APIRouter(tags=["development-spec-sizes"])
@@ -104,21 +101,11 @@ def select(rows: List[Dict[str, Any]], *, preferred_min: Optional[float] = None,
 
 # -- live data (the public view, as public_motors.public_motors) --------------------------------------------------
 
-_lock = threading.Lock()
-_cache: Dict[str, Any] = {"at": None, "rows": None}
+# No row cache of our own (Astra #893): a cached list kept archived and later-private sizes for the whole TTL.  Every request builds
+# the list from ``family.tree_for_access``, which follows grants, visibility and archive state of the moment.
 
-
-def clear_cache() -> None:
-    with _lock:
-        _cache["at"], _cache["rows"] = None, None
-
-
-def public_sizes(now: Optional[float] = None) -> List[Dict[str, Any]]:
-    """Every existing public size, cached for ``CACHE_TTL_S``; a copy."""
-    t = time.monotonic() if now is None else now
-    with _lock:
-        if _cache["rows"] is not None and _cache["at"] is not None and t - _cache["at"] < CACHE_TTL_S:
-            return [dict(r, stack_mm=list(r["stack_mm"])) for r in _cache["rows"]]
+def public_sizes() -> List[Dict[str, Any]]:
+    """Every existing public size, built fresh from the public view on each call."""
     from contextlib import nullcontext
     from fastapi import Response
     from motor_ai_sim import config_archive as CA
@@ -133,9 +120,7 @@ def public_sizes(now: Optional[float] = None) -> List[Dict[str, Any]]:
         rows = build_sizes(dies, archived=CA.is_archived)
     assert_allowlisted(rows)
     PM.assert_clean(rows)
-    with _lock:
-        _cache["at"], _cache["rows"] = t, rows
-    return [dict(r, stack_mm=list(r["stack_mm"])) for r in rows]
+    return rows
 
 
 def _opt(request: Request, name: str) -> Optional[float]:

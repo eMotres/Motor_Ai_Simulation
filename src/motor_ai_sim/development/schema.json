@@ -1830,9 +1830,9 @@
               "items": {
                 "type": "object",
                 "properties": [
-                  {"id": "od_mm", "type": "number", "unit": "mm", "min": 0, "required": true, "label": {"en": "Stator outer diameter", "zh-CN": "定子外径"}},
-                  {"id": "slots", "type": "number", "min": 0, "required": true, "label": {"en": "Slots", "zh-CN": "槽数"}},
-                  {"id": "poles", "type": "number", "min": 0, "required": true, "label": {"en": "Poles", "zh-CN": "极数"}}
+                  {"id": "od_mm", "type": "number", "unit": "mm", "min": 1, "required": true, "label": {"en": "Stator outer diameter", "zh-CN": "定子外径"}},
+                  {"id": "slots", "type": "number", "integer": true, "min": 1, "required": true, "label": {"en": "Slots", "zh-CN": "槽数"}},
+                  {"id": "poles", "type": "number", "integer": true, "min": 1, "required": true, "label": {"en": "Poles", "zh-CN": "极数"}}
                 ]
               }
             },

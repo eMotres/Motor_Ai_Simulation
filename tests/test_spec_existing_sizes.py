@@ -128,3 +128,46 @@ def test_the_assistant_asks_early_without_promises():
     assert "Outer diameter choice" in text and "existing sizes" in text
     import re
     assert not re.search(r"\b(prices?|costs?|quotes?|budget|fees?)\b", text.split("Outer diameter choice")[1].split("- Answers are SHORT")[0], re.I)
+
+
+# -- Astra #893 review fixes -----------------------------------------------------------------------------------------
+
+def _existing(sizes, **extra):
+    return _draft({"od_mode": "existing", "od_accepted_sizes": sizes, **extra})
+
+
+def test_an_accepted_size_above_the_maximum_diameter_is_refused():
+    errs = _missing_4_1({"od_mode": "existing", "outer_diameter_mm": 70, "od_accepted_sizes": [SIZE]})
+    assert [e["field"] for e in errs] == ["4_1.od_accepted_sizes[0].od_mm"]
+    assert "above the maximum" in errs[0]["message"]
+    assert _missing_4_1({"od_mode": "existing", "outer_diameter_mm": 80, "od_accepted_sizes": [SIZE]}) == []
+    assert _missing_4_1({"od_mode": "existing", "od_accepted_sizes": [SIZE]}) == []           # no maximum stated: nothing to compare
+    assert _missing_4_1({"od_mode": "custom", "outer_diameter_mm": 70, "od_accepted_sizes": [SIZE]}) == []   # ignored in custom mode
+
+
+@pytest.mark.parametrize("bad", [{"od_mm": 0, "slots": 12, "poles": 14}, {"od_mm": 80, "slots": 0.5, "poles": 14},
+                                 {"od_mm": 80, "slots": 12, "poles": 0}, {"od_mm": 80, "slots": 12.5, "poles": 14},
+                                 {"od_mm": -80, "slots": 12, "poles": 14}, {"od_mm": 0, "slots": 0.5, "poles": 0}])
+def test_invalid_sizes_are_refused_and_never_truncated(bad):
+    draft = {"schema_version": 2, "fields": {"4_1": {"status": "filled", "value": {"od_mode": "existing", "od_accepted_sizes": [bad]}}}}
+    with pytest.raises(ValueError):
+        models.normalize_draft(copy.deepcopy(draft))
+    assert models.od_choice(draft)["accepted_sizes"] == []                       # a malformed entry is left out, never int()-ed
+    assert _missing_4_1({"od_mode": "existing", "od_accepted_sizes": [bad]})
+
+
+def test_public_sizes_follow_archive_and_visibility_at_once(monkeypatch):
+    """No row cache: a configuration archived (or made private, so it leaves the public tree) is not served on the next call."""
+    from motor_ai_sim import config_archive as CA, support_catalog as SC
+    from motor_ai_sim.routes import family as fam
+    state = {"dies": _dies(), "archived": set()}
+    monkeypatch.setattr(SC, "_visitor_access", lambda: {})
+    monkeypatch.setattr(SC, "_neutral_workspace", lambda: None)
+    monkeypatch.setattr(fam, "tree_for_access", lambda response, acc, **kw: {"dies": state["dies"]})
+    monkeypatch.setattr(CA, "is_archived", lambda d, c: (d, c) in state["archived"])
+    assert {r["od_mm"] for r in S.public_sizes()} == {80.0, 120.0}
+    state["archived"] |= {("SECRETDIE B", "C")}
+    assert {r["od_mm"] for r in S.public_sizes()} == {80.0}                       # archived: gone on the very next call
+    state["dies"] = [d for d in state["dies"] if d["name"] != "SECRETDIE A"]      # made private: leaves the public tree
+    assert S.public_sizes() == []
+    assert not hasattr(S, "_cache")

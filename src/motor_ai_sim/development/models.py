@@ -364,6 +364,8 @@ def _validate_typed_item(value: Any, spec: dict, path: str, *, require_complete:
             raise ValueError(f"{path}: finite number required")
         if ("min" in spec and value < spec["min"]) or ("max" in spec and value > spec["max"]):
             raise ValueError(f"{path}: value outside allowed range")
+        if spec.get("integer") and value != int(value):
+            raise ValueError(f"{path}: whole number required")
     elif typ == "boolean":
         if not isinstance(value, bool):
             raise ValueError(f"{path}: boolean required")
@@ -453,6 +455,31 @@ def od_mode_of(envelope: Any) -> str:
     return mode if mode in OD_MODES else "custom"
 
 
+def _valid_size(item: Any) -> bool:
+    """One accepted existing size: a positive finite diameter and positive whole slot and pole counts (nothing is truncated)."""
+    def num(v: Any) -> bool:
+        return isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v) and v > 0
+    return (isinstance(item, dict) and num(item.get("od_mm"))
+            and all(num(item.get(k)) and item[k] == int(item[k]) for k in ("slots", "poles")))
+
+
+def od_size_errors(draft: dict) -> list[dict]:
+    """4_1 in "existing" mode: every accepted size must fit the stated maximum diameter (``outer_diameter_mm``, a hard limit).
+    The contradictory entry is reported on its own path so the form can show it; nothing is rewritten.  Invalid entries are
+    refused by the schema check (positive diameter, whole positive slots and poles)."""
+    answer = ((draft or {}).get("fields") or {}).get("4_1")
+    value = answer.get("value") if isinstance(answer, dict) and answer.get("status") == "filled" else None
+    if not isinstance(value, dict) or od_mode_of(value) != "existing":
+        return []
+    limit = value.get("outer_diameter_mm")
+    sizes = value.get("od_accepted_sizes")
+    if isinstance(limit, bool) or not isinstance(limit, (int, float)) or not math.isfinite(limit) or not isinstance(sizes, list):
+        return []
+    return [{"field": f"4_1.od_accepted_sizes[{i}].od_mm", "section": "4",
+             "message": f"Accepted size {item['od_mm']:g} mm is above the maximum outer diameter {limit:g} mm"}
+            for i, item in enumerate(sizes) if _valid_size(item) and item["od_mm"] > limit]
+
+
 def od_choice(draft: Any) -> dict:
     """What the computing session needs of the diameter choice: ``{"od_mode", "od_preferred_mm", "od_max_mm", "accepted_sizes"}`` (``od_max_mm`` = the stated diameter: the hard limit in "existing", the diameter itself in "custom").
 
@@ -466,8 +493,7 @@ def od_choice(draft: Any) -> dict:
     sizes = []
     if mode == "existing" and isinstance(value.get("od_accepted_sizes"), list):
         for item in value["od_accepted_sizes"]:
-            if isinstance(item, dict) and all(isinstance(item.get(k), (int, float)) and not isinstance(item.get(k), bool)
-                                              for k in ("od_mm", "slots", "poles")):
+            if _valid_size(item):
                 sizes.append({"od_mm": item["od_mm"], "slots": int(item["slots"]), "poles": int(item["poles"])})
     return {"od_mode": mode, "od_preferred_mm": value.get("od_preferred_mm") if mode == "existing" else None,
             "od_max_mm": value.get("outer_diameter_mm"), "accepted_sizes": sizes}
@@ -1262,6 +1288,7 @@ def validation_errors(draft: dict) -> list[dict]:
                         errors.append({"field": fid, "section": sid, "message": "Enter at least one relevant value"})
     errors.extend(cooling_load_errors(draft))
     errors.extend(ordered_pair_errors(draft))
+    errors.extend(od_size_errors(draft))
     for sim in simulation_minimum_errors(draft):  # the simulation minimum: "not known yet" is refused here
         # a filled but incomplete answer already carries its own, more exact errors (`2_1.voltage_nominal_V`, `key_points[0].name`)
         if any(str(e.get("field", "")).startswith((sim["field"] + ".", sim["field"] + "[")) for e in errors):

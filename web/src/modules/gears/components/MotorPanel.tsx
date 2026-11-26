@@ -6,7 +6,7 @@ import { useTranslation } from 'react-i18next';
 import { useRememberedView } from '../../../lib/useRememberedView';
 import { fetchFamilyTree } from '../../../lib/familyTree';
 import { GearsApiError, drivetrainApi } from '../api';
-import { MAX_ROWS, buildDrivetrainRequest, defaultRows, drivetrainErrorKey, motorOptions, validateMotorMemory, type DrivetrainResponse, type LoadRow, type MotorMemory } from '../drivetrain';
+import { MAX_ROWS, PICKER_MENU_PROPS, buildDrivetrainRequest, canCalculate, pickConfiguration, pickDie, defaultRows, drivetrainErrorKey, motorOptions, validateMotorMemory, type DrivetrainResponse, type LoadRow, type MotorMemory } from '../drivetrain';
 import { errorMap } from '../plain';
 import type { RequestRecord } from '../types';
 import DrivetrainResults from './DrivetrainResults';
@@ -47,7 +47,6 @@ export default function MotorPanel({ buildInline, saved }: { buildInline: () => 
       else setFailure(e instanceof Error ? e.message : String(e));
     } finally { setBusy(false); }
   };
-  const ready = !!die && !!cfg && mem.rows.length > 0;
   const rowErr = (i: number, f: string) => fieldErr[`/load/${i}/${f}`];
   const unplaced = errors.filter((e) => !/^\/(motor\/(die|configuration)|load\/\d+\/)/.test(drivetrainErrorKey(e.path)));
 
@@ -56,13 +55,13 @@ export default function MotorPanel({ buildInline, saved }: { buildInline: () => 
       <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap', alignItems: 'center' }}>
         <Tooltip title={fieldErr['/motor/die'] ?? t('tip.motorDie')}>
           <TextField select size="small" label={t('l.motorDie')} value={die ? mem.die : ''} sx={{ width: 190 }} error={!!fieldErr['/motor/die']} data-testid="gears-motor-die"
-            onChange={(e) => setMem({ ...mem, die: e.target.value, configuration: '' })} slotProps={{ inputLabel: { shrink: true } }}>
+            onChange={(e) => setMem(pickDie(mem, e.target.value))} slotProps={{ inputLabel: { shrink: true }, select: { MenuProps: PICKER_MENU_PROPS } }}>
             {options.dies.map((d) => <MenuItem key={d.name} value={d.name}>{d.name}</MenuItem>)}
           </TextField>
         </Tooltip>
         <Tooltip title={fieldErr['/motor/configuration'] ?? t('tip.motorConfig')}>
           <TextField select size="small" label={t('l.motorConfig')} value={cfg ? mem.configuration : ''} sx={{ width: 190 }} error={!!fieldErr['/motor/configuration']} data-testid="gears-motor-config" disabled={!die}
-            onChange={(e) => setMem({ ...mem, configuration: e.target.value })} slotProps={{ inputLabel: { shrink: true } }}>
+            onChange={(e) => setMem(pickConfiguration(mem, e.target.value))} slotProps={{ inputLabel: { shrink: true }, select: { MenuProps: PICKER_MENU_PROPS } }}>
             {(die?.configs ?? []).map((x) => <MenuItem key={x.name} value={x.name}>{x.name}</MenuItem>)}
           </TextField>
         </Tooltip>
@@ -87,7 +86,7 @@ export default function MotorPanel({ buildInline, saved }: { buildInline: () => 
             <NumField label={t('l.loadSpeed')} tip={t('tip.loadSpeed')} value={r.speed_out_rpm} error={rowErr(i, 'speed_out_rpm')} width={104} onChange={(v) => setRow(i, { speed_out_rpm: v })} />
             <Tooltip title={t('tip.loadDuty')}>
               <TextField select size="small" label={t('l.loadDuty')} value={cfg?.duties.some((d) => d.name === r.duty) ? r.duty : ''} sx={{ width: 150 }} disabled={!cfg}
-                onChange={(e) => setRow(i, { duty: e.target.value })} slotProps={{ inputLabel: { shrink: true } }}>
+                onChange={(e) => setRow(i, { duty: e.target.value })} slotProps={{ inputLabel: { shrink: true }, select: { MenuProps: PICKER_MENU_PROPS } }}>
                 <MenuItem value="">{t('l.dutyAuto')}</MenuItem>
                 {(cfg?.duties ?? []).map((d) => <MenuItem key={d.name} value={d.name}>{d.name}{d.kind ? ` (${d.kind})` : ''}</MenuItem>)}
               </TextField>
@@ -99,7 +98,7 @@ export default function MotorPanel({ buildInline, saved }: { buildInline: () => 
         <Box sx={{ display: 'flex', gap: 1, alignItems: 'center' }}>
           <Tooltip title={t('tip.addLoad')}><span><Button size="small" disabled={mem.rows.length >= MAX_ROWS} data-testid="gears-add-load"
             onClick={() => setMem({ ...mem, rows: [...mem.rows, { name: `load${mem.rows.length + 1}`, torque_out_Nm: 5, speed_out_rpm: 100, duty: '' }] })}>+ {t('l.addLoad')}</Button></span></Tooltip>
-          <Button size="small" variant="contained" disabled={busy || !ready} data-testid="gears-dt-run" onClick={run}>{t('l.calculate')}</Button>
+          <Button size="small" variant="contained" disabled={!canCalculate(mem, options, busy)} data-testid="gears-dt-run" onClick={run}>{t('l.calculate')}</Button>
           {busy && <CircularProgress size={16} />}
         </Box>
       </Box>

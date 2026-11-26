@@ -156,3 +156,16 @@ export function validateMotorMemory(raw: unknown): MotorMemory | null {
   }
   return r;
 }
+
+/** The picker transitions of the With motor tab (pure; tests call them).  Picking a die clears the configuration; the Calculate button
+ *  needs a known die and configuration and at least one row. */
+export const pickDie = (mem: MotorMemory, die: string): MotorMemory => ({ ...mem, die, configuration: '' });
+export const pickConfiguration = (mem: MotorMemory, configuration: string): MotorMemory => ({ ...mem, configuration });
+export function canCalculate(mem: MotorMemory, options: MotorOptions, busy: boolean): boolean {
+  const cfg = options.dies.find((d) => d.name === mem.die)?.configs.find((c) => c.name === mem.configuration);
+  return !busy && !!cfg && mem.rows.length > 0;
+}
+
+/** Menu props of the pickers: no exit animation.  With MUI's default 200 ms exit the closing menu's full-screen layer is still on top of
+ *  the page, so the first click on Calculate right after choosing a configuration landed on that layer and did nothing. */
+export const PICKER_MENU_PROPS = { transitionDuration: 0 } as const;

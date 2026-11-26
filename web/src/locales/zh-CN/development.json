@@ -1327,7 +1327,8 @@
       "priceTip": "推算值：{derived}。在此填写将替换推算价格。",
       "weeks": "周数",
       "total": "下一台（未含不可预见费）",
-      "unavailable": "暂时无法计算。"
+      "unavailable": "暂时无法计算。",
+      "invalid": "数值无效，未保存"
     },
     "origin": {
       "dhlTable": "运费表 {date}，区域 {zone}（{basis}），{from}→{to}，计费重 {weight} kg，+{margin} %",
@@ -1421,7 +1422,8 @@
       "perMotor": "每台电机 1 个",
       "zoneBasis": {
         "calibrated": "已按真实报价校准",
-        "estimate": "估算，尚无真实报价"
+        "estimate": "估算，尚无真实报价",
+        "extrapolated": "估算，由一份空运报价外推（快递没有单独报价）"
       },
       "service": {
         "express": "快递",

@@ -45,7 +45,7 @@ def _fill(line, amount, weeks=None):
 # ── the table ────────────────────────────────────────────────────────────────────────────────────────────────────────
 
 def test_the_table_reproduces_the_one_real_quote_and_marks_the_calibrated_zone(table):
-    q, why = SR.quote("AR", [{"weight_kg": 75, "box_cm": (60, 60, 40)}] * 2, table)
+    q, why = SR.quote("AR", [{"weight_kg": 75, "box_cm": (60, 60, 40)}] * 2, table, "air_freight")      # the real quote is air freight
     assert why == "" and q["amount"] == pytest.approx(20169.14, abs=0.01) and q["transit_days"] == 16
     assert q["zone"] == "SA" and q["zone_basis"] == "calibrated" and q["chargeable_kg"] == 150.0 and q["volumetric_kg"] == 57.6
     de, _ = SR.quote("DE", [{"weight_kg": 40, "box_cm": SR.default_box_cm(40, table)}], table)
@@ -193,7 +193,7 @@ def test_the_next_unit_is_stored_and_normalised(schema):
     assert again["next_unit"]["include_testing"] is True and again["next_unit"]["price"] == 3900.0
     old = json.loads(json.dumps(est))
     old.pop("next_unit")
-    assert CE.normalize_estimate(old, schema, "alpha")["next_unit"] == CE.default_next_unit("EUR")       # an older stored estimate
+    assert "next_unit" not in CE.normalize_estimate(old, schema, "alpha")        # an older stored estimate stays without the block
     with pytest.raises(CE.EstimateError):
         CE.normalize_estimate({**est, "next_unit": "x"}, schema, "alpha")
     assert any(c["path"] == "next_unit.price" for c in CE.diff(_priced(schema), est))
@@ -203,13 +203,14 @@ def test_the_next_unit_is_stored_and_normalised(schema):
 
 def test_the_quote_carries_the_next_unit_with_contingency_and_the_dap_note_only_when_computable(schema):
     est = _priced(schema)
-    before = Q.build_quote(est, schema, "2026-11-22")
-    assert before["next_unit"] is None and before["excluded"] is None and tuple(before) == Q.QUOTE_KEYS      # as it read before
+    before = Q.build_quote(est, schema, "2026-11-22", terms=1)
+    assert tuple(before) == Q.QUOTE_KEYS_V1                                    # a snapshot frozen before: the old whitelist, no new key
     est["next_unit"]["shipping"].update({"status": "filled", "amount": 400.0, "currency": "EUR", "source": "manual", "weeks": 2.0})
     quote = Q.build_quote(est, schema, "2026-11-22")
     assert quote["next_unit"] == {"price": 3740, "weeks": 8}                  # 3400 x 1.10 (the contingency is folded in, never named)
     assert quote["excluded"] == "Duties and import VAT are not included."
     assert quote["total_price"] == before["total_price"] and quote["iterations"] == before["iterations"]
+    assert Q.build_quote(est, schema, "2026-11-22", terms=1) == before             # the next unit never leaks into an old snapshot
     assert "400" not in json.dumps(quote["next_unit"]) and set(quote["next_unit"]) == set(Q.NEXT_UNIT_KEYS)
 
 
@@ -297,8 +298,10 @@ def test_calibrated_only_at_the_calibration_point_otherwise_extrapolated_or_esti
     assert far["zone"] == "SA" and far["zone_basis"] == "extrapolated"                # same zone, other country and weight
     ar_small, _ = SR.quote("AR", [{"weight_kg": 20, "box_cm": SR.default_box_cm(20, table)}], table)
     assert ar_small["zone_basis"] == "extrapolated"
-    ar, _ = SR.quote("AR", [{"weight_kg": 75, "box_cm": (60, 60, 40)}] * 2, table)
+    ar, _ = SR.quote("AR", [{"weight_kg": 75, "box_cm": (60, 60, 40)}] * 2, table, "air_freight")
     assert ar["zone_basis"] == "calibrated"
+    ar_express, _ = SR.quote("AR", [{"weight_kg": 75, "box_cm": (60, 60, 40)}] * 2, table, "express")
+    assert ar_express["zone_basis"] == "extrapolated" and ar_express["amount"] == ar["amount"]      # same factor, no quote of its own
 
 
 def test_estimated_shipping_lines_are_listed_for_the_acknowledgement(schema):
@@ -310,6 +313,6 @@ def test_estimated_shipping_lines_are_listed_for_the_acknowledgement(schema):
 
 def test_the_dap_sentence_follows_the_snapshot_version_and_the_shipping_not_the_next_unit(schema):
     est = _priced(schema)                                                             # shipping 1500 in every iteration, no next unit
-    assert Q.build_quote(est, schema, "2026-11-22")["excluded"] is None                # a snapshot frozen before: unchanged
+    assert "excluded" not in Q.build_quote(est, schema, "2026-11-22", terms=1)         # a snapshot frozen before: unchanged
     new = Q.build_quote(est, schema, "2026-11-22", Q.TERMS)
     assert new["excluded"] == "Duties and import VAT are not included." and new["next_unit"] is None

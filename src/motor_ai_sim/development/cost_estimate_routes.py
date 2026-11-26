@@ -307,6 +307,11 @@ async def share_quote(project_id: str, request: Request, response: Response, adm
         raise HTTPException(status_code=409, detail={
             "code": "development_not_shareable", "iterations": development,
             "message": "The development line is admin-only: clear it before sharing a quote."})
+    stale_iterations = CE.stale_shipping_lines(estimate)
+    if stale_iterations:                               # whatever the next unit holds and whatever was acknowledged
+        raise HTTPException(status_code=409, detail={
+            "code": "shipping_stale", "iterations": [r["iteration"] for r in stale_iterations],
+            "message": stale_iterations[0]["reason"][:200]})
     stale = CE.next_unit_shipping_stale(estimate, (estimate.get("next_unit") or {}).get("shipping") or {})
     if stale and (estimate.get("next_unit") or {}).get("price") is None:
         raise HTTPException(status_code=409, detail={"code": "next_unit_shipping_stale", "message": stale[:200]})

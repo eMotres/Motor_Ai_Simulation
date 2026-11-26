@@ -167,9 +167,6 @@
    },
    "ship_margin_pct": 20.0,
    "ship_round_eur": 100.0,
-   "ship_parcels": null,
-   "ship_box_cm": null,
-   "ship_service": "express",
    "payment_terms": ""
   },
   "fx": null,
@@ -317,50 +314,11 @@
     "note": "2 x 75 kg crates 60x60x40 cm; excl. VAT"
    }
   ],
-  "next_unit": {
-   "include_testing": false,
-   "price": null,
-   "weeks": null,
-   "shipping": {
-    "status": "missing",
-    "amount": null,
-    "currency": "EUR",
-    "pct": null,
-    "source": null,
-    "source_ref": null,
-    "factor": null,
-    "date": null,
-    "by": null,
-    "note": "",
-    "hint": "",
-    "weeks": null
-   },
-   "note": "",
-   "parcels": null,
-   "box_cm": null
-  },
   "migration": null,
   "updated_at": "2026-11-02T10:00:00+00:00",
   "updated_by": "admin@example.test"
  },
  "computed": {
-  "next_unit": {
-   "available": false,
-   "reason": "the next unit's shipping is not filled",
-   "basis_iteration": 2,
-   "include_testing": false,
-   "manufacturing": 333.33,
-   "testing": null,
-   "shipping": null,
-   "derived": null,
-   "total": null,
-   "weeks": null,
-   "weeks_parts": {},
-   "weeks_missing": [],
-   "overridden": false,
-   "currency": "EUR",
-   "shipping_stale": false
-  },
   "iterations": [
    {
     "index": 1,
@@ -771,26 +729,6 @@
    "now": 9.0
   },
   {
-   "path": "next_unit.include_testing",
-   "was": null,
-   "now": false
-  },
-  {
-   "path": "next_unit.shipping.currency",
-   "was": null,
-   "now": "EUR"
-  },
-  {
-   "path": "next_unit.shipping.note",
-   "was": null,
-   "now": ""
-  },
-  {
-   "path": "next_unit.shipping.status",
-   "was": null,
-   "now": "missing"
-  },
-  {
    "path": "settings.complex",
    "was": null,
    "now": false
@@ -829,11 +767,6 @@
    "path": "settings.ship_round_eur",
    "was": null,
    "now": 100.0
-  },
-  {
-   "path": "settings.ship_service",
-   "was": null,
-   "now": "express"
   },
   {
    "path": "settings.ship_to",

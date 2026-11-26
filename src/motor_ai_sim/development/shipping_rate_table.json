@@ -3,7 +3,7 @@
   "date": "2026-11-22",
   "origin": "CN Shanghai",
   "currency": "CNY",
-  "note": "Express / air freight rate table, NOT a carrier tariff. Zone SA is calibrated on the one real quote we have (2026-11-02, Shanghai -> Buenos Aires, 2 x 75 kg, air freight CNY 20169.14 excl. VAT, 16 days); every other zone is the same curve scaled by an ESTIMATED zone factor and is marked 'estimate' until a quote for it is entered. No paid API, no credentials.",
+  "note": "Express / air freight rate table, NOT a carrier tariff. Zone SA is calibrated on the one real quote we have (2026-11-02, Shanghai -> Buenos Aires, 2 x 75 kg, air freight CNY 20169.14 excl. VAT, 16 days); express and air freight carry the SAME factor (no separate quote for express), so only air freight at that point is 'calibrated'; every other zone is the same curve scaled by an ESTIMATED zone factor and is marked 'estimate' until a quote for it is entered. No paid API, no credentials.",
   "volumetric_divisor": 5000,
   "fuel_surcharge_pct": 15,
   "default_density_kg_m3": 500,
@@ -19,7 +19,7 @@
   ],
   "base_cny_per_kg": 116.922551,
   "min_charge_cny": 900,
-  "calibration": {"zone": "SA", "country": "AR", "chargeable_kg": 150.0, "tolerance_pct": 25},
+  "calibration": {"zone": "SA", "country": "AR", "service": "air_freight", "chargeable_kg": 150.0, "tolerance_pct": 25},
   "zones": {
     "SA": {"name": {"en": "South America", "zh-CN": "南美"}, "factor": 1.0, "transit_days": 16, "basis": "calibrated",
            "countries": ["AR", "BO", "BR", "CL", "CO", "EC", "GY", "PY", "PE", "SR", "UY", "VE"]},

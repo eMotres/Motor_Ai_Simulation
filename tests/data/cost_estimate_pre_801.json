@@ -1,0 +1,874 @@
+{
+ "stored": {
+  "version": 2,
+  "schema_version": 2,
+  "project_id": "alpha",
+  "revision": 4,
+  "settings": {
+   "complex": false,
+   "iterations": 2,
+   "currency": "EUR",
+   "contingency_pct": 10.0,
+   "ship_to": {
+    "country": "AR",
+    "city": "Buenos Aires"
+   },
+   "payment_terms": "70 % before each iteration"
+  },
+  "iterations": [
+   {
+    "index": 1,
+    "motors": 2,
+    "bench": "dyno",
+    "weeks_override": null,
+    "lines": {
+     "tooling": {
+      "status": "filled",
+      "amount": 1000.0,
+      "currency": "EUR",
+      "pct": null,
+      "source": "manual",
+      "source_ref": null,
+      "factor": null,
+      "date": "2026-11-02",
+      "by": "admin@example.test",
+      "note": "",
+      "hint": "",
+      "weeks": 6
+     },
+     "manufacturing": {
+      "status": "filled",
+      "amount": 333.33,
+      "currency": "EUR",
+      "pct": null,
+      "source": "manual",
+      "source_ref": null,
+      "factor": null,
+      "date": "2026-11-02",
+      "by": "admin@example.test",
+      "note": "",
+      "hint": "",
+      "weeks": 4
+     },
+     "testing": {
+      "status": "filled",
+      "amount": 250.0,
+      "currency": "EUR",
+      "pct": null,
+      "source": "manual",
+      "source_ref": null,
+      "factor": null,
+      "date": "2026-11-02",
+      "by": "admin@example.test",
+      "note": "",
+      "hint": "",
+      "weeks": 2
+     },
+     "shipping": {
+      "status": "filled",
+      "amount": 101.11,
+      "currency": "EUR",
+      "pct": null,
+      "source": "manual",
+      "source_ref": null,
+      "factor": null,
+      "date": "2026-11-02",
+      "by": "admin@example.test",
+      "note": "note",
+      "hint": "",
+      "weeks": 3
+     }
+    }
+   },
+   {
+    "index": 2,
+    "motors": 3,
+    "bench": "none",
+    "weeks_override": 9,
+    "lines": {
+     "tooling": {
+      "status": "filled",
+      "amount": 200.0,
+      "currency": "EUR",
+      "pct": null,
+      "source": "manual",
+      "source_ref": null,
+      "factor": null,
+      "date": "2026-11-02",
+      "by": "admin@example.test",
+      "note": "",
+      "hint": "",
+      "weeks": 3
+     },
+     "manufacturing": {
+      "status": "filled",
+      "amount": 333.33,
+      "currency": "EUR",
+      "pct": null,
+      "source": "manual",
+      "source_ref": null,
+      "factor": null,
+      "date": "2026-11-02",
+      "by": "admin@example.test",
+      "note": "",
+      "hint": "",
+      "weeks": 4
+     },
+     "testing": {
+      "status": "missing",
+      "amount": null,
+      "currency": "EUR",
+      "pct": null,
+      "source": null,
+      "source_ref": null,
+      "factor": null,
+      "date": null,
+      "by": null,
+      "note": "",
+      "hint": "",
+      "weeks": null
+     },
+     "shipping": {
+      "status": "filled",
+      "amount": 120.0,
+      "currency": "EUR",
+      "pct": null,
+      "source": "manual",
+      "source_ref": null,
+      "factor": null,
+      "date": "2026-11-02",
+      "by": "admin@example.test",
+      "note": "",
+      "hint": "",
+      "weeks": 2
+     }
+    }
+   }
+  ],
+  "updated_at": "2026-11-02T10:00:00+00:00",
+  "updated_by": "admin@example.test"
+ },
+ "normalized": {
+  "version": 2,
+  "schema_version": 2,
+  "project_id": "alpha",
+  "revision": 4,
+  "settings": {
+   "complex": false,
+   "iterations": 2,
+   "currency": "EUR",
+   "contingency_pct": 10.0,
+   "display_currency": null,
+   "target_motor": null,
+   "ship_from": "CN Shanghai",
+   "ship_to": {
+    "country": "AR",
+    "city": "Buenos Aires"
+   },
+   "ship_margin_pct": 20.0,
+   "ship_round_eur": 100.0,
+   "payment_terms": "70 % before each iteration"
+  },
+  "fx": null,
+  "iterations": [
+   {
+    "index": 1,
+    "motors": 2,
+    "bench": "dyno",
+    "weeks_override": null,
+    "lines": {
+     "tooling": {
+      "status": "filled",
+      "amount": 1000.0,
+      "currency": "EUR",
+      "pct": null,
+      "source": "manual",
+      "source_ref": null,
+      "factor": null,
+      "date": "2026-11-02",
+      "by": "admin@example.test",
+      "note": "",
+      "hint": "",
+      "weeks": 6.0
+     },
+     "manufacturing": {
+      "status": "filled",
+      "amount": 333.33,
+      "currency": "EUR",
+      "pct": null,
+      "source": "manual",
+      "source_ref": null,
+      "factor": null,
+      "date": "2026-11-02",
+      "by": "admin@example.test",
+      "note": "",
+      "hint": "",
+      "weeks": 4.0
+     },
+     "testing": {
+      "status": "filled",
+      "amount": 250.0,
+      "currency": "EUR",
+      "pct": null,
+      "source": "manual",
+      "source_ref": null,
+      "factor": null,
+      "date": "2026-11-02",
+      "by": "admin@example.test",
+      "note": "",
+      "hint": "",
+      "weeks": 2.0
+     },
+     "shipping": {
+      "status": "filled",
+      "amount": 101.11,
+      "currency": "EUR",
+      "pct": null,
+      "source": "manual",
+      "source_ref": null,
+      "factor": null,
+      "date": "2026-11-02",
+      "by": "admin@example.test",
+      "note": "note",
+      "hint": "",
+      "weeks": 3.0
+     }
+    }
+   },
+   {
+    "index": 2,
+    "motors": 3,
+    "bench": "none",
+    "weeks_override": 9.0,
+    "lines": {
+     "tooling": {
+      "status": "filled",
+      "amount": 200.0,
+      "currency": "EUR",
+      "pct": null,
+      "source": "manual",
+      "source_ref": null,
+      "factor": null,
+      "date": "2026-11-02",
+      "by": "admin@example.test",
+      "note": "",
+      "hint": "",
+      "weeks": 3.0
+     },
+     "manufacturing": {
+      "status": "filled",
+      "amount": 333.33,
+      "currency": "EUR",
+      "pct": null,
+      "source": "manual",
+      "source_ref": null,
+      "factor": null,
+      "date": "2026-11-02",
+      "by": "admin@example.test",
+      "note": "",
+      "hint": "",
+      "weeks": 4.0
+     },
+     "testing": {
+      "status": "missing",
+      "amount": null,
+      "currency": "EUR",
+      "pct": null,
+      "source": null,
+      "source_ref": null,
+      "factor": null,
+      "date": null,
+      "by": null,
+      "note": "",
+      "hint": "",
+      "weeks": null
+     },
+     "shipping": {
+      "status": "filled",
+      "amount": 120.0,
+      "currency": "EUR",
+      "pct": null,
+      "source": "manual",
+      "source_ref": null,
+      "factor": null,
+      "date": "2026-11-02",
+      "by": "admin@example.test",
+      "note": "",
+      "hint": "",
+      "weeks": 2.0
+     }
+    }
+   }
+  ],
+  "dhl_lanes": [
+   {
+    "from": "CN Shanghai",
+    "to_country": "AR",
+    "mode": "DHL Air Freight (Global Forwarding)",
+    "quoted_on": "2026-11-02",
+    "weight_kg": 150.0,
+    "price": 20169.14,
+    "currency": "CNY",
+    "transit_days": 16,
+    "source": "dhl.com get-a-quote",
+    "note": "2 x 75 kg crates 60x60x40 cm; excl. VAT"
+   }
+  ],
+  "migration": null,
+  "updated_at": "2026-11-02T10:00:00+00:00",
+  "updated_by": "admin@example.test"
+ },
+ "computed": {
+  "iterations": [
+   {
+    "index": 1,
+    "motors": 2,
+    "bench": "dyno",
+    "tooling": {
+     "EUR": 1000.0
+    },
+    "manufacturing": {
+     "EUR": 666.66
+    },
+    "testing": {
+     "EUR": 250.0
+    },
+    "shipping": {
+     "EUR": 101.11
+    },
+    "subtotal": {
+     "EUR": 2017.77
+    },
+    "weeks": {
+     "tooling": 6.0,
+     "manufacturing": 4.0,
+     "testing": 2.0,
+     "shipping": 3.0,
+     "sum": 15.0,
+     "override": null,
+     "total": 15.0,
+     "missing": []
+    },
+    "lines": {
+     "tooling": {
+      "amount": {
+       "EUR": 1000.0
+      },
+      "origin": "entered by admin@example.test on 2026-11-02"
+     },
+     "manufacturing": {
+      "amount": {
+       "EUR": 666.66
+      },
+      "origin": "entered by admin@example.test on 2026-11-02"
+     },
+     "testing": {
+      "amount": {
+       "EUR": 250.0
+      },
+      "origin": "entered by admin@example.test on 2026-11-02"
+     },
+     "shipping": {
+      "amount": {
+       "EUR": 101.11
+      },
+      "origin": "entered by admin@example.test on 2026-11-02"
+     }
+    }
+   },
+   {
+    "index": 2,
+    "motors": 3,
+    "bench": "none",
+    "tooling": {
+     "EUR": 200.0
+    },
+    "manufacturing": {
+     "EUR": 999.99
+    },
+    "testing": {},
+    "shipping": {
+     "EUR": 120.0
+    },
+    "subtotal": {
+     "EUR": 1319.99
+    },
+    "weeks": {
+     "tooling": 3.0,
+     "manufacturing": 4.0,
+     "testing": null,
+     "shipping": 2.0,
+     "sum": 9.0,
+     "override": 9.0,
+     "total": 9.0,
+     "missing": []
+    },
+    "lines": {
+     "tooling": {
+      "amount": {
+       "EUR": 200.0
+      },
+      "origin": "entered by admin@example.test on 2026-11-02"
+     },
+     "manufacturing": {
+      "amount": {
+       "EUR": 999.99
+      },
+      "origin": "entered by admin@example.test on 2026-11-02"
+     },
+     "testing": {
+      "amount": {},
+      "origin": "no test bench in this iteration"
+     },
+     "shipping": {
+      "amount": {
+       "EUR": 120.0
+      },
+      "origin": "entered by admin@example.test on 2026-11-02"
+     }
+    }
+   }
+  ],
+  "subtotal": {
+   "EUR": 3337.76
+  },
+  "contingency_pct": 10.0,
+  "contingency": {
+   "EUR": 333.78
+  },
+  "total": {
+   "EUR": 3671.54
+  },
+  "currencies": [
+   "EUR"
+  ],
+  "converted": {
+   "currency": "EUR",
+   "available": true,
+   "missing_rates": [],
+   "iterations": [
+    {
+     "index": 1,
+     "lines": {
+      "tooling": 1000.0,
+      "manufacturing": 666.66,
+      "testing": 250.0,
+      "shipping": 101.11
+     },
+     "subtotal": 2017.77
+    },
+    {
+     "index": 2,
+     "lines": {
+      "tooling": 200.0,
+      "manufacturing": 999.99,
+      "testing": 0.0,
+      "shipping": 120.0
+     },
+     "subtotal": 1319.99
+    }
+   ],
+   "subtotal": 3337.76,
+   "contingency": 333.78,
+   "total": 3671.54
+  },
+  "missing": [],
+  "missing_count": 0,
+  "warnings": [],
+  "weeks_total": 24.0,
+  "weeks_missing": []
+ },
+ "diff": [
+  {
+   "path": "dhl_lanes.1",
+   "was": null,
+   "now": "CN Shanghai->AR 150 kg CNY 20169.14, 16 d, 2026-11-02"
+  },
+  {
+   "path": "iteration 1.bench",
+   "was": null,
+   "now": "dyno"
+  },
+  {
+   "path": "iteration 1.manufacturing.amount",
+   "was": null,
+   "now": 333.33
+  },
+  {
+   "path": "iteration 1.manufacturing.currency",
+   "was": null,
+   "now": "EUR"
+  },
+  {
+   "path": "iteration 1.manufacturing.note",
+   "was": null,
+   "now": ""
+  },
+  {
+   "path": "iteration 1.manufacturing.source",
+   "was": null,
+   "now": "manual"
+  },
+  {
+   "path": "iteration 1.manufacturing.status",
+   "was": null,
+   "now": "filled"
+  },
+  {
+   "path": "iteration 1.manufacturing.weeks",
+   "was": null,
+   "now": 4.0
+  },
+  {
+   "path": "iteration 1.motors",
+   "was": null,
+   "now": 2
+  },
+  {
+   "path": "iteration 1.shipping.amount",
+   "was": null,
+   "now": 101.11
+  },
+  {
+   "path": "iteration 1.shipping.currency",
+   "was": null,
+   "now": "EUR"
+  },
+  {
+   "path": "iteration 1.shipping.note",
+   "was": null,
+   "now": "note"
+  },
+  {
+   "path": "iteration 1.shipping.source",
+   "was": null,
+   "now": "manual"
+  },
+  {
+   "path": "iteration 1.shipping.status",
+   "was": null,
+   "now": "filled"
+  },
+  {
+   "path": "iteration 1.shipping.weeks",
+   "was": null,
+   "now": 3.0
+  },
+  {
+   "path": "iteration 1.testing.amount",
+   "was": null,
+   "now": 250.0
+  },
+  {
+   "path": "iteration 1.testing.currency",
+   "was": null,
+   "now": "EUR"
+  },
+  {
+   "path": "iteration 1.testing.note",
+   "was": null,
+   "now": ""
+  },
+  {
+   "path": "iteration 1.testing.source",
+   "was": null,
+   "now": "manual"
+  },
+  {
+   "path": "iteration 1.testing.status",
+   "was": null,
+   "now": "filled"
+  },
+  {
+   "path": "iteration 1.testing.weeks",
+   "was": null,
+   "now": 2.0
+  },
+  {
+   "path": "iteration 1.tooling.amount",
+   "was": null,
+   "now": 1000.0
+  },
+  {
+   "path": "iteration 1.tooling.currency",
+   "was": null,
+   "now": "EUR"
+  },
+  {
+   "path": "iteration 1.tooling.note",
+   "was": null,
+   "now": ""
+  },
+  {
+   "path": "iteration 1.tooling.source",
+   "was": null,
+   "now": "manual"
+  },
+  {
+   "path": "iteration 1.tooling.status",
+   "was": null,
+   "now": "filled"
+  },
+  {
+   "path": "iteration 1.tooling.weeks",
+   "was": null,
+   "now": 6.0
+  },
+  {
+   "path": "iteration 2.bench",
+   "was": null,
+   "now": "none"
+  },
+  {
+   "path": "iteration 2.manufacturing.amount",
+   "was": null,
+   "now": 333.33
+  },
+  {
+   "path": "iteration 2.manufacturing.currency",
+   "was": null,
+   "now": "EUR"
+  },
+  {
+   "path": "iteration 2.manufacturing.note",
+   "was": null,
+   "now": ""
+  },
+  {
+   "path": "iteration 2.manufacturing.source",
+   "was": null,
+   "now": "manual"
+  },
+  {
+   "path": "iteration 2.manufacturing.status",
+   "was": null,
+   "now": "filled"
+  },
+  {
+   "path": "iteration 2.manufacturing.weeks",
+   "was": null,
+   "now": 4.0
+  },
+  {
+   "path": "iteration 2.motors",
+   "was": null,
+   "now": 3
+  },
+  {
+   "path": "iteration 2.shipping.amount",
+   "was": null,
+   "now": 120.0
+  },
+  {
+   "path": "iteration 2.shipping.currency",
+   "was": null,
+   "now": "EUR"
+  },
+  {
+   "path": "iteration 2.shipping.note",
+   "was": null,
+   "now": ""
+  },
+  {
+   "path": "iteration 2.shipping.source",
+   "was": null,
+   "now": "manual"
+  },
+  {
+   "path": "iteration 2.shipping.status",
+   "was": null,
+   "now": "filled"
+  },
+  {
+   "path": "iteration 2.shipping.weeks",
+   "was": null,
+   "now": 2.0
+  },
+  {
+   "path": "iteration 2.testing.currency",
+   "was": null,
+   "now": "EUR"
+  },
+  {
+   "path": "iteration 2.testing.note",
+   "was": null,
+   "now": ""
+  },
+  {
+   "path": "iteration 2.testing.status",
+   "was": null,
+   "now": "missing"
+  },
+  {
+   "path": "iteration 2.tooling.amount",
+   "was": null,
+   "now": 200.0
+  },
+  {
+   "path": "iteration 2.tooling.currency",
+   "was": null,
+   "now": "EUR"
+  },
+  {
+   "path": "iteration 2.tooling.note",
+   "was": null,
+   "now": ""
+  },
+  {
+   "path": "iteration 2.tooling.source",
+   "was": null,
+   "now": "manual"
+  },
+  {
+   "path": "iteration 2.tooling.status",
+   "was": null,
+   "now": "filled"
+  },
+  {
+   "path": "iteration 2.tooling.weeks",
+   "was": null,
+   "now": 3.0
+  },
+  {
+   "path": "iteration 2.weeks_override",
+   "was": null,
+   "now": 9.0
+  },
+  {
+   "path": "settings.complex",
+   "was": null,
+   "now": false
+  },
+  {
+   "path": "settings.contingency_pct",
+   "was": null,
+   "now": 10.0
+  },
+  {
+   "path": "settings.currency",
+   "was": null,
+   "now": "EUR"
+  },
+  {
+   "path": "settings.iterations",
+   "was": null,
+   "now": 2
+  },
+  {
+   "path": "settings.payment_terms",
+   "was": null,
+   "now": "70 % before each iteration"
+  },
+  {
+   "path": "settings.ship_from",
+   "was": null,
+   "now": "CN Shanghai"
+  },
+  {
+   "path": "settings.ship_margin_pct",
+   "was": null,
+   "now": 20.0
+  },
+  {
+   "path": "settings.ship_round_eur",
+   "was": null,
+   "now": 100.0
+  },
+  {
+   "path": "settings.ship_to",
+   "was": null,
+   "now": {
+    "country": "AR",
+    "city": "Buenos Aires"
+   }
+  },
+  {
+   "path": "total.EUR",
+   "was": null,
+   "now": 3671.54
+  }
+ ],
+ "weeks": [
+  {
+   "tooling": 6.0,
+   "manufacturing": 4.0,
+   "testing": 2.0,
+   "shipping": 3.0,
+   "sum": 15.0,
+   "override": null,
+   "total": 15.0,
+   "missing": []
+  },
+  {
+   "tooling": 3.0,
+   "manufacturing": 4.0,
+   "testing": null,
+   "shipping": 2.0,
+   "sum": 9.0,
+   "override": 9.0,
+   "total": 9.0,
+   "missing": []
+  }
+ ],
+ "quote": {
+  "currency": "EUR",
+  "iterations": [
+   {
+    "index": 1,
+    "motors": 2,
+    "bench": "dyno",
+    "lines": {
+     "tooling": {
+      "price": 1101,
+      "weeks": 6
+     },
+     "manufacturing": {
+      "price": 733,
+      "weeks": 4
+     },
+     "testing": {
+      "price": 275,
+      "weeks": 2
+     },
+     "shipping": {
+      "price": 111,
+      "weeks": 3
+     }
+    },
+    "price": 2220,
+    "weeks": 15
+   },
+   {
+    "index": 2,
+    "motors": 3,
+    "bench": "none",
+    "lines": {
+     "tooling": {
+      "price": 220,
+      "weeks": 3
+     },
+     "manufacturing": {
+      "price": 1100,
+      "weeks": 4
+     },
+     "testing": {
+      "price": 0,
+      "weeks": null
+     },
+     "shipping": {
+      "price": 132,
+      "weeks": 2
+     }
+    },
+    "price": 1452,
+    "weeks": 9
+   }
+  ],
+  "total_price": 3672,
+  "total_weeks": 24,
+  "exchange_rates": null,
+  "delivery": "DAP Buenos Aires",
+  "payment_terms": "70 % before each iteration",
+  "shared_on": "2026-11-03"
+ }
+}

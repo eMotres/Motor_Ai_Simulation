@@ -8,7 +8,7 @@ import {
   stepState, totalsView, iterationSubtotal, lineTotal, mergeEdits, reconcile, fieldLabel,
   acceptSuggestion, addIteration, blankLane, dhlDetails, dhlOrigin, iterationWeeks, laneErrors, projectWeeks, readView, removeIteration, removeLane,
   setLineWeeks, setShipTo, setWeeksOverride, suggestionAt, suggestionKey, tableModel, upsertLane, validWeeks, weeksText, writeView,
-  applyAuto, autoDhlIterations, autoKey, setDhlAuto, OPTIONAL_LINE_IDS,
+  applyAuto, autoDhlIterations, autoKey, setDhlAuto, OPTIONAL_LINE_IDS, setNextUnit, setNextUnitShipping, blankNextUnit,
 } from '../costEstimate.ts';
 
 // the real schema the server serves
@@ -690,4 +690,70 @@ test('a concurrent edit of the development line merges like any other line', () 
   const { merged, overridden } = mergeEdits(synced, mine, synced);
   assert.equal(merged.iterations[0].lines.development.amount, 900);
   assert.deepEqual(overridden, []);
+});
+
+// ── the next unit survives a 409 retry (Astra review 2026-11-26) ───────────────────────────────────────────────────────
+
+test('a next-unit price typed here is kept when another session saved first (the 3900 EUR regression)', () => {
+  const synced = estimate(2);
+  const mine = setNextUnit(synced, { price: 3900 });
+  const latest = { ...estimate(2), revision: 4, settings: { ...synced.settings, contingency_pct: 12 } };      // someone changed an unrelated setting
+  const { merged, overridden } = mergeEdits(synced, mine, latest);
+  assert.equal(merged.next_unit.price, 3900);
+  assert.equal(merged.settings.contingency_pct, 12);
+  assert.deepEqual(overridden, []);
+});
+
+test('next-unit fields are merged one by one; a clash is reported and the user value wins', () => {
+  const synced = { ...estimate(2), next_unit: { ...blankNextUnit(), price: 4000, note: 'a' } };
+  const mine = setNextUnit(setNextUnit(synced, { price: 3900 }), { parcels: 2 });
+  const latest = { ...synced, revision: 5, next_unit: { ...synced.next_unit, price: 4100, note: 'b', include_testing: true } };
+  const { merged, overridden } = mergeEdits(synced, mine, latest);
+  assert.equal(merged.next_unit.price, 3900);                       // his edit, also changed elsewhere: kept, and told
+  assert.equal(merged.next_unit.parcels, 2);
+  assert.equal(merged.next_unit.note, 'b');                         // the other session's untouched field stays
+  assert.equal(merged.next_unit.include_testing, true);
+  assert.deepEqual(overridden, [{ kind: 'nextUnit', field: 'price' }]);
+  assert.match(fieldLabel(overridden[0], schema, 'en', t), /nextUnit/);
+});
+
+test('an estimate with no next-unit block on any side keeps none after a merge', () => {
+  const synced = estimate(2);
+  const { merged } = mergeEdits(synced, setSetting(synced, schema, 'contingency_pct', 15), { ...synced, revision: 9 });
+  assert.equal('next_unit' in merged, false);
+});
+
+test('the next unit shipping edit is merged as one line', () => {
+  const synced = estimate(2);
+  const mine = setNextUnitShipping(synced, 300, '2026-11-26', 'a@b.c');
+  const { merged } = mergeEdits(synced, mine, { ...synced, revision: 8 });
+  assert.equal(merged.next_unit.shipping.amount, 300);
+});
+
+test('an automatic next-unit shipping line is part of the automatic lines and takes the server numbers', () => {
+  const e = estimate(1);
+  e.next_unit = { ...blankNextUnit(), shipping: { ...blank(), status: 'filled', amount: 500, source: 'dhl', source_ref: null, weeks: 1 } };
+  assert.deepEqual(autoDhlIterations(e), [0]);
+  const k0 = autoKey(e);
+  e.next_unit.parcels = 2;
+  assert.notEqual(autoKey(e), k0);
+  const got = applyAuto(e, { next_unit: { amount: 650, weeks: null, source_ref: null, hint: '' } });
+  assert.equal(got.next_unit.shipping.amount, 650);
+  assert.equal(e.next_unit.shipping.amount, 500);
+});
+
+test('the review table and the Steps editor carry the development line only when the iteration has it', () => {
+  const it = { index: 1, motors: 2, bench: 'dyno', tooling: { EUR: 10 }, manufacturing: { EUR: 20 }, testing: { EUR: 5 }, shipping: { EUR: 1 }, subtotal: { EUR: 36 }, lines: {} };
+  const without = reviewRows({ iterations: [it], converted: { available: false } }, 'missing')[0];
+  assert.equal('development' in without, false);                                    // an old estimate: the row is as it was
+  const withDev = reviewRows({ iterations: [{ ...it, development: { EUR: 1500 }, subtotal: { EUR: 1536 } }], converted: { available: false } }, 'missing')[0];
+  assert.equal(withDev.development, 'EUR 1 500.00');
+  const conv = { available: true, total: 1, currency: 'EUR', iterations: [{ index: 1, lines: { tooling: 10, manufacturing: 20, testing: 5, shipping: 1, development: 1500 }, subtotal: 1536 }] };
+  assert.equal(reviewRows({ iterations: [{ ...it, development: { EUR: 1500 } }], converted: conv }, 'missing')[0].development, 'EUR 1 500.00');
+  const computed = { iterations: [{ index: 1, lines: { development: { amount: { EUR: 1500 }, origin: '' } } }] };
+  assert.equal(lineTotal(computed, 1, 'development'), 'EUR 1 500.00');
+  assert.equal(lineTotal({ iterations: [{ index: 1, lines: {} }] }, 1, 'development'), '—');
+  // the step's editor edits the line the table edits: the same function creates it
+  const e = editLine(estimate(1), { iteration: 1, line: 'development' }, { amount: 700 }, 'a@b.c', '2026-11-26');
+  assert.equal(e.iterations[0].lines.development.amount, 700);
 });

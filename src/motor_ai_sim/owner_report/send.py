@@ -40,11 +40,22 @@ def default_owner() -> str:
 
 
 def allowed_addresses() -> set:
-    """The addresses that may ever receive the report: administrators of this installation."""
-    out = {default_owner()}
+    """The addresses that may ever receive the report: administrators of this installation.  ONE strict registry load; a stored
+    factory (oem) or disabled account is excluded from EVERY source (the default owner, the notification addresses, the allowlist,
+    the admin accounts), and an unreadable registry answers the empty set (nothing is sent)."""
+    try:
+        from motor_ai_sim import users as U
+        reg = U._load()
+    except Exception:                                        # noqa: BLE001 - cannot tell who is an operator: no recipient
+        return set()
+    out = set()
+    try:
+        out.add(default_owner())
+    except Exception:                                        # noqa: BLE001
+        pass
     try:
         from motor_ai_sim import auth as A
-        out |= {e.lower() for e in A._ADMIN_EMAILS}
+        out |= {str(e).strip().lower() for e in A._ADMIN_EMAILS}
     except Exception:                                        # noqa: BLE001
         pass
     try:
@@ -52,24 +63,30 @@ def allowed_addresses() -> set:
         out |= {a.lower() for a in notify.recipients()}
     except Exception:                                        # noqa: BLE001
         pass
-    try:
-        from motor_ai_sim import users as U
-        for email, rec in U._load_soft().items():
-            if rec.get("role") == "admin" and not rec.get("disabled"):
-                out.add(str(email).lower())
-    except Exception:                                        # noqa: BLE001
-        pass
-    return {a for a in out if a}
+    for email, rec in reg.items():
+        if isinstance(rec, dict) and rec.get("role") == "admin" and not rec.get("disabled"):
+            out.add(str(email).strip().lower())
+
+    def barred(addr: str) -> bool:
+        rec = reg.get(addr)
+        return isinstance(rec, dict) and (bool(rec.get("disabled")) or str(rec.get("role") or "") == "oem")
+    return {a for a in out if a and not barred(a)}
 
 
 def recipients() -> list:
-    configured = _split(os.environ.get(ENV_TO, "")) or [default_owner()]
     allowed = allowed_addresses()
+    try:
+        owner = default_owner()
+    except Exception:                                        # noqa: BLE001
+        owner = ""
+    configured = _split(os.environ.get(ENV_TO, "")) or ([owner] if owner else [])
     ok = [a for a in configured if a in allowed]
     for a in configured:
         if a not in allowed:
             log.warning("owner_report: %s is not an administrator address - not used (OWNER_REPORT_TO is for the owner only)", a)
-    return ok or [default_owner()]
+    if ok:
+        return ok
+    return [owner] if owner and owner in allowed else []      # the fallback passes the same filter; none survives -> no recipient
 
 
 # -- state and lock ------------------------------------------------------------------------------------------------------------------
@@ -156,6 +173,8 @@ def build_message(report, to: list, marker: str = "owner-report") -> EmailMessag
 def _send(report, marker: str, deliver: Optional[Callable[[EmailMessage], None]]) -> dict:
     from motor_ai_sim import auth_email as E
     to = recipients()
+    if not to:                                               # nobody eligible (or the registry cannot be read): stop before delivery
+        return {"sent": False, "to": [], "error": "no_eligible_recipient"}
     if deliver is None and not E.smtp_configured():
         return {"sent": False, "to": to, "error": "smtp_not_configured"}
     try:

@@ -4,6 +4,7 @@ neutral fixture ids and made-up numbers only."""
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import pytest
 from fastapi import FastAPI, HTTPException
@@ -46,8 +47,9 @@ def _fill(line, amount, currency="EUR", by="owner@example.test"):
 
 # ── schema and settings ─────────────────────────────────────────────────────────────────────────────────────────────
 
-def test_schema_has_exactly_the_four_lines_and_the_settings(schema):
-    assert [ln["id"] for ln in schema["lines"]] == ["tooling", "manufacturing", "testing", "shipping"]
+def test_schema_has_the_four_lines_plus_the_optional_development_line_and_the_settings(schema):
+    assert [ln["id"] for ln in schema["lines"]] == ["tooling", "manufacturing", "testing", "shipping", "development"]
+    assert CE.LINES == ("tooling", "manufacturing", "testing", "shipping") and CE.OPTIONAL_LINES == ("development",)
     assert [f["id"] for f in schema["settings"]] == ["complex", "iterations", "contingency_pct"]
     assert [f["id"] for f in schema["iteration_fields"]] == ["motors", "bench"]
     # every amount is in EUR; USD / CNY exist for the final table and the rates only
@@ -62,7 +64,7 @@ def test_schema_has_exactly_the_four_lines_and_the_settings(schema):
                                "payment_terms": "", "ship_parcels": None, "ship_box_cm": None, "ship_service": "express"}
 
 
-def test_schema_refuses_a_fifth_line(tmp_path, schema):
+def test_schema_refuses_a_sixth_line(tmp_path, schema):
     bad = json.loads(json.dumps(schema))
     bad["lines"].append(dict(bad["lines"][0], id="travel"))
     p = tmp_path / "s.json"
@@ -1257,3 +1259,126 @@ def test_put_recomputes_the_automatic_dhl_line_when_the_motors_change(client, mo
     assert auto["1"]["amount"] == 2600.0 and auto["1"]["source_ref"]["dhl"]["weight_kg"] == 125.0 and auto["1"]["hint"] == ""
     assert "2" not in auto
     assert client.get(url).json()["estimate"]["iterations"][0]["lines"]["shipping"]["amount"] == kept["amount"]
+
+
+# ── the optional Development line (owner 2026-11-26) ────────────────────────────────────────────────────────────────
+
+# provenance: tests/data/regenerate_cost_estimate_before_development_line.py, run against 8086a23d (the commit before the development line)
+GOLDEN = json.loads((Path(__file__).parent / "data" / "cost_estimate_before_development_line.json").read_text(encoding="utf-8"))
+
+
+def _dump(value):
+    return json.dumps(value, indent=1, sort_keys=False)
+
+
+def test_an_estimate_stored_before_the_development_line_reads_and_computes_byte_for_byte_as_before(schema):
+    """The golden file was produced by the code WITHOUT the line (the base of this change): normalised estimate, computed
+    result (totals, weeks, missing), the stored-vs-nothing diff and the per-iteration weeks must come out identical."""
+    stored = json.loads(json.dumps(GOLDEN["stored"]))
+    est = CE.from_stored(stored, schema, "alpha")
+    assert _dump(est) == _dump(GOLDEN["normalized"])
+    assert all("development" not in it["lines"] for it in est["iterations"])          # the key is not added on read
+    computed = CE.compute(est, schema)
+    assert _dump(computed) == _dump(GOLDEN["computed"])
+    assert computed["weeks_total"] == 24.0 and computed["missing_count"] == 1
+    assert _dump(CE.diff(None, est, schema)) == _dump(GOLDEN["diff"])
+    assert _dump([CE.iteration_weeks(i) for i in est["iterations"]]) == _dump(GOLDEN["weeks"])
+    assert stored == GOLDEN["stored"]                                                  # reading never rewrites the stored document
+
+
+def test_an_absent_development_line_is_zero_and_never_missing(schema):
+    est = CE.from_stored(json.loads(json.dumps(GOLDEN["stored"])), schema, "alpha")
+    computed = CE.compute(est, schema)
+    assert not any(m["line"] == "development" for m in computed["missing"])
+    assert not any(m["line"] == "development" for m in computed["weeks_missing"])
+    for it in computed["iterations"]:
+        assert "development" not in it and "development" not in it["lines"] and "development" not in it["weeks"]
+        assert "development" not in it["weeks"]["missing"]
+
+
+def test_a_development_line_adds_to_the_total_and_to_the_weeks_in_sequence(schema):
+    stored = json.loads(json.dumps(GOLDEN["stored"]))
+    base = CE.compute(CE.from_stored(json.loads(json.dumps(GOLDEN["stored"])), schema, "alpha"), schema)
+    stored["iterations"][0]["lines"]["development"] = {"status": "filled", "amount": 1500.0, "currency": "EUR", "source": "manual",
+                                                       "weeks": 4, "note": "synthetic"}
+    est = CE.from_stored(stored, schema, "alpha")
+    assert est["iterations"][0]["lines"]["development"]["status"] == "filled"
+    assert "development" not in est["iterations"][1]["lines"]
+    got = CE.compute(est, schema)
+    assert got["iterations"][0]["development"] == {"EUR": 1500.0} and got["iterations"][0]["lines"]["development"]["amount"] == {"EUR": 1500.0}
+    assert got["iterations"][0]["subtotal"]["EUR"] == pytest.approx(base["iterations"][0]["subtotal"]["EUR"] + 1500.0)
+    assert got["total"]["EUR"] == pytest.approx(base["total"]["EUR"] + 1500.0 * 1.10, abs=0.01)    # contingency applies like to every line
+    assert got["converted"]["total"] == pytest.approx(base["converted"]["total"] + 1500.0 * 1.10, abs=0.01)
+    assert got["missing_count"] == base["missing_count"]
+    # weeks: the stages of an iteration are in SEQUENCE and the project is the sum of the iterations: development is one more stage
+    assert got["iterations"][0]["weeks"]["development"] == 4.0
+    assert got["iterations"][0]["weeks"]["sum"] == base["iterations"][0]["weeks"]["sum"] + 4.0
+    assert got["weeks_total"] == base["weeks_total"] + 4.0
+    # an iteration weeks_override still wins (iteration 2 has 9)
+    assert got["iterations"][1]["weeks"] == base["iterations"][1]["weeks"]
+
+
+def test_a_development_line_with_a_duration_only_is_zero_money_and_not_missing(schema):
+    stored = json.loads(json.dumps(GOLDEN["stored"]))
+    stored["iterations"][0]["lines"]["development"] = {"weeks": 2}
+    est = CE.from_stored(stored, schema, "alpha")
+    got = CE.compute(est, schema)
+    base = GOLDEN["computed"]
+    assert got["total"] == base["total"] and got["missing_count"] == base["missing_count"]
+    assert got["iterations"][0]["development"] == {} and got["weeks_total"] == base["weeks_total"] + 2.0
+
+
+def test_an_empty_development_line_is_dropped_so_the_estimate_stays_as_it_was(schema):
+    stored = json.loads(json.dumps(GOLDEN["stored"]))
+    stored["iterations"][0]["lines"]["development"] = CE.blank_line("EUR")          # what the web sends for an untouched cell
+    est = CE.normalize_estimate(stored, schema, "alpha")
+    assert "development" not in est["iterations"][0]["lines"]
+    assert _dump(CE.compute(est, schema)) == _dump(GOLDEN["computed"])
+
+
+def test_the_development_line_is_validated_like_the_other_lines(schema):
+    def with_dev(**kw):
+        stored = json.loads(json.dumps(GOLDEN["stored"]))
+        stored["iterations"][0]["lines"]["development"] = dict({"amount": 100.0, "currency": "EUR"}, **kw)
+        return stored
+    for bad in ({"amount": -1.0}, {"amount": "abc"}, {"currency": "CNY"}, {"weeks": -2}, {"weeks": 105}, {"source": "bogus"}, {"pct": 10}):
+        with pytest.raises(CE.EstimateError):
+            CE.normalize_estimate(with_dev(**bad), schema, "alpha")
+    stored = json.loads(json.dumps(GOLDEN["stored"]))
+    stored["iterations"][0]["lines"]["travel"] = {"amount": 1.0}
+    with pytest.raises(CE.EstimateError, match="unknown lines"):
+        CE.normalize_estimate(stored, schema, "alpha")
+
+
+def test_the_development_line_is_never_suggested_and_a_legacy_currency_is_converted(schema):
+    stored = json.loads(json.dumps(GOLDEN["stored"]))
+    stored["iterations"][0]["lines"]["development"] = {"amount": 800.0, "currency": "CNY", "weeks": 1}
+    est = CE.normalize_estimate(stored, schema, "alpha", legacy=True)
+    out = CE.legacy_to_eur(est, schema, {"CNY": 8.0})
+    line = out["iterations"][0]["lines"]["development"]
+    assert (line["amount"], line["currency"], line["source"]) == (100.0, "EUR", "converted")
+    cells = CE.suggestion_cells(est, est)
+    assert all("development" not in c for c in cells.values())
+
+
+def test_the_diff_names_the_development_line_only_when_it_exists(schema):
+    old = CE.from_stored(json.loads(json.dumps(GOLDEN["stored"])), schema, "alpha")
+    assert not any("development" in d["path"] for d in CE.diff(None, old, schema))
+    new = json.loads(json.dumps(old))
+    new["iterations"][0]["lines"]["development"] = dict(CE.blank_line("EUR"), status="filled", amount=10.0, source="manual")
+    paths = [d["path"] for d in CE.diff(old, new, schema)]
+    assert "iteration 1.development.amount" in paths and "total.EUR" in paths
+
+
+def test_a_non_admin_cannot_write_a_development_line(client, monkeypatch):
+    body = json.loads(json.dumps(GOLDEN["stored"]))
+    body["iterations"][0]["lines"]["development"] = {"amount": 1500.0}
+    for who in ({"email": "customer@example.test", "role": "user"}, {"email": "eng@example.test", "role": "engineer"},
+                {"email": "oem@example.test", "role": "user"}):
+        _as(monkeypatch, who)
+        assert client.put("/api/admin/projects/alpha/cost-estimate", json=body).status_code == 403
+    _as(monkeypatch, {"email": "admin@example.test", "role": "admin"})
+    resp = client.put("/api/admin/projects/alpha/cost-estimate", json=dict(body, revision=0))
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["estimate"]["iterations"][0]["lines"]["development"]["amount"] == 1500.0
+    assert resp.json()["computed"]["iterations"][0]["development"] == {"EUR": 1500.0}

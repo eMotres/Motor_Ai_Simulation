@@ -8,7 +8,7 @@ import {
   stepState, totalsView, iterationSubtotal, lineTotal, mergeEdits, reconcile, fieldLabel,
   acceptSuggestion, addIteration, blankLane, dhlDetails, dhlOrigin, iterationWeeks, laneErrors, projectWeeks, readView, removeIteration, removeLane,
   setLineWeeks, setShipTo, setWeeksOverride, suggestionAt, suggestionKey, tableModel, upsertLane, validWeeks, weeksText, writeView,
-  applyAuto, autoDhlIterations, autoKey, setDhlAuto, setNextUnit, setNextUnitShipping, blankNextUnit,
+  applyAuto, autoDhlIterations, autoKey, setDhlAuto, OPTIONAL_LINE_IDS, parseNumberInput, setNextUnit, setNextUnitShipping, blankNextUnit,
 } from '../costEstimate.ts';
 
 // the real schema the server serves
@@ -23,8 +23,8 @@ function estimate(n = 2) {
     iterations: Array.from({ length: n }, (_, i) => iteration(i + 1)), migration: null, updated_at: null, updated_by: null };
 }
 
-test('the schema is four lines, and the steps are settings, one per iteration, review', () => {
-  assert.deepEqual(schema.lines.map((l) => l.id), LINE_IDS);
+test('the schema is four lines plus the optional development line, and the steps are settings, one per iteration, review', () => {
+  assert.deepEqual(schema.lines.map((l) => l.id), [...LINE_IDS, ...OPTIONAL_LINE_IDS]);
   for (const e of [...schema.lines, ...schema.settings, ...schema.iteration_fields]) assert.ok(e.label.en && e.label['zh-CN'] && e.help.en && e.help['zh-CN'], e.id);
   const steps = buildCostSteps(estimate(3));
   assert.deepEqual(steps.map((s) => s.id), ['settings', 'it1', 'it2', 'it3', 'review']);
@@ -637,6 +637,61 @@ test('the DHL tooltip names the rounding and the unrounded quote', () => {
   for (const lang of ['en', 'zh-CN']) for (const k of ['rounded', 'autoTip', 'autoOnTip', 'autoFailed']) assert.ok(locale(lang).dhl[k], `${lang} ${k}`);
 });
 
+// ── the optional development line (owner 2026-11-26): absent = 0, never missing; adds to the total and the weeks ──────────
+const priced1 = () => {
+  const e = estimate(1);
+  const it = e.iterations[0];
+  Object.assign(it.lines.manufacturing, { status: 'filled', amount: 1000 });
+  Object.assign(it.lines.shipping, { status: 'filled', amount: 200 });
+  it.lines.tooling.weeks = 2; it.lines.manufacturing.weeks = 3; it.lines.shipping.weeks = 1;
+  return e;
+};
+
+test('an estimate without the development line: same total, same weeks, no extra missing line', () => {
+  const e = priced1();
+  const before = JSON.stringify(e);
+  const m = tableModel(e);
+  assert.equal(m.rows[0].development, null);
+  assert.equal(m.rows[0].total, 2200);
+  assert.equal(iterationWeeks(e.iterations[0]).development, undefined);
+  assert.equal(iterationWeeks(e.iterations[0]).sum, 6);
+  assert.ok(!iterationWeeks(e.iterations[0]).missing.includes('development'));
+  assert.equal(JSON.stringify(e), before);
+});
+
+test('editing the development line creates it; it adds to the total and the weeks and is never missing', () => {
+  const e = priced1();
+  const at = { iteration: 1, line: 'development' };
+  const withAmount = setLineWeeks(editLine(e, at, { amount: 1500 }, 'a@b.c', '2026-11-26'), at, 4);
+  assert.equal(withAmount.iterations[0].lines.development.amount, 1500);
+  assert.equal(withAmount.iterations[0].lines.development.source, 'manual');
+  const m = tableModel(withAmount);
+  assert.equal(m.rows[0].development, 1500);
+  assert.equal(m.rows[0].total, 3700);
+  assert.equal(m.rows[0].weeks.sum, 10);
+  assert.equal(m.rows[0].missing, e.iterations[0].lines.tooling.status === 'missing' ? 2 : 1);
+  assert.equal(tableModel(e).rows[0].missing, m.rows[0].missing);
+  assert.equal(m.weeksTotal, 10);
+  assert.equal(e.iterations[0].lines.development, undefined);          // the input estimate is not touched
+});
+
+test('the development line has its label and tooltip in both languages', () => {
+  const dev = schema.lines.find((l) => l.id === 'development');
+  assert.ok(dev.help.en && dev.help['zh-CN'] && dev.label.en === 'Development' && dev.label['zh-CN']);
+  for (const lang of ['en', 'zh-CN']) {
+    assert.ok(locale(lang).table.col.development, lang);
+    assert.ok(locale(lang).durations.development, lang);
+  }
+});
+
+test('a concurrent edit of the development line merges like any other line', () => {
+  const synced = priced1();
+  const mine = editLine(synced, { iteration: 1, line: 'development' }, { amount: 900 }, 'a@b.c', '2026-11-26');
+  const { merged, overridden } = mergeEdits(synced, mine, synced);
+  assert.equal(merged.iterations[0].lines.development.amount, 900);
+  assert.deepEqual(overridden, []);
+});
+
 // ── the next unit survives a 409 retry (Astra review 2026-11-26) ───────────────────────────────────────────────────────
 
 test('a next-unit price typed here is kept when another session saved first (the 3900 EUR regression)', () => {
@@ -685,4 +740,32 @@ test('an automatic next-unit shipping line is part of the automatic lines and ta
   const got = applyAuto(e, { next_unit: { amount: 650, weeks: null, source_ref: null, hint: '' } });
   assert.equal(got.next_unit.shipping.amount, 650);
   assert.equal(e.next_unit.shipping.amount, 500);
+});
+
+test('the review table and the Steps editor carry the development line only when the iteration has it', () => {
+  const it = { index: 1, motors: 2, bench: 'dyno', tooling: { EUR: 10 }, manufacturing: { EUR: 20 }, testing: { EUR: 5 }, shipping: { EUR: 1 }, subtotal: { EUR: 36 }, lines: {} };
+  const without = reviewRows({ iterations: [it], converted: { available: false } }, 'missing')[0];
+  assert.equal('development' in without, false);                                    // an old estimate: the row is as it was
+  const withDev = reviewRows({ iterations: [{ ...it, development: { EUR: 1500 }, subtotal: { EUR: 1536 } }], converted: { available: false } }, 'missing')[0];
+  assert.equal(withDev.development, 'EUR 1 500.00');
+  const conv = { available: true, total: 1, currency: 'EUR', iterations: [{ index: 1, lines: { tooling: 10, manufacturing: 20, testing: 5, shipping: 1, development: 1500 }, subtotal: 1536 }] };
+  assert.equal(reviewRows({ iterations: [{ ...it, development: { EUR: 1500 } }], converted: conv }, 'missing')[0].development, 'EUR 1 500.00');
+  const computed = { iterations: [{ index: 1, lines: { development: { amount: { EUR: 1500 }, origin: '' } } }] };
+  assert.equal(lineTotal(computed, 1, 'development'), 'EUR 1 500.00');
+  assert.equal(lineTotal({ iterations: [{ index: 1, lines: {} }] }, 1, 'development'), '—');
+  // the step's editor edits the line the table edits: the same function creates it
+  const e = editLine(estimate(1), { iteration: 1, line: 'development' }, { amount: 700 }, 'a@b.c', '2026-11-26');
+  assert.equal(e.iterations[0].lines.development.amount, 700);
+});
+
+test('the next-unit weeks accept up to the schema override maximum (416), not the per-line 104', () => {
+  const max = schema.durations.override_max;
+  assert.equal(max, 416);
+  assert.equal(parseNumberInput('105', 0, max, false), 105);
+  assert.equal(parseNumberInput('416', 0, max, false), 416);
+  assert.equal(parseNumberInput('417', 0, max, false), undefined);       // red, not committed
+  assert.equal(parseNumberInput('', 0, max, false), null);
+  assert.equal(parseNumberInput('-1', 0, max, false), undefined);
+  assert.equal(parseNumberInput('1.5', 1, 50, true), undefined);
+  assert.equal(parseNumberInput('2,5', 0, max, false), 2.5);
 });

@@ -4,7 +4,7 @@
 import { useEffect, useState } from 'react';
 import { Box, FormControlLabel, Stack, Switch, TextField, Tooltip, Typography } from '@mui/material';
 import HelpTip from '../../../../components/common/HelpTip';
-import { blankNextUnit, formatMoney, setNextUnit, setNextUnitShipping, type CostComputed, type CostEstimate, type T } from '../../costEstimate';
+import { blankNextUnit, formatMoney, parseNumberInput as parse, setNextUnit, setNextUnitShipping, type CostComputed, type CostEstimate, type T } from '../../costEstimate';
 
 /** A number field with an EDIT BUFFER: what is typed stays on screen, and only a valid value is committed (an empty field commits
  *  `null`).  An invalid one (negative, not a number, out of range, not whole) shows red next to the field and is NOT saved, so a
@@ -22,18 +22,9 @@ function BufNum({ value, onCommit, ariaLabel, placeholder, min = 0, max, int = f
     {bad && <Typography role="alert" sx={{ fontSize: 12, color: 'error.main' }}>{invalidText}</Typography>}
   </Stack>;
 }
-/** `null` = empty, `undefined` = invalid. */
-function parse(raw: string, min: number, max: number | undefined, int: boolean): number | null | undefined {
-  const t = raw.trim().replace(',', '.');
-  if (t === '') return null;
-  if (!/^\d*\.?\d+$/.test(t)) return undefined;
-  const n = Number(t);
-  if (!Number.isFinite(n) || n < min || (max !== undefined && n > max) || (int && !Number.isInteger(n))) return undefined;
-  return n;
-}
-
-export default function CostNextUnit({ estimate, computed, t, today, who, onChange }: {
+export default function CostNextUnit({ estimate, computed, t, today, who, onChange, weeksMax = 416 }: {
   estimate: CostEstimate; computed: CostComputed | null; t: T; today: string; who: string; onChange: (next: CostEstimate) => void;
+  /** the schema's `durations.override_max`: the next unit's weeks are an override of the whole duration */ weeksMax?: number;
 }) {
   const nu = estimate.next_unit ?? blankNextUnit();
   const res = computed?.next_unit;
@@ -71,7 +62,7 @@ export default function CostNextUnit({ estimate, computed, t, today, who, onChan
       </Stack>
       <Stack spacing={0.6}>
         <Typography sx={{ fontSize: 12, color: 'var(--text-2)' }}>{t('costEstimate.nextUnit.weeks')}</Typography>
-        <BufNum value={nu.weeks} placeholder={res?.weeks != null ? String(res.weeks) : ''} max={104} invalidText={invalid} ariaLabel={t('costEstimate.nextUnit.weeks')}
+        <BufNum value={nu.weeks} placeholder={res?.weeks != null ? String(res.weeks) : ''} max={weeksMax} invalidText={invalid} ariaLabel={t('costEstimate.nextUnit.weeks')}
           onCommit={(n) => onChange(setNextUnit(estimate, { weeks: n }))} />
       </Stack>
     </Box>

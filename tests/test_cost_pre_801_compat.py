@@ -1,6 +1,8 @@
 """Estimates stored and quotes shared BEFORE the next unit / rate table (#801) read exactly as before (Astra review 2026-11-26): no new key
 in the normalised estimate, the computed result, the diff, the weeks or the shared quote.  The golden file was produced by the code of the
-base branch (without #801) from a stored v2 estimate; neutral ids and made-up numbers."""
+base branch (without #801, commit 1ba6e9edeaffb8ed0e40f6df3e908bb4ef6a86aa) from a stored v2 estimate; neutral ids and made-up numbers.
+Provenance: ``tests/data/regenerate_cost_estimate_pre_801.py`` (run against that commit; its docstring has the command).  Astra reproduced all
+five sections from the base modules, so the file is reproducible, not just checked in."""
 from __future__ import annotations
 
 import json

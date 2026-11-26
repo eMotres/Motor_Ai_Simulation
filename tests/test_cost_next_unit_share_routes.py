@@ -59,16 +59,39 @@ def test_the_shared_snapshot_carries_the_terms_version_and_the_dap_sentence_with
 
 
 def test_access_matrix_with_a_populated_next_unit(client):
+    """Explicit status per identity (Astra r2): a populated next unit with its own shipping; nothing passes by accident."""
+    import json
+    from fastapi import HTTPException, Request, Response
+    from motor_ai_sim import auth
+    from motor_ai_sim.development import quote_routes as QR
+    from tests.test_project_quote import USERS, _members, _switch
     est = _complete(client)
     est["next_unit"]["shipping"].update({"status": "filled", "amount": 300.0, "currency": "EUR", "source": "manual", "weeks": 1})
     est = _put(client, est)
     assert _share(client, revision=est["revision"]).status_code == 200
-    for who in ("admin", "owner", "member-eng", "viewer"):
-        r = _quote(client, who)
-        if r.status_code == 200:
-            assert set(r.json()["next_unit"]) == {"price", "weeks"}
-            assert "300" not in str(r.json()["next_unit"])
-    assert _quote(client, "other").status_code == 404 and _quote(client, None).status_code in (401, 403, 404)
+    _members({"email": "factory@example.test", "role": "owner"}, {"email": "flagged@example.test", "role": "customer", "sees_prices": True})
+    expected = {"admin": 200, "staff": 200, "owner": 200, "owner2": 200, "member-eng": 404, "viewer": 404, "other": 404, "stranger": 404,
+                "factory-owner": 404, "factory-flagged": 404, None: 401}
+    for who, status in expected.items():
+        assert _quote(client, who).status_code == status, who
+    # (manufacturing 333.33 + the next unit's shipping 300) x 1.10 contingency, whole EUR; weeks 4 + 1; shipping amount never shown
+    body = _quote(client, "owner").json()
+    assert body["next_unit"] == {"price": 697, "weeks": 5}
+    assert body["excluded"] == "Duties and import VAT are not included."
+    assert "300" not in json.dumps(body["next_unit"]) and list(body["iterations"][0]["lines"]) == ["tooling", "manufacturing", "testing", "shipping"]
+    assert _quote(client, "admin").json() == body and _quote(client, "staff").json() == body
+    # grant and revoke
+    assert _switch(client, "viewer@example.test", True).status_code == 200
+    assert _quote(client, "viewer").status_code == 200 and _quote(client, "viewer").json()["next_unit"] == {"price": 697, "weeks": 5}
+    assert _switch(client, "viewer@example.test", False).status_code == 200
+    assert _quote(client, "viewer").status_code == 404
+    # an agent, even for an admin or an owner
+    request = Request({"type": "http", "method": "GET", "path": "/api/projects/alpha/quote", "headers": [], "query_string": b""})
+    for who in ("admin", "owner"):
+        with auth.use_agent_user(USERS[who]):
+            with pytest.raises(HTTPException) as exc:
+                QR.get_quote("alpha", request, Response())
+        assert exc.value.status_code == 403, who
 
 
 def _dhl_iteration(est, country):
@@ -78,18 +101,26 @@ def _dhl_iteration(est, country):
         "source_ref": {"dhl": {"basis": "rate_table", "zone": "EU", "zone_basis": "calibrated", "from": "CN Shanghai", "to": "DE X"}}})
 
 
-def test_a_stale_iteration_shipping_cannot_be_shared_whatever_the_next_unit_or_the_acknowledgement(client):
-    """Freight computed for DE must not be quoted as DAP KP (Astra review 2026-11-26)."""
+def test_a_stale_iteration_shipping_cannot_be_shared_whatever_the_next_unit_or_the_acknowledgement(client, monkeypatch):
+    """Freight computed for DE must not be quoted as DAP KP (Astra review 2026-11-26): DE is shared first, the stale re-share is
+    refused and the customer keeps the previous quote byte for byte."""
+    from motor_ai_sim.development import cost_estimate_sources as SRC
+    from motor_ai_sim.development import cost_estimate_store as CS
+    monkeypatch.setattr(SRC, "ship_data", lambda *_a, **_k: {"motor_mass_kg": 30.0, "motor_mass_basis": "complete"})
     est = _complete(client)
     _dhl_iteration(est, "DE")
     est["next_unit"]["price"] = 4000.0                                   # an override of the next unit must not bypass it
     est = _put(client, est)
+    line = est["iterations"][0]["lines"]["shipping"]
+    assert line["source"] == "dhl" and not line["hint"]                  # a successful DE calculation
+    assert _share(client, revision=est["revision"], ack_estimated_shipping=True).status_code == 200
+    before, mark = _quote(client, "owner").content, CS.load_shared("alpha")
     est["settings"]["ship_to"] = {"country": "KP", "city": "X"}          # the destination changes; the rate table has no zone for it
     est = _put(client, est)
     assert est["iterations"][0]["lines"]["shipping"]["hint"]              # the refresh failed: the old amount is kept, with the reason
     r = _share(client, revision=est["revision"], ack_estimated_shipping=True)
     assert r.status_code == 409 and r.json()["detail"]["code"] == "shipping_stale" and r.json()["detail"]["iterations"] == [1]
-    assert _quote(client, "owner").status_code == 404
+    assert _quote(client, "owner").content == before and CS.load_shared("alpha") == mark     # the previous quote is untouched
     # a manual number clears the refusal
     est["iterations"][0]["lines"]["shipping"].update({"source": "manual", "source_ref": None, "hint": ""})
     est = _put(client, est)

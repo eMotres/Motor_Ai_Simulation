@@ -17,6 +17,10 @@ manufacturing + testing when ticked + shipping of one motor, the contingency fol
 duties and import VAT are not included (DAP).  Both are ``None`` for a snapshot whose estimate has no computable next unit, so a quote
 shared before this change reads exactly as it did.
 
+The DEVELOPMENT line (owner 2026-11-26) is admin-only and is NEVER part of a quote: it is not among the four lines, and an estimate
+that has one (any iteration) cannot be quoted at all - ``build_quote`` raises ``QuoteError`` and the share route refuses with
+``development_not_shareable`` - so no price, total or duration derived from it can reach a customer, not even folded into a total.
+
 Never sent: notes, hints, sources and source references (DHL lane, analog production, weight basis), factors, percentages,
 who/when per line, manual exchange rates, DHL lanes, analog or BOM references, the revision history, other snapshots."""
 from __future__ import annotations
@@ -90,6 +94,12 @@ def missing_lines(estimate: dict) -> List[dict]:
             for lid, cost in line_costs(it).items() if cost is None]
 
 
+def development_iterations(estimate: dict) -> List[int]:
+    """The iterations that carry the admin-only ``development`` line (none for every estimate stored before it existed)."""
+    return [int(it.get("index") or 0) for it in estimate.get("iterations") or []
+            if any(lid in (it.get("lines") or {}) for lid in CE.OPTIONAL_LINES)]
+
+
 def delivery_text(settings: dict) -> Optional[str]:
     """"DAP <city>" (the country code when no city is known); None without a destination."""
     dest = settings.get("ship_to") or {}
@@ -114,6 +124,8 @@ def build_quote(estimate: dict, schema: dict, shared_on: str, terms: int = TERMS
     missing = missing_lines(estimate)
     if missing:
         raise QuoteError("%d line(s) without an amount" % len(missing))
+    if development_iterations(estimate):
+        raise QuoteError("the development line is admin-only and cannot be part of a customer quote")
     settings = estimate.get("settings") or {}
     k = 1 + _dec(settings.get("contingency_pct") or 0) / 100
     iterations = list(estimate.get("iterations") or [])

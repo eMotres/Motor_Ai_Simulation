@@ -326,6 +326,13 @@
   "documents": {
     "loading": "正在加载文件…",
     "upload": "上传",
+    "uploadQueued": "排队中",
+    "uploadFailed": "失败",
+    "uploadCancelled": "已取消",
+    "uploadCancel": "取消",
+    "uploadRetry": "重试",
+    "uploadDismiss": "移除",
+    "alreadyUploading": "{name}：正在上传",
     "uploading": "正在上传 {name}…",
     "dropHere": "将文件拖放到此处",
     "all": "全部",
@@ -1391,7 +1398,8 @@
       "tooling": "工装交期",
       "manufacturing": "制造",
       "testing": "测试",
-      "shipping": "运输时间"
+      "shipping": "运输时间",
+      "development": "开发"
     },
     "table": {
       "col": {
@@ -1400,6 +1408,7 @@
         "motors": "电机 × 单价",
         "testing": "测试",
         "shipping": "DHL 运输",
+        "development": "开发",
         "duration": "工期",
         "total": "本轮合计"
       },

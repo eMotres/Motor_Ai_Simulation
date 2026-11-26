@@ -8,6 +8,8 @@
  * - Save, load, and manage custom system graphs in the user workspace alongside templates
  */
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useHelpContext } from '../support/useHelpContext';
+import { composerHelp } from '../../lib/helpContexts';
 import {
   Alert,
   Box,
@@ -623,6 +625,8 @@ export default function SystemComposer() {
   const activeEditingNode = useMemo(() => {
     return nodes.find((n) => n.id === editingNodeId)?.data || null;
   }, [nodes, editingNodeId]);
+
+  useHelpContext(composerHelp({ template: isTemplate, running, failed: !!errorBanner }));
 
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0, bgcolor: '#ffffff', color: '#111827' }}>

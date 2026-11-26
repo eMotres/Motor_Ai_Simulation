@@ -5,7 +5,7 @@
 // an EN and a zh-CN document.
 import type { HelpContext } from './supportContext.ts';
 
-export const HELP_TABS = ['simulation', 'thermal', 'mechanical'] as const;
+export const HELP_TABS = ['simulation', 'thermal', 'mechanical', 'propellers', 'schemas'] as const;
 
 const pick = (v: unknown, allowed: readonly string[]): string | undefined => (typeof v === 'string' && allowed.includes(v) ? v : undefined);
 const put = (key: string, v: string | undefined): Record<string, string> => (v === undefined ? {} : { [key]: v });
@@ -55,4 +55,34 @@ export function mechanicalHelp(i: MechanicalHelp): HelpContext {
     tab: 'mechanical', ...put('loads', pick(i.loads, LOADS)), ...put('symmetry', pick(i.symmetry, SYMMETRIES)),
     calculated: i.ran, stale: i.stale, status: i.busy ? ['solving'] : i.ran ? ['done'] : ['not_solved'], ...(i.failed ? { error: 'run_failed' } : {}),
   };
+}
+
+// ── Propellers ───────────────────────────────────────────────────────────────
+export const POLARS = ['flatplate_model', 'camber_model', 'mfoil_table'] as const;
+export const GRAPH_VIEWS = ['modules', 'propeller_s1'] as const;
+
+export interface PropellersHelp { view: 'catalog' | 'designer'; rows: number; failed: boolean }
+export function propellersHelp(i: PropellersHelp): HelpContext {
+  return { tab: 'propellers', sub: i.view, ...(i.view === 'catalog' ? { rows: Math.min(99, i.rows), ...(i.failed ? { error: 'load_failed' } : {}) } : {}) };
+}
+export interface DesignerHelp { polar: string; ran: boolean; busy: boolean; runs: number; drafts: number; optimised: boolean; failed: boolean }
+export function designerHelp(i: DesignerHelp): HelpContext {
+  return {
+    tab: 'propellers', sub: 'designer', ...put('polar', pick(i.polar, POLARS)), calculated: i.ran, runs: Math.min(99, i.runs), drafts: Math.min(99, i.drafts),
+    optimised: i.optimised, status: i.busy ? ['running'] : i.ran ? ['done'] : ['not_run'], ...(i.failed ? { error: 'request_failed' } : {}),
+  };
+}
+
+// ── Schemas ──────────────────────────────────────────────────────────────────
+export interface SchemasHelp { mode: 'view' | 'compose'; graphView: string; showAll: boolean; loading: boolean; failed: boolean }
+export function schemasHelp(i: SchemasHelp): HelpContext {
+  return {
+    tab: 'schemas', sub: i.mode,
+    ...(i.mode === 'view' ? { ...put('graphView', pick(i.graphView, GRAPH_VIEWS)), showAll: i.showAll,
+      status: i.loading ? ['loading'] : i.failed ? ['load_failed'] : ['shown'], ...(i.failed ? { error: 'load_failed' } : {}) } : {}),
+  };
+}
+export interface ComposerHelp { template: boolean; running: boolean; failed: boolean }
+export function composerHelp(i: ComposerHelp): HelpContext {
+  return { tab: 'schemas', sub: 'compose', template: i.template, status: i.running ? ['running'] : ['idle'], ...(i.failed ? { error: 'run_failed' } : {}) };
 }

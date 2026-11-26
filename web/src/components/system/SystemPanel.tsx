@@ -34,6 +34,8 @@ import { buildWiring, roundedPath, summarize, validateWiring } from '../../lib/s
 import type { Pt, Route, Violation } from '../../lib/systemGraphRoute';
 import SystemComposer from './SystemComposer';
 import SubTabs from '../common/SubTabs';
+import { useHelpContext } from '../support/useHelpContext';
+import { schemasHelp } from '../../lib/helpContexts';
 import { NARROW } from '../../lib/narrowLayout';
 
 const API = (import.meta.env.VITE_API_URL ?? 'http://localhost:8001') as string;
@@ -313,6 +315,8 @@ export default function SystemPanel() {
 
   const dieObj = dies.find((d) => d.name === motor?.die);
   const cfgObj = dieObj?.configs?.find((c) => c.name === motor?.config);
+
+  useHelpContext(schemasHelp({ mode, graphView: view, showAll, loading, failed: !!error }));
 
   return (
     <ThemeProvider theme={LIGHT}>

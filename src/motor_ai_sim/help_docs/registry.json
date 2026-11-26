@@ -179,5 +179,69 @@
         ]
       }
     }
+  },
+  "propellers": {
+    "min_role": "engineer",
+    "subs": [
+      "catalog",
+      "designer"
+    ],
+    "docs": [
+      "propellers",
+      "propellers.catalog",
+      "propellers.designer"
+    ],
+    "keys": {
+      "polar": {
+        "enum": [
+          "flatplate_model",
+          "camber_model",
+          "mfoil_table"
+        ]
+      },
+      "calculated": "flag",
+      "runs": "count",
+      "drafts": "count",
+      "optimised": "flag",
+      "rows": "count",
+      "status": {
+        "enums": [
+          "running",
+          "done",
+          "not_run"
+        ]
+      }
+    }
+  },
+  "schemas": {
+    "min_role": "engineer",
+    "subs": [
+      "view",
+      "compose"
+    ],
+    "docs": [
+      "schemas",
+      "schemas.view",
+      "schemas.compose"
+    ],
+    "keys": {
+      "graphView": {
+        "enum": [
+          "modules",
+          "propeller_s1"
+        ]
+      },
+      "showAll": "flag",
+      "template": "flag",
+      "status": {
+        "enums": [
+          "loading",
+          "load_failed",
+          "shown",
+          "running",
+          "idle"
+        ]
+      }
+    }
   }
 }

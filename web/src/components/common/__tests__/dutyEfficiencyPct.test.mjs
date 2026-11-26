@@ -74,3 +74,29 @@ test('zero (or unusable) rotor power falls back to the stored efficiency field',
   assert.ok(Math.abs(dutyEfficiencyPct(s, 0) - 98.46) < 1e-9);
   assert.ok(Math.abs(dutyEfficiencyPct(s, NaN) - 98.46) < 1e-9);
 });
+
+/* ── one efficiency per point (shaft convention follow-up) ── */
+const MARK = 'fe_on_shaft_k3d_v1';
+
+test('marked summary: the stored efficiency is the summary\'s own (unrounded) value, not a rebuild from 0.1 W powers', () => {
+  // rebuilt from the rounded powers this is 58.8 %, the summary's own value is 61.6 %
+  const s = { shaft_convention: MARK, op_mode: 'motor', efficiency: 0.616, P_loss_total_W: 14.1, P_mech_W: 20.1 };
+  assert.ok(Math.abs(dutyEfficiencyPct(s, 20.1) - 61.6) < 1e-9);
+  // zero by the summary's own thresholds stays zero (cut-in), although the rounded powers give 80 %
+  assert.equal(dutyEfficiencyPct({ shaft_convention: MARK, op_mode: 'motor', efficiency: 0, P_loss_total_W: 0.1, P_mech_W: 0.4 }, 0.4), 0);
+});
+
+test('marked summary with bearings: the same electrical power, the friction taken off the shaft once', () => {
+  const s = { shaft_convention: MARK, op_mode: 'motor', efficiency: 0.9, P_loss_total_W: 111.1, P_bearings_W: 20, P_windage_W: 10 };
+  assert.ok(Math.abs(dutyEfficiencyPct(s, 1000) - 0.9 * 970 / 1000 * 100) < 1e-9);
+  const g = { shaft_convention: MARK, op_mode: 'generator', efficiency: 0.9, P_loss_total_W: 100, P_bearings_W: 20, P_windage_W: 10 };
+  assert.ok(Math.abs(dutyEfficiencyPct(g, 1000) - 0.9 * 1000 / 1030 * 100) < 1e-9);
+});
+
+test('golden: an unmarked summary (with or without an efficiency field) keeps the old formula bit for bit', () => {
+  // values the pre-change function produced for these inputs
+  assert.equal(dutyEfficiencyPct({ P_loss_total_W: 3000, P_bearings_W: 200, P_windage_W: 100 }, 100000), 99700 / 103000 * 100);
+  assert.equal(dutyEfficiencyPct({ P_loss_total_W: 100, efficiency: 0.5 }, 900), 900 / 1000 * 100);
+  assert.equal(dutyEfficiencyPct({ P_loss_total_W: 100, efficiency: 0.5, op_mode: 'generator' }, 900), 800 / 900 * 100);
+  assert.equal(dutyEfficiencyPct({ P_loss_total_W: 100, efficiency: 0.5 }, 0), 50);
+});

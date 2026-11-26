@@ -651,6 +651,30 @@ def _metric_projection(value: Any) -> dict:
     return output
 
 
+def shaft_fields(summary: Any) -> dict:
+    """The shaft-convention fields of a MARKED summary for the project motors block: ``t_shaft_nm`` (the shaft torque the
+    convention reports), ``shaft_k3d`` (the 3-D factor inside it) and the marker.  An unmarked or missing summary gives ``{}``
+    (its record keeps exactly the shape it always had); a missing number is absent, never 0."""
+    from motor_ai_sim import shaft_convention as _sc
+    if not _sc.has_marker(summary):
+        return {}
+    out: dict = {"shaft_convention": _sc.SHAFT_CONVENTION}
+    for target, key in (("t_shaft_nm", "T_shaft_Nm"), ("shaft_k3d", "shaft_k3d")):
+        value = summary.get(key)
+        if isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(float(value)):
+            out[target] = value
+    return out
+
+
+def safe_shaft_fields(block: Any) -> dict:
+    """``shaft_fields`` again for a block that crossed a projection: only the marker value and finite numbers pass."""
+    from motor_ai_sim import shaft_convention as _sc
+    if not isinstance(block, dict) or block.get("shaft_convention") != _sc.SHAFT_CONVENTION:
+        return {}
+    return shaft_fields({"shaft_convention": _sc.SHAFT_CONVENTION, "T_shaft_Nm": block.get("t_shaft_nm"),
+                         "shaft_k3d": block.get("shaft_k3d")})
+
+
 #: the EM run's FIXED temperatures (the runner writes the magnet temperature it used as ``magnet_temp_used_c``)
 _RUN_TEMPERATURE_KEYS = (
     ("coil_temp_c", ("coil_temp_c", "t_coil_c", "winding_temperature_c")),
@@ -1110,6 +1134,9 @@ def _results(die: str, config: str, cfg: dict, stored_by_duty: dict | None = Non
         # the temperatures the EM run was made at (the magnet one the runner sends as magnet_temp_used_c): needed to pick the cold no-load point
         for key, value in _run_temperatures(primary_result, duty.get("summary")).items():
             em.setdefault(key, value)
+        # a MARKED summary also gives its shaft torque, 3-D factor and marker (PR shaft-convention follow-up); an unmarked
+        # record gets no new key
+        em.update(shaft_fields(duty.get("summary")))
         stored_duty = by_duty.get(name) or {}
         if own_only:
             from motor_ai_sim.development import motor_view

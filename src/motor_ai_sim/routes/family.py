@@ -2233,6 +2233,31 @@ _RESULT_KEYS = ("efficiency_pct", "ripple_pct", "v_ll_peak_v", "loss_w", "mass_k
                 # marks the no-load (bench) convention, 0 the loaded one.
                 "kv_rpm_per_v", "kv_is_noload")
 
+# The shaft-power convention flag of a stored result (``shaft_conv`` = 1, PR #900).  It is NOT a free client number: it is
+# stored only while the stored run summary carries the marker (``shaft_convention.has_marker``) - see ``_sync_shaft_conv``.
+_SHAFT_CONV_KEY = "shaft_conv"
+
+
+def _sc_has_marker(summary: Any) -> bool:
+    from motor_ai_sim import shaft_convention as _sc
+    return isinstance(summary, dict) and _sc.has_marker(summary)
+
+
+def _sync_shaft_conv(result: Any, summary: Any) -> None:
+    """Make ``result[shaft_conv]`` agree with the run summary beside it, in place.
+
+    A MARKED summary gives the result ``shaft_conv = 1`` (derived here, so a client that forgot the flag does not leave the point
+    on the earlier basis); an unmarked or missing summary never gets it, and a flag left over from another run is removed.
+    """
+    from motor_ai_sim import shaft_convention as _sc
+    if not isinstance(result, dict):
+        return
+    marked = isinstance(summary, dict) and _sc.has_marker(summary)
+    if marked:
+        result[_SHAFT_CONV_KEY] = 1.0
+    else:
+        result.pop(_SHAFT_CONV_KEY, None)
+
 
 class DutyResult(BaseModel):
     die: str
@@ -2244,6 +2269,10 @@ class DutyResult(BaseModel):
     # excitation is recorded under `runs[<drive>]` and leaves them alone.
     drive: Optional[str] = None
     assignment_sig: Optional[str] = None
+    # The ``shaft_convention`` marker of the run's own summary, when the caller has it.  /duty_result usually arrives BEFORE
+    # /duty_run (which files the summary), so the stored summary is still the previous run's; the marker string is the
+    # caller's witness of the summary it is saving.  /duty_run, which carries the summary itself, has the last word.
+    shaft_convention: Optional[str] = None
 
 
 class DutyRunSave(BaseModel):
@@ -4196,6 +4225,14 @@ def record_duty_result(req: DutyResult, _w: dict = Depends(require_catalog_write
     if not res:
         raise HTTPException(422, detail=(
             "empty result — expected at least one of: " + ", ".join(_RESULT_KEYS)))
+    # The convention flag rides only with a marked stored summary of this excitation (the run's summary is filed by /duty_run,
+    # which also derives the flag when this call comes first); an unmarked summary never gets it, whatever the client sent.
+    _drv0 = _drive_of(req.drive)
+    _prev_run = ((found.get("runs") or {}).get(_drv0) if isinstance(found.get("runs"), dict) else None) or {}
+    _stored_sum = _prev_run.get("summary") if _prev_run.get("summary") else found.get("summary")
+    if req.result.get(_SHAFT_CONV_KEY) is not None:
+        _sync_shaft_conv(res, _stored_sum if _sc_has_marker(_stored_sum)
+                         else ({"shaft_convention": req.shaft_convention} if req.shaft_convention else None))
     res["recorded_at"] = datetime.now().isoformat(timespec="seconds")
     try:
         res["build_sig"] = _build_sig(_load_yaml(_die_file(die), "die"), c)
@@ -4275,6 +4312,12 @@ def record_duty_run(req: DutyRunSave, _w: dict = Depends(require_catalog_write))
                      settings=req.settings, summary=req.summary,
                      result=req.result, assignment_sig=req.assignment_sig,
                      payload=req.payload)
+    # The summary of THIS run is the authority for the convention flag of the result filed with it (and of the headline
+    # result when this excitation owns it): marked -> shaft_conv 1; unmarked -> never, a leftover flag is dropped.
+    if req.summary is not None:
+        _sync_shaft_conv(rec.get("result"), req.summary)
+        if drive == _primary_drive(entry):
+            _sync_shaft_conv(entry.get("result"), req.summary)
     if verdict["status"] != "ok" and verdict["verified"] is False:
         rec["verification"] = verdict          # additive: shown as "not verified", never rewrites a number
     _save_yaml(p, c)

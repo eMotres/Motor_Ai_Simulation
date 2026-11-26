@@ -10,6 +10,18 @@ export function dutyEfficiencyPct(s: any, pMechW: number): number | null {
   const known = Number.isFinite(brg) || Number.isFinite(wind);
   const extra = (Number.isFinite(brg) ? brg : 0) + (Number.isFinite(wind) ? wind : 0);
   const gen = s?.op_mode === 'generator';
+  // ONE efficiency per point (PR: shaft convention follow-up): a MARKED summary carries its own efficiency, solved from the
+  // unrounded powers (the summary's P_mech_W / P_loss_total_W are rounded to 0.1 W, which moved small points: 58.8 vs 61.6 %,
+  // 80 vs 0 at cut-in).  It is the stored value; the bearings + windage the card already takes off the shaft are applied on
+  // top of that same electrical power.  Unmarked summaries keep the formula below, bit for bit.
+  if (s?.shaft_convention === 'fe_on_shaft_k3d_v1' && s?.efficiency != null) {
+    const eff = Number(s.efficiency);
+    if (Number.isFinite(eff) && eff >= 0) {
+      if (!known || extra === 0 || !(eff > 0) || !(pm > 0)) return eff * 100;
+      // eff = P/(P+L) (motor) or (P-L)/P (generator): the shaft-side loss changes the shaft power, not the electrical one
+      return (gen ? eff * pm / (pm + extra) : eff * Math.max(0, pm - extra) / pm) * 100;
+    }
+  }
   if (pm <= 0) return (Number(s?.efficiency) || 0) * 100;
   const pElec = gen ? Math.max(0, pm - loss) : pm + loss;
   if (!known) return (gen ? pElec / pm : pm / pElec) * 100;

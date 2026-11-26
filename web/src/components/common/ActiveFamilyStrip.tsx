@@ -697,6 +697,8 @@ const ActiveFamilyStrip: React.FC = () => {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ die: tDie, config: cfgName, duty: tDuty,
             drive, assignment_sig: dutyBody.assignment_sig,
+            // the marker of the summary being saved: the server derives shaft_conv from a marked summary, never from the flag
+            ...(sc ? { shaft_convention: s?.shaft_convention } : {}),
             result: { efficiency_pct: dutyEfficiencyPct(s, rotorW),
                       // the shaft-power convention of these numbers (1 = core loss on the shaft; the catalog never ranks two)
                       ...(sc ? { shaft_conv: 1 } : {}),

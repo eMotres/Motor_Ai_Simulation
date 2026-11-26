@@ -671,7 +671,8 @@ export const useMechanicalStore = create<MechanicalState>()((set, get) => ({
     const next = await loadStoredPoint(key, 'rotor_stress', {
       liveFingerprint: async () => {
         const last = await fetchLastMechanicalLight();
-        return last?.live_geometry_fingerprint ?? null;
+        return last?.live_geometry_fingerprint
+          ? [last.live_geometry_fingerprint, ...(last.live_geometry_fingerprint_aliases ?? [])] : null;
       },
       liveGeoSig,
     });

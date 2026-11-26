@@ -230,15 +230,8 @@ def _live_saved_materials(live: dict) -> Dict[str, str]:
     return {k: mat.get(k) for k in _SAVED_MATERIAL_KEYS if mat.get(k)}
 
 
-_ABSENT_MEANS: Dict[str, Any] = {
-    "sleeve_thickness": 0.0,   # no retaining ring
-    "wire_parallel": 1,        # one wire in hand
-    "wire_split": 1,           # one strip per wire row
-    "wire_omit": 0,            # every grid position filled
-    "k_end_by_turns": 0,       # the layer-count end-turn rule of the stored machines
-    "magnet_flat": 0,          # the arc-topped magnet of the stored machines
-    "magnet_pocket_clearance": 0.0,   # the pocket is the magnet
-}
+# ONE table (also the canonical machine fingerprint's defaults): motor_ai_sim.geo_fingerprint.ABSENT_MEANS
+from motor_ai_sim.geo_fingerprint import ABSENT_MEANS as _ABSENT_MEANS  # noqa: E402
 
 # Display names double as file/dir names, so the charset is "safe on every
 # filesystem": letters, digits, space and light punctuation.  Real product

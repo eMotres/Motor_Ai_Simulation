@@ -240,7 +240,8 @@ def _last_transient_summary():
             from motor_ai_sim.routes.simulation import _geometry_fingerprint
             live = _geometry_fingerprint()
             saved = r.get("geo_fingerprint")
-            if saved != live:
+            from motor_ai_sim.geo_fingerprint import same as _gfp_same
+            if not _gfp_same(saved, live):
                 log.info("card metrics: ignoring the last transient — it was "
                          "solved on %s, the loaded machine is %s",
                          saved or "an unstamped machine", live)

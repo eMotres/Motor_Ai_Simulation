@@ -624,6 +624,9 @@ def _remember_last(kind: str, result: Dict[str, Any], params: Dict[str, Any],
             log.debug("mechanical: per-duty field not stored", exc_info=True)
 
 
+from motor_ai_sim import geo_fingerprint as _GFP  # noqa: E402  (a stored fingerprint also matches its legacy49 alias)
+
+
 def _live_fingerprint(geo_ov) -> Optional[str]:
     try:
         from motor_ai_sim.routes.simulation import _geometry_fingerprint
@@ -728,7 +731,7 @@ def _resolve_pull(pull: Optional[str], pull_duty: Optional[str],
     live1 = _live_fingerprint(geo_ov)
     rec1 = meta.get("geometry_fingerprint")
     geometry = "unverified"
-    if rec1 and live1 and rec1 == live1:
+    if rec1 and live1 and _GFP.same(rec1, live1, geo_ov):
         geometry = "match"
     else:
         try:
@@ -2763,14 +2766,15 @@ def last(
             res = {k: v for k, v in res.items() if k != "field"}
         fp = e.get("geometry_fingerprint")
         stale = (None if (not fp or not live or live == "nofp")
-                 else bool(fp != live))
+                 else (not _GFP.same(fp, live, geo_ov)))
         return {"result": res, "params": e.get("params") or {},
                 "geometry_fingerprint": fp, "computed_at": e.get("computed_at"),
                 "stale_geometry": stale,
                 # the point it was solved for (second witness); ``None`` = unknown
                 "context": e.get("context")}
 
-    out: Dict[str, Any] = {"live_geometry_fingerprint": live}
+    out: Dict[str, Any] = {"live_geometry_fingerprint": live,
+                           "live_geometry_fingerprint_aliases": list(_GFP.aliases(live))}
     for kind in _LAST_KINDS:
         out[kind] = _entry(kind)
     # 200 with `has_result: false` rather than a 404: "nothing solved yet" is the

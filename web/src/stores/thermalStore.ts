@@ -1023,7 +1023,8 @@ export const useThermalStore = create<ThermalState>()((set, get) => ({
     const next = await loadStoredPoint(key, 'thermal', {
       liveFingerprint: async () => {
         const last = await fetchLastThermalLight();
-        return last?.live_geometry_fingerprint ?? null;
+        return last?.live_geometry_fingerprint
+          ? [last.live_geometry_fingerprint, ...(last.live_geometry_fingerprint_aliases ?? [])] : null;
       },
       liveGeoSig, withTemps: true,
     });

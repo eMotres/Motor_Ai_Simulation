@@ -384,7 +384,8 @@ def last(geo: Optional[str] = Query(default=None)) -> Dict[str, Any]:
         return {"has_result": False, "result": None,
                 "live_geometry_fingerprint": live}
     fp = _LAST.get("geometry_fingerprint")
-    stale = None if (not fp or not live or live == "nofp") else bool(fp != live)
+    from motor_ai_sim.geo_fingerprint import same as _gfp_same
+    stale = None if (not fp or not live or live == "nofp") else (not _gfp_same(fp, live))
     _snap = getattr(_LAST, "snapshot", None)
     return {"has_result": True,
             # Under the store's lock: a coupled run finishing while this GET

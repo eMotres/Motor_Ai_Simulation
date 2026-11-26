@@ -176,6 +176,32 @@ def apply_to_summary(summary: Mapping[str, Any],
     p_mech = _num(out.get("P_mech_W"))
     p_loss = _num(out.get("P_loss_total_W"))
     gen = str(out.get("op_mode") or "").lower().startswith("gen")
+    from motor_ai_sim import shaft_convention as _SC
+    if _SC.rederive(out):
+        # the shaft-side convention: the core loss is a shaft load, so the shaft
+        # power, D, the shaft torque and the efficiency move with the new iron
+        # (rebuilt from the SAME losses, motor_ai_sim.shaft_convention)
+        p_mech = _num(out.get("P_mech_W"))
+        extra = _num(out.get("P_mech_extra_W"))
+        if extra is not None and p_mech is not None:
+            # SIGNED at the coupling: a motor that stops delivering (P < X, or P < 0) keeps the negative number
+            _net = p_mech + extra if gen else p_mech - extra
+            _pe = _num(out.get("P_elec_W"))
+            if out.get("efficiency_shaft") is not None or out.get("P_shaft_net_W") is not None:
+                out["P_shaft_net_W"] = round(_net, 1)
+                if gen:
+                    out["efficiency_shaft"] = round((_pe / _net) if (_pe and _pe > 0.0 and _net > 0.0) else 0.0, 6)
+                else:
+                    out["efficiency_shaft"] = round((_net / _pe) if (_net > 0.0 and _pe and _pe > 1.0) else 0.0, 6)
+        _t = _num(out.get("T_field_k_Nm") if gen else out.get("T_shaft_Nm"))
+        for mk, tk, pk in (("mass_total_kg", "torque_per_mass_Nm_kg", "power_per_mass_W_kg"),
+                           ("mass_full_kg", "torque_per_mass_full_Nm_kg", "power_per_mass_full_W_kg")):
+            m = _num(out.get(mk))
+            if m and p_mech is not None:
+                out[pk] = round(p_mech / m, 1)
+                if _t is not None:
+                    out[tk] = round(_t / m, 3)
+        return out
     if out.get("efficiency") is not None and p_mech is not None \
             and p_loss is not None and p_mech > 0.0:
         if gen:

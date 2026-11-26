@@ -432,7 +432,11 @@ def _eval_cache_key(overrides: Dict[str, float], current_a: float, steps: int,
         # v7 (2026-10-30): ew = 0 (auto) is the BUILT COIL's k_end per
         # candidate (#507), not the semicircle — a v6 auto entry holds the
         # semicircle's end-turn copper, loss and mass.
-        "v": 7,
+        # v8 (2026-11-25, owner): the shaft-side convention
+        # (motor_ai_sim.shaft_convention) - the core loss is a shaft load, the
+        # sleeve loss is counted; a v7 entry holds the earlier efficiency,
+        # power and torque per mass.  No conversion on read.
+        "v": 8,
         "sampling_purpose": sampling_purpose,
         # Physics the CALLER pinned for the whole run (rpm / connection / demag
         # / eddy from a descent plan).  A pinned run solves the pinned values no
@@ -2692,6 +2696,12 @@ def _cogging_refuse_demagged(points: List[Dict[str, Any]], cogging_max_nm: float
     return len(bad)
 
 
+from motor_ai_sim.shaft_convention import SHAFT_CONVENTION as _SHAFT_CONVENTION  # noqa: E402
+#: The shaft-side fields a stored sweep point carries into the eval cache with its numbers.
+_SHAFT_RES_KEYS = ("shaft_convention", "op_mode", "T_shaft_Nm", "P_mech_W", "P_shaft_drag_W",
+                   "P_shaft_drag_terms", "torque_side", "shaft_k3d", "shaft_basis_note", "P_sleeve_W")
+
+
 def _cogging_limits_ok(pt: Dict[str, Any], cogging_max_nm: float, eff_min_pct: float,
                        torque_min_nm: float) -> bool:
     """The opt-in limits of a cogging sweep on one point (a limit that is on and whose value is
@@ -2711,7 +2721,11 @@ def _cogging_limits_ok(pt: Dict[str, Any], cogging_max_nm: float, eff_min_pct: f
         if e is None or e * 100.0 < eff_min_pct:
             return False
     if torque_min_nm > 0.0:
-        t = _v("T_em_Nm")
+        # a motor point on the shaft-side convention is gated on its SHAFT torque
+        # (owner Q3, 2026-11-25); a generator on what it defined before (the
+        # field torque)
+        t = (_v("T_shaft_Nm") if (pt.get("shaft_convention") and pt.get("op_mode") != "generator"
+                                  and _v("T_shaft_Nm") is not None) else _v("T_em_Nm"))
         if t is None or abs(t) < torque_min_nm:
             return False
     return True
@@ -4285,8 +4299,12 @@ def seed_cache(req: SeedCacheRequest):
     for p in result["points"]:
         if not p.get("feasible") or p.get("current_a") is None or p.get("gamma_deg") is None:
             continue
+        # a point of the earlier shaft convention never enters the v8 cache: it
+        # would be served as a current eval (owner Q4: no conversion on read)
+        if p.get("shaft_convention") != _SHAFT_CONVENTION:
+            continue
         geo_ov = {k: v for k, v in (p.get("overrides") or {}).items() if k != "gamma_deg"}
-        res = {k: p[k] for k in _RES_KEYS if k in p}
+        res = {k: p[k] for k in _RES_KEYS + _SHAFT_RES_KEYS if k in p}
         key = _eval_cache_key(geo_ov, float(p["current_a"]), steps, coil, 1.0,
                               float(p["gamma_deg"]), mesh, mn,
                               int(sp["n_sectors"]), pc, tf, fp,
@@ -4494,6 +4512,9 @@ def _log_eval(overrides, current_a, gamma_deg, result, *, solve=None,
                 "p_loss": r.get("P_loss_total_W"),
                 # Waveform quality (CIANO FOC spec) — lets the surrogate screen THD.
                 "thd_ll": r.get("THD_LL_pct"), "kt": r.get("Kt_Nm_per_Arms"),
+                # the shaft-power convention of eff / td (1 = core loss on the shaft);
+                # a row without it is the earlier convention and never warm-starts a v8 run
+                **({"shaft_conv": 1} if r.get("shaft_convention") == _SHAFT_CONVENTION else {}),
             })
         # WHICH MACHINE produced this row.  ``overrides`` is a DELTA on the
         # active baseline geometry, so without the baseline's fingerprint a
@@ -4847,7 +4868,7 @@ class DescentRequest(BaseModel):
     # Optimize the load angle γ (MTPA) for the starting geometry BEFORE the search.
     optimize_gamma: bool = True
     # Surrogate (Bayesian) warm-start: seed the search from the best geometry the
-    # RandomForest surrogate predicts over ALL accumulated evals (config/.opt_dataset.jsonl).
+    # RandomForest surrogate predicts over current-convention accumulated evals (config/.opt_dataset.jsonl).
     # Falls back to the current geometry if there isn't enough data yet (<20 evals).
     surrogate_seed: bool = False
     # Box-walking: when a variable ends pinned at a window edge, re-centre the
@@ -4977,6 +4998,10 @@ def _msum(m: Dict[str, Any]) -> Dict[str, Any]:
         "I_phase_rms_A":   m.get("I_phase_rms_A"),
         "THD_LL_pct":      m.get("THD_LL_pct"),      # line-to-line voltage THD (FOC)
         "Kt_Nm_per_Arms":  m.get("Kt_Nm_per_Arms"),
+        # the shaft-power convention of these numbers (motor_ai_sim.shaft_convention)
+        "shaft_convention": m.get("shaft_convention"),
+        "T_shaft_Nm":      m.get("T_shaft_Nm"),
+        "op_mode":         m.get("op_mode"),
         "current_a":       m.get("current_a"),   # current the design was solved at
         # the steps (as snapped) and gap rows (as used) the solver reports: the run's solved pair is stamped from these
         "n_steps_per_period_solved": m.get("n_steps_per_period_solved"),
@@ -5005,10 +5030,13 @@ def _pt(out: Dict[str, Any], kind: str):
     ov = out.get("overrides") or r.get("overrides") or {}
     return {"td": r.get("torque_per_mass_Nm_kg"), "eff": r.get("efficiency"),
             "ripple": r.get("T_ripple_pct"), "kind": kind,
-            # Shaft torque — the number the user judges a design by.  Without it
+            # Field torque; shaft power travels separately on marked results.  Without it
             # the auto card's torque×ripple cloud could only plot the per-generation
             # BEST history (6 rows), not the run's 50+ measured designs.
             "torque": r.get("T_em_Nm"),
+            **({"P_mech_W": r.get("P_mech_W")} if r.get("shaft_convention") == _SHAFT_CONVENTION else {}),
+            "T_shaft_Nm": r.get("T_shaft_Nm"),
+            "shaft_conv": 1 if r.get("shaft_convention") == _SHAFT_CONVENTION else None,
             # Mass travels with the point too: torque and torque density differ
             # ONLY by it, so with all three present the Pareto report can state
             # both axes for the same design (and a point that somehow lost one
@@ -5127,7 +5155,8 @@ def _make_bline(base_m: Dict[str, Any], bump_m: Dict[str, Any],
             "w_td": w_td, "w_eff": w_eff, "norm": norm,
             "bump_pct": float(bump_pct),
             "current_a": float(base_m.get("current_a", 0.0) or 0.0),
-            "current_b": float(bump_m.get("current_a", 0.0) or 0.0)}
+            "current_b": float(bump_m.get("current_a", 0.0) or 0.0),
+            **({"shaft_conv": 1} if base_m.get("shaft_convention") == "fe_on_shaft_k3d_v1" else {})}
 
 
 _RIPPLE_PEN_LAM = {"v": 0.0, "v0": 0.0}
@@ -6147,11 +6176,17 @@ def _descent_worker(var_specs, op, ripple_max, w_eff, w_td, lam,
 
 def _surrogate_seed_overrides(var_specs, ripple_max, min_n=20):
     """Bayesian warm-start: the geometry the RandomForest surrogate predicts best
-    over ALL accumulated evals (config/.opt_dataset.jsonl).  Returns {var: value}
+    over current-convention accumulated evals (config/.opt_dataset.jsonl).  Returns {var: value}
     clamped to each variable's current window, or None if there isn't enough data."""
     try:
         from motor_ai_sim.optimization import surrogate as _surr
-        recs = _surr.filter_operating(_surr.load_dataset(_dataset_path()))
+        recs = _surr.load_dataset(_dataset_path())
+        # New runs use the marked basis. Keep the historical all-unmarked warm
+        # start until any current-convention evaluation exists in the history.
+        convention = 1 if any(r.get("shaft_conv") == 1 for r in recs) else None
+        recs, dropped = _surr.select_convention(recs, shaft_conv=convention)
+        log.info("surrogate seed dropped_other_convention: %d", dropped)
+        recs = _surr.filter_operating(recs)
         if len(recs) < int(min_n):
             return None
         bounds = {v["name"]: (float(v["lo"]), float(v["hi"])) for v in var_specs}
@@ -7097,7 +7132,8 @@ def surrogate_report(suggest: int = 5, ripple_max: float = 5.0):
     try:
         from motor_ai_sim.optimization import surrogate as _surr
         recs = _surr.load_dataset(_dataset_path())
-        return {"n_total": len(recs),
+        _, dropped = _surr.select_convention(recs)
+        return {"n_total": len(recs), "dropped_other_convention": dropped,
                 "importance": _surr.variable_importance(recs),
                 "suggest": _surr.suggest(recs, n=int(suggest), ripple_max=float(ripple_max))}
     except Exception as e:   # noqa: BLE001
@@ -7623,11 +7659,19 @@ def _auto_warm_start(recs, specs, cfg_fp: str, current_a: float, gamma_deg: floa
     x_cur = [float(v["x0"]) for v in specs]
     lows = [float(v.get("lo", 0.0) or 0.0) for v in specs]
     scored = []
-    for r in recs or []:
-        if not isinstance(r, dict):
-            continue
-        if str(r.get("cfg_fp") or "") != str(cfg_fp or ""):
-            continue                              # other machine, or unstamped
+    mine = [r for r in recs or [] if isinstance(r, dict) and str(r.get("cfg_fp") or "") == str(cfg_fp or "")]
+    # ONE shaft convention is ranked (eff / td differ between them): the current (marked) rows once the baseline or
+    # any row of this machine is marked; an entirely earlier-convention history keeps its earlier warm start
+    bl = base.get("_bline") if isinstance(base, dict) and isinstance(base.get("_bline"), dict) else {}
+    baseline_marked = isinstance(base, dict) and (base.get("shaft_convention") == "fe_on_shaft_k3d_v1"
+                       or base.get("shaft_conv") == 1 or bl.get("shaft_conv") == 1)
+    marked = baseline_marked or any(r.get("shaft_conv") == 1 for r in mine)
+    if marked and not baseline_marked:
+        log.warning("auto warm start: selected rows and baseline use different shaft conventions")
+        return None
+    for r in mine:
+        if (r.get("shaft_conv") == 1) != marked:
+            continue                              # the other shaft convention: another efficiency / torque density
         ov = r.get("overrides")
         if not isinstance(ov, dict):
             continue
@@ -9435,6 +9479,10 @@ def _auto_result_metrics(m: Dict[str, Any], rpm: float, geo_sig: str) -> Dict[st
         "I_phase_rms_A": m.get("I_phase_rms_A") or m.get("current_a"),
         "THD_LL_pct": m.get("THD_LL_pct"),
         "Kt_Nm_per_Arms": m.get("Kt_Nm_per_Arms"),
+        "shaft_convention": m.get("shaft_convention"),
+        "T_shaft_Nm": m.get("T_shaft_Nm"),
+        "op_mode": m.get("op_mode"),
+        "shaft_conv": 1 if m.get("shaft_convention") == _SHAFT_CONVENTION else None,
         "rpm": rpm,
         # The machine stamp travels WITH the numbers (stale-machine doctrine):
         # these results were solved on THIS cross-section and no other.

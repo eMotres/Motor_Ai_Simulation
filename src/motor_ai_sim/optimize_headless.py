@@ -323,6 +323,10 @@ class EvalMemo:
         fp = self.O._config_fingerprint(tuple(sorted(overrides or {})))
         payload = [fp, sorted((overrides or {}).items()), float(current_a),
                    int(steps), float(coil_temp_c), sorted(kw.items())]
+        # the shaft-power convention of the stored answer (motor_ai_sim.shaft_convention): a memo
+        # entry of the earlier convention is never an answer to a run on this one
+        from motor_ai_sim.shaft_convention import SHAFT_CONVENTION
+        payload.append(["shaft_convention", SHAFT_CONVENTION])
         cr = self.O._RUN_COIL_REL.get()
         if cr is not None:          # the run's wire cell is part of the identity; an entry stored without one is never an answer to it
             payload.append(["coil_rel", round(float(cr), 4)])

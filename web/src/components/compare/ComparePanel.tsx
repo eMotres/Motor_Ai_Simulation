@@ -36,7 +36,7 @@ import { ktFromKv } from '../../lib/kvKt';
 import { pocketWidth, POCKET_WIDTH_TIP, SLOT_WIDTH_TIP } from '../../lib/pocketWidth';
 import { nsT } from '../../i18n/nsT';
 import { coggingComparable, storedNumber } from '../../lib/coggingPp';
-import { isSweepRow, sweepMetricsComparable } from '../../lib/sweepSettings';
+import { isSweepRow, sweepMetricsComparable, shaftConventionComparable } from '../../lib/sweepSettings';
 
 const API = import.meta.env.VITE_API_URL ?? 'http://localhost:8001';
 
@@ -188,7 +188,9 @@ const RESULT_COLS: ResultCol[] = [
   // T, P, n, η, ripple, then the drive side (V peak, I peak, I rms, J).
   { key: 'T_em_avg_Nm',          label: 'Torque',      unit: 'N·m',    d: 3, better: 'hi' },
   { key: 'P_mech_W',             label: 'Power',       unit: 'kW',     d: 2, scale: 1e-3, better: 'hi',
-    derive: r => Number(r.T_em_avg_Nm) * 2 * Math.PI * Number(r.rpm) / 60 },
+    derive: r => r.shaft_convention === 'fe_on_shaft_k3d_v1'
+      ? (r.P_mech_W != null ? Number(r.P_mech_W) : NaN)
+      : Number(r.T_em_avg_Nm) * 2 * Math.PI * Number(r.rpm) / 60 },
   { key: 'rpm',                  label: 'Speed',       unit: 'rpm',    d: 0 },
   { key: 'efficiency',           label: 'Efficiency',  unit: '%',      d: 2, scale: 100, better: 'hi' },
   { key: 'T_ripple_pct',         label: 'Ripple',      unit: '%',      d: 2, better: 'lo' },
@@ -206,7 +208,8 @@ const RESULT_COLS: ResultCol[] = [
     derive: r => perMass(r, 'torque').value ?? NaN, activeBasis: r => !perMass(r, 'torque').full },
   { key: 'power_per_mass_W_kg',  label: 'PD',          unit: 'kW/kg',  d: 2, scale: 1e-3, better: 'hi',
     derive: r => perMass(r, 'power').value
-      ?? Number(r.T_em_avg_Nm) * 2 * Math.PI * Number(r.rpm) / 60 / Number(r.mass_total_kg),
+      ?? (r.shaft_convention === 'fe_on_shaft_k3d_v1' ? NaN
+        : Number(r.T_em_avg_Nm) * 2 * Math.PI * Number(r.rpm) / 60 / Number(r.mass_total_kg)),
     activeBasis: r => !perMass(r, 'power').full },
   { key: 'mass_full',            label: 'Mass',        unit: 'kg',     d: 3, better: 'lo', presentKey: 'mass_total_kg',
     derive: r => shownMass(r).kg ?? NaN, activeBasis: r => shownMass(r).kind !== 'full' },
@@ -763,6 +766,8 @@ const ComparePanel: React.FC = () => {
   // The Δ% row and its column maxima follow the same rule as the ranking: a sweep point whose steps-and-gap identity is unknown /
   // mixed / different (or that sits beside an ordinary run) gets no delta and does not set a maximum.
   const selSweepMixed = !sweepMetricsComparable(selected.map(s => s.results as any));
+  // rows of two shaft-power conventions (owner 2026-11-25) are never ranked against each other, and get no delta
+  const selShaftMixed = !shaftConventionComparable(selected.map(s => s.results as any));
   // Cogging pp follows its own rule (known, equal settings) over the SAME selected rows as the colours of the comparison table.
   const selCoggingMixed = !coggingComparable(selected
     .filter(s => Number.isFinite(storedNumber((s.results as any)?.cogging_pp_Nm)))
@@ -771,6 +776,7 @@ const ComparePanel: React.FC = () => {
     if (r.text) return NaN;
     if (selCoggingMixed && colId(r).endsWith('cogging_pp_Nm')) return NaN;
     if (selSweepMixed && isSweepRow(s.results as any)) return NaN;
+    if (selShaftMixed) return NaN;
     const raw = resultVal(r, s);
     if (!Number.isFinite(raw)) return NaN;
     return r.activeBasis?.(resultSrc(r, s)) && selectedHasFullBasis.get(colId(r)) === true ? NaN : raw;
@@ -799,7 +805,7 @@ const ComparePanel: React.FC = () => {
     },
     cellSx: () => r.text ? { maxWidth: 170, overflow: 'hidden', textOverflow: 'ellipsis' } : {},
     cellColor: s => r.text && resultText(r, s) === '—' ? 'var(--line)' : undefined,
-    title: (_v, s) => { if (r.text) { const text = resultText(r, s); return text === '—' ? undefined : text; } return Number.isFinite(resultVal(r, s)) && r.activeBasis?.(resultSrc(r, s)) ? ACTIVE_BASIS_TIP : undefined; },
+    title: (_v, s) => { if (r.key === 'T_em_avg_Nm' && resultSrc(r, s).shaft_convention === 'fe_on_shaft_k3d_v1') return txSim('fieldTorque'); if (r.text) { const text = resultText(r, s); return text === '—' ? undefined : text; } return Number.isFinite(resultVal(r, s)) && r.activeBasis?.(resultSrc(r, s)) ? ACTIVE_BASIS_TIP : undefined; },
     format: (_v, s) => { if (r.text) return resultText(r, s); const raw = resultVal(r, s); return Number.isFinite(raw) ? `${fmtNum(raw, r.d ?? 2, r.scale ?? 1)}${r.activeBasis?.(resultSrc(r, s)) ? '*' : ''}` : '—'; },
   }));
   // Cogging pp is compared only between values measured with KNOWN, equal settings (one signature: steps,
@@ -841,6 +847,16 @@ const ComparePanel: React.FC = () => {
       };
     });
   }
+  if (!shaftConventionComparable(scope.map(s => s.results as any))) {
+    resultModelColumns.forEach((c, i) => {
+      const base = c;
+      resultModelColumns[i] = { ...base,
+        rankValues: () => [],
+        noColor: () => true,
+        title: (v, s) => [txSim('shaftConvMixed'), base.title ? base.title(v, s) : ''].filter(Boolean).join(' ') || undefined,
+      };
+    });
+  }
   return resultModelColumns;
   };
   const resultModelColumns = buildResultModelColumns(sims, libraryHasFullBasis);
@@ -871,6 +887,7 @@ const ComparePanel: React.FC = () => {
   const colMax: Record<string, number> = {};
   resultCols.forEach(r => {
     if (selCoggingMixed && colId(r).endsWith('cogging_pp_Nm')) return;
+    if (selShaftMixed) return;
     const ns = extentVals(r, selSweepMixed ? selected.filter(s => !isSweepRow(s.results as any)) : selected);
     if (ns.length) colMax[`r:${colId(r)}`] = Math.max(...ns);
   });

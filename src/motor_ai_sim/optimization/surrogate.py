@@ -96,6 +96,23 @@ def filter_operating(recs: List[Dict[str, Any]], min_torque_frac: float = 0.6) -
     return [r for r in recs if r.get("torque") is not None and float(r["torque"]) >= cut]
 
 
+def select_convention(recs: List[Dict[str, Any]], shaft_conv: Optional[int] = None
+                      ) -> Tuple[List[Dict[str, Any]], int]:
+    """Select the run's basis, or the newest appended row's basis by default.
+
+    Selection precedes operating-point filtering so older high-torque rows cannot
+    remove the current run. An entirely unmarked history follows its old path.
+    The original append-only dataset is never modified.
+    """
+    marked = (recs[-1].get("shaft_conv") == 1 if recs else False) if shaft_conv is None else shaft_conv == 1
+    selected = [r for r in recs if (r.get("shaft_conv") == 1) == marked]
+    return selected, len(recs) - len(selected)
+
+
+def _mixed_conventions(recs: List[Dict[str, Any]]) -> bool:
+    return len({r.get("shaft_conv") == 1 for r in recs if all(r.get(t) is not None for t in TARGETS)}) > 1
+
+
 def build_matrix(
     recs: List[Dict[str, Any]],
 ) -> Tuple[np.ndarray, List[str], Dict[str, np.ndarray]]:
@@ -105,6 +122,8 @@ def build_matrix(
     importance and break the surrogate's relative comparisons).  Missing keys
     in a record are imputed with that column's median.
     """
+    if _mixed_conventions(recs):
+        raise ValueError("Mixed shaft conventions: select a dataset with one power basis")
     # Union of override keys across all records (+ the load angle γ, an operating
     # variable that also affects ripple/torque).
     keys: set = set()
@@ -161,13 +180,14 @@ def variable_importance(
     robust to the correlated features a guided search produces).  filter_op drops
     the low-torque MTPA-probe rows (off for a fixed-current DOE, where torque
     legitimately varies across samples)."""
+    recs, dropped = select_convention(recs)
     X, feat_keys, ys = build_matrix(filter_operating(recs) if filter_op else recs)
     if len(X) < min_samples:
-        return {"ok": False, "n": len(X), "need": min_samples, "features": feat_keys}
+        return {"ok": False, "n": len(X), "need": min_samples, "features": feat_keys, "dropped_other_convention": dropped}
 
     from sklearn.inspection import permutation_importance
 
-    out: Dict[str, Any] = {"ok": True, "n": len(X), "features": feat_keys, "targets": {}}
+    out: Dict[str, Any] = {"ok": True, "n": len(X), "features": feat_keys, "targets": {}, "dropped_other_convention": dropped}
     for t, (label, goal) in TARGETS.items():
         y = ys[t]
         if np.ptp(y) < 1e-9:
@@ -199,9 +219,10 @@ def suggest(
     candidates within ``bounds`` (default = observed min/max per variable), predict,
     and return the top-``n`` by acquisition = td̂ × eff̂ among those with ripplê ≤
     gate.  Adds an exploration bonus from the RF prediction spread (uncertainty)."""
+    recs, dropped = select_convention(recs)
     X, feat_keys, ys = build_matrix(filter_operating(recs))
     if len(X) < 20:
-        return {"ok": False, "n": len(X), "need": 20}
+        return {"ok": False, "n": len(X), "need": 20, "dropped_other_convention": dropped}
 
     rng = np.random.default_rng(seed)
     lo = X.min(axis=0); hi = X.max(axis=0)
@@ -248,12 +269,13 @@ def suggest(
             "pred_td": round(float(pred["td"][idx]), 3),
             "pred_eff": round(float(pred["eff"][idx]), 4),
         })
-    return {"ok": True, "n_train": len(X), "ripple_max": ripple_max, "suggestions": sugg}
+    return {"ok": True, "n_train": len(X), "ripple_max": ripple_max, "suggestions": sugg, "dropped_other_convention": dropped}
 
 
 def _print_report(recs, n_suggest, ripple_max):
     vi = variable_importance(recs)
     print(f"\n=== Surrogate variable importance (n={vi.get('n')} evals) ===")
+    print(f"  dropped_other_convention: {vi['dropped_other_convention']}")
     if not vi.get("ok"):
         print(f"  not enough data yet — have {vi.get('n')}, need {vi.get('need')}.")
         return

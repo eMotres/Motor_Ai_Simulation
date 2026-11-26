@@ -7429,7 +7429,13 @@ _PWM_KEEP_SINE_PREFIX = ("KV", "Kt", "Km", "Ld", "Lq", "L0", "psi",
 _PWM_EM_KEYS = ("T_em_avg_Nm", "T_ripple_pct", "P_stranded_W", "P_core_W",
                 "P_solid_W", "P_mag_W", "P_shaft_W", "P_sleeve_W",
                 "P_loss_total_W", "efficiency", "THD_I_pct", "THD_LL_pct",
-                "V_line_peak_V", "n_steps_per_period")
+                "V_line_peak_V", "n_steps_per_period",
+                # the run's shaft-power convention travels with its numbers
+                # (motor_ai_sim.shaft_convention.CONVENTION_KEYS)
+                "P_mech_W", "op_mode", "shaft_convention", "shaft_k3d", "torque_side",
+                "shaft_rotor_in_field", "P_torque_embedded_W", "P_cu_ac_field_W",
+                "P_shaft_drag_W", "P_shaft_drag_terms", "P_field_W", "P_gap_W",
+                "T_field_k_Nm", "T_shaft_Nm", "P_elec_W", "shaft_basis_note")
 
 
 def record_drive(entry: Any) -> str:
@@ -7670,12 +7676,20 @@ def pwm_em_overlay(sine: Dict[str, Any],
         if any(str(k).startswith(p) for p in _PWM_KEEP_SINE_PREFIX):
             continue
         out[k] = v
+    # the shaft-power convention is the PWM run's, all of it or none
+    from motor_ai_sim import shaft_convention as _SCo
+    _SCo.overlay(out, pwm or {})
+    if not _SCo.has_marker(out) and _SCo.has_marker(sine or {}) and pwm.get("P_mech_W") is None:
+        # an unmarked PWM run over a marked sine summary: the sine's shaft power is
+        # not this run's; the earlier convention's T*w follows below
+        out.pop("P_mech_W", None)
     # ROTOR POWER FOLLOWS THE TORQUE IT IS MADE OF.  The record-only path has a
     # torque and no power, and leaving the sinusoid's watts under a PWM torque
     # would put two different machines in one efficiency.
     if pwm.get("T_em_avg_Nm") is not None and pwm.get("P_mech_W") is None:
         _t, _n = _numf(out.get("T_em_avg_Nm")), _numf(out.get("rpm"))
-        if _t is not None and _n:
+        from motor_ai_sim import shaft_convention as _SC
+        if _t is not None and _n and not _SC.rederive(out):
             out["P_mech_W"] = abs(_t) * 2.0 * math.pi * float(_n) / 60.0
     _pwm_solved_current(out, sine or {}, pwm or {})
     _pwm_end3d(out, sine or {}, pwm or {})
@@ -7771,14 +7785,20 @@ def _em_recompute_derived(out: Dict[str, Any]) -> None:
     """
     t = _numf(out.get("T_em_avg_Nm"))
     n = _numf(out.get("rpm"))
-    if t is not None and n:
+    # A summary on the shaft-side convention (motor_ai_sim.shaft_convention) keeps
+    # it: the shaft side is k*T*w -/+ D, the constants carry the 3-D torque factor
+    # and the per-mass torque is the shaft (motor) / field (generator) torque.
+    from motor_ai_sim import shaft_convention as _SC
+    _sc = t is not None and bool(n) and _SC.rederive(out)
+    _kc = (float(out.get("shaft_k3d")) if (_sc and _numf(out.get("shaft_k3d"))) else 1.0)
+    if t is not None and n and not _sc:
         out["P_mech_W"] = abs(t) * 2.0 * math.pi * float(n) / 60.0
     i_w = _numf(out.get("I_winding_rms_A")) or _numf(out.get("I_phase_rms_A"))
     i_l = _numf(out.get("I_line_rms_A")) or _numf(out.get("I_phase_rms_A"))
     if t is not None and i_w:
-        out["Kt_Nm_per_Arms"] = abs(t) / float(i_w)
+        out["Kt_Nm_per_Arms"] = _kc * abs(t) / float(i_w)
     if t is not None and i_l:
-        out["Kt_Nm_per_A_line"] = abs(t) / float(i_l)
+        out["Kt_Nm_per_A_line"] = _kc * abs(t) / float(i_l)
     r = _numf(out.get("R_phase_ohm"))
     kt = _numf(out.get("Kt_Nm_per_Arms"))
     if kt is not None and r and r > 0:
@@ -7789,10 +7809,12 @@ def _em_recompute_derived(out: Dict[str, Any]) -> None:
         if km is not None:
             out["Km_per_mass_Nm_sqrtW_kg"] = km / float(mass)
         if t is not None:
-            out["torque_per_mass_Nm_kg"] = abs(t) / float(mass)
+            _tpm = (_numf(out.get("T_field_k_Nm")) if str(out.get("op_mode")) == "generator"
+                    else _numf(out.get("T_shaft_Nm"))) if _sc else abs(t)
+            out["torque_per_mass_Nm_kg"] = float(_tpm) / float(mass)
         p = _numf(out.get("P_mech_W"))
         if p is not None:
-            out["power_per_mass_W_kg"] = abs(p) / float(mass)
+            out["power_per_mass_W_kg"] = (p if _sc else abs(p)) / float(mass)
         lo = _numf(out.get("P_loss_total_W"))
         if lo is not None:
             out["loss_density_W_kg"] = float(lo) / float(mass)
@@ -7826,6 +7848,9 @@ def _em_from_coupled(sine: Dict[str, Any], rec: Dict[str, Any],
     for k, v in over.items():
         if v is not None:
             out[k] = v
+    # the shaft-power convention is the RECORD's run's, all of it or none
+    from motor_ai_sim import shaft_convention as _SC
+    _SC.overlay(out, over)
     # THE RESISTANCE BELONGS TO THE TEMPERATURE THE LOOP SETTLED AT.  Km is
     # Kt/sqrt(3R) and the standalone solve's R is quoted at its own winding
     # temperature — 200 °C on the audited 'peak' duty against the coupled
@@ -10282,15 +10307,25 @@ def shaft_view(em: Dict[str, Any], brg: Optional[Dict[str, Any]],
     P = _numf(_g(em, "P_mech_W"))
     # rotor power carries the torque factor (measured k_T, else k_flux)
     k = torque_factor_3d(em)
+    # A summary on the shaft-side convention (motor_ai_sim.shaft_convention)
+    # already carries k (on the field part only) and the core loss as a shaft
+    # load in its P_mech_W: no second factor, and a motor at no load keeps its
+    # negative shaft power (the shaft supplies the core loss; no efficiency).
+    from motor_ai_sim.shaft_convention import has_marker as _sc_marked
+    _sc = _sc_marked(em)
+    if _sc:
+        k = None
     loss = _numf(_g(em, "P_loss_total_W"))
     x = _numf((brg or {}).get("P_mech_extra_W")) if (brg and brg.get("has_bearings", True)) else None
     gen = str(mode or _g(em, "op_mode") or "").lower().startswith("gen")
     out: Dict[str, Optional[float]] = {"k": k, "P_rotor_W": None, "P_shaft_W": None,
                                        "P_elec_W": None, "eta_em": None,
                                        "eta_shaft": None, "gen": gen}
+    if _sc:
+        out["shaft_convention"] = em.get("shaft_convention")
     if P is None:
         return out
-    pr = abs(P) * (k if k else 1.0)
+    pr = (P if (_sc and not gen) else abs(P)) * (k if k else 1.0)
     out["P_rotor_W"] = pr
     if loss is not None:
         pe = max(0.0, pr - loss) if gen else pr + loss
@@ -11901,7 +11936,11 @@ def em_torque_rows(em: Dict[str, Any],
     # the voltages below keep k_flux (owner 2026-09-30)
     _ktq = torque_factor_3d(em)
     T2d = _g(em, "T_em_avg_Nm")
-    P2d = _g(em, "P_mech_W")
+    # on the shaft-side convention P_mech_W is the shaft side; the 2-D rotor
+    # power T*w is P_field_W (motor_ai_sim.shaft_convention)
+    from motor_ai_sim.shaft_convention import has_marker as _sc_marked
+    _sc = _sc_marked(em)
+    P2d = _g(em, "P_field_W") if _sc else _g(em, "P_mech_W")
     _pwm_drive = str(drive or "sine") == "pwm"
     tp = [["", "2-D FEM", "with the 3-D factor"]]
     tp.append(["Torque [N·m]", _fmt(T2d, 3),
@@ -11913,6 +11952,14 @@ def em_torque_rows(em: Dict[str, Any],
                _fmt(abs(float(P2d)) / 1000.0 if P2d else None, 3),
                _fmt(abs(float(P2d)) * float(_ktq) / 1000.0 if (P2d and _ktq) else None, 3)
                if k3d else "—"])
+    if _sc:
+        # the shaft side: rotor power with the 3-D factor -/+ the core loss (and
+        # the other shaft-side loads the reported torque does not contain)
+        _psh = _numf(_g(em, "P_mech_W"))
+        tp.append([("Shaft input power, core loss on the shaft [kW]"
+                    if str(_g(em, "op_mode")) == "generator"
+                    else "Shaft output power, core loss on the shaft [kW]"),
+                   "", _fmt(_psh / 1000.0 if _psh is not None else None, 3)])
     if k3d:
         tp.append(["…3-D basis of torque and power", "",
                    kt_basis_note_of(em)])
@@ -12338,6 +12385,12 @@ def em_constant_rows(em: Dict[str, Any],
     # measured k_T, else k_flux, else 2-D (owner 2026-09-30) — the same one
     # the torque rows of section 3 carry.
     _kTc = torque_factor_3d(em)
+    # a summary on the shaft-side convention already carries the factor in its
+    # constants and densities (motor_ai_sim.shaft_convention): not applied twice
+    from motor_ai_sim.shaft_convention import has_marker as _sc_marked
+    _sc = _sc_marked(em)
+    if _sc:
+        _kTc = None
 
     def _km(v: Any) -> Optional[float]:
         f = _numf(v)
@@ -12456,12 +12509,20 @@ def em_constant_rows(em: Dict[str, Any],
     _mtot = _numf(_g(em, "mass_total_kg"))
     _t3d = _kf(_g(em, "T_em_avg_Nm"))
     _p3d = _kf(_g(em, "P_mech_W"))
+    _gen_sc = _sc and str(_g(em, "op_mode")) == "generator"
+    if _sc:
+        _t3d = _numf(_g(em, "T_field_k_Nm") if _gen_sc else _g(em, "T_shaft_Nm"))
     if _mtot and _t3d:
         R("Torque per mass", abs(_t3d) / _mtot, 3, "N·m/kg",
-          "torque × the 3-D factor over the total mass %s" % _fmt(_mtot, 3, "kg"))
+          ((("field torque × the 3-D factor" if _gen_sc else
+             "shaft torque (core loss on the shaft, 3-D factor on the field torque)")
+            if _sc else "torque × the 3-D factor")
+           + " over the total mass %s" % _fmt(_mtot, 3, "kg")))
     if _mtot and _p3d:
-        R("Rotor power per mass", abs(_p3d) / 1000.0 / _mtot, 3, "kW/kg",
-          "rotor power × the 3-D factor over the same mass")
+        R("Shaft power per mass" if _sc else "Rotor power per mass",
+          (_p3d if _sc else abs(_p3d)) / 1000.0 / _mtot, 3, "kW/kg",
+          ("shaft-side power (core loss on the shaft) over the same mass" if _sc
+           else "rotor power × the 3-D factor over the same mass"))
     # THE TEMPERATURE THE RESISTANCE BELONGS TO, printed (MJ-4, audit v7).
     _rt = _numf(_g(em, "coil_temp_C"))
     _r_note = ("at this run's winding temperature%s, end windings included"
@@ -18763,6 +18824,18 @@ def power_accounting_cell(em: Dict[str, Any]) -> str:
     return "%s (%s)" % (_fmt(v[0], 1), _fmt(v[1], 2, "%"))
 
 
+#: How a duty column names its shaft-power convention (motor_ai_sim.shaft_convention).
+SHAFT_CONV_WORDS_NEW = "core loss on the shaft, 3-D factor in the run"
+SHAFT_CONV_WORDS_OLD = "earlier run: all losses on the electrical side"
+
+
+def _sc_marked(em: Any) -> bool:
+    """True when a summary follows the shaft-side convention
+    (:mod:`motor_ai_sim.shaft_convention`)."""
+    from motor_ai_sim.shaft_convention import has_marker
+    return has_marker(em if isinstance(em, dict) else None)
+
+
 def em_compare_rows(cols: List[Dict[str, Any]], batt: Dict[str, Any]
                     ) -> Tuple[str, List[List[Any]]]:
     """The electromagnetic comparison as ``(row header, rows)`` — plain data.
@@ -18783,12 +18856,19 @@ def em_compare_rows(cols: List[Dict[str, Any]], batt: Dict[str, Any]
         x = _numf((c.get("brg") or {}).get("P_mech_extra_W"))
         if p is None or x is None:
             return None
+        if _sc_marked(c["em"]):
+            # shaft-side convention: the balance itself (k on the field part,
+            # the core loss on the shaft), see shaft_view
+            _ps = shaft_view(c["em"] or {}, c.get("brg"), c["d"].get("mode"))["P_shaft_W"]
+            return (_ps / 1000.0) if _ps is not None else None
         gen = str(c["d"].get("mode") or "").lower().startswith("gen")
         pk = p * float(k) if k else p
         return pk + x / 1000.0 if gen else max(0.0, pk - x / 1000.0)
 
     def _pk(c) -> Optional[float]:
-        p = _e(c, "P_mech_W")
+        # the 2-D rotor power T*w (on the shaft-side convention that is P_field_W;
+        # its P_mech_W is the shaft side)
+        p = _e(c, "P_field_W") if _sc_marked(c["em"]) else _e(c, "P_mech_W")
         if p is None:
             t, n = c["d"].get("torque_nm"), c["d"].get("rpm")
             p = (abs(float(t)) * 2 * math.pi * float(n) / 60.0
@@ -18839,6 +18919,13 @@ def em_compare_rows(cols: List[Dict[str, Any]], batt: Dict[str, Any]
     # …AND THE ONE BASIS OF EVERY NUMBER IN THE COLUMN (B01): which record, at which temperatures.
     rows.append(["Basis"] + _col_vals(
         cols, lambda c: str(c.get("basis") or EM_SOURCE_SHORT.get(str(c.get("em_source") or ""), "—"))))
+    # …AND WHICH SHAFT-POWER CONVENTION EACH COLUMN IS ON (owner 2026-11-25): a
+    # run solved before the convention keeps its numbers, so two columns of one
+    # table may differ by the core loss on the shaft.  Said per duty when the
+    # columns do not all agree.
+    if len({_sc_marked(c["em"]) for c in cols}) > 1:
+        rows.append(["Shaft-power convention"] + _col_vals(
+            cols, lambda c: (SHAFT_CONV_WORDS_NEW if _sc_marked(c["em"]) else SHAFT_CONV_WORDS_OLD)))
     # Per duty, because two duties of one configuration may be solved in Y
     # and in Δ (user 2026-09-13: "need to add the connection to the report").
     rows.append(["Terminal connection"] + _col_vals(
@@ -19049,6 +19136,8 @@ def em_compare_rows(cols: List[Dict[str, Any]], batt: Dict[str, Any]
     # Kt / Km: the torque factor — measured k_T, else k_flux (owner
     # 2026-09-30), the same one the torque row carries.
     def _ktmul(c, v):
+        if _sc_marked(c["em"]):
+            return v            # the shaft-side convention's Kt already carries k
         k = torque_factor_3d(c["em"])
         return (v * k) if (v is not None and k) else v
     _any_k = any(torque_factor_3d(c["em"]) for c in cols)

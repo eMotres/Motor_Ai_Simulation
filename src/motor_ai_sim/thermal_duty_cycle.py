@@ -465,6 +465,7 @@ def losses_by_node(summary: Mapping[str, Any],
     # Mechanical watts, exactly where the steady map puts them.
     mech = dict((th.get("cooling") or {}).get("mech_losses") or {})
     p_brg_air = 0.0
+    _r0, _s0 = p_r, p_s          # the mechanical share of the node watts is measured below (mech_in_nodes_W)
     if mech:
         open_ends = (bool(mech.get("shaft_ends_open")) if shaft_ends_open is None
                      else bool(shaft_ends_open))
@@ -527,6 +528,9 @@ def losses_by_node(summary: Mapping[str, Any],
                          "stator — it is sheared in the air between them"
                          % p_wind)
 
+    # the bearing friction and gap windage this function put INTO the nodes: thermal sources, not
+    # electromagnetic losses (a power balance must not count them as EM drag; shaft_convention)
+    _mech_in_nodes = (p_r - _r0) + (p_s - _s0)
     # WHAT EACH NODE'S WATTS ARE MADE OF (2026-10-19), for a caller that has
     # to move them with the current or the speed (the continuous rating's
     # eddy law and its speed search): the Bertotti terms per side, and the
@@ -569,6 +573,7 @@ def losses_by_node(summary: Mapping[str, Any],
     # watts the four nodes carry; `input_total_W` is everything made, so the
     # balance `total_W + bearings_to_ambient_W == input_total_W` is checkable.
     out["bearings_to_ambient_W"] = round(p_brg_air, 4)
+    out["mech_in_nodes_W"] = round(max(_mech_in_nodes, 0.0), 4)
     out["input_total_W"] = round(out["total_W"] + p_brg_air, 4)
     return out
 

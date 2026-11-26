@@ -276,6 +276,26 @@ def duty_terminal_budget(
         "note": info["note"],
     }
     gen = str(s.get("op_mode") or "").lower().startswith("gen")
+    from motor_ai_sim.shaft_convention import has_marker, coupling_power
+    if has_marker(s):
+        out["shaft_conv"] = 1
+        out["efficiency_basis"] = "core loss on the shaft"
+        eta_raw = s.get("efficiency_shaft")
+        p_raw = coupling_power(s)
+        if eta_raw is None and s.get("P_mech_extra_W") is None:
+            eta_raw = s.get("efficiency")
+        try:
+            eta, p = float(eta_raw), float(p_raw)
+        except (TypeError, ValueError):
+            return out
+        if not (math.isfinite(eta) and math.isfinite(p)) or eta < 0:
+            return out
+        if eta == 0 or (not gen and p <= 0):
+            out.update(efficiency=0.0, efficiency_at_terminals=0.0)
+        elif p > 0:
+            eta_t = eta - p_term / p if gen else p / (p / eta + p_term)
+            out.update(efficiency=round(eta, 6), efficiency_at_terminals=round(max(eta_t, 0.0), 6))
+        return out
     pairs = ((s.get("efficiency_shaft"), s.get("P_shaft_net_W"), "shaft"),
              (s.get("efficiency"), s.get("P_mech_W"), "electromagnetic"))
     for eta_raw, p_raw, basis in pairs:

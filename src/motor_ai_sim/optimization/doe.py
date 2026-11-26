@@ -126,7 +126,8 @@ def run_doe(n: int = 60, current_a: float = 150.0, band: float = 0.35, n_sectors
                 recs.append({"overrides": ov, "current_a": current_a, "gamma_deg": gamma_deg,
                              "ripple": r.get("T_ripple_pct"), "torque": r.get("T_em_Nm"),
                              "eff": r.get("efficiency"), "td": r.get("torque_per_mass_Nm_kg"),
-                             "mass": r.get("mass_total_kg"), "v_peak": r.get("V_peak")})
+                             "mass": r.get("mass_total_kg"), "v_peak": r.get("V_peak"),
+                             **({"shaft_conv": 1} if r.get("shaft_convention") == "fe_on_shaft_k3d_v1" else {})})
             log(f"  DOE {done}/{n}  (ok {len(recs)})")
 
     with open(doe_path(), "w", encoding="utf-8") as fh:

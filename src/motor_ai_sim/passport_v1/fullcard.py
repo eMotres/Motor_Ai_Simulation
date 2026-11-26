@@ -367,14 +367,26 @@ def cooling_block(full_dir: Path, M: str, studies: Sequence[Mapping[str, Any]], 
                                                  "record_is_s1", "I_estimated_A_rms")}
             row["s1"]["power_linear"] = {k: (cr.get("power") or {}).get(k)
                                          for k in ("T_em_Nm", "P_shaft_W", "eta_shaft")}
+            from motor_ai_sim.shaft_convention import has_marker
+            marked = has_marker(cr.get("reference") or {})
+            if marked:
+                row["s1"]["power_linear"].update(shaft_convention="fe_on_shaft_k3d_v1",
+                    torque_basis="2-D field", basis="core loss on the shaft")
             if Ic:
                 n = float(sd["rpm"])
                 w = 2.0 * math.pi * n / 60.0
                 pw = cr.get("power") or {}
                 Tem = pw.get("T_em_Nm")
-                Pm = (S3.motor_point(rec, snap, hm, rows_grid, {"rpm": n, "I_A": float(Ic),
-                                                                 "gamma_deg": 0.0})["P_mech_W"])
-                if Tem is not None:
+                Pm = None if marked else S3.motor_point(rec, snap, hm, rows_grid,
+                    {"rpm": n, "I_A": float(Ic), "gamma_deg": 0.0})["P_mech_W"]
+                if marked:
+                    # The rating already applied its run's k and drag; never rebuild P from field T.
+                    ps = pw.get("P_shaft_W")
+                    row["s1"]["card"] = {"T_Nm": float(ps) / w if ps is not None and w > 0 else None,
+                        "P_shaft_W": ps, "P_mech_W": cp.get("P_mech_extra_W"),
+                        "shaft_convention": "fe_on_shaft_k3d_v1",
+                        "basis": "S1 rating at the coupling; core loss on the shaft; stored power, no second k; P_mech_W holds bearing / windage loss"}
+                elif Tem is not None:
                     # the S1 state's OWN electromagnetic pass (TDM + demag at the S1
                     # temperatures) — the HOT map is at the 150 °C reference, which is
                     # not this state's magnet temperature
@@ -946,10 +958,18 @@ def _cooling_html(rec: Mapping[str, Any]) -> str:
     s1 = [r for r in st if r["solve_to"] == "continuous"]
     lim = [r for r in st if r["solve_to"] != "continuous"]
     rows = []
+    # the power basis column only when a row is on the shaft-side convention: a card of earlier rows alone keeps its
+    # earlier columns; next to a marked row an earlier one says so
+    def _marked(r):
+        cd = ((r.get("s1") or {}).get("card") or {})
+        return cd.get("shaft_convention") == "fe_on_shaft_k3d_v1"
+    with_basis = any(_marked(r) for r in s1)
     for r in s1:
         c = r.get("s1") or {}
         cd = c.get("card") or {}
         t = c.get("temperatures_c") or {}
+        basis = ([H_(cd.get("basis") or "") if _marked(r) else ("earlier shaft basis" if cd else "")]
+                 if with_basis else [])
         rows.append([r["cooling"].replace("_", " "), "%.0f" % r["rpm"],
                      Hh.fmt(r.get("air_speed_ms")) if r.get("air_speed_ms") else "still air",
                      c.get("I_cont_A_rms") if c.get("I_cont_A_rms") is not None
@@ -957,10 +977,10 @@ def _cooling_html(rec: Mapping[str, Any]) -> str:
                      cd.get("T_Nm"), cd.get("P_shaft_W"),
                      c.get("limiting_part") or "—",
                      t.get("winding"), t.get("magnet"), t.get("housing"),
-                     "yes" if c.get("verified") else ("no" if c else "—")])
+                     "yes" if c.get("verified") else ("no" if c else "—")] + basis)
     o.append(Hh.table(["cooling", "rpm", "air m/s", "I cont. A rms", "T cont. N·m",
                        "P shaft W", "limited by", "winding °C", "magnet °C", "housing °C",
-                       "verified"], rows, left_cols=1))
+                       "verified"] + (["power basis"] if with_basis else []), rows, left_cols=1))
     if lim:
         rows = []
         for r in lim:

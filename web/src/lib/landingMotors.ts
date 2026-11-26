@@ -6,6 +6,7 @@
 // below re-applies it, so a field added on the server tomorrow never reaches the page.
 
 export interface PublicMotorRated {
+  shaft_conv?: number;
   power_kw: number | null;
   torque_nm: number | null;
   speed_rpm: number | null;
@@ -52,6 +53,7 @@ export function parsePublicMotors(body: unknown): PublicMotor[] {
         speed_rpm: num(rated.speed_rpm), efficiency_pct: num(rated.efficiency_pct),
         mass_kg: num(rated.mass_kg), mass_is_partial: rated.mass_is_partial === true,
         continuous: rated.continuous === true,
+        ...(rated.shaft_conv === 1 ? { shaft_conv: 1 } : {}),
       },
     });
   }

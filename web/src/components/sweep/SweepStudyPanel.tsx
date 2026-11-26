@@ -9,6 +9,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 import { isScanAlreadyRunning } from '../../lib/sweepSync';
 import { nsT } from '../../i18n/nsT';
+import { basesMixed, basisTag, isMarked } from '../../lib/shaftBasisLabel';
 import { invertedRangeNames } from '../../lib/optVarRanges';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
@@ -35,7 +36,7 @@ import { canWriteServer } from '../../lib/localAuth';
 import { useRunSettings } from '../../lib/useRunSettings';
 import { runSettingsBody } from '../../lib/runSettings';
 import RunSettingsBar from './RunSettingsBar';
-import { pointApply3dK } from '../../lib/sweepApply3d';
+import { pointApply3dK, shaftPointFields } from '../../lib/sweepApply3d';
 import { sweepSettingsOf, sweepSettingsLabel, sweepSettingsMetrics } from '../../lib/sweepSettings';
 import { endWindingPin } from '../../lib/endWindingPin';
 import { coincidentGroups, coincidentOffsetPx } from '../../lib/coincidentPoints';
@@ -101,13 +102,16 @@ const readApply3dK = (): number | null => {
 // η recomputed from the corrected shaft power.
 const scale3d = (k: number | null, T2: number, P2_kW: number, Vpk2: number,
                  Vl2: number, KV2: number, td2: number, pd2: number,
-                 eff2: number, ploss_W: number) => {
+                 eff2: number, ploss_W: number, gen = false) => {
   if (k == null) return { T: T2, P: P2_kW, Vpk: Vpk2, Vl: Vl2, KV: KV2, td: td2, pd: pd2, eff: eff2 };
   const P = P2_kW * k;
+  const Pw = P * 1000;
   return {
     T: T2 * k, P, Vpk: Vpk2 * k, Vl: Vl2 * k, KV: KV2 > 0 ? KV2 / k : KV2,
     td: td2 * k, pd: pd2 * k,
-    eff: (P > 0 && ploss_W > 0) ? 100 * (P * 1000) / (P * 1000 + ploss_W) : eff2,
+    // a GENERATOR takes the shaft power in: (P - losses) / P; a motor P / (P + losses) (lib/apply3d.ts)
+    eff: (P > 0 && ploss_W > 0)
+      ? (gen ? (Pw > Math.max(ploss_W, 1) ? 100 * (Pw - ploss_W) / Pw : 0) : 100 * Pw / (Pw + ploss_W)) : eff2,
   };
 };
 
@@ -136,6 +140,7 @@ const SweepTable: React.FC<{ points: any[]; rpm: number; vdcFactor?: number; sel
       // at) — the T·ω fallback uses the CURRENT sim.rpm, which drifts if the user
       // changed rpm after the sweep, so it only covers pre-P_mech_W stored results.
       const P2 = p.P_mech_W != null ? Number(p.P_mech_W) / 1000
+        : p.shaft_convention === 'fe_on_shaft_k3d_v1' ? NaN
                                     : (Number(p.T_em_Nm) || 0) * omega / 1000;   // kW, 2-D
       const mass = Number(p.mass_total_kg) || 0;
       const td2 = Number(p.torque_per_mass_Nm_kg) || 0;
@@ -149,7 +154,7 @@ const SweepTable: React.FC<{ points: any[]; rpm: number; vdcFactor?: number; sel
       const kPt = kOfPoint(p, k3d);
       const s3 = scale3d(kPt, Number(p.T_em_Nm) || 0, P2, Number(p.V_peak) || 0,
                          Number(p.V_line_peak_V) || 0, Number(p.KV_rpm_per_V_line) || 0,
-                         td2, pd2, eff2, ploss);
+                         td2, pd2, eff2, ploss, p.op_mode === 'generator');
       const { T, P, eff, Vpk, td, pd } = s3;
       return {
         ov: p.overrides || {}, overrides: p.overrides || {}, I, g, x: td, y: eff,
@@ -167,6 +172,8 @@ const SweepTable: React.FC<{ points: any[]; rpm: number; vdcFactor?: number; sel
         k3d: kPt,
         rpm: p.rpm,   // absent today (refine result omits it) — kept for when it lands
         ripple: Number(p.T_ripple_pct) || 0, mass, td,
+        // the shaft-power convention of this point's numbers (1 = core loss on the shaft; src/motor_ai_sim/shaft_convention.py)
+        sc: p.shaft_convention === 'fe_on_shaft_k3d_v1' ? 1 : 0,
         // Cogging pp (opt-in no-load solve of the geometry); absent = not measured
         cp: coggingOf(p),
         pd,
@@ -192,6 +199,11 @@ const SweepTable: React.FC<{ points: any[]; rpm: number; vdcFactor?: number; sel
     [...keys].sort().forEach(k => { if (varied(rows.map(r => r.ov[k]))) c.push({ id: 'ov:' + k, label: k, get: r => Number(r.ov[k]), fmt: v => String(Math.round(v * 1000) / 1000), vcol: true }); });
     if (varied(rows.map(r => r.I))) c.push({ id: 'I', label: 'I (A)', get: r => r.I, fmt: v => v.toFixed(1), vcol: true });
     if (varied(rows.map(r => r.g))) c.push({ id: 'g', label: 'γ (°)', get: r => r.g, fmt: v => v.toFixed(0), vcol: true });
+    // Marked rows always name their basis; unmarked-only tables keep their columns. Export remains numeric 0/1.
+    if (rows.some(r => r.sc === 1)) {
+      c.push({ id: 'shaftConv', label: tx('shaftConvCol'), get: r => r.sc,
+        fmt: v => tx(v === 1 ? 'shaftBasisCurrent' : 'shaftBasisEarlier') });
+    }
     c.push(
       { id: 'T', label: 'T (N·m)', get: r => r.T, fmt: v => v.toFixed(2) },
       { id: 'P', label: 'P (kW)', get: r => r.P, fmt: v => v.toFixed(2) },
@@ -284,7 +296,8 @@ const SweepTable: React.FC<{ points: any[]; rpm: number; vdcFactor?: number; sel
                 style={{ background: sel ? 'var(--line-accent)' : (i % 2 ? 'var(--panel-2)' : 'var(--line-soft)'), cursor: onPick ? 'pointer' : 'default' }}>
                 {cols.map(c => (
                   <td key={c.id} title={c.titleRow ? c.titleRow(r) : undefined} style={{ padding: '3px 7px', textAlign: 'right', whiteSpace: 'nowrap', color: 'var(--text-0)', borderBottom: '1px solid var(--line-soft)' }}>
-                    {c.fmtRow ? c.fmtRow(r) : c.fmt(c.get(r))}
+                    {/* a marked point's missing value reads "—"; an earlier point keeps its earlier cell text */}
+                    {c.fmtRow ? c.fmtRow(r) : (r.sc === 1 && !Number.isFinite(c.get(r)) ? '—' : c.fmt(c.get(r)))}
                   </td>))}
               </tr>); })}
           </tbody>
@@ -299,15 +312,17 @@ const SweepTable: React.FC<{ points: any[]; rpm: number; vdcFactor?: number; sel
 const _fmtVar = (v: any) =>
   typeof v === 'number' ? String(parseFloat(v.toFixed(3))) : String(v);
 
-const SweepTooltip: React.FC<any> = ({ active, payload }) => {
+const SweepTooltip: React.FC<any> = ({ active, payload, mixed = false }) => {
   if (!active || !payload?.length) return null;
   const d = payload[0].payload;
+  const tag = basisTag(isMarked(d), mixed);
   const ov = (d.overrides || {}) as Record<string, any>;
   // geometry vars only — I and γ are already in the header line above
   const ovKeys = Object.keys(ov).filter(k => k !== 'gamma_deg' && k !== 'current_a');
   return (
     <Box sx={{ bgcolor: 'var(--panel-2)', border: '1px solid var(--line)', borderRadius: 1, p: 1, fontSize: 11, maxWidth: 360 }}>
       <div style={{ color: '#93c5fd', fontWeight: 700 }}>I = {d.I} A · γ = {d.g}°{d.gi ? ` · geom ${d.gi}` : ''}</div>
+      {tag && <div>{tx(tag === 'current' ? 'shaftBasisCurrent' : 'shaftBasisEarlier')}</div>}
       {/* every swept variable that changes at this point (the point's overrides) */}
       {ovKeys.length > 0 && (
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', columnGap: 10, rowGap: 1,
@@ -749,6 +764,7 @@ const SweepStudyPanel: React.FC = () => {
       // 3-D view of the point (same k and rule as the table and the Simulation
       // summary); the solver's 2-D numbers stay under raw2d for applyPoint.
       const P2 = p.P_mech_W != null ? Number(p.P_mech_W) / 1000
+        : p.shaft_convention === 'fe_on_shaft_k3d_v1' ? NaN
                                     : (Number(p.T_em_Nm) || 0) * omegaNow / 1000;
       const massN = Number(p.mass_total_kg) || 0;
       const pd2 = p.power_per_mass_W_kg != null ? Number(p.power_per_mass_W_kg) / 1000
@@ -757,8 +773,8 @@ const SweepStudyPanel: React.FC = () => {
       const s3 = scale3d(kPt, Number(p.T_em_Nm) || 0, P2, Number(p.V_peak) || 0,
                          Number(p.V_line_peak_V) || 0, Number(p.KV_rpm_per_V_line) || 0,
                          Number(p.torque_per_mass_Nm_kg) || 0, pd2,
-                         (p.efficiency ?? 0) * 100, Number(p.P_loss_total_W) || 0);
-      const row = { x: s3.td, y: s3.eff,
+                         (p.efficiency ?? 0) * 100, Number(p.P_loss_total_W) || 0, p.op_mode === 'generator');
+      const row = { x: s3.td, y: s3.eff, shaft_convention: p.shaft_convention,
                      I: cur, g: gam, gi, ripple: p.T_ripple_pct, T: s3.T,
                      cp: coggingOf(p),
                      apply_eligible: p.apply_eligible === true,
@@ -833,6 +849,7 @@ const SweepStudyPanel: React.FC = () => {
   // New series → full view, always.
   useEffect(() => { setZoom(null); setShowAll(false); }, [series]);
 
+  const chartMixed = basesMixed(series.flatMap(s => s.rows).map(isMarked));
   const nFeasible = series.reduce((s, c) => s + c.rows.length, 0);
 
   // Build failures: some geometries can't be meshed (e.g. teeth too wide for the
@@ -1024,16 +1041,20 @@ const SweepStudyPanel: React.FC = () => {
       if (!v || typeof v.overrides !== 'object') {
         throw new Error('Sweep point lacks its geometry; run the Sweep again');
       }
+      if (v.shaft_convention === 'fe_on_shaft_k3d_v1' && v.P_mech_W == null) {
+        throw new Error(tx('shaftPowerMissing'));
+      }
       const k3d = kOfPoint(v, readApply3dK());
       const mass = Number(v.mass_total_kg) || 0;
       const P2 = v.P_mech_W != null ? Number(v.P_mech_W) / 1000
+        : v.shaft_convention === 'fe_on_shaft_k3d_v1' ? NaN
                                     : (Number(v.T_em_Nm) || 0) * (2 * Math.PI * (Number(v.rpm) || 0) / 60) / 1000;
       const pd2 = v.power_per_mass_W_kg != null ? Number(v.power_per_mass_W_kg) / 1000
                                                : (mass > 0 ? P2 / mass : 0);
       const s3 = scale3d(k3d, Number(v.T_em_Nm) || 0, P2, Number(v.V_peak) || 0,
         Number(v.V_line_peak_V) || 0, Number(v.KV_rpm_per_V_line) || 0,
         Number(v.torque_per_mass_Nm_kg) || 0, pd2, (Number(v.efficiency) || 0) * 100,
-        Number(v.P_loss_total_W) || 0);
+        Number(v.P_loss_total_W) || 0, v.op_mode === 'generator');
       p = { ...p, overrides: v.overrides, I: v.current_a,
         g: v.gamma_deg, rpm: v.rpm, T: s3.T, ripple: v.T_ripple_pct,
         cp: coggingOf(v),
@@ -1043,6 +1064,8 @@ const SweepStudyPanel: React.FC = () => {
         ploss: v.P_loss_total_W, core: v.P_fe_W, stranded: v.P_cu_W,
         solid: (Number(v.P_mag_W) || 0) + (Number(v.P_shaft_W) || 0),
         rawSamplesPerCycle: v.cogging_raw_samples_per_cycle,
+        // the point's shaft-power convention, carried whole into the applied summary (lib/sweepApply3d.ts)
+        sc: shaftPointFields(v),
         raw2d: { T: v.T_em_Nm, P_mech_W: v.P_mech_W, Vpk: v.V_peak,
           V_line_peak_V: v.V_line_peak_V, KV_rpm_per_V_line: v.KV_rpm_per_V_line,
           td: v.torque_per_mass_Nm_kg, power_per_mass_W_kg: v.power_per_mass_W_kg,
@@ -1121,7 +1144,9 @@ const SweepStudyPanel: React.FC = () => {
         // sinusoid approximations (the refine result carries peaks only).
         const Vlpk = Number(r2.V_line_peak_V) || Vpk * Math.sqrt(3);
         const Vrms = Vpk / Math.SQRT2, Vlrms = Vlpk / Math.SQRT2;
-        const Pmech = Number(r2.P_mech_W) || T * omega;
+        const Pmech = p.shaft_conv === 1 || p.sc?.shaft_convention === 'fe_on_shaft_k3d_v1'
+          ? (r2.P_mech_W != null ? Number(r2.P_mech_W) : NaN)
+          : Number(r2.P_mech_W) || T * omega;
         const ploss = Number(p.ploss) || 0;
         const summary = {
           ...(p.k3d != null ? { end3d: { k_flux: p.k3d, source: 'machine passport, carried from the sweep view' } } : {}),
@@ -1139,6 +1164,8 @@ const SweepStudyPanel: React.FC = () => {
           torque_per_mass_Nm_kg: Number(r2.td) || (mass > 0 ? T / mass : 0),
           power_per_mass_W_kg: Number(r2.power_per_mass_W_kg) || (mass > 0 ? Pmech / mass : 0),
           loss_density_W_kg: mass > 0 ? ploss / mass : 0,
+          // a marked point: its convention fields, so the card reads its shaft numbers as they are (never as legacy)
+          ...(p.sc || {}),
         };
         window.dispatchEvent(new CustomEvent('sim-apply-summary', { detail: { summary } }));
       } catch { /* summary is best-effort — geometry + operating point already applied */ }
@@ -1488,6 +1515,10 @@ const SweepStudyPanel: React.FC = () => {
                 + `starts from a closer settled state.`} />
             </Typography>
           )}
+          {(() => { const cs = new Set((result?.points || []).filter((q: any) => q?.feasible).map((q: any) => (q.shaft_convention === 'fe_on_shaft_k3d_v1' ? 1 : 0)));
+            // a short label (the visible basis) with the explanation in its tooltip - no caption line (owner UI rules)
+            return cs.size > 1 ? <MuiTooltip title={tx('shaftConvMixed')}><Chip size="small" color="warning" variant="outlined"
+              data-testid="sweep-shaft-basis-mixed" label={`${tx('shaftConvCol')} †`} sx={{ mb: 0.5, cursor: 'help' }} /></MuiTooltip> : null; })()}
           <Box ref={chartBoxRef} onDoubleClick={() => setZoom(null)} sx={{ height: 340 }}>
             <ResponsiveContainer width="100%" height="100%">
               <ScatterChart margin={{ top: 8, right: 24, left: 8, bottom: 24 }}>
@@ -1502,7 +1533,7 @@ const SweepStudyPanel: React.FC = () => {
                   allowDataOverflow={!!zoom || view !== extent}
                   tickFormatter={(v: number) => v.toFixed(2)}
                   label={{ value: 'Efficiency (%)', angle: -90, position: 'insideLeft', fontSize: 11, fill: 'var(--text-3)' }} />
-                <Tooltip content={<SweepTooltip />} />
+                <Tooltip content={<SweepTooltip mixed={chartMixed} />} />
                 {/* Legend removed — the table below lists I/γ per design, and
                     selecting a row highlights its point (and vice-versa). */}
                 {series.map((s, i) => (

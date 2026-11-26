@@ -79,6 +79,8 @@ export interface RowValues {
   voltage: { kind: 'battery'; v: number | null; min: number | null; max: number | null; cells: number | null }
     | { kind: 'vll_peak'; v: number | null } | null;
   current_arms: number | null; mass_kg: number | null;
+  /** the shaft-power convention of the power / efficiency (1 = core loss on the shaft; 0 = an earlier run) */
+  shaft_conv?: 0 | 1;
 }
 
 const fin = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) ? v : null);
@@ -97,6 +99,7 @@ export function rowValues(c: ByDieCfg, d: ByDieDuty | null): RowValues | null {
     voltage: b ? { kind: 'battery', v: nominal, min: fin(b.v_min), max: fin(b.v_max), cells: fin(b.cells) }
       : { kind: 'vll_peak', v: fin(d.result?.v_ll_peak_v) },
     current_arms: fin(d.current_arms), mass_kg: fin(d.result?.mass_kg),
+    shaft_conv: Number((d.result as any)?.shaft_conv) === 1 ? 1 : 0,
   };
 }
 /** One header per stamped SHEET (owner 2026-11-17: "all our 80 mm motors come from one die; draw ONE icon and under it the
@@ -269,7 +272,12 @@ export function nextSort(cur: Sort, key: ColKey): Sort {
 /** Sorting stays INSIDE each die block (families and dies keep their places); a missing value sorts last either way. */
 export function sortMotors<M extends Pick<MotorRow, 'values'>>(motors: M[], key: ColKey, dir: 'asc' | 'desc', coggingOf?: (m: M) => number | null): M[] {
   const val = (m: M) => colValue(key, m, coggingOf?.(m) ?? null);
+  // power, torque and efficiency of an earlier run (every loss on the electrical side) are never ranked against the
+  // current shaft-power convention: the two groups sort apart, the current one first (owner 2026-11-25)
+  const byConv = key === 'eff' || key === 'power' || key === 'torque';
+  const conv = (m: M) => (m.values?.shaft_conv === 1 ? 1 : 0);
   return [...motors].sort((a, b) => {
+    if (byConv && conv(a) !== conv(b)) return conv(b) - conv(a);
     const x = val(a), y = val(b);
     if (x === null && y === null) return 0;
     if (x === null) return 1;

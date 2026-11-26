@@ -33,7 +33,10 @@ def _summary_numbers(duty: Dict[str, Any], stored: Dict[str, Any]) -> Tuple[Dict
         return s, "saved"
     run = (stored or {}).get("em_run")
     if isinstance(run, dict) and isinstance(run.get("numbers"), dict) and run["numbers"]:
-        return {**run["numbers"], **(run.get("text") or {})}, "em_run"
+        # with the shaft context it was filed with; a marked row without it reads as nothing stored (re-solve)
+        from motor_ai_sim.shaft_convention import summary_from_compact
+        cs = summary_from_compact(run)
+        return (cs, "em_run") if cs else ({}, "")
     return {}, ""
 
 
@@ -214,12 +217,25 @@ def from_docs(die_doc: Dict[str, Any], cfg_doc: Dict[str, Any], stored_by_duty: 
         if magnet is None and card:
             magnet = mag
         temps = _temps(stored)
-        eff = num(s.get("efficiency_shaft")) or num(s.get("efficiency"))
+        # a marked duty's zero shaft efficiency (a driven shaft) is a value, not a missing one
+        if s.get("shaft_convention") == "fe_on_shaft_k3d_v1":
+            eff = num(s.get("efficiency_shaft"))
+            if eff is None and s.get("P_mech_extra_W") is None:
+                eff = num(s.get("efficiency"))
+        else:
+            eff = num(s.get("efficiency_shaft")) or num(s.get("efficiency"))
         # DC link in, shaft out: the controller record's wall-to-shaft efficiency (inverter x motor), when stored
         ctrl = (stored or {}).get("controller")
         eff_sys = num(((ctrl or {}).get("efficiency") or {}).get("wall_to_shaft")) if isinstance(ctrl, dict) else None
         p_shaft = num(s.get("P_shaft_net_W"))
-        torque = (p_shaft / (rpm * 3.141592653589793 / 30.0)) if (p_shaft is not None and rpm) else num(s.get("T_em_avg_Nm"))
+        # a duty on the shaft-side convention (shaft_convention) stores shaft numbers that already carry the 3-D factor:
+        # its torque without a bearing model is the stored shaft torque, never the 2-D field torque
+        shaft_conv = 1 if s.get("shaft_convention") == "fe_on_shaft_k3d_v1" else 0
+        t_plain = num(s.get("T_shaft_Nm")) if (shaft_conv and num(s.get("T_shaft_Nm")) is not None) else num(s.get("T_em_avg_Nm"))
+        torque = (p_shaft / (rpm * 3.141592653589793 / 30.0)) if (p_shaft is not None and rpm) else t_plain
+        if shaft_conv:
+            from motor_ai_sim.shaft_convention import coupling_torque
+            torque = coupling_torque({**s, "rpm": rpm})
         # what the corrected efficiency is formed from (the stored rotor power and losses; nothing recomputed here)
         inv = num(((ctrl or {}).get("efficiency") or {}).get("inverter")) if isinstance(ctrl, dict) else None
         op_mode = str(s.get("op_mode") or d.get("mode") or "motor").lower()
@@ -228,7 +244,11 @@ def from_docs(die_doc: Dict[str, Any], cfg_doc: Dict[str, Any], stored_by_duty: 
                       "op_mode": "generator" if op_mode.startswith("gen") else "motor"}
         row = {"name": name, "mode": str(d.get("mode") or "motor"), "rpm": rpm, "current": cur, "source": src,
                "eff_inputs": eff_inputs, "eta_inverter_pct": None if inv is None else 100.0 * inv,
-               "connection": conn, "torque_nm": torque, "torque_kind": "shaft" if p_shaft is not None else "em",
+               "connection": conn, "torque_nm": torque,
+               "torque_kind": "shaft" if (p_shaft is not None or shaft_conv) else "em",
+               "shaft_conv": shaft_conv,
+               # the factor the run itself applied (a marked duty only): the comparison quotes it, never today's passport
+               **({"shaft_k3d": num(s.get("shaft_k3d"))} if shaft_conv else {}),
                "eff_pct": None if eff is None else 100.0 * eff,
                "eff_system_pct": None if eff_sys is None else 100.0 * eff_sys, "winding_c": temps["winding_c"],
                "magnet_c": temps["magnet_c"], "temps_source": temps["source"], "magnet_temp_c": mag_t,

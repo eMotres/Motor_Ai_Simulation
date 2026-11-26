@@ -40,6 +40,7 @@ CACHE_TTL_S = 300.0
 MOTOR_KEYS = ("die", "configuration", "application", "rated")
 RATED_KEYS = ("power_kw", "torque_nm", "speed_rpm", "efficiency_pct", "mass_kg",
               "mass_is_partial", "continuous")
+OPTIONAL_RATED_KEYS = ("shaft_conv",)
 
 _SAFE_WORD = re.compile(r"[^A-Za-z0-9 _.\-]+")
 #: What a catalogue die / configuration name can be (``routes.family._check_name``): a name outside it is
@@ -99,6 +100,7 @@ def build_row(die: Dict[str, Any], c: Dict[str, Any],
             "torque_nm": abs(torque) if torque is not None else None,
             "speed_rpm": _rpm(rated.get("rpm")),
             "efficiency_pct": _num(r.get("efficiency_pct"), 1),
+            **({"shaft_conv": 1} if r.get("shaft_conv") == 1 else {}),
             "mass_kg": kg,
             "mass_is_partial": bool(partial),
             "continuous": bool(SC._is_continuous(rated)),
@@ -153,7 +155,8 @@ def assert_clean(obj: Any, path: str = "$") -> None:
 
 def assert_allowlisted(rows: List[Dict[str, Any]]) -> None:
     for row in rows:
-        if set(row) != set(MOTOR_KEYS) or set(row["rated"]) != set(RATED_KEYS):
+        if (set(row) != set(MOTOR_KEYS) or not set(RATED_KEYS) <= set(row["rated"])
+                or not set(row["rated"]) <= set(RATED_KEYS + OPTIONAL_RATED_KEYS)):
             raise AssertionError(f"public motor row outside the allow-list: {sorted(row)}")
 
 

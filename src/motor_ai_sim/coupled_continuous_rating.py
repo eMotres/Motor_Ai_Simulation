@@ -432,6 +432,14 @@ def reference_point(em_summary: Mapping[str, Any],
         "T_em_avg_Nm": _num(s.get("T_em_avg_Nm")),
         "P_mech_W": _num(s.get("P_mech_W")),
         "k_flux": _num(end3d.get("k_flux")),
+        # the reference run's shaft-side convention (motor_ai_sim.shaft_convention):
+        # its torque factor and the shaft-side load the torque does not contain
+        "shaft_convention": s.get("shaft_convention"),
+        "shaft_k3d": _num(s.get("shaft_k3d")),
+        "torque_side": s.get("torque_side"),
+        "shaft_rotor_in_field": bool(s.get("shaft_rotor_in_field")),
+        "P_cu_ac_field_W": _num(s.get("P_cu_ac_field_W")),
+        "op_mode": s.get("op_mode"),
         "P_cu_exact_W": _num(th.get("P_cu_exact_W")) or _num(s.get("P_stranded_W")),
         "P_fe_W": _num(s.get("P_core_W")),
         "P_solid_W": _num(s.get("P_solid_W")),
@@ -1026,6 +1034,36 @@ def _power_block(ref: Mapping[str, Any], loss: Mapping[str, Any],
     em = {"P_mech_W": p_mech, "P_loss_total_W": p_loss_em,
           "end3d": ({"k_flux": ref["k_flux"]} if _num(ref.get("k_flux"))
                     else None)}
+    from motor_ai_sim import shaft_convention as _SC
+    if _SC.has_marker(ref):
+        # the reference run's convention, rebuilt from the SAME losses as L at this
+        # point: every non-copper loss is a shaft-side load (core + rotor), the rotor
+        # eddy part embedded in a rotor-side torque and the solved copper AC in a
+        # stator-side one are taken out of the torque before k (shaft_convention)
+        _gen = str(ref.get("op_mode") or mode or "") == "generator"
+        _hw = _held_watts(loss, s)
+        _side = str(ref.get("torque_side") or "rotor")
+        _f0 = _num(loss.get("eddy_f0"))
+        _solid = float((loss.get("split") or {}).get("rotor_solid_W") or 0.0)
+        _rot_emb = ((_hw.get("magnet", 0.0) + max(_solid, 0.0) * eddy_factor(
+            s, EDDY_NOLOAD_FRACTION if _f0 is None else _f0))
+            if (_side == "rotor" and ref.get("shaft_rotor_in_field")) else 0.0)
+        _st_emb = ((_num(ref.get("P_cu_ac_field_W")) or 0.0) * float(s) * float(s)) if _side == "stator" else 0.0
+        # the node watts carry the bearing friction and gap windage too (thermal sources, losses_by_node):
+        # they are the mechanical X, which shaft_view below takes at the coupling - not EM drag, not EM loss
+        _x_nodes = float(_num(loss.get("mech_in_nodes_W")) or 0.0)
+        _p_other_em = max(p_other - _x_nodes, 0.0)
+        p_loss_em = p_cu + _p_other_em
+        out["P_other_loss_W"] = _p_other_em
+        out["P_loss_em_W"] = p_loss_em
+        out["P_mech_in_thermal_nodes_W"] = _x_nodes
+        _b = _SC.balance(t_field_nm=(-1.0 if _gen else 1.0) * abs(float(out["T_em_Nm"])), rpm=float(rpm),
+                         k=ref.get("shaft_k3d"), d_w=_p_other_em, p_loss_w=p_loss_em,
+                         rotor_embedded_w=_rot_emb, stator_embedded_w=_st_emb)
+        p_mech = _b["P_mech_W"]
+        em = {"P_mech_W": p_mech, "P_loss_total_W": p_loss_em, "op_mode": _b["op_mode"],
+              "shaft_convention": _SC.SHAFT_CONVENTION,
+              "end3d": ({"k_flux": ref["k_flux"]} if _num(ref.get("k_flux")) else None)}
     brg = ({"has_bearings": True, "P_mech_extra_W": _num(ref["P_mech_extra_W"])}
            if _num(ref.get("P_mech_extra_W")) is not None else None)
     sv = shaft_view(em, brg, mode)

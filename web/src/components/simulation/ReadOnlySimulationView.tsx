@@ -91,7 +91,8 @@ export const ReadOnlySimulationView: React.FC<Props> = ({ projectId, die, config
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projectId, die, config, showAll]);
 
-  const points: Point[] = useMemo(() => pointsOf(cfg, false, driveLabel), [cfg]);
+  const points: Point[] = useMemo(() => pointsOf(cfg, false, driveLabel, undefined,
+    (marked) => t(marked ? 'common:shaftBasisCurrent' : 'common:shaftBasisEarlier')), [cfg, t]);
   const layout = switcherLayout(points, false, point);
   const here = cfg?.duties.find((d) => d.name === point) ?? null;
   const runs = useMemo(() => runMetasOf(here), [here]);

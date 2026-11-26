@@ -638,7 +638,7 @@ def _fmt_motors(start: float, end: float) -> list:
         from motor_ai_sim import duty_results as DR
         from motor_ai_sim.digest import collect as C
         results = DR._read_store(DR.shared_store_path())
-        res = []
+        res, rows = [], []
         for die, cfgs in results.items():
             for cfg, duties in (cfgs.items() if isinstance(cfgs, dict) else []):
                 for duty, kinds in (duties.items() if isinstance(duties, dict) else []):
@@ -650,9 +650,14 @@ def _fmt_motors(start: float, end: float) -> list:
                             if _in(ts, start, end):
                                 fresh[k] = (row, ts)
                     if fresh:
-                        head = C.headline({k: r for k, (r, _) in fresh.items()})
-                        res.append(B.Line(max(t for _, t in fresh.values()),
-                                          f"results {die} / {cfg}, duty {duty}: " + (head or ", ".join(sorted(fresh))), "", "", "system"))
+                        rows.append((die, cfg, duty, fresh))
+        # one list: when it mixes shaft-power bases, the earlier lines say so too
+        from motor_ai_sim.digest import readable as RD
+        mixed = len({RD.line_basis({k: r for k, (r, _) in f.items()}) for *_, f in rows} - {None}) > 1
+        for die, cfg, duty, fresh in rows:
+            head = C.headline({k: r for k, (r, _) in fresh.items()}, mixed=mixed)
+            res.append(B.Line(max(t for _, t in fresh.values()),
+                              f"results {die} / {cfg}, duty {duty}: " + (head or ", ".join(sorted(fresh))), "", "", "system"))
         if res:
             blocks.append(B.Block("New results (shared ledger)", res))
     except Exception as exc:                                 # noqa: BLE001

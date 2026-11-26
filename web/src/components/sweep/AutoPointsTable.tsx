@@ -1,22 +1,15 @@
 import React, { useState } from 'react';
+import { nsT } from '../../i18n/nsT';
+import { useTranslation } from 'react-i18next';
+import { autoPointPowerKw, autoPointFieldTorque } from '../../lib/autoPointPower';
+import { anyMarked } from '../../lib/shaftBasisLabel';
+const tx = nsT('simulation');
 import { Box, Chip, Typography } from '@mui/material';
 import HelpTip from '../common/HelpTip';
 import { useMotorStore } from '../../stores/motorStore';
 
 const fmt = (v: unknown, d = 2) =>
   (typeof v === 'number' && Number.isFinite(v) ? v.toFixed(d) : '—');
-
-/**
- * Shaft torque of a cloud point, DERIVED when it was not stored — points
- * published before the backend's `_pt` carried T_em_Nm hold only torque density
- * and mass, and torque = td · mass exactly.
- */
-const ptTorque = (p: any): number => {
-  const t = Number(p?.torque);
-  if (Number.isFinite(t)) return t;
-  const td = Number(p?.td); const m = Number(p?.mass);
-  return (Number.isFinite(td) && Number.isFinite(m)) ? td * m : NaN;
-};
 
 /**
  * EVERY EVALUATED DESIGN, AS A TABLE — the Sweep tab's table, on this run's own
@@ -31,25 +24,26 @@ const ptTorque = (p: any): number => {
  */
 const AutoPointsTable: React.FC<{ points: any[]; gate: number; rpm?: number }> =
   ({ points, gate, rpm }) => {
+  const { i18n } = useTranslation('simulation');
   const omega = 2 * Math.PI * (Number(rpm) || 0) / 60;
   const rows = React.useMemo(() => (points || [])
     .map((p: any, i: number) => {
-      const T = ptTorque(p);
+      const T = autoPointFieldTorque(p);
       const mass = Number(p.mass);
       return {
-        i: i + 1, kind: String(p.kind || ''), ov: p.overrides || {},
-        T, mass, td: Number(p.td),
-        eff: Number(p.eff) * 100,
+        shaftConv: p.shaft_conv === 1 ? 1 : 0, i: i + 1, kind: String(p.kind || ''), ov: p.overrides || {},
+        T, mass, td: p.shaft_conv === 1 && p.td == null ? NaN : Number(p.td),
+        eff: p.shaft_conv === 1 && p.eff == null ? NaN : Number(p.eff) * 100,
         ripple: Number(p.ripple),
         thd: Number(p.thd),
         F: Number(p.F),
         I: Number(p.current_a), g: Number(p.gamma_deg),
-        P: omega > 0 && Number.isFinite(T) ? T * omega / 1000 : NaN,
+        P: autoPointPowerKw(p, omega),
         ploss: Number(p.p_loss_w), vpk: Number(p.v_peak), j: Number(p.j_coil),
         dominates: !!p.dominates,
       };
     })
-    .filter((r: any) => Number.isFinite(r.T)), [points, omega]);
+    .filter((r: any) => r.shaftConv === 1 || Number.isFinite(r.T)), [points, omega]);
 
   const cols = React.useMemo(() => {
     const num = (v: any) => (typeof v === 'number' && Number.isFinite(v));
@@ -59,14 +53,19 @@ const AutoPointsTable: React.FC<{ points: any[]; gate: number; rpm?: number }> =
     const c: { id: string; label: string; get: (r: any) => number;
                fmt: (v: number) => string; vcol?: boolean }[] = [];
     c.push({ id: 'i', label: '#', get: r => r.i, fmt: v => String(v) });
+    // the basis column and the basis-named headers only when a marked point is in the table (then an earlier
+    // point reads "Earlier shaft basis"); a table of earlier points alone keeps its earlier columns
+    const marked = anyMarked(rows.map((r: any) => r.shaftConv === 1));
+    if (marked) c.push({ id: 'basis', label: tx('shaftConvCol'), get: r => r.shaftConv,
+      fmt: v => tx(v === 1 ? 'shaftBasisCurrent' : 'shaftBasisEarlier') });
     // OUTPUTS FIRST, variables after — the one place this departs from the Sweep
     // table, and for a measured reason: a sweep varies two or three parameters,
     // an optimization varies all eighteen, and with the variables leading, every
     // number a design is JUDGED by (torque, efficiency, ripple) sat off the
     // right edge behind a horizontal scrollbar.  Scrolling right now explores
     // the geometry; the verdict is always on screen.
-    c.push({ id: 'T', label: 'T (N·m)', get: r => r.T, fmt: v => v.toFixed(2) });
-    if (has(r => r.P)) c.push({ id: 'P', label: 'P (kW)', get: r => r.P, fmt: v => v.toFixed(1) });
+    c.push({ id: 'T', label: marked ? `${tx('fieldTorque')} (N·m)` : 'T (N·m)', get: r => r.T, fmt: v => v.toFixed(2) });
+    if (has(r => r.P)) c.push({ id: 'P', label: marked ? `${tx('shaftPower')} (kW)` : 'P (kW)', get: r => r.P, fmt: v => v.toFixed(1) });
     c.push({ id: 'eff', label: 'η %', get: r => r.eff, fmt: v => v.toFixed(2) });
     c.push({ id: 'ripple', label: 'ripple %', get: r => r.ripple, fmt: v => v.toFixed(2) });
     c.push({ id: 'td', label: 'N·m/kg (active)', get: r => r.td, fmt: v => v.toFixed(2) });
@@ -94,7 +93,7 @@ const AutoPointsTable: React.FC<{ points: any[]; gate: number; rpm?: number }> =
         c.push({ id: 'ov:' + k, label: k, get, fmt: v => String(Math.round(v * 1000) / 1000), vcol: true });
     });
     return c;
-  }, [rows]);
+  }, [rows, i18n.resolvedLanguage]);
 
   const [sortId, setSortId] = useState('F');
   const [dir, setDir] = useState<1 | -1>(-1);
@@ -157,7 +156,8 @@ const AutoPointsTable: React.FC<{ points: any[]; gate: number; rpm?: number }> =
                     // readable as broken at a glance — it is still shown.
                     color: (Number.isFinite(r.ripple) && r.ripple > gate) ? '#f59e0b'
                            : r.dominates ? '#e879f9' : 'var(--text-0)' }}>
-                    {c.fmt(c.get(r))}
+                    {r.shaftConv !== 1 ? c.fmt(c.get(r)) : Number.isFinite(c.get(r))
+                      ? (c.id === 'P' ? c.get(r).toFixed(2) : c.fmt(c.get(r))) : '—'}
                   </td>))}
               </tr>))}
           </tbody>

@@ -240,7 +240,7 @@ def machine_snapshot(*, tag: str, die: Mapping[str, Any], cfg: Mapping[str, Any]
 
     def _duty_point(du):
         mm = du.get("mesh") or {}
-        return {
+        out = {
             "name": du.get("name"), "mode": du.get("mode", "motor"),
             "current_arms": float(_req(du, "current_arms", "duty")),
             "rpm": float(_req(du, "rpm", "duty")),
@@ -264,6 +264,12 @@ def machine_snapshot(*, tag: str, die: Mapping[str, Any], cfg: Mapping[str, Any]
                 "psi_pm_Wb", "Ld_mH", "Lq_mH", "coil_temp_C", "end_winding_factor",
                 "torque_method", "n_steps_per_period")},
         }
+        # the shaft-power convention of those efficiencies (motor_ai_sim.shaft_convention), only on a marked summary, so
+        # an earlier snapshot keeps its exact shape
+        _ss = du.get("summary") or {}
+        if _ss.get("shaft_convention") == "fe_on_shaft_k3d_v1":
+            out["stored_summary"].update({k: _ss.get(k) for k in ("shaft_convention", "shaft_k3d", "op_mode")})
+        return out
 
     rated = _duty_point(rd)
     if rated["coil_temp_c"] is None:

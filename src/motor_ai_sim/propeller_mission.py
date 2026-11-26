@@ -76,7 +76,7 @@ def _chk(ms: Mapping[str, Any]) -> None:
 # ---------------------------------------------------------------------------
 
 DEFAULTS: Dict[str, Any] = {
-    "motor": {"card_id": None, "die": None, "config": None, "rotors": 4, "drive": "sine", "board_cap_A": None},
+    "motor": {"card_id": None, "die": None, "config": None, "source": "s1", "rotors": 4, "drive": "sine", "board_cap_A": None},
     "kv": {"mode": "free", "turns0": None, "strip_thickness0_mm": None, "strip_width_mm": None, "headroom": 0.15,
            "turns_below": 3, "turns_above": 5, "coil_height_tol": 0.0, "calibrate_bench": True, "allow_unverified": False},
     "battery": {"chemistry": "li-ion-21700", "cells_s": 6, "capacity_ah": 16.0, "v_nom": None, "v_min": None, "v_max": None,
@@ -93,7 +93,7 @@ DEFAULTS: Dict[str, Any] = {
 
 # (group, key): (kind, lo, hi); kind "f" float, "i" int, "b" bool, "s" str, "fs" list of floats, "is" list of ints
 _SPEC: Dict[Tuple[str, str], Tuple[str, Any, Any]] = {
-    ("motor", "card_id"): ("s?", None, None), ("motor", "die"): ("s?", None, None), ("motor", "config"): ("s?", None, None),
+    ("motor", "card_id"): ("s?", None, None), ("motor", "source"): ("s", None, None), ("motor", "die"): ("s?", None, None), ("motor", "config"): ("s?", None, None),
     ("refine", "enabled"): ("b", None, None), ("refine", "top_n"): ("i", 1, 3), ("refine", "pop"): ("i", 4, 20),
     ("refine", "generations"): ("i", 1, 10), ("refine", "seed"): ("i", 0, 2 ** 32 - 1), ("refine", "free"): ("ss", None, None),
     ("motor", "rotors"): ("i", 1, 12), ("motor", "board_cap_A"): ("f?", 1.0, 2000.0), ("motor", "drive"): ("s", None, None),
@@ -193,6 +193,8 @@ def validate_inputs(body: Any) -> Dict[str, Any]:
     m = cfg["motor"]
     if not m["card_id"] and not (m["die"] and m["config"]):
         raise MissionError("choose a motor: motor.card_id (a catalogue motor) or motor.die and motor.config (a motor with an S1 model)")
+    if cfg["motor"]["source"] not in ("s1", "duties"):
+        raise MissionError("motor.source must be 's1' or 'duties'")
     if cfg["kv"]["mode"] not in ("free", "as_built"):
         raise MissionError("kv.mode must be 'free' or 'as_built'")
     if cfg["flight"]["endurance_mode"] not in ("hover", "best_speed"):
@@ -681,6 +683,189 @@ def estimate_model(card: Mapping[str, Any]) -> Tuple[Dict[str, Any], Dict[str, A
         flags.append("winding_strip_unknown")
     info = {"kind": KIND_ESTIMATE, "label": ESTIMATE_LABEL, "flags": flags, "kv_rpm_per_V": kv, "R_phase_ohm": float(v["R_ohm"]),
             "pole_pairs": v["pole_pairs"], "mass_kg": v["mass_kg"], "I_peak_A": i_pk, "I_rated_A": v["I0_A"]}
+    return raw, info
+
+
+# ---------------------------------------------------------------------------
+# A configuration WITHOUT a card and without an S1 model: an estimate from its STORED DUTIES (80 mm drone, 2026-11-26)
+# ---------------------------------------------------------------------------
+
+KIND_DUTIES = "duties"
+DUTIES_LABEL = "estimate from stored duties, not an S1 model"
+
+
+def _summ(entry: Any) -> Dict[str, Any]:
+    if not isinstance(entry, Mapping):
+        return {}
+    return dict(entry["summary"]) if isinstance(entry.get("summary"), Mapping) else dict(entry)
+
+
+def duty_points(duties: Mapping[str, Mapping[str, Any]]) -> Dict[str, Any]:
+    """What the stored duties of one configuration (``duty_results.get``) give the estimate: the coupled points (speed, current, 2-D
+    torque, copper / stator-iron / rotor losses, winding and magnet temperature, the phase resistance of that duty's own EM run and its
+    end-winding factor), the no-load EM summary (Kv) and the cooling of the steady thermal map that belongs to a coupled point.  The
+    copper loss is ``P_stranded``, the stator iron ``P_core``, the rotor side ``P_solid`` (magnets + shaft + sleeve), as the coupled
+    record stores them."""
+    pts: List[Dict[str, Any]] = []
+    noload: Optional[Dict[str, Any]] = None
+    for name, kinds in sorted((duties or {}).items()):
+        if not isinstance(kinds, Mapping):
+            continue
+        run = _summ(kinds.get("em_run") or kinds.get("em"))
+        if run and _fnum(run.get("KV_noload_rpm_per_V_line")) and (noload is None or "noload" in str(name).lower()):
+            noload = dict(run, duty=name)
+        c = kinds.get("coupled")
+        if not (isinstance(c, Mapping) and isinstance(c.get("em"), Mapping) and isinstance(c.get("point"), Mapping)):
+            continue
+        e, pt = c["em"], c["point"]
+        rpm, cur, tq = _fnum(pt.get("rpm")), _fnum(pt.get("I_phase_rms")), _fnum(e.get("T_em_avg_Nm"))
+        if not (rpm and cur and tq) or rpm <= 0 or cur <= 0 or tq <= 0 or c.get("runaway") or c.get("converged") is False:
+            continue
+        th = kinds.get("thermal") if isinstance(kinds.get("thermal"), Mapping) else {}
+        pts.append({"duty": name, "rpm": rpm, "I_A": cur, "T2d_Nm": tq, "P_cu_W": _fnum(e.get("P_stranded_W")), "P_fe_W": _fnum(e.get("P_core_W")),
+                    "P_rotor_W": _fnum(e.get("P_solid_W")) or 0.0, "coil_c": _fnum(c.get("coil_temp_c")), "magnet_c": _fnum(c.get("magnet_temp_c")),
+                    "R_ohm": _fnum(run.get("R_phase_ohm")), "end_winding_factor": _fnum(run.get("end_winding_factor")),
+                    "fingerprint": c.get("geometry_fingerprint"), "shaft_convention": e.get("shaft_convention"),
+                    "cooling": dict(th.get("cooling") or {}) if th.get("state", "steady") == "steady" else {}})
+    pts.sort(key=lambda x: (x["I_A"], x["rpm"]))
+    return {"points": pts, "noload": noload}
+
+
+def duties_problem(dp: Mapping[str, Any]) -> Optional[str]:
+    cur = {round(p["I_A"], 3) for p in dp["points"]}
+    if len(cur) < 2:
+        return "fewer than two stored coupled duties at different currents (torque vs current cannot be formed)"
+    if not any(p["P_cu_W"] for p in dp["points"]):
+        return "the stored coupled duties carry no copper loss"
+    return None
+
+
+def _interp(xs: Sequence[float], ys: Sequence[float], x: float) -> float:
+    if x <= xs[0]:
+        return ys[0] if len(xs) < 2 else ys[0] + (ys[1] - ys[0]) * (x - xs[0]) / (xs[1] - xs[0])
+    for i in range(1, len(xs)):
+        if x <= xs[i]:
+            return ys[i - 1] + (ys[i] - ys[i - 1]) * (x - xs[i - 1]) / (xs[i] - xs[i - 1])
+    return ys[-1] + (ys[-1] - ys[-2]) * (x - xs[-1]) / (xs[-1] - xs[-2])
+
+
+def fit_open_frame(geom: Mapping[str, float], pt: Mapping[str, Any], d_m: float) -> Optional[Dict[str, Any]]:
+    """The S1 network's open-frame paths from the stored thermal map of one coupled point (review of the drone case: the uncalibrated
+    network sends every watt through the housing and reads far hotter than the coupled FEM).  The map's own conductances give the
+    start: end turns + slot channels -> ``winding_air_area_m2`` = G / h, rotor and magnet end faces -> ``rotor_air_area_m2``, the
+    housing film ratio -> ``housing_film_factor`` (h = the S1 housing film at the map's air speed); then the winding area is scaled so
+    the network reproduces the point's winding temperature (one-point calibration).  None when the map has no air speed."""
+    cool = pt.get("cooling") or {}
+    outer = cool.get("outer") or {}
+    v, amb = _fnum(outer.get("air_speed_mps")), _fnum(outer.get("t_sink_c"))
+    if not v or amb is None or pt.get("coil_c") is None:
+        return None
+    h = s1.housing_film(max(v, 1.0), amb, d_m)
+    g_w = sum((_fnum((cool.get(k) or {}).get("h_conv")) or 0.0) * (_fnum((cool.get(k) or {}).get("area_m2")) or 0.0)
+              for k in ("end_windings", "slot_channels"))
+    ef = cool.get("end_faces") or {}
+    g_r = sum(_fnum((ef.get(k) or {}).get("G_W_per_K")) or 0.0 for k in ("rotor", "magnet"))
+    hf = (_fnum(outer.get("h_conv")) or h) / h
+    cal = {"housing_film_factor": max(hf, 1e-3), "winding_air_area_m2": g_w / h, "rotor_air_area_m2": g_r / h, "gap_resistance_factor": 1.0}
+    p_cu, p_r = float(pt["P_cu_W"] or 0.0), float(pt["P_rotor_W"] or 0.0)
+    p_tot = p_cu + p_r + float(pt["P_fe_W"] or 0.0)
+
+    def t_w(scale: float) -> float:
+        c = dict(cal, winding_air_area_m2=cal["winding_air_area_m2"] * scale)
+        return s1.temperatures(geom, p_cu, p_r, p_tot, h, amb, c)["winding"]
+    target = float(pt["coil_c"])
+    lo, hi = 0.05, 20.0
+    if cal["winding_air_area_m2"] <= 0:
+        cal["winding_air_area_m2"] = 1e-4
+    if not (t_w(hi) <= target <= t_w(lo)):
+        scale = None                                             # the start cannot be scaled onto the point: keep it, say so
+    else:
+        for _ in range(60):
+            mid = math.sqrt(lo * hi)
+            if t_w(mid) > target:
+                lo = mid
+            else:
+                hi = mid
+        scale = math.sqrt(lo * hi)
+        cal["winding_air_area_m2"] *= scale
+    return {"calibration": cal, "anchor": {"duty": pt["duty"], "air_speed_ms": v, "ambient_c": amb, "coil_c": target,
+                                           "network_coil_c": t_w(1.0), "winding_area_scale": scale}}
+
+
+def duties_model(die: str, cfg: str, duties: Mapping[str, Mapping[str, Any]], *, od_mm: Optional[float], stack_mm: Optional[float],
+                 k3d: Optional[float] = None) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+    """An S1-schema model (kind ``duties``) from a configuration's stored duties: torque vs current from the coupled points times the
+    3-D factor ``k3d`` (the measured one of the geometry, else 1 and flagged), phase R and its temperature from the duty's own EM run
+    (so its end-winding factor, never the configuration header's), stator iron ~ rpm^1.5 and rotor losses ~ rpm^2 per current from the
+    points, Kv from the no-load duty (divided by k3d), the open-frame thermal paths fitted on a stored thermal map (``fit_open_frame``).
+    ``MissionError`` with the reason when the duties are not enough."""
+    dp = duty_points(duties)
+    why = duties_problem(dp)
+    if why:
+        raise MissionError("%s %s: %s" % (die, cfg, why))
+    pts = dp["points"]
+    flags = ["estimate", "from_stored_duties"]
+    k = float(k3d) if k3d else 1.0
+    if not k3d:
+        flags.append("no_3d_factor")
+    rpm0 = sorted(p["rpm"] for p in pts)[len(pts) // 2]
+    by_i: Dict[float, List[Dict[str, Any]]] = {}
+    for p in pts:
+        by_i.setdefault(round(p["I_A"], 3), []).append(p)
+    cur = sorted(by_i)
+    mean = lambda xs: sum(xs) / len(xs)                                             # noqa: E731
+    tq = [k * mean([p["T2d_Nm"] for p in by_i[i]]) for i in cur]
+    fe0 = [mean([(p["P_fe_W"] or 0.0) * (rpm0 / p["rpm"]) ** 1.5 for p in by_i[i]]) for i in cur]
+    ro0 = [mean([(p["P_rotor_W"] or 0.0) * (rpm0 / p["rpm"]) ** 2 for p in by_i[i]]) for i in cur]
+    with_r = [p for p in pts if p["R_ohm"] and p["coil_c"] is not None]
+    if with_r:
+        ref = with_r[-1]
+        r_ohm, r_c = float(ref["R_ohm"]), float(ref["coil_c"])
+        ef = ref.get("end_winding_factor")
+    else:
+        ref = pts[-1]
+        r_ohm, r_c, ef = float(ref["P_cu_W"]) / (3.0 * ref["I_A"] ** 2), float(ref["coil_c"] or 20.0), None
+        flags.append("R_from_copper_loss_incl_ac")
+    i_top = cur[-1]
+    i_grid = [i_top * 1.5 * x / 10.0 for x in range(1, 11)]
+    rpm_ax = [500.0 * (60.0 ** (j / 11.0)) for j in range(12)]
+    t_grid = [_interp(cur, tq, i) for i in i_grid]
+    loss = {"fe_stator": [[max(0.0, _interp(cur, fe0, i)) * (r / rpm0) ** 1.5 for i in i_grid] for r in rpm_ax],
+            "rotor_eddy": [[max(0.0, _interp(cur, ro0, i)) * (r / rpm0) ** 2 for i in i_grid] for r in rpm_ax]}
+    flags += ["iron_loss_scaled_rpm_1.5", "rotor_loss_scaled_rpm_2", "current_limit_1.5x_highest_duty"]
+    nl = dp["noload"]
+    kv = None
+    if nl:
+        from motor_ai_sim import kv_kt
+        kv = kv_kt.noload_constants(nl, k3d).get("kv")
+    if not kv:
+        kt = tq[-1] / i_top
+        kv = 60.0 / (2.0 * math.pi) / (math.sqrt(3.0) / (1.5 * math.sqrt(2.0))) / kt
+        flags.append("kv_from_torque_constant")
+    od = float(od_mm or 80.0)
+    L = float(stack_mm or 12.0)
+    if not (od_mm and stack_mm):
+        flags.append("size_default")
+    tg = {"statorOD_mm": od, "stackLength_mm": L, "numSlots": 12.0, "slotHeight_mm": 0.15 * od, "slotWidth_mm": 0.08 * od,
+          "insulation_mm": 0.2, "coreThickness_mm": 0.06 * od, "airGap_mm": 0.5, "magnetOD_mm": 0.55 * od}
+    flags.append("thermal_geometry_generic")
+    raw: Dict[str, Any] = {"schema": s1.SCHEMA, "die": str(die), "config": str(cfg), "R_phase_ohm": r_ohm, "R_temp_C": r_c,
+                           "magnet_ref_temp_C": 20.0, "flux_temp_coeff_per_K": 0.0, "torque_factor": 1.0,
+                           "grid": {"rpm": rpm_ax, "I_A": i_grid, "T_Nm": [list(t_grid) for _ in rpm_ax], "loss_W": loss},
+                           "loss_groups_zero": ["fe_rotor", "cu_ac"],
+                           "limits": {"I_max_A": 1.5 * i_top, "rpm_max": rpm_ax[-1], "magnet_C": 150.0,
+                                      "I_max_basis": "1.5 x the highest stored duty current (estimate)"},
+                           "thermal_geom": tg, "estimate": {"label": DUTIES_LABEL, "flags": flags, "die": die, "config": cfg},
+                           "kv_bench_rpm_per_V": kv}
+    fit = fit_open_frame(tg, max(pts, key=lambda p: (bool(p.get("cooling")), p["I_A"])), od / 1000.0)
+    if fit:
+        raw["thermal_calibration"] = dict(fit["calibration"])
+        flags.append("thermal_open_frame_from_stored_map" + ("" if fit["anchor"]["winding_area_scale"] else "_unscaled"))
+    else:
+        flags.append("thermal_uncalibrated")
+    info = {"kind": KIND_DUTIES, "label": DUTIES_LABEL, "flags": flags, "kv_rpm_per_V": kv, "R_phase_ohm": r_ohm, "R_temp_C": r_c,
+            "end_winding_factor": ef, "k3d": k3d, "duties_used": [p["duty"] for p in pts], "thermal_anchor": fit["anchor"] if fit else None,
+            "I_peak_A": 1.5 * i_top}
     return raw, info
 
 

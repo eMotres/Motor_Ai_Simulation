@@ -677,5 +677,6 @@
   "propMissionOwnOutside": "Our own propeller family covers {lo}–{hi} in, outside the diameter window: the optimisation of an own propeller does not apply here, the catalogue propellers are ranked.",
   "propMissionExtendBelow": "Curve below test, %",
   "propMissionExtendBelowTip": "Continue catalogue curves below the lowest tested rpm by this share, with the thrust and torque coefficients of the lowest tested row (an extrapolation, marked). 0 = off; never above the highest tested rpm.",
-  "propMissionFlag_extrapolated_below_test": "The curve is extrapolated below the lowest tested {rpm} rpm (constant coefficients); points below it are estimates."
+  "propMissionFlag_extrapolated_below_test": "The curve is extrapolated below the lowest tested {rpm} rpm (constant coefficients); points below it are estimates.",
+  "propMissionKind_duties": "estimate from stored duties"
 }

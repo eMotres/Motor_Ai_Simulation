@@ -271,13 +271,13 @@ export default function MissionPage() {
           {res && run && (
             <>
               <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap', alignItems: 'center' }} data-testid="mission-motor-used">
-                <Chip size="small" color={run.motor.kind === 'estimate' ? 'warning' : 'success'} variant="outlined" label={`${run.motor.name} · ${t(`propMissionKind_${run.motor.kind}`)}`} />
+                <Chip size="small" color={run.motor.kind === 'estimate' || run.motor.kind === 'duties' ? 'warning' : 'success'} variant="outlined" label={`${run.motor.name} · ${t(`propMissionKind_${run.motor.kind}`)}`} />
                 <Chip size="small" variant="outlined" label={t(statusKey(run.status))} />
                 {res.stopped && <Chip size="small" color="warning" label={`${t('propMissionStopped')}${res.complete ? '' : `: ${t(`propMissionStage_${res.stopped_stage ?? 'stage1'}`, { defaultValue: res.stopped_stage ?? '' })}`}`} />}
               </Box>
               <KvGrid items={[['id', run.run_id], [t('propMissionMass'), `${res.mission.mass_kg.toFixed(2)} kg`], [t('propMissionEnergy'), `${res.mission.pack.E_usable_Wh.toFixed(0)} Wh`],
                 [t('propMissionPassing'), `${res.counts.passed} / ${res.counts.total}`]]} testId="mission-run-cells" />
-              {run.motor.kind === 'estimate' && <Alert severity="warning" sx={{ py: 0, fontSize: 12 }}>{t('propMissionEstimateResult')}</Alert>}
+              {(run.motor.kind === 'estimate' || run.motor.kind === 'duties') && <Alert severity="warning" sx={{ py: 0, fontSize: 12 }}>{t('propMissionEstimateResult')}</Alert>}
               {!refined && res.own_family?.requested && res.own_family.in_window === 0 && (
                 <Alert severity="info" sx={{ py: 0, fontSize: 12 }} data-testid="mission-own-outside">
                   {t('propMissionOwnOutside', { lo: res.own_family.diameters_in?.[0] ?? '', hi: res.own_family.diameters_in?.[1] ?? '' })}

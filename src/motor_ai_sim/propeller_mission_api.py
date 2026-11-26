@@ -108,9 +108,75 @@ def motor_entries(cards: List[Dict[str, Any]], access: Dict[str, Any]) -> List[D
             continue
         rows.append({"id": None, "name": "%s %s" % (die, cfg), "diameter_mm": None, "die": die, "config": cfg, "kind": pm.KIND_S1, "reason": None,
                      **_s1_extras(die, cfg)})
+    rows += _config_rows(access, used | {(r.get("die"), r.get("config")) for r in rows if r.get("die")})
     rows = [{k: v for k, v in r.items() if k in ENTRY_FIELDS} for r in rows]
     rows.sort(key=lambda r: (str(r.get("die") or r.get("name") or "").casefold(), str(r.get("name") or "").casefold()))
     return rows
+
+
+def _config_rows(access: Dict[str, Any], used: set) -> List[Dict[str, Any]]:
+    """Configurations the caller may see that have no card and no S1 model: offered as kind ``duties`` (an estimate from their stored
+    duties, checked when the run starts; the names come from the die directories, nothing is read from the duties here)."""
+    try:
+        from motor_ai_sim.routes import family as fam
+        dies = sorted(fam.die_names())
+    except Exception:                                                   # noqa: BLE001 - no die listing: no configuration rows
+        return []
+    out = []
+    for die in dies:
+        for cfg in fam.die_config_names(die):
+            if (die, cfg) in used or not ma.may_see_config(access, die, cfg):
+                continue
+            out.append({"id": None, "name": "%s %s" % (die, cfg), "diameter_mm": None, "die": die, "config": cfg, "kind": pm.KIND_DUTIES,
+                        "reason": None, "label": pm.DUTIES_LABEL})
+    return out
+
+
+def _die_size(die: str, cfg: str) -> Tuple[Optional[float], Optional[float]]:
+    """(stator OD, stack length) in mm from the die and the configuration files (geometry.stator_diameter, motor_length), None when absent."""
+    try:
+        import yaml
+        from motor_ai_sim.routes import family as fam
+        e = next((x for x in fam._iter_die_entries() if str(x["name"]) == str(die)), None)
+        if e is None or e.get("dir") is None:
+            return None, None
+        d = yaml.safe_load((Path(str(e["dir"])) / "die.yaml").read_text(encoding="utf-8")) or {}
+        c = yaml.safe_load((Path(str(e["dir"])) / ("%s.yaml" % cfg)).read_text(encoding="utf-8")) or {}
+        geo = d.get("geometry") or {}
+        od = pm._fnum(geo.get("stator_diameter"))
+        L = pm._fnum((c.get("geometry_overrides") or {}).get("motor_length")) or pm._fnum(geo.get("motor_length"))
+        return od, L
+    except Exception:                                                   # noqa: BLE001
+        return None, None
+
+
+def _k3d_of(duties: Dict[str, Any], stack_mm: Optional[float]) -> Optional[float]:
+    """The measured 3-D torque factor of the configuration's geometry (end3d_factors.measured_k_T on a coupled duty's fingerprint)."""
+    try:
+        from motor_ai_sim import end3d_factors as e3
+        for kinds in (duties or {}).values():
+            fp = ((kinds or {}).get("coupled") or {}).get("geometry_fingerprint") if isinstance(kinds, dict) else None
+            if fp:
+                r = e3.measured_k_T(str(fp), None, stack_mm)
+                if r and r.get("k_T"):
+                    return e3.accepted_factor(r["k_T"], "k_T")
+    except Exception:                                                   # noqa: BLE001
+        return None
+    return None
+
+
+def duties_motor(die: str, cfg: str, access: Dict[str, Any]):
+    """``(raw, info)`` for a configuration from its stored duties, access-checked first (hidden = missing)."""
+    if not ma.may_see_config(access, die, cfg):
+        raise pm.MissionError("no stored duties for %s %s" % (die, cfg))
+    from motor_ai_sim import duty_results as dr
+    duties = dr.get(die, cfg)
+    if not duties:
+        raise pm.MissionError("no stored duties for %s %s" % (die, cfg))
+    od, L = _die_size(die, cfg)
+    raw, info = pm.duties_model(die, cfg, duties, od_mm=od, stack_mm=L, k3d=_k3d_of(duties, L))
+    return raw, {**info, "card_id": None, "name": "%s %s" % (die, cfg), "die": die, "config": cfg,
+                 "model_sha256": hashlib.sha256(json.dumps(raw, sort_keys=True, default=str).encode()).hexdigest()}
 
 
 def options(cards: List[Dict[str, Any]], access: Dict[str, Any]) -> Dict[str, Any]:
@@ -140,6 +206,8 @@ def resolve_motor(cfg: Dict[str, Any], cards: List[Dict[str, Any]], access: Dict
             return raw, {**info, "card_id": e["id"], "name": e["name"], "die": None, "config": None,
                          "model_sha256": hashlib.sha256(json.dumps(raw, sort_keys=True, default=str).encode()).hexdigest()}
         raise pm.MissionError("motor %r cannot be used: %s" % (e["name"], e["reason"]))
+    if m.get("source") == "duties":
+        return duties_motor(str(m["die"]), str(m["config"]), access)
     raw, sha = load_raw_model(m["die"], m["config"], access)
     return raw, {"kind": pm.KIND_S1, "card_id": None, "name": "%s %s" % (m["die"], m["config"]), "die": m["die"], "config": m["config"], "model_sha256": sha}
 

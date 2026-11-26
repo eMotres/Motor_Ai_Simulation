@@ -14,7 +14,7 @@ export const KMH = 3.6;
 export const kmhToMs = (kmh: number): number => kmh / KMH;
 export const msToKmh = (ms: number): number => ms * KMH;
 
-export type ModelKind = 's1' | 'estimate' | 'none';
+export type ModelKind = 's1' | 'estimate' | 'duties' | 'none';
 export type Objective = 'range_km' | 'endurance_min' | 'top_speed_ms' | 'hover_g_per_w';
 export const OBJECTIVES: readonly Objective[] = ['range_km', 'endurance_min', 'top_speed_ms', 'hover_g_per_w'];
 
@@ -140,7 +140,7 @@ export function buildBody(form: MissionForm, motors: MotorEntry[]): BuildResult 
   const keys = Object.keys(errors);
   if (keys.length > 0 || !motor || !range || !chords || !blades) return { ok: false, error: errors[keys[0]] ?? 'number', field: keys[0] ?? 'motorKey', errors };
   const m = body.motor as Record<string, unknown>;
-  if (motor.id) m.card_id = motor.id; else { m.die = motor.die; m.config = motor.config; }
+  if (motor.id) m.card_id = motor.id; else { m.die = motor.die; m.config = motor.config; m.source = motor.kind === 'duties' ? 'duties' : 's1'; }
   m.drive = form.drive || 'sine';
   Object.assign(body.kv as object, { mode: form.kvMode, allow_unverified: form.allowUnverified });
   Object.assign(body.battery as object, { chemistry: form.chemistry });

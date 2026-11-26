@@ -1,8 +1,10 @@
-"""A configuration's own MOTOR keys on top of a shared die (owner 2026-11-18: one die per size and pole count; the magnet
-fill belongs to the motor, not to the lamination).
+"""A configuration's own MOTOR keys on top of a shared die (owner 2026-11-18: one die per size and pole count).  Since the Astra
+review of 2026-11-21 the only motor key is the magnet segmentation ``magnet_lamination``: the magnet FILL keys decide the rotor
+pocket, so a per-configuration fill would be a different rotor under one die - they are refused (422), a stored one can only
+be cleared, and a stored one is a die difference at the duty save.
 
 Pinned:
-* ``MOTOR_GEO_KEYS`` is an explicit tuple (fill up / down / radius, lamination), disjoint from the FREE keys;
+* ``MOTOR_GEO_KEYS`` is an explicit tuple (the magnet lamination), disjoint from the FREE keys and from ``ROTOR_SHAPE_KEYS``;
 * ``PATCH /config/{die}/{cfg}/motor_keys``: admin only; a dry run writes nothing; null or the die's own value clears;
   any other key or a bad value is refused (422) and writes nothing; a locked configuration refuses (409); the build
   signature moves when an override is set, and a configuration WITHOUT such an override keeps its file and signature;
@@ -29,7 +31,7 @@ WIRE = {"wire_width": 7.0, "wire_spacing_x": 0.1, "insulation_thickness": 0.2,
 GEO = dict({"stator_diameter": 200.0, "num_seg": 4, "num_slots_per_segment": 6, "num_poles_per_segment": 7,
             "core_thickness": 5.6, "slot_height": 20.4, "air_gap": 0.65, "magnet_height": 18.7,
             "rotor_house_height": 2.8, "tooth_width": 11.3, "magnet_fill_up": 0.44, "magnet_fill_down": 0.9,
-            "magnet_fill_radius": 4.0}, **WIRE)
+            "magnet_fill_radius": 4.0, "magnet_lamination": 0}, **WIRE)
 MATS = {"magnet": "N52UH", "slot_insulation": "Nomex"}
 ADMIN = {"is_admin": True, "user": {"email": "admin@example.com"}}
 AUDIT: list = []
@@ -87,22 +89,24 @@ def _sig(root, cfg=CFG):
 
 
 # ── the key set ────────────────────────────────────────────────────────────────────────────────────────────────────────
-def test_the_motor_keys_are_an_explicit_tuple_apart_from_the_free_keys():
-    assert fam.MOTOR_GEO_KEYS == ("magnet_fill_up", "magnet_fill_down", "magnet_fill_radius", "magnet_lamination")
-    assert not set(fam.MOTOR_GEO_KEYS) & set(fam.FREE_GEO_KEYS)
+def test_the_motor_keys_are_an_explicit_tuple_apart_from_the_free_and_the_shape_keys():
+    assert fam.MOTOR_GEO_KEYS == ("magnet_lamination",)
+    assert fam.ROTOR_SHAPE_KEYS == ("magnet_fill_up", "magnet_fill_down", "magnet_fill_radius")
+    assert not set(fam.MOTOR_GEO_KEYS) & set(fam.FREE_GEO_KEYS) and not set(fam.MOTOR_GEO_KEYS) & set(fam.ROTOR_SHAPE_KEYS)
     assert fam._motor_key_overrides({"geometry_overrides": dict(WIRE)}) == {}
-    assert fam._motor_key_overrides({"geometry_overrides": {"magnet_fill_up": 0.54, "magnet_fill_down": None,
-                                                            "rotor_hole": 0.9, "magnet_lamination": True}}) \
-        == {"magnet_fill_up": 0.54}
+    assert fam._motor_key_overrides({"geometry_overrides": {"magnet_fill_up": 0.54, "magnet_lamination": 5, "rotor_hole": 0.9}}) \
+        == {"magnet_lamination": 5}                                    # a fill override is no longer read as a motor key
+    assert fam._motor_key_overrides({"geometry_overrides": {"magnet_lamination": True}}) == {}
+    assert fam.stored_shape_overrides({"geometry_overrides": {"magnet_fill_up": 0.54, "magnet_fill_down": None}}) == {"magnet_fill_up": 0.54}
 
 
 # ── the route ──────────────────────────────────────────────────────────────────────────────────────────────────────────
 def test_dry_run_writes_nothing_and_says_what_would_change(cat):
     before, sig = _bytes(cat), _sig(cat)
-    out = _patch({"magnet_fill_up": 0.54}, dry=True)
-    assert out["dry_run"] is True and out["changed"] == ["magnet_fill_up"]
-    assert out["before"] == {"magnet_fill_up": None} and out["after"] == {"magnet_fill_up": 0.54}
-    assert out["die_values"]["magnet_fill_up"] == 0.44
+    out = _patch({"magnet_lamination": 5}, dry=True)
+    assert out["dry_run"] is True and out["changed"] == ["magnet_lamination"]
+    assert out["before"] == {"magnet_lamination": None} and out["after"] == {"magnet_lamination": 5}
+    assert out["die_values"]["magnet_lamination"] == 0
     assert out["build_sig_before"] == sig != out["build_sig_after"]
     assert out["results_stale"] is True
     assert _bytes(cat) == before and AUDIT == []
@@ -111,35 +115,34 @@ def test_dry_run_writes_nothing_and_says_what_would_change(cat):
 def test_set_clear_and_the_die_value_round_trip(cat):
     sib = (cat / DIE / f"{SIB}.yaml").read_bytes()
     sig0 = _sig(cat)
-    out = _patch({"magnet_fill_up": 0.54})
+    out = _patch({"magnet_lamination": 5})
     c = _yaml(cat / DIE / f"{CFG}.yaml")
-    assert c["geometry_overrides"]["magnet_fill_up"] == 0.54
+    assert c["geometry_overrides"]["magnet_lamination"] == 5
     assert {k: c["geometry_overrides"][k] for k in WIRE} == WIRE           # the free keys are untouched
     assert _sig(cat) == out["build_sig_after"] != sig0
     assert AUDIT and AUDIT[-1][0][1] == "config.motor_keys"
-    assert AUDIT[-1][1]["details"] == {"from": {}, "to": {"magnet_fill_up": 0.54}}
-    assert (cat / DIE / f"{SIB}.yaml").read_bytes() == sib                 # the sibling keeps the die's fill
-    assert _yaml(cat / DIE / "die.yaml")["geometry"]["magnet_fill_up"] == 0.44
-    # the die's own value clears the override, and so does null; the signature is the original again
-    _patch({"magnet_fill_up": 0.44})
-    assert "magnet_fill_up" not in _yaml(cat / DIE / f"{CFG}.yaml")["geometry_overrides"]
+    assert AUDIT[-1][1]["details"] == {"from": {}, "to": {"magnet_lamination": 5}}
+    assert (cat / DIE / f"{SIB}.yaml").read_bytes() == sib                 # the sibling keeps the die's value
+    assert _yaml(cat / DIE / "die.yaml")["geometry"]["magnet_lamination"] == 0
+    _patch({"magnet_lamination": 0})                                       # the die's own value clears the override
+    assert "magnet_lamination" not in _yaml(cat / DIE / f"{CFG}.yaml")["geometry_overrides"]
     assert _sig(cat) == sig0
     _patch({"magnet_lamination": 5})
-    _patch({"magnet_lamination": None})
+    _patch({"magnet_lamination": None})                                    # and so does null
     assert "magnet_lamination" not in _yaml(cat / DIE / f"{CFG}.yaml")["geometry_overrides"]
     assert _sig(cat) == sig0
 
 
 def test_a_no_change_patch_keeps_the_file_and_the_signature_bit_identical(cat):
     before, sig = _bytes(cat), _sig(cat)
-    out = _patch({"magnet_fill_up": None, "magnet_fill_down": 0.9})        # nothing set; the die's value
+    out = _patch({"magnet_lamination": None, "magnet_fill_down": None})    # nothing set
     assert out["changed"] == [] and out["build_sig_after"] == sig
     assert _bytes(cat) == before and AUDIT == []
 
 
 @pytest.mark.parametrize("keys", [{"rotor_hole": 0.9}, {"magnet_height": 18.0}, {"motor_length": 140},
-                                  {"magnet_fill_up": 0.0}, {"magnet_fill_up": 1.2}, {"magnet_fill_up": "0.5"},
-                                  {"magnet_fill_up": True}, {"magnet_fill_radius": -1}, {"magnet_lamination": 2.5}])
+                                  {"magnet_lamination": 2.5}, {"magnet_lamination": -1}, {"magnet_lamination": "5"},
+                                  {"magnet_lamination": True}])
 def test_other_keys_and_bad_values_are_refused_and_write_nothing(cat, keys):
     before = _bytes(cat)
     with pytest.raises(HTTPException) as e:
@@ -148,17 +151,41 @@ def test_other_keys_and_bad_values_are_refused_and_write_nothing(cat, keys):
     assert _bytes(cat) == before and AUDIT == []
 
 
+@pytest.mark.parametrize("keys", [{"magnet_fill_up": 0.54}, {"magnet_fill_down": 0.8}, {"magnet_fill_radius": 3.0},
+                                  {"magnet_fill_up": 0.44}, {"magnet_lamination": 5, "magnet_fill_up": 0.54}])
+def test_the_rotor_shape_keys_cannot_be_set_even_to_the_dies_value(cat, keys):
+    """One die = one rotor (Astra review of #765): the fill decides the rotor pocket opening."""
+    before = _bytes(cat)
+    with pytest.raises(HTTPException) as e:
+        _patch(keys)
+    assert e.value.status_code == 422 and "rotor pocket" in e.value.detail and "one die = one rotor" in e.value.detail
+    assert _bytes(cat) == before and AUDIT == []
+
+
+def test_a_stored_fill_override_can_be_cleared_and_is_reported_until_then(cat):
+    c = _yaml(cat / DIE / f"{CFG}.yaml")
+    c["geometry_overrides"]["magnet_fill_up"] = 0.54                        # left by the first version of the route
+    _write(cat / DIE / f"{CFG}.yaml", c)
+    dry = _patch({"magnet_lamination": None}, dry=True)
+    assert dry["rotor_shape_overrides_left"] == {"magnet_fill_up": 0.54} and dry["changed"] == []
+    out = _patch({"magnet_fill_up": None})
+    assert out["changed"] == ["magnet_fill_up"] and out["before"] == {"magnet_fill_up": 0.54} and out["after"] == {"magnet_fill_up": None}
+    assert out["rotor_shape_overrides_left"] == {}
+    assert "magnet_fill_up" not in _yaml(cat / DIE / f"{CFG}.yaml")["geometry_overrides"]
+    assert AUDIT[-1][1]["details"]["from"] == {"magnet_fill_up": 0.54} and AUDIT[-1][1]["details"]["to"] == {}
+
+
 def test_admin_only_and_a_locked_configuration_refuses(cat):
     before = _bytes(cat)
     with pytest.raises(HTTPException) as e:
-        _patch({"magnet_fill_up": 0.54}, w={"is_admin": False})
+        _patch({"magnet_lamination": 5}, w={"is_admin": False})
     assert e.value.status_code == 403
     c = _yaml(cat / DIE / f"{CFG}.yaml")
     c["locked"] = True
     _write(cat / DIE / f"{CFG}.yaml", c)
     before = _bytes(cat)
     with pytest.raises(HTTPException) as e:
-        _patch({"magnet_fill_up": 0.54})
+        _patch({"magnet_lamination": 5})
     assert e.value.status_code == 409
     assert _bytes(cat) == before
 
@@ -179,30 +206,42 @@ def _dies(root):
     return {p.name for p in root.iterdir() if not p.name.startswith(".")}
 
 
-def test_a_live_machine_on_die_plus_override_saves_into_the_configuration(cat, monkeypatch):
-    _patch({"magnet_fill_up": 0.54})
+def test_a_live_machine_on_die_plus_lamination_override_saves_into_the_configuration(cat, monkeypatch):
+    _patch({"magnet_lamination": 5})
     die_before = (cat / DIE / "die.yaml").read_bytes()
-    _live(monkeypatch, dict(GEO, magnet_fill_up=0.54))
+    _live(monkeypatch, dict(GEO, magnet_lamination=5))
     out = _save()
     assert "transitioned" not in out and _dies(cat) == {DIE}
     assert (cat / DIE / "die.yaml").read_bytes() == die_before
     c = _yaml(cat / DIE / f"{CFG}.yaml")
-    assert c["geometry_overrides"]["magnet_fill_up"] == 0.54
+    assert c["geometry_overrides"]["magnet_lamination"] == 5
     assert next(x for x in c["duties"] if x["name"] == "rated")["current_arms"] == 9.5
 
 
 def test_the_override_survives_a_free_key_adoption(cat, monkeypatch):
-    _patch({"magnet_fill_up": 0.54})
-    _live(monkeypatch, dict(GEO, magnet_fill_up=0.54, num_wires_per_slot=34))
+    _patch({"magnet_lamination": 5})
+    _live(monkeypatch, dict(GEO, magnet_lamination=5, num_wires_per_slot=34))
     _save()
     ov = _yaml(cat / DIE / f"{CFG}.yaml")["geometry_overrides"]
-    assert ov["num_wires_per_slot"] == 34 and ov["magnet_fill_up"] == 0.54
+    assert ov["num_wires_per_slot"] == 34 and ov["magnet_lamination"] == 5
+
+
+def test_a_stored_fill_override_survives_an_adoption_untouched_and_is_a_die_difference(cat, monkeypatch):
+    c = _yaml(cat / DIE / f"{CFG}.yaml")
+    c["geometry_overrides"]["magnet_fill_up"] = 0.54
+    _write(cat / DIE / f"{CFG}.yaml", c)
+    _live(monkeypatch, dict(GEO, magnet_fill_up=0.54, num_wires_per_slot=34))
+    before, dies = _bytes(cat), _dies(cat)
+    with pytest.raises(HTTPException) as e:                                # 0.54 differs from the die's 0.44: no longer a motor key
+        _save()
+    assert e.value.status_code == 409
+    assert _bytes(cat) == before and _dies(cat) == dies
 
 
 def test_a_non_motor_die_key_is_still_a_die_difference(cat, monkeypatch):
-    _patch({"magnet_fill_up": 0.54})
+    _patch({"magnet_lamination": 5})
     before, dies = _bytes(cat), _dies(cat)
-    _live(monkeypatch, dict(GEO, magnet_fill_up=0.54, magnet_height=19.0))
+    _live(monkeypatch, dict(GEO, magnet_lamination=5, magnet_height=19.0))
     with pytest.raises(HTTPException) as e:
         _save()
     assert e.value.status_code == 409
@@ -210,12 +249,78 @@ def test_a_non_motor_die_key_is_still_a_die_difference(cat, monkeypatch):
 
 
 @pytest.mark.parametrize("fill", [0.54, 0.50])
-def test_a_magnet_fill_other_than_die_or_override_is_still_a_die_difference(cat, monkeypatch, fill):
-    if fill == 0.50:
-        _patch({"magnet_fill_up": 0.54})        # with an override, a THIRD value is refused
+def test_a_magnet_fill_other_than_the_dies_is_a_die_difference(cat, monkeypatch, fill):
     before, dies = _bytes(cat), _dies(cat)
-    _live(monkeypatch, dict(GEO, magnet_fill_up=fill))   # 0.54 without an override: as before this PR
+    _live(monkeypatch, dict(GEO, magnet_fill_up=fill))
     with pytest.raises(HTTPException) as e:
         _save()
     assert e.value.status_code == 409
     assert _bytes(cat) == before and _dies(cat) == dies
+
+
+def test_the_dry_list_finds_a_stored_fill_override(cat, tmp_path):
+    import sys
+    from pathlib import Path
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
+    import config_shape_override_dry_list as D
+    assert D.scan(cat) == []
+    c = _yaml(cat / DIE / f"{CFG}.yaml")
+    c["geometry_overrides"]["magnet_fill_up"] = 0.54
+    _write(cat / DIE / f"{CFG}.yaml", c)
+    (row,) = D.scan(cat)
+    assert row["die"] == DIE and row["config"] == CFG and row["keys"] == {"magnet_fill_up": {"override": 0.54, "die": 0.44}}
+
+
+# ── the readers: a stored rotor-shape override is quarantined everywhere (Astra pre-merge review of #793) ──────────────
+def _with_fill(cat, v=0.54):
+    c = _yaml(cat / DIE / f"{CFG}.yaml")
+    c["geometry_overrides"]["magnet_fill_up"] = v
+    _write(cat / DIE / f"{CFG}.yaml", c)
+
+
+def test_the_payload_does_not_apply_a_stored_fill_and_names_it(cat, monkeypatch):
+    _with_fill(cat)
+    monkeypatch.setattr(fam, "_require_die_access", lambda *_a, **_k: None)
+    out = fam.payload(DIE, CFG, None, None)
+    assert out["geometry"]["magnet_fill_up"] == 0.44                          # the die's rotor, not 0.54
+    assert out["rotor_shape_quarantined"] == {"magnet_fill_up": 0.54}
+    assert out["geometry"]["motor_length"] == 150                              # the approved overrides still apply
+
+
+def test_a_clean_configuration_payload_has_no_new_key(cat, monkeypatch):
+    monkeypatch.setattr(fam, "_require_die_access", lambda *_a, **_k: None)
+    assert "rotor_shape_quarantined" not in fam.payload(DIE, CFG, None, None)
+
+
+def test_mass_and_build_readers_ignore_a_stored_fill(cat):
+    from motor_ai_sim.modules import motor_mass
+    from motor_ai_sim.config_overrides import geo_overrides, shape_overrides
+    _with_fill(cat)
+    cdoc = _yaml(cat / DIE / f"{CFG}.yaml")
+    assert "magnet_fill_up" not in geo_overrides(cdoc) and shape_overrides(cdoc) == {"magnet_fill_up": 0.54}
+    assert geo_overrides(cdoc)["motor_length"] == 150
+    assert motor_mass.config_build(DIE, CFG, dies_dir=cat)["L_mm"] == 150.0   # the non-HTTP reader still reads the build
+
+
+def test_duty_geometry_diff_reports_a_duty_saved_on_the_old_fill_as_a_difference(cat):
+    _with_fill(cat)
+    die_doc, cfg_doc = _yaml(cat / DIE / "die.yaml"), _yaml(cat / DIE / f"{CFG}.yaml")
+    duty = {"name": "rated", "geometry": dict(GEO, **WIRE, magnet_fill_up=0.54)}   # solved while the override was live
+    keys = {d["key"] for d in fam.duty_geometry_diff(die_doc, cfg_doc, duty)}
+    assert "magnet_fill_up" in keys                                            # live is the die's 0.44: not "consistent"
+    ok = {"name": "rated", "geometry": dict(GEO, **WIRE)}
+    assert not {d["key"] for d in fam.duty_geometry_diff(die_doc, cfg_doc, ok)} & set(fam.ROTOR_SHAPE_KEYS)
+
+
+def test_the_build_signature_ignores_the_quarantined_key_so_old_results_read_as_an_older_build(cat):
+    clean = _sig(cat)
+    _with_fill(cat)
+    assert _sig(cat) == clean                              # a result stamped with the old (override-carrying) signature now differs
+    out = _patch({"magnet_fill_up": None})
+    assert _sig(cat) == clean and out["rotor_shape_overrides_left"] == {}
+
+
+def test_a_copy_check_uses_the_die_rotor_only(cat):
+    _with_fill(cat)
+    cdoc = _yaml(cat / DIE / f"{CFG}.yaml")
+    assert not (set(fam.geo_overrides(cdoc)) & set(fam.ROTOR_SHAPE_KEYS))

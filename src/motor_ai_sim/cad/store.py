@@ -14,6 +14,7 @@ The store (``<dies>/<die>/{die.yaml, L*.yaml}`` + the materials library) is auth
 History: moved here from CIANO14_40_motor_model/tools/sim_sync.py (2026-10-12, commit 8ef2e35 of that repo).
 """
 import ast
+from motor_ai_sim.config_overrides import geo_overrides
 import copy
 import csv
 import datetime
@@ -473,7 +474,7 @@ def load_effective(dies_dir, die, config, materials_library=None, bearings_libra
     dy = yaml.safe_load(open(die_file, encoding="utf-8")) or {}
     cy = yaml.safe_load(open(cfg_file, encoding="utf-8")) or {}
     geo = dict(dy.get("geometry") or {})
-    geo.update(cy.get("geometry_overrides") or {})
+    geo.update(geo_overrides(cy))
     if cad_variant:
         variant, variant_from = check_variant(cad_variant, "--variant"), "build option"
     else:
@@ -517,7 +518,7 @@ def load_effective(dies_dir, die, config, materials_library=None, bearings_libra
                                               mtime=datetime.datetime.fromtimestamp(os.path.getmtime(blib)).isoformat(timespec="seconds"),
                                               cards_used=sorted(bcards))
     return dict(die=die, config=cfg_name, variant=config_stem(config), cad_variant=variant, cad_variant_from=variant_from, geometry=geo,
-                geometry_overrides=cy.get("geometry_overrides") or {}, die_geometry=dy.get("geometry") or {},
+                geometry_overrides=geo_overrides(cy), die_geometry=dy.get("geometry") or {},
                 materials=mats, winding=cy.get("winding") or {}, bearings=cy.get("bearings") or {},
                 cad_overrides=cad_ov, bearing_cards=bcards, material_cards=cards, files=files, dies_dir=dies_dir)
 

@@ -31,6 +31,7 @@ field.  The current limit uses the SAME card method the Controller tab's
 (:meth:`inverter.devices.DeviceCard.i_d_rating`), so the two cannot disagree.
 """
 from __future__ import annotations
+from motor_ai_sim.config_overrides import geo_overrides
 
 import math
 from typing import Any, Dict, Optional
@@ -278,7 +279,7 @@ def preset_of(doc: Dict[str, Any], die_geometry: Optional[Dict[str, Any]] = None
     neither states is ``None`` and the web leaves that knob where it is.
     """
     base = dict(die_geometry or {})
-    geo = {**base, **(doc.get("geometry_overrides") or {})}
+    geo = {**base, **geo_overrides(doc)}
     wnd = doc.get("winding") if isinstance(doc.get("winding"), dict) else {}
     # test / validation points (bench free-run reproductions) are never a preset, a duty pill or the
     # default duty (owner 2026-10-28); they stay in the configuration for motor_tests

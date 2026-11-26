@@ -347,7 +347,7 @@ WRITE_ROUTES = {         # layered-only (a registered account writes into its ow
     ("PUT", "/api/family/config/{die}/{cfg}/cad-mass"): {"grams": 9721.111, "source": "Fusion"},
     ("PATCH", "/api/family/config/{die}/{cfg}/bearings"): {"A": {"card": "618/8-2Z"}, "B": {"card": "618/8-2Z"}},
     ("PATCH", "/api/family/config/{die}/{cfg}/coil"): {"wire_beng_r": 2.5},
-    ("PATCH", "/api/family/config/{die}/{cfg}/motor_keys"): {"keys": {"magnet_fill_up": 0.5}, "dry_run": True},
+    ("PATCH", "/api/family/config/{die}/{cfg}/motor_keys"): {"keys": {"magnet_lamination": 5}, "dry_run": True},
     ("POST", "/api/family/duty/{die}/{cfg}/{duty}/duplicate"): {"name": "copy"},
     ("POST", "/api/family/duty/{die}/{cfg}/{duty}/save_continuous_point"): {"name": "continuous"},
     ("PATCH", "/api/family/duty/{die}/{cfg}/{duty}"): {"name": "renamed"},

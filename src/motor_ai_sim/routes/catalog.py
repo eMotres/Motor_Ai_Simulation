@@ -5,6 +5,7 @@ catalog motor applies its underlying preset (geometry + operating point) via
 the presets service.
 """
 from __future__ import annotations
+from motor_ai_sim.config_overrides import geo_overrides
 
 from pathlib import Path
 from typing import Any, Callable, Dict, Optional
@@ -363,7 +364,7 @@ def _passport_copper_mass(card: Optional[dict], passport: dict) -> Optional[floa
         cy_path = ddir / f"{card['config']}.yaml"
         cy = _fsc.read_yaml(cy_path) or {}
         geo = dict(dy.get("geometry") or {})
-        geo.update(cy.get("geometry_overrides") or {})
+        geo.update(geo_overrides(cy))
         for key, val in (("motor_length", passport.get("L0_mm")),
                          ("num_wires_per_slot", passport.get("N0")),
                          ("wire_height", passport.get("wireH0_mm"))):

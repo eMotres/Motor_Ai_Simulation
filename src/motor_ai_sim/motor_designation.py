@@ -36,6 +36,7 @@ is ``?`` and the designation is marked incomplete; nothing is guessed.  :func:`c
 configuration NAMES with the parameters (read-only report; nothing is renamed).
 """
 from __future__ import annotations
+from motor_ai_sim.config_overrides import geo_overrides
 
 import re
 from typing import Any, Dict, List, Mapping, Optional, Tuple
@@ -70,7 +71,7 @@ def geometry_of(die_doc: Mapping[str, Any], cfg_doc: Mapping[str, Any]) -> Dict[
     segments when only those are given (a headless run's machine), and the radii from the primaries through the app's
     one derived-geometry function (stored derived values go stale, and a payload geometry carries primaries only)."""
     g = dict((die_doc or {}).get("geometry") or {})
-    g.update((cfg_doc or {}).get("geometry_overrides") or {})
+    g.update(geo_overrides(cfg_doc))
     for total, per in (("num_slots", "num_slots_per_segment"), ("num_poles", "num_poles_per_segment")):
         if _num(g.get(total)) is None and _num(g.get(per)) is not None and _num(g.get("num_seg")) is not None:
             g[total] = int(_num(g[per]) * _num(g["num_seg"]))

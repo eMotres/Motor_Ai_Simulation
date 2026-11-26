@@ -21,6 +21,7 @@ Word file is the useful artefact and the PDF is the last step of one.
 ``?format=pdf`` still serves exactly what it always did, byte for byte.
 """
 from __future__ import annotations
+from motor_ai_sim.config_overrides import geo_overrides
 
 import logging
 import re
@@ -145,7 +146,7 @@ def build_for(die: str, cfg: str, fmt: str, authorization: Optional[str], *, dut
             try:
                 from motor_ai_sim.masses import slot_fill_from_cad
                 _geo = dict(d.get("geometry") or {})
-                _geo.update(c.get("geometry_overrides") or {})
+                _geo.update(geo_overrides(c))
                 _slot = slot_fill_from_cad(_geo)
             except Exception:                                 # noqa: BLE001
                 _slot = None

@@ -38,6 +38,7 @@ nothing about what the server has loaded — it is built from the stored duties 
 the configuration it names, and the mismatch goes to the log instead.
 """
 from __future__ import annotations
+from motor_ai_sim.config_overrides import geo_overrides
 
 import io
 import logging
@@ -9245,7 +9246,7 @@ def gather_report_data(*, die: str, cfg: str, die_doc: Dict[str, Any],
     contract the module has always had, now stated in one function.
     """
     geo = dict(die_doc.get("geometry") or {})
-    geo.update(cfg_doc.get("geometry_overrides") or {})
+    geo.update(geo_overrides(cfg_doc))
     # DERIVED FIELDS FROM THE INPUTS, NEVER FROM THE FILE (2026-09-30).  The
     # die's stored radii were stale on most dies, and this table printed them:
     # "Rotor outer radius" and "Shaft seat Ø" (2 × rotor_inner_radius) of the

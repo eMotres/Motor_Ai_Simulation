@@ -76,3 +76,22 @@ compares every deterministic field of two existing `optimize()` inputs with the 
 ## Tests
 `tests/test_propeller_mission.py`, `tests/test_propeller_optimize_golden.py`, the unchanged `tests/test_propeller_optimize.py`, `tests/test_deploy_stage2_roles.py`;
 `web/src/lib/__tests__/propellerMission.test.mjs`. Synthetic S1 model and closed-form propeller curves; no private model data, no UIUC or APC files.
+
+## Second review (#922, 2026-11-26) and how it was met (commit after 3f26ec26)
+- **B (P1) loaded bus voltage:** `solve_pack_point` compares the converged LOADED pack voltage `st["V_V"]` with the drive's `bus_v`
+  window before it returns a point; every motor point (hover, cruise, both at the end of discharge, peak/Kv check, thrust limits,
+  speed scans) goes through it. `checks.bus_window` is `fail` on a loaded failure; the full-charge open-circuit upper bound check stays.
+  Tests: the review's 18.06 V case (loaded about 17.9 V fails), a valid window passes, open-circuit-pass / loaded-fail fails the candidate.
+- **E unknown winding:** identity scaling inside; `turns`, strip sizes and `winding.turns0 / strip_*` are `null` with `winding_known: false`.
+- **A retention / terminal write:** no pruning before admission; the progress file is removed only after the terminal file is written,
+  a failed write leaves it as `failed` with the reason (GET still finds the run); retention counts ended progress-only records
+  (stopped / interrupted / failed), deduplicated by run id, never an active job; one list row per run.
+- **D UI:** P/D shows one value (largest) with the smallest in the tooltip, stored range kept; the "checks unavailable" note and all
+  server details (failure detail, run error, request error) moved into tooltips, visible text translated only; hidden-bound errors
+  (`minD`) and the server's `airframe.min_diameter_in` go to the visible diameter field; min > max refused before submit; a remembered
+  motor that is no longer offered is cleared.
+- **C dataset collector (for the coordinator, collector lives outside this repo):** files of a run in the caller's workspace:
+  `<workspace>/propeller_designs/mission_runs/<run_id>.run.json` (terminal record: inputs, motor + model kind + sha256, results,
+  provenance), `<run_id>.progress.json` (while queued/running, or a run whose terminal write failed), and the stage-2 optimiser
+  records `<run_id>.opt/seed<k>/<opt run id>.jsonl` (`propeller-eval-1`, one line per evaluation incl. failures) + `.run.json`,
+  linked from the mission result by `refined[k].optimizer_run_id`. Retention removes the oldest beyond 100 ended runs per workspace.

@@ -56,3 +56,35 @@ def test_a_token_with_a_session_id_writes_no_sidless_event(env):
     token = _login(CLIENT, "password-client")["token"]
     A.resolve_user_detail("Bearer " + token, ip="203.0.113.9")
     assert [e for e in _events(env) if e["event"] == "sidless"] == []
+
+
+def test_an_unreadable_registry_never_accepts_a_google_credential_and_keeps_the_session(env, monkeypatch):
+    A, U = env["A"], env["U"]
+    monkeypatch.setattr(A, "_verify_google_token", lambda cred: {"email": ADMIN, "email_verified": True, "sub": "g-1"})
+
+    def boom():
+        raise OSError("registry locked")
+    monkeypatch.setattr(U, "_load", boom)
+    for who in (ADMIN, CLIENT):                      # allowlisted and ordinary: neither is trusted on the fallback tier
+        monkeypatch.setattr(A, "_verify_google_token", lambda cred, w=who: {"email": w, "email_verified": True, "sub": "g"})
+        out = A.resolve_user_detail("Bearer google-credential")
+        assert out["user"] is None and out["reason"] == "store_unavailable"
+
+
+def test_the_default_registry_role_keeps_its_fallback_for_the_login_paths(env, monkeypatch):
+    A, U = env["A"], env["U"]
+
+    def boom():
+        raise OSError("registry locked")
+    monkeypatch.setattr(U, "_load", boom)
+    assert A._registry_role(CLIENT) == "user"                                   # unchanged for callers that did not ask to fail closed
+    assert A._registry_role(CLIENT, fail_closed=True) == "__unavailable__"
+
+
+def test_a_raw_google_credential_is_part_of_the_sidless_inventory(env, monkeypatch):
+    A = env["A"]
+    monkeypatch.setattr(A, "_verify_google_token", lambda cred: {"email": CLIENT, "email_verified": True, "sub": "g-2"})
+    for _ in range(2):
+        assert A.resolve_user_detail("Bearer google-credential", ip="203.0.113.5")["reason"] == "ok"
+    ev = [e for e in _events(env) if e["event"] == "sidless" and e.get("reason") == "google_raw_credential"]
+    assert len(ev) == 1 and ev[0]["email"] == CLIENT

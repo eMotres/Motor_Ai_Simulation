@@ -273,7 +273,7 @@ def _account_disabled(email: str) -> bool:
     the key is refused for the outage (fail closed; the caller retries), never accepted unchecked."""
     try:
         from motor_ai_sim import users as _users
-        u = _users.get_user(email)
+        u = _users._load().get(_users._norm(email))     # the STRICT read: get_user swallows an outage as "no such account"
         return bool(u and u.get("disabled"))
     except Exception:                                   # noqa: BLE001
         return True

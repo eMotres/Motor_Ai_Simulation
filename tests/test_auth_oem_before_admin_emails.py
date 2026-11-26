@@ -5,6 +5,8 @@ Only an account that is BOTH a stored oem record AND in ADMIN_EMAILS changes (ad
 role is still admin, a disabled allowlisted account is still refused, an unlisted account keeps its registry role."""
 from __future__ import annotations
 
+import pytest
+
 from tests.test_auth_sessions import ADMIN, CLIENT, _login, env  # noqa: F401  (fixture)
 
 FACTORY = "factory@example.com"
@@ -135,11 +137,112 @@ def test_the_other_allowlist_readers_do_not_treat_a_stored_oem_as_staff(env, mon
     assert AD.daily_limit(_P(ADMIN)) is None and AD.daily_limit(_P(FACTORY)) is not None
 
 
-def test_an_unreadable_registry_refuses_agent_keys_and_oauth_grants_instead_of_accepting_them(env, monkeypatch):
+# ── Astra review r2 (2026-11-26): REAL corrupt-file outages (not a mocked reader) ───────────────────────────────────────────────
+
+def _corrupt(U):
+    good = U._USERS_FILE.read_bytes()
+    U._USERS_FILE.write_text("{ this is not json", encoding="utf-8")
+    return good
+
+
+def _restore(U, good):
+    U._USERS_FILE.write_bytes(good)
+
+
+def test_agent_keys_and_oauth_grants_fail_closed_on_a_corrupt_registry_and_recover(env):
     from motor_ai_sim import agent_keys as K
+    from motor_ai_sim import oauth as O
     U = env["U"]
-    assert K._account_disabled(ADMIN) is False
-    def boom(email):
-        raise OSError("registry locked")
-    monkeypatch.setattr(U, "get_user", boom)
-    assert K._account_disabled(ADMIN) is True                                      # cannot prove the account is enabled
+    token, _rec = K.create_key(ADMIN, "outage test")
+    gid = "g1"
+    out = {}
+
+    def seed(d):
+        g = {"id": gid, "client_id": "c1", "owner": ADMIN, "scopes": list(K.DEFAULT_SCOPES)}
+        d["grants"][gid] = g
+        out["tok"] = O._mint(g)
+    O._mutate(seed)
+    access, refresh = out["tok"]["access_token"], out["tok"]["refresh_token"]
+    assert K.verify("Bearer " + token)[1] == "ok" and O.verify_access(access)[1] == "ok"
+
+    good = _corrupt(U)
+    assert K._account_disabled(ADMIN) is True
+    assert K.verify("Bearer " + token) == (None, "disabled")                        # key verification refuses during the outage
+    assert O.verify_access(access) == (None, "disabled")                            # OAuth access refuses
+    with pytest.raises(O.OAuthError):                                               # OAuth refresh refuses and mints nothing
+        O._refresh({"client_id": "c1"}, {"refresh_token": refresh})
+    _restore(U, good)                                                               # the same credentials recover after the restore
+    assert K.verify("Bearer " + token)[1] == "ok" and O.verify_access(access)[1] == "ok"
+    assert O._refresh({"client_id": "c1"}, {"refresh_token": refresh})["access_token"]
+
+
+def test_the_construction_export_gate_fails_closed_on_a_corrupt_registry(env, monkeypatch):
+    from motor_ai_sim import construction_privacy as CP
+    A, U = _factory_in_allowlist(env, monkeypatch)
+    assert CP.subject_may_see_full_construction(FACTORY) is False and CP.subject_may_see_full_construction(ADMIN) is True
+    good = _corrupt(U)
+    assert CP.subject_may_see_full_construction(FACTORY) is False                   # an allowlisted OEM is NOT elevated by the outage
+    assert CP.subject_may_see_full_construction(ADMIN) is False                     # nobody is elevated blind
+    _restore(U, good)
+    assert CP.subject_may_see_full_construction(ADMIN) is True and CP.subject_may_see_full_construction(FACTORY) is False
+
+
+def test_the_account_export_keeps_the_scrubbing_for_an_allowlisted_oem_during_an_outage(env, monkeypatch):
+    """The consumer: account_lifecycle disables scrubbing only when the subject may see the full construction."""
+    from motor_ai_sim import construction_privacy as CP
+    A, U = _factory_in_allowlist(env, monkeypatch)
+    good = _corrupt(U)
+    assert CP.subject_may_see_full_construction(FACTORY) is False                   # => the export path scrubs (it keys on this gate)
+    _restore(U, good)
+
+
+def _owner_report(monkeypatch):
+    from motor_ai_sim import nda as N
+    from motor_ai_sim import notify
+    from motor_ai_sim.owner_report import send as SEND
+    monkeypatch.delenv("OWNER_REPORT_TO", raising=False)
+    monkeypatch.setattr(notify, "recipients", lambda: [])
+    return N, notify, SEND
+
+
+def test_owner_report_recipients_exclude_a_stored_oem_from_every_source(env, monkeypatch):
+    A, U = _factory_in_allowlist(env, monkeypatch)
+    N, notify, SEND = _owner_report(monkeypatch)
+    monkeypatch.setattr(N, "admin_address", lambda: ADMIN)
+    assert SEND.recipients() == [ADMIN]
+    # the default (NDA admin address, derived from the first ADMIN_EMAILS entry) is a stored OEM: never a recipient
+    monkeypatch.setattr(N, "admin_address", lambda: FACTORY)
+    assert SEND.recipients() == [] and FACTORY not in SEND.allowed_addresses()
+    # a notification-address OEM explicitly selected in OWNER_REPORT_TO is refused, and the fallback does not bring it back
+    monkeypatch.setattr(notify, "recipients", lambda: [FACTORY])
+    monkeypatch.setenv("OWNER_REPORT_TO", FACTORY)
+    assert SEND.recipients() == []
+    # a rejected selection falls back to the default owner only when that owner is eligible
+    monkeypatch.setenv("OWNER_REPORT_TO", FACTORY + ",stranger@example.com")
+    monkeypatch.setattr(N, "admin_address", lambda: ADMIN)
+    assert SEND.recipients() == [ADMIN]
+
+
+def test_owner_report_recipients_exclude_a_disabled_admin_and_stop_before_delivery(env, monkeypatch):
+    A, U = _factory_in_allowlist(env, monkeypatch)
+    N, notify, SEND = _owner_report(monkeypatch)
+    monkeypatch.setattr(N, "admin_address", lambda: ADMIN)
+    U.update_user(ADMIN, disabled=True)
+    assert SEND.recipients() == []
+    sent = []
+    res = SEND._send(type("R", (), {"text": "t", "html": "<p>t</p>", "subject": "s"})(), "m", lambda msg: sent.append(msg))
+    assert res["sent"] is False and res["error"] == "no_eligible_recipient" and res["to"] == [] and not sent
+
+
+def test_owner_report_has_no_recipient_when_the_registry_cannot_be_read(env, monkeypatch):
+    A, U = _factory_in_allowlist(env, monkeypatch)
+    N, notify, SEND = _owner_report(monkeypatch)
+    monkeypatch.setattr(N, "admin_address", lambda: ADMIN)
+    assert SEND.recipients() == [ADMIN]
+    good = _corrupt(U)
+    assert SEND.allowed_addresses() == set() and SEND.recipients() == []
+    sent = []
+    res = SEND._send(type("R", (), {"text": "t", "html": "<p>t</p>", "subject": "s"})(), "m", lambda msg: sent.append(msg))
+    assert res["error"] == "no_eligible_recipient" and not sent
+    _restore(U, good)
+    assert SEND.recipients() == [ADMIN]

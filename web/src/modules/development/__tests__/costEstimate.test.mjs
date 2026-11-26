@@ -563,7 +563,7 @@ test('the suggestions are fetched again only when what they depend on changes', 
 
 test('the schema carries the durations and the shipping block in both languages', () => {
   for (const f of schema.shipping.settings) assert.ok(f.label.en && f.label['zh-CN'] && f.help.en && f.help['zh-CN'], f.id);
-  assert.deepEqual(schema.shipping.settings.map((f) => f.id), ['ship_from', 'ship_to', 'ship_margin_pct', 'ship_round_eur']);
+  assert.deepEqual(schema.shipping.settings.map((f) => f.id), ['ship_from', 'ship_to', 'ship_margin_pct', 'ship_round_eur', 'ship_parcels', 'ship_box_cm', 'ship_service']);
   assert.equal(schema.shipping.settings[0].default, 'CN Shanghai');
   assert.equal(schema.shipping.settings[2].default, 20);
   assert.equal(schema.shipping.settings[3].default, 100, 'DHL is rounded up to whole 100 EUR by default');

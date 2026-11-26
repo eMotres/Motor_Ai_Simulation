@@ -1,5 +1,6 @@
 // Production module — fetch wrappers for /api/production/* and /api/admin/production/*
 // (docs/PRODUCTION_MODULE_DESIGN.md section 5). The session token is added by the global fetch interceptor.
+import { xhrPost, type XhrUploadOptions } from '../../lib/uploadXhr';
 import { errorInfo, productionDocumentsZipPath, supersededPrompt, productionProcessDocumentFilename, productionProcessDocumentPath, productionZipFilename, safeFileName, unwrapList } from './helpers';
 import type {
   AssemblyProcessView, AssemblyStep, AssemblyTree, Bilingual, BomImportPlan, BomRow, CostRow, CostsData, CertStatus, DocumentRec, ExtraCost, Member, MemberRole, Part, PartFiles, ProcessSection, Production, Proposal, Revision, RevisionPreview, SupersedePair,
@@ -244,14 +245,18 @@ export const productionApi = {
   updateDocument: (die: string, config: string, docId: string,
     patch: { internal?: boolean; section?: 'certification' | null; group?: string; cert_status?: CertStatus; topic?: DocumentRec['topic'] | null }) =>
     call<DocumentRec>('PATCH', `${base(die, config)}/documents/${enc(docId)}`, patch),
-  uploadDocument: (die: string, config: string, file: File, partId: string | null, stepId: string | null = null,
-    cert?: { group: string; internal: boolean }) => {
+  /** With `progress` the file goes through XMLHttpRequest (bytes sent are reported, the request can be aborted); same errors as `call`. */
+  uploadDocument: async (die: string, config: string, file: File, partId: string | null, stepId: string | null = null,
+    cert?: { group: string; internal: boolean }, progress?: XhrUploadOptions) => {
     const f = new FormData();
     f.append('file', file, file.name);
     if (partId) f.append('part_id', partId);
     if (stepId) f.append('step_id', stepId);
     if (cert) { f.append('section', 'certification'); f.append('group', cert.group); f.append('internal', cert.internal ? 'true' : 'false'); }
-    return call<DocumentRec>('POST', `${base(die, config)}/documents`, f);
+    if (!progress) return call<DocumentRec>('POST', `${base(die, config)}/documents`, f);
+    const r = await xhrPost(`${API}${base(die, config)}/documents`, f, progress);
+    if (r.status < 200 || r.status >= 300) { const e = errorInfo(r.status, r.body); throw new ProductionApiError(r.status, e.code, e.message); }
+    return r.body as DocumentRec;
   },
 
   threads: async (die: string, config: string) => unwrapList<Thread>(await call('GET', `${base(die, config)}/threads`), 'threads'),

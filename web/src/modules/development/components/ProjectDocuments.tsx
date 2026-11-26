@@ -17,6 +17,8 @@ import { NARROW } from '../../../lib/narrowLayout';
 import { developmentApi, downloadProjectDocument, downloadProjectDocumentsZip } from '../api';
 import type { DocumentFolder, DocumentRelease, ProjectDocument } from '../types';
 import { groupByRevision, isReleaseGroupOpen, orderByRelease } from '../documentRevisions';
+import UploadRows from '../../../components/common/UploadRows';
+import { useUploadQueue } from '../../../lib/useUploadQueue';
 import { formatBytes, isCoverImage, MAX_DOCUMENT_BYTES } from '../documentsModel';
 
 const FOLDERS: DocumentFolder[] = ['kicad', 'fabrication', 'bom', '3d', 'docs'];
@@ -82,18 +84,25 @@ export default function ProjectDocuments({ projectId, language, t, onCoverChange
   useEffect(() => { setDocs([]); setError(''); setLoaded(false); void load(); }, [load]);
   useEffect(() => { setToggled({}); }, [projectId]);
 
-  const uploadFiles = async (files: File[]) => {
+  // every file is its own row with bytes sent and a progress bar; two at a time, the rest wait as "queued" (owner 2026-11-26)
+  const uploadOptions = useRef({ folder: undefined as DocumentFolder | undefined, priceRestricted: false });
+  uploadOptions.current = { folder: filter === 'all' ? undefined : filter, priceRestricted: canRestrict && restrictUploads };
+  const uploads = useUploadQueue<ProjectDocument>({
+    send: (file, tx) => developmentApi.uploadDocument(projectRef.current, file, { ...(uploadOptions.current.folder ? { folder: uploadOptions.current.folder } : {}), priceRestricted: uploadOptions.current.priceRestricted }, tx),
+    onFileDone: () => { void load(); },
+    errorText: msg,
+  });
+  const uploadFiles = (files: File[]) => {
     if (!canEdit || !files.length) return;
     setError('');
-    const id = projectId;
+    const ok: File[] = [];
+    const problems: string[] = [];
     for (const file of files) {
-      if (file.size > MAX_DOCUMENT_BYTES) { setError(t('documents.tooLarge', { name: file.name })); continue; }
-      setBusy(t('documents.uploading', { name: file.name }));
-      try { await developmentApi.uploadDocument(id, file, { ...(filter === 'all' ? {} : { folder: filter }), priceRestricted: canRestrict && restrictUploads }); }
-      catch (e) { setError(`${file.name}: ${msg(e)}`); }
+      if (file.size > MAX_DOCUMENT_BYTES) problems.push(t('documents.tooLarge', { name: file.name }));
+      else ok.push(file);
     }
-    setBusy('');
-    if (projectRef.current === id) await load();
+    for (const name of uploads.add(ok)) problems.push(t('documents.alreadyUploading', { name }));
+    if (problems.length) setError(problems.join(' '));
   };
   const patch = async (doc: ProjectDocument, body: Parameters<typeof developmentApi.patchDocument>[2]) => {
     setError('');
@@ -129,7 +138,7 @@ export default function ProjectDocuments({ projectId, language, t, onCoverChange
   const dateOf = (iso: string) => { const d = new Date(iso); return Number.isNaN(d.getTime()) ? '' : d.toLocaleDateString(language); };
   const onDrop = (e: React.DragEvent) => {
     e.preventDefault(); setDragging(false);
-    void uploadFiles(Array.from(e.dataTransfer.files));
+    uploadFiles(Array.from(e.dataTransfer.files));
   };
 
   const renderRow = (d: ProjectDocument) => <TableRow key={d.id} hover sx={d.archived || d.superseded ? { opacity: 0.5 } : undefined}>
@@ -171,7 +180,7 @@ export default function ProjectDocuments({ projectId, language, t, onCoverChange
     <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1, flexWrap: 'wrap' }}>
       <HelpTip title={t('documents.tip')} />
       {canEdit && <>
-        <input ref={fileInput} type="file" multiple hidden onChange={(e) => { void uploadFiles(Array.from(e.target.files ?? [])); e.target.value = ''; }} />
+        <input ref={fileInput} type="file" multiple hidden onChange={(e) => { uploadFiles(Array.from(e.target.files ?? [])); e.target.value = ''; }} />
         <Button size="small" startIcon={<UploadFileIcon />} disabled={!!busy} onClick={() => fileInput.current?.click()}>{t('documents.upload')}</Button>
         <input ref={coverInput} type="file" accept="image/png,image/jpeg,image/webp" hidden onChange={(e) => { void uploadCover(e.target.files?.[0]); e.target.value = ''; }} />
         {canRestrict && <Box sx={{ display: 'flex', alignItems: 'center' }}>
@@ -203,6 +212,9 @@ export default function ProjectDocuments({ projectId, language, t, onCoverChange
       </Box>}
     </Box>
     {busy && <Typography sx={{ fontSize: 12, color: 'var(--text-2)', mb: 1 }}>{busy}</Typography>}
+    <UploadRows items={uploads.items} language={language} onCancel={uploads.cancel} onRetry={uploads.retry} onDismiss={uploads.dismiss}
+      labels={{ queued: t('documents.uploadQueued'), failed: t('documents.uploadFailed'),
+        cancelled: t('documents.uploadCancelled'), cancel: t('documents.uploadCancel'), retry: t('documents.uploadRetry'), dismiss: t('documents.uploadDismiss') }} />
     {error && <Alert severity="error" onClose={() => setError('')} sx={{ mb: 1 }}>{error}</Alert>}
     {canEdit && releaseCleared !== null && <Alert severity="info" data-testid="documents-release-cleared" sx={{ mb: 1 }}>{releaseCleared
       ? t('documents.releaseCleared', { release: releaseCleared }) : t('documents.releaseClearedGeneric')}</Alert>}

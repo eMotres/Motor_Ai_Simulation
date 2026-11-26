@@ -47,6 +47,11 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple
 SCHEMA_PATH = Path(__file__).with_name("cost_estimate_schema.json")
 VERSION = 2
 LINES = ("tooling", "manufacturing", "testing", "shipping")
+#: lines that may be ABSENT from an iteration (owner 2026-11-26): the development services of the project.  An absent line is
+#: 0 and is never "missing"; a stored estimate without it reads, computes and serialises exactly as before, so ``normalize_estimate``
+#: adds the key only when the admin gave it content.  Admin-only like every line; it never reaches the customer's quote.
+OPTIONAL_LINES = ("development",)
+ALL_LINES = LINES + OPTIONAL_LINES
 SOURCES = ("production", "estimate", "manual", "converted", "rule", "dhl")
 #: sources ``suggest`` may refresh; ``manual`` and ``converted`` (the owner's own old numbers) are never overwritten
 AUTO_SOURCES = ("production", "estimate", "dhl")
@@ -81,8 +86,8 @@ def _check_schema(schema: dict) -> dict:
     by_locale = schema.get("display_currency_by_locale") or {}
     if set(by_locale) != set(schema.get("locales") or []) or any(c not in schema["currencies"] for c in by_locale.values()):
         raise ValueError("cost estimate schema: display_currency_by_locale")
-    if [ln.get("id") for ln in schema.get("lines") or []] != list(LINES):
-        raise ValueError("cost estimate schema: the lines must be %s" % ", ".join(LINES))
+    if [ln.get("id") for ln in schema.get("lines") or []] != list(ALL_LINES):
+        raise ValueError("cost estimate schema: the lines must be %s" % ", ".join(ALL_LINES))
     lo, hi = schema.get("factor_limits") or (0, 0)
     if not 0 < float(lo) < 1 < float(hi):
         raise ValueError("cost estimate schema: factor_limits")
@@ -502,16 +507,22 @@ def normalize_estimate(raw: Any, schema: dict, project_id: str, *, legacy: bool 
         lines_raw = src.get("lines") or {}
         if not isinstance(lines_raw, dict):
             raise EstimateError("iteration %d lines: an object" % index)
-        unknown = set(lines_raw) - set(LINES)
+        unknown = set(lines_raw) - set(ALL_LINES)
         if unknown:
             raise EstimateError("iteration %d: unknown lines %s" % (index, ", ".join(sorted(unknown)[:5])))
+        lines = {lid: (normalize_line(lines_raw[lid], lid, index, schema, "iteration %d %s" % (index, lid), legacy) if lid in lines_raw
+                       else default_line(lid, index, settings["currency"], schema)) for lid in LINES}
+        for lid in OPTIONAL_LINES:                       # kept only with content: an empty optional line is the same as an absent one
+            if lid in lines_raw:
+                opt = normalize_line(lines_raw[lid], lid, index, schema, "iteration %d %s" % (index, lid), legacy)
+                if opt["status"] == "filled" or opt["weeks"] is not None or opt["note"]:
+                    lines[lid] = opt
         iterations.append({
             "index": index,
             "motors": _int(src.get("motors", m_field["default"]), "iteration %d motors" % index, int(m_field["min"]), int(m_field["max"])),
             "bench": bench,
             "weeks_override": _weeks(src.get("weeks_override"), "iteration %d weeks_override" % index, schema, "override_max"),
-            "lines": {lid: (normalize_line(lines_raw[lid], lid, index, schema, "iteration %d %s" % (index, lid), legacy) if lid in lines_raw
-                            else default_line(lid, index, settings["currency"], schema)) for lid in LINES}})
+            "lines": lines})
     _rules_to_amounts(iterations)
     return {"version": VERSION, "schema_version": schema["schema_version"], "project_id": project_id,
             "revision": int(raw.get("revision") or 0), "settings": settings, "fx": normalize_fx(raw.get("fx"), schema),
@@ -842,7 +853,7 @@ def legacy_to_eur(estimate: dict, schema: dict, fallback_rates: Optional[Dict[st
     rates = dict(fallback_rates or {})
     rates.update(fx_rates(est.get("fx")))
     for it in est["iterations"]:
-        for lid in LINES:
+        for lid in (lid for lid in ALL_LINES if lid in it["lines"]):
             line = it["lines"][lid]
             cur = line.get("currency") or base
             if cur == base:
@@ -929,10 +940,14 @@ def compute(estimate: dict, schema: dict, display_currency: Optional[str] = None
         lines = it["lines"]
         amounts: Dict[str, Optional[Money]] = {}
         reasons: Dict[str, str] = {}
-        for lid in LINES:
+        lids = LINES + tuple(lid for lid in OPTIONAL_LINES if lid in lines)      # an absent optional line is 0, not missing
+        for lid in lids:
             line = lines[lid]
             if lid == "testing" and it.get("bench") == "none":
                 amounts[lid] = {}                              # no bench in this iteration: nothing to test, nothing missing
+                continue
+            if lid in OPTIONAL_LINES and line.get("amount") is None:
+                amounts[lid] = {}                              # given only a duration or a note: 0
                 continue
             if line.get("amount") is None:
                 amounts[lid], reasons[lid] = None, line.get("hint") or "not filled"
@@ -942,7 +957,7 @@ def compute(estimate: dict, schema: dict, display_currency: Optional[str] = None
         subtotal: Money = {}
         line_out = {}
         conv_lines: Dict[str, Optional[float]] = {}
-        for lid in LINES:
+        for lid in lids:
             amount = amounts[lid]
             if amount is None:
                 missing.append({"iteration": index, "line": lid, "reason": reasons.get(lid, "not filled")})
@@ -955,7 +970,7 @@ def compute(estimate: dict, schema: dict, display_currency: Optional[str] = None
             line_out[lid] = {"amount": None if amount is None else _rounded(amount, order),
                              "origin": origin_text(lines[lid], index, bench=it.get("bench") if lid == "testing" else None)}
         out_iters.append({"index": index, "motors": it.get("motors"), "bench": it.get("bench"),
-                          **{lid: (None if amounts[lid] is None else _rounded(amounts[lid], order)) for lid in LINES},
+                          **{lid: (None if amounts[lid] is None else _rounded(amounts[lid], order)) for lid in lids},
                           "subtotal": _rounded(subtotal, order), "weeks": iteration_weeks(it), "lines": line_out})
         conv_iters.append({"index": index, "lines": conv_lines, "_subtotal": subtotal})
     subtotal_all: Money = {}
@@ -1103,14 +1118,20 @@ def estimated_shipping_lines(estimate: dict) -> List[dict]:
 def iteration_weeks(it: dict) -> dict:
     """The duration of one iteration: the four stages run in SEQUENCE (tooling lead time -> manufacturing -> testing ->
     shipping transit), so the iteration takes their sum; the owner's ``weeks_override`` wins.  Testing does not count when
-    the iteration has no bench.  ``missing`` = the needed stages without a duration (counted as 0 in the sum)."""
+    the iteration has no bench.  ``missing`` = the needed stages without a duration (counted as 0 in the sum).  The optional
+    ``development`` stage (owner 2026-11-26) is one more stage of the same sequence, added to the sum when the iteration has
+    that line; it is never listed in ``missing``."""
     per: Dict[str, Optional[float]] = {}
     missing: List[str] = []
-    for lid in LINES:
+    have = it.get("lines") or {}
+    for lid in LINES + tuple(x for x in OPTIONAL_LINES if x in have):
         if lid == "testing" and it.get("bench") == "none":
             per[lid] = None
             continue
         w = (it.get("lines") or {}).get(lid, {}).get("weeks")
+        if lid in OPTIONAL_LINES:                         # a duration is optional there: absent = 0 weeks, never "missing"
+            per[lid] = None if w is None else float(w)
+            continue
         per[lid] = None if w is None else float(w)
         if w is None:
             missing.append(lid)

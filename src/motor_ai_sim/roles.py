@@ -100,6 +100,7 @@ WORKER_PREFIXES = (
     "/api/jobs", "/api/history", "/api/sims",
     "/api/geometry", "/api/config", "/api/winding", "/api/mesh", "/api/parts",
     "/api/family/report",
+    "/api/propellers/mission",
     "/mcp",
 )
 #: Exact paths (the same path with a sub-path is NOT the worker's): the material assignment is the worker's, the

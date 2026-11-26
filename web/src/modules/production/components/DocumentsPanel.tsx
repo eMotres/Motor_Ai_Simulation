@@ -14,6 +14,8 @@ import {
   canShareLink, documentsForLink, latestUploadDay, productionLinkUrl, validDay, type ProductionLink,
 } from '../../../lib/productionLink';
 import { DEFAULT_CLOSED, DOCUMENT_TOPICS, groupDocuments, isDocumentTopic, stepChipLabel, stepsOfDocuments, topicContext, topicOf, validClosedGroups, type TopicGroup } from '../documentTopics';
+import UploadRows from '../../../components/common/UploadRows';
+import { useUploadQueue } from '../../../lib/useUploadQueue';
 import { useRememberedView } from '../../../lib/useRememberedView';
 import type { AssemblyStep, DocumentRec, Part, ProcessSection, ProdCtx } from '../types';
 import { NARROW } from '../../../lib/narrowLayout';
@@ -53,7 +55,6 @@ const DocumentsPanel: React.FC<{
   };
   const fileRef = useRef<HTMLInputElement>(null);
   const [partId, setPartId] = useState('');
-  const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const byId = new Map(parts.map((p) => [p.id, p]));
   // the assembly steps (not for a project viewer, who has no Assembly tab): the chips of a row and the "named by a step" topic rule
@@ -93,14 +94,20 @@ const DocumentsPanel: React.FC<{
     finally { setZipBusy(false); }
   };
 
-  const upload = async (files: FileList | null) => {
+  // every file is its own row with bytes sent and a progress bar; two at a time, the rest wait as "queued" (owner 2026-11-26)
+  const partRef = useRef(partId);
+  partRef.current = partId;
+  const uploads = useUploadQueue<DocumentRec>({
+    send: (file, tx) => productionApi.uploadDocument(ctx.die, ctx.config, file, partRef.current || null, null, undefined, tx),
+    onFileDone: () => ctx.reload(),
+    errorText: (e) => (e instanceof Error ? e.message : String(e)),
+  });
+  const upload = (files: FileList | null) => {
     if (!files?.length) return;
-    setBusy(true); setErr(null);
-    try {
-      for (const f of Array.from(files)) await productionApi.uploadDocument(ctx.die, ctx.config, f, partId || null);
-      ctx.reload();
-    } catch (e) { setErr(t('failed', { reason: e instanceof Error ? e.message : String(e) })); }
-    finally { setBusy(false); if (fileRef.current) fileRef.current.value = ''; }
+    setErr(null);
+    const dup = uploads.add(Array.from(files));
+    if (dup.length) setErr(t('docs.alreadyUploading', { name: dup.join(', ') }));
+    if (fileRef.current) fileRef.current.value = '';
   };
 
   return (
@@ -135,12 +142,15 @@ const DocumentsPanel: React.FC<{
             <MenuItem value="">{t('docs.general')}</MenuItem>
             {parts.map((p) => <MenuItem key={p.id} value={p.id}>{p.name.en || p.name.zh}</MenuItem>)}
           </TextField>
-          <input ref={fileRef} type="file" multiple hidden onChange={(e) => void upload(e.target.files)} />
-          <Button size="small" variant="contained" disabled={busy} sx={{ textTransform: 'none' }} onClick={() => fileRef.current?.click()}>{t('docs.upload')}</Button>
+          <input ref={fileRef} type="file" multiple hidden onChange={(e) => upload(e.target.files)} />
+          <Button size="small" variant="contained" sx={{ textTransform: 'none' }} onClick={() => fileRef.current?.click()}>{t('docs.upload')}</Button>
           <HelpTip title={t('docs.uploadTip')} />
-          {err && <Typography sx={{ fontSize: 11, color: '#f87171' }}>{err}</Typography>}
+          {err && <Typography role="alert" sx={{ fontSize: 11, color: '#f87171' }}>{err}</Typography>}
         </Box>
       )}
+      {ctx.canEdit && <UploadRows items={uploads.items} language={ctx.uiLang} onCancel={uploads.cancel} onRetry={uploads.retry} onDismiss={uploads.dismiss}
+        labels={{ queued: t('docs.uploadQueued'), failed: t('docs.uploadFailed'),
+          cancelled: t('docs.uploadCancelled'), cancel: t('docs.uploadCancel'), retry: t('docs.uploadRetry'), dismiss: t('docs.uploadDismiss') }} />}
       {canShare && (
         // admins and the production's owners hand the page to engineers: the link opens sign-in first and grants nothing by itself
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1.5, flexWrap: 'wrap' }}>

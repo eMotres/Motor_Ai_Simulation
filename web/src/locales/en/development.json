@@ -326,6 +326,13 @@
   "documents": {
     "loading": "Loading documents…",
     "upload": "Upload",
+    "uploadQueued": "Queued",
+    "uploadFailed": "Failed",
+    "uploadCancelled": "Cancelled",
+    "uploadCancel": "Cancel",
+    "uploadRetry": "Retry",
+    "uploadDismiss": "Remove",
+    "alreadyUploading": "{name}: already uploading",
     "uploading": "Uploading {name}…",
     "dropHere": "Drop files here",
     "all": "All",
@@ -1391,7 +1398,8 @@
       "tooling": "Tooling lead time",
       "manufacturing": "Manufacturing",
       "testing": "Testing",
-      "shipping": "Shipping transit"
+      "shipping": "Shipping transit",
+      "development": "Development"
     },
     "table": {
       "col": {
@@ -1400,6 +1408,7 @@
         "motors": "Motors × price",
         "testing": "Testing",
         "shipping": "Shipping DHL",
+        "development": "Development",
         "duration": "Duration",
         "total": "Iteration total"
       },

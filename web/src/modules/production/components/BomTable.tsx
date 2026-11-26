@@ -30,6 +30,7 @@ import {
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
 import AddIcon from '@mui/icons-material/Add';
 import AccountTreeIcon from '@mui/icons-material/AccountTree';
+import ViewInArIcon from '@mui/icons-material/ViewInAr';
 import { useTranslation } from 'react-i18next';
 import HelpTip from '../../../components/common/HelpTip';
 import PartName from './PartName';
@@ -53,6 +54,7 @@ import {
   formatShortDate,
   getStatusColor,
   orderTotal,
+  partFamilies,
   withQty,
 } from '../helpers';
 import type {
@@ -137,6 +139,8 @@ interface BomTableProps {
   documents?: DocumentRec[];
   threads?: Thread[];
   onPartChanged?: () => void;
+  /** "Show in 3D": the page opens the 3D tab on this part (the motor BOM only) */
+  onShowIn3D?: (partId: string) => void;
   /** 'table' = the BOM tab; 'graph' = the Assembly tab (graph + the same detail panel), owner 2026-10-17 */
   view?: 'table' | 'graph';
 }
@@ -151,6 +155,7 @@ const BomTable: React.FC<BomTableProps> = ({
   threads = [],
   view = 'table',
   onPartChanged,
+  onShowIn3D,
 }) => {
   const { t } = useTranslation('production');
   const ui = useContentLang();
@@ -611,7 +616,15 @@ const BomTable: React.FC<BomTableProps> = ({
                   {/* materials (parts) and works (extras) differ by colour only; the columns are the same (owner 2026-10-17) */}
                   <TableCell sx={{ color: 'var(--text-4)', borderLeft: '3px solid #3b82f6' }}>{i + 1}</TableCell>
                   <TableCell>
-                    {p ? <PartName name={p.name} /> : <span style={{ color: 'var(--text-4)' }}>{t('bom.unknownPart')}</span>}
+                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                      {p ? <PartName name={p.name} /> : <span style={{ color: 'var(--text-4)' }}>{t('bom.unknownPart')}</span>}
+                      {p && onShowIn3D && !tooling && ctx.productType !== 'electronics' && partFamilies(p.name.en || '').length > 0 && (
+                        <Tooltip title={t('tab3d.show')}>
+                          <IconButton size="small" aria-label={t('tab3d.show')} data-testid="bom-show-in-3d" sx={{ p: 0.25 }}
+                            onClick={(e) => { e.stopPropagation(); onShowIn3D(p.id); }}><ViewInArIcon sx={{ fontSize: 16 }} /></IconButton>
+                        </Tooltip>
+                      )}
+                    </Box>
                   </TableCell>
                   <TableCell sx={{ color: 'var(--text-2)' }}>{p ? t(`parts.kindValue.${p.kind}`) : ''}</TableCell>
                   <TableCell align="right" onClick={(e) => e.stopPropagation()}>
@@ -1055,6 +1068,7 @@ const BomTable: React.FC<BomTableProps> = ({
               ctx.reload();
             }}
             onClose={() => handleRowClick(selectedPart.id)}
+            onShowIn3D={tooling ? undefined : onShowIn3D}
           />
         </Box>
       )}

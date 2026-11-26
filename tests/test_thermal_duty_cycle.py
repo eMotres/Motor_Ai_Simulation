@@ -416,6 +416,20 @@ def test_a_point_that_never_reaches_the_limit_says_this_is_S1(net_robot, caps):
     assert out["s2_time_to_limit_s"] is None
     assert out["s2_limiting_part"] is None
     assert "S1" in out["note"]
+    assert out["settled"] is True and out["s1_established"] is True
+
+
+def test_not_reaching_a_limit_inside_a_short_horizon_is_not_continuous(net_robot, caps):
+    """Astra thermal audit 2026-11-21, F07: a finite integration with no crossing is not S1 unless the machine has settled."""
+    prof = dc.normalise_spec({"kind": "S2", "duty": "rated", "t_on_s": 60.0,
+                              "t_start_c": 40.0}, DUTIES,
+                             thermal_by_duty=THERMAL_BY_DUTY)
+    out = dc.time_to_limit(prof, net_robot, caps, t_max_s=5.0)      # asked for a horizon too short to settle in
+    assert out["s2_time_to_limit_s"] is None
+    # the proof is the machine's own equilibrium (below every limit here), not the horizon the caller happened to ask for
+    assert out["drift_K_per_h"] >= 1.0 and out["remaining_rise_k"] > 0.0
+    assert out["settled"] is True and out["s1_established"] is True
+    assert all(v < 200.0 for v in out["equilibrium_hot_spot_c"].values())
 
 
 def test_the_S3_cycle_reaches_a_periodic_state_and_the_budget_closes(net_robot,
@@ -873,3 +887,77 @@ def test_the_route_pulls_the_requested_duty_not_the_calibration_one():
     src = {"kind": "S2", "t_on_s": 60}
     cycle_block_for_duty(src, "takeoff")
     assert "duty" not in src            # the caller's block is not mutated
+
+
+# --- Astra pre-merge review 2026-11-22: a small derivative is not an equilibrium -------------------------------------
+
+def _slow_winding_network() -> dc.Network:
+    """A 10 000 J/K winding behind 0.01 W/K into a stator that holds 1 W/K to a 35 C mount: tau ~ 1e6 s, far beyond the
+    horizon ``sum C / sum G`` of the external paths."""
+    return dc.Network(
+        G={"w_s": 0.01, "r_s": 0.0, "m_r": 0.0, "s_mount": 1.0, "r_bore": 0.0, "r_shaft": 0.0},
+        areas={}, t_ambient_c=35.0, t_mount_c=35.0,
+        node_of={"winding": "winding", "stator": "stator", "rotor": "stator", "magnet": "stator"},
+        merged=(("rotor", "stator"), ("magnet", "stator")))
+
+
+def _slow_profile(p_w: float) -> dc.Profile:
+    seg = dc.Segment("const", 100.0, {"winding": p_w, "stator": 0.0, "rotor": 0.0, "magnet": 0.0},
+                     rpm=1000.0, copper_feedback=False)
+    return dc.Profile("S2", (seg,), cycle_s=100.0, t_start_c=35.0)
+
+
+SLOW_CAPS = {"winding": 10000.0, "stator": 100.0, "rotor": 50.0, "magnet": 50.0}
+
+
+def test_a_slow_mode_under_1_K_per_h_is_not_S1_when_its_equilibrium_is_above_the_limit():
+    """2 W: the end state of the default horizon drifts < 1 K/h at ~54 C, but the equilibrium is 237 C > 200 C."""
+    net, prof = _slow_winding_network(), _slow_profile(2.0)
+    fixed = dc.time_to_limit(prof, net, SLOW_CAPS, limits={"winding": 200.0}, t_max_s=1.0e5)   # the caller's own horizon
+    assert fixed["s2_time_to_limit_s"] is None and fixed["drift_K_per_h"] < 1.0
+    assert fixed["s1_established"] is False and fixed["settled"] is False
+    assert fixed["equilibrium_hot_spot_c"]["winding"] == pytest.approx(237.0, abs=0.5)
+    assert "ABOVE" in fixed["note"] and "NOT continuous" in fixed["note"]
+    assert fixed["t_horizon_s"] == pytest.approx(1.0e5)            # a fixed horizon is never silently extended
+    # default horizon: extended tenfold until the crossing is found (about 1.7e6 s, inside S1_HORIZON_MAX_S)
+    out = dc.time_to_limit(prof, net, SLOW_CAPS, limits={"winding": 200.0})
+    assert out["s2_limiting_part"] == "winding" and 1.5e6 < out["s2_time_to_limit_s"] < 1.9e6
+    assert out["s1_established"] is False
+
+
+def test_a_slow_network_whose_equilibrium_is_below_the_limit_is_S1_whatever_the_horizon():
+    """1 W: equilibrium 136 C. Still climbing at the horizon, and still S1 - the equilibrium is the proof."""
+    out = dc.time_to_limit(_slow_profile(1.0), _slow_winding_network(), SLOW_CAPS, limits={"winding": 200.0})
+    assert out["s2_time_to_limit_s"] is None and out["s1_established"] is True and out["settled"] is True
+    assert out["equilibrium_hot_spot_c"]["winding"] == pytest.approx(136.0, abs=0.5)
+    assert out["remaining_rise_k"] > 1.0                          # it had not got there yet; it will, and below the limit
+
+
+def test_the_horizon_extension_runs_to_the_cap_and_a_missing_crossing_is_not_continuous():
+    """tau ~ 1e9 s: the crossing is far beyond S1_HORIZON_MAX_S, so the answer is "not established", never "continuous"."""
+    net = dc.Network(
+        G={"w_s": 1.0e-5, "r_s": 0.0, "m_r": 0.0, "s_mount": 1.0, "r_bore": 0.0, "r_shaft": 0.0},
+        areas={}, t_ambient_c=35.0, t_mount_c=35.0,
+        node_of={"winding": "winding", "stator": "stator", "rotor": "stator", "magnet": "stator"},
+        merged=(("rotor", "stator"), ("magnet", "stator")))
+    out = dc.time_to_limit(_slow_profile(0.002), net, SLOW_CAPS, limits={"winding": 200.0})
+    assert out["s2_time_to_limit_s"] is None and out["s1_established"] is False
+    assert out["t_horizon_s"] == pytest.approx(dc.S1_HORIZON_MAX_S) and "NOT continuous" in out["note"]
+
+
+def test_every_answer_carries_the_s1_flag_a_crossing_included(net_robot, caps):
+    prof = dc.normalise_spec({"kind": "S2", "duty": "peak", "t_on_s": 120.0, "t_start_c": 40.0}, DUTIES,
+                             thermal_by_duty=THERMAL_BY_DUTY)
+    out = dc.time_to_limit(prof, net_robot, caps, limits={"winding": 200.0})
+    assert out["s2_time_to_limit_s"] is not None and out["s1_established"] is False and out["settled"] is False
+
+
+def test_the_step_response_asymptote_is_the_equilibrium_not_the_end_state():
+    seg = dc.Segment("const", 100.0, {"winding": 2.0, "stator": 0.0, "rotor": 0.0, "magnet": 0.0},
+                     rpm=1000.0, copper_feedback=False)
+    net = _slow_winding_network()
+    rec = dc.time_to_limits(seg, net, SLOW_CAPS, [("winding", "winding", 200.0, 0.0)], t_max_s=1.0e5)
+    blk = rec["targets"]["winding"]
+    assert blk["reaches"] is False and rec["settled"] is False and blk["asymptote_c"] is None   # 237 C > 200 C: not settled
+    rec = dc.time_to_limits(seg, net, SLOW_CAPS, [("winding", "winding", 300.0, 0.0)], t_max_s=1.0e5)
+    assert rec["settled"] is True and rec["targets"]["winding"]["asymptote_c"] == pytest.approx(237.0, abs=0.5)

@@ -65,3 +65,29 @@ def test_the_catalog_view_adds_the_key_only_for_a_configuration_with_terminals()
     v = fam._terminal_loss_view(d, {"terminals": BLOCK})
     assert v["efficiency_at_terminals"] < v["efficiency"]
     assert d == {"name": "rated", "summary": SUMMARY}                                       # the duty itself is untouched
+
+
+def test_the_loss_follows_the_solved_current_of_a_voltage_or_pwm_run_not_the_setpoint():
+    """Astra #769: a setpoint of 10 A with 20 A really solved must cost 3 * 20^2 * R, not 3 * 10^2 * R."""
+    block = {"board_mohm": 10.0}
+    setpoint = {**SUMMARY, "I_phase_rms_A": 10.0, "efficiency": 0.9, "P_mech_W": 1000.0}
+    assert T.duty_terminal_budget(setpoint, block)["P_leads_board_W"] == pytest.approx(3.0, abs=0.01)
+    solved = {**setpoint, "I_phase_rms_solved_A": 20.0}
+    b = T.duty_terminal_budget(solved, block)
+    assert b["P_leads_board_W"] == pytest.approx(12.0, abs=0.01)
+    assert b["efficiency_at_terminals"] == pytest.approx(1000.0 / (1000.0 / 0.9 + 12.0), abs=1e-5)
+    assert b["efficiency_at_terminals"] < T.duty_terminal_budget(setpoint, block)["efficiency_at_terminals"]
+
+
+def test_a_zero_setpoint_with_a_solved_current_still_has_a_budget():
+    s = {**SUMMARY, "I_phase_rms_A": 0.0, "I_phase_rms_solved_A": 20.0}
+    assert T.duty_terminal_budget(s, BLOCK)["P_leads_board_W"] == pytest.approx(23.8, abs=0.01)
+
+
+@pytest.mark.parametrize("bad", ["x", 0.0, -3.0, float("nan"), float("inf")])
+def test_an_invalid_solved_current_gives_no_budget_never_the_request(bad):
+    assert T.duty_terminal_budget({**SUMMARY, "I_phase_rms_solved_A": bad}, BLOCK) is None
+
+
+def test_a_summary_without_the_solved_key_is_unchanged():
+    assert T.duty_terminal_budget(SUMMARY, BLOCK)["P_leads_board_W"] == pytest.approx(23.8, abs=0.01)

@@ -22,6 +22,18 @@ CLI or the API returns carries its effective `priority`. Only the owner sets a p
 menu); a session may read it (`GET /api/owner-queue/agent/priority?project=<id>`) but cannot change it. The priority orders the queue and
 the daily report line; it is not mapped to compute job classes.
 
+## Items the server creates
+
+Every specification submit that creates a NEW version (customer or staff; an unchanged submit creates nothing) puts one `decision`
+in the queue (owner 2026-11-25): question `Specification vN submitted: <project title>. Start?`, options exactly
+`Simulate on existing sizes`, `Optimise geometry`, `Not now`. The first is recommended when the specification's diameter mode
+(`4_1.od_mode`) is `existing`; while the form does not store that mode, nothing is recommended. Detail: who submitted (customer /
+staff), the company, the completeness line, for a version after the first the labels of the changed fields (never values), and the
+link to the project specification. `project_id` is set, `asked_by` is `app`. **The app starts nothing on the answer**: the
+coordinator reads it and starts the session. The items belong to the internal token name `app:spec_submit` (no real token can carry
+that name, so no agent lists or withdraws them). A queue failure is logged and never blocks or fails the submit. The daily report
+line names them: `4 open (3 specification submits), 9 messages`.
+
 ## Token and token file
 
 The OWNER creates a token on the Decisions page (it is shown once) and places the file. No agent creates, reads, copies or prints it.

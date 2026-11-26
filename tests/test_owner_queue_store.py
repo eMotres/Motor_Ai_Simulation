@@ -145,7 +145,8 @@ def test_tokens_hashed_once_unique_revocable(tmp_path):
     assert tok not in raw and "token_hash" in raw
     assert OQ.verify_token("Bearer " + tok) == "agent-a"
     assert OQ.verify_token("bearer " + tok) == "agent-a"
-    for bad in (None, "", tok, "Bearer", "Bearer oq_nope", "Bearer " + tok[:-1] + "x", "Basic " + tok, "Bearer mcnode_" + tok[3:]):
+    wrong_last = "Bearer " + tok[:-1] + ("y" if tok[-1] == "x" else "x")
+    for bad in (None, "", tok, "Bearer", "Bearer oq_nope", wrong_last, "Basic " + tok, "Bearer mcnode_" + tok[3:]):
         assert OQ.verify_token(bad) is None
     with pytest.raises(OQ.Refused) as e:
         OQ.create_token("agent-a", "o@x.com")

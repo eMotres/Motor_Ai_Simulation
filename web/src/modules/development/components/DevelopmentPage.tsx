@@ -54,7 +54,6 @@ import { shownStatus } from '../projectStage';
   import { watchChunkImport as watchContractChunk } from '../../../lib/chunkReload';
   import CostEstimateWizard from './costEstimate/CostEstimateWizard';
   import ProjectQuote from './ProjectQuote';
-  import ProjectTimeline from './ProjectTimeline';
   import { hasProductionView, type ProjectProductionEntry } from '../projectProductions';
   import ProjectCover from './ProjectCover';
   import SpecView, { SpecViewSwitch, useSpecViewMode } from './specWizard/SpecView';
@@ -88,7 +87,7 @@ import { shownStatus } from '../projectStage';
   import ControllerSpecForm from './ControllerSpecForm';
 const ProjectModel3D = lazyModel3d(watchModel3dChunk(() => import('../../../components/model3d/ProjectModel3D')));   // tab "3D model" (owner 2026-11-22): the viewer loads when the tab opens
 const ProjectContract = lazyContract(watchContractChunk(() => import('../../../components/contract/ProjectContract')));   // section "Contract" (owner 2026-11-22): loads when the tab opens
-type ViewTab = 'specification' | 'motors' | 'messages' | 'documents' | 'production' | 'timeline' | 'quote' | 'cost' | 'model3d' | 'contract';
+type ViewTab = 'specification' | 'motors' | 'messages' | 'documents' | 'production' | 'quote' | 'cost' | 'model3d' | 'contract';
 const DEFAULT_DRAFT: SpecDraft = { schema_version: 2, fields: {}, mission_profile: [], production: {} };
 /** The ONE progress number everywhere (owner 2026-11-06): the required fields ANSWERED of all required.  A field marked "Answer later" is not
  *  answered; `filled_required` of the API counts it, so it is only the fallback of an answer that has no `answered`. */
@@ -811,8 +810,6 @@ export default function DevelopmentPage() {
         { id: 'model3d' as const, label: <ProjectModel3DTabLabel /> },   // the SAME viewer as Configure (owner 2026-11-22)
         ...(hasProductionView(productions) ? [{ id: 'production' as const, label: tr('tabs.production') }] : []),
         // the quote an admin shared (owner 2026-11-03): read-only, for the project's members (the server decides who may read it)
-        // the project timeline (owner 2026-11-03): read-only for the project's members, edited by admins
-        ...(selected.timeline_ready || isAdmin ? [{ id: 'timeline' as const, label: tr('tabs.timeline') }] : []),
         ...(selected.quote_shared ? [{ id: 'quote' as const, label: tr('tabs.quote') }] : []),
         // ADMIN ONLY (owner 2026-11-02): the project cost estimate; never for the customer, a viewer, the factory or an agent
         ...(contractVisible ? [{ id: 'contract' as const, label: <ContractTabLabel /> }] : []),   // next to Cost estimate (owner 2026-11-22)
@@ -893,8 +890,6 @@ export default function DevelopmentPage() {
     {view === 'model3d' && <Model3DSuspense fallback={<CircularProgress size={18} />}><ProjectModel3D projectId={selected.id} controller={isController} motors={[...motors.filter((m) => m.kind !== 'history' && m.recommended), ...motors.filter((m) => m.kind !== 'history' && !m.recommended)]} language={i18n.language} /></Model3DSuspense>}
     {view === 'contract' && contractVisible && <ContractSuspense fallback={<CircularProgress size={18} />}><ProjectContract projectId={selected.id} isAdmin={isAdmin} /></ContractSuspense>}
     {view === 'production' && <ProjectProductions projectId={selected.id} entries={productions} language={i18n.language} t={tr} />}
-    {view === 'timeline' && (selected.timeline_ready || isAdmin) && <ProjectTimeline key={selected.id} projectId={selected.id} isAdmin={isAdmin} language={i18n.language} t={tr}
-      onReady={(value) => setSelected((cur) => (cur && cur.id === selected.id && cur.timeline_ready !== value ? { ...cur, timeline_ready: value } : cur))} />}
     {view === 'quote' && selected.quote_shared && <ProjectQuote key={selected.id} projectId={selected.id} t={tr} />}
     {view === 'cost' && isAdmin && <CostEstimateWizard key={selected.id} projectId={selected.id} language={i18n.language} t={tr} who={user?.email ?? 'admin'}
       onShared={(value) => setSelected((cur) => (cur && cur.id === selected.id ? { ...cur, quote_shared: value } : cur))} />}

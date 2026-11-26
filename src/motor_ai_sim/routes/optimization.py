@@ -4868,7 +4868,7 @@ class DescentRequest(BaseModel):
     # Optimize the load angle γ (MTPA) for the starting geometry BEFORE the search.
     optimize_gamma: bool = True
     # Surrogate (Bayesian) warm-start: seed the search from the best geometry the
-    # RandomForest surrogate predicts over ALL accumulated evals (config/.opt_dataset.jsonl).
+    # RandomForest surrogate predicts over current-convention accumulated evals (config/.opt_dataset.jsonl).
     # Falls back to the current geometry if there isn't enough data yet (<20 evals).
     surrogate_seed: bool = False
     # Box-walking: when a variable ends pinned at a window edge, re-centre the
@@ -6176,11 +6176,17 @@ def _descent_worker(var_specs, op, ripple_max, w_eff, w_td, lam,
 
 def _surrogate_seed_overrides(var_specs, ripple_max, min_n=20):
     """Bayesian warm-start: the geometry the RandomForest surrogate predicts best
-    over ALL accumulated evals (config/.opt_dataset.jsonl).  Returns {var: value}
+    over current-convention accumulated evals (config/.opt_dataset.jsonl).  Returns {var: value}
     clamped to each variable's current window, or None if there isn't enough data."""
     try:
         from motor_ai_sim.optimization import surrogate as _surr
-        recs = _surr.filter_operating(_surr.load_dataset(_dataset_path()))
+        recs = _surr.load_dataset(_dataset_path())
+        # New runs use the marked basis. Keep the historical all-unmarked warm
+        # start until any current-convention evaluation exists in the history.
+        convention = 1 if any(r.get("shaft_conv") == 1 for r in recs) else None
+        recs, dropped = _surr.select_convention(recs, shaft_conv=convention)
+        log.info("surrogate seed dropped_other_convention: %d", dropped)
+        recs = _surr.filter_operating(recs)
         if len(recs) < int(min_n):
             return None
         bounds = {v["name"]: (float(v["lo"]), float(v["hi"])) for v in var_specs}
@@ -7126,7 +7132,8 @@ def surrogate_report(suggest: int = 5, ripple_max: float = 5.0):
     try:
         from motor_ai_sim.optimization import surrogate as _surr
         recs = _surr.load_dataset(_dataset_path())
-        return {"n_total": len(recs),
+        _, dropped = _surr.select_convention(recs)
+        return {"n_total": len(recs), "dropped_other_convention": dropped,
                 "importance": _surr.variable_importance(recs),
                 "suggest": _surr.suggest(recs, n=int(suggest), ripple_max=float(ripple_max))}
     except Exception as e:   # noqa: BLE001

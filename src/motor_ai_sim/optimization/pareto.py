@@ -268,8 +268,8 @@ def report(points: List[Dict[str, Any]], baseline: Dict[str, Any],
         q["pareto_front"] = False
         q["pareto_front_td"] = False
         out.append(q)
-        base_marked = baseline.get("shaft_convention") == "fe_on_shaft_k3d_v1" or baseline.get("shaft_conv") == 1
-        if match and (q.get("shaft_conv") == 1) == base_marked:
+        base_marked = bool(baseline) and (baseline.get("shaft_convention") == "fe_on_shaft_k3d_v1" or baseline.get("shaft_conv") == 1)
+        if match and (not baseline or (q.get("shaft_conv") == 1) == base_marked):
             cand_i.append(i)
 
     axes = [axes_of_point(out[i]) for i in cand_i]
@@ -279,8 +279,12 @@ def report(points: List[Dict[str, Any]], baseline: Dict[str, Any],
         out[i]["dominates"] = dominates(a, base_ax, "torque", tol)
         out[i]["dominates_td"] = dominates(a, base_ax, "td", tol)
     for axis, key in (("torque", "pareto_front"), ("td", "pareto_front_td")):
-        for on, i in zip(front_mask(axes, axis, tol), cand_i):
-            out[i][key] = bool(on)
+        # Without a baseline, compare only within each point's own convention.
+        for marked in (False, True):
+            group = [(a, i) for a, i in zip(axes, cand_i)
+                     if (out[i].get("shaft_conv") == 1) == marked]
+            for on, (_, i) in zip(front_mask([a for a, _ in group], axis, tol), group):
+                out[i][key] = bool(on)
 
     summary = {
         "axis": "torque",

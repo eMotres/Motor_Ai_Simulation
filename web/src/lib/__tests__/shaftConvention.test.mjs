@@ -317,3 +317,49 @@ test('audit: bilingual basis labels exist in every namespace used by the readers
     }
   }
 });
+
+
+test('r6 B2: Compare uses stored marked power and densities; legacy formulas are unchanged', async () => {
+  const { perMass, shownMass } = await import('../fullMass.ts');
+  const source = read('components/compare/ComparePanel.tsx');
+  const block = source.match(/const RESULT_COLS: ResultCol\[\] = \[[\s\S]*?^\];/m);
+  assert.ok(block);
+  const cols = new Function('perMass', 'shownMass', stripTypeScriptTypes(block[0]) + '\nreturn RESULT_COLS;')(perMass, shownMass);
+  const power = cols.find(c => c.key === 'P_mech_W');
+  const density = cols.find(c => c.key === 'power_per_mass_W_kg');
+  const row = { shaft_convention: 'fe_on_shaft_k3d_v1', T_em_avg_Nm: 10,
+    rpm: 100 * 60 / (2 * Math.PI), P_mech_W: 870, mass_total_kg: 2, power_per_mass_W_kg: 435 };
+  near(power.derive(row) * power.scale, .87);
+  near(density.derive(row) * density.scale, .435);
+  near(density.derive({ ...row, mass_full_kg: 3, power_per_mass_full_W_kg: 290 }), 290);
+  for (const missing of [null, undefined]) {
+    assert.ok(Number.isNaN(power.derive({ ...row, P_mech_W: missing })));
+    assert.ok(Number.isNaN(density.derive({ ...row, power_per_mass_W_kg: missing })));
+  }
+  near(power.derive({ ...row, P_mech_W: 0 }), 0);
+  near(density.derive({ ...row, power_per_mass_W_kg: 0 }), 0);
+  const old = { ...row, shaft_convention: undefined };
+  near(power.derive(old) * power.scale, 1);
+  near(density.derive({ ...old, power_per_mass_W_kg: undefined }), 500);
+  const title = source.match(/title: \(_v, s\) => \{ if \(r.key === 'T_em_avg_Nm'[\s\S]*? \},/);
+  assert.ok(title);
+  const tip = new Function('r', 'resultSrc', 'txSim', 'resultVal', 'ACTIVE_BASIS_TIP', 'return ({' + title[0] + '}).title;')(
+    { key: 'T_em_avg_Nm' }, (_r, s) => s.results, x => x, () => 10, '');
+  assert.equal(tip(10, { results: row }), 'fieldTorque');
+  assert.equal(tip(10, { results: old }), undefined);
+  for (const lang of ['en', 'zh-CN']) assert.ok(JSON.parse(read(`locales/${lang}/simulation.json`)).fieldTorque);
+});
+
+test('r6 sweep Apply: old stored zero falls back to field power, marked zero and missing stay distinct', () => {
+  const source = read('components/sweep/SweepStudyPanel.tsx');
+  const expr = source.match(/const Pmech = ([\s\S]*?);/);
+  assert.ok(expr);
+  const power = new Function('p', 'r2', 'T', 'omega', 'return ' + expr[1]);
+  for (const value of [0, null, undefined]) near(power({}, { P_mech_W: value }, 10, 100), 1000);
+  near(power({}, { P_mech_W: 870 }, 10, 100), 870);
+  for (const point of [{ shaft_conv: 1 }, { sc: { shaft_convention: 'fe_on_shaft_k3d_v1' } }]) {
+    near(power(point, { P_mech_W: 0 }, 10, 100), 0);
+    near(power(point, { P_mech_W: 870 }, 10, 100), 870);
+    assert.ok(Number.isNaN(power(point, {}, 10, 100)));
+  }
+});

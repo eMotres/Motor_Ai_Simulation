@@ -1139,7 +1139,9 @@ const SweepStudyPanel: React.FC = () => {
         // sinusoid approximations (the refine result carries peaks only).
         const Vlpk = Number(r2.V_line_peak_V) || Vpk * Math.sqrt(3);
         const Vrms = Vpk / Math.SQRT2, Vlrms = Vlpk / Math.SQRT2;
-        const Pmech = r2.P_mech_W != null ? Number(r2.P_mech_W) : T * omega;
+        const Pmech = p.shaft_conv === 1 || p.sc?.shaft_convention === 'fe_on_shaft_k3d_v1'
+          ? (r2.P_mech_W != null ? Number(r2.P_mech_W) : NaN)
+          : Number(r2.P_mech_W) || T * omega;
         const ploss = Number(p.ploss) || 0;
         const summary = {
           ...(p.k3d != null ? { end3d: { k_flux: p.k3d, source: 'machine passport, carried from the sweep view' } } : {}),

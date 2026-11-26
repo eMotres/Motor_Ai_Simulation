@@ -385,7 +385,7 @@ def cooling_block(full_dir: Path, M: str, studies: Sequence[Mapping[str, Any]], 
                     row["s1"]["card"] = {"T_Nm": float(ps) / w if ps is not None and w > 0 else None,
                         "P_shaft_W": ps, "P_mech_W": cp.get("P_mech_extra_W"),
                         "shaft_convention": "fe_on_shaft_k3d_v1",
-                        "basis": "S1 rating at the coupling; core loss on the shaft; stored power, no second k"}
+                        "basis": "S1 rating at the coupling; core loss on the shaft; stored power, no second k; P_mech_W holds bearing / windage loss"}
                 elif Tem is not None:
                     # the S1 state's OWN electromagnetic pass (TDM + demag at the S1
                     # temperatures) — the HOT map is at the 150 °C reference, which is

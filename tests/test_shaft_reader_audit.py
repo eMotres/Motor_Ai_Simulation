@@ -32,14 +32,15 @@ def test_pareto_does_not_derive_field_torque_from_shaft_density_or_rank_mixed():
     assert out["points"][1]["dominates"]
 
 
-def test_surrogate_refuses_mixed_conventions_before_training():
+def test_surrogate_matrix_guards_mixed_and_readers_select_newest_convention():
     from motor_ai_sim.optimization.surrogate import build_matrix, variable_importance, suggest
     row = {"overrides": {"length": 10}, "gamma_deg": 0, "torque": 10, "td": 5, "eff": .9, "ripple": 1}
     mixed = [row, {**row, "shaft_conv": 1}]
     with pytest.raises(ValueError, match="Mixed shaft conventions"):
         build_matrix(mixed)
-    assert variable_importance(mixed)["reason"] == "mixed_shaft_conventions"
-    assert suggest(mixed)["reason"] == "mixed_shaft_conventions"
+    for result in (variable_importance(mixed), suggest(mixed)):
+        assert result["ok"] is False and result["n"] == 1
+        assert result["need"] == 20 and result["dropped_other_convention"] == 1
     assert len(build_matrix([row])[0]) == 1
     assert len(build_matrix([{**row, "shaft_conv": 1}])[0]) == 1
 
@@ -80,6 +81,8 @@ def test_passport_cooling_card_reads_corrected_power_without_second_k(monkeypatc
     row = F.cooling_block(*args, **kw)["studies"][0]["s1"]
     assert row["card"]["P_shaft_W"] == 850 and row["card"]["T_Nm"] == pytest.approx(8.5)
     assert row["power_linear"]["shaft_convention"] == MARKER
+    assert row["card"]["P_mech_W"] == 20
+    assert "P_mech_W holds bearing / windage loss" in row["card"]["basis"]
     cp["continuous_rating"]["power"].pop("P_shaft_W")
     assert F.cooling_block(*args, **kw)["studies"][0]["s1"]["card"]["P_shaft_W"] is None
 
@@ -125,3 +128,125 @@ def test_declared_legacy_digest_omission_also_applies_to_two_unmarked_records():
     old = {"em_run": {"numbers": {"T_em_avg_Nm": 10, "P_mech_W": 1000}},
            "coupled": {"em": {"T_em_avg_Nm": 9, "P_mech_W": 900}, "efficiency_shaft": .876289}}
     assert mechanical_numbers(old) == {"T": 10, "P": 1000, "eta": None, "P_out": None, "basis": "earlier"}
+
+
+@pytest.fixture
+def tiny_surrogate(monkeypatch):
+    """Exercise real training on tiny synthetic data: 2 trees, one CPU, 2 repeats."""
+    from motor_ai_sim.optimization import surrogate as S
+    from sklearn.ensemble import RandomForestRegressor
+    import sklearn.inspection as inspection
+    permutation = inspection.permutation_importance
+    monkeypatch.setattr(S, "_fit_forest", lambda X, y: RandomForestRegressor(
+        n_estimators=2, max_depth=2, random_state=0, n_jobs=1).fit(X, y))
+    monkeypatch.setattr(inspection, "permutation_importance", lambda model, X, y, **kw:
+        permutation(model, X, y, n_repeats=2, random_state=0, n_jobs=1))
+    return S
+
+
+def surrogate_rows(marked, n=40, torque=10):
+    return [{"overrides": {"length": 10 + i / 10}, "gamma_deg": 0,
+             "torque": torque + i / 100, "td": 4 + i / 100,
+             "eff": .85 + i / 1000, "ripple": 1 + i / 100,
+             **({"shaft_conv": 1} if marked else {})} for i in range(n)]
+
+
+def test_surrogate_40_old_plus_one_new_refuses_only_for_current_sample_count(tiny_surrogate):
+    S = tiny_surrogate
+    rows = surrogate_rows(False, torque=100) + surrogate_rows(True, 1)
+    for out in (S.variable_importance(rows), S.suggest(rows, n_candidates=8)):
+        assert out["ok"] is False and out["n"] == 1 and out["need"] == 20
+        assert out["dropped_other_convention"] == 40
+
+
+@pytest.mark.parametrize("newest_marked", [False, True])
+def test_surrogate_40_plus_40_trains_only_newest_basis(tiny_surrogate, newest_marked):
+    S = tiny_surrogate
+    selected = surrogate_rows(newest_marked)
+    mixed = surrogate_rows(not newest_marked, torque=100) + selected
+    before = [dict(row) for row in mixed]
+    for reader, kw in ((S.variable_importance, {}), (S.suggest, {"n_candidates": 8})):
+        out, expected = reader(mixed, **kw), reader(selected, **kw)
+        assert out["ok"] and out.get("n", out.get("n_train")) == 40
+        assert out.pop("dropped_other_convention") == 40
+        assert expected.pop("dropped_other_convention") == 0
+        assert out == expected  # same models, rankings and suggestions as homogeneous input
+    assert mixed == before
+    assert S.select_convention(mixed, shaft_conv=1)[0] == [r for r in mixed if r.get("shaft_conv") == 1]
+
+
+def test_surrogate_all_unmarked_retains_full_training_matrix(tiny_surrogate):
+    S = tiny_surrogate
+    rows = surrogate_rows(False)
+    assert S.select_convention(rows) == (rows, 0)
+    X, keys, ys = S.build_matrix(rows)
+    assert len(X) == 40 and keys == ["length"]
+    assert ys["td"].tolist() == [r["td"] for r in rows]
+    for out in (S.variable_importance(rows), S.suggest(rows, n_candidates=8)):
+        assert out["ok"] and out["dropped_other_convention"] == 0
+
+
+def test_surrogate_routes_select_before_operating_filter_and_report_drops(tiny_surrogate, monkeypatch, caplog):
+    from motor_ai_sim.routes import optimization as O
+    S = tiny_surrogate
+    rows = surrogate_rows(False, torque=100) + surrogate_rows(True)
+    monkeypatch.setattr(S, "load_dataset", lambda *a: rows)
+    original = S.suggest
+    monkeypatch.setattr(S, "suggest", lambda rows, **kw: original(rows, n_candidates=8, **kw))
+    with caplog.at_level("INFO"):
+        result = O._surrogate_seed_overrides([{"name": "length", "lo": 10, "hi": 14}], 5)
+    assert result and 10 <= result["length"] <= 14
+    assert "dropped_other_convention: 40" in caplog.text
+    report = O.surrogate_report(suggest=1)
+    assert report["n_total"] == 80 and report["dropped_other_convention"] == 40
+    assert report["importance"]["n"] == report["suggest"]["n_train"] == 40
+    assert report["importance"]["dropped_other_convention"] == report["suggest"]["dropped_other_convention"] == 40
+    # A later imported old run must not change the current marked warm-start basis.
+    rows[:] = surrogate_rows(True) + surrogate_rows(False, torque=100)
+    seen = []
+    def capture(rows, **kw):
+        seen.extend(rows)
+        return {"ok": True, "suggestions": [{"overrides": {"length": 12}}]}
+    monkeypatch.setattr(S, "suggest", capture)
+    assert O._surrogate_seed_overrides([{"name": "length", "lo": 10, "hi": 14}], 5)
+    assert len(seen) == 40 and all(r.get("shaft_conv") == 1 for r in seen)
+    rows[:] = surrogate_rows(False)
+    seen.clear()
+    assert O._surrogate_seed_overrides([{"name": "length", "lo": 10, "hi": 14}], 5)
+    assert seen == rows
+
+
+
+@pytest.mark.parametrize("baseline", [None, {}])
+def test_pareto_empty_baseline_uses_each_points_convention(baseline):
+    from motor_ai_sim.optimization.pareto import report
+    old = {"torque": 20, "td": 10, "eff": .99, "ripple": 1, "current_a": 10, "gamma_deg": 0}
+    new = {**old, "torque": 10, "td": 4.35, "eff": .89, "shaft_conv": 1}
+    op = {"current_a": 10, "gamma_deg": 0}
+    for points in ([old], [new], [old, new]):
+        out = report(points, baseline, op)
+        assert out["summary"]["n_candidates"] == len(points)
+        assert all(p["pareto_front"] and p["pareto_front_td"] for p in out["points"])
+        assert not any(p["dominates"] for p in out["points"])
+
+
+def test_fit_producer_basis_reaches_design_agent_compactor(monkeypatch):
+    from contextlib import nullcontext
+    from motor_ai_sim import mcp_tools as M, duty_results as D
+    from motor_ai_sim.design_agent import tools as A
+    duty = {"duty": "rated", "torque_nm": 10, "speed_rpm": 1000,
+            "line_voltage_peak_v": 10, "mass_kg": 2, "mode": "motor",
+            "power_kw": 1, "efficiency_pct": 90}
+    machine = {"die": "synthetic", "config": "test", "ownership": "own",
+               "mass_kg": 2, "outer_diameter_mm": 50, "active_length_mm": 10}
+    monkeypatch.setattr(M, "acting_as", lambda p: nullcontext())
+    monkeypatch.setattr(D, "index", lambda *a: {})
+    monkeypatch.setattr(M, "_checked", lambda x: x)
+    monkeypatch.setattr(A, "_visible_configs", lambda: [{"die": {"name": "synthetic"}, "config": {"name": "test"}}])
+    for marked in (False, True):
+        monkeypatch.setattr(M, "_machines", lambda: [{**machine, "duties": [{**duty, "shaft_conv": int(marked)}]}])
+        for target, key in ((9, "fits"), (11, "rejected")):
+            produced = M.check_fit(None, target, 1000)
+            compact = A._compact_fit(produced)
+            assert compact[key][0]["shaft_convention"] == produced[key][0]["shaft_convention"]
+            assert compact[key][0]["shaft_convention"] == ("core loss on the shaft" if marked else "earlier run: every loss on the electrical side")

@@ -254,6 +254,7 @@ def _compact_fit(res: Dict[str, Any]) -> Dict[str, Any]:
     keep = ("die", "config", "duty", "torque_nm", "speed_rpm", "power_kw", "efficiency_pct", "mass_kg",
             "outer_diameter_mm", "active_length_mm", "unverified", "reasons")
     visible = {(r["die"].get("name"), r["config"].get("name")) for r in _visible_configs()}
+    # mcp_tools.check_fit stamps both fits and rejected rows with their power basis.
     fits = [{**{k: f.get(k) for k in keep}, **({"shaft_convention": f["shaft_convention"]} if "shaft_convention" in f else {})} for f in res.get("fits") or [] if (f["die"], f["config"]) in visible]
     rej = [{**{k: f.get(k) for k in keep}, **({"shaft_convention": f["shaft_convention"]} if "shaft_convention" in f else {})} for f in res.get("rejected") or [] if (f["die"], f["config"]) in visible]
     return {"requirements": res.get("requirements"), "rule": res.get("rule"), "fits": fits[:8],

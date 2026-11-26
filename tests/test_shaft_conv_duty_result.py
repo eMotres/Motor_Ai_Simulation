@@ -180,3 +180,25 @@ def test_repair_dry_run_writes_nothing_and_apply_backs_up(dies, tmp_path):
     backups = list((tmp_path / "bak" / DIE).glob(f"{CFG}.yaml.bak-shaftconv-*"))
     assert len(backups) == 1 and backups[0].read_text(encoding="utf-8") == original
     assert repair.scan() == []
+
+
+def test_efficiency_basis_only_on_marked_records(dies):
+    _save_duty(MARKED)
+    body = {"die": DIE, "config": CFG, "duty": DUTY, "drive": "current", "shaft_convention": SC.SHAFT_CONVENTION,
+            "result": {"efficiency_pct": 88.0, "shaft_conv": 1, "efficiency_basis": "coupling"}}
+    assert client.post("/api/family/duty_result", json=body).status_code == 200
+    assert _duty(dies)["result"]["efficiency_basis"] == "coupling"
+    body["result"]["efficiency_basis"] = "nonsense"
+    client.post("/api/family/duty_result", json=body)
+    assert "efficiency_basis" not in _duty(dies)["result"]
+    # an unmarked record never stores a basis, whatever is sent
+    _save_duty(UNMARKED)
+    body = {"die": DIE, "config": CFG, "duty": DUTY, "drive": "current",
+            "result": {"efficiency_pct": 88.0, "shaft_conv": 1, "efficiency_basis": "coupling"}}
+    client.post("/api/family/duty_result", json=body)
+    assert "efficiency_basis" not in _duty(dies)["result"] and "shaft_conv" not in _duty(dies)["result"]
+    # a later unmarked run drops a leftover basis with the flag
+    _save_duty(MARKED)
+    client.post("/api/family/duty_result", json={**body, "shaft_convention": SC.SHAFT_CONVENTION})
+    assert _run(UNMARKED).status_code == 200
+    assert "efficiency_basis" not in _duty(dies)["result"]

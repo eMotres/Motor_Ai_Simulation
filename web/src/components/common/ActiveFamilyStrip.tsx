@@ -44,7 +44,7 @@ import { useAuth } from '../../contexts/AuthContext';
 import { useLastMotorState } from '../../lib/lastMotor';
 import { fetchFamilyTree } from '../../lib/familyTree';
 import { modeNames, type RowDie } from '../../lib/catalogRows';
-import { dutyEfficiencyPct } from '../../lib/dutyEfficiency';
+import { dutyEfficiencyBasis, dutyEfficiencyPct } from '../../lib/dutyEfficiency';
 import { dutyLabel, isShortTime, type DutyClassInfo } from '../../lib/dutyClass';
 import { suggestDieName } from '../../lib/dieNames';
 import { buildClashOf, movedLine, movedSave, type BuildClash } from '../../lib/buildClash';
@@ -702,6 +702,7 @@ const ActiveFamilyStrip: React.FC = () => {
             result: { efficiency_pct: dutyEfficiencyPct(s, rotorW),
                       // the shaft-power convention of these numbers (1 = core loss on the shaft; the catalog never ranks two)
                       ...(sc ? { shaft_conv: 1 } : {}),
+                      ...(dutyEfficiencyBasis(s) ? { efficiency_basis: dutyEfficiencyBasis(s) } : {}),
                       // the refined ripple when there is one (lib/rippleAccuracy)
                       ripple_pct: quotedRipple(s).value ?? s.T_ripple_pct,
                       v_ll_peak_v: Number(s.V_line_peak_V) * (k3d ?? 1),

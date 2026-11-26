@@ -2236,6 +2236,9 @@ _RESULT_KEYS = ("efficiency_pct", "ripple_pct", "v_ll_peak_v", "loss_w", "mass_k
 # The shaft-power convention flag of a stored result (``shaft_conv`` = 1, PR #900).  It is NOT a free client number: it is
 # stored only while the stored run summary carries the marker (``shaft_convention.has_marker``) - see ``_sync_shaft_conv``.
 _SHAFT_CONV_KEY = "shaft_conv"
+# What the stored ``efficiency_pct`` of a MARKED point is: at the coupling (bearings + windage taken off once, the page's shaft
+# tile) or before the bearings (no bearing model).  A string, so it is not in the numeric ``_RESULT_KEYS``; marked records only.
+_EFF_BASES = ("coupling", "shaft_before_bearings")
 
 
 def _sc_has_marker(summary: Any) -> bool:
@@ -2257,6 +2260,7 @@ def _sync_shaft_conv(result: Any, summary: Any) -> None:
         result[_SHAFT_CONV_KEY] = 1.0
     else:
         result.pop(_SHAFT_CONV_KEY, None)
+        result.pop("efficiency_basis", None)
 
 
 class DutyResult(BaseModel):
@@ -4233,6 +4237,9 @@ def record_duty_result(req: DutyResult, _w: dict = Depends(require_catalog_write
     if req.result.get(_SHAFT_CONV_KEY) is not None:
         _sync_shaft_conv(res, _stored_sum if _sc_has_marker(_stored_sum)
                          else ({"shaft_convention": req.shaft_convention} if req.shaft_convention else None))
+    _basis = req.result.get("efficiency_basis")
+    if res.get(_SHAFT_CONV_KEY) and _basis in _EFF_BASES:
+        res["efficiency_basis"] = _basis
     res["recorded_at"] = datetime.now().isoformat(timespec="seconds")
     try:
         res["build_sig"] = _build_sig(_load_yaml(_die_file(die), "die"), c)

@@ -1,3 +1,11 @@
+/** The basis `dutyEfficiencyPct` stores beside a MARKED point's efficiency (null for any other point, which stores none):
+ *  "coupling" = bearings + windage known and taken off the shaft once, the page's shaft tile; "shaft_before_bearings" = no
+ *  bearing model, the summary's own efficiency. */
+export function dutyEfficiencyBasis(s: any): 'coupling' | 'shaft_before_bearings' | null {
+  if (s?.shaft_convention !== 'fe_on_shaft_k3d_v1' || s?.efficiency == null || !Number.isFinite(Number(s.efficiency))) return null;
+  return Number.isFinite(Number(s?.P_bearings_W)) || Number.isFinite(Number(s?.P_windage_W)) ? 'coupling' : 'shaft_before_bearings';
+}
+
 /** Shaft efficiency from one stored duty. `pMechW` is raw rotor T*omega. */
 export function dutyEfficiencyPct(s: any, pMechW: number): number | null {
   // shaft-side convention, motor at no load: the shaft delivers nothing (it supplies the core loss) - no efficiency

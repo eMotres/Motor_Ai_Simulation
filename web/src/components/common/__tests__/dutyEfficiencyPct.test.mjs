@@ -100,3 +100,19 @@ test('golden: an unmarked summary (with or without an efficiency field) keeps th
   assert.equal(dutyEfficiencyPct({ P_loss_total_W: 100, efficiency: 0.5, op_mode: 'generator' }, 900), 800 / 900 * 100);
   assert.equal(dutyEfficiencyPct({ P_loss_total_W: 100, efficiency: 0.5 }, 0), 50);
 });
+
+/* ── contract = page: the stored efficiency equals the page's shaft tile (lib/shaftBalance) ── */
+import { shaftBalance } from '../../../lib/shaftBalance.ts';
+import { dutyEfficiencyBasis } from '../../../lib/dutyEfficiency.ts';
+
+test('stored efficiency equals the page value, motor 870 W and generator 850 W, with and without bearings', () => {
+  const motor = { shaft_convention: MARK, op_mode: 'motor', P_mech_W: 870, P_loss_total_W: 100, efficiency: 870 / 970 };
+  const gen = { shaft_convention: MARK, op_mode: 'generator', P_mech_W: 850, P_loss_total_W: 80, efficiency: 770 / 850 };
+  for (const [s, brg, wind] of [[motor, 15, 5], [gen, 15, 5], [motor, null, null], [gen, null, null]]) {
+    const withMech = brg == null ? s : { ...s, P_bearings_W: brg, P_windage_W: wind };
+    const page = shaftBalance(s, brg == null ? null : brg + wind);
+    assert.ok(Math.abs(dutyEfficiencyPct(withMech, s.P_mech_W) - page.eta * 100) < 1e-9, `${s.op_mode} ${brg}`);
+    assert.equal(dutyEfficiencyBasis(withMech), brg == null ? 'shaft_before_bearings' : 'coupling');
+  }
+  assert.equal(dutyEfficiencyBasis({ P_loss_total_W: 1, efficiency: 0.9 }), null);
+});

@@ -133,3 +133,13 @@ def test_the_other_allowlist_readers_do_not_treat_a_stored_oem_as_staff(env, mon
     class _P:  # a minimal principal: only .email is read
         def __init__(self, email): self.email = email
     assert AD.daily_limit(_P(ADMIN)) is None and AD.daily_limit(_P(FACTORY)) is not None
+
+
+def test_an_unreadable_registry_refuses_agent_keys_and_oauth_grants_instead_of_accepting_them(env, monkeypatch):
+    from motor_ai_sim import agent_keys as K
+    U = env["U"]
+    assert K._account_disabled(ADMIN) is False
+    def boom(email):
+        raise OSError("registry locked")
+    monkeypatch.setattr(U, "get_user", boom)
+    assert K._account_disabled(ADMIN) is True                                      # cannot prove the account is enabled

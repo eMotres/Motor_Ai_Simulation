@@ -818,7 +818,7 @@ export default function DevelopmentPage() {
       </Box>
       </Box>
     </HeaderTabs>
-    {(view === 'specification' || view === 'motors') && selected && !isController && <ProjectStatusBar data={activity} t={tr} />}
+    {view === 'specification' && selected && !isController && <ProjectStatusBar data={activity} t={tr} />}
     {view === 'specification' && isController && <ControllerSpecForm key={selected.id} projectId={selected.id} lang={lang} ct={ct} memoryScope={user?.email ? `${developmentViewScope(user.email)}.controllerStep.${selected.id}` : null} />}
     {view === 'specification' && !isController && <Box sx={{ minWidth: 0 }}>
       {!schema || !spec || !selected ? <CircularProgress size={18} /> : <SpecView key={selected.id} mode={specView.mode ?? 'wizard'} onOpenWizard={specView.openWizard} onRevealField={revealField} memoryScope={user?.email ? `${developmentViewScope(user.email)}.optional.${selected.id}` : null}
@@ -835,7 +835,15 @@ export default function DevelopmentPage() {
     {view === 'motors' && isController && <ControllerSpecForm key={`sim-${selected.id}`} mode="results" projectId={selected.id} lang={lang} ct={ct}
       linkedMotors={motors.filter((m) => m.kind !== 'history')} memoryScope={user?.email ? `${developmentViewScope(user.email)}.controllerSimStep.${selected.id}` : null} />}
     {view === 'motors' && !isController && <Box>
-      <Box sx={{ display: 'flex', alignItems: 'center', mb: 1 }}><Box sx={{ flex: 1 }}><HelpTip title={tr('motorsTip')} /></Box>{canManageGlobally && <Button size="small" startIcon={<AddIcon />} onClick={async () => { if (selected) { try { setPicker(await developmentApi.motorPicker(selected.id)); setLinkOpen(true); } catch (e) { setError(e instanceof Error ? e.message : String(e)); } } }}>{tr('linkMotor')}</Button>}</Box>
+      <Box sx={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', columnGap: 1.5, rowGap: 0.5, mb: 1 }} data-testid="motors-header-row">
+        <Box sx={{ flex: '1 1 0', minWidth: 0 }} />
+        <ActivityChip rows={activityRows} t={tr} />
+        {canManageGlobally && <Button size="small" startIcon={<AddIcon />} onClick={async () => { if (selected) { try { setPicker(await developmentApi.motorPicker(selected.id)); setLinkOpen(true); } catch (e) { setError(e instanceof Error ? e.message : String(e)); } } }}>{tr('linkMotor')}</Button>}
+        <Tooltip title={tr('versionView.tip')}><ToggleButtonGroup exclusive size="small" value={showAllVersions ? 'all' : 'latest'} onChange={(_, next: 'latest' | 'all' | null) => { if (next) changeShowAllVersions(next === 'all'); }} aria-label={tr('versionView.label')}>
+          <ToggleButton value="latest" sx={{ textTransform: 'none', px: 1.2, py: 0.2, fontSize: 11 }}>{tr('versionView.latest')}</ToggleButton>
+          <ToggleButton value="all" sx={{ textTransform: 'none', px: 1.2, py: 0.2, fontSize: 11 }}>{tr('versionView.all')}</ToggleButton>
+        </ToggleButtonGroup></Tooltip>
+      </Box>
       {canEditProject && !!selected.grant_removal_candidates?.length && <Tooltip title={<Stack spacing={0.4}><Typography sx={{ fontSize: 11 }}>{tr('grantReviewTip')}</Typography>{selected.grant_removal_candidates.map((candidate) => <Typography key={`${candidate.email}/${candidate.die}/${candidate.config}`} sx={{ fontSize: 11 }}>{candidate.email} · {candidate.die}/{candidate.config} · {tr(`grantReason.${candidate.reason}`)}</Typography>)}</Stack>}><Alert severity="info" sx={{ mb: 1, py: 0 }}>{tr('grantReviewCount', { count: selected.grant_removal_candidates.length })}</Alert></Tooltip>}
       {(() => {
         // ONE group per geometry variant (name + step note once in its header, a colour accent per die), its duties as compact sub-rows;
@@ -876,12 +884,6 @@ export default function DevelopmentPage() {
           {stepNote(r.motor)}
         </Stack>);
         return <Box ref={motorsViewRef} sx={{ minWidth: 0 }}>
-        <Stack direction="row" alignItems="center" spacing={1} sx={{ mb: 0.7 }}><ActivityChip rows={activityRows} t={tr} /><Box sx={{ flex: 1 }} />
-          <Tooltip title={tr('versionView.tip')}><ToggleButtonGroup exclusive size="small" value={showAllVersions ? 'all' : 'latest'} onChange={(_, next: 'latest' | 'all' | null) => { if (next) changeShowAllVersions(next === 'all'); }} aria-label={tr('versionView.label')}>
-            <ToggleButton value="latest" sx={{ textTransform: 'none', px: 1.2, py: 0.2, fontSize: 11 }}>{tr('versionView.latest')}</ToggleButton>
-            <ToggleButton value="all" sx={{ textTransform: 'none', px: 1.2, py: 0.2, fontSize: 11 }}>{tr('versionView.all')}</ToggleButton>
-          </ToggleButtonGroup></Tooltip>
-        </Stack>
         {visibleMotors.length === 0 ? <Typography sx={{ color: 'var(--text-3)', fontSize: 12 }}>{tr('noMotors')}</Typography> : rows.length === 0 ? <Typography>{tr('noResults')}</Typography> : <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2.5 }} data-testid="project-motor-views">
           {rows.map((r, index) => {
             const flags = headerFlags(rowMotors, index);

@@ -481,6 +481,7 @@ _GATED_PREFIX: list[tuple[str, str, str]] = [
     # queue, gated like any solve (admin while SOLVE_ADMIN_ONLY is on, an engineer when it is off).
     ("GET",    "/api/propellers/mission", "solve:engineer"),
     ("POST",   "/api/propellers/mission", "solve:engineer"),
+    ("DELETE", "/api/propellers/mission", "solve:engineer"),
 ]
 
 # (HTTP method, path REGEX matched from the start) -> minimum tier, for the routes whose path carries a parameter and that

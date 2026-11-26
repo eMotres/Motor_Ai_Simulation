@@ -540,6 +540,20 @@ def _held_watts(loss: Mapping[str, Any], s: float) -> Dict[str, float]:
     return watts
 
 
+def _ac_fraction(loss: Mapping[str, Any]) -> float:
+    """The AC share of the reference copper, 0..1 (0 for a map that carries no AC key: pure DC, or a legacy payload)."""
+    w = float(loss.get("winding") or 0.0)
+    return 0.0 if w <= 1e-12 else min(max(float(loss.get("winding_ac_W") or 0.0) / w, 0.0), 1.0)
+
+
+def copper_heat_w(loss: Mapping[str, Any], p_cu_ref_w: float, s: float, t_w_c: float) -> float:
+    """The copper heat at current scale ``s`` and mean winding temperature ``t_w_c``: the ONE law (``tdc.copper_power_w``) that the
+    search's Segment, the re-solve request and the reported power all use."""
+    r = tdc.cu_rho_ratio(float(t_w_c)) / tdc.cu_rho_ratio(float(loss["coil_ref_c"]))
+    p_ref = float(p_cu_ref_w)
+    return tdc.copper_power_w(p_ref, _ac_fraction(loss) * p_ref, r, s)
+
+
 def _segment_at(loss: Mapping[str, Any], p_cu_ref_w: float, s: float,
                 duty: str) -> tdc.Segment:
     """The reference point at current scale ``s``, as ONE powered segment."""
@@ -548,7 +562,8 @@ def _segment_at(loss: Mapping[str, Any], p_cu_ref_w: float, s: float,
     return tdc.Segment(str(duty or "continuous"), t_s=1.0, losses=watts,
                        coil_ref_c=float(loss["coil_ref_c"]),
                        rpm=float(loss.get("rpm") or 0.0),
-                       note="; ".join(loss.get("notes") or ()))
+                       note="; ".join(loss.get("notes") or ()),
+                       winding_ac_ref_W=_ac_fraction(loss) * float(p_cu_ref_w) * float(s) * float(s))
 
 
 # ---------------------------------------------------------------------------
@@ -1004,7 +1019,7 @@ def _power_block(ref: Mapping[str, Any], loss: Mapping[str, Any],
     rpm = _num(ref.get("rpm")) or 0.0
     coil_ref = float(loss["coil_ref_c"])
     r = (tdc.cu_rho_ratio(float(t_w_c)) / tdc.cu_rho_ratio(coil_ref))
-    p_cu = float(p_cu_ref_w) * float(s) * float(s) * r
+    p_cu = copper_heat_w(loss, p_cu_ref_w, s, t_w_c)
     p_other = float(sum(_held_watts(loss, s).values()))
     p_loss_em = p_cu + p_other
     out: Dict[str, Any] = {
@@ -1013,6 +1028,9 @@ def _power_block(ref: Mapping[str, Any], loss: Mapping[str, Any],
         "P_other_loss_W": p_other,
         "P_loss_em_W": p_loss_em,
         "rho_ratio": r,
+        "copper_law": ("P_dc*r + P_ac/r at the reference AC share %.3f" % _ac_fraction(loss)
+                       if _ac_fraction(loss) > 0.0 else
+                       "P*r (the map carries no AC share: pure DC, or a payload from before the split - the legacy law)"),
         "torque_basis": ("T_em(s) = T_em_ref × s — LINEAR IN CURRENT, a model "
                          "estimate: no electromagnetic run was made at this "
                          "current, so saturation is not in it (optimistic above "
@@ -1210,9 +1228,8 @@ def rate(*, thermal_result: Mapping[str, Any],
         if resolve is None or k >= int(max_map_passes) - 1:
             break
         t_w = float(search["state_c"][net.rep("winding")])
-        factor = ((float(s_star) ** 2 if s_star is not None else 1e-6)
-                  * tdc.cu_rho_ratio(t_w)
-                  / tdc.cu_rho_ratio(float(loss["coil_ref_c"])))
+        # the heat the search just used, as a multiple of the reference copper - the SAME law as the Segment and the report
+        factor = copper_heat_w(loss, 1.0, (float(s_star) if s_star is not None else 1e-3), t_w)
         try:
             nxt = resolve(factor)
         except DutyCycleError:

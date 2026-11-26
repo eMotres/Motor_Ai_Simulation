@@ -599,7 +599,8 @@ def _segment(em_summary: Mapping[str, Any], thermal_result: Mapping[str, Any],
     return tdc.Segment(str(duty or "this point"), t_s=1.0,
                        losses=tdc.node_watts(loss),
                        coil_ref_c=float(loss["coil_ref_c"]), rpm=rpm,
-                       note="; ".join(loss["notes"]))
+                       note="; ".join(loss["notes"]),
+                       winding_ac_ref_W=float(loss.get("winding_ac_W") or 0.0))
 
 
 def _fit_residual(segment: tdc.Segment, network: tdc.Network,

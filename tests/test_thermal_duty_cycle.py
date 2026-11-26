@@ -873,3 +873,30 @@ def test_the_route_pulls_the_requested_duty_not_the_calibration_one():
     src = {"kind": "S2", "t_on_s": 60}
     cycle_block_for_duty(src, "takeoff")
     assert "duty" not in src            # the caller's block is not mutated
+
+
+# -- the copper feedback keeps the DC and the AC share apart (Astra thermal audit 2026-11-21, F05) ----------------------------------
+
+def test_the_transient_copper_law_is_dc_times_r_plus_ac_over_r():
+    net = dc.Network(G={})
+    T = {n: 35.0 for n in dc.NODES}
+    r = dc.cu_rho_ratio(35.0) / dc.cu_rho_ratio(200.0)
+    pure_dc = dc.Segment("x", 60.0, {"winding": 1000.0, "stator": 0.0, "rotor": 0.0, "magnet": 0.0}, coil_ref_c=200.0)
+    assert dc._seg_powers(pure_dc, T, net)["winding"] == pytest.approx(1000.0 * r, rel=1e-12)       # the old law, bit for bit
+    assert dc._seg_powers(pure_dc, T, net)["winding"] == pytest.approx(620.21, abs=0.01)
+    split = dc.Segment("x", 60.0, {"winding": 1000.0, "stator": 0.0, "rotor": 0.0, "magnet": 0.0}, coil_ref_c=200.0,
+                       winding_ac_ref_W=300.0)
+    assert dc._seg_powers(split, T, net)["winding"] == pytest.approx(700.0 * r + 300.0 / r, rel=1e-12)
+    assert dc._seg_powers(split, T, net)["winding"] == pytest.approx(917.85, abs=0.01)
+    at_ref = {n: 200.0 for n in dc.NODES}
+    assert dc._seg_powers(split, at_ref, net)["winding"] == pytest.approx(1000.0)                    # at the reference both laws agree
+    over = dc.Segment("x", 60.0, {"winding": 100.0, "stator": 0.0, "rotor": 0.0, "magnet": 0.0}, coil_ref_c=200.0,
+                      winding_ac_ref_W=500.0)                                                         # an AC share beyond the total is clamped
+    assert dc._seg_powers(over, T, net)["winding"] == pytest.approx(100.0 / r, rel=1e-12)
+
+
+def test_the_loss_split_carries_the_ac_share_of_the_map():
+    summary = {"P_stranded_W": 1000.0, "coil_temp_C": 200.0, "rpm": 1000.0}
+    assert dc.losses_by_node(summary, {"P_cu_exact_W": 1000.0})["winding_ac_W"] == 0.0               # a map without it: the old law
+    assert dc.losses_by_node(summary, {"P_cu_exact_W": 1000.0, "P_cu_ac_exact_W": 300.0})["winding_ac_W"] == 300.0
+    assert dc.losses_by_node(summary, {"P_cu_exact_W": 1000.0, "P_cu_ac_exact_W": 3000.0})["winding_ac_W"] == 1000.0

@@ -16,6 +16,6 @@
 
 警告：几何在结果之后改变时的过期提示（重新 Solve）；结果所用冷却与当前字段不同时的冷却不一致提示；以及“Loaded from history”及 Recompute。
 
-下方是工作制编辑器（S2 等循环：循环秒数、ED 检查、起始温度、停机无电或另一工作制、保存找到的 ED）和只读的“Coupled EM ↔ thermal”块。
+只读的“Coupled EM ↔ thermal”块显示最近一次耦合结果。如果此版本启用了 Duty cycle，其编辑器出现在 Frame 之后、网格和结果之前。
 
 常用顺序：先运行电磁，在此设置冷却，Solve，比较各方案。耦合迭代在 Electromagnetic 页打开。

@@ -10,7 +10,7 @@
 - 驱动：“Sine current”（自行设定电流、转速和电流矢量角）或“Target T / P”（给定目标扭矩 Nm 或功率 kW，由程序拟合电流）。PWM 逆变器本身在 Controller 页设置。
 - 线圈和磁钢温度、端部绕组系数、“每电周期步数”和网格预设（在 Mesh 页修改）。
 - “Coupled thermal - solve for the temperatures”：打开后按电磁、热、电磁迭代，直到绕组和磁钢温度稳定；冷却取自 Thermal 页。打开后出现两个菜单：Drive（Sine current，或来自 Controller 的逆变器，后者需要 Controller 中已保存器件）和“Solve to”（稳态、到达限值的时间、连续额定 S1）。
-- “Run Simulation”。运行时按钮变为“Stop Simulation”。停止后再次运行会询问“Resume the stopped run?”：Continue 保留已完成的帧，Start fresh 重新计算。
+- 按“Run Simulation”（之前运行过则为“Re-run Simulation”）；在 Target T / P 下按“Fit <扭矩> Nm & Run”。拟合期间显示“Fitting current...”，随后在仿真运行时显示“Stop Simulation”。停止后再次运行会询问“Resume the stopped run?”：Continue 保留已完成的帧，Start fresh 重新计算。
 
 结果：扭矩、机械功率和输入功率、效率、损耗项（铜、定子和转子铁、磁钢涡流）、相电阻、每匝电感、线圈电流、B 最大值和平均值、步数，以及场视图。
 

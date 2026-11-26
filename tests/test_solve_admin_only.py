@@ -279,6 +279,13 @@ REVIEWED_NOT_A_SOLVE = {
     "GET /api/wires/stock": "catalog / library / settings / stored-state read; resolves a stored value, solves nothing",
     "GET /api/optimization/runs": "lists the stored optimisation runs of one motor (a file read behind the die / configuration gate); solves nothing",
     "GET /api/optimization/runs/{run_id}": "opens one stored optimisation run (a file read behind the die / configuration gate); solves nothing",
+    "POST /api/gears/evaluate": "staff-only Gears page (require_staff), analytic, no FEM, milliseconds; deliberately NOT in the solve:engineer gate (engineers keep using Gears)",
+    "POST /api/gears/assembly": "staff-only Gears page (require_staff), analytic, no FEM, milliseconds; deliberately NOT in the solve:engineer gate (engineers keep using Gears)",
+    "POST /api/gears/pose": "staff-only Gears page (require_staff), analytic, no FEM, milliseconds; deliberately NOT in the solve:engineer gate (engineers keep using Gears)",
+    "GET /api/gears/catalogues": "staff-only Gears page (require_staff), analytic, no FEM, milliseconds; deliberately NOT in the solve:engineer gate (engineers keep using Gears)",
+    "GET /api/gears/catalogues/{name}": "staff-only Gears page (require_staff), analytic, no FEM, milliseconds; deliberately NOT in the solve:engineer gate (engineers keep using Gears)",
+    "POST /api/gears/template": "staff-only Gears page (require_staff), analytic, no FEM, milliseconds; deliberately NOT in the solve:engineer gate (engineers keep using Gears)",
+    "POST /api/gears/drivetrain": "staff-only (require_staff): reads a configuration's SAVED operating points, no FEM, writes nothing; deliberately NOT in the solve gate",
 }
 
 #: Router modules whose routes are data, accounts or admin screens - they compute nothing on request.  A route in a module that is in
@@ -296,6 +303,9 @@ DATA_MODULES = frozenset({
     "die_archive",                      # archive a workspace / published die: a sidecar list, nothing on disk moves - computes nothing
     "regions_sync",                     # the signed peer channel of the catalog mirror (extracts, foreign submit / result)
     "optimization_runs",                # stored optimisation runs of a motor: list / open / import a file, solves nothing
+    "gears_store",                      # saved gearbox records (list / save / open / delete / restore) - computes nothing
+    "config_archive",                   # archive / restore one configuration: a sidecar history + audit row, admin only - computes nothing
+    "owner_queue",                      # the owner's question queue: agent items in, owner answers out, only records - computes nothing
     "designation",                      # the standard motor name read off the stored parameters - computes nothing
 })
 #: Router modules that can compute: every route in them is admin-only or reviewed above.
@@ -304,6 +314,7 @@ COMPUTE_MODULES = frozenset({
     "static3d", "kernel", "pipeline", "freecad", "fusion", "geometry", "system_graph", "design_agent", "compute_nodes", "cogging",
     "construction", "components", "report", "model3d", "catalog", "catalog_cards", "motor_view", "history", "jobs_api", "presets",
     "saved_sims", "sweep_config", "wire_stock",
+    "gears", "gears_drivetrain",        # REVIEWED 2026-11-26: staff-only analytic / saved-point reads, each route in REVIEWED_NOT_A_SOLVE
 })
 
 

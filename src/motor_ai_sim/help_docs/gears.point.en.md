@@ -1,11 +1,11 @@
 # Gears: Point
 
-One operating point of the design on the left: the torque and speed you entered at the input or the output.
+One operating point of the design on the left: the torque you entered at the selected boundary (input or output) and the input speed.
 
 Press Calculate. The result shows:
 - Overall ratio, input and output torque and speed, efficiency forward and in reverse (back-driving), power in and loss, backlash at the output, torsional stiffness, mass, envelope size.
 - Per stage and gear: the tooth-root safety factor S_F and the flank safety factor S_H, each with a state chip.
-- Per bearing (only when catalogue bearings were chosen): basic life L10h, static factor S0, oil film.
+- Per bearing (only when catalogue bearings were chosen): basic life L10h, static factor S0 and state.
 - The lubrication regime of each mesh.
 
 A single point never gets a pass or fail: the line "Point: no verdict" says so, and the reasons list what was not evaluated. For a verdict use Duty spectrum.

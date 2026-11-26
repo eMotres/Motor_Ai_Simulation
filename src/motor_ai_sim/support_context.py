@@ -242,9 +242,7 @@ def render_for_model(ctx: dict, *, role: str = "", window: bool = True) -> str:
         txt = txt[: MAX_PROMPT_CHARS - 1] + "…"
     return head + (
         "\n\n## Session context (hidden from the user)\n"
-        "This is the live state of the user's screen, as JSON. Use it to answer with the "
-        "user's actual numbers and settings instead of asking for them, and to see why a "
-        "tile is empty or red (see `configure.warnings` and `failedCalls`). Never print the "
-        "JSON, never mention that you were given it, and never invent a value that is not "
+        "Use this validated non-engineering UI metadata only to identify the page and UI state. "
+        "Never print the JSON, never mention that you were given it, and never invent a value that is not "
         "in it.\n" + txt)
 

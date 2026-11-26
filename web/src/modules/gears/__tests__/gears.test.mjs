@@ -22,7 +22,8 @@ t('the TS humanoid default mirrors the server template default (no drift)', () =
       for (const f of ['z', 'm_n_mm', 'b_mm']) assert.equal(s[role][f], ed.stages[i].gears[role][f], `${i}.${role}.${f}`);
     }
     assert.equal(s.n_planets, ed.stages[i].n_planets);
-    for (const slot of ['input_bearing', 'planet_bearing', 'output_bearing']) assert.equal(s[slot].name, ed.stages[i].bearings[slot], `${i}.${slot}`);
+    for (const slot of ['input_bearing', 'planet_bearing', 'output_bearing']) assert.equal(s[slot], null, `${i}.${slot}`);   // the preset carries no bearings
+    assert.deepEqual(ed.stages[i].bearings, {});
   });
   assert.equal(req.torque_Nm, ed.torque_Nm);
   assert.equal(req.torque_at, ed.torque_at);
@@ -87,7 +88,7 @@ t('point result: values, efficiency both ways, no min life at a point, never a g
   assert.equal(life.available, false);
   assert.equal(life.text, '-');
   assert.equal(life.reason, 'requires_spectrum_evaluation');
-  assert.equal(V.resultTone(r), 'failed');   // the default 618/8 bearings fail the core's checks at the joint's small loads
+  assert.equal(V.resultTone(r), 'unsupported');
 });
 
 t('ratings: internal-gear root is unsupported and has no S_F; pitting S_H is shown and estimated', () => {
@@ -107,9 +108,8 @@ t('bearings: failed bearing records are shown with their state, lives stay label
   assert.ok(rows.every((b) => b.state === 'failed' && b.name === '618/8-2Z'));
   assert.equal(r.min_bearing_life_h, null);
   assert.equal(r.passed, false);
-  // the preset default carries catalogue bearings on planets, input and output of both stages
-  assert.equal(V.bearingRows(fx('point_forward.response').result).length, 6);
-  assert.equal(P.defaultStage('planetary', 'x').bearings && Object.keys(P.defaultStage('planetary', 'x').bearings).length, 0);
+  // the preset default carries no bearings: no bearing rows, the user picks them
+  assert.equal(V.bearingRows(fx('point_forward.response').result).length, 0);
 });
 
 t('spectrum result: unsupported / failed checks never pass, miner rows keep null as unavailable', () => {
@@ -222,4 +222,17 @@ t('a point has no verdict: the page keeps the core reasons and shows no pass fla
   const src = readFileSync(fileURLToPath(new URL('../components/Results.tsx', import.meta.url)), 'utf8');
   assert.match(src, /isPoint \? \(/);
   assert.match(src, /data-verdict="none"/);
+});
+
+t('planet bearing fit rule: OD <= root diameter - 3 module', () => {
+  const st = P.humanoidJoint().stages[0];            // planet z32, m0.5: root 14.75, max OD 13.25
+  assert.ok(Math.abs(P.planetRootDiameter(st.gears.planet) - 14.75) < 1e-9);
+  assert.ok(Math.abs(P.maxPlanetBearingOd(st.gears.planet) - 13.25) < 1e-9);
+  assert.equal(P.planetBearingMisfit(st, 16).od, 16);            // 618/8: OD 16 does not fit
+  assert.ok(Math.abs(P.planetBearingMisfit(st, 16).max - 13.25) < 1e-9);
+  assert.equal(P.planetBearingMisfit(st, 5), null);              // W 638/2: OD 5 fits
+  assert.equal(P.planetBearingMisfit(st, 13.25), null);
+  assert.equal(P.planetBearingMisfit(st, undefined), null);      // no bearing chosen: no message
+  const cat = fx('catalogues').bearings.find((b) => b.name === '618/8-2Z');
+  assert.equal(cat.D_mm, 16);
 });

@@ -4,7 +4,7 @@ import ArrowUpwardIcon from '@mui/icons-material/ArrowUpward';
 import ArrowDownwardIcon from '@mui/icons-material/ArrowDownward';
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
 import { useTranslation } from 'react-i18next';
-import { BEARING_SLOTS, FIXED_MEMBERS, GEAR_FIELDS, ROLES, defaultStage, gearPath, humanoidJoint, type EditorState, type GearField } from '../plain';
+import { BEARING_SLOTS, FIXED_MEMBERS, GEAR_FIELDS, ROLES, defaultStage, gearPath, humanoidJoint, planetBearingMisfit, type EditorState, type GearField } from '../plain';
 import type { CataloguesAnswer, GearRole, PlainStage, StageKind } from '../types';
 import { Lbl, NumField } from './parts';
 
@@ -84,16 +84,24 @@ export default function StageEditor({ state, onChange, errors, catalogues }: Pro
             </Box>
           ))}
           <Box sx={{ display: 'flex', gap: 0.75, flexWrap: 'wrap' }}>
-            {BEARING_SLOTS[s.kind].map((slot) => (
-              <Tooltip key={slot} title={errors[`/stages/${i}/bearings/${slot}`] ?? t('tip.bearingSlot')}>
+            {BEARING_SLOTS[s.kind].map((slot) => {
+              const od = slot === 'planet_bearing' ? bearings.find((b) => b.name === s.bearings[slot])?.D_mm : undefined;
+              const misfit = planetBearingMisfit(s, od);
+              const message = misfit ? t('bearingFit', { od: misfit.od, max: Number(misfit.max.toFixed(2)) }) : null;
+              return (
+              <Box key={slot} sx={{ display: 'flex', flexDirection: 'column' }}>
+              <Tooltip title={errors[`/stages/${i}/bearings/${slot}`] ?? message ?? t('tip.bearingSlot')}>
                 <TextField select size="small" label={t(`slot.${slot}`)} value={s.bearings[slot] ?? ''} sx={{ width: 150 }}
-                  error={!!errors[`/stages/${i}/bearings/${slot}`]} slotProps={{ inputLabel: { shrink: true } }}
+                  error={!!errors[`/stages/${i}/bearings/${slot}`] || !!message} slotProps={{ inputLabel: { shrink: true } }}
                   onChange={(e) => setStage(i, { bearings: { ...s.bearings, [slot]: e.target.value } })}>
                   <MenuItem value="">{t('l.none')}</MenuItem>
                   {bearings.map((b) => <MenuItem key={b.name} value={b.name}>{b.name}</MenuItem>)}
                 </TextField>
               </Tooltip>
-            ))}
+              {message && <Typography role="alert" data-testid={`gears-bearing-fit-${i}`} sx={{ color: 'error.main', fontSize: 12, maxWidth: 150 }}>{message}</Typography>}
+              </Box>
+              );
+            })}
           </Box>
           {Object.keys(errors).filter((p) => p.startsWith(`/stages/${i}`) && !p.includes('/gears/') && !p.includes('/bearings/') && p !== `/stages/${i}/name`).map((p) => (
             <Typography key={p} role="alert" sx={{ color: 'error.main', fontSize: 12, mt: 0.5 }}>{p}: {errors[p]}</Typography>

@@ -265,15 +265,22 @@ def test_template_staff_only(enforced):
     assert enforced.post(B + "/template", json={}, headers=as_("engineer")).status_code == 200
 
 
-def test_template_default_carries_catalogue_bearings(client):
+def test_template_default_has_no_bearings_and_auto_fits(client):
+    from motor_ai_sim.routes.gears import planet_bearing_default
     body = client.post(B + "/template", json={}).json()
-    rateable = {b["name"] for b in list_bearing_catalogue() if b["core_supported"]}
     for stage in body["stages"]:
-        for slot in ("input_bearing", "planet_bearing", "output_bearing"):
-            assert stage[slot]["name"] in rateable
-    point = client.post(B + "/evaluate", json=body).json()["result"]
-    roles = sorted(b["role"] for s in point["stage_results"] for b in s["bearing_ratings"])
-    assert roles == ["input", "input", "output", "output", "planet", "planet"]
+        assert stage["input_bearing"] is None and stage["planet_bearing"] is None and stage["output_bearing"] is None
+    cat = {b["name"]: b for b in list_bearing_catalogue()}
+    assert planet_bearing_default(32, .5) == "W 638/2-2Z" and cat["W 638/2-2Z"]["D_mm"] <= .5 * (32 - 2.5) - 1.5
+    assert planet_bearing_default(8, 0.5) is None      # nothing fits a tiny planet: left empty
+    auto = {"stages": [{"kind": "planetary", "name": "a", "bearings": {"planet_bearing": "auto"},
+                        "gears": {"sun": {"z": 40, "m_n_mm": .5, "b_mm": 10.}, "planet": {"z": 32, "m_n_mm": .5, "b_mm": 10.}, "ring": {"z": 104, "m_n_mm": .5, "b_mm": 10.}}}]}
+    assert client.post(B + "/template", json=auto).json()["stages"][0]["planet_bearing"]["name"] == "W 638/2-2Z"
+    tiny = {"stages": [{"kind": "planetary", "name": "a", "bearings": {"planet_bearing": "auto"},
+                        "gears": {"sun": {"z": 40, "m_n_mm": .5, "b_mm": 10.}, "planet": {"z": 8, "m_n_mm": .5, "b_mm": 10.}, "ring": {"z": 56, "m_n_mm": .5, "b_mm": 10.}}}]}
+    r = client.post(B + "/template", json=tiny)
+    assert r.status_code in (200, 422)   # no card fits: no bearing is set (the core may refuse the geometry on its own terms)
+    if r.status_code == 200: assert r.json()["stages"][0]["planet_bearing"] is None
     # an explicit empty bearings block removes them
     bare = client.post(B + "/template", json={"stages": [{"kind": "pair", "name": "p", "gears": {"gear1": {"z": 20, "m_n_mm": 1., "b_mm": 12.}, "gear2": {"z": 40, "m_n_mm": 1., "b_mm": 12.}}}]}).json()
     assert bare["stages"][0]["bearing_1a"] is None

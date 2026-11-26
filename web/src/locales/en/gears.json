@@ -296,5 +296,6 @@
     "outlines": "Sampled or decimated outlines are viewer geometry, not manufacturing CAD and not a 3-D clearance certification.",
     "irMotoringOnly": "The drivetrain (TransmissionIR) export from the core is motoring only and keeps partial and unqualified provenance. This page does not use it."
   },
-  "noVerdict": "Point: no verdict (run the duty spectrum for a pass / fail)"
+  "noVerdict": "Point: no verdict (run the duty spectrum for a pass / fail)",
+  "bearingFit": "Bearing does not fit inside the planet (OD {od} mm, max {max} mm)"
 }

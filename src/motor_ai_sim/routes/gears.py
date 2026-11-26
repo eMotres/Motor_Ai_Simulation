@@ -124,16 +124,20 @@ _BEARING_SLOTS = ("planet_bearing", "input_bearing", "output_bearing",
                   "bearing_1a", "bearing_1b", "bearing_2a", "bearing_2b")
 
 
-# The one catalogue card the core can rate and that is small enough for the joint (618/8-2Z, 8 x 16 x 4); the core does not check
-# that a planet bearing physically fits inside the planet, so this is a screening default the engineer replaces.
-_DEFAULT_BEARING = "618/8-2Z"
+def planet_bearing_default(z: int, m_n_mm: float, x: float = 0., hf_star: float = 1.25) -> Optional[str]:
+    """Largest core-rateable catalogue bearing whose OD fits in the planet: OD <= root diameter - 3 module (1.5 m rim each side).
+
+    Not the preset default: the only card that fits the humanoid-joint planets (OD 5 mm) is overloaded (the core rates it failed),
+    so the preset carries no bearings and the engineer picks them; bearings.planet_bearing = "auto" asks for this rule."""
+    max_od = m_n_mm * (z + 2. * x - 2. * hf_star) - 3. * m_n_mm
+    fits = [b for b in list_bearing_catalogue() if b["core_supported"] and b["D_mm"] <= max_od]
+    return max(fits, key=lambda b: (b["D_mm"], b["d_mm"]))["name"] if fits else None
 
 
 def _humanoid_default() -> Dict[str, Any]:
     """The humanoid-joint starting point: two planetary stages, 12.884:1 (9.8 N*m at 247 rpm out)."""
     def stage(name, zs, zp, zr, n, b):
         return {"kind": "planetary", "name": name, "n_planets": n,
-                "bearings": {"input_bearing": _DEFAULT_BEARING, "planet_bearing": _DEFAULT_BEARING, "output_bearing": _DEFAULT_BEARING},
                 "gears": {"sun": {"z": zs, "m_n_mm": .5, "b_mm": b, "tooth_thickness_allowance_mm": .02},
                           "planet": {"z": zp, "m_n_mm": .5, "b_mm": b, "tooth_thickness_allowance_mm": .02},
                           "ring": {"z": zr, "m_n_mm": .5, "b_mm": b, "tooth_thickness_allowance_mm": .02}}}
@@ -171,6 +175,9 @@ def _build_stage(i: int, raw: Any):
     for slot, name in bearings_in.items():
         if slot not in _BEARING_SLOTS:
             raise FieldValidationError(path + "/bearings/" + str(slot), "Unknown bearing slot", "unknown_field")
+        if name == "auto" and slot == "planet_bearing" and "planet" in gears:
+            g = gears["planet"]
+            name = planet_bearing_default(g.z, g.m_n_mm, g.x, g.hf_star)   # largest catalogue card that fits; None leaves it empty
         if name:
             try:
                 data[slot] = GearBearingSpec.from_library(name)

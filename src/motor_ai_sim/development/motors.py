@@ -1062,6 +1062,11 @@ def _comparison_projection(duty: dict, stored: dict) -> dict:
                 _eta = _number(_s.get("efficiency"))
             _m = _number(comparison.get("mass_kg"))
             _td = _number(_s.get("T_field_k_Nm") if _s.get("op_mode") == "generator" else _s.get("T_shaft_Nm"))
+            if result_raw.get("shaft_conv") == 1:
+                # a marked stored result carries the efficiency the page showed when it was saved (full precision, at the basis it
+                # names); an explicitly absent one (the page showed "-") stays absent - never refilled from the summary
+                _ep = _number(result_raw.get("efficiency_pct"))
+                _eta = None if _ep is None else _ep / 100.0
             _vals = (_t, _p, None if _eta is None else _eta * 100.0,
                      _td / _m if (_td is not None and _m and _m > 0) else None)
             comparison.update({k: v for k, v in zip(_keys, _vals) if v is not None})

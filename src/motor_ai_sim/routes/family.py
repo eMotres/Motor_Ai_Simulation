@@ -907,7 +907,11 @@ def _load_yaml(p: Path, what: str) -> dict:
         raise HTTPException(500, detail=f"{what} file {p.name} is unreadable: {e}")
 
 
-def _save_yaml(p: Path, d: dict, history_note: Optional[str] = None) -> None:
+def _save_yaml(p: Path, d: dict, history_note: Optional[str] = None, *, metadata_only: bool = False) -> None:
+    """The one writer of every die and configuration file.  ``metadata_only`` (default OFF, used only by the one-off repair tools)
+    keeps the guards, the atomic replace and the catalog history, but writes the document AS GIVEN to exactly ``p``: no layer
+    redirection / copy-on-write, no derived-geometry refresh, and a save that would need construction redaction is REFUSED
+    (409), never done by deleting fields."""
     # A configuration that is a FROZEN product revision (Rev A once Rev B exists) is read-only for good - one check here covers
     # every route that would rewrite it (owner 2026-10-27, motor_revisions).
     if p.name != "die.yaml":
@@ -917,7 +921,8 @@ def _save_yaml(p: Path, d: dict, history_note: Optional[str] = None) -> None:
     # is redirected into the caller's own workspace (copying the die's yaml
     # documents across on the way), and an admin's ``?layer=shared`` write is
     # redirected the other way.  With layering off this is a no-op.
-    p = _write_target(p)
+    if not metadata_only:
+        p = _write_target(p)
     p.parent.mkdir(parents=True, exist_ok=True)
     # A save into a WORKSPACE by a caller without the full-construction gate
     # never writes the CAD basis there (re-audit #2 R5): the document was read
@@ -933,6 +938,8 @@ def _save_yaml(p: Path, d: dict, history_note: Optional[str] = None) -> None:
         if _in_ws:
             from motor_ai_sim import construction_privacy as _cp
             if not _cp.caller_may_keep_construction():
+                if metadata_only:
+                    raise HTTPException(409, detail=f"{p.name}: a metadata-only save would need construction redaction; refused")
                 d = _cp.redact(d)
                 _scrub_old = True
     # An unknown `applications` value is refused loudly, never written (owner 2026-10-13).
@@ -956,7 +963,7 @@ def _save_yaml(p: Path, d: dict, history_note: Optional[str] = None) -> None:
     try:
         from motor_ai_sim.geometry.motor_geometry import (
             fresh_derived_on_write, refresh_derived_geometry)
-        if fresh_derived_on_write() and isinstance(d, dict):
+        if fresh_derived_on_write() and isinstance(d, dict) and not metadata_only:
             for _gk in ("geometry", "geometry_overrides"):
                 if isinstance(d.get(_gk), dict):
                     d[_gk] = refresh_derived_geometry(d[_gk])
@@ -4240,6 +4247,14 @@ def record_duty_result(req: DutyResult, _w: dict = Depends(require_catalog_write
     _basis = req.result.get("efficiency_basis")
     if res.get(_SHAFT_CONV_KEY) and _basis in _EFF_BASES:
         res["efficiency_basis"] = _basis
+    if res.get(_SHAFT_CONV_KEY) and req.result.get("efficiency_pct") is not None:
+        # a MARKED point keeps the efficiency the page showed at full precision (no round(..., 3)): one number per point
+        try:
+            _eff = float(req.result["efficiency_pct"])
+            if _eff == _eff and abs(_eff) != float("inf"):
+                res["efficiency_pct"] = _eff
+        except (TypeError, ValueError):
+            pass
     res["recorded_at"] = datetime.now().isoformat(timespec="seconds")
     try:
         res["build_sig"] = _build_sig(_load_yaml(_die_file(die), "die"), c)

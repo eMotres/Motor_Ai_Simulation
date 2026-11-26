@@ -182,6 +182,85 @@ def test_repair_dry_run_writes_nothing_and_apply_backs_up(dies, tmp_path):
     assert repair.scan() == []
 
 
+def _marked_cfg(dies, **extra):
+    p = dies / DIE / f"{CFG}.yaml"
+    doc = yaml.safe_load(p.read_text(encoding="utf-8"))
+    doc["duties"][0].update({"summary": dict(MARKED), "result": {"efficiency_pct": 90.0}})
+    doc.update(extra)
+    p.write_text(yaml.safe_dump(doc, sort_keys=False), encoding="utf-8")
+    return p
+
+
+def test_the_repair_save_is_metadata_only_no_derived_geometry_refresh(dies, tmp_path, monkeypatch):
+    from motor_ai_sim.geometry import motor_geometry as MG
+    calls = []
+
+    def fake_refresh(g):                                    # what a normal save does to a stale derived field
+        calls.append(1)
+        return {**g, "num_slots": 12}
+    monkeypatch.setattr(MG, "refresh_derived_geometry", fake_refresh)
+    monkeypatch.setattr(MG, "fresh_derived_on_write", lambda: True)
+    p = _marked_cfg(dies, geometry_overrides={"motor_length": 40.0, "num_slots": 99})
+    done = repair.repair(apply=True, backup_dir=tmp_path / "bak")
+    assert done["saved"] == 1 and not calls
+    doc = yaml.safe_load(p.read_text(encoding="utf-8"))
+    assert doc["geometry_overrides"]["num_slots"] == 99 and doc["duties"][0]["result"]["shaft_conv"] == 1
+    # control: a normal save of the same document DOES refresh (so the guard above is meaningful)
+    from motor_ai_sim.routes import family as fam
+    fam._save_yaml(p, yaml.safe_load(p.read_text(encoding="utf-8")))
+    assert calls and yaml.safe_load(p.read_text(encoding="utf-8"))["geometry_overrides"]["num_slots"] == 12
+
+
+def test_metadata_only_save_never_redirects_or_redacts(dies, monkeypatch):
+    from fastapi import HTTPException
+    from motor_ai_sim import construction_privacy as cp
+    from motor_ai_sim.routes import family as fam
+    p = _marked_cfg(dies)
+    redirected = []
+    monkeypatch.setattr(fam, "_write_target", lambda q: redirected.append(q) or q.with_name("elsewhere.yaml"))
+    fam._save_yaml(p, yaml.safe_load(p.read_text(encoding="utf-8")), metadata_only=True)
+    assert not redirected and not (p.parent / "elsewhere.yaml").exists()
+    # layered save by a caller without the construction gate: a normal save redacts, metadata-only refuses and writes nothing
+    monkeypatch.setattr(fam, "_ws_layering", lambda: True)
+    monkeypatch.setattr(fam, "_classify_die_dir", lambda d: (fam._WS.LAYER_WORKSPACE, None))
+    monkeypatch.setattr(cp, "caller_may_keep_construction", lambda: False)
+    before = p.read_bytes()
+    with pytest.raises(HTTPException) as exc:
+        fam._save_yaml(p, yaml.safe_load(before), metadata_only=True)
+    assert exc.value.status_code == 409 and p.read_bytes() == before
+
+
+def test_frozen_and_production_linked_configurations_are_skipped_in_dry_run_and_apply(dies, tmp_path, monkeypatch):
+    from motor_ai_sim import motor_revisions as MR
+    p = _marked_cfg(dies)
+    original = p.read_bytes()
+    monkeypatch.setenv("MOTRES_PRODUCTION_ROOT", str(tmp_path / "prod"))
+    from motor_ai_sim.production import store as ps
+    (ps.path_for(DIE, CFG)).mkdir(parents=True, exist_ok=True)
+    (ps.path_for(DIE, CFG) / "production.json").write_text("{}", encoding="utf-8")
+    dry = repair.scan()
+    assert [r.get("skip") for r in dry] == ["production_linked"]
+    done = repair.repair(apply=True, backup_dir=tmp_path / "bak")
+    assert done["saved"] == 0 and p.read_bytes() == original and not (tmp_path / "bak").exists()
+    (ps.path_for(DIE, CFG) / "production.json").unlink()
+    monkeypatch.setattr(MR, "find", lambda d, c: ({"id": "x"}, {"frozen": True}))
+    assert [r.get("skip") for r in repair.scan()] == ["frozen_revision"]
+    assert repair.repair(apply=True, backup_dir=tmp_path / "bak")["saved"] == 0 and p.read_bytes() == original
+    # unreadable protection metadata is a refusal, not a guess
+    monkeypatch.setattr(MR, "find", lambda d, c: (_ for _ in ()).throw(OSError("store unreadable")))
+    assert [r.get("skip") for r in repair.scan()] == ["protection_unreadable"]
+    assert repair.repair(apply=True, backup_dir=tmp_path / "bak")["saved"] == 0 and p.read_bytes() == original
+
+
+def test_the_backup_never_overwrites_an_existing_file(tmp_path):
+    src = tmp_path / "L40.yaml"
+    src.write_text("a: 1\n", encoding="utf-8")
+    first = repair._exclusive_backup(src, tmp_path / "bak", "L40", "T1")
+    src.write_text("a: 2\n", encoding="utf-8")
+    second = repair._exclusive_backup(src, tmp_path / "bak", "L40", "T1")
+    assert first != second and first.read_text(encoding="utf-8") == "a: 1\n" and second.read_text(encoding="utf-8") == "a: 2\n"
+
+
 def test_efficiency_basis_only_on_marked_records(dies):
     _save_duty(MARKED)
     body = {"die": DIE, "config": CFG, "duty": DUTY, "drive": "current", "shaft_convention": SC.SHAFT_CONVENTION,

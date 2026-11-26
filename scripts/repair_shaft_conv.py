@@ -30,8 +30,10 @@ def main(argv=None) -> int:
     res = shaft_conv_repair.repair(apply=a.apply, backup_dir=a.backup_dir)
     for r in res["rows"]:
         print(f"{r['die']} / {r['config']} / {r.get('duty')}  drive={r.get('drive') or 'headline'}"
-              + (f"  [{r['error']}]" if r.get("error") else ""))
-    print(f"{len(res['rows'])} stored result(s) to repair" + (f"; {res['saved']} saved" if res["applied"] else " (dry run, nothing written)"))
+              + (f"  [SKIPPED: {r['skip']}]" if r.get("skip") else "") + (f"  [{r['error']}]" if r.get("error") else ""))
+    todo = [r for r in res["rows"] if not r.get("skip") and not r.get("error")]
+    print(f"{len(todo)} stored result(s) to repair, {len(res['rows']) - len(todo)} skipped or unreadable"
+          + (f"; {res['saved']} saved" if res["applied"] else " (dry run, nothing written)"))
     for f in res["failed"]:
         print(f"NOT saved: {f['die']} / {f['config']} ({f['error']})")
     return 1 if res["failed"] else 0

@@ -12,13 +12,15 @@ import { oneOf } from '../../lib/viewMemory';
 import { useRememberedView } from '../../lib/useRememberedView';
 import { GearsApiError, gearsApi } from './api';
 import { errorMap, humanoidJoint, toPlainBody, validateEditor, type EditorState } from './plain';
-import type { AssemblyResult, CataloguesAnswer, EvaluationResult, FieldError, GearboxResponse } from './types';
+import type { AssemblyResult, BoxRecord, CataloguesAnswer, EvaluationResult, FieldError, GearboxResponse } from './types';
 import AssemblyView from './components/AssemblyView';
 import Limitations from './components/Limitations';
 import OperatingEditor from './components/OperatingEditor';
 import Results from './components/Results';
 import SpectrumEditor from './components/SpectrumEditor';
+import SavedPanel from './components/SavedPanel';
 import StageEditor from './components/StageEditor';
+import { EditorFromRequestError, editorFromRequest, responseToShow } from './saved';
 import { Lbl, StateChip } from './components/parts';
 
 const TABS = ['point', 'spectrum', 'assembly'] as const;
@@ -74,6 +76,29 @@ export default function GearsPage() {
     } catch (e) { fail(e); } finally { if (abort.current === ctl) setBusy(false); }
   };
 
+  // Save: the request of the open point / spectrum tab (the assembly tab saves the point request) with its response when it is current.
+  const buildSave = useCallback(async () => {
+    const op = tab === 'spectrum' ? 'spectrum' : 'point';
+    const request = await gearsApi.template(toPlainBody(state, op));
+    const ran = op === 'spectrum' ? spectrum : point;
+    return { request, response: ran && ran.key === keyOf(op) ? ran.response : null };
+  }, [tab, state, spectrum, point, keyOf]);
+  const openRecord = (rec: BoxRecord) => {
+    try {
+      const next = { ...editorFromRequest(rec.request), name: rec.name };
+      setState(next); setErrors([]); setFailure(null);
+      const response = responseToShow(rec);
+      const op = rec.request.operation === 'spectrum' ? 'spectrum' : 'point';
+      const keyFor = JSON.stringify(toPlainBody(next, op));
+      setPoint(null); setSpectrum(null);
+      if (response) (op === 'spectrum' ? setSpectrum : setPoint)({ response: response as GearboxResponse<EvaluationResult>, key: keyFor });
+      setTab(op);
+    } catch (e) {
+      if (e instanceof EditorFromRequestError) { setErrors([{ path: e.path, code: 'not_editable', message: e.message }]); setFailure(null); }
+      else throw e;
+    }
+  };
+
   const shown = tab === 'point' ? point : tab === 'spectrum' ? spectrum : null;
   const stale = (ran: Ran<unknown> | null) => !!ran && ran.key !== keyOf(tab);
 
@@ -91,6 +116,7 @@ export default function GearsPage() {
       )}
       <Box sx={{ display: 'grid', gap: 2, gridTemplateColumns: { xs: '1fr', lg: 'minmax(460px, 5fr) 6fr' }, alignItems: 'start' }}>
         <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5, minWidth: 0 }}>
+          <SavedPanel name={state.name} onName={(name) => setState({ ...state, name })} buildSave={buildSave} onOpen={openRecord} />
           <OperatingEditor state={state} onChange={setState} errors={fieldErrors} catalogues={catalogues} />
           <StageEditor state={state} onChange={setState} errors={fieldErrors} catalogues={catalogues} />
         </Box>

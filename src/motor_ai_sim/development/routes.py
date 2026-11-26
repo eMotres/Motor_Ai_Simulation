@@ -14,7 +14,7 @@ from fastapi import APIRouter, HTTPException, Request
 
 from motor_ai_sim import platform_agreement, users
 from motor_ai_sim.development import access, models, self_service, spec_proposals, store, unread
-from motor_ai_sim.development.motors import _metric_projection
+from motor_ai_sim.development.motors import _metric_projection, safe_shaft_fields
 from motor_ai_sim.development.quote_routes import quote_shared
 from motor_ai_sim.development.timeline_routes import timeline_ready
 from motor_ai_sim.development import thread_audit
@@ -441,7 +441,8 @@ def _safe_results(results: Any) -> list[dict]:
                                    and __import__("math").isfinite(float(point[k]))}
         if point.get("mode") in ("motor", "generator"):
             row["operating_point"]["mode"] = point["mode"]
-        row["electromagnetic"] = _metric_projection(item.get("electromagnetic"))
+        row["electromagnetic"] = {**_metric_projection(item.get("electromagnetic")),
+                                  **safe_shaft_fields(item.get("electromagnetic"))}
         stored = item.get("stored_results") if isinstance(item.get("stored_results"), dict) else {}
         row["stored_results"] = {str(name): _metric_projection(value) for name, value in stored.items()
                                   if str(name).casefold() in allowed_kinds and isinstance(value, dict)}

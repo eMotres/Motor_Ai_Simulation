@@ -125,8 +125,8 @@ test('Compare: rows of two shaft conventions are not comparable; one convention 
   assert.match(panel, /if \(selShaftMixed\) return NaN;/);
 });
 
-test('duty efficiency: a marked motor at no load has none; a delivered output keeps the formula', () => {
-  assert.equal(D.dutyEfficiencyPct({ shaft_convention: 'fe_on_shaft_k3d_v1', op_mode: 'motor', P_loss_total_W: 40 }, -10), 0);
+test('duty efficiency: a marked motor at no load has none (the page shows "-"); a delivered output keeps the formula', () => {
+  assert.equal(D.dutyEfficiencyPct({ shaft_convention: 'fe_on_shaft_k3d_v1', op_mode: 'motor', P_loss_total_W: 40 }, -10), null);
   near(D.dutyEfficiencyPct({ shaft_convention: 'fe_on_shaft_k3d_v1', op_mode: 'motor', P_loss_total_W: 100 }, 900),
     90, 'P/(P+L)');
 });

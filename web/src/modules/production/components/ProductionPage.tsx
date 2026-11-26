@@ -15,13 +15,14 @@ import DiscussionPanel from './DiscussionPanel';
 import CertificationPanel from './CertificationPanel';
 import ChecklistPanel from './ChecklistPanel';
 import DocumentsPanel from './DocumentsPanel';
+import Model3DTab, { type Model3DSelection } from './Model3DTab';
 import ProductionListPage from './ProductionListPage';
 import LegacyProposals from './LegacyProposals';
 import ToolingFiles from './ToolingFiles';
 import { TimelineView } from './TimelineView';
 import TestsPanel from '../../tests/components/TestsPanel';
 import { downloadFile, fetchFileBlob, ProductionApiError, productionApi } from '../api';
-import { canAckRole, canEditRole, displayText, legacyTab, plainDocuments, productionRole, unackedFiles, unackedRevisions, VIEWER_TABS, visibleProductionTabs } from '../helpers';
+import { canAckRole, canEditRole, displayText, legacyTab, modelItemOf, modelSelectionOf, plainDocuments, productionRole, unackedFiles, unackedRevisions, VIEWER_TABS, visibleProductionTabs } from '../helpers';
 import { OPEN_PRODUCTION_EVENT, type OpenProductionDetail } from '../../../lib/openProduction';
 import { shortTitle } from '../../../lib/stripContext.ts';
 import { useTabContextStore } from '../../../stores/tabContextStore';
@@ -45,7 +46,7 @@ import type {
 // 'process' merged into the Assembly tab (owner 2026-10-18): the graph on top, the process document below it
 // 'tests' (owner 2026-10-26): bench tests of this configuration against the simulation (modules/tests)
 // 'proposals' (owner 2026-11-15) is gone: Discussion and Changes stay.  An old link or remembered tab 'proposals' opens Discussion (see legacyTab).
-const TABS = ['bom', 'tooling', 'assembly', 'timeline', 'documents', 'certification', 'checklist', 'tests', 'discussion', 'changes'] as const;
+const TABS = ['bom', '3d', 'tooling', 'assembly', 'timeline', 'documents', 'certification', 'checklist', 'tests', 'discussion', 'changes'] as const;
 type TabId = typeof TABS[number];
 
 // Where the user stopped (owner 2026-10-18): the open production and its sub-tab survive a page reload.  Browser
@@ -102,16 +103,21 @@ const ProductionPage: React.FC<{ die: string; config: string; onBack: () => void
   // or a click on the graph.  While the Assembly tab shows one, the address bar carries its link, so a reload and a copy both keep it.
   const [stepSel, setStepSel] = useState<string | null>(() => (!linkProp && initialTab === 'assembly' && itemId ? itemId : null));
   const openStep = (id: string) => { setStepSel(id); setTab('assembly'); };
+  // The 3D tab's selection (a step or a part): set by "Show in 3D" on a BOM row, a part card or an assembly step, or by a 3d link;
+  // while one is chosen the address bar carries it (pageAddress).
+  const [modelSel, setModelSel] = useState<Model3DSelection>(() => (!linkProp && initialTab === '3d' ? modelSelectionOf(itemId) : { stepId: null, partId: null }));
+  const showStepIn3D = (id: string) => { setModelSel({ stepId: id, partId: null }); setTab('3d'); };
+  const showPartIn3D = (id: string) => { setModelSel({ stepId: null, partId: id }); setTab('3d'); };
   // While the page was entered by a link its address stays that link (reload / copy from the bar both work); leaving the
   // Documents view or the link's filter returns the bar to the app root.
   useEffect(() => {
     try {
-      const want = pageAddress({ die, config, tab, stepSel, hasEntryLink: !!linkProp, link, initialTab, itemId });
+      const want = pageAddress({ die, config, tab, stepSel, hasEntryLink: !!linkProp, link, initialTab, itemId, modelItem: modelItemOf(modelSel) });
       if (want === 'ROOT') {
         if (isProductionLinkPath(window.location.pathname) || isAppLinkPath(window.location.pathname)) window.history.replaceState(window.history.state, '', '/');
       } else if (want && want !== window.location.pathname + window.location.search) window.history.replaceState(window.history.state, '', want);
     } catch { /* no history API */ }
-  }, [linkProp, tab, link, die, config, initialTab, itemId, stepSel]);
+  }, [linkProp, tab, link, die, config, initialTab, itemId, stepSel, modelSel]);
   const [loading, setLoading] = useState(true);
   const [nda, setNda] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -240,9 +246,11 @@ const ProductionPage: React.FC<{ die: string; config: string; onBack: () => void
                 documents={data.documents}
                 threads={data.threads}
                 onPartChanged={reload}
+                onShowIn3D={showPartIn3D}
               />
             </>
           )}
+          {tab === '3d' && <Model3DTab ctx={ctx} parts={data.parts} selection={modelSel} onSelect={setModelSel} />}
           {tab === 'tooling' && (
             <>
               <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, mb: 1 }}>
@@ -262,7 +270,7 @@ const ProductionPage: React.FC<{ die: string; config: string; onBack: () => void
               <ToolingFiles ctx={toolingCtx} rows={data.toolingBom} parts={data.parts} />
             </>
           )}
-          {tab === 'assembly' && <AssemblyProcess ctx={ctx} parts={data.parts} sections={data.process} documents={data.documents} stepId={stepSel} onStepChange={setStepSel} />}
+          {tab === 'assembly' && <AssemblyProcess ctx={ctx} parts={data.parts} sections={data.process} documents={data.documents} stepId={stepSel} onStepChange={setStepSel} onShowIn3D={showStepIn3D} />}
           {tab === 'timeline' && <TimelineView ctx={ctx} prod={prod} />}
           {tab === 'documents' && <DocumentsPanel documents={plainDocuments(data.documents)} parts={data.parts} ctx={ctx} sections={data.process} link={link} onLinkChange={setLink} unackedFiles={unackedFiles(data.revisions, ctx.email)}
             toolingPartIds={toolingPartIds} onOpenStep={openStep} />}

@@ -43,6 +43,7 @@
   "tabs": {
     "parts": "零件",
     "bom": "物料清单",
+    "3d": "3D",
     "timeline": "时间线",
     "process": "工艺",
     "documents": "文件",
@@ -130,8 +131,6 @@
     "drawings": "图纸",
     "noDrawings": "未附图纸。",
     "download": "下载",
-    "model3d": "3D 模型（STEP）",
-    "model3dTip": "此型号/配置的完整电机模型；与 3D 标签页适用同一保密协议。",
     "partStep": "零件 STEP",
     "deleteConfirm": "删除此零件？",
     "writeLang": "书写语言",
@@ -273,7 +272,6 @@
     "fit": "适应屏幕",
     "stepSectionsPick": "工艺章节",
     "stepDocs": "图纸和文件",
-    "model3d": "本工序装配内容（三维）",
     "model3dOwn": "本工序装配的零件。",
     "model3dGhost": "高亮：本工序装配的零件；淡显：前序工序已装配的零件。",
     "model3dUpTo": "截至本工序已装配的全部零件。",
@@ -904,5 +902,14 @@
     },
     "move": "移至文件",
     "moveTip": "将此文件移回文件标签页"
+  },
+  "tab3d": {
+    "all": "全部",
+    "step": "装配工序",
+    "none": "此电机暂无三维模型。",
+    "revision": "模型 {rev}",
+    "revisionTip": "参数哈希 {hash}",
+    "download": "STEP",
+    "show": "在 3D 中显示"
   }
 }

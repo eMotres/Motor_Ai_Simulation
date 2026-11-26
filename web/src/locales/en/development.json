@@ -1439,5 +1439,12 @@
     "noRun": "No stored run for this point.",
     "loadFailed": "Could not load the stored results.",
     "close": "Close"
+  },
+  "odSizes": {
+    "row": "Ø {od} mm, {slots} slots / {poles} poles",
+    "stack": ", stack {stacks} mm",
+    "loading": "Loading the existing sizes...",
+    "none": "No existing size is listed right now.",
+    "customHelp": "With a custom diameter the geometry is optimised for your diameter, which takes much longer than a calculation on one of the existing sizes. You can pick the existing sizes instead."
   }
 }

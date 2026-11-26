@@ -58,6 +58,15 @@ t('a malformed ids= list is parsed as an INVALID selection (the page says so), t
   }
 });
 
+t('a tab may hold a digit (3d) and letter-only tabs still parse; an unknown tab is refused', () => {
+  assert.deepEqual(parse(`${PROD}/3d?item=step.s1`), { kind: 'production', die: DIE, config: 'L12', tab: '3d', item: 'step.s1' });
+  assert.equal(L.appLinkPath({ kind: 'production', die: DIE, config: 'L12', tab: '3d', item: 'part.p-7' }), `${PROD}/3d?item=part.p-7`);
+  assert.deepEqual(parse(`${PROD}/bom`), { kind: 'production', die: DIE, config: 'L12', tab: 'bom' });
+  assert.equal(parse(`${PROD}/3x`), null);
+  assert.equal(L.isAppLinkPath(`${PROD}/3d`), true);
+  assert.equal(L.isAppLinkPath(`${PROD}/bom`), true);
+});
+
 t('build refuses what the server would refuse', () => {
   assert.equal(L.appLinkPath({ kind: 'production', die: DIE, config: '../x' }), null);
   assert.equal(L.appLinkPath({ kind: 'production', die: DIE, config: 'L12', tab: 'nope' }), null);

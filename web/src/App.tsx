@@ -661,7 +661,8 @@ function App() {
       render: () => <PropellersPanel /> },
     { id: 'schemas', label: 'Schemas', order: 61, gate: TAB_GATES.schemas, showViewer: false,
       render: () => <SystemPanel /> },
-    // Gears (owner 2026-11-26, gear module stage 5): staff with the simulation UI; the /api/gears routes are engineer/admin only.
+    // Gears (owner 2026-11-26, gear module stage 5): a member of the Simulations tab (lib/simulationsMenu), before Schemas; staff with the
+    // simulation UI, the /api/gears routes are engineer/admin only.  showViewer false: no motor viewer / point bar for this page.
     { id: 'gears', label: 'Gears', order: 62, gate: TAB_GATES.gears, showViewer: false,
       render: () => <GearsPage /> },
     { id: 'sweep', label: 'Optimization', order: 60, panelId: 'optimization', gate: TAB_GATES.sweep, showViewer: false,

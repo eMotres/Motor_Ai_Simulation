@@ -1,5 +1,5 @@
 // The "Simulations" top tab (owner 2026-10-13): Electromagnetic, Thermal and Mechanical
-// share ONE top tab, in that order (Propellers, owner 2026-11-15: the one page for all propeller work, before Schemas) (owner 2026-10-30: a plain tab like the others - no dropdown;
+// share ONE top tab, in that order (Propellers, owner 2026-11-15: the one page for all propeller work, before Schemas; Gears, owner 2026-11-26: "меню gears добавь в меню simulation", also before Schemas) (owner 2026-10-30: a plain tab like the others - no dropdown;
 // the members are sub-tabs in the panel header row, see App.tsx and components/common/SubTabs); "Schemas" (owner 2026-10-14: the view-only graph of how the
 // simulations are chained) is the last entry.  Geometry, Mesh and Controller stay
 // separate tabs, with the same gates and order as before.  The individual panels keep their
@@ -9,7 +9,7 @@
 // Pure, no imports: web/src/lib/__tests__/simulationsMenu.test.mjs imports this file.
 
 /** The panels the dropdown lists, in menu order. */
-export const SIMULATION_TAB_IDS: readonly string[] = ['simulation', 'thermal', 'mechanical', 'propellers', 'schemas'];
+export const SIMULATION_TAB_IDS: readonly string[] = ['simulation', 'thermal', 'mechanical', 'propellers', 'gears', 'schemas'];
 
 /** The bar's value while one of them is open. */
 export const SIMULATIONS_BAR_ID = 'simulations';

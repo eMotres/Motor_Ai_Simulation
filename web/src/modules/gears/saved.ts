@@ -69,6 +69,10 @@ export function editorFromRequest(req: RequestRecord): EditorState {
     }
     const stage: PlainStage = { uid: String(s.stage_id), kind, name: String(s.name), gears, bearings };
     if (kind !== 'pair') { stage.n_planets = num(s.n_planets, 3); stage.fixed_member = String(s.fixed_member ?? 'ring'); }
+    for (const k of ['f_ma_um', 'sun_planet_f_ma_um', 'planet_ring_f_ma_um'] as const) {   // the optional misalignment inputs ride along (absent stays absent)
+      const v = s[k];
+      if (typeof v === 'number' && Number.isFinite(v) && v >= 0) stage[k] = v;
+    }
     return stage;
   });
   const sp = r.spectrum as Record<string, unknown> | null;

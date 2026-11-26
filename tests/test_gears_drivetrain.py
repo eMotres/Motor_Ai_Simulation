@@ -479,3 +479,71 @@ def test_reader_uses_saved_numbers_only_and_leaks_nothing(monkeypatch, inline, t
     row = j["rows"][0]
     assert row["motor_duty"] == "rated" and row["covered_by_saved_point"] is True and j["motor"]["mass_kg"] == 0.9
     assert set(row["motor_saved_point"]) == {"torque_Nm", "speed_rpm", "efficiency", "torque_basis", "shaft_convention"}
+
+
+# ----------------------------------------------------------------------------------------------- review #907 regressions
+
+def test_failed_gearbox_is_a_failed_row_before_any_comparison(client, inline, motor_src):
+    ok = post(client, body(inline)).json()["rows"][0]["gearbox"]
+    bad = copy.deepcopy(inline)
+    bad["stages"][0]["n_planets"] = 10                          # neighbour_planet_interference: the assembly fails
+    motor_src["motor"]["duties"]["rated"] = point("rated", ok["torque_in_Nm"], ok["speed_in_rpm"])
+    r = post(client, body(bad, [{"name": "continuous", "torque_out_Nm": 9.8, "speed_out_rpm": 247.0}]))
+    assert r.status_code == 200, r.text
+    row = r.json()["rows"][0]
+    assert row["status"] == "gearbox_failed" and row["chain_efficiency"] is None
+    assert row["chain_efficiency_reason"] == "gearbox_failed" and row["gearbox_state"] == "failed"
+    assert "covered_by_saved_point" in row and row["covered_by_saved_point"] is None and "margin" not in row
+    assert "gearbox" not in row and isinstance(row["gearbox_flags"], list)
+
+
+def test_saved_speed_beats_the_editable_duty_speed():
+    p = gd.saved_point({"name": "rated", "rpm": 2000, "summary": {"T_em_avg_Nm": 1, "speed_rpm": 1000, "efficiency_pct": 85}})
+    assert p["speed_rpm"] == 1000
+    p = gd.saved_point({"name": "rated", "rpm": 2000, "result": {"T_em_avg_Nm": 1, "efficiency_pct": 85}})
+    assert p["speed_rpm"] == 2000                                # no saved speed: the duty's field is the fallback
+
+
+@pytest.mark.parametrize("value", [10 ** 400, -10 ** 400, 10 ** 309])
+def test_huge_integers_are_422_not_500(client, inline, value):
+    b = body(inline)
+    b["load"][0]["torque_out_Nm"] = value
+    assert errors(post(client, b))[0]["path"] == "/load/0/torque_out_Nm"
+    b = body(inline)
+    b["load"][1]["speed_out_rpm"] = value
+    assert errors(post(client, b))[0]["path"] == "/load/1/speed_out_rpm"
+
+
+def test_huge_saved_integer_is_not_a_number():
+    assert gd._num(10 ** 400) is None
+    assert gd.saved_point({"name": "a", "rpm": 10 ** 400, "result": {"T_em_avg_Nm": 1}})["missing"]
+
+
+def test_row_count_limits(client, inline):
+    rows = [{"name": f"r{i}", "torque_out_Nm": 1.0, "speed_out_rpm": 100.0} for i in range(20)]
+    assert len(post(client, body(inline, rows)).json()["rows"]) == 20
+    rows.append({"name": "r20", "torque_out_Nm": 1.0, "speed_out_rpm": 100.0})
+    assert errors(post(client, body(inline, rows)))[0]["path"] == "/load"
+
+
+def test_archived_record_is_labelled_and_still_read(client, inline):
+    rid = save_record(client, inline)
+    gear_store.set_state("proj1", rid, "archived", "tester", None)
+    b = body(inline)
+    b["gearbox"] = {"record_id": rid, "project": "proj1"}
+    j = post(client, b).json()
+    assert j["gearbox"]["record_state"] == "archived" and j["rows"][0]["status"] == "ok"
+
+
+def test_independent_hand_check_numbers(client, inline):
+    """Hand calculation (not read back from the endpoint): ratio (1+104/40)*(1+98/38) = 12.884210526; n_in = 247 * ratio =
+    3182.4 rpm; mesh losses 3.163751 W on 253.484639 W useful output give T_in = 0.77011425 N*m; mass 0.2184477343 + 0.5 kg."""
+    j = post(client, body(inline)).json()
+    row = j["rows"][0]
+    assert abs(j["gearbox"]["ratio_abs"] - 12.8842105263) < 1e-9
+    assert abs(row["gearbox"]["speed_in_rpm"] - 3182.4) < 1e-6 * 3182.4
+    assert abs(row["gearbox"]["torque_in_Nm"] - 0.7701142525) < 1e-6
+    assert abs(row["gearbox"]["power_out_W"] - 253.484639243) < 1e-5 and abs(row["gearbox"]["loss_W"] - 3.163751057) < 1e-5
+    assert abs(row["margin"]["torque_Nm"] - 0.2298857475) < 1e-6 and abs(row["margin"]["speed_rpm"] - 317.6) < 1e-3
+    assert abs(row["mass"]["total_kg"] - 0.7184477343) < 1e-6
+    assert abs(row["output_torque_per_total_mass_Nm_per_kg"] - 13.6405190417) < 1e-5

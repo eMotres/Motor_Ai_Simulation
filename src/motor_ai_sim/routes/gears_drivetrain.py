@@ -57,7 +57,8 @@ CORE_LIMITATIONS = [
     "motoring only: power flows motor -> load; reverse / regeneration is not computed",
     "screening estimate, not a measured or certified rating; see docs/gear_module/CORE_API_AND_LIMITATIONS.md",
     "loss by stage is the core's own estimate: mesh-loss correlation, bearing friction and churning are not qualified against "
-    "measurements; a stage without bearings or lubricant data shows 0 W for them (not 'none')",
+    "measurements; a loss the core could not compute for lack of inputs (bearing definitions, grease drag torque) is null "
+    "with loss_inputs_missing and the totals are marked partial",
     "internal-root bending, signed-reversal fatigue and thin-rim gates are unsupported; a point result is never a qualification",
     "mass and inertia of the gearbox are analytical blank estimates",
 ]
@@ -102,9 +103,15 @@ def _name(value: Any, path: str) -> str:
 
 
 def _positive(value: Any, path: str) -> float:
-    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(float(value)) or value <= 0:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
         raise _bad(path, "Expected a finite number greater than 0")
-    return float(value)
+    try:
+        number = float(value)
+    except (ValueError, OverflowError):            # a JSON integer of 400+ digits
+        raise _bad(path, "Expected a finite number greater than 0")
+    if not math.isfinite(number) or number <= 0:
+        raise _bad(path, "Expected a finite number greater than 0")
+    return number
 
 
 def parse_body(body: Any) -> Dict[str, Any]:
@@ -196,9 +203,13 @@ def load_gearbox_request(gb: Dict[str, Any]) -> Tuple[GearboxRequest, Dict[str, 
 # ----------------------------------------------------------------------------------------------- motor saved points
 
 def _num(v: Any) -> Optional[float]:
-    if isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(float(v)):
+    if isinstance(v, bool) or not isinstance(v, (int, float)):
         return None
-    return float(v)
+    try:
+        f = float(v)
+    except (ValueError, OverflowError):
+        return None
+    return f if math.isfinite(f) else None
 
 
 def _pick(blocks: List[Any], keys: Tuple[str, ...]) -> Tuple[Optional[float], Optional[str]]:
@@ -224,7 +235,9 @@ def saved_point(duty: Dict[str, Any]) -> Dict[str, Any]:
         torque, tkey = _pick(blocks, SHAFT_TORQUE_KEYS)
     if torque is None:
         torque, tkey = _pick(blocks, FIELD_TORQUE_KEYS)
-    rpm, _ = _pick(blocks + [duty], ("rpm", "speed_rpm"))
+    rpm, _ = _pick(blocks, ("rpm", "speed_rpm"))          # the saved blocks first: the duty's own rpm is editable
+    if rpm is None:
+        rpm, _ = _pick([duty], ("rpm", "speed_rpm"))
     if torque is None or rpm is None or torque <= 0 or rpm <= 0:
         return {"duty": name, "missing": "the saved result has no positive shaft torque and speed"}
     eff, ekey = _pick(blocks, ("efficiency_shaft", "eta_shaft"))
@@ -346,6 +359,10 @@ def evaluate_row(gb: Any, req: GearboxRequest, ratio_abs: float, motor: Dict[str
                                 temp_C=req.temp_C, preset_name=req.preset_name, compute_reverse_check=False)
     except (ValueError, TypeError, KeyError) as exc:
         return {**out, "status": "gearbox_failed", "reason": str(exc)}
+    if res.state == "failed" or not res.chain_kinematics.all_assemblies_ok:
+        return {**out, "status": "gearbox_failed", "reason": "gearbox core or assembly failed",
+                "gearbox_state": res.state, "gearbox_flags": list(res.flags), "missing_inputs": list(res.missing_inputs),
+                "chain_efficiency": None, "chain_efficiency_reason": "gearbox_failed"}
     t_in = abs(res.input_torque_Nm)
     if not (res.power_in_W > 0 and math.isfinite(t_in)):
         return {**out, "status": "gearbox_failed", "reason": "the gearbox point has no positive input power"}

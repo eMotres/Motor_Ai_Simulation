@@ -1344,7 +1344,6 @@ async def upload_document(request: Request, die: str, config: str):
     uploaded = form.get("file")
     if uploaded is None or isinstance(uploaded, str):
         raise HTTPException(status_code=400, detail="No file uploaded")
-    file_id = await _store_upload(user, die, config, uploaded)
     part_id = form.get("part_id")
     if part_id and not isinstance(part_id, str):
         part_id = str(part_id)
@@ -1365,6 +1364,8 @@ async def upload_document(request: Request, die: str, config: str):
             raise HTTPException(status_code=422, detail="cert_status: %s expected" % " | ".join(models.CERT_STATUSES))
         internal = str(form.get("internal") or "true").strip().lower() not in ("0", "false", "no", "off")
         raw.update(section=section, group=str(form.get("group") or ""), cert_status=cert_status, internal=internal)
+    # stored only after every check above: a refused request leaves no orphan file
+    file_id = await _store_upload(user, die, config, uploaded)
     doc = models.normalize_document(raw, file_id, _email(user), str(uploaded.filename or "unnamed"),
                                     part_id if part_id else None)
     store.mutate_file(die, config, "documents.json", lambda d: d.setdefault("documents", []).append(doc))

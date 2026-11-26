@@ -107,8 +107,9 @@ def customer_visible_thread(thread: Any) -> bool:
 
 
 def visible_documents(documents: list) -> list:
-    """Documents a viewer may see: every document that is not internal."""
-    return [d for d in documents or [] if isinstance(d, dict) and not d.get("internal")]
+    """Documents a viewer may see: every document that is not internal and not a certification file (members only)."""
+    return [d for d in documents or [] if isinstance(d, dict) and not d.get("internal")
+            and d.get("section") != "certification"]
 
 
 def viewer_file_ids(die: str, config: str) -> set:

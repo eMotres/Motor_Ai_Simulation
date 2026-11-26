@@ -129,3 +129,24 @@ t('remembered motor state: valid kept, junk dropped', () => {
   assert.equal(D.validateMotorMemory({ ...ok, rows: [] }), null);
   assert.equal(D.validateMotorMemory({ ...ok, rows: [ok.rows[0], ok.rows[0]] }), null);   // duplicate row names are refused by the route
 });
+
+t('pick the configuration, then Calculate once: the first click is enabled, uses the picked configuration, and the pickers have no exit layer', () => {
+  const options = D.motorOptions({ dies: [{ name: 'D1', configs: [{ name: 'C1', duties: [{ name: 'rated', kind: 'continuous' }] }, { name: 'C2', duties: [] }] }] });
+  let mem = { die: '', configuration: '', rows: D.defaultRows(), source: 'inline' };
+  assert.equal(D.canCalculate(mem, options, false), false);                    // nothing picked
+  mem = D.pickDie(mem, 'D1');
+  assert.equal(D.canCalculate(mem, options, false), false);                    // a die alone is not enough
+  mem = D.pickConfiguration(mem, 'C2');
+  assert.equal(D.canCalculate(mem, options, false), true);                     // enabled right after the pick: no second pick or click needed
+  const first = D.buildDrivetrainRequest({ die: mem.die, configuration: mem.configuration }, mem.rows, { kind: 'record', record_id: 'gb_1', project: '' });
+  assert.deepEqual(first.motor, { die: 'D1', configuration: 'C2' });           // the request carries the configuration just picked
+  mem = D.pickConfiguration(mem, 'C1');
+  assert.equal(D.buildDrivetrainRequest({ die: mem.die, configuration: mem.configuration }, mem.rows, { kind: 'record', record_id: 'gb_1', project: '' }).motor.configuration, 'C1');
+  assert.equal(D.canCalculate(mem, options, true), false);                     // busy disables, as before
+  assert.equal(D.canCalculate(D.pickDie(mem, 'D1'), options, false), false);   // re-picking the die clears the configuration
+  assert.equal(D.canCalculate({ ...mem, configuration: 'gone' }, options, false), false);
+  assert.equal(D.PICKER_MENU_PROPS.transitionDuration, 0);
+  // the panel really hands that to its three pickers
+  const src = readFileSync(fileURLToPath(new URL('../components/MotorPanel.tsx', import.meta.url)), 'utf8');
+  assert.equal((src.match(/MenuProps: PICKER_MENU_PROPS/g) ?? []).length, 3);
+});

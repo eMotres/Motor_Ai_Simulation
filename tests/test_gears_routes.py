@@ -215,3 +215,51 @@ def test_catalogues_match_the_core(client):
         assert list(one) == [name] and len(one[name]) == count == len(r.json()[name])
     missing = client.get(B + "/catalogues/absent")
     assert missing.status_code == 404 and "presets" in missing.json()["detail"]["catalogues"]
+
+
+# ----------------------------------------------------------------------------- template
+
+def test_template_default_is_complete_and_evaluates(client):
+    r = client.post(B + "/template", json={})
+    assert r.status_code == 200
+    body = r.json()
+    assert GearboxRequest.from_dict(body).to_dict() == body
+    assert body["preset_name"] == "humanoid_robot_joint" and len(body["stages"]) == 2
+    assert client.post(B + "/evaluate", json=body).status_code == 200
+
+
+def test_template_edit_pair_and_bearings_and_spectrum(client):
+    plain = {"preset_name": "standard", "stages": [
+        {"kind": "pair", "name": "p", "gears": {"gear1": {"z": 20, "m_n_mm": 1., "b_mm": 12.}, "gear2": {"z": 40, "m_n_mm": 1., "b_mm": 12.}},
+         "bearings": {"bearing_1a": "618/8-2Z"}}],
+        "spectrum": {"bins": [{"torque_out_Nm": 2., "speed_out_rpm": 100., "duration_h": 1.}, {"torque_out_Nm": 1., "speed_out_rpm": 100., "duration_h": 1.}]}}
+    r = client.post(B + "/template", json=plain)
+    assert r.status_code == 200
+    body = r.json()
+    assert body["operation"] == "spectrum" and body["stages"][0]["bearing_1a"]["name"] == "618/8-2Z"
+    assert GearboxRequest.from_dict(body).to_dict() == body
+
+
+def test_template_compound_stage_kind(client):
+    g = lambda z: {"z": z, "m_n_mm": 1., "b_mm": 12.}
+    plain = {"stages": [{"kind": "compound_planetary", "name": "c",
+                         "gears": {"sun": g(30), "planet": g(40), "planet2": g(30), "ring": g(100)}}]}
+    r = client.post(B + "/template", json=plain)
+    assert r.status_code == 200 and r.json()["stages"][0]["kind"] == "compound_planetary"
+
+
+def test_template_errors_carry_field_paths(client):
+    bad = {"stages": [{"kind": "planetary", "gears": {"sun": {"z": -1, "m_n_mm": 1., "b_mm": 5.}}}]}
+    r = client.post(B + "/template", json=bad)
+    assert r.status_code == 422
+    err = r.json()["detail"]["errors"][0]
+    assert err["path"].startswith("/stages/0/gears/sun")
+    r = client.post(B + "/template", json={"stages": [{"kind": "pair", "bearings": {"bearing_1a": "absent"}}]})
+    assert r.status_code == 422 and r.json()["detail"]["errors"][0]["path"] == "/stages/0/bearings/bearing_1a"
+    assert client.post(B + "/template", json={"nonsense": 1}).status_code == 422
+
+
+def test_template_staff_only(enforced):
+    assert enforced.post(B + "/template", json={}).status_code == 401
+    assert enforced.post(B + "/template", json={}, headers=as_("user")).status_code == 403
+    assert enforced.post(B + "/template", json={}, headers=as_("engineer")).status_code == 200

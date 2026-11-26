@@ -1263,6 +1263,7 @@ def test_put_recomputes_the_automatic_dhl_line_when_the_motors_change(client, mo
 
 # ── the optional Development line (owner 2026-11-26) ────────────────────────────────────────────────────────────────
 
+# provenance: tests/data/regenerate_cost_estimate_before_development_line.py, run against 8086a23d (the commit before the development line)
 GOLDEN = json.loads((Path(__file__).parent / "data" / "cost_estimate_before_development_line.json").read_text(encoding="utf-8"))
 
 

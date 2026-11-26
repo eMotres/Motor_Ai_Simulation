@@ -8,7 +8,7 @@ import {
   stepState, totalsView, iterationSubtotal, lineTotal, mergeEdits, reconcile, fieldLabel,
   acceptSuggestion, addIteration, blankLane, dhlDetails, dhlOrigin, iterationWeeks, laneErrors, projectWeeks, readView, removeIteration, removeLane,
   setLineWeeks, setShipTo, setWeeksOverride, suggestionAt, suggestionKey, tableModel, upsertLane, validWeeks, weeksText, writeView,
-  applyAuto, autoDhlIterations, autoKey, setDhlAuto, OPTIONAL_LINE_IDS, setNextUnit, setNextUnitShipping, blankNextUnit,
+  applyAuto, autoDhlIterations, autoKey, setDhlAuto, OPTIONAL_LINE_IDS, parseNumberInput, setNextUnit, setNextUnitShipping, blankNextUnit,
 } from '../costEstimate.ts';
 
 // the real schema the server serves
@@ -756,4 +756,16 @@ test('the review table and the Steps editor carry the development line only when
   // the step's editor edits the line the table edits: the same function creates it
   const e = editLine(estimate(1), { iteration: 1, line: 'development' }, { amount: 700 }, 'a@b.c', '2026-11-26');
   assert.equal(e.iterations[0].lines.development.amount, 700);
+});
+
+test('the next-unit weeks accept up to the schema override maximum (416), not the per-line 104', () => {
+  const max = schema.durations.override_max;
+  assert.equal(max, 416);
+  assert.equal(parseNumberInput('105', 0, max, false), 105);
+  assert.equal(parseNumberInput('416', 0, max, false), 416);
+  assert.equal(parseNumberInput('417', 0, max, false), undefined);       // red, not committed
+  assert.equal(parseNumberInput('', 0, max, false), null);
+  assert.equal(parseNumberInput('-1', 0, max, false), undefined);
+  assert.equal(parseNumberInput('1.5', 1, 50, true), undefined);
+  assert.equal(parseNumberInput('2,5', 0, max, false), 2.5);
 });

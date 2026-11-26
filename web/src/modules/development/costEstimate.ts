@@ -713,3 +713,14 @@ export function removeLane(e: CostEstimate, index: number): CostEstimate {
   next.dhl_lanes = next.dhl_lanes!.filter((_, i) => i !== index);
   return next;
 }
+
+/** A typed number: `null` = empty (clear), `undefined` = invalid (negative, not a number, out of range, not whole when `int`).  The
+ *  next-unit fields commit only a valid value (the weeks use the schema's `durations.override_max`, 416, not the per-line 104). */
+export function parseNumberInput(raw: string, min: number, max: number | undefined, int: boolean): number | null | undefined {
+  const t = raw.trim().replace(',', '.');
+  if (t === '') return null;
+  if (!/^\d*\.?\d+$/.test(t)) return undefined;
+  const n = Number(t);
+  if (!Number.isFinite(n) || n < min || (max !== undefined && n > max) || (int && !Number.isInteger(n))) return undefined;
+  return n;
+}

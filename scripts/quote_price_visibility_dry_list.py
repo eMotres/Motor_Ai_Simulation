@@ -75,7 +75,7 @@ def scan(root: Path, accounts: dict[str, Any] | None = None):
             project = None
         shared_doc, bad = _read(pdir / SHARED)
         if bad:
-            problems.append({"project": pdir.name, "input": str(SHARED), "problem": bad})
+            problems.append({"project": pdir.name, "input": SHARED.as_posix(), "problem": bad})
             continue
         mark = shared_doc.get("current") if isinstance(shared_doc, dict) else None
         if not mark:

@@ -49,7 +49,8 @@ SCHEMA = "gear_drivetrain-1"
 MAX_ROWS = 20
 _TOL = 1e-9
 _W = math.pi / 30.0                                   # rpm -> rad/s (the constant of modules/drivetrain/system.py)
-SHAFT_TORQUE_KEYS = ("T_coupling_Nm", "T_shaft_Nm", "T_shaft_em_Nm")   # in this order, read only with the shaft_convention marker
+SHAFT_POWER_KEY = "P_shaft_net_W"        # coupling power; the coupling torque is this / omega (saved speed)
+SHAFT_TORQUE_KEYS = ("T_shaft_Nm",)      # the marked shaft torque key of shaft_convention.CONVENTION_KEYS; read only with the marker
 FIELD_TORQUE_KEYS = ("T_em_avg_Nm", "T_em_Nm", "T_avg_Nm", "torque_avg_Nm")
 _MATCH_TOL = 0.02                                     # a required point within 2 % of the saved one counts as "the saved point"
 
@@ -72,7 +73,7 @@ ASSUMPTIONS = [
     "AND speed; otherwise it is null (motor_point_differs). The two parts are always given separately, each with the point it "
     "belongs to; nothing from another point is multiplied silently",
     "motor torque basis: when the saved summary carries the shaft_convention marker, the marked shaft quantity (coupling torque "
-    "when a bearing model exists, else T_shaft_Nm); otherwise the field torque of the legacy convention (torque_basis: field_legacy)",
+    "P_shaft_net_W / omega when the summary carries it, else T_shaft_Nm); otherwise the field torque of the legacy convention (torque_basis: field_legacy)",
     "gearbox losses are the core's stage results; a loss the core did not compute (bearings without bearing definitions, grease "
     "churning without a drag torque) is null with loss_inputs_missing, and the totals and the gearbox efficiency of that row are "
     "marked partial",
@@ -230,16 +231,20 @@ def saved_point(duty: Dict[str, Any]) -> Dict[str, Any]:
     if not any(isinstance(b, dict) and b for b in blocks):
         return {"duty": name, "missing": "no saved result for this duty"}
     marker = next((b.get("shaft_convention") for b in blocks if isinstance(b, dict) and b.get("shaft_convention")), None)
+    rpm, _ = _pick(blocks, ("rpm", "speed_rpm"))          # the saved blocks first: the duty's own rpm is editable
+    if rpm is None:
+        rpm, _ = _pick([duty], ("rpm", "speed_rpm"))
     torque = tkey = None
-    if marker:                       # the marked shaft quantities (PR #900): coupling torque with a bearing model, else the shaft torque
-        torque, tkey = _pick(blocks, SHAFT_TORQUE_KEYS)
+    if marker:                       # the marked shaft quantities (PR #900): coupling torque (net shaft power / omega), else T_shaft_Nm
+        p_net, _ = _pick(blocks, (SHAFT_POWER_KEY,))
+        if p_net is not None and rpm is not None and rpm > 0:
+            torque, tkey = p_net / (rpm * _W), SHAFT_POWER_KEY
+        else:
+            torque, tkey = _pick(blocks, SHAFT_TORQUE_KEYS)
         if torque is None:           # a MARKED record states shaft quantities: never fall back to the field torque
             return {"duty": name, "missing": "shaft_key_unrecognised"}
     else:
         torque, tkey = _pick(blocks, FIELD_TORQUE_KEYS)
-    rpm, _ = _pick(blocks, ("rpm", "speed_rpm"))          # the saved blocks first: the duty's own rpm is editable
-    if rpm is None:
-        rpm, _ = _pick([duty], ("rpm", "speed_rpm"))
     if torque is None or rpm is None or torque <= 0 or rpm <= 0:
         return {"duty": name, "missing": "the saved result has no positive shaft torque and speed"}
     eff, ekey = _pick(blocks, ("efficiency_shaft", "eta_shaft"))
@@ -250,7 +255,7 @@ def saved_point(duty: Dict[str, Any]) -> Dict[str, Any]:
         eff, ekey = _pick(blocks, ("efficiency", "eta_em"))
     if eff is not None and not (0.0 < eff <= 1.0):
         eff, ekey = None, None
-    shaft = bool(marker) and tkey in SHAFT_TORQUE_KEYS
+    shaft = bool(marker) and (tkey == SHAFT_POWER_KEY or tkey in SHAFT_TORQUE_KEYS)
     return {"duty": name, "torque_Nm": torque, "speed_rpm": rpm, "efficiency": eff, "efficiency_key": ekey,
             "torque_basis": "shaft" if shaft else "field_legacy", "torque_key": tkey, "shaft_convention": marker}
 

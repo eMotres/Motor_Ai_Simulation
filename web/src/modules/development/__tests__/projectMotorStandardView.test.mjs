@@ -19,10 +19,11 @@ test('Configure of a project motor uses the same component and the same props', 
   assert.match(cfg, /\{!focus && <Box sx=\{\{ display: 'grid'/);                              // the own tiles serve the motors outside a project
 });
 
-test('the view puts the field to the right of the table and reuses the standard viewer, kinds and rules', () => {
+test('the view stacks table, field and charts in ONE column of the same width, and reuses the standard viewer, kinds and rules', () => {
   const view = src('../../../components/simulation/ReadOnlySimulationView.tsx');
-  assert.match(view, /data-testid="results-with-field"/);
-  assert.match(view, /flex: '1 1 560px'[\s\S]*<SummaryTable[\s\S]*flex: '1 1 420px'[\s\S]*<PointFieldPane/);
+  assert.match(view, /<SummaryTable[\s\S]*\{withField && point && <PointFieldPane[\s\S]*<TransientCharts/);   // table, then the field, then the charts
+  assert.doesNotMatch(view, /results-with-field|flex: '1 1 560px'/);                                         // no side-by-side half-width table
+  assert.match(src('../../../components/simulation/PointFieldPane.tsx'), /\.\.\.SIM_BLOCK_SX/);
   const pane = src('../../../components/simulation/PointFieldPane.tsx');
   assert.match(pane, /import\('\.\.\/compare\/StoredFieldViewer'\)/);                         // no new viewer
   assert.match(pane, /storedFieldKinds\(current\)/);                                         // a map of another speed is never offered

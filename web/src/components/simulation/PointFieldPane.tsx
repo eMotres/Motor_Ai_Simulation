@@ -13,6 +13,7 @@ import { FIELD_KIND_ORDER, isNotComputed, otherPointFields, provenanceLine, stor
 import type { FieldKind, MotorView, StoredField } from '../../modules/development/types';
 import { watchChunkImport } from '../../lib/chunkReload';
 import { PANEL, LABEL } from '../common/ResultTiles';
+import { SIM_BLOCK_SX } from './simLayout';
 
 const StoredFieldViewer = lazy(watchChunkImport(() => import('../compare/StoredFieldViewer')));
 
@@ -59,7 +60,7 @@ const PointFieldPane: React.FC<Props> = ({ projectId, die, config, duty, showAll
     : '';
 
   return (
-    <Box sx={{ ...PANEL, p: 1, display: 'flex', flexDirection: 'column', gap: 0.75, minWidth: 0 }} data-testid="point-field-pane">
+    <Box sx={{ ...SIM_BLOCK_SX, ...PANEL, p: 1, display: 'flex', flexDirection: 'column', gap: 0.75, minWidth: 0 }} data-testid="point-field-pane">
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
         <Typography sx={LABEL}>{t('points.fields.title')}</Typography>
         <ToggleButtonGroup exclusive size="small" value={activeKind} aria-label={t('points.fields.title')}

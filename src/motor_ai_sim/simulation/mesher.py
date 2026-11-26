@@ -2600,6 +2600,44 @@ def _resample_ring_arcs(geom, r_ring: float, n_grid: int, tol_mm: float = 0.02,
         return _MP(parts) if len(parts) > 1 else (parts[0] if parts else geom)
     return geom
 
+def _belt_ring_with_boundary_neighbours(P, T, ring_idx, rP, r_iron, reach=15e-6):
+    """The belt's iron-side ring: the nodes within 2 um of the ring circle PLUS every node that is joined to one of them
+    by a BOUNDARY edge of the half mesh (an edge of exactly one triangle) that runs along the circle (a radial sector cut
+    does not count) and lies within ``reach`` of the circle.
+
+    Why: a rotor cell tiled by ``geo_mesh._tile_cells`` carries ray nodes whose radius was snapped to the mean of a
+    cluster of cut-ray radii (``_symmetrize_cuts``), so on some geometries (magnet_fill_up 1 to 2 on a 28-pole rotor)
+    they sit 2-3 um inside the circle.  The plain +-2 um window dropped them: the seam triangle then spanned the ray
+    node, left a hair-thin hole under the belt and an extra edge midpoint at every INTERIOR cell seam that the sector
+    boundary does not have, so the rotor mesh was not pole-pair periodic and TDM refused it.  A node that is
+    already inside the window, or that is not on a boundary edge next to the ring, is never added: a mesh whose ring
+    nodes all sit within 2 um (every die that worked before) selects exactly the same nodes."""
+    ring = np.asarray(ring_idx, np.int64)
+    if ring.size == 0:
+        return ring
+    T = np.asarray(T, np.int64)
+    e = np.sort(np.concatenate([T[[0, 1]].T, T[[1, 2]].T, T[[2, 0]].T]), axis=1)
+    key = e[:, 0] * np.int64(P.shape[1]) + e[:, 1]
+    uk, cnt = np.unique(key, return_counts=True)
+    bk = uk[cnt == 1]                                      # boundary edges
+    ba = bk // np.int64(P.shape[1]); bb = bk % np.int64(P.shape[1])
+    inring = np.zeros(P.shape[1], bool); inring[ring] = True
+    near = np.abs(rP - r_iron) < reach
+    # Only the gap-facing outline chain: a boundary edge that runs ALONG the circle.  A radial sector cut is a boundary
+    # edge too, but it leaves the circle at a right angle, and its inner end must never join the seam ring (it would
+    # make a zero-area seam triangle that overlaps the cells below it).
+    elen = np.hypot(P[0, bb] - P[0, ba], P[1, bb] - P[1, ba])
+    along = np.abs(rP[bb] - rP[ba]) <= 0.1 * elen
+    add = np.zeros(P.shape[1], bool)
+    m = inring[ba] & ~inring[bb] & near[bb] & along
+    add[bb[m]] = True
+    m = inring[bb] & ~inring[ba] & near[ba] & along
+    add[ba[m]] = True
+    if not add.any():
+        return ring
+    return np.where(inring | add)[0]
+
+
 def _weld_belt_into_half(mesh, tags, spec: dict, half: str, n_sectors: int):
     """BELT: build this half's gap slice (r_lo→r_hi from ``spec``) directly in
     numpy — K uniform radial rings × the n_slip angular grid — and weld it into
@@ -2635,6 +2673,12 @@ def _weld_belt_into_half(mesh, tags, spec: dict, half: str, n_sectors: int):
     r_iron = r_lo if half == "rotor" else r_hi
     rP = np.hypot(P[0], P[1])
     ring_idx = np.where(np.abs(rP - r_iron) < 2e-6)[0]        # ±2 µm
+    if half == "rotor":                    # the half TDM maps pole pair to pole pair (see the helper)
+        _n_plain = int(ring_idx.size)
+        ring_idx = _belt_ring_with_boundary_neighbours(P, T, ring_idx, rP, r_iron)
+        if ring_idx.size != _n_plain:
+            log.info("belt[rotor]: %d boundary node(s) a few um inside the ring circle joined the seam ring",
+                     ring_idx.size - _n_plain)
     if ring_idx.size < 8:
         raise ValueError(f"belt[{half}]: only {ring_idx.size} mesh nodes on the "
                          f"iron circle r={r_iron*1e3:.4f}mm — boundary not on the ring")

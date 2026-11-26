@@ -159,9 +159,12 @@ def _image_maps(cen: np.ndarray, tol: float, n_sectors: int, bc_sign: int,
         worst = max(worst, float(best_d.max()))
         if not np.all(best_d < tol) or (bijective
                                         and np.unique(best_j).size != n):
+            _w = int(np.argmax(best_d))                    # where the mesh is not periodic, in plain numbers
             info.update({"failed_k": k, "max_match_distance_m": worst,
                          "tolerance_m": tol,
-                         "unmatched": int(np.sum(best_d >= tol))})
+                         "unmatched": int(np.sum(best_d >= tol)),
+                         "worst_point_r_mm": float(1e3 * math.hypot(cen[0, _w], cen[1, _w])),
+                         "worst_point_angle_deg": float(math.degrees(math.atan2(cen[1, _w], cen[0, _w])))})
             return None, info
         ang = best_f * phi - a
         sign = np.where(best_f % 2 == 1, s, 1).astype(float) if s < 0 \

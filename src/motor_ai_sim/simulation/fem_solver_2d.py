@@ -4390,6 +4390,18 @@ class TdmMeshNotPeriodic(RuntimeError):
         self.detail = str(detail)
 
 
+def _tdm_not_periodic_words(info) -> str:
+    """The period-map diagnostics of a refused rotor mesh, in plain words first (which point, where), the raw numbers after."""
+    try:
+        return ("%d of %d rotor mesh points have no pole-pair image; the worst is at radius %.3f mm, angle %.3f deg "
+                "(%.2f um off, tolerance %.4f um): %s" % (
+                    int(info["unmatched"]), int(info["n_points"]), float(info["worst_point_r_mm"]),
+                    float(info["worst_point_angle_deg"]), 1e6 * float(info["max_match_distance_m"]),
+                    1e6 * float(info["tolerance_m"]), info))
+    except (KeyError, TypeError, ValueError):
+        return str(info)
+
+
 class TdmAttemptFailed(RuntimeError):
     """A time-periodic (TDM) attempt that must not be reported: it failed at
     ``stage`` (set-up, static start, Newton, demag, re-solve, splice) or its
@@ -9546,7 +9558,8 @@ def _fem_transient_sliding_band_once(
                 _td_back, _mi_b = _td_map(1.0, -1.0)
                 _td_fwd, _mi_f = _td_map(1.0, +1.0)
                 if _td_back is None or _td_fwd is None:
-                    raise TdmMeshNotPeriodic(str(_mi_b))
+                    _mi_bad = _mi_b if _td_back is None else _mi_f
+                    raise TdmMeshNotPeriodic(_tdm_not_periodic_words(_mi_bad))
             _td_N = _td_Nh if _td_neg else _td_nspp
             # THE MAP CHECKS of the period actually used (second Codex review,
             # finding 7): inverse, BC signs / constrained spaces, operators,

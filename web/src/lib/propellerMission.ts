@@ -53,7 +53,7 @@ export interface MissionForm {
   chemistry: string; cells: string; capacity: string; usable: string; battMass: string; vNom: string; vMin: string; vMax: string; whKg: string; rCell: string;
   dryMass: string; payload: string; dragArea: string; maxD: string; minD: string; airTemp: string; altitude: string; avionics: string;
   speedKmh: string; bestSpeed: boolean; hoverShare: string; twCont: string; twPeak: string; tipMach: string; enduranceMode: 'hover' | 'best_speed';
-  catalogue: boolean; own: boolean; pdMin: string; pdMax: string; pdStep: string; chords: string; blades: string;
+  catalogue: boolean; own: boolean; pdRange: string; pdStep: string; chords: string; blades: string; allowUnverified: boolean; battCurrent: string;
   refine: boolean; topN: string; pop: string; generations: string; seed: string; objective: Objective;
 }
 
@@ -63,88 +63,163 @@ export const DEFAULT_FORM: MissionForm = {
   chemistry: 'li-ion-21700', cells: '6', capacity: '16', usable: '85', battMass: '', vNom: '', vMin: '', vMax: '', whKg: '', rCell: '',
   dryMass: '3.5', payload: '1', dragArea: '0.05', maxD: '13', minD: '10', airTemp: '25', altitude: '0', avionics: '0',
   speedKmh: '70', bestSpeed: false, hoverShare: '0', twCont: '1.5', twPeak: '2', tipMach: '0.7', enduranceMode: 'hover',
-  catalogue: true, own: true, pdMin: '0.25', pdMax: '0.6', pdStep: '0.05', chords: '1, 1.15', blades: '2',
+  catalogue: true, own: true, pdRange: '0.25-0.6', pdStep: '0.05', chords: '1, 1.15', blades: '2', allowUnverified: false, battCurrent: '',
   refine: true, topN: '1', pop: '12', generations: '6', seed: '1', objective: 'range_km',
 };
 
-export type BuildResult = { ok: true; body: Record<string, unknown> } | { ok: false; error: string; field: string };
-
-function num(form: MissionForm, key: keyof MissionForm): { v: number } | { error: string; field: string } {
-  const n = parseNumber(String(form[key]));
-  return n === null ? { error: 'number', field: key } : { v: n };
-}
+export type BuildResult = { ok: true; body: Record<string, unknown> } | { ok: false; error: string; field: string; errors: Record<string, string> };
 
 function list(text: string): number[] | null {
   const parts = text.split(/[;,\s]+/).filter(Boolean).map((p) => parseNumber(p));
   return parts.length && parts.every((p): p is number => p !== null) ? (parts as number[]) : null;
 }
 
+/** Allowed ranges of the numeric fields (the server's own limits, so a typo is shown on its field before the request). */
+export const FIELD_RULES: Partial<Record<keyof MissionForm, { min: number; max: number; int?: boolean }>> = {
+  rotors: { min: 1, max: 12, int: true }, boardCap: { min: 1, max: 2000 }, turns0: { min: 1, max: 60, int: true }, strip0: { min: 0.05, max: 5 },
+  stripWidth: { min: 0.5, max: 30 }, headroom: { min: 0, max: 50 }, turnsBelow: { min: 0, max: 10, int: true }, turnsAbove: { min: 0, max: 10, int: true },
+  coilTol: { min: 0, max: 50 }, cells: { min: 1, max: 30, int: true }, capacity: { min: 0.1, max: 500 }, usable: { min: 30, max: 100 }, battMass: { min: 0.01, max: 500 },
+  vNom: { min: 2, max: 5 }, vMin: { min: 2, max: 5 }, vMax: { min: 2, max: 5 }, whKg: { min: 20, max: 600 }, rCell: { min: 0, max: 1 }, battCurrent: { min: 1, max: 5000 },
+  dryMass: { min: 0.05, max: 500 }, payload: { min: 0, max: 500 }, dragArea: { min: 0, max: 5 }, maxD: { min: 4, max: 30 }, minD: { min: 0, max: 30 },
+  airTemp: { min: -40, max: 60 }, altitude: { min: -500, max: 6000 }, avionics: { min: 0, max: 2000 }, speedKmh: { min: 0, max: 288 },
+  hoverShare: { min: 0, max: 95 }, twCont: { min: 1, max: 10 }, twPeak: { min: 1, max: 10 }, tipMach: { min: 0.2, max: 1 }, pdStep: { min: 0.01, max: 0.5 },
+  topN: { min: 1, max: 3, int: true }, pop: { min: 4, max: 20, int: true }, generations: { min: 1, max: 10, int: true }, seed: { min: 0, max: 4294967295, int: true },
+};
+
+/** `a-b` (or `a – b`, `a b`) -> [a, b]; null when it is not two numbers with a <= b. */
+export function parseRange(text: string): [number, number] | null {
+  const m = text.trim().replace(/,/g, '.').match(/^(-?[\d.]+)\s*(?:-|–|—|\s)\s*(-?[\d.]+)$/);
+  if (!m) return null;
+  const lo = Number(m[1]), hi = Number(m[2]);
+  return Number.isFinite(lo) && Number.isFinite(hi) && lo <= hi ? [lo, hi] : null;
+}
+
 /** The request body of POST /api/propellers/mission/run from the form: SI inside (km/h -> m/s, % -> fraction), an empty optional field
- *  left out (the server takes the preset / the model's value).  The first unreadable field is named. */
+ *  left out (the server takes the preset / the model's value).  EVERY unreadable or out-of-range field is returned in `errors` (key =
+ *  form field, value = 'number' | 'range' | 'int'), the first one in `field`. */
 export function buildBody(form: MissionForm, motors: MotorEntry[]): BuildResult {
   const motor = motors.find((m) => motorKey(m) === form.motorKey);
-  if (!motor) return { ok: false, error: 'motor', field: 'motorKey' };
-  if (motor.kind === 'none') return { ok: false, error: 'motor', field: 'motorKey' };
+  const errors: Record<string, string> = {};
+  if (!motor || motor.kind === 'none') errors.motorKey = 'motor';
   const body: Record<string, Record<string, unknown> | string> = { motor: {}, kv: {}, battery: {}, airframe: {}, flight: {}, candidates: {}, refine: {} };
-  const put = (g: string, k: string, key: keyof MissionForm, scale = 1, optional = false): string | null => {
-    if (optional && String(form[key]).trim() === '') return null;
-    const r = num(form, key);
-    if ('error' in r) return key;
-    (body[g] as Record<string, unknown>)[k] = r.v * scale;
-    return null;
+  const put = (g: string, k: string, key: keyof MissionForm, scale = 1, optional = false): void => {
+    const text = String(form[key]);
+    if (optional && text.trim() === '') return;
+    const n = parseNumber(text);
+    const rule = FIELD_RULES[key];
+    if (n === null) { errors[key] = 'number'; return; }
+    if (rule && (n < rule.min || n > rule.max)) { errors[key] = 'range'; return; }
+    if (rule?.int && !Number.isInteger(n)) { errors[key] = 'int'; return; }
+    (body[g] as Record<string, unknown>)[k] = n * scale;
   };
-  const checks: Array<string | null> = [
-    put('motor', 'rotors', 'rotors'), put('motor', 'board_cap_A', 'boardCap', 1, true),
-    put('kv', 'turns0', 'turns0', 1, true), put('kv', 'strip_thickness0_mm', 'strip0', 1, true), put('kv', 'strip_width_mm', 'stripWidth', 1, true),
-    put('kv', 'headroom', 'headroom', 0.01), put('kv', 'turns_below', 'turnsBelow'), put('kv', 'turns_above', 'turnsAbove'), put('kv', 'coil_height_tol', 'coilTol', 0.01),
-    put('battery', 'cells_s', 'cells'), put('battery', 'capacity_ah', 'capacity'), put('battery', 'usable', 'usable', 0.01), put('battery', 'mass_kg', 'battMass', 1, true),
-    put('battery', 'v_nom', 'vNom', 1, true), put('battery', 'v_min', 'vMin', 1, true), put('battery', 'v_max', 'vMax', 1, true),
-    put('battery', 'wh_per_kg', 'whKg', 1, true), put('battery', 'r_cell_ohm_ah', 'rCell', 1, true),
-    put('airframe', 'dry_mass_kg', 'dryMass'), put('airframe', 'payload_kg', 'payload'), put('airframe', 'drag_area_m2', 'dragArea'),
-    put('airframe', 'max_diameter_in', 'maxD'), put('airframe', 'min_diameter_in', 'minD'), put('airframe', 'air_temp_c', 'airTemp'),
-    put('airframe', 'altitude_m', 'altitude'), put('airframe', 'avionics_W', 'avionics'),
-    put('flight', 'cruise_speed_ms', 'speedKmh', 1 / KMH), put('flight', 'hover_share_pct', 'hoverShare'), put('flight', 'tw_cont', 'twCont'),
-    put('flight', 'tw_peak', 'twPeak'), put('flight', 'tip_mach', 'tipMach'),
-    put('candidates', 'pd_min', 'pdMin'), put('candidates', 'pd_max', 'pdMax'), put('candidates', 'pd_step', 'pdStep'),
-    put('refine', 'top_n', 'topN'), put('refine', 'pop', 'pop'), put('refine', 'generations', 'generations'), put('refine', 'seed', 'seed'),
-  ];
-  const bad = checks.find((c) => c !== null);
-  if (bad) return { ok: false, error: 'number', field: bad };
+  put('motor', 'rotors', 'rotors'); put('motor', 'board_cap_A', 'boardCap', 1, true);
+  put('kv', 'turns0', 'turns0', 1, true); put('kv', 'strip_thickness0_mm', 'strip0', 1, true); put('kv', 'strip_width_mm', 'stripWidth', 1, true);
+  put('kv', 'headroom', 'headroom', 0.01); put('kv', 'turns_below', 'turnsBelow'); put('kv', 'turns_above', 'turnsAbove'); put('kv', 'coil_height_tol', 'coilTol', 0.01);
+  put('battery', 'cells_s', 'cells'); put('battery', 'capacity_ah', 'capacity'); put('battery', 'usable', 'usable', 0.01); put('battery', 'mass_kg', 'battMass', 1, true);
+  put('battery', 'v_nom', 'vNom', 1, true); put('battery', 'v_min', 'vMin', 1, true); put('battery', 'v_max', 'vMax', 1, true);
+  put('battery', 'wh_per_kg', 'whKg', 1, true); put('battery', 'r_cell_ohm_ah', 'rCell', 1, true); put('battery', 'cont_current_A', 'battCurrent', 1, true);
+  put('airframe', 'dry_mass_kg', 'dryMass'); put('airframe', 'payload_kg', 'payload'); put('airframe', 'drag_area_m2', 'dragArea');
+  put('airframe', 'max_diameter_in', 'maxD'); put('airframe', 'min_diameter_in', 'minD'); put('airframe', 'air_temp_c', 'airTemp');
+  put('airframe', 'altitude_m', 'altitude'); put('airframe', 'avionics_W', 'avionics');
+  put('flight', 'cruise_speed_ms', 'speedKmh', 1 / KMH); put('flight', 'hover_share_pct', 'hoverShare'); put('flight', 'tw_cont', 'twCont');
+  put('flight', 'tw_peak', 'twPeak'); put('flight', 'tip_mach', 'tipMach');
+  put('candidates', 'pd_step', 'pdStep');
+  put('refine', 'top_n', 'topN'); put('refine', 'pop', 'pop'); put('refine', 'generations', 'generations'); put('refine', 'seed', 'seed');
+  const range = parseRange(form.pdRange);
+  if (!range || range[0] < 0.1 || range[1] > 1.5) errors.pdRange = 'range';
   const chords = list(form.chords);
-  if (!chords) return { ok: false, error: 'number', field: 'chords' };
+  if (!chords || chords.some((c) => c < 0.5 || c > 1.6)) errors.chords = chords ? 'range' : 'number';
   const blades = list(form.blades);
-  if (!blades) return { ok: false, error: 'number', field: 'blades' };
+  if (!blades || blades.some((b) => b !== 2 && b !== 3)) errors.blades = blades ? 'range' : 'number';
+  const keys = Object.keys(errors);
+  if (keys.length > 0 || !motor || !range || !chords || !blades) return { ok: false, error: errors[keys[0]] ?? 'number', field: keys[0] ?? 'motorKey', errors };
   const m = body.motor as Record<string, unknown>;
   if (motor.id) m.card_id = motor.id; else { m.die = motor.die; m.config = motor.config; }
   m.drive = form.drive || 'sine';
-  Object.assign(body.kv as object, { mode: form.kvMode });
+  Object.assign(body.kv as object, { mode: form.kvMode, allow_unverified: form.allowUnverified });
   Object.assign(body.battery as object, { chemistry: form.chemistry });
   Object.assign(body.flight as object, { best_speed: form.bestSpeed, endurance_mode: form.enduranceMode });
-  Object.assign(body.candidates as object, { catalogue: form.catalogue, own: form.own, chords, blades });
+  Object.assign(body.candidates as object, { catalogue: form.catalogue, own: form.own, chords, blades, pd_min: range[0], pd_max: range[1] });
   Object.assign(body.refine as object, { enabled: form.refine });
   body.objective = form.objective;
   return { ok: true, body };
 }
 
+/** The form as it was remembered: only the known keys, each with the type of its default (a stale or edited store never injects anything). */
+export function sanitizeForm(raw: unknown): MissionForm {
+  const out: Record<string, unknown> = { ...DEFAULT_FORM };
+  if (raw && typeof raw === 'object') {
+    for (const [k, def] of Object.entries(DEFAULT_FORM)) {
+      const v = (raw as Record<string, unknown>)[k];
+      if (typeof v === typeof def && (typeof v !== 'string' || v.length <= 200)) out[k] = v;
+    }
+  }
+  if (!['free', 'as_built'].includes(String(out.kvMode))) out.kvMode = DEFAULT_FORM.kvMode;
+  if (!['hover', 'best_speed'].includes(String(out.enduranceMode))) out.enduranceMode = DEFAULT_FORM.enduranceMode;
+  if (!(OBJECTIVES as readonly string[]).includes(String(out.objective))) out.objective = DEFAULT_FORM.objective;
+  return out as unknown as MissionForm;
+}
+
+/** A server validation message names a field as `group.key`: the form field it belongs to (null when unknown). */
+const SERVER_FIELDS: Record<string, keyof MissionForm> = {
+  'motor.rotors': 'rotors', 'motor.board_cap_A': 'boardCap', 'kv.turns0': 'turns0', 'kv.strip_thickness0_mm': 'strip0', 'kv.strip_width_mm': 'stripWidth',
+  'kv.headroom': 'headroom', 'kv.turns_below': 'turnsBelow', 'kv.turns_above': 'turnsAbove', 'kv.coil_height_tol': 'coilTol', 'battery.cells_s': 'cells',
+  'battery.capacity_ah': 'capacity', 'battery.usable': 'usable', 'battery.mass_kg': 'battMass', 'battery.v_nom': 'vNom', 'battery.v_min': 'vMin',
+  'battery.v_max': 'vMax', 'battery.wh_per_kg': 'whKg', 'battery.r_cell_ohm_ah': 'rCell', 'battery.cont_current_A': 'battCurrent', 'airframe.dry_mass_kg': 'dryMass',
+  'airframe.payload_kg': 'payload', 'airframe.drag_area_m2': 'dragArea', 'airframe.max_diameter_in': 'maxD', 'airframe.min_diameter_in': 'minD',
+  'airframe.air_temp_c': 'airTemp', 'airframe.altitude_m': 'altitude', 'airframe.avionics_W': 'avionics', 'flight.cruise_speed_ms': 'speedKmh',
+  'flight.hover_share_pct': 'hoverShare', 'flight.tw_cont': 'twCont', 'flight.tw_peak': 'twPeak', 'flight.tip_mach': 'tipMach', 'candidates.pd_min': 'pdRange',
+  'candidates.pd_max': 'pdRange', 'candidates.pd_step': 'pdStep', 'candidates.chords': 'chords', 'candidates.blades': 'blades', 'refine.top_n': 'topN',
+  'refine.pop': 'pop', 'refine.generations': 'generations', 'refine.seed': 'seed', 'refine': 'pop',
+};
+export function serverFieldKey(message: string): keyof MissionForm | null {
+  const m = message.match(/\b([a-z]+(?:\.[A-Za-z0-9_]+)?)\b/g) ?? [];
+  for (const w of m) if (SERVER_FIELDS[w]) return SERVER_FIELDS[w];
+  return null;
+}
+
+export const RUN_ID_RX = /^msn-[0-9a-f]{10,12}$/;
+/** A run id read from storage: the id or null (nothing else is ever sent to the server from a stored value). */
+export function validRunId(v: unknown): string | null {
+  return typeof v === 'string' && RUN_ID_RX.test(v) ? v : null;
+}
+/** The remembered row, if the opened run still has it; else null (the page falls back to the best row without a word). */
+export function pickRow(rows: Array<{ id: string }>, id: unknown): string | null {
+  return typeof id === 'string' && rows.some((r) => r.id === id) ? id : null;
+}
+
+export type RunStatus = 'queued' | 'running' | 'done' | 'stopped' | 'failed' | 'interrupted';
+export const RUN_STATUSES: readonly RunStatus[] = ['queued', 'running', 'done', 'stopped', 'failed', 'interrupted'];
+/** The translation key of a run status (an unknown value gets the `interrupted` text, never the raw English word). */
+export function statusKey(status: string): string {
+  return `propMissionStatus_${(RUN_STATUSES as readonly string[]).includes(status) ? status : 'interrupted'}`;
+}
+/** The translation key of an API error by HTTP status; the server's own text follows it as detail. */
+export function errorKey(status: number): string {
+  return [401, 403, 404, 409, 422, 499, 503].includes(status) ? `propMissionErr_${status}` : 'propMissionErr_other';
+}
+
 export interface Point {
   V_ms: number; thrust_N: number; rpm: number; torque_Nm: number; current_A: number | null; pack_power_W: number | null; motor_eta: number | null;
-  T_winding_C: number | null; tip_mach: number; tilt_deg: number | null;
+  T_winding_C: number | null; tip_mach: number; tilt_deg: number | null; verification?: string | null; pack_V?: number | null;
 }
 export interface Failure { rule: string; detail: string }
 export interface CandidateResult {
   id: string; name: string; source: 'own' | 'catalogue'; prop_id?: string | null; D_in: number; pitch_ratio: number | null; pitch_in?: number | null;
   chord_scale: number | null; blades: number | null; flags?: string[]; turns?: number; strip?: { thickness_mm: number; width_mm: number; stock_kg: number | null; check: boolean; low_stock: boolean };
-  as_built?: boolean; kv_rpm_per_V?: number | null; objectives: Partial<Record<Objective, number | null>>; objective_value: number | null;
-  tw_cont?: number; tw_peak?: number; points?: { hover: Point | null; cruise: Point | null }; failures: Failure[]; passed: boolean;
+  as_built?: boolean; kv_rpm_per_V?: number | null; checks?: Record<string, string>; curve?: { source: string | null; points: number; rpm_min: number | null; rpm_max: number | null };
+  vector?: Record<string, number | string> | null; objectives: Partial<Record<Objective, number | null>>; objective_value: number | null;
+  tw_cont?: number; tw_peak?: number; points?: { hover: Point | null; cruise: Point | null; hover_end?: Point | null; cruise_end?: Point | null }; failures: Failure[]; passed: boolean;
 }
 export interface Alternative { turns: number; kv_rpm_per_V: number | null; objectives: CandidateResult['objectives']; tw_cont?: number; tw_peak?: number; passed?: boolean }
 export interface Refined {
   from_id: string; from_name: string; seed_vector: Record<string, number | string>; seed_value: number | null; best_vector: Record<string, number | string> | null;
   best_value: number | null; gain_pct: number | null; result: CandidateResult | null; n_evaluations: number; n_feasible: number;
-  settings: { pop: number; generations: number; seed: number; free: string[] };
+  settings: { pop: number; generations: number; seed: number; free: string[] }; optimizer_run_id?: string | null;
 }
 export interface MissionResult {
-  results: CandidateResult[]; alternatives: Record<string, Alternative[]>; refined: Refined[]; note: string; stopped: boolean;
+  results: CandidateResult[]; alternatives: Record<string, Alternative[]>; refined: Refined[]; note: string; stopped: boolean; stopped_stage?: string | null; complete?: boolean;
+  provenance?: Record<string, unknown>;
   counts: { total: number; done: number; passed: number };
   mission: { mass_kg: number; weight_N: number; rho_kg_m3: number; pack: { E_usable_Wh: number; mass_kg: number } };
   winding: { turns0: number; options: Array<{ turns: number }> };

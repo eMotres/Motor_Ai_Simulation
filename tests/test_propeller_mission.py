@@ -9,6 +9,8 @@ import math
 
 import pytest
 
+from motor_ai_sim import jobs as J
+from motor_ai_sim import motor_access as ma
 from motor_ai_sim import propeller_mission as pm
 from motor_ai_sim import propeller_mission_api as pma
 from motor_ai_sim import propeller_optimize as po
@@ -117,7 +119,7 @@ def _body(**over):
     b = {"motor": {"die": "TEST DIE", "config": "L1"}, "battery": {"cells_s": 6, "capacity_ah": 16.0},
          "candidates": {"catalogue": False, "own": True, "blades": [2], "chords": [1.0], "pd_min": 0.3, "pd_max": 0.4, "pd_step": 0.05},
          "airframe": {"min_diameter_in": 12.0, "max_diameter_in": 12.0, "dry_mass_kg": 1.0},
-         "flight": {"tw_cont": 1.2, "tw_peak": 1.5}, "kv": {"mode": "as_built"},
+         "flight": {"tw_cont": 1.2, "tw_peak": 1.5}, "kv": {"mode": "as_built", "allow_unverified": True},
          "refine": {"enabled": False}}
     for k, v in over.items():
         b[k] = {**b.get(k, {}), **v} if isinstance(v, dict) else v
@@ -148,6 +150,9 @@ def _stub_curve(spec, design, ms, rpm_step):
     return _curve(D, ct, cp, min(cap, 20000.0)), ["stub"]
 
 
+ACCESS = {"mode": "granted", "dies": frozenset(), "email": "u@x", "is_admin": False, "configs": frozenset(), "hide": ()}
+
+
 @pytest.fixture()
 def stub(monkeypatch, tmp_path):
     monkeypatch.setattr(pm, "own_curve", _stub_curve)
@@ -156,12 +161,16 @@ def stub(monkeypatch, tmp_path):
     (d / "L1.json").write_text(json.dumps(_raw()), encoding="utf-8")
     monkeypatch.setattr(s1, "_DIR", tmp_path / "s1")
     monkeypatch.setattr(pma, "_runs_dir", lambda: tmp_path / "runs")
-    return tmp_path
+    monkeypatch.setattr(pma.ma, "may_see_config", lambda access, die, cfg: die not in access.get("hide", ()))
+    old_q = J.queue()
+    J.reset_queue(J.InProcessQueue(workers=2, persist=False))
+    yield tmp_path
+    J.reset_queue(old_q)
 
 
 def test_run_ranks_flags_failures_and_switches_objective(stub):
     cfg = pma.validate(_body())
-    raw, sha = pma.load_raw_model("TEST DIE", "L1")
+    raw, sha = pma.load_raw_model("TEST DIE", "L1", ACCESS)
     res = pm.run_selection(cfg, raw)
     rows = res["results"]
     assert len(rows) == 3 and res["note"].startswith("Estimate:")
@@ -186,7 +195,7 @@ def test_run_ranks_flags_failures_and_switches_objective(stub):
 
 
 def test_run_storage_round_trip_and_motor_kind(stub):
-    r = pma.start_run(_body(), [], background=False)
+    r = pma.start_run(_body(), [], ACCESS, background=False)
     assert r["run_id"].startswith("msn-") and r["status"] == "done"
     j = pma.get_run(r["run_id"])
     assert j["motor"]["kind"] == "s1" and j["motor"]["die"] == "TEST DIE" and len(j["motor"]["model_sha256"]) == 64
@@ -197,7 +206,7 @@ def test_run_storage_round_trip_and_motor_kind(stub):
         pma.get_run("msn-0000000000")
     assert e.value.status == 404
     with pytest.raises(ApiProblem) as e:
-        pma.start_run(_body(motor={"die": "NOPE", "config": "X"}), [], background=False)
+        pma.start_run(_body(motor={"die": "NOPE", "config": "X"}), [], ACCESS, background=False)
     assert e.value.status == 422 and "no propeller S1 model" in str(e.value.detail)
 
 
@@ -248,16 +257,16 @@ def test_picker_rows_kind_and_greyed_motor(stub):
     del no_kv["passport"]["passport"]["Vemf0_peak_V"]
     no_pass = {"id": "cat_z", "name": "NO PASSPORT", "diameter_mm": 30}
     s1_named = _card(id="cat_s", name="TEST DIE L1")
-    rows = {r["name"]: r for r in pma.motor_entries([good, no_kv, no_pass, s1_named])}
+    rows = {r["name"]: r for r in pma.motor_entries([good, no_kv, no_pass, s1_named], ACCESS)}
     assert rows["TEST EST 40"]["kind"] == "estimate" and rows["TEST EST 40"]["reason"] is None
     assert rows["NO KV 30"]["kind"] == "none" and "Kv" in rows["NO KV 30"]["reason"]
     assert rows["NO PASSPORT"]["kind"] == "none" and "passport" in rows["NO PASSPORT"]["reason"]
     assert rows["TEST DIE L1"]["kind"] == "s1" and rows["TEST DIE L1"]["die"] == "TEST DIE" and rows["TEST DIE L1"]["id"] == "cat_s"
     # the greyed motor is refused with its reason; the estimate one runs and the run says which model was used
     with pytest.raises(ApiProblem) as e:
-        pma.start_run(_body(motor={"card_id": "cat_y", "die": None, "config": None}), [good, no_kv], background=False)
+        pma.start_run(_body(motor={"card_id": "cat_y", "die": None, "config": None}), [good, no_kv], ACCESS, background=False)
     assert e.value.status == 422 and "cannot be used" in str(e.value.detail) and "Kv" in str(e.value.detail)
-    r = pma.start_run(_body(motor={"card_id": "cat_x", "die": None, "config": None}, battery={"cells_s": 12}, kv={"mode": "free"}), [good], background=False)
+    r = pma.start_run(_body(motor={"card_id": "cat_x", "die": None, "config": None}, battery={"cells_s": 12}, kv={"mode": "free"}), [good], ACCESS, background=False)
     j = pma.get_run(r["run_id"])
     assert j["status"] == "done", j.get("error")
     assert j["motor"]["kind"] == "estimate" and j["motor"]["label"] == "estimate, not an S1 model" and j["motor"]["card_id"] == "cat_x"
@@ -289,7 +298,7 @@ def test_optimizer_default_behaviour_is_unchanged():
 
 def test_mission_optimisation_runs_and_does_not_lose_the_seed(stub):
     cfg = pma.validate(_body(refine={"enabled": True, "top_n": 1, "pop": 4, "generations": 2, "seed": 1, "free": ["outer"]}))
-    raw, _ = pma.load_raw_model("TEST DIE", "L1")
+    raw, _ = pma.load_raw_model("TEST DIE", "L1", ACCESS)
     res = pm.run_selection(cfg, raw)
     assert len(res["refined"]) == 1
     rf = res["refined"][0]
@@ -316,6 +325,7 @@ def test_routes_and_open_in_designer_draft(stub, monkeypatch):
     cards = [_card(), _card(id="cat_y", name="NO KV 30")]
     del cards[1]["passport"]["passport"]["Vemf0_peak_V"]
     monkeypatch.setattr(rp, "_mission_cards", lambda authorization: cards)
+    monkeypatch.setattr(rp, "_mission_access", lambda authorization: ACCESS)
     app = FastAPI()
     app.include_router(rp.router)
     c = TestClient(app)
@@ -331,8 +341,261 @@ def test_routes_and_open_in_designer_draft(stub, monkeypatch):
     assert c.get("/api/propellers/mission/runs/msn-0000000000").status_code == 404
     # Open in Designer: the refined vector saves as an ordinary Designer draft (the caller's workspace, no catalogue write)
     cfg = pma.validate(_body(refine={"enabled": True, "top_n": 1, "pop": 4, "generations": 1, "seed": 1, "free": ["outer"]}))
-    raw, _ = pma.load_raw_model("TEST DIE", "L1")
+    raw, _ = pma.load_raw_model("TEST DIE", "L1", ACCESS)
     rf = pm.run_selection(cfg, raw)["refined"][0]
     monkeypatch.setattr(pda, "_draft_dir", lambda: stub / "drafts")
     saved = pda.put_draft("mission_abc_1", rf["best_vector"], "L12")
     assert saved["saved"] and pda.get_draft("mission_abc_1")["vector"]["diameter_in"] == rf["best_vector"]["diameter_in"]
+
+
+# ================================================================ rework after the independent review (2026-11-26)
+class FakeCtx:
+    """A motor whose point depends only on the voltage it is given: ok above ``v_ok`` volts, electrical power = shaft power / eff."""
+
+    def __init__(self, v_ok=0.0, eff=0.8, verification="verified", status="ok"):
+        self.v_ok, self.eff, self.verification, self.status = v_ok, eff, verification, status
+        self.calls = []
+        self.lim = {"I_max_A": 1e9, "winding_C": 200.0, "magnet_C": 150.0}
+        self.drive, self.board_cap_A, self.k, self.f, self.kv, self.m, self.estimate = {}, None, 1.0, 1.0, 400.0, {"R_phase_ohm": 0.01}, False
+
+    def point(self, rpm, q, air, amb, v_min):
+        self.calls.append(v_min)
+        if v_min is not None and v_min < self.v_ok:
+            return {"ok": False, "state": "voltage_infeasible", "status": "infeasible"}
+        shaft = q * 2 * math.pi * rpm / 60.0
+        return {"ok": True, "state": "converged", "rpm": rpm, "torque_Nm": q, "current_A": shaft / 20.0, "T_winding_C": 80.0, "T_magnet_C": 60.0,
+                "shaft_W": shaft, "P_motor_in_W": shaft / self.eff, "P_elec_W": shaft / self.eff, "eta_motor": self.eff, "controller_loss_W": None,
+                "voltage_status": self.status, "verification": self.verification, "continuous": True, "reasons": [], "demag_known": False}
+
+
+class FakeBank:
+    def __init__(self, ctx):
+        self._c = ctx
+        self.options = [{"turns": 7, "strip": {"thickness_mm": 0.6, "width_mm": 2.5, "stock_kg": None, "check": False, "low_stock": False}, "as_built": True}]
+        self.n0 = 7
+
+    def ctx(self, n):
+        return self._c
+
+
+def _ms(cfg_over=None, cancel=None):
+    cfg = pm.validate_inputs({"motor": {"die": "A", "config": "B"}, "battery": {"cells_s": 6, "capacity_ah": 16.0, "mass_kg": 1.0}, "airframe": {"dry_mass_kg": 1.0},
+                              "kv": {"allow_unverified": True}, **(cfg_over or {})})
+    ms = pm.mission_numbers(cfg)
+    ms["cancel"] = cancel
+    return cfg, ms
+
+
+def test_pack_sag_is_iterated_with_the_real_losses_not_an_assumed_efficiency():
+    # the review's case: 800 W shaft, 24 V open circuit, 0.05 ohm, efficiency 50 % -> the pack gives 20.000 V (an assumed 80 % said 21.695 V)
+    cfg, ms = _ms()
+    ms["n_rot"] = 1
+    ms["avionics_W"] = 0.0
+    ms["pack"] = {**ms["pack"], "V_mean_open": 24.0, "V_end_open": 24.0, "R_pack_ohm": 0.05}
+    ctx = FakeCtx(eff=0.5)
+    q = 800.0 / (2 * math.pi * 6000 / 60.0)
+    sp = pm.solve_pack_point(ctx, ms, 6000.0, q, 5.0, "mean")
+    assert sp["ok"] and sp["pack"]["V_V"] == pytest.approx(20.0, rel=1e-3)
+    assert ctx.calls[-1] == pytest.approx(20.0, rel=2e-3)                      # the motor was solved at that voltage, not at 21.7 V
+    # a motor that needs 21 V therefore fails (it used to pass at the assumed 21.695 V)
+    ctx2 = FakeCtx(eff=0.5, v_ok=21.0)
+    sp2 = pm.solve_pack_point(ctx2, ms, 6000.0, q, 5.0, "mean")
+    assert not sp2["ok"] and sp2["reason"].startswith("motor_")
+    # high R: the pack cannot deliver the power at all -> rejected, not approximated
+    ms["pack"] = {**ms["pack"], "R_pack_ohm": 0.5}
+    assert pm.solve_pack_point(FakeCtx(eff=0.5), ms, 6000.0, q, 5.0, "mean")["reason"] == "pack_cannot_deliver"
+
+
+def test_mean_pass_end_fail_is_a_failure_of_the_candidate():
+    cfg, ms = _ms()
+    rows = _curve(0.3, 0.10, 0.045, 12000.0)
+    ctx = FakeCtx(v_ok=17.0)                      # the mean pack (21.6 V) holds it; the end of discharge with 15 % headroom (about 15 V) does not
+    cand = {"id": "x", "name": "x", "source": "own", "D_in": 0.3 / 0.0254, "blades": 2, "rows": rows, "curve_source": "t"}
+    res = pm.evaluate_candidate(cand, FakeBank(ctx), ms, cfg)
+    assert res["points"]["hover"] is not None and res["points"]["hover_end"] is None
+    rules = {f["rule"] for f in res["failures"]}
+    assert "hover_end" in rules and "cruise_end" in rules and not res["passed"]
+    ok = pm.evaluate_candidate(cand, FakeBank(FakeCtx(v_ok=0.0)), ms, cfg)
+    assert ok["passed"] and ok["points"]["hover_end"] and ok["points"]["cruise_end"]
+    assert ok["checks"]["voltage"] == "verified" and ok["checks"]["bus_window"] == "unknown" and ok["checks"]["board_current"] == "unknown"
+
+
+def test_unverified_voltage_never_counts_as_headroom():
+    cfg, ms = _ms({"kv": {"allow_unverified": False}})
+    cand = {"id": "x", "name": "x", "source": "own", "D_in": 0.3 / 0.0254, "blades": 2, "rows": _curve(0.3, 0.10, 0.045, 12000.0), "curve_source": "t"}
+    res = pm.evaluate_candidate(cand, FakeBank(FakeCtx(verification="unverified", status="unverified")), ms, cfg)
+    assert not res["passed"] and any(f["rule"] == "voltage_unverified" for f in res["failures"])
+    assert res["checks"]["voltage"] == "unverified"
+    cfg2, ms2 = _ms({"kv": {"allow_unverified": True}})                           # only by the explicit opt-in
+    res2 = pm.evaluate_candidate(cand, FakeBank(FakeCtx(verification="unverified", status="unverified")), ms2, cfg2)
+    assert res2["passed"] and res2["checks"]["voltage"] == "unverified"
+    # the real synthetic S1 model has no psi map: by default every row fails on it
+    assert pm.validate_inputs(_body())["kv"]["allow_unverified"] is True and pm.DEFAULTS["kv"]["allow_unverified"] is False
+
+
+def test_estimate_voltage_uses_the_hot_resistance():
+    raw, info = pm.estimate_model(_card())
+    cfg = pm.validate_inputs({"motor": {"card_id": "cat_x"}, "kv": {"mode": "free"}})
+    c7 = pm.MotorBank(raw, cfg, pm_stock()).ctx(7)
+    assert c7.simple_voltage_ok(8000.0, 10.0, 40.0) and not c7.simple_voltage_ok(8000.0, 10.0, 40.0, r_ohm=2.0)
+    p = c7.point(6000.0, 0.3, 5.0, 25.0, 40.0)
+    assert p["ok"] and p["verification"] == "estimate" and p["T_winding_C"] > 25.0
+    assert c7.point(6000.0, 0.3, 5.0, 25.0, None)["verification"] == "unverified"
+
+
+def test_the_run_carries_the_verification_provenance_and_stage1_vectors(stub):
+    cfg = pma.validate(_body())
+    raw, _ = pma.load_raw_model("TEST DIE", "L1", ACCESS)
+    res = pm.run_selection(cfg, raw)
+    r0 = res["results"][0]
+    assert r0["checks"]["voltage"] == "unverified" and r0["curve"]["source"] and r0["vector"]["diameter_in"] == 12
+    prov = res["provenance"]
+    assert len(prov["polar_tables_sha256"]) == 64 and len(prov["wire_stock_sha256"]) == 64 and len(prov["design_file_sha256"]) == 64 and prov["code_commit"]
+    # without the opt-in an S1 model with no voltage map cannot assert the headroom: every row fails on it
+    strict = pm.run_selection(pma.validate(_body(kv={"allow_unverified": False})), raw)
+    assert all((not r["passed"]) and any(f["rule"] == "voltage_unverified" for f in r["failures"]) for r in strict["results"])
+
+
+def test_every_stage2_evaluation_is_stored_and_linked(stub):
+    cfg = pma.validate(_body(refine={"enabled": True, "top_n": 1, "pop": 4, "generations": 2, "seed": 1, "free": ["outer"]}))
+    raw, _ = pma.load_raw_model("TEST DIE", "L1", ACCESS)
+    res = pm.run_selection(cfg, raw, store_dir=stub / "opt")
+    rf = res["refined"][0]
+    files = list((stub / "opt" / "seed1").glob("opt-*.jsonl"))
+    assert len(files) == 1 and rf["optimizer_run_id"] and files[0].stem == rf["optimizer_run_id"]
+    lines = [json.loads(x) for x in files[0].read_text().splitlines()]
+    assert len(lines) == rf["n_evaluations"] and all("mission_objective" in x["objectives"] for x in lines)
+    assert any(x["violation"] > 0 for x in lines) or all(x["violation"] == 0 for x in lines)      # failures are in the record, not dropped
+
+
+# ---------------------------------------------------------------- access
+def test_hidden_configurations_are_absent_everywhere_and_answer_like_missing(stub):
+    d2 = stub / "s1" / "SECRET DIE"
+    d2.mkdir(parents=True)
+    (d2 / "X1.json").write_text(json.dumps({**_raw(), "die": "SECRET DIE"}), encoding="utf-8")
+    seen = {**ACCESS, "hide": ()}
+    blind = {**ACCESS, "hide": ("SECRET DIE",)}
+    assert {r["name"] for r in pma.motor_entries([], seen)} >= {"SECRET DIE X1", "TEST DIE L1"}
+    names = {r["name"] for r in pma.motor_entries([], blind)}
+    assert "SECRET DIE X1" not in names and "TEST DIE L1" in names
+    card = _card(id="cat_h", name="SECRET DIE X1")                                   # a card named like the hidden model: no S1 model is revealed
+    row = next(r for r in pma.motor_entries([card], blind) if r["id"] == "cat_h")
+    assert row["kind"] == "estimate" and row["die"] is None and row["config"] is None
+    with pytest.raises(ApiProblem) as hidden:                                          # direct die / config: the SAME 422 text as a missing model
+        pma.start_run(_body(motor={"die": "SECRET DIE", "config": "X1"}), [], blind, background=False)
+    with pytest.raises(ApiProblem) as missing:
+        pma.start_run(_body(motor={"die": "NOPE DIE", "config": "X1"}), [], blind, background=False)
+    assert hidden.value.status == missing.value.status == 422
+    assert str(hidden.value.detail).replace("SECRET DIE", "NOPE DIE") == str(missing.value.detail)
+    r = pma.start_run(_body(motor={"card_id": "cat_h", "die": None, "config": None}, battery={"cells_s": 12}, kv={"mode": "free"}), [card], blind, background=False)
+    assert pma.get_run(r["run_id"])["motor"]["kind"] == "estimate"                     # the card falls to the estimate path, as if no S1 model existed
+
+
+def test_the_picker_rows_are_an_allow_list(stub):
+    rows = pma.motor_entries([_card(), _card(id="cat_s", name="TEST DIE L1")], ACCESS)
+    assert rows and all(set(r) <= pma.ENTRY_FIELDS for r in rows)
+    for r in rows:
+        assert not any(k in r for k in ("psi_map", "grid", "thermal_geom", "loss_W", "_path", "path", "raw"))
+    assert "/" not in json.dumps(rows).replace("rpm/V", "")                            # no file path leaves the server
+
+
+# ---------------------------------------------------------------- cancellation
+def test_stop_inside_stage_one_gives_partial_results_and_the_stage(stub):
+    cfg = pma.validate(_body())
+    raw, _ = pma.load_raw_model("TEST DIE", "L1", ACCESS)
+    n = {"c": 0}
+
+    def stop():
+        n["c"] += 1
+        return n["c"] > 60                        # a stop request that arrives in the middle of the grid, inside the loops of a candidate
+    res = pm.run_selection(cfg, raw, should_stop=stop)
+    assert res["stopped"] is True and res["stopped_stage"] == "stage1" and res["complete"] is False
+    assert len(res["results"]) < 3 and res["counts"]["done"] == len(res["results"])
+
+
+def test_stop_inside_stage_two_keeps_the_stage_one_result_and_does_not_recompute(stub, monkeypatch):
+    cfg = pma.validate(_body(refine={"enabled": True, "top_n": 1, "pop": 4, "generations": 2, "seed": 1, "free": ["outer"]}))
+    raw, _ = pma.load_raw_model("TEST DIE", "L1", ACCESS)
+    flag = {"stop": False}
+    calls = {"evaluated_after_stop": 0}
+    orig = pm.evaluate_candidate
+
+    def spy(*a, **k):
+        out = orig(*a, **k)                                  # a call that is cut by the stop raises and is not counted
+        if flag["stop"]:
+            calls["evaluated_after_stop"] += 1
+        return out
+    monkeypatch.setattr(pm, "evaluate_candidate", spy)
+    res = pm.run_selection(cfg, raw, should_stop=lambda: flag["stop"], progress=lambda d, t, line: flag.update(stop=(line == "refining" and d >= 5)) if line == "refining" else None)
+    assert res["stopped"] and res["stopped_stage"] == "stage2" and res["refined"] == [] and len(res["results"]) == 3
+    assert calls["evaluated_after_stop"] == 0                    # nothing is computed once the stop is seen, the final recomputation included
+
+
+def test_a_late_stop_is_a_stopped_run_with_complete_results(stub, monkeypatch):
+    cfg = pma.validate(_body())
+    raw, _ = pma.load_raw_model("TEST DIE", "L1", ACCESS)
+    flag = {"stop": False}
+    orig = pm.provenance
+    monkeypatch.setattr(pm, "provenance", lambda stock: (flag.update(stop=True), orig(stock))[1])      # the request arrives after the last step
+    res = pm.run_selection(cfg, raw, should_stop=lambda: flag["stop"])
+    assert res["stopped"] is True and res["complete"] is True and len(res["results"]) == 3
+
+
+def test_the_run_is_a_queue_job_and_stop_is_scoped_to_the_owner(stub):
+    r = pma.start_run(_body(), [], ACCESS, background=False)
+    rec = J.queue().status(r["run_id"])
+    assert rec is not None and rec.kind == "propeller_mission" and rec.state == "done"
+    with pytest.raises(J.NotOwner):                                  # the queue's own owner check
+        J.queue().cancel(r["run_id"], requester="intruder", is_admin=False)
+    other = stub / "other_workspace"
+    with pytest.raises(ApiProblem) as e:                             # a foreign workspace never finds the id
+        old = pma._runs_dir
+        pma._runs_dir = lambda: other
+        try:
+            pma.stop_run(r["run_id"])
+        finally:
+            pma._runs_dir = old
+    assert e.value.status == 404
+    assert pma.stop_run(r["run_id"]) == {"run_id": r["run_id"], "stopping": False, "status": "done"}    # a late stop does not change a finished run
+
+
+def test_stop_through_the_queue_ends_a_started_run_as_stopped(stub):
+    import time
+    r = pma.start_run(_body(refine={"enabled": True, "top_n": 1, "pop": 4, "generations": 2, "seed": 1, "free": ["outer"]}), [], ACCESS)
+    assert r["status"] == "queued"
+    s = pma.stop_run(r["run_id"])
+    t0 = time.time()
+    while time.time() - t0 < 60:
+        st = pma.get_run(r["run_id"])["status"]
+        if st not in ("queued", "running"):
+            break
+        time.sleep(0.2)
+    assert st in ("stopped", "done")
+    if s["stopping"]:
+        assert st == "stopped"
+
+
+# ---------------------------------------------------------------- retention and delete
+def test_retention_keeps_the_last_100_and_delete_is_refused_while_running(stub, monkeypatch):
+    import os
+    folder = stub / "runs"
+    folder.mkdir()
+    rid_of = lambda i: "msn-%010x" % i
+    for i in range(104):
+        rid = rid_of(i)
+        f = folder / (rid + ".run.json")
+        f.write_text(json.dumps({"run_id": rid, "status": "done", "created_utc": "2026-11-26T00:00:%02dZ" % (i % 60)}))
+        os.utime(f, (1000 + i, 1000 + i))
+        (folder / (rid + ".opt")).mkdir()
+    assert pma.prune(folder, 100) == 4
+    left = sorted(p.name for p in folder.glob("msn-*.run.json"))
+    assert len(left) == 100 and rid_of(0) + ".run.json" not in left and rid_of(3) + ".run.json" not in left and rid_of(4) + ".run.json" in left
+    assert not (folder / (rid_of(0) + ".opt")).exists() and (folder / (rid_of(4) + ".opt")).exists()
+    assert pma.delete_run(rid_of(4)) == {"run_id": rid_of(4), "deleted": True}
+    assert not (folder / (rid_of(4) + ".run.json")).exists() and not (folder / (rid_of(4) + ".opt")).exists()
+    (folder / (rid_of(5) + ".progress.json")).write_text(json.dumps({"run_id": rid_of(5), "status": "running"}))
+    (folder / (rid_of(5) + ".run.json")).unlink()
+    monkeypatch.setattr(pma, "_effective", lambda rid, st: "running")
+    with pytest.raises(ApiProblem) as e:
+        pma.delete_run(rid_of(5))
+    assert e.value.status == 409

@@ -13,7 +13,7 @@ export interface MissionOptions {
 }
 export interface MotorInfo { kind: 's1' | 'estimate'; name: string; die?: string | null; config?: string | null; card_id?: string | null; label?: string; flags?: string[]; model_sha256?: string }
 export interface MissionRun {
-  run_id: string; status: 'running' | 'done' | 'stopped' | 'failed' | 'interrupted'; created_utc: string; motor: MotorInfo; inputs: Record<string, unknown>;
+  run_id: string; status: 'queued' | 'running' | 'done' | 'stopped' | 'failed' | 'interrupted'; position?: number; created_utc: string; motor: MotorInfo; inputs: Record<string, unknown>;
   version: string; done?: number; total?: number; line?: string; error?: string; elapsed_s?: number; result?: MissionResult;
 }
 export interface RunSummary {
@@ -42,4 +42,5 @@ export const getOptions = (signal?: AbortSignal) => call<MissionOptions>('GET', 
 export const startRun = (body: Record<string, unknown>) => call<{ run_id: string; status: string; total: number }>('POST', '/run', body);
 export const listRuns = () => call<{ runs: RunSummary[]; note: string }>('GET', '/runs');
 export const getRun = (id: string, signal?: AbortSignal) => call<MissionRun>('GET', `/runs/${encodeURIComponent(id)}`, undefined, signal);
+export const deleteRun = (id: string) => call<{ deleted: boolean }>('DELETE', `/runs/${encodeURIComponent(id)}`);
 export const stopRun = (id: string) => call<{ stopping: boolean }>('POST', `/runs/${encodeURIComponent(id)}/stop`);

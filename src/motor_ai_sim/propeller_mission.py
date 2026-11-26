@@ -59,6 +59,18 @@ class MissionError(ValueError):
     """A bad input or an unusable model; the API turns it into a 422 with this message."""
 
 
+class MissionCancelled(Exception):
+    """The run was stopped (the queue's cancel).  Deliberately NOT a ``DesignError`` or a ``ValueError``: the optimiser treats those as "a bad
+    design, go on", and the per-candidate guard of the run must not swallow a stop."""
+
+
+def _chk(ms: Mapping[str, Any]) -> None:
+    """Raise ``MissionCancelled`` when the run was asked to stop (called inside every loop of any length)."""
+    fn = ms.get("cancel")
+    if fn is not None and fn():
+        raise MissionCancelled("stopped")
+
+
 # ---------------------------------------------------------------------------
 # Inputs: defaults and validation (SI inside; the UI shows km/h and inches)
 # ---------------------------------------------------------------------------
@@ -66,9 +78,9 @@ class MissionError(ValueError):
 DEFAULTS: Dict[str, Any] = {
     "motor": {"card_id": None, "die": None, "config": None, "rotors": 4, "drive": "sine", "board_cap_A": None},
     "kv": {"mode": "free", "turns0": None, "strip_thickness0_mm": None, "strip_width_mm": None, "headroom": 0.15,
-           "turns_below": 3, "turns_above": 5, "coil_height_tol": 0.0, "calibrate_bench": True},
+           "turns_below": 3, "turns_above": 5, "coil_height_tol": 0.0, "calibrate_bench": True, "allow_unverified": False},
     "battery": {"chemistry": "li-ion-21700", "cells_s": 6, "capacity_ah": 16.0, "v_nom": None, "v_min": None, "v_max": None,
-                "wh_per_kg": None, "r_cell_ohm_ah": None, "usable": 0.85, "mass_kg": None},
+                "wh_per_kg": None, "r_cell_ohm_ah": None, "usable": 0.85, "mass_kg": None, "cont_current_A": None},
     "airframe": {"dry_mass_kg": 3.5, "payload_kg": 1.0, "drag_area_m2": 0.05, "max_diameter_in": 13.0, "min_diameter_in": 10.0,
                  "air_temp_c": 25.0, "altitude_m": 0.0, "avionics_W": 0.0},
     "flight": {"cruise_speed_ms": 70.0 / 3.6, "best_speed": False, "hover_share_pct": 0.0, "tw_cont": 1.5, "tw_peak": 2.0,
@@ -87,7 +99,8 @@ _SPEC: Dict[Tuple[str, str], Tuple[str, Any, Any]] = {
     ("motor", "rotors"): ("i", 1, 12), ("motor", "board_cap_A"): ("f?", 1.0, 2000.0), ("motor", "drive"): ("s", None, None),
     ("kv", "mode"): ("s", None, None), ("kv", "turns0"): ("i?", 1, 60), ("kv", "strip_thickness0_mm"): ("f?", 0.05, 5.0),
     ("kv", "strip_width_mm"): ("f?", 0.5, 30.0), ("kv", "headroom"): ("f", 0.0, 0.5), ("kv", "turns_below"): ("i", 0, 10),
-    ("kv", "turns_above"): ("i", 0, 10), ("kv", "coil_height_tol"): ("f", 0.0, 0.5), ("kv", "calibrate_bench"): ("b", None, None),
+    ("kv", "turns_above"): ("i", 0, 10), ("kv", "coil_height_tol"): ("f", 0.0, 0.5), ("kv", "calibrate_bench"): ("b", None, None), ("kv", "allow_unverified"): ("b", None, None),
+    ("battery", "cont_current_A"): ("f?", 1.0, 5000.0),
     ("battery", "chemistry"): ("s", None, None), ("battery", "cells_s"): ("i", 1, 30), ("battery", "capacity_ah"): ("f", 0.1, 500.0),
     ("battery", "v_nom"): ("f?", 2.0, 5.0), ("battery", "v_min"): ("f?", 2.0, 5.0), ("battery", "v_max"): ("f?", 2.0, 5.0),
     ("battery", "wh_per_kg"): ("f?", 20.0, 600.0), ("battery", "r_cell_ohm_ah"): ("f?", 0.0, 1.0),
@@ -254,7 +267,8 @@ def mission_numbers(cfg: Mapping[str, Any]) -> Dict[str, Any]:
     from motor_ai_sim import propeller_bemt as pb
     return {"pack": pk, "mass_kg": mass, "W_N": mass * G0, "rho": rho, "a_snd": pb.sound_speed(a["air_temp_c"]),
             "n_rot": int(cfg["motor"]["rotors"]), "f_m2": float(a["drag_area_m2"]), "avionics_W": float(a["avionics_W"]),
-            "ambient_c": float(a["air_temp_c"]), "tip_mach": float(f["tip_mach"]), "headroom": float(cfg["kv"]["headroom"])}
+            "ambient_c": float(a["air_temp_c"]), "tip_mach": float(f["tip_mach"]), "headroom": float(cfg["kv"]["headroom"]),
+            "allow_unverified": bool(cfg["kv"]["allow_unverified"]), "batt_cont_A": cfg["battery"].get("cont_current_A"), "cancel": None}
 
 
 # ---------------------------------------------------------------------------
@@ -470,17 +484,21 @@ class MotorCtx:
         self.kv = kv_shown
         self.pwm = self.drive if self.drive.get("kind") == "pwm" else {}
 
-    def simple_voltage_ok(self, rpm: float, i_rms: float, v_dc: float) -> bool:
+    def simple_voltage_ok(self, rpm: float, i_rms: float, v_dc: float, r_ohm: Optional[float] = None) -> bool:
         """Estimate models only: line-line peak voltage needed = rpm / Kv + sqrt(3) sqrt(2) R I (inductance and field weakening
-        ignored) against the modulation limit ``MODULATION`` x the pack voltage."""
+        ignored) against the modulation limit ``MODULATION`` x the pack voltage.  ``r_ohm`` = the HOT phase resistance at the
+        point's winding temperature (default: the model's reference value)."""
         if not self.kv:
             return True
-        need = rpm / float(self.kv) + math.sqrt(6.0) * float(self.m["R_phase_ohm"]) * i_rms
+        r = float(r_ohm) if r_ohm is not None else float(self.m["R_phase_ohm"])
+        need = rpm / float(self.kv) + math.sqrt(6.0) * r * i_rms
         return need <= MODULATION * v_dc
 
     def point(self, rpm: float, q_Nm: float, air_ms: float, ambient_c: float, v_min: Optional[float]) -> Dict[str, Any]:
         """The motor + controller at one point: ``ok`` False with ``state`` when no steady state exists (voltage, current cap,
-        loss data); else current, losses, temperatures, electrical input power and the constraint check ``continuous``."""
+        loss data); else current, losses, temperatures, electrical input power and the constraint check ``continuous``.
+        ``verification`` says how the voltage was checked: ``verified`` (the passport's psi map), ``estimate`` (the simple rule of an
+        estimate model) or ``unverified`` (the model has no map or no pack voltage was given: nothing is asserted)."""
         h = s1.housing_film(max(air_ms, 1.0), ambient_c, self.od_m)
         p = _load_point_v(self.m, self.pwm, rpm, q_Nm, h, ambient_c, v_min)
         if not p or p.get("state") != "converged":
@@ -506,14 +524,21 @@ class MotorCtx:
         if dl is not None and i > dl + 1e-9:
             reasons.append("demagnetisation")
         status = vc.get("status")
-        if self.estimate and v_min:
-            status = "ok" if self.simple_voltage_ok(rpm, i, float(v_min)) else "infeasible"
+        if self.estimate:
+            if v_min:
+                r_hot = s1.resistance(self.m, float(p["T_winding_C"]))
+                status = "ok" if self.simple_voltage_ok(rpm, i, float(v_min), r_hot) else "infeasible"
+            else:
+                status = "unverified"
+            verification = "estimate" if status == "ok" else ("unverified" if status == "unverified" else "estimate")
+        else:
+            verification = "unverified" if status in (None, "unverified") else "verified"
         if status == "infeasible":
             return {"ok": False, "state": "voltage_infeasible", "status": status}
         return {"ok": True, "state": "converged", "rpm": rpm, "torque_Nm": q_Nm, "current_A": i, "T_winding_C": float(p["T_winding_C"]),
                 "T_magnet_C": float(p["T_magnet_C"]), "shaft_W": shaft, "P_motor_in_W": p_in, "P_elec_W": p_elec,
-                "eta_motor": shaft / p_in if p_in > 0 else None, "controller_loss_W": ctl, "voltage_status": status,
-                "continuous": not reasons, "reasons": reasons}
+                "eta_motor": shaft / p_in if p_in > 0 else None, "controller_loss_W": ctl, "voltage_status": status, "verification": verification,
+                "continuous": not reasons, "reasons": reasons, "demag_known": dl is not None}
 
 
 # ---------------------------------------------------------------------------
@@ -778,41 +803,65 @@ def _fail(out: List[Dict[str, Any]], rule: str, detail: str) -> None:
     out.append({"rule": rule, "detail": detail})
 
 
+def solve_pack_point(ctx: MotorCtx, ms: Mapping[str, Any], rpm: float, q_Nm: float, air_ms: float, which: str, headroom: float = 0.0
+                     ) -> Dict[str, Any]:
+    """One motor point together with the pack that feeds ALL rotors, iterated to convergence: the motor is solved at the voltage the pack
+    gives under the load the motor itself (with its losses, at that voltage) puts on it.  ``which`` = 'mean' | 'end' of discharge;
+    ``headroom`` lowers the voltage the motor must hold.  Impossible or non-converged points are rejected (``ok`` False with a reason),
+    never approximated with an assumed efficiency."""
+    n, pk = ms["n_rot"], ms["pack"]
+    v = pack_state(pk, 0.0, which)["V_V"]
+    last = None
+    for it in range(1, 41):
+        _chk(ms)
+        mp = ctx.point(rpm, q_Nm, air_ms, ms["ambient_c"], v * (1.0 - headroom))
+        if not mp["ok"]:
+            return {"ok": False, "reason": "motor_" + str(mp.get("state")), "detail": "motor: %s %s" % (mp.get("state"), mp.get("status") or ""), "iterations": it}
+        st = pack_state(pk, n * mp["P_elec_W"] + ms["avionics_W"], which)
+        if not st["ok"]:
+            return {"ok": False, "reason": "pack_cannot_deliver", "detail": "the pack cannot supply this power at %s of discharge" % which, "iterations": it}
+        last = (mp, st)
+        if abs(st["V_V"] - v) <= 1e-4 * max(v, 1.0):
+            return {"ok": True, "mp": mp, "pack": st, "V_used": v, "iterations": it}
+        v = 0.5 * v + 0.5 * st["V_V"]
+    return {"ok": False, "reason": "nonconverged", "detail": "motor and pack voltage did not converge in 40 iterations", "iterations": 40,
+            "last_V": last[1]["V_V"] if last else None}
+
+
 def _pt_summary(ms: Mapping[str, Any], D_m: float, fl: Mapping[str, Any], mp: Mapping[str, Any], pack: Mapping[str, Any]) -> Dict[str, Any]:
     return {"V_ms": fl["V"], "thrust_N": fl["T_N"], "tilt_deg": fl.get("tilt_deg"), "rpm": fl["rpm"], "torque_Nm": fl["q_Nm"],
             "shaft_W": mp.get("shaft_W"), "current_A": mp.get("current_A"), "pack_power_W": pack.get("P_draw_W"),
             "pack_current_A": pack.get("I_bus_A"), "pack_V": pack.get("V_V"), "motor_eta": mp.get("eta_motor"),
             "T_winding_C": mp.get("T_winding_C"), "T_magnet_C": mp.get("T_magnet_C"), "voltage_status": mp.get("voltage_status"),
-            "tip_mach": tip_mach_at(D_m, fl["rpm"], fl["V"], ms["a_snd"]), "mu": fl.get("mu")}
+            "verification": mp.get("verification"), "tip_mach": tip_mach_at(D_m, fl["rpm"], fl["V"], ms["a_snd"]), "mu": fl.get("mu")}
 
 
 def flight_point(ctx: MotorCtx, rows: Sequence[Row], D_m: float, ms: Mapping[str, Any], V: float, which: str = "mean",
                  headroom: float = 0.0) -> Dict[str, Any]:
-    """The whole aircraft at speed V (V = 0: hover): rotor flight, motor + controller of one rotor, pack of all rotors.
-    ``which`` = 'mean' | 'end' selects the pack voltage; ``headroom`` lowers the voltage the motor must hold."""
+    """The whole aircraft at speed V (V = 0: hover): rotor flight, motor + controller of one rotor, pack of all rotors, solved together
+    (``solve_pack_point``).  ``which`` = 'mean' | 'end' selects the pack voltage; ``headroom`` lowers the voltage the motor must hold.
+    ``reasons`` lists every constraint the point breaks (motor limits, tip Mach, voltage headroom, battery current, unverified voltage)."""
     fl = rotor_flight(rows, D_m, ms["W_N"], ms["n_rot"], ms["f_m2"], V, ms["rho"])
     if "error" in fl:
         return {"ok": False, "reason": "thrust_outside_curve", "detail": fl["error"], "V_ms": V}
-    n = ms["n_rot"]
-    air = V + fl["v_h"]
-    st = pack_state(ms["pack"], n * fl["P_shaft_W"] / 0.8 + ms["avionics_W"], which)
-    if not st["ok"]:
-        return {"ok": False, "reason": "pack_cannot_deliver", "detail": "the pack cannot supply this power at %s of discharge" % which, "V_ms": V}
-    mp = ctx.point(fl["rpm"], fl["q_Nm"], air, ms["ambient_c"], st["V_V"] * (1.0 - headroom))
-    if not mp["ok"]:
-        return {"ok": False, "reason": "motor_" + str(mp.get("state")), "detail": "motor: %s %s" % (mp.get("state"), mp.get("status") or ""),
-                "V_ms": V, "flight": fl}
-    st2 = pack_state(ms["pack"], n * mp["P_elec_W"] + ms["avionics_W"], which)
-    if not st2["ok"]:
-        return {"ok": False, "reason": "pack_cannot_deliver", "detail": "the pack cannot supply this power at %s of discharge" % which, "V_ms": V}
-    summ = _pt_summary(ms, D_m, fl, mp, st2)
-    summ["P_elec_W"] = n * mp["P_elec_W"] + ms["avionics_W"]
+    sp = solve_pack_point(ctx, ms, fl["rpm"], fl["q_Nm"], V + fl["v_h"], which, headroom)
+    if not sp["ok"]:
+        return {"ok": False, "reason": sp["reason"], "detail": sp["detail"], "V_ms": V, "flight": fl}
+    mp, st = sp["mp"], sp["pack"]
+    summ = _pt_summary(ms, D_m, fl, mp, st)
+    summ["P_elec_W"] = ms["n_rot"] * mp["P_elec_W"] + ms["avionics_W"]
+    summ["pack_iterations"] = sp["iterations"]
     reasons = list(mp["reasons"])
     if summ["tip_mach"] > ms["tip_mach"] + 1e-9:
         reasons.append("tip_mach")
     if headroom > 0 and mp.get("voltage_status") == "deeper_fw":
         reasons.append("headroom")
-    return {"ok": True, "V_ms": V, "point": summ, "pack": st2, "reasons": reasons, "pass": not reasons}
+    if ms.get("batt_cont_A") and st["I_bus_A"] is not None and st["I_bus_A"] > float(ms["batt_cont_A"]) + 1e-9:
+        reasons.append("battery_current")
+    if mp.get("verification") == "unverified" and not ms["allow_unverified"]:
+        reasons.append("voltage_unverified")
+    return {"ok": True, "V_ms": V, "point": summ, "pack": st, "reasons": reasons, "pass": not reasons, "verification": mp.get("verification"),
+            "demag_known": mp.get("demag_known")}
 
 
 def _limit_row(rows: Sequence[Row], test: Callable[[Row], Optional[Dict[str, Any]]]) -> Tuple[Optional[Row], Optional[Dict[str, Any]]]:
@@ -820,11 +869,10 @@ def _limit_row(rows: Sequence[Row], test: Callable[[Row], Optional[Dict[str, Any
     above some rpm (loads rise with rpm): bisection over the row index, a few motor evaluations instead of one per row."""
     if not rows:
         return None, None
-    best: Tuple[Optional[Row], Optional[Dict[str, Any]]] = (None, None)
     res0 = test(rows[0])
     if res0 is None:
         return None, None
-    best = (rows[0], res0)
+    best: Tuple[Optional[Row], Optional[Dict[str, Any]]] = (rows[0], res0)
     lo, hi = 0, len(rows) - 1
     resh = test(rows[hi])
     if resh is not None:
@@ -839,33 +887,25 @@ def _limit_row(rows: Sequence[Row], test: Callable[[Row], Optional[Dict[str, Any
     return best
 
 
-def _end_voltage(ms: Mapping[str, Any], shaft_total_W: float, headroom: float = 0.0) -> Optional[float]:
-    st = pack_state(ms["pack"], shaft_total_W / 0.85 + ms["avionics_W"], "end")
-    return st["V_V"] * (1.0 - headroom) if st["ok"] else None
-
-
 def thrust_limits(ctx: MotorCtx, rows: Sequence[Row], ms: Mapping[str, Any]) -> Dict[str, Any]:
     """Highest thrust per rotor the motor holds continuously (temperatures, current limits, board cap, voltage at the end of
-    discharge) and the highest it reaches at all (voltage and the model's current limit only), at 5 m/s air over the housing."""
-    n = ms["n_rot"]
-
-    def point_at(row: Row) -> Optional[Dict[str, Any]]:
-        v = _end_voltage(ms, n * row[2] * 2.0 * math.pi * row[0] / 60.0)
-        if v is None:
-            return None
-        mp = ctx.point(row[0], row[2], 5.0, ms["ambient_c"], v)
-        return mp if mp["ok"] else None
-
+    discharge, the pack solved with the motor) and the highest it reaches at all (voltage and the model's current limit only), at
+    5 m/s air over the housing."""
     cache: Dict[float, Optional[Dict[str, Any]]] = {}
+    verifs: set = set()
 
     def cached(row: Row) -> Optional[Dict[str, Any]]:
         if row[0] not in cache:
-            cache[row[0]] = point_at(row)
+            _chk(ms)
+            sp = solve_pack_point(ctx, ms, row[0], row[2], 5.0, "end", 0.0)
+            cache[row[0]] = sp["mp"] if sp["ok"] else None
+            if sp["ok"]:
+                verifs.add(sp["mp"].get("verification"))
         return cache[row[0]]
 
     cont_row, cont_mp = _limit_row(rows, lambda r: (cached(r) if (cached(r) or {}).get("continuous") else None))
     peak_row, peak_mp = _limit_row(rows, lambda r: (cached(r) if (cached(r) or {}).get("current_A", 1e99) <= ctx.lim["I_max_A"] + 1e-9 else None))
-    out: Dict[str, Any] = {"cont": None, "peak": None}
+    out: Dict[str, Any] = {"cont": None, "peak": None, "verification": sorted(v for v in verifs if v)}
     if cont_row:
         out["cont"] = {"thrust_N": cont_row[1], "rpm": cont_row[0], "torque_Nm": cont_row[2], "current_A": cont_mp["current_A"],
                        "T_winding_C": cont_mp["T_winding_C"]}
@@ -875,9 +915,9 @@ def thrust_limits(ctx: MotorCtx, rows: Sequence[Row], ms: Mapping[str, Any]) -> 
 
 
 def speed_scan(ctx: MotorCtx, rows: Sequence[Row], D_m: float, ms: Mapping[str, Any], cfg: Mapping[str, Any]) -> Dict[str, Any]:
-    """Level flight over speeds (2 m/s steps from 0 until the first failure after a pass, then 4 bisections): the points, the top
-    speed (thrust / tilt, motor continuous, board cap and voltage headroom all hold), and the speeds of best range and best
-    endurance among the passing ones."""
+    """Level flight over speeds (2 m/s steps from 0 until the first failure after a pass, then 4 bisections): the top speed (thrust /
+    tilt, motor continuous, board cap and voltage headroom all hold at the END-of-discharge voltage), and the speeds of best range and
+    best endurance among the passing ones (energy at the mean voltage)."""
     h = float(cfg["kv"]["headroom"])
     vmax = float(cfg["flight"]["speed_max_ms"])
     pts: List[Dict[str, Any]] = []
@@ -885,6 +925,7 @@ def speed_scan(ctx: MotorCtx, rows: Sequence[Row], D_m: float, ms: Mapping[str, 
     v = 0.0
     last_pass, first_fail = None, None
     while v <= vmax + 1e-9:
+        _chk(ms)
         fp = flight_point(ctx, rows, D_m, ms, v, "end", h)
         pts.append(fp)
         if fp["ok"] and fp["pass"]:
@@ -897,6 +938,7 @@ def speed_scan(ctx: MotorCtx, rows: Sequence[Row], D_m: float, ms: Mapping[str, 
     if last_pass is not None and first_fail is not None:
         lo, hi = last_pass, first_fail
         for _ in range(4):
+            _chk(ms)
             mid = 0.5 * (lo + hi)
             fp = flight_point(ctx, rows, D_m, ms, mid, "end", h)
             if fp["ok"] and fp["pass"]:
@@ -904,97 +946,111 @@ def speed_scan(ctx: MotorCtx, rows: Sequence[Row], D_m: float, ms: Mapping[str, 
             else:
                 hi = mid
         top = lo
-    # energy at the mean voltage over the passing speeds
     best_range, best_end = None, None
     e_wh = ms["pack"]["E_usable_Wh"]
     share = float(cfg["flight"]["hover_share_pct"]) / 100.0
     p_hover = None
+    means: Dict[float, Dict[str, Any]] = {}
     for fp in pts:
-        if fp["ok"] and fp["pass"] and fp["V_ms"] == 0.0:
-            m0 = flight_point(ctx, rows, D_m, ms, 0.0, "mean")
-            if m0["ok"]:
-                p_hover = m0["pack"]["P_draw_W"]
-    for fp in pts:
-        if not (fp["ok"] and fp["pass"]):
-            continue
-        mean = flight_point(ctx, rows, D_m, ms, fp["V_ms"], "mean")
+        if fp["ok"] and fp["pass"]:
+            _chk(ms)
+            means[fp["V_ms"]] = flight_point(ctx, rows, D_m, ms, fp["V_ms"], "mean")
+    if 0.0 in means and means[0.0]["ok"]:
+        p_hover = means[0.0]["pack"]["P_draw_W"]
+    for vv, mean in means.items():
         if not mean["ok"]:
             continue
         p = mean["pack"]["P_draw_W"]
         t_h = e_wh / p
         if best_end is None or t_h > best_end["time_h"]:
-            best_end = {"V_ms": fp["V_ms"], "time_h": t_h, "endurance_min": t_h * 60.0}
-        if fp["V_ms"] > 0:
+            best_end = {"V_ms": vv, "time_h": t_h, "endurance_min": t_h * 60.0}
+        if vv > 0:
             p_mix = share * p_hover + (1.0 - share) * p if (share > 0 and p_hover) else p
-            t_mix = e_wh / p_mix
-            rng = fp["V_ms"] * (1.0 - share) * t_mix * 3.6
+            rng = vv * (1.0 - share) * (e_wh / p_mix) * 3.6
             if best_range is None or rng > best_range["range_km"]:
-                best_range = {"V_ms": fp["V_ms"], "range_km": rng}
+                best_range = {"V_ms": vv, "range_km": rng}
     return {"top_speed_ms": top, "best_range": best_range, "best_endurance": best_end,
-            "points": [{"V_ms": p["V_ms"], "ok": p["ok"], "pass": bool(p.get("pass")), "reason": p.get("reason")} for p in pts]}
+            "points": [{"V_ms": q["V_ms"], "ok": q["ok"], "pass": bool(q.get("pass")), "reason": q.get("reason")} for q in pts]}
+
+
+def peak_headroom(ctx: MotorCtx, rows: Sequence[Row], ms: Mapping[str, Any], cfg: Mapping[str, Any]) -> Dict[str, Any]:
+    """The Kv check: the peak-thrust point (T/W peak; the top of the curve when the curve does not reach it) must be reachable at the
+    END-of-discharge pack voltage under load, lowered by the headroom, with the motor and the pack solved together.  ``verification``:
+    an ``unverified`` voltage check never counts as headroom held (unless the run allows it explicitly)."""
+    req = float(cfg["flight"]["tw_peak"]) * ms["W_N"] / ms["n_rot"]
+    pk = at_thrust(rows, req)
+    reaches = pk is not None
+    if pk is None:
+        pk = (rows[-1][0], rows[-1][2])
+    rpm, q = pk
+    sp = solve_pack_point(ctx, ms, rpm, q, 5.0, "end", float(cfg["kv"]["headroom"]))
+    info = {"rpm": rpm, "torque_Nm": q, "curve_reaches": reaches, "thrust_required_N": req, "verification": None, "status": None}
+    if not sp["ok"]:
+        return {**info, "held": False, "reason": sp["reason"]}
+    mp = sp["mp"]
+    info.update(verification=mp.get("verification"), status=mp.get("voltage_status"), current_A=mp["current_A"])
+    if mp.get("voltage_status") == "deeper_fw" or mp["current_A"] > ctx.lim["I_max_A"] + 1e-9:
+        return {**info, "held": False, "reason": "headroom"}
+    if mp.get("verification") == "unverified" and not ms["allow_unverified"]:
+        return {**info, "held": False, "reason": "voltage_unverified"}
+    return {**info, "held": True, "reason": None}
 
 
 def choose_for_candidate(bank: MotorBank, rows: Sequence[Row], D_m: float, ms: Mapping[str, Any], cfg: Mapping[str, Any]
                          ) -> Tuple[Dict[str, Any], bool, Dict[str, Any]]:
-    """The inner Kv step for one propeller: the peak-thrust point (T/W peak), tested at the end-of-discharge pack voltage under
-    load lowered by the headroom.  Returns (chosen option, headroom held, peak point info)."""
-    req = float(cfg["flight"]["tw_peak"]) * ms["W_N"] / ms["n_rot"]
-    pk = at_thrust(rows, req)
-    reachable_peak = pk is not None
-    if pk is None:
-        top = rows[-1]
-        pk = (top[0], top[2])
-    rpm, q = pk
-    air = 5.0
-    h = float(cfg["kv"]["headroom"])
-
+    """The inner Kv step for one propeller (``choose_turns`` with ``peak_headroom``).  Returns (chosen option, headroom held, peak check)."""
     def reachable(n: int) -> bool:
-        v = _end_voltage(ms, ms["n_rot"] * q * 2.0 * math.pi * rpm / 60.0, h)
-        if v is None:
-            return False
-        mp = bank.ctx(n).point(rpm, q, air, ms["ambient_c"], v)
-        return bool(mp["ok"] and mp.get("voltage_status") in ("ok", "unverified") and mp["current_A"] <= bank.ctx(n).lim["I_max_A"] + 1e-9)
+        _chk(ms)
+        return bool(peak_headroom(bank.ctx(n), rows, ms, cfg)["held"])
 
     opt, ok = choose_turns(bank.options, reachable)
-    return opt, ok, {"rpm": rpm, "torque_Nm": q, "curve_reaches": reachable_peak, "thrust_required_N": req}
+    info = peak_headroom(bank.ctx(int(opt["turns"])), rows, ms, cfg) if opt else {}
+    return opt, ok, info
 
 
 def evaluate_candidate(cand: Mapping[str, Any], bank: MotorBank, ms: Mapping[str, Any], cfg: Mapping[str, Any],
                        turns_override: Optional[int] = None) -> Dict[str, Any]:
     """Everything for one candidate (``cand``: id, name, source, D_in, pitch_ratio, blades, ..., ``rows`` = the static curve).  The
-    result is JSON-ready; ``passed`` False with ``failures`` when a hard constraint fails (the numbers are still given)."""
+    result is JSON-ready; ``passed`` False with ``failures`` when a hard constraint fails (the numbers are still given).  The required
+    hover and cruise points are checked at the mean AND at the end-of-discharge voltage (with the headroom); ``checks`` says what could
+    and could not be verified."""
+    _chk(ms)
     D_m = float(cand["D_in"]) * 0.0254
     rows = cut_at_mach(cand["rows"], D_m, ms["a_snd"], ms["tip_mach"])
-    base = {k: cand.get(k) for k in ("id", "name", "source", "prop_id", "D_in", "pitch_ratio", "pitch_in", "chord_scale", "blades", "flags")}
+    base = {k: cand.get(k) for k in ("id", "name", "source", "prop_id", "D_in", "pitch_ratio", "pitch_in", "chord_scale", "blades", "flags", "vector")}
+    base["curve"] = {"source": cand.get("curve_source"), "points": len(cand["rows"]), "points_within_mach": len(rows),
+                     "rpm_min": cand["rows"][0][0] if cand["rows"] else None, "rpm_max": cand["rows"][-1][0] if cand["rows"] else None}
     failures: List[Dict[str, Any]] = []
     if len(rows) < 3:
         _fail(failures, "no_curve", "fewer than three curve points within the tip Mach limit")
-        return {**base, "passed": False, "failures": failures, "objectives": {}, "objective_value": None}
+        return {**base, "passed": False, "failures": failures, "objectives": {}, "objective_value": None, "checks": {}}
     if turns_override is not None:
         opt = next((o for o in bank.options if o["turns"] == turns_override), None)
         if opt is None:
-            return {**base, "passed": False, "failures": [{"rule": "no_turns", "detail": "no such winding"}], "objectives": {}, "objective_value": None}
+            return {**base, "passed": False, "failures": [{"rule": "no_turns", "detail": "no such winding"}], "objectives": {}, "objective_value": None, "checks": {}}
         held, pk_info = True, {}
-        hold = None
     else:
         opt, held, pk_info = choose_for_candidate(bank, rows, D_m, ms, cfg)
     if opt is None:
         _fail(failures, "no_winding", "no winding option")
-        return {**base, "passed": False, "failures": failures, "objectives": {}, "objective_value": None}
+        return {**base, "passed": False, "failures": failures, "objectives": {}, "objective_value": None, "checks": {}}
     ctx = bank.ctx(int(opt["turns"]))
-    if turns_override is None and not held:
-        _fail(failures, "headroom", "no winding in range reaches the peak point with %.0f %% voltage headroom" % (100.0 * cfg["kv"]["headroom"]))
     if turns_override is not None:
-        req = float(cfg["flight"]["tw_peak"]) * ms["W_N"] / ms["n_rot"]
-        pk = at_thrust(rows, req) or (rows[-1][0], rows[-1][2])
-        v = _end_voltage(ms, ms["n_rot"] * pk[1] * 2.0 * math.pi * pk[0] / 60.0, float(cfg["kv"]["headroom"]))
-        mp = ctx.point(pk[0], pk[1], 5.0, ms["ambient_c"], v) if v else {"ok": False}
-        if not (mp["ok"] and mp.get("voltage_status") in ("ok", "unverified")):
-            _fail(failures, "headroom", "the peak point is not reachable with the voltage headroom at this winding")
+        pk_info = peak_headroom(ctx, rows, ms, cfg)
+        held = bool(pk_info["held"])
+    if not held:
+        if pk_info.get("reason") == "voltage_unverified":
+            _fail(failures, "voltage_unverified", "the voltage check of this motor model is unverified: headroom cannot be asserted")
+        else:
+            _fail(failures, "headroom", "the peak point is not reachable with %.0f %% voltage headroom at the end-of-discharge voltage"
+                  % (100.0 * cfg["kv"]["headroom"]))
 
+    h = float(cfg["kv"]["headroom"])
     hov = flight_point(ctx, rows, D_m, ms, 0.0, "mean")
     cru_v = float(cfg["flight"]["cruise_speed_ms"])
     cru = flight_point(ctx, rows, D_m, ms, cru_v, "mean") if not cfg["flight"]["best_speed"] else None
+    hov_end = flight_point(ctx, rows, D_m, ms, 0.0, "end", h)
+    cru_end = flight_point(ctx, rows, D_m, ms, cru_v, "end", h) if not cfg["flight"]["best_speed"] else None
     lim = thrust_limits(ctx, rows, ms)
     W4 = ms["W_N"] / ms["n_rot"]
     tw_cont = lim["cont"]["thrust_N"] / W4 if lim["cont"] else 0.0
@@ -1003,14 +1059,33 @@ def evaluate_candidate(cand: Mapping[str, Any], bank: MotorBank, ms: Mapping[str
         _fail(failures, "tw_cont", "T/W continuous %.2f is below %.2f" % (tw_cont, cfg["flight"]["tw_cont"]))
     if tw_peak < float(cfg["flight"]["tw_peak"]):
         _fail(failures, "tw_peak", "T/W peak %.2f is below %.2f" % (tw_peak, cfg["flight"]["tw_peak"]))
-    for name, fp in (("hover", hov), ("cruise", cru)):
+    unverified_seen = False
+    for name, fp in (("hover", hov), ("cruise", cru), ("hover_end", hov_end), ("cruise_end", cru_end)):
         if fp is None:
             continue
         if not fp["ok"]:
             _fail(failures, name, fp.get("detail") or fp.get("reason") or "no point")
         else:
             for r in fp["reasons"]:
+                if r == "voltage_unverified":
+                    unverified_seen = True
+                    continue
                 _fail(failures, name + "_" + r, "%s: %s" % (name, r))
+    if unverified_seen and not any(f["rule"] == "voltage_unverified" for f in failures):
+        _fail(failures, "voltage_unverified", "the voltage check of this motor model is unverified: the required points cannot be asserted")
+
+    # what could and could not be checked (shown beside the result)
+    verifs = {fp.get("verification") for fp in (hov, cru, hov_end, cru_end) if fp and fp.get("ok")} | set(lim.get("verification") or []) | {pk_info.get("verification")}
+    verifs.discard(None)
+    level = "unverified" if "unverified" in verifs else ("estimate" if "estimate" in verifs else ("verified" if verifs else "unknown"))
+    pack_win = {"v_min": ms["pack"]["V_end_open"], "v_max": ms["pack"]["S"] * float(cfg["battery"]["v_max"])}
+    fits = s1.pack_fits_drive(ctx.drive, pack_win)
+    if fits is False:
+        _fail(failures, "drive_bus_window", "the pack voltage window %.1f-%.1f V is outside the controller's bus range" % (pack_win["v_min"], pack_win["v_max"]))
+    demag = {bool(fp.get("demag_known")) for fp in (hov, cru, hov_end, cru_end) if fp and fp.get("ok")}
+    checks = {"voltage": level, "bus_window": "unknown" if fits is None else ("ok" if fits else "fail"),
+              "board_current": "set" if ctx.board_cap_A is not None else "unknown", "battery_current": "set" if ms.get("batt_cont_A") else "unknown",
+              "demagnetisation": "known" if (demag and all(demag)) else "unknown"}
 
     scan = speed_scan(ctx, rows, D_m, ms, cfg)
     e_wh = ms["pack"]["E_usable_Wh"]
@@ -1037,14 +1112,13 @@ def evaluate_candidate(cand: Mapping[str, Any], bank: MotorBank, ms: Mapping[str
     if value is None and cfg["objective"] == "top_speed_ms":
         _fail(failures, "no_speed", "no speed passes all constraints")
     strip = opt["strip"]
-    out = {**base, "turns": int(opt["turns"]), "strip": strip, "as_built": bool(opt.get("as_built")), "k": ctx.k, "copper_f": ctx.f,
-           "kv_rpm_per_V": ctx.kv, "R_phase_ohm": ctx.m["R_phase_ohm"], "board_cap_A": ctx.board_cap_A,
-           "objectives": obj, "objective_value": value, "tw_cont": tw_cont, "tw_peak": tw_peak,
-           "limits": lim, "peak_point": pk_info,
-           "points": {"hover": hov.get("point") if hov["ok"] else None, "cruise": cru["point"] if (cru and cru["ok"]) else None},
-           "best_speed": {"range": scan["best_range"], "endurance": scan["best_endurance"]},
-           "failures": failures, "passed": not failures and value is not None}
-    return out
+    points = {"hover": hov.get("point") if hov["ok"] else None, "cruise": cru["point"] if (cru and cru["ok"]) else None,
+              "hover_end": hov_end.get("point") if hov_end["ok"] else None, "cruise_end": cru_end["point"] if (cru_end and cru_end["ok"]) else None}
+    return {**base, "turns": int(opt["turns"]), "strip": strip, "as_built": bool(opt.get("as_built")), "k": ctx.k, "copper_f": ctx.f,
+            "kv_rpm_per_V": ctx.kv, "R_phase_ohm": ctx.m["R_phase_ohm"], "board_cap_A": ctx.board_cap_A,
+            "objectives": obj, "objective_value": value, "tw_cont": tw_cont, "tw_peak": tw_peak, "limits": lim, "peak_point": pk_info,
+            "points": points, "best_speed": {"range": scan["best_range"], "endurance": scan["best_endurance"]}, "checks": checks,
+            "failures": failures, "passed": not failures and value is not None}
 
 
 def rank(results: List[Dict[str, Any]], key: str) -> List[Dict[str, Any]]:
@@ -1155,6 +1229,7 @@ def own_curve(spec: Mapping[str, Any], design: Any, ms: Mapping[str, Any], rpm_s
     flags: set = set()
     rpm = 2000.0
     while rpm <= rpm_cap + 1e-9:
+        _chk(ms)
         try:
             r = pb.solve(prop.blade, int(vec["blades"]), float(rpm), ms["rho"], 0.0, polar=pol, temp_c=ms["ambient_c"])
         except Exception:                                          # noqa: BLE001  (a speed the section model cannot solve is skipped)
@@ -1170,17 +1245,26 @@ def own_curve(spec: Mapping[str, Any], design: Any, ms: Mapping[str, Any], rpm_s
 # Stage 2: refine the best own propellers with the existing optimiser
 # ---------------------------------------------------------------------------
 
-def optimizer_evaluate(bank: "MotorBank", ms: Mapping[str, Any], cfg: Mapping[str, Any], should_stop: Optional[Callable[[], bool]] = None,
+CURVE_SOURCE_OWN = "blade-element model bemt-1, static, mfoil section tables + Prandtl-Glauert lift correction"
+CURVE_SOURCE_CATALOGUE = "catalogue fit of the published static test points (thrust, torque) over the tested rpm range"
+
+
+def _compact(res: Mapping[str, Any]) -> Dict[str, Any]:
+    keep = ("turns", "strip", "kv_rpm_per_V", "objectives", "objective_value", "tw_cont", "tw_peak", "checks", "failures", "passed", "points", "curve")
+    return {k: res.get(k) for k in keep}
+
+
+def optimizer_evaluate(bank: "MotorBank", ms: Mapping[str, Any], cfg: Mapping[str, Any],
                        on_eval: Optional[Callable[[], None]] = None) -> Callable[[Any, Dict[str, Any], str], Dict[str, Any]]:
     """The ``evaluate`` callback of ``propeller_optimize.optimize`` for the opt-in ``mission_objective``: curve of the candidate by the
     blade-element model, then the mission with the chosen motor, battery and flight (Kv inner step inside).  The record carries the
-    objective and one boolean per failed mission rule (every failed rule counts 1 in the optimiser's violation)."""
+    objective and one boolean per failed mission rule (every failed rule counts 1 in the optimiser's violation).  A stop raises
+    ``MissionCancelled`` (not a ``DesignError``), which leaves the optimiser at once."""
     from motor_ai_sim import propeller_design as pd
     from motor_ai_sim import propeller_optimize as po
 
     def evaluate(design: Any, vec: Dict[str, Any], op: str) -> Dict[str, Any]:
-        if should_stop and should_stop():
-            raise pd.DesignError("stopped")
+        _chk(ms)
         if on_eval:
             on_eval()
         spec = {"vector": vec, "D_in": float(vec["diameter_in"])}
@@ -1188,26 +1272,28 @@ def optimizer_evaluate(bank: "MotorBank", ms: Mapping[str, Any], cfg: Mapping[st
             rows, flags = own_curve(spec, design, ms, float(cfg["candidates"]["rpm_step"]))
         except MissionError as exc:
             raise pd.DesignError(str(exc))
-        cand = {"id": "opt", "name": "opt", "source": "own", "D_in": spec["D_in"], "blades": int(vec["blades"]), "flags": flags, "rows": rows}
+        cand = {"id": "opt", "name": "opt", "source": "own", "D_in": spec["D_in"], "blades": int(vec["blades"]), "flags": flags, "rows": rows,
+                "curve_source": CURVE_SOURCE_OWN}
         res = evaluate_candidate(cand, bank, ms, cfg)
         value = res.get("objective_value")
         return {"design_id": "mission", "objectives": {po.MISSION_OBJECTIVE: value}, "tip_mach": 0.0, "flags": flags,
                 "constraints": {f["rule"]: False for f in res.get("failures", [])}, "operating": {"rpm": (res.get("points", {}).get("cruise") or {}).get("rpm")},
-                "mission": res}
+                "mission": _compact(res)}
     return evaluate
 
 
 def refine_candidate(seed_spec: Mapping[str, Any], seed_result: Mapping[str, Any], bank: "MotorBank", ms: Mapping[str, Any], cfg: Mapping[str, Any],
-                     design: Any, should_stop: Optional[Callable[[], bool]] = None, on_eval: Optional[Callable[[], None]] = None) -> Dict[str, Any]:
+                     design: Any, on_eval: Optional[Callable[[], None]] = None, store_dir: Optional[Any] = None) -> Dict[str, Any]:
     """NSGA-II (the existing ``propeller_optimize.optimize``) over the design variables from the stage-1 vector with the single
-    objective ``mission_objective``; diameter and blade count stay.  Returns the stage-1 seed, the best feasible refined design with its
-    full mission numbers, the gain in percent and the optimiser's evaluations."""
+    objective ``mission_objective``; diameter and blade count stay.  EVERY evaluation (failures included) is stored in ``store_dir``
+    (``<run id>.jsonl`` + ``.run.json`` of the optimiser's own record format) and its run id is returned.  Returns the stage-1 seed,
+    the best feasible refined design with its full mission numbers, the gain in percent and the counts."""
     from motor_ai_sim import propeller_optimize as po
     rf = cfg["refine"]
     op = sorted(design.operating_points)[0]
-    ev = optimizer_evaluate(bank, ms, cfg, should_stop, on_eval)
+    ev = optimizer_evaluate(bank, ms, cfg, on_eval)
     out = po.optimize(design, dict(seed_spec["vector"]), op, objectives=[po.MISSION_OBJECTIVE], pop=int(rf["pop"]), generations=int(rf["generations"]),
-                      seed=int(rf["seed"]), free=list(rf["free"]), enforce_tip_mach=False, evaluate=ev)
+                      seed=int(rf["seed"]), free=list(rf["free"]), enforce_tip_mach=False, evaluate=ev, store_dir=store_dir)
     feas = [e for e in out["evaluations"] if e["constraints_met"] and e["objectives"].get(po.MISSION_OBJECTIVE) is not None]
     seed_value = seed_result.get("objective_value")
     best = max(feas, key=lambda e: e["objectives"][po.MISSION_OBJECTIVE]) if feas else None
@@ -1215,15 +1301,17 @@ def refine_candidate(seed_spec: Mapping[str, Any], seed_result: Mapping[str, Any
     if best is not None and seed_value:
         gain = 100.0 * (best["objectives"][po.MISSION_OBJECTIVE] - seed_value) / abs(seed_value)
     final = None
+    _chk(ms)                                                     # a stop before the final recomputation ends the stage here
     if best is not None:
         spec = {"vector": best["vector"], "D_in": float(best["vector"]["diameter_in"])}
         rows, flags = own_curve(spec, design, ms, float(cfg["candidates"]["rpm_step"]))
         final = evaluate_candidate({"id": "refined", "name": "refined " + str(seed_result.get("name")), "source": "own", "D_in": spec["D_in"],
-                                    "blades": int(best["vector"]["blades"]), "pitch_ratio": seed_result.get("pitch_ratio"), "flags": flags, "rows": rows},
-                                   bank, ms, cfg)
+                                    "blades": int(best["vector"]["blades"]), "pitch_ratio": seed_result.get("pitch_ratio"), "flags": flags, "rows": rows,
+                                    "vector": best["vector"], "curve_source": CURVE_SOURCE_OWN}, bank, ms, cfg)
     return {"from_id": seed_result.get("id"), "from_name": seed_result.get("name"), "seed_vector": dict(seed_spec["vector"]), "seed_value": seed_value,
             "objective": cfg["objective"], "best_vector": best["vector"] if best else None, "best_value": best["objectives"][po.MISSION_OBJECTIVE] if best else None,
             "gain_pct": gain, "result": final, "n_evaluations": len(out["evaluations"]), "n_feasible": len(feas),
+            "optimizer_run_id": out.get("run_id"), "optimizer_store": out.get("stored"),
             "settings": {k: rf[k] for k in ("pop", "generations", "seed", "free")}, "optimizer": "propeller_optimize.optimize (NSGA-II), objective mission_objective"}
 
 
@@ -1248,13 +1336,64 @@ def count_candidates(cfg: Mapping[str, Any]) -> int:
     return n
 
 
+_PROV_CACHE: Dict[str, str] = {}
+
+
+def _sha256_files(paths: Sequence[Any]) -> str:
+    import hashlib
+    h = hashlib.sha256()
+    for f in sorted(paths, key=lambda x: str(x)):
+        try:
+            h.update(str(getattr(f, "name", f)).encode())
+            h.update(open(f, "rb").read())
+        except OSError:
+            h.update(b"?")
+    return h.hexdigest()
+
+
+def _code_commit() -> str:
+    if "commit" not in _PROV_CACHE:
+        import os
+        import subprocess
+        from pathlib import Path
+        out = os.environ.get("MOTRES_COMMIT", "")
+        if not out:
+            try:
+                out = subprocess.run(["git", "rev-parse", "HEAD"], cwd=str(Path(__file__).resolve().parent), capture_output=True, text=True, timeout=5).stdout.strip()
+            except Exception:                                    # noqa: BLE001
+                out = ""
+        _PROV_CACHE["commit"] = out or "unknown"
+    return _PROV_CACHE["commit"]
+
+
+def provenance(stock: Sequence[Mapping[str, Any]]) -> Dict[str, Any]:
+    """What the numbers were computed with: the code commit, the hashes of the design file, the section polar tables and the wire stock
+    used, and the solver identities.  (The motor model's hash is added by the caller that read the file.)"""
+    import hashlib
+    import json
+    from motor_ai_sim import propeller_bemt as pb
+    from motor_ai_sim import propeller_design as pd
+    if "polars" not in _PROV_CACHE:
+        _PROV_CACHE["polars"] = _sha256_files(sorted(pb.MFOIL_POLAR_DIR.glob("*.csv")))
+        _PROV_CACHE["design"] = _sha256_files([pd.DESIGN_PATH])
+    return {"code_commit": _code_commit(), "model_version": MODEL_VERSION, "design_file_sha256": _PROV_CACHE["design"],
+            "polar_tables_sha256": _PROV_CACHE["polars"],
+            "wire_stock_sha256": hashlib.sha256(json.dumps(list(stock), sort_keys=True, default=str).encode()).hexdigest(),
+            "solvers": {"propeller_bemt": getattr(pb, "MODEL_BEMT", "bemt-1"), "s1_schema": s1.SCHEMA}}
+
+
 def run_selection(cfg: Mapping[str, Any], raw_model: Mapping[str, Any], *, stock: Optional[Sequence[Mapping[str, Any]]] = None,
                   progress: Optional[Callable[[int, int, str], None]] = None, should_stop: Optional[Callable[[], bool]] = None,
-                  curve_fn: Optional[Callable[..., Tuple[List[Row], List[str]]]] = None) -> Dict[str, Any]:
-    """The whole selection.  ``raw_model`` is the raw S1 model dict of the chosen motor (``load_raw_model``); ``progress(done, total,
-    line)`` and ``should_stop()`` are optional.  Returns ``{inputs, mission, results (ranked), alternatives, counts, note, ...}``."""
+                  store_dir: Optional[Any] = None) -> Dict[str, Any]:
+    """The whole selection.  ``raw_model`` is the raw S1 model dict of the chosen motor; ``progress(done, total, line)`` and
+    ``should_stop()`` are optional.  A stop (``should_stop`` true, checked inside every loop) ends the run with the partial results and
+    ``stopped`` True (``stopped_stage``); a stop that arrives after the last step also reports ``stopped`` (the results are then complete).
+    ``store_dir``: where the optimiser stores every stage-2 evaluation.  Returns ``{inputs, mission, results (ranked), alternatives,
+    refined, counts, provenance, note, ...}``."""
     ms = mission_numbers(cfg)
-    bank = MotorBank(raw_model, cfg, stock if stock is not None else stock_rows())
+    ms["cancel"] = should_stop
+    stock_used = list(stock) if stock is not None else stock_rows()
+    bank = MotorBank(raw_model, cfg, stock_used)
     design = mission_design() if cfg["candidates"]["own"] else None
     specs: List[Dict[str, Any]] = own_family_specs(cfg, design) if design is not None else []
     cats = catalogue_candidates(cfg, ms["rho"]) if cfg["candidates"]["catalogue"] else []
@@ -1264,73 +1403,82 @@ def run_selection(cfg: Mapping[str, Any], raw_model: Mapping[str, Any], *, stock
                            % (total, cfg["candidates"]["max_candidates"]))
     if total == 0:
         raise MissionError("no candidate propeller in the diameter window")
-    fn = curve_fn or own_curve
     results: List[Dict[str, Any]] = []
     cand_by_id: Dict[str, Dict[str, Any]] = {}
-    done = 0
-    stopped = False
-    for c in cats + specs:
-        if should_stop and should_stop():
-            stopped = True
-            break
-        if "rows" not in c:
-            try:
-                c["rows"], c["flags"] = fn(c, design, ms, float(cfg["candidates"]["rpm_step"]))
-            except MissionError as exc:
-                results.append({k: c.get(k) for k in ("id", "name", "source", "prop_id", "D_in", "pitch_ratio", "pitch_in", "chord_scale", "blades")}
-                               | {"passed": False, "objectives": {}, "objective_value": None, "failures": [{"rule": "invalid_design", "detail": str(exc)}]})
-                done += 1
-                if progress:
-                    progress(done, total, c["name"])
-                continue
-        try:
-            res = evaluate_candidate(c, bank, ms, cfg)
-        except Exception as exc:                                    # noqa: BLE001  (one bad candidate must not end the run)
-            res = {k: c.get(k) for k in ("id", "name", "source", "prop_id", "D_in", "pitch_ratio", "pitch_in", "chord_scale", "blades")} | {
-                "passed": False, "objectives": {}, "objective_value": None,
-                "failures": [{"rule": "evaluation_error", "detail": "%s: %s" % (type(exc).__name__, exc)}]}
-        cand_by_id[c["id"]] = c
-        results.append(res)
-        done += 1
-        if progress:
-            progress(done, total, c["name"])
-    ranked = rank(results, cfg["objective"])
     alternatives: Dict[str, List[Dict[str, Any]]] = {}
-    if not stopped:
+    refined: List[Dict[str, Any]] = []
+    done = 0
+    stage = "stage1"
+    stopped = False
+    keys = ("id", "name", "source", "prop_id", "D_in", "pitch_ratio", "pitch_in", "chord_scale", "blades", "vector")
+    try:
+        for c in cats + specs:
+            _chk(ms)
+            c["curve_source"] = CURVE_SOURCE_CATALOGUE if c["source"] == "catalogue" else CURVE_SOURCE_OWN
+            if "rows" not in c:
+                try:
+                    c["rows"], c["flags"] = own_curve(c, design, ms, float(cfg["candidates"]["rpm_step"]))
+                except MissionError as exc:
+                    results.append({k: c.get(k) for k in keys} | {"passed": False, "objectives": {}, "objective_value": None,
+                                                                  "failures": [{"rule": "invalid_design", "detail": str(exc)}], "checks": {}})
+                    done += 1
+                    if progress:
+                        progress(done, total, c["name"])
+                    continue
+            try:
+                res = evaluate_candidate(c, bank, ms, cfg)
+            except MissionCancelled:
+                raise
+            except Exception as exc:                            # noqa: BLE001  (one bad candidate must not end the run)
+                res = {k: c.get(k) for k in keys} | {"passed": False, "objectives": {}, "objective_value": None, "checks": {},
+                                                      "failures": [{"rule": "evaluation_error", "detail": "%s: %s" % (type(exc).__name__, exc)}]}
+            cand_by_id[c["id"]] = c
+            results.append(res)
+            done += 1
+            if progress:
+                progress(done, total, c["name"])
+        stage = "alternatives"
+        ranked = rank(results, cfg["objective"])
         opts = [o["turns"] for o in bank.options]
         for r in ranked[:3]:
-            if not r.get("turns") or r["id"] not in cand_by_id:
+            if not r.get("turns") or r["id"] not in cand_by_id or r["turns"] not in opts:
                 continue
-            i = opts.index(r["turns"]) if r["turns"] in opts else None
-            if i is None:
-                continue
+            i = opts.index(r["turns"])
             alts = []
             for j in (i - 1, i + 1):
                 if 0 <= j < len(opts):
+                    _chk(ms)
                     a = evaluate_candidate(cand_by_id[r["id"]], bank, ms, cfg, turns_override=opts[j])
                     alts.append({"turns": opts[j], "strip": a.get("strip"), "kv_rpm_per_V": a.get("kv_rpm_per_V"), "objectives": a.get("objectives"),
                                  "tw_cont": a.get("tw_cont"), "tw_peak": a.get("tw_peak"), "passed": a.get("passed"), "failures": a.get("failures")})
             alternatives[r["id"]] = alts
-    refined: List[Dict[str, Any]] = []
-    rf = cfg["refine"]
-    if rf["enabled"] and not stopped and design is not None:
-        seeds = [r for r in ranked if r.get("source") == "own" and r.get("passed") and r["id"] in cand_by_id][: int(rf["top_n"])]
-        total += len(seeds) * int(rf["pop"]) * (int(rf["generations"]) + 1)
+        rf = cfg["refine"]
+        if rf["enabled"] and design is not None:
+            stage = "stage2"
+            seeds = [r for r in ranked if r.get("source") == "own" and r.get("passed") and r["id"] in cand_by_id][: int(rf["top_n"])]
+            total += len(seeds) * int(rf["pop"]) * (int(rf["generations"]) + 1)
 
-        def tick() -> None:
-            nonlocal done
-            done += 1
-            if progress:
-                progress(done, total, "refining")
-        for r in seeds:
-            if should_stop and should_stop():
-                stopped = True
-                break
-            refined.append(refine_candidate(cand_by_id[r["id"]], r, bank, ms, cfg, design, should_stop, tick))
-        stopped = stopped or bool(should_stop and should_stop())
+            def tick() -> None:
+                nonlocal done
+                done += 1
+                if progress:
+                    progress(done, total, "refining")
+            for k, r in enumerate(seeds):
+                sd = None
+                if store_dir is not None:
+                    from pathlib import Path
+                    sd = Path(store_dir) / ("seed%d" % (k + 1))
+                refined.append(refine_candidate(cand_by_id[r["id"]], r, bank, ms, cfg, design, tick, sd))
+        stage = "done"
+    except MissionCancelled:
+        stopped = True
+    ranked = rank(results, cfg["objective"])
+    prov = provenance(stock_used)
+    if not stopped and should_stop is not None and should_stop():
+        stopped = True                                           # a stop that came too late to cut anything: complete results, terminal state stopped
     return {"version": MODEL_VERSION, "note": NOTE, "inputs": cfg, "refined": refined,
             "mission": {"mass_kg": ms["mass_kg"], "weight_N": ms["W_N"], "rho_kg_m3": ms["rho"], "pack": ms["pack"], "rotors": ms["n_rot"]},
             "winding": {"turns0": bank.n0, "strip_thickness0_mm": bank.t0, "strip_width_mm": bank.w0, "kv_bench_rpm_per_V": bank.kv_bench,
                         "options": [{"turns": o["turns"], "strip": o["strip"]} for o in bank.options]},
             "results": ranked, "alternatives": alternatives, "counts": {"total": total, "done": done, "passed": sum(1 for r in results if r.get("passed"))},
-            "stopped": stopped}
+            "stopped": stopped, "stopped_stage": stage if stopped else None, "complete": stage == "done", "provenance": prov}

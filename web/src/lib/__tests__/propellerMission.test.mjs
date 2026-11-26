@@ -117,3 +117,61 @@ t('gain in percent and the draft name', () => {
   assert.equal(M.draftName('mission', 'msn-0a1b2c3d4e', 1), 'mission_0a1b2c3d4e_1');
   assert.ok(/^[A-Za-z0-9][A-Za-z0-9_.-]{0,59}$/.test(M.draftName('mission', 'msn-0a1b2c3d4e', 2)));
 });
+
+t('field-level validation: every bad field is reported with its kind, ranges and whole numbers are checked', () => {
+  const r = M.buildBody({ ...M.DEFAULT_FORM, motorKey: 'cat_a', cells: '2.5', capacity: '-1', speedKmh: 'fast', pop: '99', pdRange: '0.6-0.2', blades: '4' }, motors);
+  assert.equal(r.ok, false);
+  assert.equal(r.errors.cells, 'int');
+  assert.equal(r.errors.capacity, 'range');
+  assert.equal(r.errors.speedKmh, 'number');
+  assert.equal(r.errors.pop, 'range');
+  assert.equal(r.errors.pdRange, 'range');
+  assert.equal(r.errors.blades, 'range');
+  assert.equal(Object.keys(r.errors).length, 6);
+  const ok = M.buildBody({ ...M.DEFAULT_FORM, motorKey: 'cat_a', pdRange: '0.3 - 0.45', allowUnverified: true, battCurrent: '60' }, motors);
+  assert.equal(ok.ok, true);
+  assert.equal(ok.body.candidates.pd_min, 0.3);
+  assert.equal(ok.body.candidates.pd_max, 0.45);
+  assert.equal(ok.body.kv.allow_unverified, true);
+  assert.equal(ok.body.battery.cont_current_A, 60);
+  assert.equal('allow_unverified' in M.buildBody({ ...M.DEFAULT_FORM, motorKey: 'cat_a' }, motors).body.kv, true);
+  assert.equal(M.buildBody({ ...M.DEFAULT_FORM, motorKey: 'cat_a' }, motors).body.kv.allow_unverified, false);
+  assert.deepEqual(M.parseRange('0.25–0.6'), [0.25, 0.6]);
+  assert.equal(M.parseRange('abc'), null);
+});
+
+t('a remembered form is sanitised: unknown keys dropped, wrong types and bad enums replaced by the defaults', () => {
+  const f = M.sanitizeForm({ cells: '8', evil: 'x', capacity: 5, kvMode: 'weird', objective: 'nope', own: 'yes', chords: 'x'.repeat(500), enduranceMode: 'best_speed' });
+  assert.equal(f.cells, '8');
+  assert.equal('evil' in f, false);
+  assert.equal(f.capacity, M.DEFAULT_FORM.capacity);
+  assert.equal(f.kvMode, 'free');
+  assert.equal(f.objective, 'range_km');
+  assert.equal(f.own, true);
+  assert.equal(f.chords, M.DEFAULT_FORM.chords);
+  assert.equal(f.enduranceMode, 'best_speed');
+  assert.deepEqual(M.sanitizeForm(null), M.DEFAULT_FORM);
+  assert.deepEqual(M.sanitizeForm('x'), M.DEFAULT_FORM);
+});
+
+t('remembered run id and row are validated; a missing row falls back silently', () => {
+  assert.equal(M.validRunId('msn-0a1b2c3d4e'), 'msn-0a1b2c3d4e');
+  assert.equal(M.validRunId('msn-0a1b2c3d4e5f'), 'msn-0a1b2c3d4e5f');
+  assert.equal(M.validRunId('../x'), null);
+  assert.equal(M.validRunId(5), null);
+  assert.equal(M.pickRow([{ id: 'a' }, { id: 'b' }], 'b'), 'b');
+  assert.equal(M.pickRow([{ id: 'a' }], 'gone'), null);
+  assert.equal(M.pickRow([{ id: 'a' }], null), null);
+});
+
+t('statuses and errors map to translation keys; an unknown status never shows as raw text', () => {
+  assert.equal(M.statusKey('stopped'), 'propMissionStatus_stopped');
+  assert.equal(M.statusKey('queued'), 'propMissionStatus_queued');
+  assert.equal(M.statusKey('weird'), 'propMissionStatus_interrupted');
+  assert.equal(M.errorKey(422), 'propMissionErr_422');
+  assert.equal(M.errorKey(503), 'propMissionErr_503');
+  assert.equal(M.errorKey(418), 'propMissionErr_other');
+  assert.equal(M.serverFieldKey('battery.cells_s must be between 1 and 30'), 'cells');
+  assert.equal(M.serverFieldKey('candidates.pd_max must be at least pd_min'), 'pdRange');
+  assert.equal(M.serverFieldKey('something else'), null);
+});

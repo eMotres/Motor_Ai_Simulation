@@ -17,12 +17,41 @@ const SERIES = ['#1f77b4', '#d62728', '#2ca02c', '#9467bd', '#ff7f0e', '#17becf'
 const CELL = { fontSize: 11, py: 0.25, whiteSpace: 'nowrap' } as const;
 
 /** A text field with a short label and the explanation in a tooltip. */
-export function MField({ label, tip, value, onChange, width = 96, error }: { label: string; tip?: string; value: string; onChange: (v: string) => void; width?: number; error?: boolean }) {
+export function MField({ label, tip, value, onChange, width = 96, error }: { label: string; tip?: string; value: string; onChange: (v: string) => void; width?: number; error?: string | null }) {
+  const { t } = useTranslation('simulation');
   return (
     <Tooltip title={tip ?? ''} disableHoverListener={!tip}>
-      <TextField size="small" label={label} value={value} error={error} onChange={(e) => onChange(e.target.value)} sx={{ width }}
-        inputProps={{ inputMode: 'decimal', 'aria-label': label }} InputLabelProps={{ sx: { fontSize: 12 } }} />
+      <TextField size="small" label={label} value={value} error={!!error} helperText={error ? t(`propMissionFieldErr_${error}`) : undefined} onChange={(e) => onChange(e.target.value)} sx={{ width }}
+        inputProps={{ inputMode: 'decimal', 'aria-label': label, 'aria-invalid': !!error }} InputLabelProps={{ sx: { fontSize: 12 } }} FormHelperTextProps={{ sx: { fontSize: 10, mx: 0 } }} />
     </Tooltip>
+  );
+}
+
+/** Values in labelled cells (label above, value below); a missing value is skipped. */
+export function KvGrid({ items, testId }: { items: Array<[string, string | number | null | undefined]>; testId?: string }) {
+  return (
+    <Box sx={{ display: 'flex', gap: 2, flexWrap: 'wrap', mt: 0.5 }} data-testid={testId}>
+      {items.filter(([, v]) => v !== null && v !== undefined && v !== '').map(([k, v]) => (
+        <Box key={k} sx={{ minWidth: 56 }}>
+          <Typography sx={{ fontSize: 10, color: 'var(--text-3)', lineHeight: 1.2 }}>{k}</Typography>
+          <Typography sx={{ fontSize: 13, lineHeight: 1.3 }}>{v}</Typography>
+        </Box>
+      ))}
+    </Box>
+  );
+}
+
+/** What could and could not be verified for a candidate (voltage check, drive bus window, current limits), each with its status. */
+export function CheckList({ checks }: { checks: Record<string, string> | undefined }) {
+  const { t } = useTranslation('simulation');
+  if (!checks || Object.keys(checks).length === 0) return null;
+  const bad = (v: string) => v === 'unverified' || v === 'unknown' || v === 'fail';
+  return (
+    <Box sx={{ mt: 1 }} data-testid="mission-checks">
+      <Typography sx={{ fontSize: 12, fontWeight: 600 }}>{t('propMissionChecks')}</Typography>
+      <KvGrid items={Object.entries(checks).map(([k, v]) => [t(`propMissionCheck_${k}`, { defaultValue: k }), t(`propMissionCheckVal_${v}`, { defaultValue: v })] as [string, string])} />
+      {Object.values(checks).some(bad) && <Typography sx={{ fontSize: 11, color: 'var(--warn, #ed6c02)' }}>{t('propMissionChecksUnavailable')}</Typography>}
+    </Box>
   );
 }
 
@@ -68,13 +97,10 @@ export function MotorPicker({ motors, value, onChange }: { motors: MotorEntry[];
         ])}
       </Select>
       {chosen && (
-        <Box sx={{ fontSize: 11, color: 'var(--text-2)' }} data-testid="mission-motor-info">
-          <Box sx={{ display: 'flex', gap: 1, alignItems: 'center', flexWrap: 'wrap' }}>
-            <KindChip kind={chosen.kind} />
-            <span>{[chosen.kv_rpm_per_V != null ? `Kv ${fmt(chosen.kv_rpm_per_V, 0)} rpm/V` : '', chosen.R_phase_ohm != null ? `R ${fmt(chosen.R_phase_ohm * 1000, 1)} mΩ` : '',
-              chosen.pole_pairs != null ? `${fmt(chosen.pole_pairs * 2, 0)} ${t('propMissionPoles')}` : '', chosen.mass_kg != null ? `${fmt(chosen.mass_kg, 2)} kg` : '',
-              chosen.I_peak_A != null ? `${fmt(chosen.I_peak_A, 0)} A ${t('propMissionPeak')}` : ''].filter(Boolean).join(' · ')}</span>
-          </Box>
+        <Box data-testid="mission-motor-info">
+          <KvGrid items={[[t('propMissionModel'), t(`propMissionKind_${chosen.kind}`)], ['Kv, rpm/V', chosen.kv_rpm_per_V != null ? fmt(chosen.kv_rpm_per_V, 0) : null],
+            ['R, mΩ', chosen.R_phase_ohm != null ? fmt(chosen.R_phase_ohm * 1000, 1) : null], [t('propMissionPoles'), chosen.pole_pairs != null ? fmt(chosen.pole_pairs * 2, 0) : null],
+            ['kg', chosen.mass_kg != null ? fmt(chosen.mass_kg, 2) : null], [`${t('propMissionPeak')}, A`, chosen.I_peak_A != null ? fmt(chosen.I_peak_A, 0) : null]]} />
           {chosen.kind === 'estimate' && <Alert severity="warning" sx={{ py: 0, mt: 0.5, fontSize: 11 }}>{t('propMissionEstimateWarn')}</Alert>}
           {chosen.kind === 'none' && <Alert severity="error" sx={{ py: 0, mt: 0.5, fontSize: 11 }}>{chosen.reason}</Alert>}
         </Box>
@@ -96,11 +122,10 @@ export function BestCard({ best, objective, seed }: { best: CandidateResult | nu
         <Typography sx={{ fontSize: 13, color: 'var(--text-2)' }}>{t(`propMissionObjUnit_${objective}`)}</Typography>
         <Typography sx={{ fontSize: 13 }}>{best.name}</Typography>
       </Box>
-      <Box sx={{ fontSize: 12, color: 'var(--text-2)', mt: 0.5 }}>
-        {[`D ${fmt(best.D_in, 1)}″`, best.pitch_ratio != null ? `P/D ${fmt(best.pitch_ratio, 2)}` : '', best.turns != null ? `${best.turns} ${t('propMissionTurns')}` : '',
-          s ? `${s.thickness_mm} × ${s.width_mm} mm` : '', best.kv_rpm_per_V != null ? `Kv ${fmt(best.kv_rpm_per_V, 0)}` : '',
-          best.tw_cont != null ? `T/W ${fmt(best.tw_cont, 2)} / ${fmt(best.tw_peak ?? 0, 2)}` : ''].filter(Boolean).join(' · ')}
-      </Box>
+      <KvGrid testId="mission-best-cells" items={[['D, in', fmt(best.D_in, 1)], ['P/D', best.pitch_ratio != null ? fmt(best.pitch_ratio, 2) : null], [t('propMissionTurns'), best.turns ?? null],
+        [t('propMissionStrip'), s ? `${s.thickness_mm} × ${s.width_mm} mm` : null], ['Kv', best.kv_rpm_per_V != null ? fmt(best.kv_rpm_per_V, 0) : null],
+        [t('propMissionColTwC'), best.tw_cont != null ? fmt(best.tw_cont, 2) : null], [t('propMissionColTwP'), best.tw_peak != null ? fmt(best.tw_peak, 2) : null]]} />
+      <CheckList checks={best.checks} />
     </Panel>
   );
 }
@@ -186,6 +211,7 @@ export function ObjectiveChart({ rows, objective }: { rows: CandidateResult[]; o
 }
 
 function PointRow({ label, p }: { label: string; p: Point | null | undefined }) {
+  const { t } = useTranslation('simulation');
   if (!p) return null;
   return (
     <TableRow>
@@ -198,6 +224,7 @@ function PointRow({ label, p }: { label: string; p: Point | null | undefined }) 
       <TableCell sx={CELL}>{p.motor_eta != null ? fmt(100 * p.motor_eta, 1) : '-'}</TableCell>
       <TableCell sx={CELL}>{p.T_winding_C != null ? fmt(p.T_winding_C, 0) : '-'}</TableCell>
       <TableCell sx={CELL}>{fmt(p.tip_mach, 2)}</TableCell>
+      <TableCell sx={CELL}>{p.verification ? t(`propMissionCheckVal_${p.verification}`, { defaultValue: p.verification }) : '-'}</TableCell>
     </TableRow>
   );
 }
@@ -206,7 +233,7 @@ function PointRow({ label, p }: { label: string; p: Point | null | undefined }) 
 export function RowDetails({ row, alternatives }: { row: CandidateResult | null; alternatives: Alternative[] | undefined }) {
   const { t } = useTranslation('simulation');
   if (!row) return null;
-  const cols = ['propMissionPtV', 'propMissionPtRpm', 'propMissionPtTorque', 'propMissionPtCurrent', 'propMissionPtPower', 'propMissionPtEta', 'propMissionPtTemp', 'propMissionPtTip'];
+  const cols = ['propMissionPtV', 'propMissionPtRpm', 'propMissionPtTorque', 'propMissionPtCurrent', 'propMissionPtPower', 'propMissionPtEta', 'propMissionPtTemp', 'propMissionPtTip', 'propMissionPtVerif'];
   return (
     <Panel title={`${t('propMissionDetails')}: ${row.name}`}>
       <Box data-testid="mission-details">
@@ -216,11 +243,14 @@ export function RowDetails({ row, alternatives }: { row: CandidateResult | null;
             {[row.strip.low_stock ? t('propMissionStripLow', { kg: row.strip.stock_kg }) : '', row.strip.check ? t('propMissionStripCheck') : ''].filter(Boolean).join(' ')}
           </Alert>
         )}
+        <CheckList checks={row.checks} />
         <Table size="small">
           <TableHead><TableRow><TableCell sx={CELL} />{cols.map((c) => <TableCell key={c} sx={CELL}>{t(c)}</TableCell>)}</TableRow></TableHead>
           <TableBody>
             <PointRow label={t('propMissionHover')} p={row.points?.hover} />
             <PointRow label={t('propMissionCruise')} p={row.points?.cruise} />
+            <PointRow label={t('propMissionHoverEnd')} p={row.points?.hover_end} />
+            <PointRow label={t('propMissionCruiseEnd')} p={row.points?.cruise_end} />
           </TableBody>
         </Table>
         {alternatives && alternatives.length > 0 && (
@@ -269,19 +299,18 @@ export function RefinedCard({ refined, objective, geo, motorRadiusMm, onSave, sa
               <Typography sx={{ fontSize: 30, fontWeight: 700, lineHeight: 1 }}>{fv(refined.best_value)}</Typography>
               <Typography sx={{ fontSize: 13, color: 'var(--text-2)' }}>{t(`propMissionObjUnit_${objective}`)}</Typography>
               <Chip size="small" color={(refined.gain_pct ?? 0) > 0 ? 'success' : 'default'} label={refined.gain_pct === null ? '-' : `${refined.gain_pct >= 0 ? '+' : ''}${fmt(refined.gain_pct, 1)} %`} data-testid="mission-gain" />
-              <Typography sx={{ fontSize: 12, color: 'var(--text-2)' }}>{t('propMissionSeedValue', { value: fv(refined.seed_value), name: refined.from_name })}</Typography>
             </Box>
             {r && (
-              <Box sx={{ fontSize: 12, color: 'var(--text-2)', mt: 0.5 }}>
-                {[r.turns != null ? `${r.turns} ${t('propMissionTurns')}` : '', s ? `${s.thickness_mm} × ${s.width_mm} mm` : '', r.kv_rpm_per_V != null ? `Kv ${fmt(r.kv_rpm_per_V, 0)}` : '',
-                  r.tw_cont != null ? `T/W ${fmt(r.tw_cont, 2)} / ${fmt(r.tw_peak ?? 0, 2)}` : ''].filter(Boolean).join(' · ')}
-              </Box>
+              <KvGrid testId="mission-refined-cells" items={[[t('propMissionTurns'), r.turns ?? null], [t('propMissionStrip'), s ? `${s.thickness_mm} × ${s.width_mm} mm` : null],
+                ['Kv', r.kv_rpm_per_V != null ? fmt(r.kv_rpm_per_V, 0) : null], [t('propMissionColTwC'), r.tw_cont != null ? fmt(r.tw_cont, 2) : null],
+                [t('propMissionColTwP'), r.tw_peak != null ? fmt(r.tw_peak, 2) : null], [t('propMissionStage1'), fv(refined.seed_value)],
+                [t('propMissionEvaluated'), refined.n_evaluations], [t('propMissionFeasible'), refined.n_feasible], [t('propMissionPop'), refined.settings.pop], [t('propMissionGen'), refined.settings.generations]]} />
             )}
-            <Typography sx={{ fontSize: 11, color: 'var(--text-3)', mt: 0.5 }}>{t('propMissionRefinedSettings', { n: refined.n_evaluations, ok: refined.n_feasible, pop: refined.settings.pop, gen: refined.settings.generations })}</Typography>
+            {r && <CheckList checks={r.checks} />}
             <Box sx={{ mt: 1 }}><PlanformChart geo={geo} motorRadiusMm={motorRadiusMm} /></Box>
             <Box sx={{ mt: 1 }}><ZoneTable geo={geo} /></Box>
             <Box sx={{ display: 'flex', gap: 1, alignItems: 'center', mt: 1 }}>
-              <Button size="small" variant="contained" onClick={onSave} disabled={busy} data-testid="mission-open-designer">{t('propMissionOpenDesigner')}</Button>
+              <Button size="small" variant="contained" onClick={onSave} disabled={busy} data-testid="mission-open-designer">{t('propMissionSaveDraft')}</Button>
               {saveMsg && <Typography sx={{ fontSize: 12 }}>{saveMsg}</Typography>}
             </Box>
           </>

@@ -823,3 +823,12 @@ def test_duties_source_is_access_checked_and_resolved(stub, monkeypatch):
     assert "no stored duties" in str(e.value)
     res = pm.run_selection(cfg, raw)                                               # the model runs end to end
     assert res["results"] and res["results"][0]["objectives"] is not None
+
+
+def test_limit_mode_duties_are_used_for_torque_and_the_current_range():
+    d = _duties()
+    c = d["lim_30A"]["coupled"]
+    c.update({"converged": False, "mode": "limited", "coil_temp_c": 200.0})       # how a solve_to-limits record is stored
+    raw, info = pm.duties_model("D", "C", d, od_mm=80.0, stack_mm=12.0, k3d=0.9227)
+    assert "lim_30A" in info["duties_used"] and raw["limits"]["I_max_A"] == pytest.approx(45.0)
+    assert max(raw["grid"]["I_A"]) == pytest.approx(45.0)

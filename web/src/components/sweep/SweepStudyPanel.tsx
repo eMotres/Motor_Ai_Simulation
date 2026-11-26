@@ -9,6 +9,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 import { isScanAlreadyRunning } from '../../lib/sweepSync';
 import { nsT } from '../../i18n/nsT';
+import { basesMixed, basisTag, isMarked } from '../../lib/shaftBasisLabel';
 import { invertedRangeNames } from '../../lib/optVarRanges';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
@@ -198,10 +199,10 @@ const SweepTable: React.FC<{ points: any[]; rpm: number; vdcFactor?: number; sel
     [...keys].sort().forEach(k => { if (varied(rows.map(r => r.ov[k]))) c.push({ id: 'ov:' + k, label: k, get: r => Number(r.ov[k]), fmt: v => String(Math.round(v * 1000) / 1000), vcol: true }); });
     if (varied(rows.map(r => r.I))) c.push({ id: 'I', label: 'I (A)', get: r => r.I, fmt: v => v.toFixed(1), vcol: true });
     if (varied(rows.map(r => r.g))) c.push({ id: 'g', label: 'γ (°)', get: r => r.g, fmt: v => v.toFixed(0), vcol: true });
-    // two shaft-power conventions in one payload: a column says which row is which ("†" = earlier, exported as 0/1)
-    if (new Set(rows.map(r => r.sc)).size > 1) {
-      c.push({ id: 'shaftConv', label: tx('shaftConvCol'), get: r => r.sc, fmt: v => (v === 1 ? '' : '†'),
-        titleRow: r => (r.sc === 1 ? undefined : tx('shaftConvMixed')) });
+    // Marked rows always name their basis; unmarked-only tables keep their columns. Export remains numeric 0/1.
+    if (rows.some(r => r.sc === 1)) {
+      c.push({ id: 'shaftConv', label: tx('shaftConvCol'), get: r => r.sc,
+        fmt: v => tx(v === 1 ? 'shaftBasisCurrent' : 'shaftBasisEarlier') });
     }
     c.push(
       { id: 'T', label: 'T (N·m)', get: r => r.T, fmt: v => v.toFixed(2) },
@@ -311,15 +312,17 @@ const SweepTable: React.FC<{ points: any[]; rpm: number; vdcFactor?: number; sel
 const _fmtVar = (v: any) =>
   typeof v === 'number' ? String(parseFloat(v.toFixed(3))) : String(v);
 
-const SweepTooltip: React.FC<any> = ({ active, payload }) => {
+const SweepTooltip: React.FC<any> = ({ active, payload, mixed = false }) => {
   if (!active || !payload?.length) return null;
   const d = payload[0].payload;
+  const tag = basisTag(isMarked(d), mixed);
   const ov = (d.overrides || {}) as Record<string, any>;
   // geometry vars only — I and γ are already in the header line above
   const ovKeys = Object.keys(ov).filter(k => k !== 'gamma_deg' && k !== 'current_a');
   return (
     <Box sx={{ bgcolor: 'var(--panel-2)', border: '1px solid var(--line)', borderRadius: 1, p: 1, fontSize: 11, maxWidth: 360 }}>
       <div style={{ color: '#93c5fd', fontWeight: 700 }}>I = {d.I} A · γ = {d.g}°{d.gi ? ` · geom ${d.gi}` : ''}</div>
+      {tag && <div>{tx(tag === 'current' ? 'shaftBasisCurrent' : 'shaftBasisEarlier')}</div>}
       {/* every swept variable that changes at this point (the point's overrides) */}
       {ovKeys.length > 0 && (
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', columnGap: 10, rowGap: 1,
@@ -771,7 +774,7 @@ const SweepStudyPanel: React.FC = () => {
                          Number(p.V_line_peak_V) || 0, Number(p.KV_rpm_per_V_line) || 0,
                          Number(p.torque_per_mass_Nm_kg) || 0, pd2,
                          (p.efficiency ?? 0) * 100, Number(p.P_loss_total_W) || 0, p.op_mode === 'generator');
-      const row = { x: s3.td, y: s3.eff,
+      const row = { x: s3.td, y: s3.eff, shaft_convention: p.shaft_convention,
                      I: cur, g: gam, gi, ripple: p.T_ripple_pct, T: s3.T,
                      cp: coggingOf(p),
                      apply_eligible: p.apply_eligible === true,
@@ -846,6 +849,7 @@ const SweepStudyPanel: React.FC = () => {
   // New series → full view, always.
   useEffect(() => { setZoom(null); setShowAll(false); }, [series]);
 
+  const chartMixed = basesMixed(series.flatMap(s => s.rows).map(isMarked));
   const nFeasible = series.reduce((s, c) => s + c.rows.length, 0);
 
   // Build failures: some geometries can't be meshed (e.g. teeth too wide for the
@@ -1529,7 +1533,7 @@ const SweepStudyPanel: React.FC = () => {
                   allowDataOverflow={!!zoom || view !== extent}
                   tickFormatter={(v: number) => v.toFixed(2)}
                   label={{ value: 'Efficiency (%)', angle: -90, position: 'insideLeft', fontSize: 11, fill: 'var(--text-3)' }} />
-                <Tooltip content={<SweepTooltip />} />
+                <Tooltip content={<SweepTooltip mixed={chartMixed} />} />
                 {/* Legend removed — the table below lists I/γ per design, and
                     selecting a row highlights its point (and vice-versa). */}
                 {series.map((s, i) => (

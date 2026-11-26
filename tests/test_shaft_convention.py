@@ -387,11 +387,16 @@ def test_b4_headless_memo_and_warm_start_isolate_the_convention():
     base = {"torque_per_mass_Nm_kg": 1.0, "efficiency": 0.9}
     # an entirely earlier-convention history keeps its earlier warm start
     assert O._auto_warm_start([old] * 5, [{"name": "a", "x0": 1.0}], "f", 10.0, 0.0, 10.0, base)["n"] == 5
-    # once any row of this machine is marked, only marked rows are ranked (too few here: no seed)
-    marked = {**old, "overrides": {"a": 2.0}, "shaft_conv": 1}
-    assert O._auto_warm_start([old] * 5 + [marked], [{"name": "a", "x0": 1.0}], "f", 10.0, 0.0, 10.0, base) is None
-    s3 = O._auto_warm_start([old] * 5 + [marked] * 3, [{"name": "a", "x0": 1.0}], "f", 10.0, 0.0, 10.0, base)
+    marked = {**old, "overrides": {"a": 2.0}, "shaft_conv": 1, "td": 4.35, "eff": 870 / 970}
+    marked_base = {"torque_per_mass_Nm_kg": 4.35, "efficiency": 870 / 970,
+                   "shaft_convention": SC.SHAFT_CONVENTION,
+                   "_bline": {"shaft_conv": 1, "td_a": 4.35, "eff_a": 870 / 970,
+                              "w_td": 0.01, "w_eff": 0.5, "norm": math.hypot(0.01, 0.5)}}
+    # Only matching marked rows are ranked, and one row is still too few to seed.
+    assert O._auto_warm_start([old] * 5 + [marked], [{"name": "a", "x0": 1.0}], "f", 10.0, 0.0, 10.0, marked_base) is None
+    s3 = O._auto_warm_start([old] * 5 + [marked] * 3, [{"name": "a", "x0": 1.0}], "f", 10.0, 0.0, 10.0, marked_base)
     assert s3["n"] == 3 and s3["x"] == [2.0]
+    assert s3["F"] == pytest.approx(0.0)
     # a marked baseline never ranks earlier-convention rows
     assert O._auto_warm_start([old] * 5, [{"name": "a", "x0": 1.0}], "f", 10.0, 0.0, 10.0,
                               {**base, "_bline": {"shaft_conv": 1}}) is None

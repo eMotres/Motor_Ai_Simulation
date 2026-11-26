@@ -302,7 +302,7 @@ const DescentPanel: React.FC<{ chartsOnly?: boolean }> = ({ chartsOnly = false }
             const a = pts[j], b = pts[j + 1], f = (ratedTorque - a.T) / ((b.T - a.T) || 1);
             return { name, color: LL_PALETTE[i % LL_PALETTE.length], z: 6,
                      td: a.td + f * (b.td - a.td), eff: a.eff + f * (b.eff - a.eff),
-                     I: Math.round(a.I + f * (b.I - a.I)) };
+                     I: Math.round(a.I + f * (b.I - a.I)), shaft_conv: loadLineBasis(a) ? 1 : undefined };
           }
         }
         return null;
@@ -316,6 +316,13 @@ const DescentPanel: React.FC<{ chartsOnly?: boolean }> = ({ chartsOnly = false }
   const certified = st.final_validation_status === 'certified' && st.apply_eligible === true;
   const history: any[] = st.history || [];
   const chartData = history.map((h: any) => ({ ...h, eff_pct: (h.efficiency ?? (loadLineBasis(h) ? NaN : 0)) * 100 }));
+
+  const historyTooltipProps = anyMarked(chartData.map(loadLineBasis)) ? {
+    labelFormatter: (label: any, payload: any[]) => {
+      const tag = basisTag(loadLineBasis(payload?.[0]?.payload), true);
+      return `${label} — ${shaftTx(tag === 'current' ? 'shaftBasisCurrent' : 'shaftBasisEarlier')}`;
+    },
+  } : {};
 
   // Descent direction per variable (−∂cost/∂var): >0 → optimizer raises the
   // variable, <0 → lowers it.  Visualises what the optimizer is doing right now.
@@ -939,7 +946,7 @@ const DescentPanel: React.FC<{ chartsOnly?: boolean }> = ({ chartsOnly = false }
                   <XAxis dataKey="iter" tick={{ fontSize: 10 }} />
                   <YAxis yAxisId="l" tick={{ fontSize: 10 }} width={42} domain={['auto', 'auto']} />
                   <YAxis yAxisId="r" orientation="right" tick={{ fontSize: 10 }} width={42} domain={['auto', 'auto']} />
-                  <RTooltip contentStyle={{ fontSize: 11 }} />
+                  <RTooltip contentStyle={{ fontSize: 11 }} {...historyTooltipProps} />
                   <Legend wrapperStyle={{ fontSize: 10 }} />
                   <Line yAxisId="l" type="monotone" dataKey="torque_per_mass" name="Nm/kg" stroke="#3b82f6" dot={{ r: 0.5 }} strokeWidth={1.25} isAnimationActive={false} />
                   <Line yAxisId="r" type="monotone" dataKey="eff_pct" name="Eff %" stroke="#22c55e" dot={{ r: 0.5 }} strokeWidth={1.25} isAnimationActive={false} />
@@ -1163,12 +1170,12 @@ const DescentPanel: React.FC<{ chartsOnly?: boolean }> = ({ chartsOnly = false }
                 <Scatter name="★ best" data={bestPt} fill="#fbbf24" shape="star" isAnimationActive={false}
                   cursor="pointer" onClick={(d: any) => d && setSelectedPt(d.payload ?? d)} />
                 {selectedPt && selectedPt.td != null && (
-                  <Scatter name="● picked" data={[{ td: selectedPt.td, eff: selectedPt.eff, z: 9 }]}
+                  <Scatter name="● picked" data={[{ td: selectedPt.td, eff: selectedPt.eff, z: 9, shaft_conv: loadLineBasis(selectedPt) ? 1 : undefined }]}
                     fill="none" stroke="#e879f9" strokeWidth={1.25} shape="circle" isAnimationActive={false} />
                 )}
                 {showLoadLines && loadLineDesigns.map(([name, arr], i) => (
                   <Scatter key={'ll-' + name} name={name}
-                    data={arr.map((p: any) => ({ td: p.td, eff: p.eff, z: 1, I: p.I }))}
+                    data={arr.map((p: any) => ({ td: p.td, eff: p.eff, z: 1, I: p.I, shaft_conv: loadLineBasis(p) ? 1 : undefined }))}
                     fill={LL_PALETTE[i % LL_PALETTE.length]}
                     line={{ stroke: LL_PALETTE[i % LL_PALETTE.length], strokeWidth: 2.5 }} lineType="joint" isAnimationActive={false}>
                     <LabelList dataKey="I" position="top" formatter={(v: any) => `${v}A`} fill={LL_PALETTE[i % LL_PALETTE.length]} fontSize={9} />
@@ -1176,7 +1183,7 @@ const DescentPanel: React.FC<{ chartsOnly?: boolean }> = ({ chartsOnly = false }
                 ))}
                 {showLoadLines && ratedMarkers.map((rp: any) => (
                   <Scatter key={'rated-' + rp.name} name={`◆ ${rp.name} @ ${ratedTorque} Nm`}
-                    data={[{ td: rp.td, eff: rp.eff, z: rp.z, I: rp.I }]}
+                    data={[{ td: rp.td, eff: rp.eff, z: rp.z, I: rp.I, shaft_conv: rp.shaft_conv }]}
                     fill={rp.color} shape="diamond" isAnimationActive={false}>
                     <LabelList dataKey="I" position="right" formatter={(v: any) => `${v}A`} fill={rp.color} fontSize={9} />
                   </Scatter>

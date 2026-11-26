@@ -268,32 +268,8 @@ KIND_WORDS = {"em_run": ("electromagnetic", "电磁"), "coupled": ("thermal", "�
               "pwm": ("inverter", "逆变器"), "controller": ("inverter", "逆变器")}
 
 
-def line_basis(kinds: dict) -> Optional[str]:
-    """The shaft-power basis of the mechanical numbers :func:`result_line` / :func:`headline` would state for ``kinds``:
-    ``"shaft"`` (a marked record), ``"earlier"`` (an unmarked one) or None (no power or efficiency stated).  A caller
-    that lists several lines in one place passes ``mixed=True`` to them when both bases occur there."""
-    mech = mechanical_numbers(kinds)
-    if mech["P"] is None and mech["eta"] is None:
-        return None
-    return mech["basis"]
-
-
-def _basis_words(mech: dict, mixed: bool) -> Optional[tuple]:
-    """``(en, zh)`` basis words for a line: always on a marked record; on an unmarked one ONLY when marked and unmarked
-    lines are shown together (``mixed``) - an unmarked record shown on its own keeps its earlier text exactly."""
-    if mech["P"] is None and mech["eta"] is None:
-        return None
-    if mech.get("basis") == "shaft":
-        return ("core loss on the shaft", "铁损计入轴侧")
-    return ("earlier shaft basis", "较早轴功率口径") if mixed else None
-
-
-def result_line(duty: str, kinds: dict, mixed: bool = False) -> tuple:
-    """``(en, zh)``: one line about one duty's fresh results, without the variant name (the caller puts that in a heading).
-
-    ``kinds`` maps result kind -> stored record (only the records that are new in the period).  ``mixed``: this line is
-    listed together with lines of the other shaft-power basis (then an unmarked line names its earlier basis too)."""
-    duty = str(duty)
+def _result_context(kinds: dict) -> tuple:
+    """Select the mechanical and thermal records actually stated by result_line."""
     mech = mechanical_numbers(kinds)
     rec = None
     for k in ("coupled", "coupled_limit"):                    # a limit answer is the more telling one: it wins over a steady one
@@ -313,6 +289,37 @@ def result_line(duty: str, kinds: dict, mixed: bool = False) -> tuple:
         if mech["P"] is not None and mech["T"]:
             mech = {**mech, "P": mech["P"] * got / mech["T"]}
         mech = {**mech, "T": got}
+    return mech, rec
+
+
+def line_basis(kinds: dict, result: bool = False) -> Optional[str]:
+    """The shaft-power basis of the mechanical numbers :func:`result_line` / :func:`headline` would state for ``kinds``:
+    ``"shaft"`` (a marked record), ``"earlier"`` (an unmarked one) or None (no mechanical value stated).
+    Set result=True for the held-result override. A caller listing several lines in one place passes
+    ``mixed=True`` to them when both bases occur there."""
+    mech = _result_context(kinds)[0] if result else mechanical_numbers(kinds)
+    if all(mech.get(k) is None for k in ("T", "P", "P_out", "eta")):
+        return None
+    return mech["basis"]
+
+
+def _basis_words(mech: dict, mixed: bool) -> Optional[tuple]:
+    """``(en, zh)`` basis words for a line: always on a marked record; on an unmarked one ONLY when marked and unmarked
+    lines are shown together (``mixed``) - an unmarked record shown on its own keeps its earlier text exactly."""
+    if all(mech.get(k) is None for k in ("T", "P", "P_out", "eta")):
+        return None
+    if mech.get("basis") == "shaft":
+        return ("core loss on the shaft", "铁损计入轴侧")
+    return ("earlier shaft basis", "较早轴功率口径") if mixed else None
+
+
+def result_line(duty: str, kinds: dict, mixed: bool = False) -> tuple:
+    """``(en, zh)``: one line about one duty's fresh results, without the variant name (the caller puts that in a heading).
+
+    ``kinds`` maps result kind -> stored record (only the records that are new in the period).  ``mixed``: this line is
+    listed together with lines of the other shaft-power basis (then an unmarked line names its earlier basis too)."""
+    duty = str(duty)
+    mech, rec = _result_context(kinds)
     first: list = []
     first_zh: list = []
     if mech.get("P_out") is not None:

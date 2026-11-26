@@ -7663,7 +7663,12 @@ def _auto_warm_start(recs, specs, cfg_fp: str, current_a: float, gamma_deg: floa
     # ONE shaft convention is ranked (eff / td differ between them): the current (marked) rows once the baseline or
     # any row of this machine is marked; an entirely earlier-convention history keeps its earlier warm start
     bl = base.get("_bline") if isinstance(base, dict) and isinstance(base.get("_bline"), dict) else {}
-    marked = bl.get("shaft_conv") == 1 or any(r.get("shaft_conv") == 1 for r in mine)
+    baseline_marked = isinstance(base, dict) and (base.get("shaft_convention") == "fe_on_shaft_k3d_v1"
+                       or base.get("shaft_conv") == 1 or bl.get("shaft_conv") == 1)
+    marked = baseline_marked or any(r.get("shaft_conv") == 1 for r in mine)
+    if marked and not baseline_marked:
+        log.warning("auto warm start: selected rows and baseline use different shaft conventions")
+        return None
     for r in mine:
         if (r.get("shaft_conv") == 1) != marked:
             continue                              # the other shaft convention: another efficiency / torque density

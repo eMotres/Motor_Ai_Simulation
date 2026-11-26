@@ -369,7 +369,7 @@ def collect_project(project: dict, start: float, end: float, *,
             if fresh:
                 group.append((duty, fresh))
         # the lines of one variant are listed together: when they mix shaft-power bases, the earlier ones say so too
-        mixed = len({RD.line_basis({k: r for k, (r, _) in f.items()}) for _, f in group} - {None}) > 1
+        mixed = len({RD.line_basis({k: r for k, (r, _) in f.items()}, result=True) for _, f in group} - {None}) > 1
         for duty, fresh in group:
             ts = max(t for _, t in fresh.values())
             en, zh = RD.result_line(duty, {k: r for k, (r, _) in fresh.items()}, mixed=mixed)

@@ -208,7 +208,9 @@ def from_docs(die_doc: Dict[str, Any], cfg_doc: Dict[str, Any], stored_by_duty: 
         # card's quoted temperature is a label, not a statement of what was solved (owner 2026-11-18, model-vs-bench
         # investigation): a point with neither stays "unknown" and is not compared with a bench row.
         _mt = summary_magnet_temp_c(s)
-        if _mt is None:
+        # only when the numbers ARE that duty's saved snapshot: the mesh block belongs to the saved run, and an em_run
+        # fallback has no stated connection to it (Astra review of #767)
+        if _mt is None and src == "saved":
             _mt = num((d.get("mesh") or {}).get("sim.magnetTempC")) if isinstance(d.get("mesh"), dict) else None
         mag_t = _mt
         if magnet is None and card:

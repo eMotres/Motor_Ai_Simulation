@@ -162,6 +162,22 @@ def test_a_model_point_without_a_stamp_takes_the_saved_setting_not_the_cards_lab
     assert model_source.from_docs({}, cfg, {}, LIB)["noload"][0]["magnet_temp_c"] is None
 
 
+def test_a_saved_mesh_setting_is_not_borrowed_by_a_different_em_run():
+    """Astra review of #767: no saved summary, a newer em_run without a temperature stamp, and an OLD mesh setting of
+    80 C on the duty - the run's temperature stays unknown (the setting belongs to the saved snapshot, not to this run)."""
+    numbers = {"rpm": 3000, "I_phase_rms_A": 0.0, "V_line_peak_V": 510.0, "V1_LL_V": 500.0}
+    duty = {"name": "nl", "rpm": 3000, "current_arms": 0, "mesh": {"sim.magnetTempC": 80.0}}
+    cfg = {"winding": {"star_delta": "star"}, "materials": {"magnet": "GRADE_150C"}, "duties": [duty]}
+    stored = {"nl": {"em_run": {"numbers": dict(numbers)}}}
+    m = model_source.from_docs({}, cfg, stored, LIB)
+    assert m["noload"][0]["magnet_temp_c"] is None
+    duty["summary"] = dict(numbers)                       # the saved snapshot of that duty: its own setting applies
+    assert model_source.from_docs({}, cfg, stored, LIB)["noload"][0]["magnet_temp_c"] == 80.0
+    stored["nl"]["em_run"]["numbers"]["magnet_temp_used_c"] = 55.0                 # a stamp on the run always wins
+    duty.pop("summary")
+    assert model_source.from_docs({}, cfg, stored, LIB)["noload"][0]["magnet_temp_c"] == 55.0
+
+
 def test_the_emf_slope_row_follows_the_bench_basis_and_kv_stays_on_the_fundamental():
     m = _model([("nl 50", 3000, 50.0, 0.170)])
     # a bench that read only Vpp / 2: the waveform peak on both sides of the EMF-slope row

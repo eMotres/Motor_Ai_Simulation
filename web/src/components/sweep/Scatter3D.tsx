@@ -10,6 +10,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { Box, FormControlLabel, Checkbox, Typography } from '@mui/material';
 import { nsT } from '../../i18n/nsT';
 import { useTranslation } from 'react-i18next';
+import { basesMixed, basisTag } from '../../lib/shaftBasisLabel';
 const shaftTx = nsT('simulation');
 
 export interface P3 { td: number; eff: number; ripple: number; kind?: string; shaft_conv?: number }
@@ -146,6 +147,9 @@ const Scatter3D: React.FC<{ points: P3[]; rippleMax: number; best?: P3 | null }>
       };
     }, [points, best, rippleMax, showProj]);
 
+    const mixed = basesMixed([...points, ...(best ? [best] : [])].map((p) => p.shaft_conv === 1));
+    const hoverTag = hover ? basisTag(hover.shaft_conv === 1, mixed) : null;
+
     return (
       <Box sx={{ position: 'relative', width: '100%', height: '100%' }}>
         <canvas ref={cvRef} style={{ width: '100%', height: '100%', display: 'block', cursor: 'grab' }} />
@@ -158,7 +162,8 @@ const Scatter3D: React.FC<{ points: P3[]; rippleMax: number; best?: P3 | null }>
         {hover && (
           <Box sx={{ position: 'absolute', bottom: 6, right: 8, fontSize: 11, color: 'var(--text-1)', bgcolor: 'var(--overlay)', px: 1, py: 0.25, borderRadius: 1 }}>
             td {hover.td.toFixed(2)} · eff {(hover.eff * 100).toFixed(2)}% · ripple {hover.ripple.toFixed(1)}%
-            {' · '}{shaftTx(hover.shaft_conv === 1 ? 'shaftBasisCurrent' : 'shaftBasisEarlier')}
+            {/* the basis on a marked point, and on an earlier one only when the cloud mixes both kinds */}
+            {hoverTag && <>{' · '}{shaftTx(hoverTag === 'current' ? 'shaftBasisCurrent' : 'shaftBasisEarlier')}</>}
           </Box>
         )}
       </Box>

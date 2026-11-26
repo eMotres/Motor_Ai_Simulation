@@ -1,5 +1,6 @@
 import { nsT } from '../../i18n/nsT';
 import { useTranslation } from 'react-i18next';
+import { anyMarked, basisTag } from '../../lib/shaftBasisLabel';
 import React, { useState, useEffect, useRef } from 'react';
 import { useRunSettings } from '../../lib/useRunSettings';
 import { runSettingsBody } from '../../lib/runSettings';
@@ -171,12 +172,22 @@ const DescentPanel: React.FC<{ chartsOnly?: boolean }> = ({ chartsOnly = false }
   // Distinct from the scatter's own colors (green feasible / red infeasible /
   // blue descent path / yellow best) so the overlaid finalist segments read clearly.
   const LL_PALETTE = ['#f97316', '#a855f7', '#22d3ee', '#ec4899', '#fb923c', '#c084fc'];
-  const loadLineDesigns: [string, any[]][] = loadLines
-    ? Object.entries(loadLines).flatMap(([name, a]) => !Array.isArray(a) ? [] : [false, true].flatMap(marked => {
+  // The basis words appear on this chart only when a marked design is on it (then an earlier one says so too); a chart
+  // of earlier designs alone keeps its earlier names, legend and tooltips.
+  const _ds: any = descentState || {};
+  const chartMarked = anyMarked([
+    ...Object.values(loadLines || {}).flatMap((a) => (Array.isArray(a) ? a : [])),
+    ...((_ds.points || []) as any[]), ...((_ds.history || []) as any[]),
+    ...(_ds.best?.metrics ? [_ds.best.metrics] : []),
+    ...[_ds.baseline_line, _ds.result?.baseline_line, baselineLine].filter(Boolean),
+  ].map(loadLineBasis));
+  const chartTag = (p: any) => (chartMarked ? basisTag(loadLineBasis(p), true) : null);
+  const loadLineDesigns: [string, any[]][] = !loadLines ? [] : !chartMarked
+    ? Object.entries(loadLines).filter(([, a]) => Array.isArray(a) && a.length > 0)
+    : Object.entries(loadLines).flatMap(([name, a]) => !Array.isArray(a) ? [] : [false, true].flatMap(marked => {
         const rows = a.filter(p => loadLineBasis(p) === marked);
         return rows.length ? [[`${name} (${shaftTx(marked ? 'shaftBasisCurrent' : 'shaftBasisEarlier')})`, rows] as [string, any[]]] : [];
-      }))
-    : [];
+      }));
 
   const [maxIters, setMaxIters] = useState(10);
   const [wEff, setWEff] = useState(1);
@@ -950,7 +961,9 @@ const DescentPanel: React.FC<{ chartsOnly?: boolean }> = ({ chartsOnly = false }
               <span style={{ color: '#ef4444' }}>ripple&gt;limit</span> ·{' '}
               <span style={{ color: '#3b82f6' }}>descent path</span> ·{' '}
               <span style={{ color: '#fbbf24' }}>★ best</span>
-              {bline && <> · <Tooltip title={shaftTx(bline.shaft_conv === 1 ? 'shaftBasisCurrent' : 'shaftBasisEarlier')}><span style={{ color: '#f59e0b' }}>— baseline</span></Tooltip></>}
+              {bline && <> · {chartTag(bline)
+                ? <Tooltip title={shaftTx(chartTag(bline) === 'current' ? 'shaftBasisCurrent' : 'shaftBasisEarlier')}><span style={{ color: '#f59e0b' }}>— baseline</span></Tooltip>
+                : <span style={{ color: '#f59e0b' }}>— baseline</span>}</>}
             </Typography>
             <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75, flexWrap: 'wrap' }}>
               <Tooltip title="2-D = efficiency vs torque/mass. 3-D lifts ripple onto the height (z) axis, with a translucent plane at the ripple gate — see the eff×td-vs-ripple trade-off at a glance. Drag to rotate." placement="top">
@@ -1101,7 +1114,7 @@ const DescentPanel: React.FC<{ chartsOnly?: boolean }> = ({ chartsOnly = false }
                       <div style={{ background: 'var(--app-bg)', border: '1px solid var(--line)', borderRadius: 4,
                                     padding: '6px 9px', fontSize: 11, lineHeight: 1.6 }}>
                         {p.eff != null && <div style={{ color: '#22c55e' }}>Eff %: {Number(p.eff).toFixed(3)}</div>}
-                        <div>{shaftTx(p.shaft_conv === 1 ? 'shaftBasisCurrent' : 'shaftBasisEarlier')}</div>
+                        {chartTag(p) && <div>{shaftTx(chartTag(p) === 'current' ? 'shaftBasisCurrent' : 'shaftBasisEarlier')}</div>}
                         {p.td  != null && <div style={{ color: '#3b82f6' }}>Nm/kg: {Number(p.td).toFixed(3)}</div>}
                         {p.ripple != null && (
                           <div style={{ color: '#22c55e' }}>

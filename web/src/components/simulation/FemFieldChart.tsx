@@ -802,7 +802,9 @@ const FemFieldChart: React.FC<Props> = ({ gamma_deg = 0, rotor_angle_deg = 0,
                 { label: 'Copper loss', value: payload.P_cu_W == null ? '—' : `${payload.P_cu_W.toFixed(0)} W`, tip: payload.P_cu_W == null ? tx('lossNotComputed') : undefined },
                 { label: 'Iron loss', value: payload.P_fe_W == null ? '—' : `${payload.P_fe_W.toFixed(0)} W`, tip: payload.P_fe_W == null ? tx('lossNotComputed') : undefined },
                 { label: 'Magnet eddy', value: payload.P_mag_eddy_W == null ? '—' : `${payload.P_mag_eddy_W.toFixed(1)} W`, tip: payload.P_mag_eddy_W == null ? tx('lossNotComputed') : undefined },
-                { label: 'Efficiency', value: payload.efficiency == null ? '—' : `${(payload.efficiency * 100).toFixed(1)} %`, tip: payload.efficiency == null ? tx('lossNotComputed') : tx(payload.shaft_convention === 'fe_on_shaft_k3d_v1' ? 'shaftBasisCurrent' : 'shaftBasisEarlier') },
+                { label: 'Efficiency', value: payload.efficiency == null ? '—' : `${(payload.efficiency * 100).toFixed(1)} %`, tip: payload.efficiency == null ? tx('lossNotComputed')
+                  // a marked run names its basis; an earlier run keeps its earlier (tip-less) tile
+                  : payload.shaft_convention === 'fe_on_shaft_k3d_v1' ? tx('shaftBasisCurrent') : undefined },
               ]
             : [
                 { label: 'Mesh vertices',  value: payload.n_vertices.toLocaleString() },

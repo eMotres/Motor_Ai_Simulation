@@ -267,9 +267,19 @@ test('r5 R5: point efficiency tooltip names its convention; targets remain targe
     for (const marked of [false, true]) {
       const d = { name: 'rated', power_kw: 1, torque_nm: 10, result: { efficiency_pct: 89.69, ...(marked ? { shaft_conv: 1 } : {}) } };
       const tip = S.pointTip(d, { duties: [d] }, x => x, undefined, basis);
-      assert.ok(tip.includes(basis(marked)));
+      // a marked point names its basis; an earlier point among earlier ones keeps its earlier text
+      assert.equal(tip.includes(basis(marked)), marked);
+      if (!marked) assert.ok(tip.endsWith('η 89.7 %') && !tip.includes(basis(true)));
       assert.ok(tip.includes('10 N·m') && tip.includes('1.0 kW'));
     }
+    // points of both bases on one configuration: the earlier one says so too
+    const old = { name: 'rated', result: { efficiency_pct: 89.69 } };
+    const marked = { name: 'peak', result: { efficiency_pct: 88.1, shaft_conv: 1 } };
+    const both = { duties: [old, marked] };
+    assert.ok(S.pointTip(old, both, x => x, undefined, basis).endsWith(`η 89.7 % (${basis(false)})`));
+    assert.ok(S.pointTip(marked, both, x => x, undefined, basis).endsWith(`η 88.1 % (${basis(true)})`));
+    const chips = S.pointsOf(both, true, x => x, undefined, basis);
+    assert.ok(chips[0].tip.includes(basis(false)) && chips[1].tip.includes(basis(true)));
     const different = S.pointTip({ name: 'rated', result: { efficiency_pct: 90 },
       terminal_loss: { efficiency_at_terminals: .85, shaft_conv: 1, P_leads_board_W: 10 } }, {}, x => x, undefined, basis);
     assert.ok(different.includes(basis(false)) && different.includes(basis(true)));
@@ -361,5 +371,77 @@ test('r6 sweep Apply: old stored zero falls back to field power, marked zero and
     near(power(point, { P_mech_W: 0 }, 10, 100), 0);
     near(power(point, { P_mech_W: 870 }, 10, 100), 870);
     assert.ok(Number.isNaN(power(point, {}, 10, 100)));
+  }
+});
+
+test('r7: an unmarked record alone keeps its earlier text; marked and mixed views name the basis', async () => {
+  const L = await import('../shaftBasisLabel.ts');
+  assert.equal(L.isMarked({ shaft_conv: 1 }), true);
+  assert.equal(L.isMarked({ shaft_convention: 'fe_on_shaft_k3d_v1' }), true);
+  assert.equal(L.isMarked({ shaft_conv: 0 }), false);
+  assert.equal(L.isMarked(null), false);
+  assert.equal(L.basesMixed([false, false]), false);
+  assert.equal(L.basesMixed([true, true]), false);
+  assert.equal(L.basesMixed([false, true]), true);
+  assert.equal(L.anyMarked([false, false]), false);
+  assert.equal(L.anyMarked([false, true]), true);
+  assert.equal(L.basisTag(false, false), null);            // unmarked alone: no label
+  assert.equal(L.basisTag(false, true), 'earlier');         // unmarked next to a marked one
+  assert.equal(L.basisTag(true, false), 'current');         // marked: always
+  assert.equal(L.basisTag(true, true), 'current');
+
+  // the point tooltip: earlier points among earlier ones keep their exact earlier text, terminal parenthesis too
+  const S = await import('../simPoints.ts');
+  const old = { name: 'rated', result: { efficiency_pct: 90.7 },
+    terminal_loss: { P_leads_board_W: 23.8, efficiency_at_terminals: 0.886 } };
+  const oldTip = S.pointTip(old, { duties: [old] }, x => x);
+  assert.ok(oldTip.endsWith('η 90.7 % · η at terminals 88.6 % (leads + board 23.8 W)'));
+  const marked = { name: 'peak', result: { efficiency_pct: 88.1, shaft_conv: 1 },
+    terminal_loss: { P_leads_board_W: 10, efficiency_at_terminals: 0.85, shaft_conv: 1 } };
+  assert.ok(S.pointTip(marked, { duties: [marked] }, x => x)
+    .endsWith('η 88.1 % (core loss on the shaft) · η at terminals 85 % (leads + board 10 W; core loss on the shaft)'));
+  assert.ok(S.pointTip(old, { duties: [old, marked] }, x => x)
+    .endsWith('η 90.7 % (earlier shaft basis) · η at terminals 88.6 % (leads + board 23.8 W; earlier shaft basis)'));
+
+  // components: the basis words are gated on a marked record / a mixed view, and the unmarked text is the earlier one
+  const auto = read('components/sweep/AutoPointsTable.tsx');
+  assert.match(auto, /if \(marked\) c\.push\(\{ id: 'basis'/);
+  assert.match(auto, /label: marked \? `\$\{tx\('fieldTorque'\)\} \(N·m\)` : 'T \(N·m\)'/);
+  assert.match(auto, /label: marked \? `\$\{tx\('shaftPower'\)\} \(kW\)` : 'P \(kW\)'/);
+  const opt = read('components/sweep/AutoOptimizePanel.tsx');
+  assert.match(opt, /const tLabel = chartMarked \? `\$\{shaftTx\('fieldTorque'\)\} \[N·m\]` : 'T \[N·m\]'/);
+  assert.match(opt, /\.\.\.\(chartMarked \? \{ labelFormatter:/);
+  assert.match(opt, /baseMarked \|\| bestMarked \? shaftTx\('fieldTorque'\) : 'Torque'/);
+  assert.match(opt, /baseTag \? <Tooltip title=\{tagTx\(baseTag\)\}><span>Current design<\/span><\/Tooltip> : 'Current design'/);
+  const desc = read('components/sweep/DescentPanel.tsx');
+  assert.match(desc, /!chartMarked\s+\? Object\.entries\(loadLines\)\.filter\(\(\[, a\]\) => Array\.isArray\(a\) && a\.length > 0\)/);
+  assert.match(desc, /\{chartTag\(p\) && <div>/);
+  const s3 = read('components/sweep/Scatter3D.tsx');
+  assert.match(s3, /const mixed = basesMixed\(/);
+  assert.match(s3, /\{hoverTag && <>/);
+  const pub = read('components/landing/PublicMotors.tsx');
+  assert.match(pub, /const tag = basisTag\(motor\.rated\.shaft_conv === 1, mixed\)/);
+  assert.match(pub, /: t\('motors\.ratedHint'\)\} arrow>/);
+  const ctl = read('components/controller/ControllerPanel.tsx');
+  assert.ok(ctl.includes(`: "inverter efficiency × the ONE shaft efficiency of this duty's coupled record"`));
+  assert.match(ctl, /columns=\{controllerCompareColumns\(rows\)\}/);
+  const rows = read('components/controller/compareRows.ts');
+  assert.match(rows, /if \(res\.sources\?\.shaft_convention === 'fe_on_shaft_k3d_v1'\) put\(out, 'shaft_basis', 'current'\)/);
+  assert.match(rows, /marked \? CONTROLLER_COMPARE_COLUMNS : CONTROLLER_COMPARE_COLUMNS\.filter\(\(c\) => c\.key !== 'shaft_basis'\)/);
+  assert.match(read('components/compare/ConfiguratorPanel.tsx'),
+    /<Tooltip title=\{draftHeadline\.shaft_conv === 1 \? tx\('configure\.femShaftBasis'\) : ''\}>/);
+  assert.match(read('components/simulation/FemFieldChart.tsx'),
+    /payload\.shaft_convention === 'fe_on_shaft_k3d_v1' \? tx\('shaftBasisCurrent'\) : undefined/);
+  // the landing data keeps the earlier shape for an unmarked motor
+  const LM = await import('../landingMotors.ts');
+  const rated = { power_kw: 1, torque_nm: 10, speed_rpm: 1000, efficiency_pct: 90, mass_kg: 2, mass_is_partial: false, continuous: true };
+  const parsed = LM.parsePublicMotors({ motors: [{ die: 'D', configuration: 'C', application: null, rated }] });
+  if (parsed.length) assert.ok(!('shaft_conv' in parsed[0].rated));
+  // every basis key exists in both languages
+  for (const lang of ['en', 'zh-CN']) {
+    const c = JSON.parse(read(`locales/${lang}/common.json`));
+    const sim = JSON.parse(read(`locales/${lang}/simulation.json`));
+    for (const k of ['shaftBasisCurrent', 'shaftBasisEarlier']) assert.ok(c[k] && sim[k]);
+    for (const k of ['shaftConvCol', 'fieldTorque', 'shaftPower']) assert.ok(sim[k]);
   }
 });

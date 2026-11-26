@@ -382,10 +382,19 @@ def test_b4_headless_memo_and_warm_start_isolate_the_convention():
     assert a["shaft_conv"] == 1
     p = O._pt({"ok": True, "res": {"shaft_convention": SC.SHAFT_CONVENTION, "T_em_Nm": 1.0}}, "x")
     assert p["shaft_conv"] == 1
-    recs = [{"cfg_fp": "f", "overrides": {"a": 1.0}, "current_a": 10.0, "gamma_deg": 0.0, "ripple": 1.0,
-             "td": 1.0, "eff": 0.9}] * 5
-    assert O._auto_warm_start(recs, [{"name": "a", "x0": 1.0}], "f", 10.0, 0.0, 10.0,
-                              {"torque_per_mass_Nm_kg": 1.0, "efficiency": 0.9}) is None
+    old = {"cfg_fp": "f", "overrides": {"a": 1.0}, "current_a": 10.0, "gamma_deg": 0.0, "ripple": 1.0,
+           "td": 1.0, "eff": 0.9}
+    base = {"torque_per_mass_Nm_kg": 1.0, "efficiency": 0.9}
+    # an entirely earlier-convention history keeps its earlier warm start
+    assert O._auto_warm_start([old] * 5, [{"name": "a", "x0": 1.0}], "f", 10.0, 0.0, 10.0, base)["n"] == 5
+    # once any row of this machine is marked, only marked rows are ranked (too few here: no seed)
+    marked = {**old, "overrides": {"a": 2.0}, "shaft_conv": 1}
+    assert O._auto_warm_start([old] * 5 + [marked], [{"name": "a", "x0": 1.0}], "f", 10.0, 0.0, 10.0, base) is None
+    s3 = O._auto_warm_start([old] * 5 + [marked] * 3, [{"name": "a", "x0": 1.0}], "f", 10.0, 0.0, 10.0, base)
+    assert s3["n"] == 3 and s3["x"] == [2.0]
+    # a marked baseline never ranks earlier-convention rows
+    assert O._auto_warm_start([old] * 5, [{"name": "a", "x0": 1.0}], "f", 10.0, 0.0, 10.0,
+                              {**base, "_bline": {"shaft_conv": 1}}) is None
 
 
 def test_b6_restamp_uses_the_live_numerator(monkeypatch):
@@ -749,7 +758,8 @@ def test_r4_c4_digest_headline_from_one_record():
     mech = RD.mechanical_numbers(kinds)
     assert mech["T"] == 10.0 and mech["P"] == 1000.0 and mech["eta"] is None and mech["basis"] == "earlier"
     h = RD.headline(kinds)
-    assert "87.6" not in h and "earlier shaft basis" in h
+    assert "87.6" not in h and "shaft basis" not in h                     # unmarked on its own: its earlier text
+    assert "earlier shaft basis" in RD.headline(kinds, mixed=True)          # listed with marked lines: named
     k2 = {"coupled": {"em": _plain_marked(), "efficiency_shaft": 0.876289}}
     m2 = RD.mechanical_numbers(k2)
     assert m2["basis"] == "shaft" and m2["eta"] == pytest.approx(87.6289, abs=1e-3)
@@ -814,7 +824,47 @@ def test_r5_r2_digest_missing_context_and_legacy_omission():
            "coupled": {"em": {"efficiency": .9}, "efficiency_shaft": .88}}
     assert mechanical_numbers(old)["eta"] is None
     en, zh = result_line("rated", {"em_run": {"numbers": {"T_em_avg_Nm": 10, "P_elec_in_W": -800}}})
-    assert "field torque" in en and "电磁转矩" in zh
+    # an unmarked generator on its own keeps its earlier text exactly
+    assert en == "rated: generator 800 W out, shaft torque 10 N·m" and zh == "rated：发电 800 W，轴转矩 10 N·m"
+
+
+def test_r7_digest_unmarked_alone_keeps_text_marked_and_mixed_name_the_basis():
+    from motor_ai_sim.digest import readable as RD
+    old = {"em_run": {"numbers": {"T_avg_Nm": 12.34, "efficiency_pct": 95.1, "P_mech_W": 4100}}}
+    en, zh = RD.result_line("cruise", old)
+    assert en == "cruise: 12.3 N·m at 4.1 kW, efficiency 95.1 %" and "口径" not in zh
+    assert RD.headline(old) == "T 12.3 N·m, P 4.1 kW, η 95.1 %"
+    assert RD.line_basis(old) == "earlier"
+    en_m, zh_m = RD.result_line("cruise", old, mixed=True)
+    assert en_m == "cruise: 12.3 N·m at 4.1 kW, efficiency 95.1 %, earlier shaft basis" and "较早轴功率口径" in zh_m
+    assert RD.headline(old, mixed=True).endswith("earlier shaft basis")
+    marked = {"coupled": {"em": _plain_marked(), "P_mech_extra_W": 20, "efficiency_shaft": 850 / 970}}
+    assert RD.line_basis(marked) == "shaft"
+    for mixed in (False, True):
+        en2, zh2 = RD.result_line("rated", marked, mixed=mixed)
+        assert en2.startswith("rated: shaft torque ") and "core loss on the shaft" in en2 and "铁损计入轴侧" in zh2
+        assert "core loss on the shaft" in RD.headline(marked, mixed=mixed)
+    assert RD.line_basis({"rotor_stress": {"sf_min": 2.0}}) is None
+
+
+def test_r7_digest_collector_names_the_basis_only_in_a_mixed_variant(tmp_path, monkeypatch):
+    from motor_ai_sim.digest import collect as C
+    from motor_ai_sim.development import store as PS
+    monkeypatch.setattr(PS, "path_for", lambda pid: tmp_path / str(pid))    # no project files: results only
+    old = {"em_run": {"computed_at": "2026-11-26T10:00:00Z",
+                      "numbers": {"T_avg_Nm": 12.34, "efficiency_pct": 95.1, "P_mech_W": 4100}}}
+    marked = {"coupled": {"computed_at": "2026-11-26T10:00:00Z", "em": _plain_marked(), "P_mech_extra_W": 20,
+                          "efficiency_shaft": 850 / 970}}
+    proj = {"id": "p_r7_none", "linked_motors": [{"die": "D", "config": "C"}]}
+
+    def lines(by_duty):
+        items = C.collect_project(proj, 0.0, 4.0e9, results=lambda die, cfg: by_duty)
+        return sorted(i.en for i in items if i.kind == "results")
+    alone = lines({"cruise": old})
+    assert alone and alone[0] == "cruise: 12.3 N·m at 4.1 kW, efficiency 95.1 %"
+    both = lines({"cruise": old, "rated": marked})
+    assert any(x == "cruise: 12.3 N·m at 4.1 kW, efficiency 95.1 %, earlier shaft basis" for x in both)
+    assert any(x.startswith("rated: shaft torque ") and "core loss on the shaft" in x for x in both)
 
 
 def test_r5_r3_rebuild_keeps_marker_and_refuses_wrong_cache():

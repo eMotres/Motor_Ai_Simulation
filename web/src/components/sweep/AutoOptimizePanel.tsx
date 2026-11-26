@@ -1,4 +1,5 @@
 import { autoPointFieldTorque } from '../../lib/autoPointPower';
+import { anyMarked, basesMixed, basisTag, isMarked } from '../../lib/shaftBasisLabel';
 import { nsT } from '../../i18n/nsT';
 import { useTranslation } from 'react-i18next';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
@@ -121,6 +122,11 @@ const AutoOptimizePanel: React.FC = () => {
   const best = st.best?.metrics;
   const certified = st.final_validation_status === 'certified' && st.apply_eligible === true;
   const base = st.baseline;
+  // the current-vs-optimized table names a basis only for a marked design, and for an earlier one next to a marked one
+  const baseMarked = isMarked(base), bestMarked = isMarked(best);
+  const pairMixed = basesMixed([baseMarked, bestMarked]);
+  const baseTag = basisTag(baseMarked, pairMixed), bestTag = basisTag(bestMarked, pairMixed);
+  const tagTx = (tag: 'current' | 'earlier') => shaftTx(tag === 'current' ? 'shaftBasisCurrent' : 'shaftBasisEarlier');
   // Pareto-dominance over the run's OWN cloud, at the run's OWN operating point
   // (backend: motor_ai_sim/optimization/pareto.py).
   const pareto = st.pareto || null;
@@ -508,6 +514,11 @@ const AutoOptimizePanel: React.FC = () => {
             ? [{ ripple: best.T_ripple_pct, torque: best.T_em_Nm, shaft_conv: best.shaft_convention === 'fe_on_shaft_k3d_v1' ? 1 : best.shaft_conv }] : [];
           const basePt = base && Number.isFinite(base.T_em_Nm)
             ? [{ ripple: base.T_ripple_pct, torque: base.T_em_Nm, shaft_conv: base.shaft_convention === 'fe_on_shaft_k3d_v1' ? 1 : base.shaft_conv }] : [];
+          // the basis words only when a marked design is on these charts (then an earlier one says so too); charts of
+          // earlier designs alone keep their earlier labels
+          const chartMarked = anyMarked([...cloud, ...bestPt, ...basePt, ...((st.history || []) as any[])]
+            .map((p: any) => isMarked(p)));
+          const tLabel = chartMarked ? `${shaftTx('fieldTorque')} [N·m]` : 'T [N·m]';
           return (
           <Box sx={{ mt: 1.5, display: 'flex', gap: 2, flexWrap: 'wrap' }}>
             {/* Trajectory: what the search did over time */}
@@ -525,7 +536,7 @@ const AutoOptimizePanel: React.FC = () => {
                     border: '1px solid var(--line-soft)', fontSize: 11 }} />
                   <ReferenceLine yAxisId="r" y={gate} stroke="#f59e0b"
                     strokeDasharray="4 3" label={{ value: `≤${fmt(gate, 1)}%`, fontSize: 10, fill: '#f59e0b' }} />
-                  <Line yAxisId="t" dataKey="torque" name={`${shaftTx('fieldTorque')} [N·m]`} dot={false}
+                  <Line yAxisId="t" dataKey="torque" name={tLabel} dot={false}
                     stroke="#60a5fa" strokeWidth={2} isAnimationActive={false} />
                   <Line yAxisId="r" dataKey="ripple" name="ripple [%]" dot={false}
                     stroke="#f87171" strokeWidth={1.5} isAnimationActive={false} />
@@ -563,9 +574,10 @@ const AutoOptimizePanel: React.FC = () => {
                   <YAxis type="number" dataKey="torque" name="T"
                     tick={{ fontSize: 10, fill: 'var(--text-2)' }} width={44}
                     domain={['auto', 'auto']}
-                    label={{ value: `${shaftTx('fieldTorque')} [N·m]`, angle: -90, position: 'insideLeft', fontSize: 10, fill: 'var(--text-3)' }} />
+                    label={{ value: tLabel, angle: -90, position: 'insideLeft', fontSize: 10, fill: 'var(--text-3)' }} />
                   <RTooltip cursor={{ strokeDasharray: '3 3' }}
-                    labelFormatter={(_label: any, payload: any) => shaftTx(payload?.[0]?.payload?.shaft_conv === 1 ? 'shaftBasisCurrent' : 'shaftBasisEarlier')}
+                    {...(chartMarked ? { labelFormatter: (_label: any, payload: any) =>
+                      shaftTx(payload?.[0]?.payload?.shaft_conv === 1 ? 'shaftBasisCurrent' : 'shaftBasisEarlier') } : {})}
                     contentStyle={{ background: 'var(--app-bg)',
                       border: '1px solid var(--line-soft)', fontSize: 11 }} />
                   <ReferenceLine x={gate} stroke="#f59e0b" strokeDasharray="4 3"
@@ -674,7 +686,7 @@ const AutoOptimizePanel: React.FC = () => {
               <TableHead>
                 <TableRow>
                   <TableCell sx={{ fontSize: 10, color: 'text.secondary' }}>—</TableCell>
-                  <TableCell align="right" sx={{ fontSize: 10, color: 'text.secondary' }}>{shaftTx('fieldTorque')}</TableCell>
+                  <TableCell align="right" sx={{ fontSize: 10, color: 'text.secondary' }}>{baseMarked || bestMarked ? shaftTx('fieldTorque') : 'Torque'}</TableCell>
                   <TableCell align="right" sx={{ fontSize: 10, color: 'text.secondary' }}>Ripple</TableCell>
                   <TableCell align="right" sx={{ fontSize: 10, color: 'text.secondary' }}>Efficiency</TableCell>
                   <TableCell align="right" sx={{ fontSize: 10, color: 'text.secondary' }}>N·m/kg</TableCell>
@@ -682,14 +694,14 @@ const AutoOptimizePanel: React.FC = () => {
               </TableHead>
               <TableBody>
                 <TableRow>
-                  <TableCell sx={{ fontSize: 11 }}><Tooltip title={shaftTx(base.shaft_convention === 'fe_on_shaft_k3d_v1' || base.shaft_conv === 1 ? 'shaftBasisCurrent' : 'shaftBasisEarlier')}><span>Current design</span></Tooltip></TableCell>
+                  <TableCell sx={{ fontSize: 11 }}>{baseTag ? <Tooltip title={tagTx(baseTag)}><span>Current design</span></Tooltip> : 'Current design'}</TableCell>
                   <TableCell align="right" sx={{ fontSize: 11 }}>{fmt(base.T_em_Nm, 3)}</TableCell>
                   <TableCell align="right" sx={{ fontSize: 11 }}>{fmt(base.T_ripple_pct, 2)}%</TableCell>
                   <TableCell align="right" sx={{ fontSize: 11 }}>{pct(base.efficiency)}</TableCell>
                   <TableCell align="right" sx={{ fontSize: 11 }}>{fmt(base.torque_per_mass, 3)}</TableCell>
                 </TableRow>
                 <TableRow>
-                  <TableCell sx={{ fontSize: 11, fontWeight: 700 }}><Tooltip title={shaftTx(best.shaft_convention === 'fe_on_shaft_k3d_v1' || best.shaft_conv === 1 ? 'shaftBasisCurrent' : 'shaftBasisEarlier')}><span>Optimized</span></Tooltip></TableCell>
+                  <TableCell sx={{ fontSize: 11, fontWeight: 700 }}>{bestTag ? <Tooltip title={tagTx(bestTag)}><span>Optimized</span></Tooltip> : 'Optimized'}</TableCell>
                   <TableCell align="right" sx={{ fontSize: 11, fontWeight: 700 }}>
                     {fmt(best.T_em_Nm, 3)}
                     <Typography component="span" sx={{ fontSize: 10, ml: 0.5, color: 'text.secondary' }}>

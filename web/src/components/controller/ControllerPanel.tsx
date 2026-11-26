@@ -27,7 +27,7 @@ import ControllerProducts from './ControllerProducts';
 import LocalCompareTable from '../common/LocalCompareTable';
 import { MAX_LOCAL_ROWS, normalizeLocalRows } from '../compare/resultRows';
 import type { LocalRow } from '../compare/resultRows';
-import { CONTROLLER_COMPARE_COLUMNS, localControllerRow,
+import { controllerCompareColumns, localControllerRow,
          controllerRowName } from './compareRows';
 import { useDieContext } from '../common/useDieContext';
 import { listDevices, getTopologies, solveController, getLast, postSchematic,
@@ -900,7 +900,10 @@ const ControllerPanel: React.FC = () => {
                   value={pct(E?.inverter)}
                   tip={(E as any)?.inverter_definition || ''} />
                 <Tile label={tx('wallToShaftEfficiency')} value={pct(E?.wall_to_shaft)}
-                  tip={`${tx('shaftEfficiencyBasisTip')} ${tx(res.sources?.shaft_convention === 'fe_on_shaft_k3d_v1' ? 'shaftBasisCurrent' : 'shaftBasisEarlier')}`} />
+                  tip={res.sources?.shaft_convention === 'fe_on_shaft_k3d_v1'
+                    ? `${tx('shaftEfficiencyBasisTip')} ${tx('shaftBasisCurrent')}`
+                    // an earlier record on its own keeps its earlier tip
+                    : "inverter efficiency × the ONE shaft efficiency of this duty's coupled record"} />
                 <Tile label="T_j max" value={`${fmt(T?.t_j_max_c, 0)} °C`}
                   bad={(T?.margin_K ?? 1) < 0}
                   tip={`limit ${fmt(T?.t_j_limit_c, 0)} °C · margin ${fmt(T?.margin_K, 0)} K`} />
@@ -1077,7 +1080,7 @@ const ControllerPanel: React.FC = () => {
         <LocalCompareTable
           title={tx('controllerVariants')}
           rows={rows}
-          columns={CONTROLLER_COMPARE_COLUMNS}
+          columns={controllerCompareColumns(rows)}
           onRemove={(id) => saveRows(rows.filter(r => r.id !== id))}
           onClear={() => saveRows([])}
           onRename={(id, name) => saveRows(rows.map(r => (r.id === id ? { ...r, name } : r)))}

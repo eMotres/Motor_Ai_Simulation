@@ -570,10 +570,16 @@ def check_fit(p: Principal, torque_nm: float, speed_rpm: float,
                 fits.append({**row, "unverified": unverified})
     # two shaft-power conventions are never ranked together: a stored duty of an earlier run (every loss on the
     # electrical side) is flagged and sorts after the current convention's (owner 2026-11-25)
+    # The basis is named on a marked row always and on an earlier row only when the answer lists both kinds: an
+    # answer of earlier rows alone keeps its earlier shape.
+    marked_of = {id(r): conv_of.get((r["die"], r["config"], r["duty"])) == 1 for r in fits + rejected}
+    mixed = len(set(marked_of.values())) > 1
     for r in fits + rejected:
-        r["shaft_convention"] = ("core loss on the shaft" if conv_of.get((r["die"], r["config"], r["duty"])) == 1
-                                 else "earlier run: every loss on the electrical side")
-    fits.sort(key=lambda r: (r["shaft_convention"] != "core loss on the shaft", len(r["unverified"]),
+        if marked_of[id(r)]:
+            r["shaft_convention"] = "core loss on the shaft"
+        elif mixed:
+            r["shaft_convention"] = "earlier run: every loss on the electrical side"
+    fits.sort(key=lambda r: (not marked_of[id(r)], len(r["unverified"]),
                              r["mass_kg"] if r["mass_kg"] is not None else 1e9,
                              -(r["efficiency_pct"] or 0)))
     rejected.sort(key=lambda r: len(r["reasons"]))

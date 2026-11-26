@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { nsT } from '../../i18n/nsT';
 import { useTranslation } from 'react-i18next';
 import { autoPointPowerKw, autoPointFieldTorque } from '../../lib/autoPointPower';
+import { anyMarked } from '../../lib/shaftBasisLabel';
 const tx = nsT('simulation');
 import { Box, Chip, Typography } from '@mui/material';
 import HelpTip from '../common/HelpTip';
@@ -52,7 +53,10 @@ const AutoPointsTable: React.FC<{ points: any[]; gate: number; rpm?: number }> =
     const c: { id: string; label: string; get: (r: any) => number;
                fmt: (v: number) => string; vcol?: boolean }[] = [];
     c.push({ id: 'i', label: '#', get: r => r.i, fmt: v => String(v) });
-    c.push({ id: 'basis', label: tx('shaftConvCol'), get: r => r.shaftConv,
+    // the basis column and the basis-named headers only when a marked point is in the table (then an earlier
+    // point reads "Earlier shaft basis"); a table of earlier points alone keeps its earlier columns
+    const marked = anyMarked(rows.map((r: any) => r.shaftConv === 1));
+    if (marked) c.push({ id: 'basis', label: tx('shaftConvCol'), get: r => r.shaftConv,
       fmt: v => tx(v === 1 ? 'shaftBasisCurrent' : 'shaftBasisEarlier') });
     // OUTPUTS FIRST, variables after — the one place this departs from the Sweep
     // table, and for a measured reason: a sweep varies two or three parameters,
@@ -60,8 +64,8 @@ const AutoPointsTable: React.FC<{ points: any[]; gate: number; rpm?: number }> =
     // number a design is JUDGED by (torque, efficiency, ripple) sat off the
     // right edge behind a horizontal scrollbar.  Scrolling right now explores
     // the geometry; the verdict is always on screen.
-    c.push({ id: 'T', label: `${tx('fieldTorque')} (N·m)`, get: r => r.T, fmt: v => v.toFixed(2) });
-    if (has(r => r.P)) c.push({ id: 'P', label: `${tx('shaftPower')} (kW)`, get: r => r.P, fmt: v => v.toFixed(1) });
+    c.push({ id: 'T', label: marked ? `${tx('fieldTorque')} (N·m)` : 'T (N·m)', get: r => r.T, fmt: v => v.toFixed(2) });
+    if (has(r => r.P)) c.push({ id: 'P', label: marked ? `${tx('shaftPower')} (kW)` : 'P (kW)', get: r => r.P, fmt: v => v.toFixed(1) });
     c.push({ id: 'eff', label: 'η %', get: r => r.eff, fmt: v => v.toFixed(2) });
     c.push({ id: 'ripple', label: 'ripple %', get: r => r.ripple, fmt: v => v.toFixed(2) });
     c.push({ id: 'td', label: 'N·m/kg (active)', get: r => r.td, fmt: v => v.toFixed(2) });

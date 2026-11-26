@@ -295,7 +295,8 @@ const SweepTable: React.FC<{ points: any[]; rpm: number; vdcFactor?: number; sel
                 style={{ background: sel ? 'var(--line-accent)' : (i % 2 ? 'var(--panel-2)' : 'var(--line-soft)'), cursor: onPick ? 'pointer' : 'default' }}>
                 {cols.map(c => (
                   <td key={c.id} title={c.titleRow ? c.titleRow(r) : undefined} style={{ padding: '3px 7px', textAlign: 'right', whiteSpace: 'nowrap', color: 'var(--text-0)', borderBottom: '1px solid var(--line-soft)' }}>
-                    {c.fmtRow ? c.fmtRow(r) : (Number.isFinite(c.get(r)) ? c.fmt(c.get(r)) : '—')}
+                    {/* a marked point's missing value reads "—"; an earlier point keeps its earlier cell text */}
+                    {c.fmtRow ? c.fmtRow(r) : (r.sc === 1 && !Number.isFinite(c.get(r)) ? '—' : c.fmt(c.get(r)))}
                   </td>))}
               </tr>); })}
           </tbody>

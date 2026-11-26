@@ -98,7 +98,27 @@ def test_public_and_support_efficiency_carry_basis():
     assert "core loss on the shaft" in _rated_lines(duty)[0]
     duty["result"].pop("shaft_conv")
     assert "shaft_conv" not in build_row({"name": "synthetic"}, {"name": "test", "duties": [duty]})["rated"]
-    assert "earlier shaft basis" in _rated_lines(duty)[0]
+    # an unmarked duty on its own keeps its earlier text; named only when listed with marked duties
+    assert _rated_lines(duty)[0].endswith("efficiency 89.7 %") and "basis" not in _rated_lines(duty)[0]
+    assert _rated_lines(duty, mixed=True)[0].endswith("efficiency 89.7 % (earlier shaft basis)")
+
+
+def test_support_block_names_the_basis_only_when_bases_mix():
+    from motor_ai_sim.support_catalog import render_block
+
+    def cfg(name, marked):
+        return {"name": name, "card_date": "2026-11-26",
+                "duties": [{"name": "rated", "rpm": 1000, "torque_nm": 10, "current_arms": 10, "duty_class": "continuous",
+                            "result": {"efficiency_pct": 89.69, **({"shaft_conv": 1} if marked else {})}}]}
+    die = {"name": "synthetic", "stator_diameter": 50, "configs": [cfg("A", False)]}
+    alone = render_block([die])
+    assert "efficiency 89.7 %" in alone and "basis" not in alone and "core loss on the shaft" not in alone
+    die["configs"].append(cfg("B", True))
+    both = render_block([die])
+    assert "efficiency 89.7 % (earlier shaft basis)" in both and "efficiency 89.7 % (core loss on the shaft)" in both
+    die["configs"] = [cfg("B", True)]
+    marked = render_block([die])
+    assert "(core loss on the shaft)" in marked and "earlier shaft basis" not in marked
 
 
 def test_bench_missing_marked_coupling_values_do_not_fall_back_to_field():
@@ -248,5 +268,34 @@ def test_fit_producer_basis_reaches_design_agent_compactor(monkeypatch):
         for target, key in ((9, "fits"), (11, "rejected")):
             produced = M.check_fit(None, target, 1000)
             compact = A._compact_fit(produced)
-            assert compact[key][0]["shaft_convention"] == produced[key][0]["shaft_convention"]
-            assert compact[key][0]["shaft_convention"] == ("core loss on the shaft" if marked else "earlier run: every loss on the electrical side")
+            if marked:
+                assert compact[key][0]["shaft_convention"] == produced[key][0]["shaft_convention"]
+                assert compact[key][0]["shaft_convention"] == "core loss on the shaft"
+            else:                                       # earlier rows alone: their earlier shape, no basis key
+                assert "shaft_convention" not in produced[key][0] and "shaft_convention" not in compact[key][0]
+    # both kinds in one answer: the earlier row names its basis too, and sorts after the marked one
+    other = {**machine, "config": "test2", "duties": [{**duty, "shaft_conv": 1}]}
+    monkeypatch.setattr(M, "_machines", lambda: [{**machine, "duties": [{**duty, "shaft_conv": 0}]}, other])
+    monkeypatch.setattr(A, "_visible_configs", lambda: [{"die": {"name": "synthetic"}, "config": {"name": c}}
+                                                        for c in ("test", "test2")])
+    produced = M.check_fit(None, 9, 1000)
+    compact = A._compact_fit(produced)
+    assert [f["shaft_convention"] for f in compact["fits"]] == ["core loss on the shaft",
+                                                                "earlier run: every loss on the electrical side"]
+
+
+def test_passport_cooling_table_names_the_basis_only_with_a_marked_row():
+    from motor_ai_sim.passport_v1 import fullcard as F
+
+    def study(cooling, marked):
+        card = {"T_Nm": 8.5, "P_shaft_W": 850.0, "basis": "own S1 pass" if not marked else "S1 rating at the coupling"}
+        if marked:
+            card["shaft_convention"] = MARKER
+        return {"cooling": cooling, "rpm": 1000.0, "solve_to": "continuous",
+                "s1": {"I_cont_A_rms": 10, "card": card, "temperatures_c": {}, "verified": True}}
+    old = F._cooling_html({"cooling": {"method": "synthetic", "studies": [study("air", False)]}})
+    assert "power basis" not in old and "own S1 pass" not in old and "earlier shaft basis" not in old
+    both = F._cooling_html({"cooling": {"method": "synthetic", "studies": [study("air", False), study("propeller", True)]}})
+    assert "power basis" in both and "earlier shaft basis" in both and "S1 rating at the coupling" in both
+    marked = F._cooling_html({"cooling": {"method": "synthetic", "studies": [study("propeller", True)]}})
+    assert "power basis" in marked and "earlier shaft basis" not in marked

@@ -268,10 +268,31 @@ KIND_WORDS = {"em_run": ("electromagnetic", "电磁"), "coupled": ("thermal", "�
               "pwm": ("inverter", "逆变器"), "controller": ("inverter", "逆变器")}
 
 
-def result_line(duty: str, kinds: dict) -> tuple:
+def line_basis(kinds: dict) -> Optional[str]:
+    """The shaft-power basis of the mechanical numbers :func:`result_line` / :func:`headline` would state for ``kinds``:
+    ``"shaft"`` (a marked record), ``"earlier"`` (an unmarked one) or None (no power or efficiency stated).  A caller
+    that lists several lines in one place passes ``mixed=True`` to them when both bases occur there."""
+    mech = mechanical_numbers(kinds)
+    if mech["P"] is None and mech["eta"] is None:
+        return None
+    return mech["basis"]
+
+
+def _basis_words(mech: dict, mixed: bool) -> Optional[tuple]:
+    """``(en, zh)`` basis words for a line: always on a marked record; on an unmarked one ONLY when marked and unmarked
+    lines are shown together (``mixed``) - an unmarked record shown on its own keeps its earlier text exactly."""
+    if mech["P"] is None and mech["eta"] is None:
+        return None
+    if mech.get("basis") == "shaft":
+        return ("core loss on the shaft", "铁损计入轴侧")
+    return ("earlier shaft basis", "较早轴功率口径") if mixed else None
+
+
+def result_line(duty: str, kinds: dict, mixed: bool = False) -> tuple:
     """``(en, zh)``: one line about one duty's fresh results, without the variant name (the caller puts that in a heading).
 
-    ``kinds`` maps result kind -> stored record (only the records that are new in the period)."""
+    ``kinds`` maps result kind -> stored record (only the records that are new in the period).  ``mixed``: this line is
+    listed together with lines of the other shaft-power basis (then an unmarked line names its earlier basis too)."""
     duty = str(duty)
     mech = mechanical_numbers(kinds)
     rec = None
@@ -297,20 +318,23 @@ def result_line(duty: str, kinds: dict) -> tuple:
     if mech.get("P_out") is not None:
         # a GENERATOR (owner 2026-10-28): the electrical power it delivers and the shaft torque it takes, never a negative
         # torque or the shaft power read as an output
-        first.append(f"generator {fmt_power(mech['P_out'])} out" + (f", {'shaft torque' if mech['basis'] == 'shaft' else 'field torque'} {fmt_num(abs(mech['T']))} N·m" if mech["T"] is not None else ""))
-        first_zh.append(f"发电 {fmt_power(mech['P_out'])}" + (f"，{'轴转矩' if mech['basis'] == 'shaft' else '电磁转矩'} {fmt_num(abs(mech['T']))} N·m" if mech["T"] is not None else ""))
+        first.append(f"generator {fmt_power(mech['P_out'])} out" + (f", shaft torque {fmt_num(abs(mech['T']))} N·m" if mech["T"] is not None else ""))
+        first_zh.append(f"发电 {fmt_power(mech['P_out'])}" + (f"，轴转矩 {fmt_num(abs(mech['T']))} N·m" if mech["T"] is not None else ""))
     elif mech["T"] is not None:
-        first.append(f"{'shaft torque' if mech['basis'] == 'shaft' else 'field torque'} {fmt_num(mech['T'])} N·m" + (f" at {fmt_power(mech['P'])}" if mech["P"] is not None else ""))
-        first_zh.append(f"{'轴转矩' if mech['basis'] == 'shaft' else '电磁转矩'} {fmt_num(mech['T'])} N·m" + (f"，{fmt_power(mech['P'])}" if mech["P"] is not None else ""))
+        # a marked record names its torque "shaft torque"; an unmarked one keeps its earlier wording ("{T} N·m")
+        lead_en, lead_zh = ("shaft torque ", "轴转矩 ") if mech["basis"] == "shaft" else ("", "")
+        first.append(f"{lead_en}{fmt_num(mech['T'])} N·m" + (f" at {fmt_power(mech['P'])}" if mech["P"] is not None else ""))
+        first_zh.append(f"{lead_zh}{fmt_num(mech['T'])} N·m" + (f"，{fmt_power(mech['P'])}" if mech["P"] is not None else ""))
     elif mech["P"] is not None:
         first.append(fmt_power(mech["P"]))
         first_zh.append(fmt_power(mech["P"]))
     if mech["eta"] is not None:
         first.append(f"efficiency {fmt_num(mech['eta'])} %")
         first_zh.append(f"效率 {fmt_num(mech['eta'])} %")
-    if mech["P"] is not None or mech["eta"] is not None:
-        first.append("core loss on the shaft" if mech["basis"] == "shaft" else "earlier shaft basis")
-        first_zh.append("铁损计入轴侧" if mech["basis"] == "shaft" else "较早轴功率口径")
+    words = _basis_words(mech, mixed)
+    if words:
+        first.append(words[0])
+        first_zh.append(words[1])
     parts_en = [", ".join(first)] if first else []
     parts_zh = ["，".join(first_zh)] if first_zh else []
 
@@ -340,8 +364,10 @@ def result_line(duty: str, kinds: dict) -> tuple:
     return f"{duty}: " + "; ".join(parts_en), f"{duty}：" + "；".join(parts_zh)
 
 
-def headline(kinds: dict) -> str:
-    """The same numbers as one comma-separated clause (the owner report's own lines): torque, power, efficiency, temperatures."""
+def headline(kinds: dict, mixed: bool = False) -> str:
+    """The same numbers as one comma-separated clause (the owner report's own lines): torque, power, efficiency, temperatures.
+
+    ``mixed`` as in :func:`result_line`."""
     mech = mechanical_numbers(kinds)
     parts: list = []
     if mech["T"] is not None:
@@ -350,8 +376,9 @@ def headline(kinds: dict) -> str:
         parts.append(f"P {fmt_num(mech['P'] / 1000.0)} kW")
     if mech["eta"] is not None:
         parts.append(f"η {fmt_num(mech['eta'])} %")
-    if mech["P"] is not None or mech["eta"] is not None:
-        parts.append("core loss on the shaft" if mech.get("basis") == "shaft" else "earlier shaft basis")
+    words = _basis_words(mech, mixed)
+    if words:
+        parts.append(words[0])
     coil, mag = _temps(_d(kinds.get("coupled")))
     if coil is not None:
         parts.append(f"winding {fmt_temp(coil)}")

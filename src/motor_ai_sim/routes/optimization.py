@@ -7659,13 +7659,14 @@ def _auto_warm_start(recs, specs, cfg_fp: str, current_a: float, gamma_deg: floa
     x_cur = [float(v["x0"]) for v in specs]
     lows = [float(v.get("lo", 0.0) or 0.0) for v in specs]
     scored = []
-    for r in recs or []:
-        if not isinstance(r, dict):
-            continue
-        if str(r.get("cfg_fp") or "") != str(cfg_fp or ""):
-            continue                              # other machine, or unstamped
-        if r.get("shaft_conv") != 1:
-            continue                              # earlier shaft convention: another efficiency / torque density
+    mine = [r for r in recs or [] if isinstance(r, dict) and str(r.get("cfg_fp") or "") == str(cfg_fp or "")]
+    # ONE shaft convention is ranked (eff / td differ between them): the current (marked) rows once the baseline or
+    # any row of this machine is marked; an entirely earlier-convention history keeps its earlier warm start
+    bl = base.get("_bline") if isinstance(base, dict) and isinstance(base.get("_bline"), dict) else {}
+    marked = bl.get("shaft_conv") == 1 or any(r.get("shaft_conv") == 1 for r in mine)
+    for r in mine:
+        if (r.get("shaft_conv") == 1) != marked:
+            continue                              # the other shaft convention: another efficiency / torque density
         ov = r.get("overrides")
         if not isinstance(ov, dict):
             continue

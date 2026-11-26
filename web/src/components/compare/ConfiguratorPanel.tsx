@@ -2283,8 +2283,8 @@ ${s1Text.text}` : '';
               {!draftOpen && tx('configure.bannerOpenHint', { button: tx('configure.openInTuner') })}
               {draftOpen && draftTarget && tx('configure.bannerOpened')}
               {draftHeadline && (
-                <Tooltip title={draftHeadline.shaft_conv === 1
-                  ? tx('configure.femShaftBasis') : tx('configure.femEarlierBasis')}>
+                // a marked headline names its basis; an earlier one keeps its earlier (tooltip-less) line
+                <Tooltip title={draftHeadline.shaft_conv === 1 ? tx('configure.femShaftBasis') : ''}>
                 <Box sx={{ mt: 0.5 }}>
                   {tx('configure.femOnFile', {
                     what: ({ coupled: tx('configure.whatCoupled'), thermal: tx('configure.whatThermal'),

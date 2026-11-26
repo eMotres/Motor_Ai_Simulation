@@ -958,10 +958,18 @@ def _cooling_html(rec: Mapping[str, Any]) -> str:
     s1 = [r for r in st if r["solve_to"] == "continuous"]
     lim = [r for r in st if r["solve_to"] != "continuous"]
     rows = []
+    # the power basis column only when a row is on the shaft-side convention: a card of earlier rows alone keeps its
+    # earlier columns; next to a marked row an earlier one says so
+    def _marked(r):
+        cd = ((r.get("s1") or {}).get("card") or {})
+        return cd.get("shaft_convention") == "fe_on_shaft_k3d_v1"
+    with_basis = any(_marked(r) for r in s1)
     for r in s1:
         c = r.get("s1") or {}
         cd = c.get("card") or {}
         t = c.get("temperatures_c") or {}
+        basis = ([H_(cd.get("basis") or "") if _marked(r) else ("earlier shaft basis" if cd else "")]
+                 if with_basis else [])
         rows.append([r["cooling"].replace("_", " "), "%.0f" % r["rpm"],
                      Hh.fmt(r.get("air_speed_ms")) if r.get("air_speed_ms") else "still air",
                      c.get("I_cont_A_rms") if c.get("I_cont_A_rms") is not None
@@ -969,11 +977,10 @@ def _cooling_html(rec: Mapping[str, Any]) -> str:
                      cd.get("T_Nm"), cd.get("P_shaft_W"),
                      c.get("limiting_part") or "—",
                      t.get("winding"), t.get("magnet"), t.get("housing"),
-                     "yes" if c.get("verified") else ("no" if c else "—"),
-                     H_(cd.get("basis") or "")])
+                     "yes" if c.get("verified") else ("no" if c else "—")] + basis)
     o.append(Hh.table(["cooling", "rpm", "air m/s", "I cont. A rms", "T cont. N·m",
                        "P shaft W", "limited by", "winding °C", "magnet °C", "housing °C",
-                       "verified", "power basis"], rows, left_cols=1))
+                       "verified"] + (["power basis"] if with_basis else []), rows, left_cols=1))
     if lim:
         rows = []
         for r in lim:

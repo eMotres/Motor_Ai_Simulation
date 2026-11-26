@@ -7,14 +7,13 @@ import { dirname, join } from 'node:path';
 const here = dirname(fileURLToPath(import.meta.url));
 const source = (path) => readFileSync(join(here, path), 'utf8');
 
-test('project snapshots remain list-only metadata and are shown as history headers beside the standard motor views', () => {
+test('project snapshots remain list-only metadata and are shown in the shared comparison table', () => {
   const api = source('../api.ts');
   const page = source('../components/DevelopmentPage.tsx');
   assert.match(api, /snapshots:\s*async\s*\(id: string\).*?'GET'/s);
   assert.doesNotMatch(api, /createSnapshot|loadSnapshot|saveSnapshotAsMotor|POST.*snapshots|snapshots.*POST/);
   assert.match(page, /visibleProjectVersions\(motors, snapshots, showAllVersions\)/);
-  assert.match(page, /data-testid="project-motor-views"/);
-  assert.match(page, /if \(flags\.history\) return <Box key=\{r\.id\}>\{header\(historyHeader\(r, 1\)\)\}<\/Box>;/);
+  assert.match(page, /<SharedComparisonTable rows=\{rows\}/);
   assert.match(page, /setHistoryDetail\(r\.motor\)/);
   assert.match(page, /<Dialog open=\{!!historyDetail\}/);
   assert.doesNotMatch(page, /restoreSnapshotToWorkspace|saveSnapshotAsMotor|openSaveAsDialog|snapshots\.loadWorkspace|snapshots\.saveAsMotor/);

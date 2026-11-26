@@ -161,8 +161,8 @@ test('parameters line: operating point, mesh, solver, date - only what is known'
 test('wiring: a click on a Development motor row opens it like the Motors tab; the action cell keeps its own buttons', () => {
   const src = (rel) => readFileSync(new URL(rel, import.meta.url), 'utf8');
   const page = src('../components/DevelopmentPage.tsx');
-  assert.match(page, /void openProjectMotor\(\{ id: selected\.id, title: selected\.title \}, r\.motor, r\.result\?\.duty\)/);      // the page's own open-in-Configure button
-  assert.match(page, /<ReadOnlySimulationView key=.*embedded withField projectId=\{selected\.id\}/);                                 // the standard Simulation results table + the field, on every project's motor page
+  assert.match(page, /onRowClick=\{\(r\) => \{ if \(!r\.history\) void openProjectMotor\(\{ id: selected\.id, title: selected\.title \}, r\.motor, r\.result\.duty\)/);
+  assert.match(page, /renderRowEnd=\{\(r\) => <Box component="td" onClick=\{\(e\) => e\.stopPropagation\(\)\}/);   // buttons do not also trigger the row
   const table = src('../../../components/compare/SharedComparisonTable.tsx');
   assert.match(table, /onClick=\{onRowClick \? \(\) => onRowClick\(row\) : undefined\}/);
 });

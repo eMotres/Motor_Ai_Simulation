@@ -6,11 +6,12 @@ import { readFileSync } from 'node:fs';
 
 const src = (rel) => readFileSync(new URL(rel, import.meta.url), 'utf8');
 
-test('the project motor page renders the standard view for every live variant, not its own table', () => {
+test('the project motor page keeps its compact comparison rows; a row opens the motor in Configure (owner 2026-10-28 rule, restored 2026-11-26)', () => {
   const page = src('../components/DevelopmentPage.tsx');
-  assert.doesNotMatch(page, /<SharedComparisonTable/);
-  assert.match(page, /<ReadOnlySimulationView key=.*embedded withField projectId=\{selected\.id\} die=\{r\.motor\.die\} config=\{r\.motor\.config\}/);
-  assert.match(page, /r\.motor\.available !== false/);                                        // the same availability gate the open buttons used
+  assert.match(page, /<SharedComparisonTable rows=\{rows\}/);
+  assert.match(page, /onRowClick=\{\(r\) => \{ if \(!r\.history\) void openProjectMotor\(/);
+  assert.doesNotMatch(page, /ReadOnlySimulationView|project-motor-views/);                  // no embedded Simulation output on this page
+  assert.doesNotMatch(page, /tr\('openConfigure'\)/);                                      // and no separate "Open in Configure" button
 });
 
 test('Configure of a project motor uses the same component and the same props', () => {

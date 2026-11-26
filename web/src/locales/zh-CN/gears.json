@@ -70,7 +70,17 @@
     "peakTorque": "峰值转矩，N*m",
     "peakEvents": "峰值次数",
     "peakSpeed": "峰值转速，rpm",
-    "showStages": "级"
+    "showStages": "级",
+    "saved": "已保存的减速器",
+    "saveName": "名称",
+    "project": "项目",
+    "saveNew": "保存",
+    "saveChanges": "保存更改",
+    "reload": "重新加载",
+    "open": "打开",
+    "archive": "归档",
+    "restore": "恢复",
+    "showArchived": "已归档"
   },
   "tip": {
     "presetJoint": "两级行星轮，12.884:1：输出端 247 rpm 时 9.8 N*m。",
@@ -144,7 +154,15 @@
     "title": "齿轮和行星减速器计算：筛查估算，不是鉴定。",
     "noVerdict": "单个工况点不是工况谱鉴定：此处不评估零件和预设，因此该点不给出通过或未通过。下面的原因说明缺少什么。结论请使用工况谱。",
     "stageToggle": "显示或隐藏此级。",
-    "showStages": "3D 视图中显示哪些级。"
+    "showStages": "3D 视图中显示哪些级。",
+    "saved": "保存在服务器上的减速器：设计、工况点或工况谱，以及当前有效时的最近结果。",
+    "saveName": "已保存减速器的名称。",
+    "project": "记录所属的项目 ID；留空则保存在工作区。目前没有访问规则：本页仅限员工。",
+    "saveNew": "将当前设计保存为新记录。",
+    "saveChanges": "覆盖已打开的记录。如果期间有人保存了更新的版本，则会被拒绝。",
+    "currentRecord": "已打开记录 {id}，版本 {version}。",
+    "showArchived": "归档的记录会保留；显示它们以便恢复。",
+    "unreadable": "此范围内无法读取的文件。它们不会列出；请联系管理员检查。"
   },
   "gear": {
     "z": "齿数",
@@ -297,5 +315,27 @@
     "irMotoringOnly": "核心的传动链（TransmissionIR）导出仅限电动工况，并保留部分和未鉴定的出处。本页不使用它。"
   },
   "noVerdict": "工况点：无结论（通过/未通过请运行工况谱）",
-  "bearingFit": "轴承装不进行星轮（外径 {od} mm，最大 {max} mm）"
+  "bearingFit": "轴承装不进行星轮（外径 {od} mm，最大 {max} mm）",
+  "flag": {
+    "response_stale": "结果已过期",
+    "request_hash_mismatch": "哈希不一致",
+    "request_invalid": "请求无效",
+    "checksum_mismatch": "校验和不一致",
+    "core_stale": "核心已更改",
+    "catalogue_changed": "目录已更改"
+  },
+  "flagTip": {
+    "response_stale": "已保存的结果可能不再可信，因此打开时不显示；请重新计算。",
+    "request_hash_mismatch": "存储的请求与其存储的哈希不一致。",
+    "request_invalid": "核心不再接受存储的请求。",
+    "checksum_mismatch": "文件在应用之外被更改（损坏或手工编辑）。",
+    "core_stale": "自结果保存以来计算核心已更改。",
+    "catalogue_changed": "自结果保存以来材料、润滑剂、轴承或预设已更改。"
+  },
+  "changedElsewhere": "已在别处更改。请重新加载后继续。",
+  "workspace": "工作区",
+  "defaultName": "gearbox",
+  "noSaved": "尚无已保存的记录。",
+  "archived": "已归档",
+  "unreadable": "{count, plural, other {# 个无法读取的文件}}"
 }

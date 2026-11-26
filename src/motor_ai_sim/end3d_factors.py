@@ -111,6 +111,15 @@ def _records() -> List[Dict[str, Any]]:
     return out
 
 
+def _equivalent_prints(fp: str, geo: Optional[Dict[str, Any]] = None) -> list:
+    """``fp`` plus the prints known (or resolvable from ``geo`` / the machine loaded now) for the same machine."""
+    try:
+        from motor_ai_sim.geo_fingerprint import accepted
+        return accepted(fp, geo) or [fp]
+    except Exception:                                             # noqa: BLE001 - no resolver: the literal print only
+        return [fp]
+
+
 def measured_k_T(fingerprint: Optional[str], geo: Optional[Dict[str, Any]] = None,
                  stack_mm: Optional[float] = None) -> Optional[Dict[str, Any]]:
     """The measured k_T for this geometry: exact fingerprint first; else one
@@ -123,15 +132,23 @@ def measured_k_T(fingerprint: Optional[str], geo: Optional[Dict[str, Any]] = Non
     one; the same-machine rule below then looks for a record at this length."""
     recs = _records()
     fp = str(fingerprint or "")
-    for r in recs:
-        if fp and r["fingerprint"] == fp:
-            if stack_mm:
-                try:
-                    if abs(float(r["stack_mm"]) - float(stack_mm)) > 0.05 * float(stack_mm):
-                        continue
-                except (TypeError, ValueError, KeyError):
-                    continue
-            return {"k_T": r["k_T"], "source": r["source"], "inherited": False}
+    # the exact match: a record under the LITERAL print wins (the answer of the build before); only when none exists, a
+    # record under an equivalent print of the same machine (canonical <-> legacy49, geo_fingerprint), in the order
+    # ``accepted`` gives (deterministic), each tier in file order
+    def _ok_len(r) -> bool:
+        if not stack_mm:
+            return True
+        try:
+            return abs(float(r["stack_mm"]) - float(stack_mm)) <= 0.05 * float(stack_mm)
+        except (TypeError, ValueError, KeyError):
+            return False
+    if fp:
+        for tier in ([fp], None):
+            want = tier if tier is not None else [f for f in _equivalent_prints(fp, geo) if f != fp]
+            for f in want:
+                for r in recs:
+                    if r["fingerprint"] == f and _ok_len(r):
+                        return {"k_T": r["k_T"], "source": r["source"], "inherited": False}
     g = geo or {}
     try:
         ns = int(g.get("num_seg") or 0)

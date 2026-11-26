@@ -39,6 +39,7 @@ the configuration it names, and the mismatch goes to the log instead.
 """
 from __future__ import annotations
 
+from motor_ai_sim.geo_fingerprint import same as _gfp_same  # a stored fingerprint also matches its legacy49 alias
 import io
 import logging
 import math
@@ -4739,7 +4740,7 @@ def duty_fingerprint_check(res: Dict[str, Any], em: Dict[str, Any]
     for fp in fps:
         counts[fp] = counts.get(fp, 0) + 1
     winner = max(counts.items(), key=lambda kv: (kv[1], kv[0]))[0]
-    all_agree = all(fp == winner for fp in fps)
+    all_agree = all(_gfp_same(fp, winner) for fp in fps)
     # AN UNFINGERPRINTED EM RECORD IS NOT A CLEAN BILL.  Found empirically
     # against the SERVER's own L13 records while verifying this fix: the
     # audited stale 'peak' summary carries no fingerprint of its own at all
@@ -5075,13 +5076,13 @@ class _Source:
         # comparison stand, and None = UNKNOWN, never "fine": a staleness check
         # that cannot prove a mismatch must not claim one.
         if self.report_fp and self.fp:
-            self.stale: Optional[bool] = bool(self.fp != self.report_fp)
+            self.stale: Optional[bool] = not _gfp_same(self.fp, self.report_fp)
         elif delta:
             self.stale = True
         elif not self.fp or not live_fp or live_fp == "nofp":
             self.stale = None
         else:
-            self.stale = bool(self.fp != live_fp)
+            self.stale = not _gfp_same(self.fp, live_fp)
 
     def line(self) -> str:
         if self.stale is True:
@@ -21612,7 +21613,7 @@ def sources_per_duty_rows(cols: List[Dict[str, Any]],
                 continue
             fp = e.get("geometry_fingerprint")
             if fp and ref and ref != "nofp":
-                machine = ("this machine" if str(fp) == str(ref)
+                machine = ("this machine" if _gfp_same(str(fp), str(ref))
                            else "ANOTHER machine " + FLAG)
             else:
                 machine = "unverified"

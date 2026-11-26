@@ -50,7 +50,7 @@ export const IDLE_STORED: StoredPoint = { key: null, status: 'idle' };
 /** What the lookup needs from the tab: the server's fingerprint of the machine loaded now (the `/last` route's
  *  `live_geometry_fingerprint`, asked only when a file has no build stamp) and this client's stamp of it. */
 export interface StoredLookup {
-  liveFingerprint: () => Promise<string | null>;
+  liveFingerprint: () => Promise<string | string[] | null>;
   liveGeoSig?: () => string;
   /** also look the point's stored temperatures up (the Thermal tab) */
   withTemps?: boolean;
@@ -94,7 +94,7 @@ export async function loadStoredPoint(
   }
   const storedFingerprint = field?.provenance?.geometry_fingerprint
     ?? duty?.thermal?.duty_temps?.provenance?.geometry_fingerprint ?? null;
-  let liveFingerprint: string | null = null;
+  let liveFingerprint: string | string[] | null = null;
   if (buildStale == null && storedFingerprint) {
     try { liveFingerprint = await opts.liveFingerprint(); } catch { liveFingerprint = null; }
   }

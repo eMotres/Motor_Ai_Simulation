@@ -97,6 +97,7 @@ const ThermalPanel = lazy(watchChunkImport(() => import('./components/thermal/Th
 const ControllerPanel = lazy(watchChunkImport(() => import('./components/controller/ControllerPanel')));
 const SystemPanel = lazy(watchChunkImport(() => import('./components/system/SystemPanel')));
 const PropellersPanel = lazy(watchChunkImport(() => import('./components/propellers/PropellersPanel')));
+const GearsPage = lazy(watchChunkImport(() => import('./modules/gears/GearsPage')));
 const SweepConfigPanel = lazy(watchChunkImport(() => import('./components/sweep/SweepConfigPanel')));
 const ComparePanel = lazy(watchChunkImport(() => import('./components/compare/ComparePanel')));
 const CostPanel = lazy(watchChunkImport(() => import('./components/cost/CostPanel')));
@@ -658,6 +659,9 @@ function App() {
       render: () => <PropellersPanel /> },
     { id: 'schemas', label: 'Schemas', order: 61, gate: TAB_GATES.schemas, showViewer: false,
       render: () => <SystemPanel /> },
+    // Gears (owner 2026-11-26, gear module stage 5): staff with the simulation UI; the /api/gears routes are engineer/admin only.
+    { id: 'gears', label: 'Gears', order: 62, gate: TAB_GATES.gears, showViewer: false,
+      render: () => <GearsPage /> },
     { id: 'sweep', label: 'Optimization', order: 60, panelId: 'optimization', gate: TAB_GATES.sweep, showViewer: false,
       render: () => <SweepConfigPanel /> },
     // Compare writes the SHARED saved-sims store and Cost studies run on the

@@ -106,9 +106,11 @@ export type StoredVerdict = 'draw' | 'older_build' | 'unproven';
  * (the file's `geometry_fingerprint` and the `live_geometry_fingerprint` the `/last` route reports for this request) - the
  * server's own dialect, compared by the server's own rule (equality).  Missing on either side is unproven, not a pass.
  */
-export function storedVerdict(stored: string | null | undefined, live: string | null | undefined): StoredVerdict {
-  if (!stored || !live || live === 'nofp') return 'unproven';
-  return stored === live ? 'draw' : 'older_build';
+export function storedVerdict(stored: string | null | undefined, live: string | string[] | null | undefined): StoredVerdict {
+  // `live` may be [canonical, ...legacy49 aliases] (a record of 2026-11-15 .. 2026-11-25 carries the legacy one)
+  const lives = (Array.isArray(live) ? live : [live]).filter((x): x is string => !!x);
+  if (!stored || !lives.length || lives[0] === 'nofp') return 'unproven';
+  return lives.includes(stored) ? 'draw' : 'older_build';
 }
 
 /** What a stored point result is judged on (all optional: a missing witness is unknown, never a pass). */
@@ -121,7 +123,7 @@ export interface StoredWitnesses {
   liveGeoSig?: string | null;
   /** the geometry fingerprints: the stored file's and the server's live one (the fallback witness) */
   storedFingerprint?: string | null;
-  liveFingerprint?: string | null;
+  liveFingerprint?: string | string[] | null;
 }
 
 export type StoredPointVerdict = StoredVerdict | 'edited';

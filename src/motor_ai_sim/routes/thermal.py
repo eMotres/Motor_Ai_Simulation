@@ -235,6 +235,9 @@ def _elapsed(t0: float) -> float:
     return round(max(time.time() - t0, 1e-3), 3)
 
 
+from motor_ai_sim import geo_fingerprint as _GFP  # noqa: E402  (a stored fingerprint also matches its legacy49 alias)
+
+
 def _live_fingerprint(geo_ov) -> Optional[str]:
     """The backend's fingerprint of the machine THIS request means.
 
@@ -8481,7 +8484,7 @@ def last(
             res = _strip_heavy(res)
         fp = e.get("geometry_fingerprint")
         stale = (None if (not fp or not live or live == "nofp")
-                 else bool(fp != live))
+                 else (not _GFP.same(fp, live)))
         return {"result": res, "params": e.get("params") or {},
                 "geometry_fingerprint": fp, "computed_at": e.get("computed_at"),
                 "stale_geometry": stale,
@@ -8489,7 +8492,8 @@ def last(
                 # unknown (an entry stored before the stamp existed)
                 "context": e.get("context")}
 
-    out: Dict[str, Any] = {"live_geometry_fingerprint": live}
+    out: Dict[str, Any] = {"live_geometry_fingerprint": live,
+                           "live_geometry_fingerprint_aliases": list(_GFP.aliases(live))}
     for kind in _LAST_KINDS:
         out[kind] = _entry(kind)
     out["has_result"] = any(out[k] is not None for k in _LAST_KINDS)
@@ -8562,7 +8566,7 @@ def heat_paths_last(
 
     fp = e.get("geometry_fingerprint")
     stale = (None if (not fp or not live or live == "nofp")
-             else bool(fp != live))
+             else (not _GFP.same(fp, live)))
     return {
         "has_result": True,
         "kind": _kind,
@@ -8729,7 +8733,7 @@ def _dc_map_matches(entry: Any, *, point: Dict[str, Any],
     if not ((res.get("cooling") or {}).get("heat_budget")):
         return False
     stored_fp = entry.get("geometry_fingerprint")
-    if fp and stored_fp and str(stored_fp) != str(fp):
+    if fp and stored_fp and not _GFP.same(str(stored_fp), str(fp)):
         return False
     p = entry.get("params") or {}
     for k in _DC_POINT_KEYS:
@@ -9498,6 +9502,7 @@ def duty_cycle_last(geo: Optional[str] = Query(default=None)) -> Dict[str, Any]:
     live = _live_fingerprint(parse_geo_override(geo))
     e = _LAST.get("duty_cycle")
     out: Dict[str, Any] = {"live_geometry_fingerprint": live,
+                           "live_geometry_fingerprint_aliases": list(_GFP.aliases(live)),
                            "has_result": False, "duty_cycle": None}
     if not e or e.get("result") is None:
         return out
@@ -9507,7 +9512,7 @@ def duty_cycle_last(geo: Optional[str] = Query(default=None)) -> Dict[str, Any]:
         "result": e["result"], "params": e.get("params") or {},
         "geometry_fingerprint": fp, "computed_at": e.get("computed_at"),
         "stale_geometry": (None if (not fp or not live or live == "nofp")
-                           else bool(fp != live)),
+                           else (not _GFP.same(fp, live))),
     }
     return out
 

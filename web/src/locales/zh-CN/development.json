@@ -1398,7 +1398,8 @@
       "tooling": "工装交期",
       "manufacturing": "制造",
       "testing": "测试",
-      "shipping": "运输时间"
+      "shipping": "运输时间",
+      "development": "开发"
     },
     "table": {
       "col": {
@@ -1407,6 +1408,7 @@
         "motors": "电机 × 单价",
         "testing": "测试",
         "shipping": "DHL 运输",
+        "development": "开发",
         "duration": "工期",
         "total": "本轮合计"
       },

@@ -1398,7 +1398,8 @@
       "tooling": "Tooling lead time",
       "manufacturing": "Manufacturing",
       "testing": "Testing",
-      "shipping": "Shipping transit"
+      "shipping": "Shipping transit",
+      "development": "Development"
     },
     "table": {
       "col": {
@@ -1407,6 +1408,7 @@
         "motors": "Motors × price",
         "testing": "Testing",
         "shipping": "Shipping DHL",
+        "development": "Development",
         "duration": "Duration",
         "total": "Iteration total"
       },

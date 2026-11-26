@@ -16,7 +16,7 @@ import HelpTip from '../../../../components/common/HelpTip';
 import { BigNumber, StepCard, TOUCH } from '../specWizard/ui';
 import { developmentApi, DevelopmentApiError } from '../../api';
 import {
-  applyAuto, autoDhlIterations, autoKey, setDhlAuto,
+  applyAuto, autoDhlIterations, autoKey, blankLine, setDhlAuto,
   buildCostSteps, defaultDisplayCurrency, displayCurrencyOf, editLine, fieldLabel, formatMoney, fxLine, iterationSubtotal, langOf, LINE_IDS, lineNeeded, lineTotal, originChip, reconcile,
   reviewRows, setDisplayCurrency, setIterationField, setManualRate, setSetting, snapshotTotalText, sourceCounts, stepIndexOfMissing,
   stepState, todayIso, totalsView, txt,
@@ -348,7 +348,7 @@ export default function CostEstimateWizard({ projectId, language, t, who, onShar
       </Box>
     </Stack>
     <CostShipping estimate={estimate} schema={schema} lang={lang} t={t} today={today} onChange={change} />
-    <CostNextUnit estimate={estimate} computed={computed} t={t} today={today} who={who} onChange={change} />
+    <CostNextUnit estimate={estimate} computed={computed} t={t} today={today} who={who} onChange={change} weeksMax={schema.durations?.override_max ?? WEEKS_OVERRIDE_MAX} />
     <Stack spacing={0.6} data-testid="payment-terms" sx={{ borderTop: '1px solid var(--line-soft)', pt: 1.5 }}>
       <Stack direction="row" spacing={0.5} alignItems="center"><Typography sx={{ fontSize: 14, fontWeight: 600, color: 'var(--text-0)' }}>{t('costEstimate.paymentTerms')}</Typography><HelpTip title={t('costEstimate.paymentTermsTip')} /></Stack>
       <TextField size="small" value={String(estimate.settings.payment_terms ?? '')} onChange={(e) => change(setSetting(estimate, schema, 'payment_terms', e.target.value.slice(0, 300)))}
@@ -368,7 +368,12 @@ export default function CostEstimateWizard({ projectId, language, t, who, onShar
       </Box>
       <Box>{LINE_IDS.map((id) => { const def = schema.lines.find((l) => l.id === id)!; return <LineRow key={id} def={def} line={it.lines[id]} it={it} total={lineTotal(computed, index, id)} lang={lang} t={t}
         onEdit={(patch) => change(editLine(estimate, { iteration: index, line: id }, patch, who, today))}
-        onWeeks={(n) => change(setLineWeeks(estimate, { iteration: index, line: id }, n))} />; })}</Box>
+        onWeeks={(n) => change(setLineWeeks(estimate, { iteration: index, line: id }, n))} />; })}
+        {/* the optional development line: same row, an empty line when the iteration has none yet */}
+        {(() => { const def = schema.lines.find((l) => l.id === 'development'); if (!def) return null;
+          return <LineRow def={def} line={it.lines.development ?? blankLine(estimate.settings.currency)} it={it} total={lineTotal(computed, index, 'development')} lang={lang} t={t}
+            onEdit={(patch) => change(editLine(estimate, { iteration: index, line: 'development' }, patch, who, today))}
+            onWeeks={(n) => change(setLineWeeks(estimate, { iteration: index, line: 'development' }, n))} />; })()}</Box>
       <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2} alignItems={{ sm: 'flex-end' }} data-testid="iteration-duration" sx={{ borderTop: '1px solid var(--line-soft)', pt: 1.25 }}>
         <Stack spacing={0.4} sx={{ flex: 1 }}>
           <Stack direction="row" spacing={0.5} alignItems="center"><Typography sx={{ fontSize: 14, fontWeight: 600, color: 'var(--text-0)' }}>{t('costEstimate.iterationDuration')}</Typography><HelpTip title={txt(schema.durations?.help, lang)} /></Stack>
@@ -386,6 +391,7 @@ export default function CostEstimateWizard({ projectId, language, t, who, onShar
   const lineLabel = (id: LineId) => txt(schema.lines.find((l) => l.id === id)?.label, lang);
   const missingWord = t('costEstimate.status.missing');
   const reviewWeeks = (index: number) => { const it = estimate.iterations.find((x) => x.index === index); return it ? t('costEstimate.weeksN', { n: weeksText(iterationWeeks(it).total) }) : '—'; };
+  const hasDev = reviewRows(computed, missingWord).some((r) => r.development !== undefined);
   const reviewStep = <Stack spacing={2}>
     {estimate.migration && <Alert severity="info" sx={{ py: 0.5 }}>
       <Typography sx={{ fontSize: 13 }}>{t('costEstimate.migrated')}</Typography>
@@ -399,15 +405,16 @@ export default function CostEstimateWizard({ projectId, language, t, who, onShar
       </Select>
     </Stack></Tooltip>}>
       <Box sx={{ overflowX: 'auto' }}><Table size="small">
-        <TableHead><TableRow><TableCell />{LINE_IDS.map((id) => <TableCell key={id}>{lineLabel(id)}</TableCell>)}<TableCell>{t('costEstimate.durationCol')}</TableCell><TableCell>{t('costEstimate.subtotal')}</TableCell></TableRow></TableHead>
+        <TableHead><TableRow><TableCell />{LINE_IDS.map((id) => <TableCell key={id}>{lineLabel(id)}</TableCell>)}{hasDev && <TableCell>{txt(schema.lines.find((l) => l.id === 'development')?.label, lang)}</TableCell>}<TableCell>{t('costEstimate.durationCol')}</TableCell><TableCell>{t('costEstimate.subtotal')}</TableCell></TableRow></TableHead>
         <TableBody>
           {reviewRows(computed, missingWord).map((r) => <TableRow key={r.key}>
             <TableCell sx={{ fontWeight: 600, whiteSpace: 'nowrap' }}>{t('costEstimate.iteration', { n: r.iteration })}</TableCell>
             {LINE_IDS.map((id) => <TableCell key={id} sx={{ color: r[id] === missingWord ? 'var(--text-3)' : undefined }}>{r[id]}</TableCell>)}
+            {hasDev && <TableCell>{r.development ?? '—'}</TableCell>}
             <TableCell sx={{ whiteSpace: 'nowrap' }}>{reviewWeeks(r.iteration)}</TableCell>
             <TableCell sx={{ fontWeight: 600 }}>{r.original ? <Tooltip title={t('costEstimate.originalsTip', { list: r.original })}><span>{r.subtotal}</span></Tooltip> : r.subtotal}</TableCell>
           </TableRow>)}
-          <TableRow><TableCell sx={{ fontWeight: 600 }}>{t('costEstimate.subtotal')}</TableCell><TableCell colSpan={4} /><TableCell sx={{ whiteSpace: 'nowrap' }}>{t('costEstimate.weeksN', { n: weeksText(projectWeeks(estimate)) })}</TableCell><TableCell sx={{ fontWeight: 600 }}>{tv.converted ? <Tooltip title={t('costEstimate.originalsTip', { list: formatMoney(computed.subtotal) })}><span>{tv.subtotal}</span></Tooltip> : tv.subtotal}</TableCell></TableRow>
+          <TableRow><TableCell sx={{ fontWeight: 600 }}>{t('costEstimate.subtotal')}</TableCell><TableCell colSpan={hasDev ? 5 : 4} /><TableCell sx={{ whiteSpace: 'nowrap' }}>{t('costEstimate.weeksN', { n: weeksText(projectWeeks(estimate)) })}</TableCell><TableCell sx={{ fontWeight: 600 }}>{tv.converted ? <Tooltip title={t('costEstimate.originalsTip', { list: formatMoney(computed.subtotal) })}><span>{tv.subtotal}</span></Tooltip> : tv.subtotal}</TableCell></TableRow>
           <TableRow><TableCell sx={{ fontWeight: 600 }}>{t('costEstimate.contingency', { pct: computed.contingency_pct })}</TableCell><TableCell colSpan={5} /><TableCell>{tv.converted ? <Tooltip title={t('costEstimate.originalsTip', { list: formatMoney(computed.contingency) })}><span>{tv.contingency}</span></Tooltip> : tv.contingency}</TableCell></TableRow>
           <TableRow><TableCell sx={{ fontWeight: 700 }}>{t('costEstimate.total')}</TableCell><TableCell colSpan={4} /><TableCell sx={{ fontWeight: 700, whiteSpace: 'nowrap' }} data-testid="review-weeks">{t('costEstimate.weeksN', { n: weeksText(projectWeeks(estimate)) })}</TableCell><TableCell sx={{ fontWeight: 700 }}>{tv.converted ? <Tooltip title={t('costEstimate.originalsTip', { list: tv.original })}><span data-testid="review-total">{tv.total}</span></Tooltip> : <span data-testid="review-total">{tv.total}</span>}</TableCell></TableRow>
         </TableBody>

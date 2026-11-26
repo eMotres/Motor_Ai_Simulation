@@ -112,7 +112,10 @@
     "dtTorquePerMass": "Torque per mass",
     "f_ma_um": "f_ma, µm",
     "sun_planet_f_ma_um": "f_ma sun-planet, µm",
-    "planet_ring_f_ma_um": "f_ma planet-ring, µm"
+    "planet_ring_f_ma_um": "f_ma planet-ring, µm",
+    "f_sh_um": "f_sh, µm",
+    "sun_planet_f_sh_um": "f_sh sun-planet, µm",
+    "planet_ring_f_sh_um": "f_sh planet-ring, µm"
   },
   "tip": {
     "presetJoint": "Two planetary stages, 12.884:1: 9.8 N*m at 247 rpm at the output.",
@@ -229,7 +232,10 @@
     "dtTorquePerMass": "Output torque per total mass.",
     "f_ma_um": "Mesh misalignment f_ma of this pair in micrometres, as the engineer states it. Empty = the core estimates it (flagged as estimated); 0 means supplied: no misalignment.",
     "sun_planet_f_ma_um": "Mesh misalignment f_ma of the sun-planet mesh in micrometres, as the engineer states it. Empty = the core estimates it (flagged as estimated); 0 means supplied: no misalignment.",
-    "planet_ring_f_ma_um": "Mesh misalignment f_ma of the planet-ring mesh in micrometres, as the engineer states it. Empty = the core estimates it (flagged as estimated); 0 means supplied: no misalignment."
+    "planet_ring_f_ma_um": "Mesh misalignment f_ma of the planet-ring mesh in micrometres, as the engineer states it. Empty = the core estimates it (flagged as estimated); 0 means supplied: no misalignment.",
+    "f_sh_um": "Shaft / pin deflection f_sh of this pair in micrometres, as the engineer states it. It is one value for every load of the duty: enter the conservative maximum deflection. Empty = the core uses its placeholder estimate (flagged as estimated); 0 means supplied: no deflection.",
+    "sun_planet_f_sh_um": "Shaft / pin deflection f_sh of the sun-planet mesh in micrometres, as the engineer states it. It is one value for every load of the duty: enter the conservative maximum deflection. Empty = the core uses its placeholder estimate (flagged as estimated); 0 means supplied: no deflection.",
+    "planet_ring_f_sh_um": "Shaft / pin deflection f_sh of the planet-ring mesh in micrometres, as the engineer states it. It is one value for every load of the duty: enter the conservative maximum deflection. Empty = the core uses its placeholder estimate (flagged as estimated); 0 means supplied: no deflection."
   },
   "gear": {
     "z": "Teeth",

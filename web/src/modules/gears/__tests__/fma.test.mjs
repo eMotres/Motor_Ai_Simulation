@@ -28,7 +28,7 @@ test('a supplied value is sent per stage kind; 0 is a supplied value; a negative
 
 test('the editor shows the fields beside the stage header, optional (emptying clears), EN + zh-CN labels and tooltips', () => {
   const ed = src('../components/StageEditor.tsx');
-  assert.match(ed, /F_MA_KEYS\[s\.kind\]\.map/);
+  assert.match(ed, /\[\.\.\.F_MA_KEYS\[s\.kind\], \.\.\.F_SH_KEYS\[s\.kind\]\]\.map/);
   assert.match(ed, /onClear=\{\(\) => setStage\(i, \{ \[k\]: undefined \}\)\}/);
   const parts = src('../components/parts.tsx');
   assert.match(parts, /onClear\?: \(\) => void/);
@@ -40,5 +40,24 @@ test('the editor shows the fields beside the stage header, optional (emptying cl
 
 test('a saved record brings the values back into the editor (absent stays absent)', () => {
   const saved = src('../saved.ts');
-  assert.match(saved, /for \(const k of \['f_ma_um', 'sun_planet_f_ma_um', 'planet_ring_f_ma_um'\] as const\)/);
+  assert.match(saved, /for \(const k of \['f_ma_um', 'sun_planet_f_ma_um', 'planet_ring_f_ma_um', 'f_sh_um'/);
+});
+
+test('the f_sh deflection inputs follow the same rules (absent stays absent, 0 is supplied, per stage kind, round trip, labels)', async () => {
+  const { F_SH_KEYS } = await import('../plain.ts');
+  const state = humanoidJoint();
+  assert.equal(JSON.stringify(toPlainBody(state, 'point').stages).includes('f_sh'), false);
+  state.stages[0] = { ...state.stages[0], sun_planet_f_sh_um: 0.1, planet_ring_f_sh_um: 0, f_sh_um: 5 };
+  const pair = { ...defaultStage('pair', 'p'), f_sh_um: 1, planet_ring_f_sh_um: 2 };
+  state.stages.push(pair);
+  const body = toPlainBody(state, 'point');
+  assert.deepEqual([body.stages[0].sun_planet_f_sh_um, body.stages[0].planet_ring_f_sh_um, 'f_sh_um' in body.stages[0]], [0.1, 0, false]);
+  assert.deepEqual([body.stages[2].f_sh_um, 'planet_ring_f_sh_um' in body.stages[2]], [1, false]);
+  assert.deepEqual(F_SH_KEYS.pair, ['f_sh_um']);
+  assert.match(src('../saved.ts'), /'f_sh_um', 'sun_planet_f_sh_um', 'planet_ring_f_sh_um'/);
+  assert.match(src('../components/StageEditor.tsx'), /\.\.\.F_SH_KEYS\[s\.kind\]/);
+  for (const lang of ['en', 'zh-CN']) {
+    const loc = JSON.parse(readFileSync(new URL(`../../../locales/${lang}/gears.json`, import.meta.url), 'utf8'));
+    for (const k of ['f_sh_um', 'sun_planet_f_sh_um', 'planet_ring_f_sh_um']) { assert.ok(loc.l[k], `${lang} l.${k}`); assert.ok(loc.tip[k], `${lang} tip.${k}`); }
+  }
 });

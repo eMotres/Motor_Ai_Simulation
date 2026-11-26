@@ -26,6 +26,10 @@ export interface PlainStage {
   f_ma_um?: number;
   sun_planet_f_ma_um?: number;
   planet_ring_f_ma_um?: number;
+  /** shaft / pin deflection f_sh, micrometres (core PR #932): absent = the placeholder estimate, 0 = supplied; constant over every duty bin - enter the conservative maximum */
+  f_sh_um?: number;
+  sun_planet_f_sh_um?: number;
+  planet_ring_f_sh_um?: number;
   gears: Partial<Record<GearRole, PlainGear>>;
   bearings: Record<string, string>;
 }

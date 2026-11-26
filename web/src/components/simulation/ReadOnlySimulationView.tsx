@@ -141,16 +141,10 @@ export const ReadOnlySimulationView: React.FC<Props> = ({ projectId, die, config
 
       {run && (
         <>
-          {withField && point
-            ? <Box sx={{ display: 'flex', gap: 1.5, flexWrap: 'wrap', alignItems: 'flex-start' }} data-testid="results-with-field">
-              <Box sx={{ flex: '1 1 560px', minWidth: 0 }}>
-                <SummaryTable summary={derived?.run === run ? derived.s : ((run.summary as unknown as TransientSummary) ?? null)} readOnly />
-              </Box>
-              <Box sx={{ flex: '1 1 420px', minWidth: 0 }}>
-                <PointFieldPane projectId={projectId} die={die} config={config} duty={point} showAll={showAll} />
-              </Box>
-            </Box>
-            : <SummaryTable summary={derived?.run === run ? derived.s : ((run.summary as unknown as TransientSummary) ?? null)} readOnly />}
+          {/* the summary table, then the field of the point (stored maps through the standard FieldViewer), then the charts: ONE column,
+              the same width for all three (simLayout), so a phone stacks them exactly as a wide screen does */}
+          <SummaryTable summary={derived?.run === run ? derived.s : ((run.summary as unknown as TransientSummary) ?? null)} readOnly />
+          {withField && point && <PointFieldPane projectId={projectId} die={die} config={config} duty={point} showAll={showAll} />}
           <TransientCharts readOnly payloadOverride={run.payload ?? null} onSummary={(s) => setDerived({ run, s })} />
         </>
       )}

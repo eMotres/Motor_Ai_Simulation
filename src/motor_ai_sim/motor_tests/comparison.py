@@ -907,14 +907,21 @@ def _load(rec: Dict[str, Any], model: Dict[str, Any], die: str, config: str) -> 
             continue
         det = f"duty '{d['name']}' ({d['rpm']:g} rpm, {d['current']:g} A)"
         kt, kt_clause, kt_src = _k3(model, "torque")
+        if d.get("shaft_conv") == 1:
+            # shaft-side convention: the stored torque, power and efficiency already carry the 3-D factor (k on the
+            # converted power, core loss on the shaft) - applied ONCE, never again here (shaft_convention)
+            kt_in, kt_src = kt, "applied once in the solve (shaft-side convention)"
+            kt, kt_clause = None, "shaft-side convention: the 3-D factor is already in the stored shaft numbers"
+        else:
+            kt_in = kt
         rows = [_row("torque", "Torque" + (" (shaft)" if d.get("torque_kind") == "shaft" else " (EM)"), "N·m",
                      r.get("torque_nm"), _scaled(d.get("torque_nm"), kt), tip="load", detail=det + ", " + kt_clause,
-                     extra={"corrected": kt is not None}),
+                     extra={"corrected": kt is not None or d.get("shaft_conv") == 1}),
                 ]
         d_eff, d_eff_sys = _duty_effs(d, kt)
         if eff_meas is not None:
             rows.append(_row("eff", "Efficiency", "%", eff_meas, d_eff, tip="load", detail=det + ", " + kt_clause,
-                             extra={"corrected": kt is not None}))
+                             extra={"corrected": kt is not None or d.get("shaft_conv") == 1}))
         if eff_sys is not None:
             rows.append(_eff_system_row(eff_sys, d_eff_sys, det + ", " + kt_clause))
         if num(r.get("temp_winding_c")) is not None:
@@ -927,10 +934,10 @@ def _load(rec: Dict[str, Any], model: Dict[str, Any], die: str, config: str) -> 
         if num(r.get("j_a_mm2")) is not None:
             rows.append(_row("j_coil", "Current density", "A/mm²", r.get("j_a_mm2"), None, tip="load", status="no_model"))
         groups.append(_group("load_point", label, rows, params={**params, "duty": d["name"]}, tip="load",
-                             basis="torque and efficiency on the corrected shaft power" if kt is not None
-                             else "not corrected yet",
-                             basis_key="load_3d" if kt is not None else "load_2d",
-                             basis_params={"k": None if kt is None else "%.3f" % kt, "src": kt_src or ""}))
+                             basis="torque and efficiency on the corrected shaft power"
+                             if (kt is not None or d.get("shaft_conv") == 1) else "not corrected yet",
+                             basis_key="load_3d" if (kt is not None or d.get("shaft_conv") == 1) else "load_2d",
+                             basis_params={"k": None if kt_in is None else "%.3f" % kt_in, "src": kt_src or ""}))
         # the model side of the same row, for the chart (the very numbers of the table rows above)
         t_mod = _scaled(d.get("torque_nm"), kt)
         sp["torque"] = (t_meas, t_mod)

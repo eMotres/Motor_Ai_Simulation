@@ -625,3 +625,45 @@ def test_r3_provenance_in_scalar_exports():
     assert mech["basis"] == "shaft" and "core loss on the shaft" in RD.headline({"em_run": row})
     old = DR.compact_em_run({"summary": {"P_mech_W": 1000.0, "T_em_avg_Nm": 10.0}})
     assert "shaft_conv" not in old["numbers"] and RD.mechanical_numbers({"em_run": old})["basis"] == "earlier"
+
+
+# ── coordinator 2026-11-26: the bench comparison and the controller tab ───────────────────────────────────────────────
+def _bench_doc(summary):
+    return {"winding": {"star_delta": "star"}, "duties": [{"name": "rated", "rpm": summary["rpm"], "current_arms": 100,
+                                                           "summary": {"I_phase_rms_A": 100, **summary}}]}
+
+
+def test_bench_comparison_takes_a_marked_duty_as_stored():
+    from motor_ai_sim.motor_tests import comparison, model_source, models
+    s = _plain_marked(mass_total_kg=2.0)
+    assert s["P_mech_W"] == pytest.approx(870.0, abs=0.06)
+    m = model_source.from_docs({}, _bench_doc(s), {}, {}, end3d={"k_flux": 0.9})
+    d = m["duties"][0]
+    assert d["shaft_conv"] == 1 and d["torque_nm"] == pytest.approx(8.7, abs=1e-3) and d["torque_kind"] == "shaft"
+    rec = models.normalize({"kind": "load", "date": "2026-01-15",
+                            "rows": [{"rpm": RPM100, "i_phase_a": 100, "torque_nm": 8.6, "eff_pct": 89.0}]},
+                           who="eng@example.test")
+    g = comparison.compare_record(rec, m, "D", "C")["groups"][0]
+    rows = {r["key"]: r for r in g["rows"]}
+    # 8.7 N*m (870 W at 100 rad/s) and 870/970 - never x0.9 again (7.83 N*m / 783 W)
+    assert rows["torque"]["model"] == pytest.approx(8.7, abs=1e-3)
+    assert rows["eff"]["model"] == pytest.approx(100.0 * 870.0 / 970.0, abs=0.01)
+    assert rows["torque"]["extra"]["corrected"] is True and g["basis_key"] == "load_3d"
+
+
+def test_controller_torque_on_a_marked_record_is_the_coupling_torque(monkeypatch):
+    from motor_ai_sim import duty_results as dr
+    from motor_ai_sim.routes import controller as rc, family as fam
+    em = _plain_marked(P_mech_extra_W=20.0)
+    node = {"coupled": {"mode": "steady", "em": em, "P_mech_extra_W": 20.0,
+                        "inverter": {"I_phase_rms_solved_A": 50.0, "star_delta": "star", "v_dc_V": 400.0}},
+            "thermal": {"point": {"rpm": RPM100}}}
+    monkeypatch.setattr(rc, "_DR", dr)
+    monkeypatch.setattr(dr, "get", lambda die, cfg: {"rated": node})
+    monkeypatch.setattr(fam, "config_doc", lambda die, cfg: {})
+    monkeypatch.setattr(fam, "duty_entry", lambda die, cfg, duty: {})
+    out = rc._duty_defaults("DIE", "CFG", "rated")
+    assert out["torque_Nm"] == pytest.approx(8.5, abs=1e-3)          # (870 - 20) W / 100 rad/s, not the 10 N*m field torque
+    old = {"T_em_avg_Nm": 10.0, "P_loss_total_W": 100.0}
+    node["coupled"]["em"] = old
+    assert rc._duty_defaults("DIE", "CFG", "rated")["torque_Nm"] == pytest.approx(10.0)

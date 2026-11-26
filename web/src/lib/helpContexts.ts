@@ -46,3 +46,37 @@ export function mechanicalHelp(i: MechanicalHelp): HelpContext {
     calculated: i.ran, stale: i.stale, status: i.busy ? ['solving'] : i.ran ? ['done'] : ['not_solved'], ...err(i.error),
   };
 }
+
+// ── Propellers ───────────────────────────────────────────────────────────────
+export interface PropellersHelp { view: 'catalog' | 'designer'; rows: number; error?: string | null }
+export function propellersHelp(i: PropellersHelp): HelpContext {
+  return { tab: 'propellers', sub: i.view, ...(i.view === 'catalog' ? { rows: Math.min(99, i.rows) } : {}), ...(i.view === 'catalog' ? err(i.error) : {}) };
+}
+export interface DesignerHelp { polar: string; ran: boolean; busy: boolean; runs: number; drafts: number; optimised: boolean; error?: string | null }
+export function designerHelp(i: DesignerHelp): HelpContext {
+  return {
+    tab: 'propellers', sub: 'designer', polar: word(i.polar), calculated: i.ran, runs: Math.min(99, i.runs), drafts: Math.min(99, i.drafts), optimised: i.optimised,
+    status: i.busy ? ['running'] : i.ran ? ['done'] : ['not_run'], ...err(i.error),
+  };
+}
+
+// ── Schemas ──────────────────────────────────────────────────────────────────
+export interface SchemasHelp {
+  mode: 'view' | 'compose'; graphView: string; showAll: boolean; die?: string | null; configuration?: string | null; duty?: string | null;
+  loading: boolean; error?: string | null;
+}
+export function schemasHelp(i: SchemasHelp): HelpContext {
+  return {
+    tab: 'schemas', sub: i.mode,
+    ...(i.mode === 'view' ? {
+      graphView: word(i.graphView), showAll: i.showAll,
+      ...(i.die ? { die: String(i.die).slice(0, 80) } : {}), ...(i.configuration ? { configuration: String(i.configuration).slice(0, 80) } : {}),
+      ...(i.duty ? { duty: String(i.duty).slice(0, 80) } : {}),
+      status: i.loading ? ['loading'] : i.error ? ['load_failed'] : ['shown'], ...err(i.error),
+    } : {}),
+  };
+}
+export interface ComposerHelp { graph: string; template: boolean; running: boolean; error?: string | null }
+export function composerHelp(i: ComposerHelp): HelpContext {
+  return { tab: 'schemas', sub: 'compose', graph: String(i.graph ?? '').slice(0, 80), template: i.template, status: i.running ? ['running'] : ['idle'], ...err(i.error) };
+}

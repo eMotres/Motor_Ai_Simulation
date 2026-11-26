@@ -155,3 +155,14 @@ def test_prompt_describes_every_tab_of_the_app():
     from motor_ai_sim import support_prompt as SP
     for label in ("Propellers", "Gears", "Overview"):
         assert f"**{label}**" in SP.STAFF_PROMPT
+
+
+def test_propellers_and_schemas_sanitise_and_load_their_documents():
+    out = H.sanitize_ui_context({"tab": "propellers", "sub": "designer", "polar": "mfoil_table", "runs": 4, "optimised": True,
+                                 "status": ["done"], "thrust": 12}, "engineer")
+    assert out["runs"] == 4 and "thrust" not in out
+    assert "# Propellers: Designer" in H.help_docs_for(out, "en") and "# 仿真 > 螺旋桨" in H.help_docs_for(out, "zh-CN")
+    sch = H.sanitize_ui_context({"tab": "schemas", "sub": "compose", "graph": "My S1", "template": False}, "admin")
+    assert sch == {"tab": "schemas", "sub": "compose", "graph": "My S1", "template": False}
+    assert "# Schemas: Compose" in H.help_docs_for(sch, "en")
+    assert H.sanitize_ui_context({"tab": "schemas", "sub": "compose", "graph": "x"}, "user") == {"tab": "schemas", "sub": "compose"}

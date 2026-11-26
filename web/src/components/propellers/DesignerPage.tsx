@@ -9,6 +9,8 @@ import { frontCost, paretoFront, round2, runLabel, toRun } from '../../lib/prope
 import type { EvalRecord, RunRecord, Vector } from '../../lib/propellerDesign';
 import { oneOf } from '../../lib/viewMemory';
 import { useRememberedView } from '../../lib/useRememberedView';
+import { useHelpContext } from '../support/useHelpContext';
+import { designerHelp } from '../../lib/helpContexts';
 import * as api from '../../lib/propellerDesignApi';
 import { CurveChart, Panel, PlanformChart, ProfileChart, ParetoView, ResultTiles, VariablesPanel, ZoneTable } from './DesignerParts';
 import { StoredRunsPanel } from './StoredRuns';
@@ -171,6 +173,8 @@ export default function DesignerPage() {
   const opRuns = runs.filter((r) => r.op === op && (r.polar ?? 'flatplate_model') === polar);
   const front = paretoFront(opRuns);
   const cost = frontCost(opRuns, front);
+
+  useHelpContext(designerHelp({ polar, ran: !!result, busy, runs: runs.length, drafts: drafts.length, optimised: optMsg !== null, error }));
 
   if (!family || !vector) return <Box sx={{ p: 2 }}>{error ? <Alert severity="error">{error}</Alert> : <CircularProgress size={20} />}</Box>;
 

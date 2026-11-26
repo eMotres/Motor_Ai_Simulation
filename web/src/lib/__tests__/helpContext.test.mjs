@@ -110,3 +110,22 @@ th('every Simulations tab declared by the web is in the shared registry with EN 
     for (const lg of ['en', 'zh-CN']) assert.ok(existsSync(`${DOCS}${id}.${lg}.md`), `${id}.${lg}.md`);
   }
 });
+
+th('Propellers and Schemas contexts: ids, names, flags and counts only', () => {
+  assert.deepEqual(H.propellersHelp({ view: 'catalog', rows: 12, error: 'HTTP 500' }), { tab: 'propellers', sub: 'catalog', rows: 12, error: 'HTTP #' });
+  const d = H.designerHelp({ polar: 'mfoil_table', ran: true, busy: false, runs: 4, drafts: 1, optimised: true, error: 'The design is not valid: root_chord 3' });
+  assert.deepEqual(d, { tab: 'propellers', sub: 'designer', polar: 'mfoil_table', calculated: true, runs: 4, drafts: 1, optimised: true, status: ['done'], error: 'The design is not valid: root_chord #' });
+  const s = H.schemasHelp({ mode: 'view', graphView: 'propeller_s1', showAll: false, die: 'D1', configuration: 'cfg', duty: '', loading: false, error: null });
+  assert.deepEqual(s, { tab: 'schemas', sub: 'view', graphView: 'propeller_s1', showAll: false, die: 'D1', configuration: 'cfg', status: ['shown'] });
+  assert.deepEqual(H.schemasHelp({ mode: 'compose', graphView: 'modules', showAll: false, loading: false }), { tab: 'schemas', sub: 'compose' });
+  assert.deepEqual(H.composerHelp({ graph: 'My S1', template: false, running: true, error: null }), { tab: 'schemas', sub: 'compose', graph: 'My S1', template: false, status: ['running'] });
+});
+
+th('every web help tab is in the registry, with its sub-views, EN and zh-CN documents', () => {
+  const reg = JSON.parse(readFileSync(`${DOCS}registry.json`, 'utf8'));
+  for (const id of H.HELP_TABS) {
+    assert.ok(reg[id], `${id} registered`);
+    for (const d of reg[id].docs) for (const lg of ['en', 'zh-CN']) assert.ok(existsSync(`${DOCS}${d}.${lg}.md`), `${d}.${lg}.md`);
+    for (const sub of reg[id].subs) assert.ok(reg[id].docs.includes(`${id}.${sub}`), `${id}.${sub} has a document`);
+  }
+});

@@ -73,5 +73,47 @@
       "calculated": "flag",
       "stale": "flag"
     }
+  },
+  "propellers": {
+    "min_role": "engineer",
+    "subs": [
+      "catalog",
+      "designer"
+    ],
+    "docs": [
+      "propellers",
+      "propellers.catalog",
+      "propellers.designer"
+    ],
+    "keys": {
+      "polar": "enum",
+      "calculated": "flag",
+      "runs": "count",
+      "drafts": "count",
+      "optimised": "flag",
+      "rows": "count"
+    }
+  },
+  "schemas": {
+    "min_role": "engineer",
+    "subs": [
+      "view",
+      "compose"
+    ],
+    "docs": [
+      "schemas",
+      "schemas.view",
+      "schemas.compose"
+    ],
+    "keys": {
+      "graphView": "enum",
+      "showAll": "flag",
+      "die": "name",
+      "configuration": "name",
+      "duty": "name",
+      "graph": "name",
+      "template": "flag",
+      "calculated": "flag"
+    }
   }
 }

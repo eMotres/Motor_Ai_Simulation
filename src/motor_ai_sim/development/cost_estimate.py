@@ -256,7 +256,7 @@ def normalize_settings(raw: Any, schema: dict, legacy: bool = False) -> dict:
     margin_field = _ship_field(schema, "ship_margin_pct")
     round_field = _ship_field(schema, "ship_round_eur")
     ship_from = _text(raw.get("ship_from", _ship_field(schema, "ship_from")["default"]), _MAX_PLACE)
-    return {"complex": complex_project,
+    out = {"complex": complex_project,
             "iterations": _int(raw.get("iterations", default_iterations(complex_project, schema)), "iterations",
                                int(it_field["min"]), int(it_field["max"])),
             "currency": currency,
@@ -269,10 +269,16 @@ def normalize_settings(raw: Any, schema: dict, legacy: bool = False) -> dict:
                                     lo=margin_field["min"], hi=margin_field["max"], allow_none=False),
             "ship_round_eur": _num(raw.get("ship_round_eur", round_field["default"]), "ship_round_eur",
                                    lo=round_field["min"], hi=round_field["max"], allow_none=False),
-            "ship_parcels": (None if raw.get("ship_parcels") in (None, "") else _int(raw.get("ship_parcels"), "ship_parcels", 1, 50)),
-            "ship_box_cm": _box(raw.get("ship_box_cm")),
-            "ship_service": _service(raw.get("ship_service")),
             "payment_terms": " ".join(str(raw.get("payment_terms") or "").split())[:MAX_PAYMENT_TERMS]}
+    # an estimate stored before the rate table has no parcels / box / service: they stay ABSENT (the calculation reads an absent
+    # field as its default); they are written only when the document carries them (a new estimate, or the admin's own edit)
+    if "ship_parcels" in raw:
+        out["ship_parcels"] = None if raw.get("ship_parcels") in (None, "") else _int(raw.get("ship_parcels"), "ship_parcels", 1, 50)
+    if "ship_box_cm" in raw:
+        out["ship_box_cm"] = _box(raw.get("ship_box_cm"))
+    if "ship_service" in raw:
+        out["ship_service"] = _service(raw.get("ship_service"))
+    return out
 
 
 def _box(raw: Any) -> Optional[List[float]]:
@@ -510,7 +516,7 @@ def normalize_estimate(raw: Any, schema: dict, project_id: str, *, legacy: bool 
     return {"version": VERSION, "schema_version": schema["schema_version"], "project_id": project_id,
             "revision": int(raw.get("revision") or 0), "settings": settings, "fx": normalize_fx(raw.get("fx"), schema),
             "iterations": iterations, "dhl_lanes": normalize_lanes(raw.get("dhl_lanes"), schema),
-            "next_unit": normalize_next_unit(raw.get("next_unit"), schema, legacy),
+            **({"next_unit": normalize_next_unit(raw.get("next_unit"), schema, legacy)} if raw.get("next_unit") is not None else {}),
             "migration": _normalize_migration(raw.get("migration")),
             "updated_at": raw.get("updated_at"), "updated_by": raw.get("updated_by")}
 
@@ -979,7 +985,7 @@ def compute(estimate: dict, schema: dict, display_currency: Optional[str] = None
                  "iterations": conv_iters, **(conv_total or {"subtotal": None, "contingency": None, "total": None})}
     weeks_total = round(sum(it["weeks"]["total"] for it in out_iters), 2)
     next_unit = next_unit_of(estimate, schema)
-    return {"next_unit": next_unit, "iterations": out_iters, "subtotal": _rounded(subtotal_all, order), "contingency_pct": pct,
+    return {**({"next_unit": next_unit} if "next_unit" in estimate else {}), "iterations": out_iters, "subtotal": _rounded(subtotal_all, order), "contingency_pct": pct,
             "contingency": _rounded(contingency, order), "total": _rounded(total, order), "currencies": currencies,
             "converted": converted, "missing": missing, "missing_count": len(missing), "warnings": warnings,
             "weeks_total": weeks_total,
@@ -1046,21 +1052,37 @@ def next_unit_of(estimate: dict, schema: dict) -> dict:
     return out
 
 
-def next_unit_shipping_stale(estimate: dict, ship: dict) -> str:
-    """Why an AUTOMATIC next-unit shipping line must not be quoted ("" = it may): its last refresh failed (it carries a ``hint``),
-    or it was computed for another destination / origin than the settings say now.  A manual line is the admin's own number."""
+def shipping_line_stale(estimate: dict, ship: dict, what: str = "the shipping") -> str:
+    """Why an AUTOMATIC shipping line (an iteration's or the next unit's) must not be quoted ("" = it may): its last refresh failed
+    (it carries a ``hint``), or it was computed for another destination / origin than the settings say now.  A manual line is the
+    admin's own number."""
     if not ship or ship.get("source") != "dhl" or ship.get("amount") is None:
         return ""
     if ship.get("hint"):
-        return "the next unit's shipping is out of date: %s" % ship["hint"]
+        return "%s is out of date: %s" % (what, ship["hint"])
     ref = (ship.get("source_ref") or {}).get("dhl") or {}
     settings = estimate.get("settings") or {}
     country = str((settings.get("ship_to") or {}).get("country") or "").upper()
     if not country or not str(ref.get("to") or "").upper().startswith(country):
-        return "the next unit's shipping was calculated for another destination: refresh it"
+        return "%s was calculated for another destination: refresh it" % what
     if str(ref.get("from") or "").strip().lower() != str(settings.get("ship_from") or "").strip().lower():
-        return "the next unit's shipping was calculated from another origin: refresh it"
+        return "%s was calculated from another origin: refresh it" % what
     return ""
+
+
+def next_unit_shipping_stale(estimate: dict, ship: dict) -> str:
+    """``shipping_line_stale`` of the next unit's shipping line."""
+    return shipping_line_stale(estimate, ship, "the next unit's shipping")
+
+
+def stale_shipping_lines(estimate: dict) -> List[dict]:
+    """``[{iteration, reason}]`` of the iterations whose AUTOMATIC shipping line is stale (a quote must not carry it)."""
+    out: List[dict] = []
+    for it in estimate.get("iterations") or []:
+        why = shipping_line_stale(estimate, (it.get("lines") or {}).get("shipping") or {}, "the shipping of iteration %s" % it.get("index"))
+        if why:
+            out.append({"iteration": it.get("index"), "reason": why})
+    return out
 
 
 def estimated_shipping_lines(estimate: dict) -> List[dict]:
@@ -1573,7 +1595,7 @@ def _flat(estimate: dict) -> Dict[str, Any]:
             lane.get("from"), lane.get("to_country"), _fmt(lane.get("weight_kg")), lane.get("currency"), _fmt(lane.get("price")),
             lane.get("transit_days"), lane.get("quoted_on"))
     nu = estimate.get("next_unit") or {}
-    for k in ("include_testing", "price", "weeks"):
+    for k in ("include_testing", "price", "weeks", "note", "parcels", "box_cm"):
         out["next_unit.%s" % k] = nu.get(k)
     for f in _LINE_FIELDS:
         out["next_unit.shipping.%s" % f] = (nu.get("shipping") or {}).get(f)

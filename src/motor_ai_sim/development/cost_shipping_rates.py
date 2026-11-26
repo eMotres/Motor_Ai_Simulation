@@ -71,12 +71,14 @@ def chargeable_kg(parcels: List[dict], table: dict) -> Tuple[float, float, float
     return charge, actual, vol
 
 
-def _zone_basis(zid: str, zone: dict, country: str, charge: float, table: dict) -> str:
+def _zone_basis(zid: str, zone: dict, country: str, charge: float, table: dict, service: Optional[str] = None) -> str:
     """``calibrated`` only AT the one real quote (its country and its chargeable weight within the tolerance); the rest of a
     calibrated zone is an ``extrapolated`` use of that curve; every other zone is an ``estimate``."""
     if (zone.get("basis") or "estimate") != "calibrated":
         return zone.get("basis") or "estimate"
     cal = table.get("calibration") or {}
+    if cal.get("service") and service != cal["service"]:
+        return "extrapolated"          # the one real quote is for ONE service: the other service has the same factor, not its own quote
     if (cal.get("zone") == zid and str(country or "").upper() == str(cal.get("country") or "").upper() and cal.get("chargeable_kg")
             and abs(charge - float(cal["chargeable_kg"])) <= float(cal["chargeable_kg"]) * float(cal.get("tolerance_pct") or 0) / 100.0):
         return "calibrated"
@@ -104,6 +106,6 @@ def quote(country: str, parcels: List[dict], table: dict, service: Optional[str]
     fuel = float(table["fuel_surcharge_pct"])
     amount = round(base * (1 + fuel / 100.0), 2)
     return {"amount": amount, "currency": table["currency"], "transit_days": int(zone["transit_days"]), "zone": zid,
-            "zone_basis": _zone_basis(zid, zone, country, charge, table), "chargeable_kg": round(charge, 2), "actual_kg": round(actual, 2),
+            "zone_basis": _zone_basis(zid, zone, country, charge, table, service), "chargeable_kg": round(charge, 2), "actual_kg": round(actual, 2),
             "volumetric_kg": round(vol, 2), "parcels": len(parcels), "service": service, "fuel_pct": fuel,
             "table_date": table["date"]}, ""

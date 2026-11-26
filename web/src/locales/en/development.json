@@ -1327,7 +1327,8 @@
       "priceTip": "Derived: {derived}. Typed here, it replaces the derived price.",
       "weeks": "Weeks",
       "total": "Next unit, before contingency",
-      "unavailable": "Not computable yet."
+      "unavailable": "Not computable yet.",
+      "invalid": "Invalid value: not saved"
     },
     "origin": {
       "dhlTable": "Rate table {date}, zone {zone} ({basis}), {from}→{to}, {weight} kg chargeable, +{margin} %",
@@ -1419,7 +1420,8 @@
       "perMotor": "1 per motor",
       "zoneBasis": {
         "calibrated": "calibrated on a real quote",
-        "estimate": "estimate, no real quote yet"
+        "estimate": "estimate, no real quote yet",
+        "extrapolated": "estimate, extrapolated from one air-freight quote (express has no quote of its own)"
       },
       "service": {
         "express": "Express courier",

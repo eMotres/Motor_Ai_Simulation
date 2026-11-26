@@ -404,7 +404,7 @@ def test_old_shape_is_summed_into_the_four_lines(schema):
     assert est["settings"] == {"complex": False, "iterations": 2, "currency": "EUR", "contingency_pct": 15.0,
                                "display_currency": None, "target_motor": {"die": "DIE-A", "config": "big"},
                                "ship_from": "CN Shanghai", "ship_to": None, "ship_margin_pct": 20.0, "ship_round_eur": 100.0,
-                               "payment_terms": "", "ship_parcels": None, "ship_box_cm": None, "ship_service": "express"}
+                               "payment_terms": ""}                       # an old document gains no rate-table field
     l1, l2 = (it["lines"] for it in est["iterations"])
     assert est["iterations"][0]["bench"] == "both" and est["iterations"][0]["motors"] == 2
     assert l1["tooling"]["amount"] == 10000.0 and l1["tooling"]["source"] == "converted"

@@ -119,3 +119,16 @@ test('no caption / helperText in the new tab source', () => {
   const s = readFileSync(join(src, 'modules/production/components/Model3DTab.tsx'), 'utf8');
   assert.ok(!/variant\s*=\s*["']caption["']/.test(s) && !/helperText\s*=/.test(s) && !/FormHelperText/.test(s));
 });
+
+test('a saved step link that is not loaded yet, or is gone, shows All and does not crash (Astra #896)', async () => {
+  const i18n = m.makeI18n('en'); await ready(i18n);
+  for (const loaded of [[], steps]) {
+    const html = decode(m.view(i18n, base({ steps: loaded, selection: { stepId: 'gone', partId: null } })));
+    assert.equal(attr(html, 'only'), 'ALL', html);
+    assert.ok(html.includes('>All<'), html);
+  }
+  const pending = decode(m.view(i18n, base({ steps: [], selection: { stepId: 's1', partId: null } })));
+  assert.equal(attr(pending, 'only'), 'ALL', pending);
+  const found = decode(m.view(i18n, base({ selection: { stepId: 's1', partId: null } })));
+  assert.notEqual(attr(found, 'only'), 'ALL', found);
+});

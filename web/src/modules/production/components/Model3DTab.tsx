@@ -55,7 +55,8 @@ export const Model3DView: React.FC<Model3DViewProps> = ({ ctx, steps, parts, sel
   const [loaded, setLoaded] = useState<ReadonlySet<string> | null>(null);
   const onLoaded = useCallback((r: { groups: PartGroup[] }) => setLoaded(new Set(r.groups.map((g) => g.family))), []);
   const part = useMemo(() => parts.find((p) => p.id === selection.partId) ?? null, [parts, selection.partId]);
-  const stepId = part ? null : selection.stepId;
+  // a saved link may name a step that is not loaded yet or is gone: only a loaded step is honoured, anything else reads as All
+  const stepId = part ? null : (selection.stepId && steps.some((x) => x.id === selection.stepId) ? selection.stepId : null);
   const view = useMemo(() => modelViewFamilies({ electronics: ctx.productType === 'electronics', steps, stepId, part }),
     [ctx.productType, steps, stepId, part]);
   const stepTitle = (s: AssemblyStep) => `${s.n}. ${displayText(s.title, ui).text}`;
@@ -75,7 +76,7 @@ export const Model3DView: React.FC<Model3DViewProps> = ({ ctx, steps, parts, sel
     <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.25 }} data-testid="model3d-tab">
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, flexWrap: 'wrap' }}>
         <TextField select size="small" label={t('tab3d.step')} value={part ? '' : (stepId ?? '')} sx={{ minWidth: 260, maxWidth: 420 }}
-          SelectProps={{ displayEmpty: true, renderValue: (v) => (v ? stepTitle(steps.find((s) => s.id === v)!) : t('tab3d.all')) }}
+          SelectProps={{ displayEmpty: true, renderValue: (v) => { const hit = v ? steps.find((s) => s.id === v) : undefined; return hit ? stepTitle(hit) : t('tab3d.all'); } }}
           InputLabelProps={{ shrink: true }}
           onChange={(e) => onSelect({ stepId: e.target.value ? String(e.target.value) : null, partId: null })} inputProps={{ 'data-testid': 'model3d-step-select' }}>
           <MenuItem value="">{t('tab3d.all')}</MenuItem>

@@ -37,6 +37,10 @@ from motor_ai_sim import propeller_design as pd
 
 OBJECTIVES = ("thrust_per_shaft_W", "cooling_air_axial_ms", "flight_thrust_N")
 DEFAULT_OBJECTIVES = ("thrust_per_shaft_W", "cooling_air_axial_ms")
+#: opt-in (Propellers > Mission, 2026-11-26): the mission value of the candidate (range / endurance / top speed / g per W with the
+#: chosen motor, battery and flight) from the caller's ``evaluate`` callback (``propeller_mission.optimizer_evaluate``).  It is not in
+#: ``OBJECTIVES`` and needs ``evaluate``; without it nothing here changes.
+MISSION_OBJECTIVE = "mission_objective"
 FREE_GROUPS = ("outer", "inner", "airfoil")
 EVAL_SCHEMA = "propeller-eval-1"
 MAX_POP, MAX_GEN, MAX_EVALS = 20, 10, 200
@@ -275,8 +279,9 @@ def optimize(design: pd.Design, base: Dict[str, Any], op: str, *, objectives: Se
     """Run NSGA-II from ``base`` (diameter and blade count stay as given).  Returns the evaluations, the front (indices) and the settings."""
     t0 = time.time()
     objectives = list(objectives)
-    if not objectives or any(o not in OBJECTIVES for o in objectives) or len(set(objectives)) != len(objectives):
-        raise OptimizeError("objectives must be a non-empty subset of %s" % list(OBJECTIVES))
+    allowed = OBJECTIVES + ((MISSION_OBJECTIVE,) if evaluate is not None else ())
+    if not objectives or any(o not in allowed for o in objectives) or len(set(objectives)) != len(objectives):
+        raise OptimizeError("objectives must be a non-empty subset of %s" % list(allowed if evaluate is not None else OBJECTIVES))
     if not (isinstance(pop, int) and 4 <= pop <= MAX_POP) or not (isinstance(generations, int) and 1 <= generations <= MAX_GEN):
         raise OptimizeError("pop must be 4..%d and generations 1..%d" % (MAX_POP, MAX_GEN))
     if pop * (generations + 1) > MAX_EVALS:

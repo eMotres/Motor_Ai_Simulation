@@ -24,6 +24,7 @@ import { driveFor, initialPoint, runMetasOf, type SimStoredPoints, type SimStore
 import { PointChips, RunChips } from './SimChips';
 import SummaryTable, { type TransientSummary } from './SummaryTable';
 import TransientCharts from './TransientCharts';
+import PointFieldPane from './PointFieldPane';
 
 interface Props {
   projectId: string;
@@ -32,6 +33,10 @@ interface Props {
   /** the point to open first (the row's own); falls back to the motor's default point */
   duty?: string | null;
   showAll?: boolean;
+  /** inside a page (the project motor page) rather than a dialog: no title line, no view-only chip */
+  embedded?: boolean;
+  /** the standard stored field view of the shown point to the RIGHT of the results table (below it on a narrow screen) */
+  withField?: boolean;
 }
 
 const errText = (e: unknown, fallback: string): string => {
@@ -39,7 +44,7 @@ const errText = (e: unknown, fallback: string): string => {
   return m && !/^HTTP \d+$/.test(m) ? m : fallback;
 };
 
-export const ReadOnlySimulationView: React.FC<Props> = ({ projectId, die, config, duty = null, showAll = false }) => {
+export const ReadOnlySimulationView: React.FC<Props> = ({ projectId, die, config, duty = null, showAll = false, embedded = false, withField = false }) => {
   const { t } = useTranslation('development');
   const [cfg, setCfg] = useState<SimStoredPoints | null>(null);
   const [point, setPoint] = useState<string | null>(null);
@@ -100,10 +105,10 @@ export const ReadOnlySimulationView: React.FC<Props> = ({ projectId, die, config
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, flexWrap: 'wrap' }}>
-        <Typography variant="h6" sx={{ color: 'var(--text-0)', fontWeight: 700 }}>{t('simView.title')}</Typography>
-        <Tooltip title={t('simView.viewOnlyTip')}>
+        {!embedded && <Typography variant="h6" sx={{ color: 'var(--text-0)', fontWeight: 700 }}>{t('simView.title')}</Typography>}
+        {!embedded && <Tooltip title={t('simView.viewOnlyTip')}>
           <Chip label={t('simView.viewOnly')} size="small" sx={{ fontSize: 10, bgcolor: 'var(--panel-2)', color: 'var(--text-2)' }} />
-        </Tooltip>
+        </Tooltip>}
         {layout.chips && point && (
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.6, flexWrap: 'wrap' }}>
             <Tooltip title={t('simView.pointsTip')}>
@@ -135,7 +140,16 @@ export const ReadOnlySimulationView: React.FC<Props> = ({ projectId, die, config
 
       {run && (
         <>
-          <SummaryTable summary={derived?.run === run ? derived.s : ((run.summary as unknown as TransientSummary) ?? null)} readOnly />
+          {withField && point
+            ? <Box sx={{ display: 'flex', gap: 1.5, flexWrap: 'wrap', alignItems: 'flex-start' }} data-testid="results-with-field">
+              <Box sx={{ flex: '1 1 560px', minWidth: 0 }}>
+                <SummaryTable summary={derived?.run === run ? derived.s : ((run.summary as unknown as TransientSummary) ?? null)} readOnly />
+              </Box>
+              <Box sx={{ flex: '1 1 420px', minWidth: 0 }}>
+                <PointFieldPane projectId={projectId} die={die} config={config} duty={point} showAll={showAll} />
+              </Box>
+            </Box>
+            : <SummaryTable summary={derived?.run === run ? derived.s : ((run.summary as unknown as TransientSummary) ?? null)} readOnly />}
           <TransientCharts readOnly payloadOverride={run.payload ?? null} onSummary={(s) => setDerived({ run, s })} />
         </>
       )}

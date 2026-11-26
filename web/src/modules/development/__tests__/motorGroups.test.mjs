@@ -97,10 +97,10 @@ test('the table rows: a variant without results is ONE "not computed" row', () =
 });
 
 test('the page: one group header per variant, left column in one style, no blue link buttons, two-state view', () => {
-  assert.match(page, /headInGroups renderGroupHeader=\{\(r, index, _all, colSpan, headRow\) =>/);
-  // the motor name sits ABOVE the column names (owner 2026-11-09): the column row follows each group header
-  assert.match(page, /\{flags\.group && groupHeader\(r, colSpan\)\}\{flags\.group && headRow\}/);
-  assert.match(page, /rowAccent=\{\(r\) => motorColor\(r\.motor\)\}/);
+  // one header per variant, then the standard Simulation results table of the selected point with the field beside it (owner 2026-11-26)
+  assert.match(page, /\{header\(groupHeader\(r, 1\)\)\}/);
+  assert.match(page, /headerFlags\(rowMotors, index\)/);
+  assert.match(page, /bgcolor: motorColor\(r\.motor\)|motorColor\(r\.motor\)/);
   assert.match(page, /data-testid="variant-name"/);
   assert.match(page, /showAllVersions \? orderByGroup\(versions\) : latestAndRecommended\(versions\)/);
   // the old per-row left column (name + note on EVERY row, uppercase blue "history" link button) is gone
@@ -114,8 +114,8 @@ test('the page: one group header per variant, left column in one style, no blue 
   assert.match(page, /<ToggleButtonGroup exclusive size="small" value=\{showAllVersions \? 'all' : 'latest'\}/);
   assert.match(page, /<Tooltip title=\{tr\('versionView\.tip'\)\}>/);
   // note and status controls are in the group header (once), not repeated on every duty row
-  const rowEnd = page.slice(page.indexOf('renderRowEnd={(r) =>'), page.indexOf('renderRowEnd={(r) =>') + 700);
-  assert.doesNotMatch(rowEnd, /MotorNoteField|changeMotorStatus|setUnlinkTarget/);
+  const view = page.slice(page.indexOf('data-testid="project-motor-view"'), page.indexOf('data-testid="project-motor-view"') + 1400);
+  assert.doesNotMatch(view.slice(view.indexOf('<Stack direction="row" spacing={0.5}')), /MotorNoteField|changeMotorStatus|setUnlinkTarget/);
   for (const key of ['versionView.label', 'versionView.latest', 'versionView.all', 'versionView.tip', 'snapshots.details']) {
     assert.ok(get(en, key), `EN ${key}`); assert.ok(get(zh, key), `zh-CN ${key}`);
   }

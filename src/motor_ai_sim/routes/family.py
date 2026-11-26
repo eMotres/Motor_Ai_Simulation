@@ -1479,8 +1479,21 @@ def _restamp_results(c: dict, old_sig: str, new_sig: str) -> int:
 
 
 def _primary_drive(entry: dict) -> str:
-    """The excitation the duty's PRIMARY (top-level) snapshot was solved with."""
-    return _drive_of(None, entry.get("mesh"), entry.get("summary"))
+    """The excitation the duty's PRIMARY (top-level) snapshot was solved with.
+
+    The saved summary / mesh settings answer first.  A duty whose primary is a RESULT only (no summary, no mesh) has no such
+    witness: it keeps the excitation its result was recorded under in ``primary_drive`` (written by ``record_duty_result``
+    when a non-sine result became primary), so a second result of that same excitation can refresh it (Astra review of
+    #766).  Old rows without the key read exactly as before."""
+    s, m = entry.get("summary"), entry.get("mesh")
+    d = _drive_of(None, m, s)
+    stored = str(entry.get("primary_drive") or "").strip()
+    stated = any(x in _RUN_DRIVES for x in (
+        str(s.get("drive") or "").strip() if isinstance(s, dict) else "",
+        str(m.get("sim.drive") or "").strip() if isinstance(m, dict) else ""))
+    if not stated and stored in _RUN_DRIVES:
+        return stored
+    return d
 
 
 def _run_stem(duty: str) -> str:
@@ -4215,6 +4228,10 @@ def record_duty_result(req: DutyResult, _w: dict = Depends(require_catalog_write
     _drive = _drive_of(req.drive)
     if _drive == "current" or not found.get("result") or _drive == _primary_drive(found):
         found["result"] = res
+        if _drive != "current":
+            found["primary_drive"] = _drive           # the witness a result-only primary lacks (Astra review of #766)
+        else:
+            found.pop("primary_drive", None)
         _primary = True
     else:
         _primary = False

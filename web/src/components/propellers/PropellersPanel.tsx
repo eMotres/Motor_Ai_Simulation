@@ -14,6 +14,7 @@ import { useRememberedView } from '../../lib/useRememberedView';
 import { catalogRows } from '../../lib/propellersCatalog';
 import type { Quality } from '../../lib/propellersCatalog';
 import DesignerPage from './DesignerPage';
+import MissionPage from './MissionPage';
 import { useHelpContext } from '../support/useHelpContext';
 import { propellersHelp } from '../../lib/helpContexts';
 
@@ -25,7 +26,7 @@ const QUALITY_COLOR: Record<Quality, string> = {
 
 export default function PropellersPanel() {
   const { t } = useTranslation('simulation');
-  const [view, setView] = useRememberedView<'catalog' | 'designer'>('propellers.view', 'catalog', oneOf(['catalog', 'designer'] as const));
+  const [view, setView] = useRememberedView<'catalog' | 'designer' | 'mission'>('propellers.view', 'catalog', oneOf(['catalog', 'designer', 'mission'] as const));
   const [resp, setResp] = useState<unknown>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -48,9 +49,9 @@ export default function PropellersPanel() {
     <Box sx={{ height: '100%', overflow: 'auto' }} data-testid="propellers-panel">
       <Box sx={{ px: 2, pt: 1 }}>
         <SubTabs value={view} onChange={setView} ariaLabel={t('propTabCatalog')} testId="propellers-tabs"
-          items={[{ id: 'catalog', label: t('propTabCatalog') }, { id: 'designer', label: t('propTabDesigner') }]} />
+          items={[{ id: 'catalog', label: t('propTabCatalog') }, { id: 'designer', label: t('propTabDesigner') }, { id: 'mission', label: t('propTabMission') }]} />
       </Box>
-      {view === 'designer' ? <DesignerPage /> : (
+      {view === 'mission' ? <MissionPage /> : view === 'designer' ? <DesignerPage /> : (
       <Box sx={{ p: 2 }}>
       <Paper variant="outlined" sx={{ p: 1.5, borderColor: 'var(--line)' }}>
         <Typography variant="subtitle1" sx={{ fontWeight: 600, mb: 1 }}>{t('propellersCatalog', { count: rows.length })}</Typography>

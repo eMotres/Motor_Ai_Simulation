@@ -141,17 +141,10 @@ def test_the_background_job_routes_are_worker_paths():
         assert roles.is_worker_path(p), p
 
 
-#: Worker prefixes whose routes arrive in a stacked pull request (the Mission tab, routes/propellers.py): routing and the gate land
-#: first so the routes are never served ungated.  Remove the entry when those routes are merged.
-_ROUTES_PENDING = ("/api/propellers/mission",)
-
-
 def test_every_worker_prefix_names_real_routes(app_routes):
     paths = [r.path for r in app_routes]
     paths.append("/mcp")                       # mounted (a Starlette sub-app), not a FastAPI route
     for pfx in roles.WORKER_PREFIXES:
-        if pfx in _ROUTES_PENDING:
-            continue
         assert any(p == pfx or p.startswith(pfx + "/") for p in paths), "dead prefix %s" % pfx
     for ex in roles.WORKER_EXACT:
         assert ex in paths

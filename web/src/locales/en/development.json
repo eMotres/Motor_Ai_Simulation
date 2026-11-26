@@ -326,6 +326,13 @@
   "documents": {
     "loading": "Loading documents…",
     "upload": "Upload",
+    "uploadQueued": "Queued",
+    "uploadFailed": "Failed",
+    "uploadCancelled": "Cancelled",
+    "uploadCancel": "Cancel",
+    "uploadRetry": "Retry",
+    "uploadDismiss": "Remove",
+    "alreadyUploading": "{name}: already uploading",
     "uploading": "Uploading {name}…",
     "dropHere": "Drop files here",
     "all": "All",

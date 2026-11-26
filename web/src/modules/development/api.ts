@@ -1,3 +1,5 @@
+import { xhrPost, type XhrUploadOptions } from '../../lib/uploadXhr';
+import { serverErrorText } from '../../lib/uploadQueue';
 import type { CatalogController } from './controllerCatalog';
 import { parseActivity } from './stageBarModel';
 import { finalComparison } from '../../lib/resultsPanel';
@@ -78,14 +80,18 @@ export const developmentApi = {
   resolveMessage: (id: string, messageId: string, resolved: boolean) => call<ProjectThreadMessage>('POST', `${p(id)}/thread/${enc(messageId)}/resolve`, { resolved }),
   /** Documents of a project (production package files): KiCad, fabrication, BOM, 3-D models, drawings. */
   documents: (id: string, archived = false) => call<ProjectDocumentList>('GET', `${p(id)}/documents${archived ? '?archived=true' : ''}`),
-  uploadDocument: (id: string, file: File, o: { folder?: string; revision?: string; internal?: boolean; priceRestricted?: boolean } = {}) => {
+  /** With `progress` the file goes through XMLHttpRequest (bytes sent are reported, the request can be aborted); same errors as `call`. */
+  uploadDocument: async (id: string, file: File, o: { folder?: string; revision?: string; internal?: boolean; priceRestricted?: boolean } = {}, progress?: XhrUploadOptions) => {
     const form = new FormData();
     form.append('file', file, file.name);
     if (o.folder) form.append('folder', o.folder);
     if (o.revision) form.append('revision', o.revision);
     if (o.internal) form.append('internal', 'true');
     if (o.priceRestricted) form.append('price_restricted', 'true');
-    return call<ProjectDocument>('POST', `${p(id)}/documents`, form);
+    if (!progress) return call<ProjectDocument>('POST', `${p(id)}/documents`, form);
+    const r = await xhrPost(`${API}${p(id)}/documents`, form, progress);
+    if (r.status < 200 || r.status >= 300) throw new DevelopmentApiError(r.status, serverErrorText(r.status, r.body), r.body);
+    return r.body as ProjectDocument;
   },
   patchDocument: (id: string, docId: string, v: Partial<Pick<ProjectDocument, 'internal' | 'price_restricted' | 'folder' | 'revision'>> | { archived: false }) =>
     call<ProjectDocument>('PATCH', `${p(id)}/documents/${enc(docId)}`, v),

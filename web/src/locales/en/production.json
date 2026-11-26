@@ -308,6 +308,13 @@
   "docs": {
     "none": "No documents.",
     "upload": "Upload",
+    "uploadQueued": "Queued",
+    "uploadFailed": "Failed",
+    "uploadCancelled": "Cancelled",
+    "uploadCancel": "Cancel",
+    "uploadRetry": "Retry",
+    "uploadDismiss": "Remove",
+    "alreadyUploading": "{name}: already uploading",
     "forPart": "For part",
     "general": "General",
     "name": "File",

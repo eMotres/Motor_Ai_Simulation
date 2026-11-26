@@ -736,3 +736,90 @@ def test_failures_carry_parameters_for_a_translated_message():
     f = next(x for x in res["failures"] if x["rule"] == "tw_cont")
     assert f["params"]["limit"] == 9.0 and isinstance(f["params"]["value"], float)
     assert all("params" in x for x in res["failures"])
+
+
+# ================================================================ 80 mm drone (TASK_mission_drone80, 2026-11-26)
+def test_diameter_window_reaches_40_in():
+    cfg = pm.validate_inputs({"motor": {"die": "A", "config": "B"}, "airframe": {"min_diameter_in": 24.0, "max_diameter_in": 40.0}})
+    assert cfg["airframe"]["max_diameter_in"] == 40.0
+    with pytest.raises(pm.MissionError):
+        pm.validate_inputs({"motor": {"die": "A", "config": "B"}, "airframe": {"max_diameter_in": 41.0}})
+
+
+def test_catalogue_extension_below_the_test_is_opt_in_flagged_and_never_above():
+    base = {"motor": {"die": "A", "config": "B"}, "airframe": {"min_diameter_in": 24.0, "max_diameter_in": 40.0}}
+    off = pm.catalogue_candidates(pm.validate_inputs(base), 1.225)
+    on = pm.catalogue_candidates(pm.validate_inputs({**base, "candidates": {"extend_below": 0.4}}), 1.225)
+    assert off and len(off) == len(on)
+    for a, b in zip(off, on):
+        lo, hi = a["tested_rpm"]
+        assert "extrapolated_below_test" not in a["flags"] and a["rows"][0][0] == pytest.approx(lo)
+        assert "extrapolated_below_test" in b["flags"]
+        assert b["rows"][0][0] == pytest.approx(0.6 * lo) and max(r[0] for r in b["rows"]) <= hi + 1e-9
+        assert b["rows"][-len(a["rows"]):] == a["rows"]                       # the tested part is unchanged
+        r0 = b["rows"][0]                                                      # constant coefficients: T, Q ~ rpm^2
+        assert r0[1] / a["rows"][0][1] == pytest.approx(0.36) and r0[2] / a["rows"][0][2] == pytest.approx(0.36)
+
+
+def test_own_family_outside_the_window_is_reported(stub):
+    raw, _ = pma.load_raw_model("TEST DIE", "L1", ACCESS)
+    cfg = pma.validate(_body(airframe={"min_diameter_in": 24.0, "max_diameter_in": 40.0}, candidates={"catalogue": True, "own": True}))
+    res = pm.run_selection(cfg, raw)
+    assert res["own_family"]["in_window"] == 0 and res["own_family"]["requested"] is True and res["refined"] == []
+
+
+def _duties():
+    cool = {"outer": {"mode": "air", "h_conv": 30.7, "t_sink_c": 40.0, "air_speed_mps": 5.33, "area_m2": 0.0048},
+            "end_windings": {"h_conv": 122.3, "area_m2": 0.00458}, "slot_channels": {"h_conv": 28.3, "area_m2": 0.00274},
+            "end_faces": {"rotor": {"G_W_per_K": 0.041}, "magnet": {"G_W_per_K": 0.055}}}
+
+    def coupled(i, t, cu, fe, solid, coil):
+        return {"point": {"rpm": 2647.0, "I_phase_rms": i, "gamma_deg": 3.7}, "converged": True, "runaway": False,
+                "em": {"T_em_avg_Nm": t, "P_stranded_W": cu, "P_core_W": fe, "P_solid_W": solid}, "coil_temp_c": coil, "magnet_temp_c": coil - 6,
+                "geometry_fingerprint": "fp-test"}
+    return {"hover_11A": {"coupled": coupled(11.0, 1.542, 21.0, 7.6, 3.0, 74.0), "em_run": {"summary": {"R_phase_ohm": 0.0556, "end_winding_factor": 2.078}},
+                          "thermal": {"state": "steady", "cooling": cool}},
+            "lim_30A": {"coupled": coupled(30.0, 4.10, 150.0, 8.5, 6.0, 160.0)},
+            "noload_3000": {"em_run": {"summary": {"KV_noload_rpm_per_V_line": 81.1}}}}
+
+
+def test_a_configuration_model_from_its_stored_duties():
+    raw, info = pm.duties_model("CIANO28 80 x", "L12", _duties(), od_mm=80.0, stack_mm=12.0, k3d=0.9227)
+    m = s1.validate_model(raw)
+    assert info["kind"] == pm.KIND_DUTIES and info["R_phase_ohm"] == 0.0556 and info["end_winding_factor"] == 2.078
+    assert info["kv_rpm_per_V"] == pytest.approx(81.1 / 0.9227)                    # Kv divided by the 3-D factor
+    t11 = pm._interp(m["grid"]["I_A"], m["grid"]["T_Nm"][0], 11.0)
+    assert t11 == pytest.approx(1.542 * 0.9227, rel=1e-6)                           # torque x k3d at the stored current
+    assert "from_stored_duties" in info["flags"] and raw["estimate"]["label"] == pm.DUTIES_LABEL
+    # the open-frame paths were fitted on the stored map: the network reproduces the stored winding temperature at that point
+    cal = raw["thermal_calibration"]
+    a = info["thermal_anchor"]
+    h = s1.housing_film(5.33, 40.0, 0.08)
+    tw = s1.temperatures(raw["thermal_geom"], 21.0, 3.0, 31.6, h, 40.0, cal)["winding"]
+    assert tw == pytest.approx(74.0, abs=0.05) and a["winding_area_scale"] is not None
+    # without the fit (the plain network) the same point reads hotter: the fit is what moves it toward the coupled FEM
+    assert s1.temperatures(raw["thermal_geom"], 21.0, 3.0, 31.6, h, 40.0, None)["winding"] > 74.0
+
+
+def test_too_few_duties_is_refused_with_the_reason():
+    d = _duties()
+    d.pop("lim_30A")
+    with pytest.raises(pm.MissionError) as e:
+        pm.duties_model("D", "C", d, od_mm=80.0, stack_mm=12.0)
+    assert "two stored coupled duties" in str(e.value)
+
+
+def test_duties_source_is_access_checked_and_resolved(stub, monkeypatch):
+    monkeypatch.setattr(pma, "_die_size", lambda die, cfg: (80.0, 12.0))
+    monkeypatch.setattr(pma, "_k3d_of", lambda duties, L: 0.9227)
+    import motor_ai_sim.duty_results as dr
+    monkeypatch.setattr(dr, "get", lambda die, cfg: _duties())
+    cfg = pma.validate(_body(motor={"die": "D80", "config": "L12", "source": "duties"}))
+    raw, info = pma.resolve_motor(cfg, [], ACCESS)
+    assert info["kind"] == pm.KIND_DUTIES and info["die"] == "D80" and info["model_sha256"]
+    hidden = {**ACCESS, "hide": ("D80",)}
+    with pytest.raises(pm.MissionError) as e:
+        pma.resolve_motor(cfg, [], hidden)
+    assert "no stored duties" in str(e.value)
+    res = pm.run_selection(cfg, raw)                                               # the model runs end to end
+    assert res["results"] and res["results"][0]["objectives"] is not None

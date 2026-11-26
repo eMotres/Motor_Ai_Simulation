@@ -673,5 +673,10 @@
   "propMissionPointReason_nonconverged": "电机与电池电压未收敛。",
   "propMissionPointReason_thrust_outside_curve": "螺旋桨曲线达不到所需推力。",
   "propMissionPointReason_drive_bus_window": "负载电池电压 {V} V 超出控制器母线范围。",
-  "propMissionPointReason_other": "无法达到该工作点。"
+  "propMissionPointReason_other": "无法达到该工作点。",
+  "propMissionOwnOutside": "自有螺旋桨系列覆盖 {lo}–{hi} 英寸，不在直径范围内：此处不进行自有螺旋桨优化，只对目录螺旋桨排序。",
+  "propMissionExtendBelow": "试验以下曲线，%",
+  "propMissionExtendBelowTip": "按此比例将目录曲线延伸到最低试验转速以下，沿用最低试验行的推力和扭矩系数（外推，有标记）。0 = 关闭；不超过最高试验转速。",
+  "propMissionFlag_extrapolated_below_test": "曲线在最低试验转速 {rpm} rpm 以下为外推（系数不变）；该转速以下的点为估算。",
+  "propMissionKind_duties": "基于已存工况的估算"
 }

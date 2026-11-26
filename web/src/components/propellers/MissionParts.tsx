@@ -67,7 +67,7 @@ export function MCheck({ label, tip, checked, onChange }: { label: string; tip?:
 
 export function KindChip({ kind }: { kind: MotorEntry['kind'] }) {
   const { t } = useTranslation('simulation');
-  const color = kind === 's1' ? 'success' : kind === 'estimate' ? 'warning' : 'default';
+  const color = kind === 's1' ? 'success' : kind === 'estimate' || kind === 'duties' ? 'warning' : 'default';
   return <Chip size="small" color={color} variant="outlined" label={t(`propMissionKind_${kind}`)} sx={{ fontSize: 10, height: 18 }} />;
 }
 
@@ -102,7 +102,7 @@ export function MotorPicker({ motors, value, onChange }: { motors: MotorEntry[];
           <KvGrid items={[[t('propMissionModel'), t(`propMissionKind_${chosen.kind}`)], ['Kv, rpm/V', chosen.kv_rpm_per_V != null ? fmt(chosen.kv_rpm_per_V, 0) : null],
             ['R, mΩ', chosen.R_phase_ohm != null ? fmt(chosen.R_phase_ohm * 1000, 1) : null], [t('propMissionPoles'), chosen.pole_pairs != null ? fmt(chosen.pole_pairs * 2, 0) : null],
             ['kg', chosen.mass_kg != null ? fmt(chosen.mass_kg, 2) : null], [`${t('propMissionPeak')}, A`, chosen.I_peak_A != null ? fmt(chosen.I_peak_A, 0) : null]]} />
-          {chosen.kind === 'estimate' && <Alert severity="warning" sx={{ py: 0, mt: 0.5, fontSize: 11 }}>{t('propMissionEstimateWarn')}</Alert>}
+          {(chosen.kind === 'estimate' || chosen.kind === 'duties') && <Alert severity="warning" sx={{ py: 0, mt: 0.5, fontSize: 11 }}>{t('propMissionEstimateWarn')}</Alert>}
           {chosen.kind === 'none' && <Alert severity="error" sx={{ py: 0, mt: 0.5, fontSize: 11 }}>{chosen.reason}</Alert>}
         </Box>
       )}
@@ -243,6 +243,11 @@ export function RowDetails({ row, alternatives }: { row: CandidateResult | null;
             <Alert severity="error" sx={{ py: 0, mb: 0.5, fontSize: 12 }}>{t(`propMissionRule_${f.rule}`, { defaultValue: f.rule })}</Alert>
           </Tooltip>
         ))}
+        {(row.flags ?? []).includes('extrapolated_below_test') && (
+          <Alert severity="warning" sx={{ py: 0, mb: 0.5, fontSize: 12 }} data-testid="mission-extrapolated">
+            {t('propMissionFlag_extrapolated_below_test', { rpm: Math.round(row.tested_rpm?.[0] ?? 0) })}
+          </Alert>
+        )}
         {row.strip && (row.strip.low_stock || row.strip.check) && (
           <Alert severity="warning" sx={{ py: 0, mb: 0.5, fontSize: 11 }}>
             {[row.strip.low_stock ? t('propMissionStripLow', { kg: row.strip.stock_kg }) : '', row.strip.check ? t('propMissionStripCheck') : ''].filter(Boolean).join(' ')}

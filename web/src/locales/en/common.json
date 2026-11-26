@@ -18,6 +18,7 @@
     "controller": "Controller",
     "schemas": "Schemas",
     "propellers": "Propellers",
+    "gears": "Gears",
     "sweep": "Optimization",
     "comparePoints": "Compare",
     "cost": "Cost",

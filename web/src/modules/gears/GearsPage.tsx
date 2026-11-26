@@ -18,12 +18,13 @@ import Limitations from './components/Limitations';
 import OperatingEditor from './components/OperatingEditor';
 import Results from './components/Results';
 import SpectrumEditor from './components/SpectrumEditor';
+import MotorPanel, { type SavedRefLite } from './components/MotorPanel';
 import SavedPanel from './components/SavedPanel';
 import StageEditor from './components/StageEditor';
 import { EditorFromRequestError, editorFromRequest, responseToShow } from './saved';
 import { Lbl, StateChip } from './components/parts';
 
-const TABS = ['point', 'spectrum', 'assembly'] as const;
+const TABS = ['point', 'spectrum', 'assembly', 'motor'] as const;
 type Tab = typeof TABS[number];
 
 interface Ran<R> { response: GearboxResponse<R>; key: string }
@@ -40,6 +41,7 @@ export default function GearsPage() {
   const [failure, setFailure] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const abort = useRef<AbortController | null>(null);
+  const [openRecord_, setOpenRecord] = useState<SavedRefLite | null>(null);
 
   useEffect(() => {
     const ctl = new AbortController();
@@ -48,7 +50,7 @@ export default function GearsPage() {
   }, []);
   useEffect(() => () => abort.current?.abort(), []);
 
-  const keyOf = useCallback((op: Tab) => JSON.stringify(toPlainBody(state, op === 'assembly' ? 'assembly' : op)), [state]);
+  const keyOf = useCallback((op: Exclude<Tab, 'motor'>) => JSON.stringify(toPlainBody(state, op === 'assembly' ? 'assembly' : op)), [state]);
   const fieldErrors = useMemo(() => errorMap(errors), [errors]);
 
   const fail = (e: unknown) => {
@@ -58,6 +60,7 @@ export default function GearsPage() {
   };
 
   const run = async () => {
+    if (tab === 'motor') return;
     abort.current?.abort();
     const ctl = new AbortController(); abort.current = ctl;
     setBusy(true); setErrors([]); setFailure(null);
@@ -100,7 +103,7 @@ export default function GearsPage() {
   };
 
   const shown = tab === 'point' ? point : tab === 'spectrum' ? spectrum : null;
-  const stale = (ran: Ran<unknown> | null) => !!ran && ran.key !== keyOf(tab);
+  const stale = (ran: Ran<unknown> | null) => !!ran && tab !== 'motor' && ran.key !== keyOf(tab);
 
   return (
     <Box data-testid="gears-page" sx={{ height: '100%', overflow: 'auto', p: 2 }}>
@@ -116,7 +119,7 @@ export default function GearsPage() {
       )}
       <Box sx={{ display: 'grid', gap: 2, gridTemplateColumns: { xs: '1fr', lg: 'minmax(460px, 5fr) 6fr' }, alignItems: 'start' }}>
         <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5, minWidth: 0 }}>
-          <SavedPanel name={state.name} onName={(name) => setState({ ...state, name })} buildSave={buildSave} onOpen={openRecord} />
+          <SavedPanel name={state.name} onName={(name) => setState({ ...state, name })} buildSave={buildSave} onOpen={openRecord} onRef={setOpenRecord} />
           <OperatingEditor state={state} onChange={setState} errors={fieldErrors} catalogues={catalogues} />
           <StageEditor state={state} onChange={setState} errors={fieldErrors} catalogues={catalogues} />
         </Box>
@@ -124,12 +127,14 @@ export default function GearsPage() {
           <Box sx={{ display: 'flex', gap: 1, alignItems: 'center', flexWrap: 'wrap' }}>
             <SubTabs<Tab> value={tab} onChange={setTab} ariaLabel={t('l.title')} testId="gears-tabs"
               items={TABS.map((id) => ({ id, label: t(`tab.${id}`), tip: t(`tip.tab_${id}`) }))} />
-            <Button size="small" variant="contained" onClick={run} disabled={busy} data-testid="gears-run">{t(tab === 'assembly' ? 'l.build' : 'l.calculate')}</Button>
+            {tab !== 'motor' && <Button size="small" variant="contained" onClick={run} disabled={busy} data-testid="gears-run">{t(tab === 'assembly' ? 'l.build' : 'l.calculate')}</Button>}
             {busy && <CircularProgress size={16} />}
-            {(tab === 'assembly' ? stale(assembly) : stale(shown)) && <StateChip state="estimated" label={t('state.stale')} />}
+            {tab !== 'motor' && (tab === 'assembly' ? stale(assembly) : stale(shown)) && <StateChip state="estimated" label={t('state.stale')} />}
           </Box>
           {tab === 'spectrum' && <SpectrumEditor value={state.spectrum} onChange={(v) => setState({ ...state, spectrum: v })} errors={fieldErrors} />}
-          {tab === 'assembly'
+          {tab === 'motor'
+            ? <MotorPanel buildInline={() => gearsApi.template(toPlainBody(state, 'point'))} saved={openRecord_} />
+            : tab === 'assembly'
             ? <AssemblyView assembly={assembly?.response.result ?? null} sourceKey={`gears:${assembly?.response.request_hash ?? 'none'}`} busy={busy} />
             : shown ? <Results result={shown.response.result} isPoint={tab === 'point'} />
               : <Typography sx={{ fontSize: 13, color: 'var(--text-3)' }}>{t('noResult')}</Typography>}

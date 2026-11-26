@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """The canonical machine fingerprint (2026-11-25): a geometry key added after the 2026-10-20 baseline, at its default value, does
-not change ``routes.simulation._geometry_fingerprint``; the legacy49 print (every key) stays available as an alias that every reader
+not change the canonical print (``routes.simulation._geometry_fingerprints()[0]``); the legacy49 print (every key) stays available as an alias that every reader
 of a stored fingerprint accepts; a non-default value and a real mismatch still move it."""
 from __future__ import annotations
 
@@ -14,6 +14,11 @@ from motor_ai_sim import geo_fingerprint as GF
 from motor_ai_sim.routes import simulation as S
 
 DEFAULTS = {"wire_omit": 0.0, "k_end_by_turns": 0.0, "magnet_flat": 0.0, "magnet_pocket_clearance": 0.0}
+
+
+def _canonical(ov=None) -> str:
+    """The canonical print (what writers store from stage 2 on, ``geo_fingerprint.WRITE_CANONICAL``)."""
+    return S._geometry_fingerprints(ov)[0]
 
 
 def _md5(d) -> str:
@@ -53,10 +58,10 @@ def test_a_machine_at_defaults_has_the_fingerprint_it_had_before_the_four_keys(m
     state["glive"] = {**base, **DEFAULTS}                                    # what the 2026-11-15 code hashes (49 keys on a catalogue machine)
     legacy49 = _md5({"g": state["g"], "glive": state["glive"]})
     assert S._geometry_fingerprint_legacy(None) == legacy49 and legacy49 != old
-    assert S._geometry_fingerprint(None) == old                              # canonical == the old fingerprint
+    assert _canonical(None) == old                              # canonical == the old fingerprint
     # defaults spelt differently (None, "", 0, False) are the same machine
     state["glive"] = {**base, "wire_omit": None, "k_end_by_turns": 0, "magnet_flat": False, "magnet_pocket_clearance": ""}
-    assert S._geometry_fingerprint(None) == old
+    assert _canonical(None) == old
 
 
 def test_the_alias_is_accepted_both_ways(machine):
@@ -73,28 +78,28 @@ def test_the_alias_is_accepted_both_ways(machine):
 
 def test_wire_bore_margin_unset_is_dropped_and_any_value_counts(machine):
     base, state = machine
-    old = S._geometry_fingerprint(None)
+    old = _canonical(None)
     state["glive"] = {**base, "wire_bore_margin": None}
-    assert S._geometry_fingerprint(None) == old
+    assert _canonical(None) == old
     state["glive"] = {**base, "wire_bore_margin": 0.0}                       # a stated zero margin is a statement, not "unset"
-    assert S._geometry_fingerprint(None) != old
+    assert _canonical(None) != old
 
 
 def test_a_non_default_new_key_changes_the_canonical_fingerprint(machine):
     base, state = machine
-    old = S._geometry_fingerprint(None)
+    old = _canonical(None)
     for k, v in (("magnet_pocket_clearance", 0.035), ("magnet_flat", 1), ("wire_omit", 2), ("k_end_by_turns", 1)):
         state["glive"] = {**base, **DEFAULTS, k: v}
         state["g"] = {**base, **DEFAULTS, k: v}
-        assert S._geometry_fingerprint(None) != old, k
+        assert _canonical(None) != old, k
         assert GF.canonical_geometry(state["glive"])[k] == v
 
 
 def test_a_real_value_mismatch_still_mismatches(machine):
     base, state = machine
-    a = S._geometry_fingerprint(None)
+    a = _canonical(None)
     state["glive"] = {**base, "stator_diameter": float(base["stator_diameter"]) + 1.0}
-    assert S._geometry_fingerprint(None) != a
+    assert _canonical(None) != a
     canon, legacy = S._geometry_fingerprints(None)
     assert not GF.same(a, canon) and not GF.same(a, legacy)
 
@@ -105,16 +110,16 @@ def test_the_geo_override_path_is_consistent(machine):
     state["g"], state["glive"] = {**base, **DEFAULTS}, {**base, **DEFAULTS}
     ov = {"tooth_width": float(base["tooth_width"]) + 0.2}
     expected_old = _md5({"g": base, "glive": merge_geo_override(dict(base), dict(ov))})   # the 2026-10-20 function on the override
-    assert S._geometry_fingerprint(ov) == expected_old
+    assert _canonical(ov) == expected_old
     assert S._geometry_fingerprint_legacy(ov) != expected_old
     # ov == live resolves to the no-override fingerprint (canonical AND legacy)
     full = {**base, **DEFAULTS}
-    assert S._geometry_fingerprint(full) == S._geometry_fingerprint(None)
+    assert _canonical(full) == _canonical(None)
     assert S._geometry_fingerprint_legacy(full) == S._geometry_fingerprint_legacy(None)
     # an override carrying a default key resolves like one without it; a non-default one is another machine
-    assert S._geometry_fingerprint({**ov, "magnet_flat": 0}) == expected_old
-    assert S._geometry_fingerprint({**ov, "magnet_pocket_clearance": 0.035}) != expected_old
-    assert GF.same(S._geometry_fingerprint_legacy(ov), S._geometry_fingerprint(ov), ov)
+    assert _canonical({**ov, "magnet_flat": 0}) == expected_old
+    assert _canonical({**ov, "magnet_pocket_clearance": 0.035}) != expected_old
+    assert GF.same(S._geometry_fingerprint_legacy(ov), _canonical(ov), ov)
 
 
 def test_a_new_geometry_key_must_be_registered_on_purpose():
@@ -203,3 +208,86 @@ def test_the_match_list_script_counts_and_writes_nothing(tmp_path, machine, caps
     assert {p: p.read_bytes() for p in sorted(tmp_path.rglob("*")) if p.is_file()} == snap     # byte-identical, nothing created
     assert sorted(p for p in tmp_path.rglob("*") if p.is_dir()) == dirs
     assert mod.main(["--root", str(tmp_path / "nope")]) == 2
+
+
+# ── review of #891 (2026-11-26): one snapshot, staged writer, symmetric readers, the measured k_T reader ─────────────────────
+def test_stage_1_writers_keep_the_print_of_the_build_before(machine, monkeypatch):
+    """Stage 1: ``_geometry_fingerprint`` (what every writer stores) is bit-identical to the function before this PR (every key
+    hashed), so a process of the previous build reads what this one writes; stage 2 switches to the canonical print."""
+    base, state = machine
+    state["g"], state["glive"] = {**base, **DEFAULTS}, {**base, **DEFAULTS}
+    before = _md5({"g": state["g"], "glive": state["glive"]})
+    assert GF.WRITE_CANONICAL is False
+    assert S._geometry_fingerprint(None) == before == S._geometry_fingerprint_legacy(None)
+    ov = {"tooth_width": float(base["tooth_width"]) + 0.2}
+    from motor_ai_sim.simulation.geometry_2d import merge_geo_override
+    assert S._geometry_fingerprint(ov) == _md5({"g": state["g"], "glive": merge_geo_override(dict(state["glive"]), dict(ov))})
+    monkeypatch.setattr(GF, "WRITE_CANONICAL", True)
+    assert S._geometry_fingerprint(None) == _canonical(None) != before
+
+
+def test_both_prints_come_from_one_snapshot(machine, monkeypatch):
+    """A geometry change between the two hashes must not link canonical(A) to legacy(B) (review P1 #1)."""
+    from motor_ai_sim.services import geometry_service as GS
+    base, state = machine
+    a = {**base, **DEFAULTS, "stator_diameter": 80.0}
+    b = {**base, **DEFAULTS, "stator_diameter": 120.0}
+    state["g"], state["glive"] = dict(a), dict(a)
+    canon_a, legacy_a = S._geometry_fingerprints(None)
+    state["glive"] = dict(b)
+    canon_b, legacy_b = S._geometry_fingerprints(None)
+    GF._BOOK.clear()
+    reads = iter([a, b, b, b, b, b])
+    monkeypatch.setattr(GS, "get_current_geometry", lambda *x, **k: _Geo(next(reads)))
+    got = S._geometry_fingerprints(None)                                   # ONE read of the live object: machine A
+    assert got == (canon_a, legacy_a)
+    assert not GF.same(legacy_b, canon_a) and not GF.same(canon_a, legacy_b)
+    assert legacy_b not in GF.accepted(canon_a) and canon_b != canon_a
+
+
+def test_the_alias_book_is_symmetric(machine):
+    base, state = machine
+    state["g"], state["glive"] = {**base, **DEFAULTS}, {**base, **DEFAULTS}
+    canon, legacy = S._geometry_fingerprints(None)
+    assert canon in GF.accepted(legacy) and legacy in GF.accepted(canon)
+    assert canon in GF.aliases(legacy) and legacy in GF.aliases(canon)
+    GF._BOOK.clear()
+    assert canon in GF.accepted(legacy)                                    # resolved from the live machine in a fresh process
+
+
+def _kT_record(fp):
+    return {"fingerprint": fp, "k_T": 0.83, "slots": 12, "poles": 14, "od_mm": 80.0, "stack_mm": 40.0, "source": "synthetic"}
+
+
+@pytest.mark.parametrize("stored_as", ["legacy", "canonical"])
+def test_a_measured_k_T_keyed_by_either_print_is_an_exact_match(machine, monkeypatch, stored_as):
+    """Review P1 #2: ``end3d_factors.measured_k_T`` matches a record keyed by the equivalent print, without geometry."""
+    from motor_ai_sim import end3d_factors as F
+    base, state = machine
+    state["g"], state["glive"] = {**base, **DEFAULTS}, {**base, **DEFAULTS}
+    canon, legacy = S._geometry_fingerprints(None)
+    stored, asked = (legacy, canon) if stored_as == "legacy" else (canon, legacy)
+    monkeypatch.setattr(F, "_records", lambda: [_kT_record(stored)])
+    for book_known in (True, False):
+        if not book_known:
+            GF._BOOK.clear()
+        m = F.measured_k_T(asked)
+        assert m and m["k_T"] == 0.83 and m["inherited"] is False, (stored_as, book_known)
+    assert F.measured_k_T("0123456789abcdef") is None
+
+
+def test_the_enrich_path_keeps_the_measured_k_T_of_a_legacy_record(machine, monkeypatch):
+    """``_end3d_lookup`` finds the legacy passport AND ``enrich`` keeps the exact measured k_T recorded under the legacy print."""
+    from motor_ai_sim import end3d_factors as F
+    from motor_ai_sim import end3d_store
+    base, state = machine
+    state["g"], state["glive"] = {**base, **DEFAULTS}, {**base, **DEFAULTS}
+    canon, legacy = S._geometry_fingerprints(None)
+    monkeypatch.setattr(F, "_records", lambda: [_kT_record(legacy)])
+    monkeypatch.setattr(end3d_store, "load", lambda: {legacy: {"k_flux": 0.93, "machine": "x", "stack_mm": 40.0}})
+    for live in (canon, legacy):
+        GF._BOOK.clear()
+        got = S._end3d_lookup(live, None, exact=True)
+        assert got is not None and got.get("k_flux") == 0.93
+        assert got.get("k_T") == 0.83 and not got.get("k_T_inherited"), live
+        assert F.torque_factor(got) == (0.83, F.BASIS_MEASURED)

@@ -6,12 +6,14 @@ object}``.  On 2026-11-15 the geometry object gained four keys at their DEFAULT 
 that day stopped matching the SAME machine (45 vs 49 keys).  RULE (owner / coordinator 2026-11-25): a geometry key added after
 the 2026-10-20 baseline, at its default value, does not change the fingerprint.
 
-* ``canonical_geometry`` drops those keys when they equal their default; ``routes.simulation._geometry_fingerprint`` hashes the
-  canonical form (writers write it from now on) and reproduces the pre-2026-11-15 fingerprint for a machine at defaults.
-* ``legacy49`` (``_geometry_fingerprint_legacy``) is today's function, every key kept: records written between 2026-11-15 and
-  now carry it.
-* a reader that matches a stored fingerprint against the live one accepts either (``same`` / ``accepted``).  Nothing stored is
-  rewritten.
+* ``canonical_geometry`` drops those keys when they equal their default; the canonical print reproduces the pre-2026-11-15
+  fingerprint for a machine at defaults.
+* ``legacy49`` is the print with every key kept: records written since 2026-11-15 carry it.
+* both are hashed from ONE snapshot of the geometry (``routes.simulation._geometry_fingerprint_pair``) and registered as
+  equivalent; a reader that matches a stored fingerprint against the live one accepts either (``same`` / ``accepted``).
+  Nothing stored is rewritten.
+* writers keep storing legacy49 until ``WRITE_CANONICAL`` is switched on in a later deploy (see that constant and
+  ``docs/GEO_FINGERPRINT_ROLLOUT_2026-11-26.md``).
 
 A NEW geometry key must be registered consciously: ``KNOWN_POST_BASELINE`` lists every key the live object may carry beyond
 the baseline set; ``tests/test_geo_fingerprint.py`` fails when ``get_current_geometry().to_dict()`` gains a key that is in
@@ -82,45 +84,61 @@ def canonical_geometry(geo: Optional[Mapping[str, Any]]) -> Optional[Dict[str, A
     return {k: v for k, v in dict(geo).items() if not (k in POST_BASELINE_KEYS and _is_default(k, v))}
 
 
-# ── the alias book: canonical fingerprint -> the legacy ones computed for the same machine in this process ──────────────
-_BOOK: "OrderedDict[str, tuple]" = OrderedDict()
-_BOOK_MAX = 512
+#: Staged rollout (review of PR #891, 2026-11-26).  During a deploy the API and the worker may run different builds for a few
+#: minutes, and a build before this one compares the legacy49 print LITERALLY.  Stage 1 (this build): writers keep writing the
+#: legacy49 print (bit-identical to the build before), readers accept both prints.  Stage 2 (a LATER deploy, once no process of
+#: a build without these readers is left): set this True and writers store the canonical print.  Readers need no change then.
+WRITE_CANONICAL = False
+
+
+# ── the alias book: every fingerprint -> the group of fingerprints computed for the SAME machine (one geometry snapshot) in
+# this process.  Symmetric: canonical -> legacy49 and legacy49 -> canonical. ───────────────────────────────────────────────
+_BOOK: "OrderedDict[str, frozenset]" = OrderedDict()
+_BOOK_MAX = 1024
 _LOCK = threading.Lock()
 
 
 def register(canonical: str, legacy: str) -> None:
+    """Record two prints of ONE machine as equivalent.  Callers derive both from one snapshot of its geometry."""
     if not canonical or not legacy or canonical == legacy:
         return
     with _LOCK:
-        have = _BOOK.pop(canonical, ())
-        _BOOK[canonical] = tuple(sorted(set(have) | {legacy}))
+        group = set(_BOOK.pop(canonical, ())) | set(_BOOK.pop(legacy, ())) | {canonical, legacy}
+        frozen = frozenset(group)
+        for k in group:
+            _BOOK.pop(k, None)
+            _BOOK[k] = frozen
         while len(_BOOK) > _BOOK_MAX:
             _BOOK.popitem(last=False)
 
 
 def aliases(fp: Optional[str]) -> tuple:
+    """The OTHER prints known for the machine of ``fp`` (canonical or legacy49), sorted; empty when none is known."""
+    if not fp:
+        return ()
     with _LOCK:
-        return _BOOK.get(str(fp), ()) if fp else ()
+        return tuple(sorted(_BOOK.get(str(fp), frozenset()) - {str(fp)}))
 
 
 def accepted(fp: Optional[str], live_fp_for: Optional[Any] = None) -> List[str]:
-    """``[canonical, *legacy aliases]`` for ``fp`` (a canonical fingerprint of a machine this process has fingerprinted).  When the
+    """``[fp, *its equivalent prints]`` for ``fp`` (canonical or legacy49 of a machine this process has fingerprinted).  When the
     book does not know ``fp`` yet, ``live_fp_for`` (``None`` = the machine loaded now, or a geometry override dict) is
-    fingerprinted first, which registers the pair if ``fp`` is that machine's."""
+    fingerprinted first, which registers the pair if ``fp`` is one of that machine's prints."""
     if not fp:
         return []
     fp = str(fp)
     if not aliases(fp):
         try:
-            from motor_ai_sim.routes.simulation import _geometry_fingerprint
-            _geometry_fingerprint(live_fp_for if isinstance(live_fp_for, dict) else None)
-        except Exception:                                         # noqa: BLE001 - no machine to resolve: canonical only
+            from motor_ai_sim.routes.simulation import _geometry_fingerprint_pair
+            _geometry_fingerprint_pair(live_fp_for if isinstance(live_fp_for, dict) else None)
+        except Exception:                                         # noqa: BLE001 - no machine to resolve: this print only
             pass
     return [fp, *aliases(fp)]
 
 
 def same(stored: Optional[str], live: Optional[str], geo_override: Optional[dict] = None) -> bool:
-    """Is the STORED fingerprint the machine whose canonical fingerprint is ``live``?  Equal, or the stored one is its legacy49."""
+    """Is the STORED fingerprint the machine whose live fingerprint is ``live``?  Equal, or one is the other's equivalent print
+    (canonical <-> legacy49), in either direction."""
     if not stored or not live:
         return False
     if str(stored) == str(live):

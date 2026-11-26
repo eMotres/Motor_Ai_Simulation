@@ -1521,28 +1521,62 @@ def _geo_fp_module():
 
 
 def _geometry_fingerprint(geo_override: Optional[dict] = None) -> str:
-    """The CANONICAL machine fingerprint (``geo_fingerprint``): the legacy hash with the geometry keys added after the 2026-10-20
-    baseline left out while they sit at their default, so a machine at defaults has the fingerprint it had before 2026-11-15.
-    Writers store this one.  The pair (canonical, legacy49) is recorded so a reader accepts a stored legacy one
-    (``geo_fingerprint.same``)."""
-    fp = _geometry_fingerprint_impl(geo_override, True)
-    leg = _geometry_fingerprint_impl(geo_override, False)
-    _geo_fp_module().register(fp, leg)
-    return fp
+    """The machine fingerprint WRITERS store and readers compare against (``geo_fingerprint``, staged rollout).
+
+    Stage 1 (``geo_fingerprint.WRITE_CANONICAL`` False, this build): the legacy49 hash, every key kept - bit-identical to the
+    print of the build before, so an API and a worker of the previous build that run beside this one during a deploy keep
+    understanding every record this build writes.  Stage 2 (a later deploy, after no process of the old build is left): the
+    canonical hash (post-baseline keys at their default left out = the pre-2026-11-15 print of a machine at defaults).
+    Both prints are derived from ONE snapshot of the geometry and recorded as equivalents, so a reader accepts a stored
+    record carrying either (``geo_fingerprint.same`` / ``accepted``)."""
+    c, leg = _geometry_fingerprint_pair(geo_override)
+    return c if _geo_fp_module().WRITE_CANONICAL else leg
 
 
 def _geometry_fingerprint_legacy(geo_override: Optional[dict] = None) -> str:
-    """Today's (2026-11-15 .. 2026-11-25) fingerprint, every key hashed: what records of that period carry (``legacy49``)."""
-    return _geometry_fingerprint_impl(geo_override, False)
+    """The 2026-11-15 .. fingerprint with every key hashed (``legacy49``)."""
+    return _geometry_fingerprint_pair(geo_override)[1]
 
 
 def _geometry_fingerprints(geo_override: Optional[dict] = None) -> tuple:
-    """``(canonical, legacy49)`` of a machine, the accepted set of a reader (equal when no default key was dropped)."""
-    c = _geometry_fingerprint(geo_override)
-    return c, _geometry_fingerprint_legacy(geo_override)
+    """``(canonical, legacy49)`` of a machine from ONE snapshot of its geometry (equal when no default key was dropped)."""
+    return _geometry_fingerprint_pair(geo_override)
 
 
-def _geometry_fingerprint_impl(geo_override: Optional[dict] = None, canonical: bool = True) -> str:
+def _geometry_snapshot():
+    """``(config geometry block, live geometry dict or None)`` read ONCE and copied, so every print derived from it describes
+    the same machine even when the geometry changes while they are computed (no alias between two different machines)."""
+    import copy as _cp
+    from motor_ai_sim.config import get_config as _gc
+    g = (_gc() or {}).get("geometry")
+    try:
+        from motor_ai_sim.services.geometry_service import (
+            get_current_geometry as _gcg)
+        glive = _gcg().to_dict()
+    except Exception:
+        glive = None
+    try:
+        g, glive = _cp.deepcopy(g), _cp.deepcopy(glive)
+    except Exception:                                             # noqa: BLE001 - uncopyable value: hash the objects read
+        pass
+    return g, glive
+
+
+def _geometry_fingerprint_pair(geo_override: Optional[dict] = None) -> tuple:
+    """``(canonical, legacy49)`` hashed from one snapshot; the pair is registered as equivalent prints of one machine."""
+    try:
+        snap = _geometry_snapshot()
+    except Exception:
+        return "nofp", "nofp"
+    c = _geometry_fingerprint_impl(geo_override, True, snap)
+    leg = _geometry_fingerprint_impl(geo_override, False, snap)
+    if c != "nofp" and leg != "nofp":
+        _geo_fp_module().register(c, leg)
+    return c, leg
+
+
+def _geometry_fingerprint_impl(geo_override: Optional[dict] = None, canonical: bool = True,
+                               snapshot: Optional[tuple] = None) -> str:
     """md5 of the MACHINE alone — no operating point, no materials.
 
     `_config_physics_fingerprint` mixes geometry, winding, materials and the
@@ -1560,16 +1594,11 @@ def _geometry_fingerprint_impl(geo_override: Optional[dict] = None, canonical: b
     """
     try:
         import hashlib as _hl, json as _jl
-        from motor_ai_sim.config import get_config as _gc
         _GF = _geo_fp_module()
         _canon = _GF.canonical_geometry if canonical else (lambda g: g)
-        _d = {"g": _canon((_gc() or {}).get("geometry"))}
-        try:
-            from motor_ai_sim.services.geometry_service import (
-                get_current_geometry as _gcg)
-            _d["glive"] = _canon(_gcg().to_dict())
-        except Exception:
-            _d["glive"] = None
+        _g, _glive = snapshot if snapshot is not None else _geometry_snapshot()
+        _d = {"g": _canon(_g)}
+        _d["glive"] = None if _glive is None else _canon(dict(_glive) if canonical else _glive)
         if geo_override:
             # Resolve the override into the machine it PRODUCES instead of
             # hashing the raw dict: a kernel run sends the on-screen machine

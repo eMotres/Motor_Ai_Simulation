@@ -174,7 +174,7 @@ export default function DesignerPage() {
   const front = paretoFront(opRuns);
   const cost = frontCost(opRuns, front);
 
-  useHelpContext(designerHelp({ polar, ran: !!result, busy, runs: runs.length, drafts: drafts.length, optimised: optMsg !== null, error }));
+  useHelpContext(designerHelp({ polar, ran: !!result, busy, runs: runs.length, drafts: drafts.length, optimised: optMsg !== null, failed: !!error }));
 
   if (!family || !vector) return <Box sx={{ p: 2 }}>{error ? <Alert severity="error">{error}</Alert> : <CircularProgress size={20} />}</Box>;
 

@@ -5,7 +5,7 @@
 // an EN and a zh-CN document.
 import type { HelpContext } from './supportContext.ts';
 
-export const HELP_TABS = ['simulation', 'thermal', 'mechanical'] as const;
+export const HELP_TABS = ['simulation', 'thermal', 'mechanical', 'propellers', 'schemas'] as const;
 
 const pick = (v: unknown, allowed: readonly string[]): string | undefined => (typeof v === 'string' && allowed.includes(v) ? v : undefined);
 const put = (key: string, v: string | undefined): Record<string, string> => (v === undefined ? {} : { [key]: v });
@@ -58,35 +58,31 @@ export function mechanicalHelp(i: MechanicalHelp): HelpContext {
 }
 
 // ── Propellers ───────────────────────────────────────────────────────────────
-export interface PropellersHelp { view: 'catalog' | 'designer'; rows: number; error?: string | null }
+export const POLARS = ['flatplate_model', 'camber_model', 'mfoil_table'] as const;
+export const GRAPH_VIEWS = ['modules', 'propeller_s1'] as const;
+
+export interface PropellersHelp { view: 'catalog' | 'designer'; rows: number; failed: boolean }
 export function propellersHelp(i: PropellersHelp): HelpContext {
-  return { tab: 'propellers', sub: i.view, ...(i.view === 'catalog' ? { rows: Math.min(99, i.rows) } : {}), ...(i.view === 'catalog' ? err(i.error) : {}) };
+  return { tab: 'propellers', sub: i.view, ...(i.view === 'catalog' ? { rows: Math.min(99, i.rows), ...(i.failed ? { error: 'load_failed' } : {}) } : {}) };
 }
-export interface DesignerHelp { polar: string; ran: boolean; busy: boolean; runs: number; drafts: number; optimised: boolean; error?: string | null }
+export interface DesignerHelp { polar: string; ran: boolean; busy: boolean; runs: number; drafts: number; optimised: boolean; failed: boolean }
 export function designerHelp(i: DesignerHelp): HelpContext {
   return {
-    tab: 'propellers', sub: 'designer', polar: word(i.polar), calculated: i.ran, runs: Math.min(99, i.runs), drafts: Math.min(99, i.drafts), optimised: i.optimised,
-    status: i.busy ? ['running'] : i.ran ? ['done'] : ['not_run'], ...err(i.error),
+    tab: 'propellers', sub: 'designer', ...put('polar', pick(i.polar, POLARS)), calculated: i.ran, runs: Math.min(99, i.runs), drafts: Math.min(99, i.drafts),
+    optimised: i.optimised, status: i.busy ? ['running'] : i.ran ? ['done'] : ['not_run'], ...(i.failed ? { error: 'request_failed' } : {}),
   };
 }
 
 // ── Schemas ──────────────────────────────────────────────────────────────────
-export interface SchemasHelp {
-  mode: 'view' | 'compose'; graphView: string; showAll: boolean; die?: string | null; configuration?: string | null; duty?: string | null;
-  loading: boolean; error?: string | null;
-}
+export interface SchemasHelp { mode: 'view' | 'compose'; graphView: string; showAll: boolean; loading: boolean; failed: boolean }
 export function schemasHelp(i: SchemasHelp): HelpContext {
   return {
     tab: 'schemas', sub: i.mode,
-    ...(i.mode === 'view' ? {
-      graphView: word(i.graphView), showAll: i.showAll,
-      ...(i.die ? { die: String(i.die).slice(0, 80) } : {}), ...(i.configuration ? { configuration: String(i.configuration).slice(0, 80) } : {}),
-      ...(i.duty ? { duty: String(i.duty).slice(0, 80) } : {}),
-      status: i.loading ? ['loading'] : i.error ? ['load_failed'] : ['shown'], ...err(i.error),
-    } : {}),
+    ...(i.mode === 'view' ? { ...put('graphView', pick(i.graphView, GRAPH_VIEWS)), showAll: i.showAll,
+      status: i.loading ? ['loading'] : i.failed ? ['load_failed'] : ['shown'], ...(i.failed ? { error: 'load_failed' } : {}) } : {}),
   };
 }
-export interface ComposerHelp { graph: string; template: boolean; running: boolean; error?: string | null }
+export interface ComposerHelp { template: boolean; running: boolean; failed: boolean }
 export function composerHelp(i: ComposerHelp): HelpContext {
-  return { tab: 'schemas', sub: 'compose', graph: String(i.graph ?? '').slice(0, 80), template: i.template, status: i.running ? ['running'] : ['idle'], ...err(i.error) };
+  return { tab: 'schemas', sub: 'compose', template: i.template, status: i.running ? ['running'] : ['idle'], ...(i.failed ? { error: 'run_failed' } : {}) };
 }

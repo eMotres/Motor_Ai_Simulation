@@ -130,21 +130,24 @@ th('every Simulations tab declared by the web is in the registry, with documents
   assert.deepEqual(reg.mechanical.keys.symmetry.enum, [...H.SYMMETRIES]);
 });
 
-th('Propellers and Schemas contexts: ids, names, flags and counts only', () => {
-  assert.deepEqual(H.propellersHelp({ view: 'catalog', rows: 12, error: 'HTTP 500' }), { tab: 'propellers', sub: 'catalog', rows: 12, error: 'HTTP #' });
-  const d = H.designerHelp({ polar: 'mfoil_table', ran: true, busy: false, runs: 4, drafts: 1, optimised: true, error: 'The design is not valid: root_chord 3' });
-  assert.deepEqual(d, { tab: 'propellers', sub: 'designer', polar: 'mfoil_table', calculated: true, runs: 4, drafts: 1, optimised: true, status: ['done'], error: 'The design is not valid: root_chord #' });
-  const s = H.schemasHelp({ mode: 'view', graphView: 'propeller_s1', showAll: false, die: 'D1', configuration: 'cfg', duty: '', loading: false, error: null });
-  assert.deepEqual(s, { tab: 'schemas', sub: 'view', graphView: 'propeller_s1', showAll: false, die: 'D1', configuration: 'cfg', status: ['shown'] });
-  assert.deepEqual(H.schemasHelp({ mode: 'compose', graphView: 'modules', showAll: false, loading: false }), { tab: 'schemas', sub: 'compose' });
-  assert.deepEqual(H.composerHelp({ graph: 'My S1', template: false, running: true, error: null }), { tab: 'schemas', sub: 'compose', graph: 'My S1', template: false, status: ['running'] });
+th('Propellers and Schemas contexts: ids, flags, counts and codes only', () => {
+  assert.deepEqual(H.propellersHelp({ view: 'catalog', rows: 12, failed: true }), { tab: 'propellers', sub: 'catalog', rows: 12, error: 'load_failed' });
+  const d = H.designerHelp({ polar: 'mfoil_table', ran: true, busy: false, runs: 4, drafts: 1, optimised: true, failed: false });
+  assert.deepEqual(d, { tab: 'propellers', sub: 'designer', polar: 'mfoil_table', calculated: true, runs: 4, drafts: 1, optimised: true, status: ['done'] });
+  assert.ok(!('polar' in H.designerHelp({ polar: 'diameter 10', ran: false, busy: true, runs: 0, drafts: 0, optimised: false, failed: true })));
+  assert.deepEqual(H.schemasHelp({ mode: 'view', graphView: 'propeller_s1', showAll: false, loading: false, failed: false }),
+    { tab: 'schemas', sub: 'view', graphView: 'propeller_s1', showAll: false, status: ['shown'] });
+  assert.deepEqual(H.schemasHelp({ mode: 'compose', graphView: 'modules', showAll: false, loading: false, failed: false }), { tab: 'schemas', sub: 'compose' });
+  assert.deepEqual(H.composerHelp({ template: false, running: true, failed: false }), { tab: 'schemas', sub: 'compose', template: false, status: ['running'] });
 });
 
-th('every web help tab is in the registry, with its sub-views, EN and zh-CN documents', () => {
+th('every web help tab is in the registry, with sub-views, EN and zh-CN documents and the same lists', () => {
   const reg = JSON.parse(readFileSync(`${DOCS}registry.json`, 'utf8'));
   for (const id of H.HELP_TABS) {
     assert.ok(reg[id], `${id} registered`);
     for (const d of reg[id].docs) for (const lg of ['en', 'zh-CN']) assert.ok(existsSync(`${DOCS}${d}.${lg}.md`), `${d}.${lg}.md`);
     for (const sub of reg[id].subs) assert.ok(reg[id].docs.includes(`${id}.${sub}`), `${id}.${sub} has a document`);
   }
+  assert.deepEqual(reg.propellers.keys.polar.enum, [...H.POLARS]);
+  assert.deepEqual(reg.schemas.keys.graphView.enum, [...H.GRAPH_VIEWS]);
 });

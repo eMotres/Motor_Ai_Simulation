@@ -316,7 +316,7 @@ export default function SystemPanel() {
   const dieObj = dies.find((d) => d.name === motor?.die);
   const cfgObj = dieObj?.configs?.find((c) => c.name === motor?.config);
 
-  useHelpContext(schemasHelp({ mode, graphView: view, showAll, die: motor?.die, configuration: motor?.config, duty: motor?.duty, loading, error }));
+  useHelpContext(schemasHelp({ mode, graphView: view, showAll, loading, failed: !!error }));
 
   return (
     <ThemeProvider theme={LIGHT}>

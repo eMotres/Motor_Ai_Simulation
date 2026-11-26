@@ -626,7 +626,7 @@ export default function SystemComposer() {
     return nodes.find((n) => n.id === editingNodeId)?.data || null;
   }, [nodes, editingNodeId]);
 
-  useHelpContext(composerHelp({ graph: selectedGraphName, template: isTemplate, running, error: errorBanner }));
+  useHelpContext(composerHelp({ template: isTemplate, running, failed: !!errorBanner }));
 
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0, bgcolor: '#ffffff', color: '#111827' }}>

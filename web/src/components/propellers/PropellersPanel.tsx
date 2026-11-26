@@ -39,7 +39,7 @@ export default function PropellersPanel() {
   }, []);
 
   const rows = useMemo(() => catalogRows(resp), [resp]);
-  useHelpContext(propellersHelp({ view, rows: rows.length, error }));
+  useHelpContext(propellersHelp({ view, rows: rows.length, failed: !!error }));
   const head = (label: string, tip: string) => (
     <TableCell sx={{ fontSize: 12, whiteSpace: 'nowrap' }}><Tooltip title={tip}><span>{label}</span></Tooltip></TableCell>
   );

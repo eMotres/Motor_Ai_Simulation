@@ -192,12 +192,25 @@
       "propellers.designer"
     ],
     "keys": {
-      "polar": "enum",
+      "polar": {
+        "enum": [
+          "flatplate_model",
+          "camber_model",
+          "mfoil_table"
+        ]
+      },
       "calculated": "flag",
       "runs": "count",
       "drafts": "count",
       "optimised": "flag",
-      "rows": "count"
+      "rows": "count",
+      "status": {
+        "enums": [
+          "running",
+          "done",
+          "not_run"
+        ]
+      }
     }
   },
   "schemas": {
@@ -212,14 +225,23 @@
       "schemas.compose"
     ],
     "keys": {
-      "graphView": "enum",
+      "graphView": {
+        "enum": [
+          "modules",
+          "propeller_s1"
+        ]
+      },
       "showAll": "flag",
-      "die": "name",
-      "configuration": "name",
-      "duty": "name",
-      "graph": "name",
       "template": "flag",
-      "calculated": "flag"
+      "status": {
+        "enums": [
+          "loading",
+          "load_failed",
+          "shown",
+          "running",
+          "idle"
+        ]
+      }
     }
   }
 }

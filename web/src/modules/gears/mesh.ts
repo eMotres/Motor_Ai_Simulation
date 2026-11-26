@@ -71,9 +71,10 @@ export function place(vertices: number[], deg: number, centre: readonly [number,
 export const outlineOf = (p: Placement, outlines: Record<string, Outline>): Outline | null => p.outline ?? outlines[p.outline_id] ?? null;
 
 /** One mesh per gear.  With `pose` every member sits where the pose operation put it; without, where the assembly built it. */
-export function buildParts(assembly: AssemblyResult, pose: Record<string, PoseMember> | null): MeshPart[] {
+export function buildParts(assembly: AssemblyResult, pose: Record<string, PoseMember> | null, hiddenStages: ReadonlySet<number> = new Set()): MeshPart[] {
   const parts: MeshPart[] = [];
   for (const p of assembly.members) {
+    if (hiddenStages.has(p.stage_index)) continue;
     const outline = outlineOf(p, assembly.outlines);
     if (!outline || outline.outline_mm.length < 3) continue;
     const at = pose?.[p.name];

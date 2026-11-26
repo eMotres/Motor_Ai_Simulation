@@ -124,10 +124,16 @@ _BEARING_SLOTS = ("planet_bearing", "input_bearing", "output_bearing",
                   "bearing_1a", "bearing_1b", "bearing_2a", "bearing_2b")
 
 
+# The one catalogue card the core can rate and that is small enough for the joint (618/8-2Z, 8 x 16 x 4); the core does not check
+# that a planet bearing physically fits inside the planet, so this is a screening default the engineer replaces.
+_DEFAULT_BEARING = "618/8-2Z"
+
+
 def _humanoid_default() -> Dict[str, Any]:
     """The humanoid-joint starting point: two planetary stages, 12.884:1 (9.8 N*m at 247 rpm out)."""
     def stage(name, zs, zp, zr, n, b):
         return {"kind": "planetary", "name": name, "n_planets": n,
+                "bearings": {"input_bearing": _DEFAULT_BEARING, "planet_bearing": _DEFAULT_BEARING, "output_bearing": _DEFAULT_BEARING},
                 "gears": {"sun": {"z": zs, "m_n_mm": .5, "b_mm": b, "tooth_thickness_allowance_mm": .02},
                           "planet": {"z": zp, "m_n_mm": .5, "b_mm": b, "tooth_thickness_allowance_mm": .02},
                           "ring": {"z": zr, "m_n_mm": .5, "b_mm": b, "tooth_thickness_allowance_mm": .02}}}

@@ -263,3 +263,17 @@ def test_template_staff_only(enforced):
     assert enforced.post(B + "/template", json={}).status_code == 401
     assert enforced.post(B + "/template", json={}, headers=as_("user")).status_code == 403
     assert enforced.post(B + "/template", json={}, headers=as_("engineer")).status_code == 200
+
+
+def test_template_default_carries_catalogue_bearings(client):
+    body = client.post(B + "/template", json={}).json()
+    rateable = {b["name"] for b in list_bearing_catalogue() if b["core_supported"]}
+    for stage in body["stages"]:
+        for slot in ("input_bearing", "planet_bearing", "output_bearing"):
+            assert stage[slot]["name"] in rateable
+    point = client.post(B + "/evaluate", json=body).json()["result"]
+    roles = sorted(b["role"] for s in point["stage_results"] for b in s["bearing_ratings"])
+    assert roles == ["input", "input", "output", "output", "planet", "planet"]
+    # an explicit empty bearings block removes them
+    bare = client.post(B + "/template", json={"stages": [{"kind": "pair", "name": "p", "gears": {"gear1": {"z": 20, "m_n_mm": 1., "b_mm": 12.}, "gear2": {"z": 40, "m_n_mm": 1., "b_mm": 12.}}}]}).json()
+    assert bare["stages"][0]["bearing_1a"] is None

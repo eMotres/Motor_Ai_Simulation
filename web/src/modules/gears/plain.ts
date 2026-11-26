@@ -36,10 +36,13 @@ export function defaultStage(kind: StageKind, name: string): PlainStage {
   return { uid: newUid(), kind, name, n_planets: 3, fixed_member: 'ring', gears: { sun: gear(40, 10), planet: gear(32, 10), ring: gear(104, 10) }, bearings: {} };
 }
 
+/** Catalogue card of the preset's default bearings (mirrors the template route). */
+export const DEFAULT_BEARING = '618/8-2Z';
+const jointBearings = (): Record<string, string> => ({ input_bearing: DEFAULT_BEARING, planet_bearing: DEFAULT_BEARING, output_bearing: DEFAULT_BEARING });
 /** The humanoid-joint preset: two planetary stages, 12.884:1 (9.8 N*m at 247 rpm out).  Mirrors the template route's default. */
 export function humanoidJoint(): EditorState {
-  const s1 = defaultStage('planetary', 's1');
-  const s2: PlainStage = { ...defaultStage('planetary', 's2'), n_planets: 4,
+  const s1: PlainStage = { ...defaultStage('planetary', 's1'), bearings: jointBearings() };
+  const s2: PlainStage = { ...defaultStage('planetary', 's2'), n_planets: 4, bearings: jointBearings(),
     gears: { sun: gear(38, 12), planet: gear(30, 12), ring: gear(98, 12) } };
   return {
     name: 'joint', preset_name: 'humanoid_robot_joint', lubricant: 'ROBOT_GREASE_NLGI1_PAO',

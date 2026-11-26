@@ -69,7 +69,8 @@
     "addBin": "Row",
     "peakTorque": "Peak torque, N*m",
     "peakEvents": "Peak events",
-    "peakSpeed": "Peak speed, rpm"
+    "peakSpeed": "Peak speed, rpm",
+    "showStages": "Stages"
   },
   "tip": {
     "presetJoint": "Two planetary stages, 12.884:1: 9.8 N*m at 247 rpm at the output.",
@@ -93,7 +94,6 @@
     "stages": "Stages in order from the input; each stage's output is the next stage's input.",
     "limitations": "What this screening calculation does not cover. Read it before using any number.",
     "pass": "Combined result of the overall state, the preset checks and every supplied part. Estimated results may pass their thresholds but stay labelled as estimates.",
-    "passPoint": "A single point is never a duty qualification: it always reads not passed and says why. Use the duty spectrum for qualification.",
     "endurance": "Zero damage in the supported model. This is not unlimited physical life.",
     "bearingDiagnostic": "The bearing record failed or is unsupported: its life is a diagnostic value, not a rating, and no aggregate bearing life is formed.",
     "boundary": "Boundary lubrication: the oil film is thinner than the surface roughness; wear and micropitting risk is high.",
@@ -141,7 +141,10 @@
     "peakEvents": "Number of peak events over the life.",
     "peakSpeed": "Output speed during a peak event; zero is allowed.",
     "inputAngle": "Rotation angle at the chain input; every gear and planet orbit follows from the pose calculation.",
-    "title": "Gear and planetary gearbox calculation: a screening estimate, not a qualification."
+    "title": "Gear and planetary gearbox calculation: a screening estimate, not a qualification.",
+    "noVerdict": "A single operating point is never a duty qualification: parts and the preset are not evaluated here, so the point carries no pass or fail. The reasons below say what is missing. Use the duty spectrum for the verdict.",
+    "stageToggle": "Show or hide this stage.",
+    "showStages": "Which stages are shown in the 3-D view."
   },
   "gear": {
     "z": "Teeth",
@@ -292,5 +295,6 @@
     "bearingAggregate": "A failed or unsupported bearing spectrum gives no aggregate life; finite life values inside failed records are diagnostic only. Blank bounds exclude the housing.",
     "outlines": "Sampled or decimated outlines are viewer geometry, not manufacturing CAD and not a 3-D clearance certification.",
     "irMotoringOnly": "The drivetrain (TransmissionIR) export from the core is motoring only and keeps partial and unqualified provenance. This page does not use it."
-  }
+  },
+  "noVerdict": "Point: no verdict (run the duty spectrum for a pass / fail)"
 }

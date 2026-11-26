@@ -4,6 +4,7 @@ import { finalComparison } from '../../lib/resultsPanel';
 import type { ProjectProductionEntry } from './projectProductions';
 import type { CostEstimate, CostEstimateAnswer, CostSnapshot, CostSuggestions } from './costEstimate';
 import type { OrderRequest } from './orderRequests';
+import type { ExistingSize } from './odSizes';
 import type { ProjectQuote, SharedQuoteMark } from './quote';
 import type { SimStoredPoints, SimStoredRun } from '../../lib/simReadOnly';
 import type { ProjectDocument, ProjectDocumentList, DevelopmentSchema, FieldKind, MotorPointsAnswer, MotorView, StoredField, ProjectSummary, ProjectThreadMessage, ProjectMotor, ProjectMotorPickerItem, ProjectSnapshot, SpecState, SpecSnapshot } from './types';
@@ -134,6 +135,11 @@ export const developmentApi = {
   snapshots: async (id: string) => (await call<{ snapshots: ProjectSnapshot[] }>('GET', `${p(id)}/snapshots`)).snapshots,
   /** The productions of the project's linked motors, as the caller may see them (owner 2026-11-02; projectProductions.ts). */
   productions: async (id: string) => (await call<{ productions: ProjectProductionEntry[] }>('GET', `${p(id)}/productions`)).productions ?? [],
+  /** The public existing sizes the specification form offers (owner 2026-11-25), closest to the preferred diameter first. */
+  existingSizes: (id: string, q: { preferredMin?: number; preferredMax?: number; max?: number } = {}) => {
+    const qs = [['preferred_min_mm', q.preferredMin], ['preferred_max_mm', q.preferredMax], ['max_mm', q.max]].filter(([, v]) => typeof v === 'number' && Number.isFinite(v) && (v as number) > 0).map(([k, v]) => `${k}=${v}`).join('&');
+    return call<{ sizes: ExistingSize[]; available: boolean }>('GET', `${p(id)}/spec/existing-sizes${qs ? `?${qs}` : ''}`);
+  },
   /** ADMIN ONLY (owner 2026-11-02): the project cost estimate (costEstimate.ts).  403 for anybody else. */
   costEstimate: (id: string, display?: string) => call<CostEstimateAnswer>('GET', ce(id) + dq(display)),
   saveCostEstimate: (id: string, estimate: CostEstimate, display?: string) => call<CostEstimateAnswer>('PUT', ce(id) + dq(display), estimate),

@@ -136,3 +136,22 @@ def test_added_tokens_stay_small():
     ctx = C.sanitize_context({"lang": "en", "ui_context": GEARS}, "engineer")
     block = C.render_for_model(ctx, role="engineer")
     assert len(block) <= H.MAX_DOC_CHARS + 2500 + len(H.WINDOW_RULES)                        # ~ 1500 tokens at 4+ chars/token
+
+
+@pytest.mark.parametrize("tab,raw,kept", [
+    ("simulation", {"opMode": "motor", "input": "target_torque", "coupled": True, "solveTo": "limits", "status": ["done"], "rpm": 9000}, "solveTo"),
+    ("thermal", {"coolMode": "robotics", "boreMode": "still", "emMissing": True, "compareRows": 3, "status": ["done"]}, "coolMode"),
+    ("mechanical", {"loads": "both", "symmetry": "sector", "stale": False, "status": ["solving"], "torque": 5.5}, "loads"),
+])
+def test_simulations_tabs_keep_their_keys_for_engineers_only(tab, raw, kept):
+    out = H.sanitize_ui_context({"tab": tab, **raw}, "engineer")
+    assert kept in out and "rpm" not in out and "torque" not in out
+    assert H.sanitize_ui_context({"tab": tab, **raw}, "user") == {"tab": tab}
+    assert H.help_docs_for(out, "en").startswith("# Simulations >")
+    assert H.help_docs_for(out, "zh-CN").startswith("# 仿真 >")
+
+
+def test_prompt_describes_every_tab_of_the_app():
+    from motor_ai_sim import support_prompt as SP
+    for label in ("Propellers", "Gears", "Overview"):
+        assert f"**{label}**" in SP.STAFF_PROMPT

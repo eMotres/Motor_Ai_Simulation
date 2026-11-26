@@ -79,3 +79,34 @@ t('every id the web declares is in the shared registry and has an EN and a zh-CN
     for (const lg of ['en', 'zh-CN']) assert.ok(existsSync(`${DOCS}${id}.${lg}.md`), `${id}.${lg}.md exists`);
   }
 });
+
+// ── the Simulations pages (lib/helpContexts.ts) ──────────────────────────────
+let H = null;
+try { H = await import('../helpContexts.ts'); } catch { /* old Node */ }
+const th = C && H ? test : test.skip;
+
+th('Electromagnetic context: modes and chips, no numbers, error digits masked', () => {
+  const ctx = H.simulationHelp({ motorName: 'M1', opMode: 'motor', drive: 'current', targetKind: 'nm', connection: '4S', coupled: true, coupledDrive: 'inverter',
+    solveTo: 'limits', running: false, stopped: false, failed: true, ran: true, notice: 'speed 12500 rpm is outside 0..9000' });
+  assert.deepEqual(ctx, { tab: 'simulation', motor: 'M1', opMode: 'motor', input: 'target_torque', connection: '4S', coupled: true, coupledDrive: 'inverter',
+    solveTo: 'limits', calculated: true, status: ['error'], error: 'speed # rpm is outside #..#' });
+  const idle = H.simulationHelp({ opMode: 'generator', drive: 'current', targetKind: 'off', connection: '2S', coupled: false, coupledDrive: 'sine', solveTo: 'steady',
+    running: false, stopped: false, failed: false, ran: false });
+  assert.equal(idle.input, 'current_drive'); assert.deepEqual(idle.status, ['not_run']); assert.ok(!('solveTo' in idle) && !('motor' in idle));
+});
+
+th('Thermal and Mechanical contexts carry modes and flags only', () => {
+  const t = H.thermalHelp({ motorName: 'M1', coolMode: 'robotics', boreMode: 'still', outerSource: 'manual', busy: false, ran: true, stale: true, emMissing: false, compareRows: 3, issue: null });
+  assert.deepEqual(t, { tab: 'thermal', motor: 'M1', coolMode: 'robotics', boreMode: 'still', outerSource: 'manual', calculated: true, stale: true, emMissing: false, compareRows: 3, status: ['done'] });
+  const m = H.mechanicalHelp({ loads: 'both', symmetry: 'sector', busy: true, ran: false, stale: false, error: 'rpm 99999 too high' });
+  assert.deepEqual(m, { tab: 'mechanical', loads: 'both', symmetry: 'sector', calculated: false, stale: false, status: ['solving'], error: 'rpm # too high' });
+});
+
+th('every Simulations tab declared by the web is in the shared registry with EN and zh-CN documents', () => {
+  const reg = JSON.parse(readFileSync(`${DOCS}registry.json`, 'utf8'));
+  for (const id of ['simulation', 'thermal', 'mechanical']) {
+    assert.ok(reg[id], `${id} registered`);
+    assert.ok(reg[id].docs.includes(id));
+    for (const lg of ['en', 'zh-CN']) assert.ok(existsSync(`${DOCS}${id}.${lg}.md`), `${id}.${lg}.md`);
+  }
+});

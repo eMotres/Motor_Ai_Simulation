@@ -56,6 +56,8 @@ import {
   controllerSavedFieldsLine, getResolvedPoint, type ControllerSettings,
 } from '../controller/controllerApi';
 import { syncActiveMotor, getActiveMotor } from '../common/motorSettings';
+import { useHelpContext } from '../support/useHelpContext';
+import { simulationHelp } from '../../lib/helpContexts';
 import BatteryDialog, { type BatteryValue } from '../catalog/BatteryDialog';
 import {
   packFromCells, machineKey, readLocalBattery, writeLocalBattery,
@@ -1865,6 +1867,13 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
   };
 
   const isRunning = job?.status === 'queued' || job?.status === 'running';
+
+  // the window the help assistant sees (modes and chips only, no numbers)
+  useHelpContext(simulationHelp({
+    motorName: getActiveMotor()?.name, opMode, drive, targetKind, connection, coupled, coupledDrive, solveTo,
+    running: !!simBusy || isRunning, stopped: cancelledRun, failed: !!srvErr || job?.status === 'error', ran: runNonce > 0 || job?.status === 'done',
+    notice: runNotice?.kind === 'error' ? runNotice.text : srvErr,
+  }));
 
   // ─────────────────────────────────────────────────────────────────────────
   return (

@@ -23,6 +23,9 @@ import {
 } from '@mui/material';
 
 import { useMotorStore, useUIStore } from '../../stores/motorStore';
+import { getActiveMotor } from '../common/motorSettings';
+import { useHelpContext } from '../support/useHelpContext';
+import { thermalHelp } from '../../lib/helpContexts';
 import { coolingIssue, effectiveBoreMode, geomFor, HEAT_PATHS, isStale, useThermalStore } from '../../stores/thermalStore';
 import type { HeatPath } from '../../stores/thermalStore';
 import { historyNoticeFor } from '../../lib/historyNotice';
@@ -1077,6 +1080,12 @@ const ThermalPanel: React.FC = () => {
      they survive a reload and another browser); the Compare tab remains the
      permanent, cross-physics library. */
   const compareRows = st.compareRows;
+
+  // the window the help assistant sees (modes and chips only, no numbers)
+  useHelpContext(thermalHelp({
+    motorName: getActiveMotor()?.name, coolMode: String(coolMode), boreMode: String(boreMode), outerSource: String(st.airSpeedSource),
+    busy, ran: !!res, stale, emMissing: !!emMissing, compareRows: compareRows.length, issue: coolErr,
+  }));
 
   /** One column per PART the STORED rows carry — the tiles' order first, then
    *  anything the backend has started reporting since (the same rule the tiles

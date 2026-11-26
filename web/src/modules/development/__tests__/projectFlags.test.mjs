@@ -7,11 +7,20 @@ import { flagWho, isRecommended, recommendedMotor, reportAccess } from '../proje
 const m = (config, extra = {}) => ({ die: 'D', config, status: 'current', ...extra });
 const flag = { by: 'staff@example.test', at: '2026-10-26T10:00:00' };
 
-test('the report: staff always, a member only for a reviewed variant, the button says why when closed', () => {
+test('the report: every member downloads it at any time (owner 2026-11-26: no review gate)', () => {
   assert.deepEqual(reportAccess(m('a'), true), { enabled: true, reason: 'staff' });
-  assert.deepEqual(reportAccess(m('a'), false), { enabled: false, reason: 'not_reviewed' });
+  assert.deepEqual(reportAccess(m('a'), false), { enabled: true, reason: 'ok' });
   assert.deepEqual(reportAccess(m('a', { report_reviewed: flag }), false), { enabled: true, reason: 'ok' });
-  assert.deepEqual(reportAccess(null, false), { enabled: false, reason: 'not_reviewed' });
+  assert.deepEqual(reportAccess(null, false), { enabled: true, reason: 'ok' });
+});
+
+test('the variant controls no longer carry the "Report reviewed" checkbox or its tooltip keys', () => {
+  const ui = readFileSync(new URL('../components/VariantControls.tsx', import.meta.url), 'utf8');
+  assert.doesNotMatch(ui, /Checkbox|report\.reviewed|notReviewedTip|setReportReviewed/);
+  for (const lang of ['en', 'zh-CN']) {
+    const loc = JSON.parse(readFileSync(new URL(`../../../locales/${lang}/development.json`, import.meta.url), 'utf8'));
+    assert.deepEqual(Object.keys(loc.report), ['word', 'pdf']);
+  }
 });
 
 test('the recommended variant is the marked one; none marked falls back to the latest current variant and says so', () => {
@@ -34,9 +43,7 @@ test('wiring: the group header carries the controls and a stronger accent for th
   assert.match(page, /strong \? `inset 9px 0 0/);
   const controls = readFileSync(new URL('../components/VariantControls.tsx', import.meta.url), 'utf8');
   assert.match(controls, /\/motors\/report\?/);                                                         // the project route (its own gate)
-  assert.match(controls, /disabled=\{!access\.enabled/);                                                // closed for a member until reviewed
-  assert.match(controls, /t\('report\.notReviewedTip'\)/);
+  assert.match(controls, /disabled=\{!access\.enabled/);                                                // always enabled by reportAccess
   const api = readFileSync(new URL('../api.ts', import.meta.url), 'utf8');
-  assert.match(api, /motors\/report_reviewed/);
   assert.match(api, /motors\/recommended/);
 });

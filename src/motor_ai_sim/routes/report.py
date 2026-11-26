@@ -198,10 +198,6 @@ def report(die: str, cfg: str, duty: Optional[str] = Query(default=None),
     Costs no solve time: every figure comes out of a store some solver already
     wrote.
     """
-    # a motor of a project: the report goes out to non-staff only after our engineers marked it reviewed (no way round the
-    # project route through this one)
-    from motor_ai_sim.development import motors as _project_motors
-    _project_motors.require_report_reviewed(die, cfg, authorization)
     blob, fname, rid = build_for(die, cfg, format, authorization, duty=duty, pictures=pictures, run_id=run_id)
     fmt = str(format or "").strip().lower()
     return Response(

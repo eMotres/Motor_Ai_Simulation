@@ -15,8 +15,6 @@ import { adminProjectPaths, projectAdminMembers, projectCompletenessLabel, proje
 import { filterPickerCatalog, groupPickerCatalog, pickerDisplayLabel, pickerReasonKey } from '../../../modules/development/pickerModel';
 import StarIcon from '@mui/icons-material/Star';
 import StarBorderIcon from '@mui/icons-material/StarBorder';
-import TaskAltIcon from '@mui/icons-material/TaskAlt';
-import RadioButtonUncheckedIcon from '@mui/icons-material/RadioButtonUnchecked';
 import { flagWho } from '../../../modules/development/projectFlags';
 import { REGIONS, matchesRegion, projectRegion, regionLabel, type RegionFilter } from '../regions';
 import { useRegionMap } from '../useRegionMap';
@@ -181,10 +179,10 @@ const ProjectDrawer: React.FC<{ project: ProjectRow; users: RegistryUser[]; onCl
       const live = m.kind !== 'history';
       const avail = motorLinkAvailability(m, undefined, true);
       const computed = !!(avail.configureDuty ?? avail.pointsDuty);     // the same test the open buttons used to make
-      const flag = (name: 'recommended' | 'report_reviewed', value: boolean) => act('/api/projects/' + enc(project.id) + '/motors/' + name, 'PATCH', { die: motorDie, config: m.config, value }, td(name === 'recommended' ? 'recommended.label' : 'report.reviewed'));
+      const flag = (name: 'recommended', value: boolean) => act('/api/projects/' + enc(project.id) + '/motors/' + name, 'PATCH', { die: motorDie, config: m.config, value }, td('recommended.label'));
       return (
         <Box key={projectMotorKey(motorDie, m.config) + (m.snapshot_id ?? '')} data-testid="linked-motor-row"
-          sx={{ display: 'grid', gridTemplateColumns: 'minmax(0,1fr) 112px 32px 32px 32px', alignItems: 'center', columnGap: 0.5, py: 0.2 }}>
+          sx={{ display: 'grid', gridTemplateColumns: 'minmax(0,1fr) 112px 32px 32px', alignItems: 'center', columnGap: 0.5, py: 0.2 }}>
           <Tooltip title={`${motorDie} / ${m.config}${m.note ? ` — ${m.note}` : ''}`}>
             <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75, minWidth: 0 }}>
               <Typography noWrap sx={{ fontSize: 12, minWidth: 0 }}>{motorDie} / {m.config}</Typography>
@@ -197,10 +195,8 @@ const ProjectDrawer: React.FC<{ project: ProjectRow; users: RegistryUser[]; onCl
               onChange={async (e) => { const status = e.target.value as 'current' | 'trial'; await act('/api/projects/' + enc(project.id) + '/motors/status', 'PATCH', { die: motorDie, config: m.config, status }, td('motorStatus.updated')); }}>{['current', 'trial'].map((status) => <MenuItem key={status} value={status}>{td(`motorStatus.${status}`)}</MenuItem>)}</TextField></Tooltip>
             <Tooltip title={m.recommended ? `${td('recommended.tip')} ${flagWho(m.recommended)}` : td('recommended.setTip')}><span><IconButton size="small" disabled={busy} aria-label={td('recommended.label')} aria-pressed={!!m.recommended}
               onClick={() => void flag('recommended', !m.recommended)} sx={{ color: m.recommended ? '#f59e0b' : 'var(--text-4)' }}>{m.recommended ? <StarIcon sx={{ fontSize: 17 }} /> : <StarBorderIcon sx={{ fontSize: 17 }} />}</IconButton></span></Tooltip>
-            <Tooltip title={m.report_reviewed ? `${td('report.reviewedTip')} ${flagWho(m.report_reviewed)}` : td('report.reviewedTip')}><span><IconButton size="small" disabled={busy} aria-label={td('report.reviewed')} aria-pressed={!!m.report_reviewed}
-              onClick={() => void flag('report_reviewed', !m.report_reviewed)} sx={{ color: m.report_reviewed ? '#22c55e' : 'var(--text-4)' }}>{m.report_reviewed ? <TaskAltIcon sx={{ fontSize: 17 }} /> : <RadioButtonUncheckedIcon sx={{ fontSize: 17 }} />}</IconButton></span></Tooltip>
             <IconButton size="small" disabled={busy} aria-label={t('projects.unlinkMotor')} onClick={() => setUnlinkTarget({ die: motorDie, config: m.config })}><CloseIcon sx={{ fontSize: 14 }} /></IconButton>
-          </> : <><span /><span /><span /><span /></>}
+          </> : <><span /><span /><span /></>}
         </Box>);
     })}
     <Box sx={{ display: 'flex', gap: 0.75, mt: 1 }}><Button size="small" disabled={busy} onClick={() => { setPickerOpen(true); void loadPicker(); }} sx={{ textTransform: 'none' }}>{td('linkMotor')}</Button></Box>

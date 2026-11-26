@@ -1137,10 +1137,7 @@
   },
   "report": {
     "word": "Report (Word)",
-    "pdf": "Report (PDF)",
-    "reviewed": "Report reviewed",
-    "reviewedTip": "The report was checked by our engineers: project members can download it. Staff can always build it.",
-    "notReviewedTip": "The report is being checked by our engineers."
+    "pdf": "Report (PDF)"
   },
   "motorTests": {
     "button": "Tests",

@@ -77,3 +77,11 @@ export interface CataloguesAnswer {
   bearings: Array<{ name: string; core_supported: boolean; d_mm: number; D_mm: number; B_mm: number }>;
   presets: Array<{ name: string; description?: string }>;
 }
+
+export type BoxFlag = 'request_hash_mismatch' | 'request_invalid' | 'checksum_mismatch' | 'core_stale' | 'catalogue_changed';
+export interface BoxSummary {
+  id: string; name: string; scope: string; state: 'active' | 'archived'; version: number; created_at: string; updated_at: string;
+  author: string; updated_by: string; core_version: string | null; request_hash: string | null; flags: string[]; response_stale: boolean; has_response: boolean;
+}
+export interface BoxList { scope: string; items: BoxSummary[]; unreadable: Array<{ file: string; error: string }> }
+export interface BoxRecord extends Omit<BoxSummary, 'has_response'> { request: RequestRecord; response: GearboxResponse | null }

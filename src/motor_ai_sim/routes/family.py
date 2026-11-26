@@ -3040,7 +3040,7 @@ def die_audience_count(die: str) -> int:
         email = str(row.get("email") or "").strip().lower()
         if not email or row.get("disabled"):
             continue
-        if (everyone or email in _auth._ADMIN_EMAILS
+        if (everyone or _auth.allowlist_elevates(email, row)
                 or str(row.get("role") or "") == "admin"):
             n += 1
             continue

@@ -49,6 +49,8 @@ MAX_ANSWER_TEXT = 4000
 MIN_OPTIONS, MAX_OPTIONS = 2, 5
 MAX_OPEN_PER_TOKEN = 200
 _NAME_RE = re.compile(r"^[A-Za-z0-9_.-]{1,40}$")
+#: The internal "token" of the items the server creates on a specification submit (owner_queue_events); no real token can have it.
+SPEC_SUBMIT_TOKEN = "app:spec_submit"
 _ID_RE = re.compile(r"^oq-[0-9a-f]{12}$")
 _TOUCH_EVERY_S = 60.0
 
@@ -457,11 +459,12 @@ def list_items(*, token_name: Optional[str] = None, state: str = "", project_id:
 
 
 def counts() -> Dict[str, Any]:
-    """``{open_blocking, open_messages, oldest_open_at}`` for the badge and the daily report."""
+    """``{open_blocking, open_urgent, open_messages, open_spec_submits, oldest_open_at}`` for the badge and the daily report."""
     op = [r for r in list_items(state="open", ordered=False)]
     return {"open_blocking": sum(1 for r in op if band_of(r) == 1),
             "open_urgent": sum(1 for r in op if r.get("priority") == "urgent"),
             "open_messages": sum(1 for r in op if band_of(r) == 2),
+            "open_spec_submits": sum(1 for r in op if r.get("token_name") == SPEC_SUBMIT_TOKEN),
             "oldest_open_at": min((r["created_at"] for r in op), default=None)}
 
 

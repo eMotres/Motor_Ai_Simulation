@@ -1003,6 +1003,9 @@ def run_stage_a(geo_override: Optional[dict] = None,
         version=PASSPORT_VERSION,
         generated_utc=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         geometry_fingerprint=section.fingerprint,
+        # the stack length [mm] this result was solved at, at the top level where a passport-store entry carries it (the
+        # length-aware lookup reads it); additive: machine.stack_mm stays
+        stack_mm=section.stack_mm,
         machine=dict(
             num_slots=section.num_slots, num_poles=section.num_poles,
             pole_pairs=section.pole_pairs,

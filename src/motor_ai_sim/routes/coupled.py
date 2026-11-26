@@ -4547,12 +4547,22 @@ def _register_answer_pass(phase: str, body: Dict[str, Any],
     return rec
 
 
+def _torque_factor_k(summary: Optional[Dict[str, Any]]) -> Optional[float]:
+    """THE torque factor of a run summary: the measured k_T, else the Stage A flux factor k_flux, else None (plain 2-D), inside
+    the accepted band (``end3d_factors.torque_factor``) - the one the Electromagnetic tab's tiles (``apply3d.ts``), the S1 / continuous
+    power blocks and the report (``report.torque_factor_3d``) apply.  The torque hold, the mechanical step and the propeller
+    load line use it too (they used the flux factor alone: the same number while no k_T is measured, another one the day one is)."""
+    from motor_ai_sim.end3d_factors import torque_factor
+    e3 = (summary or {}).get("end3d")
+    return torque_factor(e3 if isinstance(e3, dict) else None)[0]
+
+
 def _shaft_torque_nm(summary: Dict[str, Any]) -> tuple:
     """The run's shaft torque for the mechanical step, and how it was made.
 
     ``(torque_or_None, note_or_None)``.  The 2-D mean ``T_em_avg_Nm`` times
-    the run's 3-D end-effect factor ``end3d.k_flux`` when the summary carries
-    one — the same product the Electromagnetic tab's tiles show — else the 2-D
+    the run's 3-D torque factor (``_torque_factor_k``: k_T else k_flux) when the
+    summary carries one — the same product the Electromagnetic tab's tiles show — else the 2-D
     mean itself.  A run with no torque at all gives ``None`` (the hook then
     falls back the way the route does).
     """
@@ -4563,13 +4573,8 @@ def _shaft_torque_nm(summary: Dict[str, Any]) -> tuple:
         t = None
     if t is None or not math.isfinite(t):
         return None, None
-    e3 = summary.get("end3d")
-    k = (e3 or {}).get("k_flux") if isinstance(e3, dict) else None
-    try:
-        k = None if k is None else float(k)
-    except (TypeError, ValueError):
-        k = None
-    if k is not None and math.isfinite(k) and k > 0.0 and abs(k - 1.0) > 1e-9:
+    k = _torque_factor_k(summary)
+    if k is not None and abs(k - 1.0) > 1e-9:
         return t * k, ("2-D mean %.4g N·m × 3-D end-effect %.4g" % (t, k))
     return t, None
 
@@ -7431,7 +7436,7 @@ def _run(body: Dict[str, Any],
                         _sv_v = shaft_view(_s_v, _brg_v,
                                            str(body.get("mode") or "motor"))
                         continuous_rating["power"] = {
-                            "T_em_Nm": _t_v, "P_mech_W": _sv_v.get("P_mech_W"),
+                            "T_em_Nm": _t_v, "P_mech_W": _sv_v.get("P_rotor_W"),
                             "P_rotor_W": _sv_v.get("P_rotor_W"),
                             "P_shaft_W": _sv_v.get("P_shaft_W"),
                             "eta_em": _sv_v.get("eta_em"),
@@ -9028,7 +9033,7 @@ def _cp_verify_continuous_point(body: Dict[str, Any],
                      if x_v is not None else None)
             sv = shaft_view(summ, brg_v, str(body.get("mode") or "motor"))
             cp["power"] = {
-                "T_em_Nm": t_v, "P_mech_W": sv.get("P_mech_W"),
+                "T_em_Nm": t_v, "P_mech_W": sv.get("P_rotor_W"),
                 "P_shaft_W": sv.get("P_shaft_W"),
                 "eta_shaft": sv.get("eta_shaft"),
                 "basis": ("real electromagnetic pass at %.0f rpm, %.1f A — "
@@ -9340,7 +9345,7 @@ def _cr_speed_search_opts(cooling: Mapping[str, Any], summary: Mapping[str, Any]
                         "propeller's load line" % (pid, exc))
         return opts
     t_ref = _ccr._num((summary or {}).get("T_em_avg_Nm"))
-    k3d = _ccr._num(((summary or {}).get("end3d") or {}).get("k_flux")) or 1.0
+    k3d = _torque_factor_k(summary) or 1.0
     if not (t_ref and abs(t_ref) > 0.0):
         log.warning("coupled: the reference run states no torque, so the S1 "
                     "speed search has no propeller load line")

@@ -15,9 +15,10 @@ from __future__ import annotations
 import json
 import threading
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, Request
+from fastapi.responses import JSONResponse
 
 from motor_ai_sim.auth import resolve_user
 
@@ -80,18 +81,31 @@ def _bucket(request: Request) -> str:
     return "local"
 
 
+def _revision_of(cfg: Any) -> int:
+    """The server-issued revision of a stored config (0 = stored before revisions existed, or nothing stored)."""
+    try:
+        return max(0, int(cfg.get("_rev"))) if isinstance(cfg, dict) else 0
+    except (TypeError, ValueError):
+        return 0
+
+
 @router.get("/config")
 def get_sweep_config(request: Request):
-    """This browser-context's saved sweep config, or ``null`` if none saved yet."""
-    return {"config": _load_all().get(_bucket(request))}
+    """This browser-context's saved sweep config, or ``null`` if none saved yet, with its server revision."""
+    cfg = _load_all().get(_bucket(request))
+    return {"config": cfg, "revision": _revision_of(cfg)}
 
 
 @router.put("/config")
-async def put_sweep_config(request: Request):
+async def put_sweep_config(request: Request, expected_revision: Optional[int] = None):
     """Persist the sweep config (variations + operating points + ripple limit).
 
     Accepts the raw JSON body as-is so the frontend's SweepConfig shape can evolve
-    without a server change."""
+    without a server change.  Every save is stamped with a server-issued, monotonic revision (``_rev``).  A client that
+    states the revision it last saw (``expected_revision``) writes only if that is still the stored one: the check and
+    the write are one step under the lock, so two tabs that read the same base cannot both win - the second one gets
+    HTTP 409 with the stored copy and keeps its own edit.  Without ``expected_revision`` the save is unconditional
+    (older clients), and still advances the revision."""
     try:
         body: Dict[str, Any] = await request.json()
     except Exception:
@@ -100,6 +114,15 @@ async def put_sweep_config(request: Request):
         return {"status": "error", "detail": "config must be an object"}
     with _LOCK:
         store = _load_all()
-        store[_bucket(request)] = body
+        bucket = _bucket(request)
+        current = store.get(bucket)
+        cur_rev = _revision_of(current)
+        if expected_revision is not None and int(expected_revision) != cur_rev:
+            return JSONResponse(status_code=409, content={
+                "status": "conflict", "detail": "the stored sweep config changed since this copy was loaded",
+                "revision": cur_rev, "config": current})
+        body = {k: v for k, v in body.items() if k != "_rev"}
+        body["_rev"] = cur_rev + 1
+        store[bucket] = body
         _save_all(store)
-    return {"status": "ok"}
+    return {"status": "ok", "revision": body["_rev"]}

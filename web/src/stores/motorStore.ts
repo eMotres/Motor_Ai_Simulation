@@ -1,4 +1,4 @@
-import { sweepContentKey, isRealEdit, mayPush } from '../lib/sweepSync';
+import { sweepContentKey, isRealEdit, sweepPutUrl, sweepKeepConflictCopy } from '../lib/sweepSync';
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import { syncActiveMotor } from '../components/common/motorSettings';
@@ -287,6 +287,9 @@ let _sweepHydrating = false;
 // The content (see lib/sweepSync) and edit stamp of the copy this browser last LOADED from, or PUSHED to, the server.
 let _sweepKnownKey: string | null = null;
 let _sweepBaseAt = 0;
+// The SERVER-ISSUED revision of that copy (null = never seen: a failed read is unknown, not zero).  A push states it, and
+// the server refuses (409) when the stored copy has moved on.
+let _sweepBaseRev: number | null = null;
 const _sweepMarkSynced = (cfg: { updatedAt?: number } | null | undefined) => {
   _sweepKnownKey = sweepContentKey(cfg as never);
   _sweepBaseAt = Number(cfg?.updatedAt) || 0;
@@ -1310,7 +1313,9 @@ export const useMotorStore = create<MotorState>()(
           if (!canWriteServer()) return;
           const r = await fetch(`${API_BASE_URL}/api/sweep/config`);
           if (!r.ok) return;
-          const { config } = await r.json();
+          const { config, revision } = await r.json();
+          const srvRev = Number.isFinite(Number(revision)) ? Number(revision) : null;
+          if (srvRev !== null) _sweepBaseRev = srvRev;   // the revision this browser has now SEEN
           const local = get().sweepConfig;
           const srvVars = config?.variations && typeof config.variations === 'object'
             ? config.variations : null;
@@ -1341,13 +1346,20 @@ export const useMotorStore = create<MotorState>()(
                 updatedAt: srvAt,
               } });
               _sweepMarkSynced(get().sweepConfig);
+              _sweepBaseRev = srvRev;
               _sweepHydrating = false;
             } else if (_sweepSelected(local.variations) > 0) {
-              // This browser's copy is the newer one → it becomes the server's.
-              fetch(`${API_BASE_URL}/api/sweep/config`, {
+              // This browser's copy is the newer one → it becomes the server's - but only over the revision just read.
+              fetch(sweepPutUrl(API_BASE_URL, srvRev), {
                 method: 'PUT', headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(local),
-              }).then((pr) => { if (pr.ok) _sweepMarkSynced(local); }).catch(() => {});
+              }).then(async (pr) => {
+                if (pr.ok) {
+                  _sweepMarkSynced(local);
+                  const j = await pr.json().catch(() => null);
+                  if (Number.isFinite(Number(j?.revision))) _sweepBaseRev = Number(j.revision);
+                }
+              }).catch(() => {});
             }
             return;
           }
@@ -1380,6 +1392,7 @@ export const useMotorStore = create<MotorState>()(
               modulation: config.modulation ?? local.modulation,
             } });
             _sweepMarkSynced({ ...get().sweepConfig, updatedAt: srvAt });
+            _sweepBaseRev = srvRev;
             _sweepHydrating = false;
           } else if (_geoSel(local.variations) > 0
                      || (_sweepSelected(local.variations) > 0 && _sweepSelected(srvVars) === 0)) {
@@ -1387,10 +1400,16 @@ export const useMotorStore = create<MotorState>()(
             // them to the server so they sync out (covers server-empty AND
             // server-stale).  Default op-point cards alone never overwrite a
             // server copy that has anything.
-            fetch(`${API_BASE_URL}/api/sweep/config`, {
+            fetch(sweepPutUrl(API_BASE_URL, srvRev), {
               method: 'PUT', headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify(local),
-            }).then((pr) => { if (pr.ok) _sweepMarkSynced(local); }).catch(() => {});
+            }).then(async (pr) => {
+              if (pr.ok) {
+                _sweepMarkSynced(local);
+                const j = await pr.json().catch(() => null);
+                if (Number.isFinite(Number(j?.revision))) _sweepBaseRev = Number(j.revision);
+              }
+            }).catch(() => {});
           }
         } catch { /* ignore */ }
       },
@@ -1443,21 +1462,32 @@ useMotorStore.subscribe((state) => {
   clearTimeout(_sweepSaveTimer);
   _sweepSaveTimer = setTimeout(async () => {
     try {
-      // compare-and-swap: a server copy NEWER than the one this browser last saw is somebody else's edit (another tab
-      // or browser) - adopt it, do not overwrite it
-      const cur = await fetch(`${API_BASE_URL}/api/sweep/config`).then((r) => (r.ok ? r.json() : null)).catch(() => null);
-      const srvAt = Number(cur?.config?.updatedAt) || 0;
-      if (!mayPush(_sweepBaseAt, srvAt)) {
-        await useMotorStore.getState().loadServerSweepConfig();
-        return;
-      }
+      // The server decides (compare-and-swap on its own revision, one atomic step): a copy loaded before somebody
+      // else's save is refused with 409.  A browser that has never read the server copy (a failed read is UNKNOWN,
+      // not zero) does not push at all: its edit stays in localStorage and the next load reconciles it.
+      if (_sweepBaseRev === null) return;
       const mine = useMotorStore.getState().sweepConfig;
-      const r = await fetch(`${API_BASE_URL}/api/sweep/config`, {
+      const r = await fetch(sweepPutUrl(API_BASE_URL, _sweepBaseRev), {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(mine),
       });
-      if (r.ok) { _sweepKnownKey = sweepContentKey(mine); _sweepBaseAt = Number(mine.updatedAt) || _sweepBaseAt; }
+      if (r.ok) {
+        _sweepKnownKey = sweepContentKey(mine); _sweepBaseAt = Number(mine.updatedAt) || _sweepBaseAt;
+        const j = await r.json().catch(() => null);
+        if (Number.isFinite(Number(j?.revision))) _sweepBaseRev = Number(j.revision);
+      } else if (r.status === 409) {
+        // Somebody else saved first.  Keep THIS edit recoverable, then adopt the stored copy - without calling the
+        // loader that can write (it used to push the stale copy straight back over the refused save).
+        const j = await r.json().catch(() => null);
+        sweepKeepConflictCopy(mine);
+        if (j?.config && typeof j.config === 'object') {
+          _adoptSweepCopy(j.config as SweepConfig);
+          _sweepBaseRev = Number.isFinite(Number(j.revision)) ? Number(j.revision) : null;
+        } else {
+          _sweepBaseRev = null;
+        }
+      }
     } catch { /* offline / backend down — localStorage still holds it */ }
   }, 600);
 });

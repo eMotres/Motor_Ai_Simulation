@@ -10,7 +10,7 @@ test('catalog and Development enter the same catalog duty handoff', async () => 
   const actions = source('../MotorOpenActions.tsx');
   const handoff = source('../../../lib/catalogDutyApply.ts');
   assert.match(catalog, /applyCatalogDuty\(die, cfg, duty, canWrite,/);
-  assert.match(development, /<MotorOpenActions motor=\{r\.motor\} duty=\{r\.result\?\.duty\}/);
+  assert.match(development, /<MotorOpenActions motor=\{r\.motor\} duty=\{r\.result\.duty\}/);
   assert.match(actions, /applyCatalogDuty\(motor\.die, motor\.config, targetDuty, canWriteServer\(\),/);
   assert.match(handoff, /import \{ applyDutyEverywhere \} from '\.\/dutyApply'/);
   const begin = handoff.indexOf('beginFamilyLoad(');

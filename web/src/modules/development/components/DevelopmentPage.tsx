@@ -70,8 +70,8 @@ import { shownStatus } from '../projectStage';
   import HistoryIcon from '@mui/icons-material/History';
   import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined';
   import { useProjectStripContext } from '../projectStripContext';
-  import { ReadOnlySimulationView } from '../../../components/simulation/ReadOnlySimulationView';
-  import { developmentComparisonRows } from '../comparisonRows';
+  import { SharedComparisonTable } from '../../../components/compare/SharedComparisonTable';
+  import { developmentComparisonColumns, developmentComparisonRows } from '../comparisonRows';
   import { specPointRefs } from '../specPoints';
   import { claimProjectOpenIntent, projectOpenEvent, restoreProjectOpenIntent } from '../projectOpenIntent.ts';
   import { filterPickerCatalog, groupPickerCatalog, pickerDisplayLabel, pickerReasonKey, snapshotSourceKey } from '../pickerModel';
@@ -886,23 +886,7 @@ export default function DevelopmentPage() {
           {stepNote(r.motor)}
         </Stack>);
         return <Box ref={motorsViewRef} sx={{ minWidth: 0 }}>
-        {visibleMotors.length === 0 ? <Typography sx={{ color: 'var(--text-3)', fontSize: 12 }}>{tr('noMotors')}</Typography> : rows.length === 0 ? <Typography>{tr('noResults')}</Typography> : <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2.5 }} data-testid="project-motor-views">
-          {rows.map((r, index) => {
-            const flags = headerFlags(rowMotors, index);
-            if (!flags.group && !flags.history) return null;
-            const header = (node: React.ReactNode) => <Box component="table" sx={{ width: '100%', borderCollapse: 'collapse' }}><tbody>{node}</tbody></Box>;
-            if (flags.history) return <Box key={r.id}>{header(historyHeader(r, 1))}</Box>;
-            return <Box key={r.id} sx={{ display: 'flex', flexDirection: 'column', gap: 1 }} data-testid="project-motor-view">
-              {header(groupHeader(r, 1))}
-              <Stack direction="row" spacing={0.5} alignItems="center" flexWrap="wrap" useFlexGap>
-                <Button size="small" onClick={() => { void openProjectMotor({ id: selected.id, title: selected.title }, r.motor, r.result?.duty).catch((e) => setError(e instanceof Error ? e.message : String(e))); }}>{tr('openConfigure')}</Button>
-                <MotorOpenActions motor={r.motor} duty={r.result?.duty} engineer={canManageGlobally} t={tr} projectTitle={selected.title} showAll={showAllVersions} />
-              </Stack>
-              {r.motor.available !== false
-                && <ReadOnlySimulationView key={`${r.motor.die}\u0000${r.motor.config}`} embedded withField projectId={selected.id} die={r.motor.die} config={r.motor.config} duty={r.result?.duty ?? null} showAll={showAllVersions} />}
-            </Box>;
-          })}
-        </Box>}
+        {visibleMotors.length === 0 ? <Typography sx={{ color: 'var(--text-3)', fontSize: 12 }}>{tr('noMotors')}</Typography> : <SharedComparisonTable rows={rows} columns={developmentComparisonColumns(tr, rows)} rowKey={(r) => r.id} rowLabel={() => <span />} labelHeader="" rowAccent={(r) => motorColor(r.motor)} onRowClick={(r) => { if (!r.history) void openProjectMotor({ id: selected.id, title: selected.title }, r.motor, r.result.duty).catch((e) => setError(e instanceof Error ? e.message : String(e))); }} headInGroups renderGroupHeader={(r, index, _all, colSpan, headRow) => { const flags = headerFlags(rowMotors, index); return flags.group || flags.history ? <>{flags.group && groupHeader(r, colSpan)}{flags.group && headRow}{flags.history && historyHeader(r, colSpan)}</> : null; }} showAllInputs inputHeaderColor="var(--text-2)" resultHeaderColor="var(--text-2)" enableColumnPicker columnPickerTitle={tr('comparison.columns')} columnPickerLabel={tr('comparison.chooseColumns')} empty={<Typography>{tr('noResults')}</Typography>} renderHeadEnd={() => <Box component="th" sx={{ px: 1, py: 0.65, fontSize: 10, color: 'var(--text-3)', borderBottom: '1px solid var(--line-soft)', bgcolor: 'var(--panel-2)', textAlign: 'left' }}>{tr('comparison.actions')}</Box>} renderRowEnd={(r) => <Box component="td" onClick={(e) => e.stopPropagation()} sx={{ px: 0.5, borderBottom: '1px solid var(--app-bg)', whiteSpace: 'nowrap', cursor: 'default' }}>{r.history ? null : <MotorOpenActions motor={r.motor} duty={r.result.duty} engineer={canManageGlobally} t={tr} projectId={selected.id} projectTitle={selected.title} showAll={showAllVersions} />}</Box>} />}
       </Box>; })()}
     </Box>}
     {view === 'messages' && <Box><Stack spacing={0.8} sx={{ mb: 1 }}>{messages.map((m, i) => <Box key={`${m.created_at}-${i}`}>{i === firstUnreadIndex(messages, shownUnread) && <Divider sx={{ mb: 0.8, fontSize: 10.5 }}><Chip size="small" color="primary" label={tr('unread.new')} sx={{ height: 16, fontSize: 10 }} /></Divider>}<Paper sx={{ p: 1, bgcolor: m.staff_only ? 'var(--internal-tint, rgba(255, 193, 7, 0.12))' : 'var(--panel-2)', ...(m.staff_only ? { borderLeft: '3px solid', borderLeftColor: 'warning.main' } : {}), ...(m.id && shownUnread.has(m.id) ? { borderLeft: '3px solid', borderLeftColor: 'primary.main' } : {}) }}><Typography sx={{ fontSize: 10, color: 'var(--text-3)' }}>{m.author_display_name || tr('projectMember')} · {m.created_at}</Typography><Typography sx={{ fontSize: 12, whiteSpace: 'pre-wrap', color: 'var(--text-1)' }}>{m.text}</Typography>{m.field_ref && <Chip size="small" label={m.field_ref} />}{m.staff_only && <Tooltip title={tr('internalMessageTip')}><Chip size="small" color="warning" label={tr('internalMessage')} sx={{ ml: 0.5 }} /></Tooltip>}{m.price_restricted && <Tooltip title={tr('priceRestrictedTip')}><Chip size="small" label={tr('priceRestricted')} sx={{ ml: 0.5 }} /></Tooltip>}</Paper></Box>)}</Stack><Box sx={{ display: 'flex', gap: 1 }}><TextField size="small" fullWidth multiline maxRows={4} value={message} onChange={(e) => setMessage(e.target.value)} placeholder={tr('writeMessage')} /><Select size="small" displayEmpty value={messageFieldRef} onChange={(e) => setMessageFieldRef(e.target.value)}><MenuItem value="">{tr('noFieldReference')}</MenuItem>{sections.flatMap((section) => (section.fields ?? []).map((f) => <MenuItem key={`${section.id}:${f.id}`} value={`${section.id}:${f.id}`}>{label(f.short_label ?? f.label)}</MenuItem>))}</Select><Tooltip title={audienceBlocked ? tr(audienceBlocked) : ''}><span><Button disabled={busy || !message.trim() || audienceBlocked !== null} onClick={() => void postMessage()}>{tr('send')}</Button></span></Tooltip></Box>{canPostInternal && <Box sx={{ mt: 0.5 }}><MessageAudience value={audience} fixed={null} onChange={(value) => setAudienceState({ project: selected.id, identity: user?.email ?? '', value })} t={tr} /></Box>}{canSetPrices && <Tooltip title={tr('priceRestrictedTip')}><FormControlLabel sx={{ ml: 0 }} control={<Switch size="small" checked={messageRestricted} onChange={(e) => setMessageRestricted(e.target.checked)} />} label={<Typography sx={{ fontSize: 12 }}>{tr('priceRestricted')}</Typography>} /></Tooltip>}<Typography sx={{ mt: 0.5, fontSize: 10.5, color: 'var(--text-4)' }}>{tr('noEmail')}</Typography></Box>}

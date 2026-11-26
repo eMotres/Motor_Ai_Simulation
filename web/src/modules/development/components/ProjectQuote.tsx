@@ -73,11 +73,18 @@ export default function ProjectQuote({ projectId, t }: Props) {
             <TableCell sx={{ ...num, fontWeight: 700 }}>{t('customerQuote.weeksN', { n: quoteWeeks(quote.total_weeks) })}</TableCell>
             <TableCell sx={{ ...num, fontWeight: 700, fontSize: 15 }} data-testid="quote-total">{money(quote.total_price)}</TableCell>
           </TableRow>
+          {quote.next_unit && <TableRow data-testid="quote-next-unit">
+            <TableCell colSpan={2 + QUOTE_LINES.length} sx={{ fontSize: 13.5, fontWeight: 600 }}>
+              <Tooltip title={t('customerQuote.nextUnitTip')}><span>{t('customerQuote.nextUnit')}</span></Tooltip>
+            </TableCell>
+            <TableCell sx={num}>{t('customerQuote.weeksN', { n: quoteWeeks(quote.next_unit.weeks) })}</TableCell>
+            <TableCell sx={{ ...num, fontWeight: 600 }} data-testid="quote-next-unit-price">{money(quote.next_unit.price)}</TableCell>
+          </TableRow>}
         </TableBody>
       </Table>
     </Box>
     <Box sx={{ display: 'grid', gap: 2, mt: 1.5, gridTemplateColumns: { xs: '1fr', sm: '1fr 2fr 1fr' } }}>
-      {fact(t('customerQuote.delivery'), quote.delivery ?? '', 'quote-delivery')}
+      {fact(t('customerQuote.delivery'), [quote.delivery, quote.excluded].filter(Boolean).join(' · '), 'quote-delivery')}
       {fact(t('customerQuote.paymentTerms'), quote.payment_terms, 'quote-terms')}
       {fact(t('customerQuote.sharedOn'), quote.shared_on, 'quote-shared-on')}
     </Box>

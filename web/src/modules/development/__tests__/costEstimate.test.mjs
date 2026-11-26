@@ -8,7 +8,7 @@ import {
   stepState, totalsView, iterationSubtotal, lineTotal, mergeEdits, reconcile, fieldLabel,
   acceptSuggestion, addIteration, blankLane, dhlDetails, dhlOrigin, iterationWeeks, laneErrors, projectWeeks, readView, removeIteration, removeLane,
   setLineWeeks, setShipTo, setWeeksOverride, suggestionAt, suggestionKey, tableModel, upsertLane, validWeeks, weeksText, writeView,
-  applyAuto, autoDhlIterations, autoKey, setDhlAuto,
+  applyAuto, autoDhlIterations, autoKey, setDhlAuto, setNextUnit, setNextUnitShipping, blankNextUnit,
 } from '../costEstimate.ts';
 
 // the real schema the server serves
@@ -563,7 +563,7 @@ test('the suggestions are fetched again only when what they depend on changes', 
 
 test('the schema carries the durations and the shipping block in both languages', () => {
   for (const f of schema.shipping.settings) assert.ok(f.label.en && f.label['zh-CN'] && f.help.en && f.help['zh-CN'], f.id);
-  assert.deepEqual(schema.shipping.settings.map((f) => f.id), ['ship_from', 'ship_to', 'ship_margin_pct', 'ship_round_eur']);
+  assert.deepEqual(schema.shipping.settings.map((f) => f.id), ['ship_from', 'ship_to', 'ship_margin_pct', 'ship_round_eur', 'ship_parcels', 'ship_box_cm', 'ship_service']);
   assert.equal(schema.shipping.settings[0].default, 'CN Shanghai');
   assert.equal(schema.shipping.settings[2].default, 20);
   assert.equal(schema.shipping.settings[3].default, 100, 'DHL is rounded up to whole 100 EUR by default');
@@ -635,4 +635,54 @@ test('the DHL tooltip names the rounding and the unrounded quote', () => {
   assert.equal(lines.at(-1), 'excl');
   assert.ok(!dhlDetails({ ...dhlRef, price_eur_unrounded: 1714.38, round_eur: 0 }, 2, en, 'excl').some((l) => /multiple of/.test(l)), 'no rounding, no line');
   for (const lang of ['en', 'zh-CN']) for (const k of ['rounded', 'autoTip', 'autoOnTip', 'autoFailed']) assert.ok(locale(lang).dhl[k], `${lang} ${k}`);
+});
+
+// ── the next unit survives a 409 retry (Astra review 2026-11-26) ───────────────────────────────────────────────────────
+
+test('a next-unit price typed here is kept when another session saved first (the 3900 EUR regression)', () => {
+  const synced = estimate(2);
+  const mine = setNextUnit(synced, { price: 3900 });
+  const latest = { ...estimate(2), revision: 4, settings: { ...synced.settings, contingency_pct: 12 } };      // someone changed an unrelated setting
+  const { merged, overridden } = mergeEdits(synced, mine, latest);
+  assert.equal(merged.next_unit.price, 3900);
+  assert.equal(merged.settings.contingency_pct, 12);
+  assert.deepEqual(overridden, []);
+});
+
+test('next-unit fields are merged one by one; a clash is reported and the user value wins', () => {
+  const synced = { ...estimate(2), next_unit: { ...blankNextUnit(), price: 4000, note: 'a' } };
+  const mine = setNextUnit(setNextUnit(synced, { price: 3900 }), { parcels: 2 });
+  const latest = { ...synced, revision: 5, next_unit: { ...synced.next_unit, price: 4100, note: 'b', include_testing: true } };
+  const { merged, overridden } = mergeEdits(synced, mine, latest);
+  assert.equal(merged.next_unit.price, 3900);                       // his edit, also changed elsewhere: kept, and told
+  assert.equal(merged.next_unit.parcels, 2);
+  assert.equal(merged.next_unit.note, 'b');                         // the other session's untouched field stays
+  assert.equal(merged.next_unit.include_testing, true);
+  assert.deepEqual(overridden, [{ kind: 'nextUnit', field: 'price' }]);
+  assert.match(fieldLabel(overridden[0], schema, 'en', t), /nextUnit/);
+});
+
+test('an estimate with no next-unit block on any side keeps none after a merge', () => {
+  const synced = estimate(2);
+  const { merged } = mergeEdits(synced, setSetting(synced, schema, 'contingency_pct', 15), { ...synced, revision: 9 });
+  assert.equal('next_unit' in merged, false);
+});
+
+test('the next unit shipping edit is merged as one line', () => {
+  const synced = estimate(2);
+  const mine = setNextUnitShipping(synced, 300, '2026-11-26', 'a@b.c');
+  const { merged } = mergeEdits(synced, mine, { ...synced, revision: 8 });
+  assert.equal(merged.next_unit.shipping.amount, 300);
+});
+
+test('an automatic next-unit shipping line is part of the automatic lines and takes the server numbers', () => {
+  const e = estimate(1);
+  e.next_unit = { ...blankNextUnit(), shipping: { ...blank(), status: 'filled', amount: 500, source: 'dhl', source_ref: null, weeks: 1 } };
+  assert.deepEqual(autoDhlIterations(e), [0]);
+  const k0 = autoKey(e);
+  e.next_unit.parcels = 2;
+  assert.notEqual(autoKey(e), k0);
+  const got = applyAuto(e, { next_unit: { amount: 650, weeks: null, source_ref: null, hint: '' } });
+  assert.equal(got.next_unit.shipping.amount, 650);
+  assert.equal(e.next_unit.shipping.amount, 500);
 });

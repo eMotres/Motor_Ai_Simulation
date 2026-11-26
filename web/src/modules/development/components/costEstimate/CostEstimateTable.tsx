@@ -13,7 +13,7 @@ import EditNoteIcon from '@mui/icons-material/EditNote';
 import AddIcon from '@mui/icons-material/Add';
 import LocalShippingOutlinedIcon from '@mui/icons-material/LocalShippingOutlined';
 import {
-  acceptSuggestion, addIteration as addIterationOf, dhlDetails, editLine, formatMoney, iterationWeeks, lineNeeded, originChip, setIterationField, setLineWeeks, setSetting,
+  acceptSuggestion, addIteration as addIterationOf, dhlDetails, dhlOrigin, editLine, formatMoney, iterationWeeks, lineNeeded, originChip, setIterationField, setLineWeeks, setSetting,
   removeIteration as removeIterationOf, setWeeksOverride, suggestionAt, tableModel, txt, weeksText, WEEKS_MAX, WEEKS_OVERRIDE_MAX,
   type Bench, type CostEstimate, type CostLang, type CostSchema, type CostSuggestions, type LineId, type LineRef, type SuggestionCell, type T,
 } from '../../costEstimate';
@@ -81,7 +81,7 @@ function cellTip(ctx: CellCtx, ref: LineRef, sug: SuggestionCell | undefined): s
   const out: string[] = [];
   if (line.status === 'missing' && sug?.amount !== undefined) {
     out.push(`${t('costEstimate.table.suggested')}: ${money(sug.amount)}`);
-    out.push(sug.source === 'dhl' ? t('costEstimate.origin.dhl', { date: sug.source_ref?.dhl?.quoted_on ?? '?', from: sug.source_ref?.dhl?.from ?? '?', to: sug.source_ref?.dhl?.to ?? '?', weight: weeksText(sug.source_ref?.dhl?.weight_kg ?? null), margin: weeksText(sug.source_ref?.dhl?.margin_pct ?? 0) }) : (sug.origin ?? ''));
+    out.push(sug.source === 'dhl' ? dhlOrigin(sug.source_ref?.dhl, t) : (sug.origin ?? ''));
   } else out.push(`${chip.label}: ${chip.tip}`);
   if (line.status === 'missing' && sug?.hint) out.push(sug.hint);
   if (line.status === 'filled' && line.source === 'dhl' && line.hint) out.push(line.hint);      // an automatic line that could not be recomputed

@@ -326,6 +326,13 @@
   "documents": {
     "loading": "正在加载文件…",
     "upload": "上传",
+    "uploadQueued": "排队中",
+    "uploadFailed": "失败",
+    "uploadCancelled": "已取消",
+    "uploadCancel": "取消",
+    "uploadRetry": "重试",
+    "uploadDismiss": "移除",
+    "alreadyUploading": "{name}：正在上传",
     "uploading": "正在上传 {name}…",
     "dropHere": "将文件拖放到此处",
     "all": "全部",

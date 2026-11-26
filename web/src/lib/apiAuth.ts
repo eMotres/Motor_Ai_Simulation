@@ -95,6 +95,39 @@ export function currentMatJson(): string | null {
 const COMPUTE_RE =
   /\/api\/(geometry\/mesh(2d|_extruded)?|simulation\/(physics(\/[a-z0-9_]+)?|mesh\/build2d(_sliding_band)?))(\?|$)/;
 
+/** The Bearer token the fetch wrapper below would attach to `url` (null: none - signed out, idle-closed token, or not our API).
+ *  For transports that cannot go through fetch (an XMLHttpRequest with upload progress); keeps the same rule in one place. */
+export async function authTokenForUrl(url: string): Promise<string | null> {
+  try {
+    if (!tokenGetter || !isApiUrl(url)) return null;
+    const token = await tokenGetter();
+    return token && !idleClosedTokens.has(token) ? token : null;
+  } catch { return null; }
+}
+
+/** What the fetch wrapper does with an ANSWER, for a transport that cannot use it: the idle-close notice and the refusal notice. */
+export async function noteApiAnswer(url: string, usedToken: string | null, status: number, authReason: string | null, body: unknown): Promise<void> {
+  try {
+    if (!isApiUrl(url)) return;
+    const reason = (body && typeof body === 'object' ? (body as { reason?: unknown }).reason : undefined);
+    const idleReason = authReason === 'idle_timeout' || (status === 401 && reason === 'idle_timeout');
+    if (usedToken && idleReason) {
+      const cur = tokenGetter ? await tokenGetter() : null;
+      const firstClose = !idleClosedTokens.has(usedToken);
+      idleClosedTokens.add(usedToken);
+      if (cur === usedToken && firstClose) window.dispatchEvent(new CustomEvent(AUTH_IDLE_EVENT));
+    }
+    if (status === 401 || status === 403) {
+      const key = refusalReasonKey(status, body);
+      if (key) window.dispatchEvent(new CustomEvent('api-refused', { detail: { key } }));
+    }
+    if (status === 421) {
+      const target = wrongRegionTarget(421, body, window.location.href);
+      if (target) window.location.assign(target);
+    }
+  } catch { /* a notice must never break a request */ }
+}
+
 export function installFetchAuth(): void {
   const w = window as unknown as { __fetchAuthInstalled?: boolean };
   if (w.__fetchAuthInstalled) return;

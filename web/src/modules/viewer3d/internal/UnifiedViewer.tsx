@@ -36,6 +36,8 @@ export interface UnifiedViewerProps {
   highlightFamilies?: readonly string[] | null;
   /** the explode slider's start value (0..1) after every load / reset; default 0 */
   defaultExplode?: number;
+  /** a standard view the camera takes once per resetKey after the first load (default: what the viewer opens with) */
+  initialView?: StandardView;
 }
 
 // the projection the viewer was last left in, kept for this tab's session (owner 2026-10-17)
@@ -62,6 +64,8 @@ const UnifiedViewer: React.FC<UnifiedViewerProps> = (p) => {
   const [localSelected, setLocalSelected] = useState<string | null>(null);
   const [loadedGroups, setLoadedGroups] = useState<PartGroup[]>([]);
   const initialized = useRef('');
+  const viewApplied = useRef('');
+  const initialView = p.initialView;
   const initializedWithRows = useRef(false);
   const resetKey = `${p.resetKey}\u0000${p.toolbarSpec}`;
   const selectedKey = p.selectedKey === undefined ? localSelected : p.selectedKey;
@@ -110,8 +114,9 @@ const UnifiedViewer: React.FC<UnifiedViewerProps> = (p) => {
   const tools = useMemo(() => ({ hidden:new Set<string>(), explode, section, measure, edges }), [explode, section, measure, edges]);
   const loaded = useCallback((r: { groups: PartGroup[]; range: { min:number; max:number } }) => {
     setExplode(p.defaultExplode ?? 0); setMeasure(false); setMeasuredMm(null); p.onMeasure?.(null);
+    if (initialView && viewApplied.current !== resetKey) { viewApplied.current = resetKey; const v = initialView; window.setTimeout(() => { canvas.current?.view(v); canvas.current?.fit(); }, 0); }
     setRange(r.range); setSection({ on:false, axis:'x', position:(r.range.min+r.range.max)/2 }); setLoadedGroups(r.groups); p.onLoaded?.(r);
-  }, [p.onLoaded, p.onMeasure, p.defaultExplode]);
+  }, [p.onLoaded, p.onMeasure, p.defaultExplode, initialView, resetKey]);
   const changeSection = useCallback((s: { on:boolean; axis:Axis; position:number }) => {
     if (s.axis !== section.axis) { const r = canvas.current?.sectionRange(s.axis) ?? range; setRange(r); setSection({ ...s, position:(r.min+r.max)/2 }); }
     else setSection(s);

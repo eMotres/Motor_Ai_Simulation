@@ -23,10 +23,17 @@ export function PassBanner({ r, isPoint }: { r: EvaluationResult; isPoint: boole
   const colour = r.passed ? TONE_COLOUR.ok : TONE_COLOUR.failed;
   return (
     <Box data-testid="gears-pass" sx={{ display: 'flex', gap: 1, alignItems: 'center', flexWrap: 'wrap' }}>
-      <Tooltip title={t(isPoint ? 'tip.passPoint' : 'tip.pass')}>
-        <Chip size="small" label={r.passed ? t('passed') : t('notPassed')} data-passed={r.passed ? 'true' : 'false'}
-          sx={{ color: '#fff', bgcolor: colour, fontWeight: 600 }} />
-      </Tooltip>
+      {isPoint ? (
+        // a single point is never a duty qualification: no red verdict, the reasons stay below
+        <Tooltip title={t('tip.noVerdict')}>
+          <Chip size="small" variant="outlined" label={t('noVerdict')} data-verdict="none" sx={{ fontWeight: 600 }} />
+        </Tooltip>
+      ) : (
+        <Tooltip title={t('tip.pass')}>
+          <Chip size="small" label={r.passed ? t('passed') : t('notPassed')} data-passed={r.passed ? 'true' : 'false'}
+            sx={{ color: '#fff', bgcolor: colour, fontWeight: 600 }} />
+        </Tooltip>
+      )}
       <StateChip state={r.state} />
       <Typography sx={{ fontSize: 12 }}>{t('presetUsed', { name: t(`presetName.${r.preset_name}`, { defaultValue: r.preset_name }) })}</Typography>
       {r.pass_reasons?.length > 0 && (

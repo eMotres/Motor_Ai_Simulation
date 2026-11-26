@@ -59,7 +59,9 @@ export interface EvaluationResult extends Rec {
 }
 
 export interface Outline extends Rec { z: number; is_internal: boolean; outer_diameter_mm: number | null; outline_mm: Array<[number, number]>; b_mm: number }
-export interface Placement { name: string; member_id: string; role: string; stage_index: number; outline_id: string; outline: Outline | null; center_mm: [number, number, number]; face_width_mm: number; reference_angle_deg: number }
+export interface Placement { name: string; member_id: string; role: string; stage_index: number; outline_id: string; outline: Outline | null; center_mm: [number, number, number]; face_width_mm: number; reference_angle_deg: number;
+  speed_ratio_to_input: number; carrier_speed_ratio_to_input: number; carrier_center_mm: [number, number, number];
+  orbital_radius_mm: number; orbital_angle_ref_deg: number }
 export interface AssemblyResult extends Rec { members: Placement[]; outlines: Record<string, Outline>; overall_ratio: number }
 export interface PoseMember { name: string; member_id: string; role: string; center_mm: [number, number, number]; rotation_deg: number }
 export interface PoseResult extends Rec { input_angle_deg: number; members: Record<string, PoseMember> }

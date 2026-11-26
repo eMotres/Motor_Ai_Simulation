@@ -12,7 +12,7 @@ import { oneOf } from '../../lib/viewMemory';
 import { useRememberedView } from '../../lib/useRememberedView';
 import { GearsApiError, gearsApi } from './api';
 import { errorMap, humanoidJoint, toPlainBody, validateEditor, type EditorState } from './plain';
-import type { AssemblyResult, CataloguesAnswer, EvaluationResult, FieldError, GearboxResponse, PoseMember, PoseResult, RequestRecord } from './types';
+import type { AssemblyResult, CataloguesAnswer, EvaluationResult, FieldError, GearboxResponse } from './types';
 import AssemblyView from './components/AssemblyView';
 import Limitations from './components/Limitations';
 import OperatingEditor from './components/OperatingEditor';
@@ -37,7 +37,6 @@ export default function GearsPage() {
   const [errors, setErrors] = useState<FieldError[]>([]);
   const [failure, setFailure] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const poseRecord = useRef<RequestRecord | null>(null);
   const abort = useRef<AbortController | null>(null);
 
   useEffect(() => {
@@ -65,7 +64,6 @@ export default function GearsPage() {
         const key = keyOf('assembly');
         const rec = await gearsApi.template(toPlainBody(state, 'assembly', { outline_once: true, outline_stride: 4 }), ctl.signal);
         const response = await gearsApi.assembly(rec, ctl.signal) as GearboxResponse<AssemblyResult>;
-        poseRecord.current = await gearsApi.template(toPlainBody(state, 'pose', { input_angle_deg: 0 }), ctl.signal);
         setAssembly({ response, key });
       } else {
         const key = keyOf(tab);
@@ -75,13 +73,6 @@ export default function GearsPage() {
       }
     } catch (e) { fail(e); } finally { if (abort.current === ctl) setBusy(false); }
   };
-
-  const loadPose = useCallback(async (angle: number): Promise<Record<string, PoseMember>> => {
-    const rec = poseRecord.current;
-    if (!rec) throw new Error(t('noAssembly'));
-    const response = await gearsApi.pose({ ...rec, input_angle_deg: angle }) as GearboxResponse<PoseResult>;
-    return response.result.members;
-  }, [t]);
 
   const shown = tab === 'point' ? point : tab === 'spectrum' ? spectrum : null;
   const stale = (ran: Ran<unknown> | null) => !!ran && ran.key !== keyOf(tab);
@@ -113,7 +104,7 @@ export default function GearsPage() {
           </Box>
           {tab === 'spectrum' && <SpectrumEditor value={state.spectrum} onChange={(v) => setState({ ...state, spectrum: v })} errors={fieldErrors} />}
           {tab === 'assembly'
-            ? <AssemblyView assembly={assembly?.response.result ?? null} sourceKey={`gears:${assembly?.response.request_hash ?? 'none'}`} loadPose={loadPose} busy={busy} />
+            ? <AssemblyView assembly={assembly?.response.result ?? null} sourceKey={`gears:${assembly?.response.request_hash ?? 'none'}`} busy={busy} />
             : shown ? <Results result={shown.response.result} isPoint={tab === 'point'} />
               : <Typography sx={{ fontSize: 13, color: 'var(--text-3)' }}>{t('noResult')}</Typography>}
           <Limitations />

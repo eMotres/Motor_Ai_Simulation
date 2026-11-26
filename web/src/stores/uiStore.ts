@@ -33,7 +33,7 @@ interface UIState {
   magnetVisibility: Record<number, boolean>;
 
   toggleSidebar: () => void;
-  setActiveTab: (tab: 'motors' | 'geometry' | 'materials' | 'mesh' | 'simulation' | 'static3d' | 'cost' | 'sweep' | 'compare' | 'admin' | 'schemas') => void;
+  setActiveTab: (tab: 'motors' | 'geometry' | 'materials' | 'mesh' | 'simulation' | 'static3d' | 'cost' | 'sweep' | 'compare' | 'admin' | 'schemas' | 'gears') => void;
   toggleWireframe: () => void;
   toggleAxes: () => void;
   toggleGrid: () => void;

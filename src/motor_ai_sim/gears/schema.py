@@ -59,7 +59,8 @@ def encode_record(obj):
     from .common import serialize_value
     # Explicitly marked additive defaults preserve legacy canonical v1 bytes.
     present = [f for f in fields(obj) if not (
-        f.metadata.get('omit_if_default') and getattr(obj, f.name) == f.default)]
+        (f.metadata.get('omit_if_default') and getattr(obj, f.name) == f.default)
+        or f.metadata.get('omit_if_flag') in getattr(obj, 'flags', []))]
     out = {f.name: serialize_value(getattr(obj, f.name)) for f in present}
     if type(obj).__name__ == 'PlanetaryStageSpec': out['kind'] = obj.kind
     availability = {}

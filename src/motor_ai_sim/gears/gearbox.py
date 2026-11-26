@@ -210,8 +210,9 @@ class PairStageSpec(DictResultMixin):
     flags: List[str] = field(default_factory=list)
 
     stage_id: str = field(default_factory=lambda: "stage_" + uuid.uuid4().hex)
-    # Manufacturing/assembly mesh misalignment [um]; f_sh remains separately estimated.
+    # Separate manufacturing/assembly and shaft/pin mesh misalignment [um].
     f_ma_um: Optional[float] = field(default=None, metadata={"omit_if_default": True})
+    f_sh_um: Optional[float] = field(default=None, metadata={"omit_if_default": True})
 
     def __post_init__(self):
         from typing import get_type_hints, get_args
@@ -229,7 +230,7 @@ class PairStageSpec(DictResultMixin):
         if self.kind not in ("spur_pair", "helical_pair", "internal_pair"):
             raise ValueError("Unknown pair stage kind")
         validate_fields(self, positive=("centre_distance_mm", "shaft1_span_mm", "shaft2_span_mm"),
-                        nonnegative=("immersion_depth_mm", "grease_drag_torque_Nm", "f_ma_um"),
+                        nonnegative=("immersion_depth_mm", "grease_drag_torque_Nm", "f_ma_um", "f_sh_um"),
                         signed=("shaft1_offset_mm", "shaft2_offset_mm"))
 
 
@@ -277,6 +278,8 @@ class PlanetaryStageSpec(DictResultMixin):
     # Separate inputs for each mesh, including stepped planets.
     sun_planet_f_ma_um: Optional[float] = field(default=None, metadata={"omit_if_default": True})
     planet_ring_f_ma_um: Optional[float] = field(default=None, metadata={"omit_if_default": True})
+    sun_planet_f_sh_um: Optional[float] = field(default=None, metadata={"omit_if_default": True})
+    planet_ring_f_sh_um: Optional[float] = field(default=None, metadata={"omit_if_default": True})
 
     def __post_init__(self):
         from typing import get_type_hints, get_args
@@ -298,7 +301,8 @@ class PlanetaryStageSpec(DictResultMixin):
         validate_fields(self, counts=("n_planets", "n_bearings_per_planet"),
                         nonnegative=("planet_bearing_spacing_mm", "carrier_inertia_kg_m2", "carrier_mass_kg",
                                      "immersion_depth_mm", "grease_drag_torque_Nm",
-                                     "sun_planet_f_ma_um", "planet_ring_f_ma_um"))
+                                     "sun_planet_f_ma_um", "planet_ring_f_ma_um",
+                                     "sun_planet_f_sh_um", "planet_ring_f_sh_um"))
         validate_fields(self,nonnegative=("input_external_radial_N","output_external_radial_N",
                         "input_external_axial_N","output_external_axial_N"),
                         positive=("input_shaft_span_mm","output_shaft_span_mm"))
@@ -959,6 +963,7 @@ def _evaluate_pair_stage(
         mesh_forces=mf,
         n1_rel_rpm=kin.member_speeds_rpm["gear1"],
         f_ma_um=stage.f_ma_um,
+        f_sh_um=stage.f_sh_um,
         lubricant=lubricant,
         temp_C=temp_C,
         cycles_1=(member_cycles or {}).get("gear1", abs(kin.member_speeds_rpm["gear1"])*60.*required_life_h),
@@ -1271,6 +1276,7 @@ def _evaluate_planetary_stage(
         mesh_forces=mf_sp,
         n1_rel_rpm=v_s_rpm,
         f_ma_um=stage.sun_planet_f_ma_um,
+        f_sh_um=stage.sun_planet_f_sh_um,
         lubricant=lubricant,
         temp_C=temp_C,
         cycles_1=(member_cycles or {}).get("sun", stage.n_planets*abs(v_s_rpm)*60.*required_life_h),
@@ -1288,6 +1294,7 @@ def _evaluate_planetary_stage(
         mesh_forces=mf_pr,
         n1_rel_rpm=w_p_rel_rpm,
         f_ma_um=stage.planet_ring_f_ma_um,
+        f_sh_um=stage.planet_ring_f_sh_um,
         lubricant=lubricant,
         temp_C=temp_C,
         cycles_1=(member_cycles or {}).get("planet2" if stage.planet2 else "planet", abs(w_p_rel_rpm)*60.*required_life_h),

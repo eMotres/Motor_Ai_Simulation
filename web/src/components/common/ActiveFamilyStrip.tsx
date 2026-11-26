@@ -44,7 +44,7 @@ import { useAuth } from '../../contexts/AuthContext';
 import { useLastMotorState } from '../../lib/lastMotor';
 import { fetchFamilyTree } from '../../lib/familyTree';
 import { modeNames, type RowDie } from '../../lib/catalogRows';
-import { dutyEfficiencyBasis, dutyEfficiencyPct } from '../../lib/dutyEfficiency';
+import { dutyEfficiencyBasis, dutyEfficiencyPct, shaftExtraW, withPageMechanicalContext } from '../../lib/dutyEfficiency';
 import { dutyDefinitionOnly, atomicDutyRunBody } from '../../lib/dutyRunSave';
 import { dutyLabel, isShortTime, type DutyClassInfo } from '../../lib/dutyClass';
 import { suggestDieName } from '../../lib/dieNames';
@@ -367,7 +367,7 @@ const ActiveFamilyStrip: React.FC = () => {
       // MEASURED torque/power replace the duty's stored kW/Nm (an old target
       // must not outlive a real run at the new point), and its results are
       // recorded right after.
-      const s = readLS('lastSummary', null);
+      const s = withPageMechanicalContext(readLS('lastSummary', null));
       // Match the run by its INPUTS (current, speed, γ, the REQUESTED mode).
       // s.op_mode is derived from the power-flow sign — a generator-mode run
       // near a zero-crossing reads "motor" there, and comparing it against
@@ -702,7 +702,8 @@ const ActiveFamilyStrip: React.FC = () => {
                       loss_w: s.P_loss_total_W, mass_kg: s.mass_total_kg,
                       // …and the mechanical watts that η above already carries,
                       // so the catalog's loss column can be read either way.
-                      ...(Number.isFinite(Number(s.P_bearings_W))
+                      ...(sc ? (shaftExtraW(s) != null ? { loss_mech_w: shaftExtraW(s) } : {})
+                        : Number.isFinite(Number(s.P_bearings_W))
                           || Number.isFinite(Number(s.P_windage_W))
                           ? { loss_mech_w: Number(s.P_bearings_W ?? 0)
                                          + Number(s.P_windage_W ?? 0) } : {}),
@@ -715,6 +716,11 @@ const ActiveFamilyStrip: React.FC = () => {
                         ? { kv_rpm_per_v: Number(vw.KV_rpm_per_V_line),
                             kv_is_noload: vw.view_flags?.kv === 'no-load' ? 1 : 0 }
                         : {}) };
+        // Read-only charts derive their summary from the waveform payload too: carry the SAME saved context there.
+        const savedPayload = sc && tOfRun ? { ...tOfRun, summary: { ...tOfRun.summary,
+          P_mech_extra_W: s.P_mech_extra_W, P_mech_extra_source: s.P_mech_extra_source,
+          P_bearings_W: s.P_bearings_W, P_windage_W: s.P_windage_W,
+        } } : tOfRun;
         // Summary and numbers are one save, even when this browser has no waveforms.
         try {
           const rr = await fetch(`${API}/api/family/duty_run`, {
@@ -722,7 +728,7 @@ const ActiveFamilyStrip: React.FC = () => {
             body: JSON.stringify(atomicDutyRunBody(
               { die: tDie, config: cfgName, duty: tDuty, drive,
                 settings: dutyBody.mesh, summary: s, result,
-                assignment_sig: dutyBody.assignment_sig }, tOfRun)),
+                assignment_sig: dutyBody.assignment_sig }, savedPayload)),
           });
           if (rr.ok) {
             const saved = await rr.json();

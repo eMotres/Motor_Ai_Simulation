@@ -32,6 +32,7 @@ from __future__ import annotations
 import contextlib
 import contextvars
 import hashlib
+import json
 import logging
 import os
 import re
@@ -105,7 +106,37 @@ def _lock():
     return json_store.lock_for(_file())
 
 
-def _load() -> Dict[str, dict]:
+def _load(*, strict: bool = False) -> Dict[str, dict]:
+    if strict:
+        # Repair protection must distinguish an absent registry from unreadable/corrupt metadata.
+        def unique_object(pairs):
+            obj = {}
+            for key, value in pairs:
+                if key in obj:
+                    raise ValueError("duplicate revision metadata key")
+                obj[key] = value
+            return obj
+
+        def invalid_constant(value):
+            raise ValueError("invalid revision metadata constant")
+
+        try:
+            text = _file().read_text(encoding="utf-8")
+        except FileNotFoundError:
+            return {}
+        doc = json.loads(text, object_pairs_hook=unique_object, parse_constant=invalid_constant)
+        if not isinstance(doc, dict) or not isinstance(doc.get("lineages"), dict):
+            raise ValueError("invalid revision lineages")
+        for lin in doc["lineages"].values():
+            if not isinstance(lin, dict) or not isinstance(lin.get("revisions"), list):
+                raise ValueError("invalid revision lineage")
+            for rev in lin["revisions"]:
+                if (not isinstance(rev, dict)
+                        or not isinstance(rev.get("die"), str) or not rev["die"].strip()
+                        or not isinstance(rev.get("config"), str) or not rev["config"].strip()
+                        or not isinstance(rev.get("frozen"), bool)):
+                    raise ValueError("invalid revision protection record")
+        return doc["lineages"]
     doc = json_store.read_json(_file(), default=None)
     lineages = doc.get("lineages") if isinstance(doc, dict) else None
     return lineages if isinstance(lineages, dict) else {}
@@ -128,13 +159,13 @@ def _same(a: str, b: str) -> bool:
     return str(a) == str(b) or str(a).casefold() == str(b).casefold()
 
 
-def find(die: str, config: str) -> Optional[Tuple[dict, dict]]:
+def find(die: str, config: str, *, strict: bool = False) -> Optional[Tuple[dict, dict]]:
     """``(lineage, revision)`` of the motor ``die/config`` or ``None`` (exact name first, then case-insensitive)."""
     die, config = str(die or ""), str(config or "")
     if not die or not config:
         return None
     loose: Optional[Tuple[dict, dict]] = None
-    for lin in _load().values():
+    for lin in _load(strict=strict).values():
         for rev in lin.get("revisions") or []:
             if rev.get("die") == die and rev.get("config") == config:
                 return lin, rev

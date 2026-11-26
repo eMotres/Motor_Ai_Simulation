@@ -74,7 +74,7 @@ def skip_reason(die: str, cfg: str) -> Optional[str]:
     protection metadata that cannot be read (refusal, never a guess)."""
     try:
         from motor_ai_sim import motor_revisions as _mr
-        hit = _mr.find(die, cfg)
+        hit = _mr.find(die, cfg, strict=True)
         if hit is not None and hit[1].get("frozen"):
             return "frozen_revision"
     except Exception:  # noqa: BLE001

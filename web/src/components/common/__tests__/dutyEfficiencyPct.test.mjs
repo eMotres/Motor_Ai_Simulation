@@ -131,8 +131,8 @@ test('null / non-finite mechanical context is unknown, never zero (Number(null) 
   assert.equal(shaftExtraW({ P_mech_extra_W: null, P_bearings_W: null, P_windage_W: null }), null);
   assert.equal(shaftExtraW({ P_mech_extra_W: Number.NaN }), null);
   assert.equal(shaftExtraW({ P_mech_extra_W: 5 }), 5);
-  assert.equal(shaftExtraW({ P_bearings_W: 3 }), 3);
-  assert.equal(shaftExtraW({ P_bearings_W: 3, P_windage_W: 1 }), 4);
+  assert.equal(shaftExtraW({ P_bearings_W: 3 }), null);
+  assert.equal(shaftExtraW({ P_bearings_W: 3, P_windage_W: 1 }), null);
 });
 
 test('golden: an unmarked summary (with or without an efficiency field) keeps the old formula bit for bit', () => {

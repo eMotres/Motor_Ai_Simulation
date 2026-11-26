@@ -17,6 +17,7 @@ import { currentMatJson } from '../../lib/apiAuth';
 import { assignmentSignature } from '../../lib/dutyMaterials';
 import { fetchBearingLosses } from '../../lib/machineBearings';
 import type { BearingLosses } from '../../lib/machineBearings';
+import { hasMechanicalContext, resolveMechanicalContext, rememberPageMechanicalContext } from '../../lib/dutyEfficiency';
 import { useMotorStore } from '../../stores/motorStore';
 import { end3dStatusOf, end3dStatusView } from '../../lib/end3dStatus';
 import { couplingLine, couplingTooltip, coupledStateLine,
@@ -617,7 +618,7 @@ const SummaryTable: React.FC<Props> = ({ summary, loading, fromSweep, liveOp, re
     }
     return t > 0 ? t : null;
   }, [summary?.mass_components]);
-  const runCarriesMech = summary?.P_mech_extra_W != null;
+  const runCarriesMech = hasMechanicalContext(summary);
   React.useEffect(() => {
     // A run that carries its OWN mechanical block needs no fetch: those watts
     // describe THE RUN, at the bearing temperature it was billed at, and a
@@ -793,12 +794,12 @@ const SummaryTable: React.FC<Props> = ({ summary, loading, fromSweep, liveOp, re
   // Losses stay 2-D under the 3D toggle (the same rule the loss tiles follow),
   // so these read untouched either way.
   const runMech = s.mech_losses;
-  const fromRun = s.P_mech_extra_W != null;
-  const pBrg = fromRun ? Number(s.P_bearings_W ?? 0)
-             : (mech?.has_bearings ? Number(mech?.P_bearings_W ?? 0) : null);
-  const pWind = fromRun ? s.P_windage_W : mech?.P_windage_W;
-  const pExtra = fromRun ? Number(s.P_mech_extra_W ?? 0)
-               : (mech?.has_bearings ? Number(mech?.P_mech_extra_W ?? 0) : null);
+  const fromRun = hasMechanicalContext(s);
+  const mechanical = resolveMechanicalContext(summary, mech);
+  if (!readOnly) rememberPageMechanicalContext(summary, mechanical);
+  const pBrg = mechanical.P_bearings_W;
+  const pWind = mechanical.P_windage_W;
+  const pExtra = mechanical.P_mech_extra_W;
   const brgTempC = fromRun ? s.bearing_temp_c : mech?.temp_c;
   const brgWind = fromRun ? runMech?.windage : mech?.windage;
   const brgNames = fromRun ? (runMech?.cards ?? [])

@@ -243,11 +243,11 @@ def test_frozen_and_production_linked_configurations_are_skipped_in_dry_run_and_
     done = repair.repair(apply=True, backup_dir=tmp_path / "bak")
     assert done["saved"] == 0 and p.read_bytes() == original and not (tmp_path / "bak").exists()
     (ps.path_for(DIE, CFG) / "production.json").unlink()
-    monkeypatch.setattr(MR, "find", lambda d, c: ({"id": "x"}, {"frozen": True}))
+    monkeypatch.setattr(MR, "find", lambda d, c, **kw: ({"id": "x"}, {"frozen": True}))
     assert [r.get("skip") for r in repair.scan()] == ["frozen_revision"]
     assert repair.repair(apply=True, backup_dir=tmp_path / "bak")["saved"] == 0 and p.read_bytes() == original
     # unreadable protection metadata is a refusal, not a guess
-    monkeypatch.setattr(MR, "find", lambda d, c: (_ for _ in ()).throw(OSError("store unreadable")))
+    monkeypatch.setattr(MR, "find", lambda d, c, **kw: (_ for _ in ()).throw(OSError("store unreadable")))
     assert [r.get("skip") for r in repair.scan()] == ["protection_unreadable"]
     assert repair.repair(apply=True, backup_dir=tmp_path / "bak")["saved"] == 0 and p.read_bytes() == original
 
@@ -461,3 +461,90 @@ def test_page_efficiency_precision_survives_both_routes(dies, pct):
         saved = _duty(dies)["result"]["efficiency_pct"]
         assert saved == pct
         assert (None if saved is None else f"{saved:.2f}") == (None if pct is None else f"{pct:.2f}")
+
+@pytest.mark.parametrize("metadata", [
+    '{"lineages":',  # real truncated JSON, formerly swallowed by json_store.read_json
+    '', 'null', '[]', '{}', '{"lineages": []}',
+    '{"lineages": {"x": null}}', '{"lineages": {"x": {"revisions": null}}}',
+    '{"lineages": {"x": {"revisions": [{"die": "D", "config": "C"}]}}}',
+    '{"lineages": {"x": {"revisions": [{"die": "D", "config": "C", "frozen": null}]}}}',
+    '{"lineages": {"x": {"revisions": [{"die": "D", "config": "C", "frozen": 0}]}}}',
+    '{"lineages": {}, "lineages": {}}', '{"lineages": {}, "other": NaN}',
+])
+def test_real_corrupt_revision_metadata_refuses_repair_without_any_write(dies, tmp_path, monkeypatch, metadata):
+    from motor_ai_sim import motor_revisions as MR
+    from motor_ai_sim.routes import family as fam
+    p = _marked_cfg(dies)
+    monkeypatch.setenv("MOTRES_MOTOR_REVISIONS_ROOT", str(tmp_path / "revisions"))
+    MR.root().mkdir()
+    MR._file().write_text(metadata, encoding="utf-8")
+    before = {q.relative_to(tmp_path): q.read_bytes() for q in tmp_path.rglob('*') if q.is_file()}
+    writes = []
+    monkeypatch.setattr(fam, "_save_yaml", lambda *a, **kw: writes.append(a))
+    dry = repair.repair()
+    done = repair.repair(apply=True, backup_dir=tmp_path / "bak")
+    assert [r.get("skip") for r in dry["rows"]] == ["protection_unreadable"]
+    assert done["rows"] == dry["rows"] and done["saved"] == 0
+    assert not writes and not (tmp_path / "bak").exists()
+    after = {q.relative_to(tmp_path): q.read_bytes() for q in tmp_path.rglob('*') if q.is_file()}
+    assert after == before  # config, registry, history, and every other sandbox file unchanged
+
+
+@pytest.mark.parametrize("frozen", [False, True])
+def test_strict_revision_reader_accepts_real_valid_registry(dies, tmp_path, monkeypatch, frozen):
+    import json
+    from motor_ai_sim import motor_revisions as MR
+    p = _marked_cfg(dies)
+    before = p.read_bytes()
+    monkeypatch.setenv("MOTRES_MOTOR_REVISIONS_ROOT", str(tmp_path / "revisions"))
+    monkeypatch.setenv("MOTRES_PRODUCTION_ROOT", str(tmp_path / "production"))
+    MR.root().mkdir()
+    MR._file().write_text(json.dumps({"lineages": {"x": {"revisions": [
+        {"die": DIE.lower(), "config": CFG.lower(), "frozen": frozen}]}}}), encoding="utf-8")
+    assert MR.find(DIE, CFG, strict=True)[1]["frozen"] is frozen
+    done = repair.repair(apply=True, backup_dir=tmp_path / "bak")
+    assert done["saved"] == (0 if frozen else 1)
+    if frozen:
+        assert done["rows"][0]["skip"] == "frozen_revision"
+        assert p.read_bytes() == before and not (tmp_path / "bak").exists()
+    else:
+        assert len(list((tmp_path / "bak" / DIE).iterdir())) == 1
+
+
+def test_revision_corruption_after_scan_is_rechecked_before_backup(dies, tmp_path, monkeypatch):
+    from motor_ai_sim import motor_revisions as MR
+    p = _marked_cfg(dies)
+    before = p.read_bytes()
+    monkeypatch.setenv("MOTRES_MOTOR_REVISIONS_ROOT", str(tmp_path / "revisions"))
+    monkeypatch.setenv("MOTRES_PRODUCTION_ROOT", str(tmp_path / "production"))
+    MR.root().mkdir()
+    MR._file().write_text('{"lineages": {}}', encoding="utf-8")
+    original_scan = repair.scan
+
+    def corrupt_after_scan():
+        rows = original_scan()
+        assert rows and not rows[0].get("skip")
+        MR._file().write_text('{"lineages":', encoding="utf-8")
+        return rows
+
+    monkeypatch.setattr(repair, "scan", corrupt_after_scan)
+    done = repair.repair(apply=True, backup_dir=tmp_path / "bak")
+    assert done["saved"] == 0
+    assert done["failed"] == [{"die": DIE, "config": CFG, "error": "protection_unreadable"}]
+    assert p.read_bytes() == before and not (tmp_path / "bak").exists()
+
+
+@pytest.mark.parametrize("extra,source,eff", [(None, "unknown", 100 / 110 * 100), (20, "live_bearings", 80 / 110 * 100)])
+def test_atomic_run_persists_resolved_mechanical_context_with_full_precision(dies, extra, source, eff):
+    summary = {**MARKED, "P_mech_W": 100, "P_loss_total_W": 10,
+               "P_mech_extra_W": extra, "P_mech_extra_source": source}
+    response = client.post("/api/family/duty_run", json={"die": DIE, "config": CFG, "duty": DUTY,
+        "drive": "current", "summary": summary,
+        "result": {"efficiency_pct": eff, "efficiency_basis": "shaft_before_bearings" if extra is None else "coupling"}})
+    assert response.status_code == 200, response.text
+    duty = _duty(dies)
+    for saved in [duty, duty["runs"]["current"]]:
+        assert saved["summary"]["P_mech_extra_W"] == extra
+        assert saved["summary"]["P_mech_extra_source"] == source
+        assert saved["result"]["efficiency_pct"] == eff
+        assert f'{saved["result"]["efficiency_pct"]:.2f}' == f'{eff:.2f}'

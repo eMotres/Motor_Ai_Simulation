@@ -3,15 +3,55 @@ import { shaftBalance } from './shaftBalance.ts';
 const MARKER = 'fe_on_shaft_k3d_v1';
 const fin = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) ? v : null);
 
-/** The mechanical context a MARKED point is saved with: the SAME watts the Electromagnetic tab's tiles use (SummaryTable: the run's
- *  own `P_mech_extra_W` first, else the bearings + windage components it carries).  Strict finite numbers only (`Number(null)` is
- *  NOT a known loss); null = the machine has no bearing model, the friction is unknown. */
+export interface MechanicalContext {
+  P_mech_extra_W: number | null;
+  P_mech_extra_source: 'run' | 'live_bearings' | 'unknown';
+  P_bearings_W: number | null;
+  P_windage_W: number | null;
+}
+
+/** A saved null with provenance is resolved too: never fetch today's friction for it. */
+export function hasMechanicalContext(s: any): boolean {
+  return s?.P_mech_extra_W != null
+    || ['run', 'live_bearings', 'unknown'].includes(s?.P_mech_extra_source);
+}
+
+/** SummaryTable's rule: run total first; otherwise LIVE bearings, never a sum of stale run components. */
+export function resolveMechanicalContext(s: any, live: any): MechanicalContext {
+  if (hasMechanicalContext(s)) {
+    return {
+      P_mech_extra_W: fin(s.P_mech_extra_W),
+      P_mech_extra_source: s.P_mech_extra_source ?? 'run',
+      P_bearings_W: s.P_mech_extra_source ? fin(s.P_bearings_W) : fin(s.P_bearings_W ?? 0),
+      P_windage_W: fin(s.P_windage_W),
+    };
+  }
+  return {
+    P_mech_extra_W: live?.has_bearings ? fin(live.P_mech_extra_W ?? 0) : null,
+    P_mech_extra_source: live?.has_bearings ? 'live_bearings' : 'unknown',
+    P_bearings_W: live?.has_bearings ? fin(live.P_bearings_W ?? 0) : null,
+    P_windage_W: fin(live?.P_windage_W),
+  };
+}
+
+// Tab-local handoff from the displayed card, keyed by the ENTIRE raw summary, including run/build identity.
+// It is deliberately not localStorage: another tab or a reload must not supply a stale live response.
+let pageMechanical: { summary: string; context: MechanicalContext } | null = null;
+export function rememberPageMechanicalContext(summary: any, context: MechanicalContext): void {
+  pageMechanical = { summary: JSON.stringify(summary), context: { ...context } };
+}
+
+/** Capture once at the start of Save. The atomic run request persists this context beside its efficiency. */
+export function withPageMechanicalContext(s: any): any {
+  if (s?.shaft_convention !== MARKER) return s; // legacy saves keep their historical shape/formula
+  const context = pageMechanical?.summary === JSON.stringify(s)
+    ? pageMechanical.context : resolveMechanicalContext(s, null);
+  return { ...s, ...context };
+}
+
+/** Marked saved efficiency consumes ONLY the resolved total; absent/unknown is never inferred from components. */
 export function shaftExtraW(s: any): number | null {
-  const e = fin(s?.P_mech_extra_W);
-  if (e != null) return e;
-  const b = fin(s?.P_bearings_W);
-  const w = fin(s?.P_windage_W);
-  return b == null && w == null ? null : (b ?? 0) + (w ?? 0);
+  return fin(s?.P_mech_extra_W);
 }
 
 /** The basis `dutyEfficiencyPct` stores beside a MARKED point's efficiency (null for any other point, which stores none):

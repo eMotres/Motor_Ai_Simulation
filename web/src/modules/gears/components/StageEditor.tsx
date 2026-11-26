@@ -4,7 +4,7 @@ import ArrowUpwardIcon from '@mui/icons-material/ArrowUpward';
 import ArrowDownwardIcon from '@mui/icons-material/ArrowDownward';
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
 import { useTranslation } from 'react-i18next';
-import { BEARING_SLOTS, F_MA_KEYS, FIXED_MEMBERS, GEAR_FIELDS, ROLES, defaultStage, gearPath, humanoidJoint, planetBearingMisfit, type EditorState, type GearField } from '../plain';
+import { BEARING_SLOTS, F_MA_KEYS, F_SH_KEYS, FIXED_MEMBERS, GEAR_FIELDS, ROLES, defaultStage, gearPath, humanoidJoint, planetBearingMisfit, type EditorState, type GearField } from '../plain';
 import type { CataloguesAnswer, GearRole, PlainStage, StageKind } from '../types';
 import { Lbl, NumField } from './parts';
 
@@ -64,7 +64,7 @@ export default function StageEditor({ state, onChange, errors, catalogues }: Pro
                 </TextField>
               </Tooltip>
             </>)}
-            {F_MA_KEYS[s.kind].map((k) => (
+            {[...F_MA_KEYS[s.kind], ...F_SH_KEYS[s.kind]].map((k) => (
               <NumField key={k} label={t(`l.${k}`)} tip={t(`tip.${k}`)} value={s[k]} width={92} step={0.5} testId={`gears-${i}-${k}`}
                 error={errors[`/stages/${i}/${k}`]} onChange={(v) => setStage(i, { [k]: v >= 0 ? v : 0 })} onClear={() => setStage(i, { [k]: undefined })} />
             ))}

@@ -304,3 +304,20 @@ def test_template_carries_the_optional_misalignment_inputs_and_absent_stays_abse
     assert client.post(B + "/evaluate", json=body).status_code == 200
     bad = client.post(B + "/template", json={"stages": [{**planetary, "sun_planet_f_ma_um": -1}]})
     assert bad.status_code == 422 and "f_ma" in bad.text
+
+
+def test_template_carries_the_optional_f_sh_inputs_and_absent_stays_absent(client):
+    g = lambda z, b=12.: {"z": z, "m_n_mm": 1., "b_mm": b}
+    planetary = {"kind": "planetary", "name": "s", "gears": {"sun": g(40), "planet": g(32), "ring": g(104)}}
+    pair = {"kind": "pair", "name": "p", "gears": {"gear1": g(20), "gear2": g(40)}}
+    r = client.post(B + "/template", json={"stages": [dict(planetary), dict(pair)]})
+    assert r.status_code == 200
+    for st in r.json()["stages"]:
+        assert not {"f_sh_um", "sun_planet_f_sh_um", "planet_ring_f_sh_um"} & set(st)
+    r = client.post(B + "/template", json={"stages": [{**planetary, "sun_planet_f_sh_um": 0.1, "planet_ring_f_sh_um": 0}, {**pair, "f_sh_um": 1.0}]})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["stages"][0]["sun_planet_f_sh_um"] == 0.1 and body["stages"][0]["planet_ring_f_sh_um"] == 0 and body["stages"][1]["f_sh_um"] == 1.0
+    assert GearboxRequest.from_dict(body).to_dict() == body
+    assert client.post(B + "/evaluate", json=body).status_code == 200
+    assert client.post(B + "/template", json={"stages": [{**planetary, "planet_ring_f_sh_um": -1}]}).status_code == 422

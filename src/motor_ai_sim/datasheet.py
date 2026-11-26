@@ -1286,6 +1286,14 @@ def build_datasheet(*, die: str, cfg: str, die_doc: Dict[str, Any],
     mass_full_for_km = float(_mi["full_kg"]) if (not _partial and _mi.get("full_kg")) else None
 
     row("Power (kW)", P_kw, "shaft power at this point", 2, bold=True)
+    # WHICH SHAFT-POWER CONVENTION EACH COLUMN IS ON (owner 2026-11-25, motor_ai_sim.shaft_convention): a duty solved
+    # before it keeps its numbers, so its power and efficiency put every loss on the electrical side
+    _conv = [_g(d, "summary.shaft_convention") == "fe_on_shaft_k3d_v1" for d in duties]
+    if any(_conv):
+        row("Shaft-power basis", ["core loss on the shaft" if c else "earlier run: all losses electrical"
+                                  for c in _conv],
+            "on the current basis the core and rotor losses are shaft loads and the 3-D factor applies to the "
+            "converted power only; an earlier run is not comparable with it", 0)
     row("Torque (N·m)", T_nm,
         "average electromagnetic torque over one electrical period", 2, bold=True)
     row("Speed (rpm)", [_g(d, "rpm") for d in duties], "", 0, bold=True)

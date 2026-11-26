@@ -207,3 +207,20 @@ test('catalog by die: efficiency of two conventions sorts in two groups', async 
   const sorted = C.sortMotors([m(95, 0), m(90, 1), m(92, 1)], 'eff', 'desc');
   assert.deepEqual(sorted.map((x) => [x.values.efficiency_pct, x.values.shaft_conv]), [[92, 1], [90, 1], [95, 0]]);
 });
+
+test('steps feed: a marked light panel renders its own power (870 W), never a second factor (783 W)', async () => {
+  const R = await import('../resultsPanel.ts');
+  const rpm100 = 100 * 60 / (2 * Math.PI);
+  const light = { summary: { shaft_convention: 'fe_on_shaft_k3d_v1', op_mode: 'motor', rpm: rpm100, T_em_avg_Nm: 10,
+    T_shaft_Nm: 8.7, T_field_k_Nm: 9, P_mech_W: 870, P_loss_total_W: 100, efficiency: 870 / 970, end3d: { k_flux: 0.9 } } };
+  const c = R.finalComparison(light, {});
+  near(c.power_w, 870, 'power'); near(c.torque_nm, 8.7, 'torque'); assert.equal(c.shaft_conv, 1);
+});
+
+test('a variant whose duties carry two conventions has no average efficiency', async () => {
+  const G = await import('../../modules/development/motorGroups.ts');
+  const same = { results: [{ comparison: { efficiency_pct: 90, shaft_conv: 1 } }, { comparison: { efficiency_pct: 88, shaft_conv: 1 } }] };
+  near(G.averageEfficiency(same), 89, 'avg');
+  const mixed = { results: [{ comparison: { efficiency_pct: 90, shaft_conv: 1 } }, { comparison: { efficiency_pct: 95 } }] };
+  assert.equal(G.averageEfficiency(mixed), null);
+});

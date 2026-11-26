@@ -264,10 +264,15 @@ def _torque_of_block(block: Any) -> Optional[float]:
     # the shaft-side convention (motor_ai_sim.shaft_convention): the torque the shaft carries is the run's own
     # shaft torque - a motor's output, a generator's input - already with its 3-D factor and the core loss on it
     if block.get("shaft_convention") == "fe_on_shaft_k3d_v1":
-        try:
-            ts = float(block.get("T_shaft_Nm"))
-        except (TypeError, ValueError):
-            ts = None
+        # the LOAD the shaft carries: the torque at the coupling, bearings and windage included when the run names
+        # them (a stress magnitude - its sign says nothing about the stress)
+        from motor_ai_sim.shaft_convention import coupling_torque
+        ts = coupling_torque(block)
+        if ts is None:
+            try:
+                ts = float(block.get("T_shaft_Nm"))
+            except (TypeError, ValueError):
+                ts = None
         if ts is not None and math.isfinite(ts) and ts != 0.0:
             return abs(ts)
     t = None

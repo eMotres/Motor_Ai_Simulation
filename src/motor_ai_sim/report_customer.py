@@ -239,7 +239,9 @@ def _torque(col: Mapping[str, Any]) -> Optional[float]:
         # when the run names them (motor_ai_sim.shaft_convention.coupling_torque)
         t = _SC.coupling_torque({**em, "rpm": em.get("rpm") or _rpm(col)})
         if t is not None:
-            return abs(t)
+            # SIGNED: a motor whose shaft is driven (no output: the coupling supplies the core loss and the friction)
+            # has a negative output torque and can never meet a positive output requirement
+            return t
     t = _num(_g(em, "end3d.T_corrected_Nm"))
     if t is None:
         t = _num(em.get("T_em_avg_Nm"))

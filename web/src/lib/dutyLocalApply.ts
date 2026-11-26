@@ -465,6 +465,9 @@ export async function applyDutyLocal(die: string, cfg: string, duty: string,
       star_delta: sim.star_delta ?? 'star',
       T_em_avg_Nm: T, T_ripple_pct: Number(rr.ripple_pct) || 0,
       P_mech_W: Pmech,
+      // a duty recorded on the shaft-side convention: its torque and power are shaft numbers; the summary built from them
+      // says so, so no reader takes them for a field torque or applies a second factor (src/motor_ai_sim/shaft_convention.py)
+      ...(Number((rr as any).shaft_conv) === 1 ? { shaft_convention: 'fe_on_shaft_k3d_v1', T_shaft_Nm: T } : {}),
       // v_ll_peak_v was RECORDED from a real run, so it IS the line peak.
       // KV = rpm / V_line_PEAK — the max/max convention of the Simulation tile
       // and the user's commercial FEM table (2026-08-04); dividing by rms read ~√2

@@ -170,6 +170,8 @@ const SweepTable: React.FC<{ points: any[]; rpm: number; vdcFactor?: number; sel
         k3d: kPt,
         rpm: p.rpm,   // absent today (refine result omits it) — kept for when it lands
         ripple: Number(p.T_ripple_pct) || 0, mass, td,
+        // the shaft-power convention of this point's numbers (1 = core loss on the shaft; src/motor_ai_sim/shaft_convention.py)
+        sc: p.shaft_convention === 'fe_on_shaft_k3d_v1' ? 1 : 0,
         // Cogging pp (opt-in no-load solve of the geometry); absent = not measured
         cp: coggingOf(p),
         pd,
@@ -195,6 +197,11 @@ const SweepTable: React.FC<{ points: any[]; rpm: number; vdcFactor?: number; sel
     [...keys].sort().forEach(k => { if (varied(rows.map(r => r.ov[k]))) c.push({ id: 'ov:' + k, label: k, get: r => Number(r.ov[k]), fmt: v => String(Math.round(v * 1000) / 1000), vcol: true }); });
     if (varied(rows.map(r => r.I))) c.push({ id: 'I', label: 'I (A)', get: r => r.I, fmt: v => v.toFixed(1), vcol: true });
     if (varied(rows.map(r => r.g))) c.push({ id: 'g', label: 'γ (°)', get: r => r.g, fmt: v => v.toFixed(0), vcol: true });
+    // two shaft-power conventions in one payload: a column says which row is which ("†" = earlier, exported as 0/1)
+    if (new Set(rows.map(r => r.sc)).size > 1) {
+      c.push({ id: 'shaftConv', label: tx('shaftConvCol'), get: r => r.sc, fmt: v => (v === 1 ? '' : '†'),
+        titleRow: r => (r.sc === 1 ? undefined : tx('shaftConvMixed')) });
+    }
     c.push(
       { id: 'T', label: 'T (N·m)', get: r => r.T, fmt: v => v.toFixed(2) },
       { id: 'P', label: 'P (kW)', get: r => r.P, fmt: v => v.toFixed(2) },
@@ -1495,6 +1502,8 @@ const SweepStudyPanel: React.FC = () => {
                 + `starts from a closer settled state.`} />
             </Typography>
           )}
+          {(() => { const cs = new Set((result?.points || []).filter((q: any) => q?.feasible).map((q: any) => (q.shaft_convention === 'fe_on_shaft_k3d_v1' ? 1 : 0)));
+            return cs.size > 1 ? <Typography role="alert" sx={{ fontSize: 11, color: 'warning.main', mb: 0.5 }}>{tx('shaftConvMixed')}</Typography> : null; })()}
           <Box ref={chartBoxRef} onDoubleClick={() => setZoom(null)} sx={{ height: 340 }}>
             <ResponsiveContainer width="100%" height="100%">
               <ScatterChart margin={{ top: 8, right: 24, left: 8, bottom: 24 }}>

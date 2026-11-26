@@ -183,12 +183,16 @@ def apply_to_summary(summary: Mapping[str, Any],
         # (rebuilt from the SAME losses, motor_ai_sim.shaft_convention)
         p_mech = _num(out.get("P_mech_W"))
         extra = _num(out.get("P_mech_extra_W"))
-        if out.get("efficiency_shaft") is not None and extra is not None and p_mech and p_mech > 0.0:
-            x = extra / p_mech
-            eff = float(out["efficiency"])
-            out["efficiency_shaft"] = round(eff / (1.0 + x) if gen else eff * max(0.0, 1.0 - x), 6)
-        if extra is not None and p_mech is not None and out.get("P_shaft_net_W") is not None:
-            out["P_shaft_net_W"] = round(p_mech + extra if gen else max(p_mech - extra, 0.0), 1)
+        if extra is not None and p_mech is not None:
+            # SIGNED at the coupling: a motor that stops delivering (P < X, or P < 0) keeps the negative number
+            _net = p_mech + extra if gen else p_mech - extra
+            _pe = _num(out.get("P_elec_W"))
+            if out.get("efficiency_shaft") is not None or out.get("P_shaft_net_W") is not None:
+                out["P_shaft_net_W"] = round(_net, 1)
+                if gen:
+                    out["efficiency_shaft"] = round((_pe / _net) if (_pe and _pe > 0.0 and _net > 0.0) else 0.0, 6)
+                else:
+                    out["efficiency_shaft"] = round((_net / _pe) if (_net > 0.0 and _pe and _pe > 1.0) else 0.0, 6)
         _t = _num(out.get("T_field_k_Nm") if gen else out.get("T_shaft_Nm"))
         for mk, tk, pk in (("mass_total_kg", "torque_per_mass_Nm_kg", "power_per_mass_W_kg"),
                            ("mass_full_kg", "torque_per_mass_full_Nm_kg", "power_per_mass_full_W_kg")):

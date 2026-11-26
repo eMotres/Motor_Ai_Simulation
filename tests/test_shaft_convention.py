@@ -434,13 +434,14 @@ def test_r2_b2_overlay_carries_mode_and_speed():
     from motor_ai_sim.development import motor_view as MV
     base = _plain_marked(mass_total_kg=2.0)
     before = dict(base)
-    gen = _plain_marked(op_mode="generator")
-    assert gen["P_mech_W"] == pytest.approx(930.0, abs=0.06)
+    gen = _plain_marked(op_mode="generator", rpm=2.0 * RPM100)     # a DIFFERENT speed: it must travel with the run
+    assert gen["P_mech_W"] == pytest.approx(0.9 * 10.0 * 200.0 + 30.0, abs=0.06)
     SC.overlay(base, gen)
     base["T_em_avg_Nm"] = gen["T_em_avg_Nm"]
     MV._rescale_to_loop(base, before)
-    assert base["op_mode"] == "generator" and base["P_mech_W"] == pytest.approx(930.0, abs=0.06)
-    assert base["T_shaft_Nm"] == pytest.approx(9.3, abs=1e-3)
+    assert base["op_mode"] == "generator" and base["rpm"] == pytest.approx(2.0 * RPM100)
+    assert base["P_mech_W"] == pytest.approx(1830.0, abs=0.06)
+    assert base["T_shaft_Nm"] == pytest.approx(9.15, abs=1e-3)
 
 
 def test_r2_b2_density_rebuilt_from_the_selected_torque():
@@ -518,3 +519,109 @@ def test_r2_rederive_uses_the_full_precision_torque():
                       op_mode="generator")
     w = 2 * math.pi * 1900.0 / 60.0
     assert s["P_mech_W"] == pytest.approx(0.9 * 0.12784 * w + 3.2, abs=0.06)
+    # the rounded torque (0.128) would give 0.1152: the stored field torque x k tells the two apart
+    assert s["T_field_k_Nm"] == pytest.approx(0.9 * 0.12784, abs=5e-5)
+
+
+
+# ── Astra review round 3 (each example with its numbers) ──────────────────────────────────────────────────────────────
+def test_r3_b2_project_table_takes_the_marked_numbers_as_they_are():
+    from motor_ai_sim.development import motors as DM
+    m = _plain_marked(mass_total_kg=2.0, efficiency_shaft=None, end3d={"k_flux": 0.9})
+    c = DM._comparison_projection({"summary": m}, {})
+    assert c["power_w"] == pytest.approx(870.0, abs=0.06) and c["torque_nm"] == pytest.approx(8.7, abs=1e-3)
+    assert c["torque_to_mass_nm_kg"] == pytest.approx(4.35, abs=1e-3) and c["shaft_conv"] == 1
+    g = _plain_marked(op_mode="generator", mass_total_kg=2.0, end3d={"k_flux": 0.9})
+    cg = DM._comparison_projection({"summary": g}, {})
+    assert cg["power_w"] == pytest.approx(930.0, abs=0.06) and cg["torque_nm"] == pytest.approx(9.3, abs=1e-3)
+    # a marked result block alone keeps its own numbers and its code
+    cr = DM._comparison_projection({"result": {"shaft_conv": 1, "power_w": 870.0, "efficiency_pct": 89.69}}, {})
+    assert cr["shaft_conv"] == 1 and cr["power_w"] == 870.0 and cr["efficiency_pct"] == 89.69
+    # an OLD result beside a marked summary: the row takes the summary's numbers, never the old efficiency
+    co = DM._comparison_projection({"summary": m, "result": {"efficiency_pct": 95.0}}, {})
+    assert co["efficiency_pct"] == pytest.approx(100.0 * m["efficiency"], abs=1e-6)
+    # an unmarked row is the earlier convention, unchanged and unstamped
+    cu = DM._comparison_projection({"summary": {"T_em_avg_Nm": 10.0, "P_mech_W": 1000.0, "end3d": {"k_flux": 0.9}}}, {})
+    assert "shaft_conv" not in cu and cu["power_w"] == pytest.approx(900.0)
+
+
+def test_r3_b2_reverse_overlay_keeps_the_old_run_s_mode_and_speed():
+    from motor_ai_sim.development import motor_view as MV
+    base = _plain_marked(mass_total_kg=2.0)                      # marked motor at 100 rad/s
+    before = dict(base)
+    old_gen = {"T_em_avg_Nm": 10.0, "op_mode": "generator", "rpm": 2.0 * RPM100}
+    SC.overlay(base, old_gen)
+    base["T_em_avg_Nm"] = 10.0
+    MV._rescale_to_loop(base, before)
+    assert not SC.has_marker(base) and base["op_mode"] == "generator"
+    assert base["rpm"] == pytest.approx(2.0 * RPM100) and base["P_mech_W"] == pytest.approx(2000.0, abs=1e-6)
+
+
+def test_r3_b3_summary_shaft_net_is_signed(monkeypatch):
+    from motor_ai_sim.routes import simulation as S
+    from motor_ai_sim import mech_losses as ML, bearings as BR
+    monkeypatch.setattr(ML, "machine_bearings", lambda: ({"x": 1}, "d", "c"))
+    monkeypatch.setattr(BR, "has_bearings", lambda a: True)
+    monkeypatch.setattr(ML, "rotor_mass_from_summary", lambda s: 1.0)
+    monkeypatch.setattr(ML, "machine_mech_losses", lambda **k: {"P_bearings_W": 15.0, "P_windage_W": 5.0,
+                                                                "P_mech_extra_W": 20.0})
+    monkeypatch.setattr(ML, "summary_block", lambda m: {})
+    out = S._mech_loss_fields({}, geo_override=None, rpm=1000.0, p_mech_w=-30.0, p_loss_w=40.0, efficiency=0.0,
+                              op_mode="motor", signed=True)
+    assert out["P_shaft_net_W"] == pytest.approx(-50.0) and out["efficiency_shaft"] == 0.0
+    pos = S._mech_loss_fields({}, geo_override=None, rpm=1000.0, p_mech_w=870.0, p_loss_w=100.0,
+                              efficiency=870.0 / 970.0, op_mode="motor", signed=True)
+    assert pos["P_shaft_net_W"] == pytest.approx(850.0) and pos["efficiency_shaft"] == pytest.approx(850.0 / 970.0, abs=1e-6)
+
+
+def test_r3_b3_pwm_net_goes_through_zero_signed():
+    from motor_ai_sim import coupled_pwm_final as PF
+    # k*T*w = 36 W (k 0.9, T 0.4 N*m at 100 rad/s), core 30 -> 40 W, X 20 W: P = 36 - 40 = -4 W, net -24 W
+    s = _plain_marked(T_em_avg_Nm=0.4, P_core_W=30.0, P_core_rotor_W=10.0, P_loss_rotor_W=10.0, P_loss_total_W=31.0,
+                      efficiency=0.0, P_mech_extra_W=20.0, P_shaft_net_W=-14.0, efficiency_shaft=0.0)
+    out = PF.apply_to_summary(s, {"raw_W": 10.0, "selected_W": 20.0})
+    assert out["P_core_W"] == pytest.approx(40.0)
+    assert out["P_mech_W"] == pytest.approx(-4.0, abs=0.06) and out["P_shaft_net_W"] == pytest.approx(-24.0, abs=0.06)
+    assert out["efficiency_shaft"] == 0.0
+
+
+def test_r3_b7_driven_shaft_never_meets_an_output_requirement():
+    from motor_ai_sim import report_customer as RC
+    idle = _plain_marked(T_em_avg_Nm=0.0, P_mech_W=-30.0)
+    idle["P_mech_W"] = -30.0
+    idle["P_mech_extra_W"] = 20.0
+    t = RC._torque({"em": idle})
+    assert t == pytest.approx(-0.5)
+    assert not (t >= 0.4 * (1.0 - RC.TORQUE_TOL_REL))
+
+
+def test_r3_b7_mechanical_fallback_is_the_coupling_load():
+    from motor_ai_sim.routes import mechanical as ME
+    m = _plain_marked(P_mech_extra_W=20.0)
+    assert ME._torque_of_block(m) == pytest.approx(8.5, abs=1e-3)
+    g = _plain_marked(op_mode="generator", P_mech_extra_W=20.0)
+    assert ME._torque_of_block(g) == pytest.approx(9.5, abs=1e-3)
+
+
+def test_r3_b3_bearing_heat_through_the_real_loss_adapter():
+    from motor_ai_sim import coupled_continuous_rating as CR, thermal_duty_cycle as TD
+    summ = {"P_stranded_W": 70.0, "P_core_W": 30.0, "P_solid_W": 0.0, "coil_temp_C": 20.0, "rpm": RPM100}
+    th = {"cooling": {"mech_losses": {"P_bearings_W": 10.0, "shaft_ends_open": True}}, "P_mag_eddy_W": 0.0}
+    loss = TD.losses_by_node(summ, th)
+    assert loss["mech_in_nodes_W"] == pytest.approx(10.0)
+    ref = {"T_em_avg_Nm": 10.0, "rpm": RPM100, "k_flux": 0.9, "shaft_k3d": 0.9, "shaft_convention": SC.SHAFT_CONVENTION,
+           "torque_side": "rotor", "shaft_rotor_in_field": False, "op_mode": "motor", "P_mech_extra_W": 10.0}
+    out = CR._power_block(ref, loss, 70.0, 1.0, 20.0, mode="motor")
+    assert out["P_mech_W"] == pytest.approx(870.0, abs=0.01) and out["P_shaft_W"] == pytest.approx(860.0, abs=0.01)
+    assert out["P_elec_W"] == pytest.approx(970.0, abs=0.01)
+
+
+def test_r3_provenance_in_scalar_exports():
+    from motor_ai_sim import duty_results as DR
+    from motor_ai_sim.digest import readable as RD
+    row = DR.compact_em_run({"summary": _plain_marked()})
+    assert row["numbers"]["shaft_conv"] == 1.0
+    mech = RD.mechanical_numbers({"em_run": row})
+    assert mech["basis"] == "shaft" and "core loss on the shaft" in RD.headline({"em_run": row})
+    old = DR.compact_em_run({"summary": {"P_mech_W": 1000.0, "T_em_avg_Nm": 10.0}})
+    assert "shaft_conv" not in old["numbers"] and RD.mechanical_numbers({"em_run": old})["basis"] == "earlier"

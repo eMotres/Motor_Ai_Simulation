@@ -8117,7 +8117,8 @@ def _round_w(value: float, nd: int) -> float:
 def _mech_loss_fields(sbres: dict, *, geo_override: Optional[dict],
                       rpm: float, p_mech_w: float, p_loss_w: float,
                       efficiency: float, op_mode: str,
-                      mass_components: Optional[list] = None) -> dict:
+                      mass_components: Optional[list] = None,
+                      signed: bool = False) -> dict:
     """The MECHANICAL half of this run's loss picture, or ``{}``.
 
     User, 2026-09-08: *"all losses should be passed into the electromagnetic
@@ -8199,7 +8200,15 @@ def _mech_loss_fields(sbres: dict, *, geo_override: Optional[dict],
     p_mech = abs(float(p_mech_w or 0.0))
     gen = str(op_mode) == "generator"
     x = (p_extra / p_mech) if p_mech > 0.0 else None
-    if x is None:
+    if signed and not gen:
+        # the shaft-side convention (motor_ai_sim.shaft_convention): a motor's shaft power is SIGNED - at no load
+        # the shaft supplies the core loss - and the coupling sees it minus the friction, still signed; there is
+        # a shaft efficiency only for a delivered output
+        p_s = float(p_mech_w or 0.0)
+        p_shaft_net = p_s - p_extra
+        _pe = p_s + float(p_loss_w or 0.0)
+        eta_shaft = (p_shaft_net / _pe) if (p_shaft_net > 0.0 and _pe > 1.0) else 0.0
+    elif x is None:
         eta_shaft = None
         p_shaft_net = None
     elif gen:
@@ -9322,9 +9331,10 @@ def _build_transient_summary(
         # — not zero — on a machine that names no bearings, on a background
         # solve and on a candidate geometry; see `_mech_loss_fields`.
         **_mech_loss_fields(
-            sbres, geo_override=geo_override, rpm=_rpm, p_mech_w=_Pmech_out,
+            sbres, geo_override=geo_override, rpm=_rpm,
+            p_mech_w=(_Pmech if _sc_on else _Pmech_out),
             p_loss_w=_ploss, efficiency=_eff, op_mode=_op_mode,
-            mass_components=_masses.get("components")),
+            mass_components=_masses.get("components"), signed=_sc_on),
     }
     # NET FORCE ON THE ROTOR (the bearing load of an unbalanced field): the
     # means on the summary, the per-frame Fx/Fy beside them.  Full ring only.

@@ -773,10 +773,6 @@ def _comparison_projection(duty: dict, stored: dict) -> dict:
         "p_shaft_out_w", "p_shaft_w", "power_w")
     if power is not None:
         comparison["power_w"] = power
-    # the shaft-power convention of the source these numbers come from (motor_ai_sim.shaft_convention)
-    _src = summary_raw if summary_raw else coupled_em_raw
-    if isinstance(_src, dict) and _src.get("shaft_convention") == "fe_on_shaft_k3d_v1":
-        comparison["shaft_conv"] = 1
 
     # Phase voltage peak of the solved waveform (owner 2026-10-25: every row shows it).
     phase_peak = _first(primary + [coupled_em], "v_phase_peak_v")
@@ -1011,6 +1007,45 @@ def _comparison_projection(duty: dict, stored: dict) -> dict:
     demag = _demag_flag(result_raw, summary_raw, coupled_em_raw)
     if demag is not None:
         comparison["demag"] = demag
+    # THE SHAFT-POWER CONVENTION (owner 2026-11-25, motor_ai_sim.shaft_convention): the headline torque, power,
+    # efficiency and torque density of a row come from ONE source and carry that source's convention.  A marked summary
+    # (or, without a summary, a marked coupled run) gives them at the coupling, its 3-D factor already inside: they are
+    # never scaled again below.  A marked result block alone gives its own numbers.  Anything else is the earlier
+    # convention, as it always was.
+    from motor_ai_sim import shaft_convention as _SC
+    _msrc = (summary_raw if _SC.has_marker(summary_raw)
+             else coupled_em_raw if (not summary_raw and _SC.has_marker(coupled_em_raw)) else None)
+    _sc_row = False
+    if _msrc is not None:
+        _sc_row = True
+        _gen = str(_msrc.get("op_mode") or "") == "generator"
+        _t = _SC.coupling_torque(_msrc)
+        _p = _SC.coupling_power(_msrc)
+        for key, v in (("torque_nm", _t), ("power_w", _p)):
+            if v is not None:
+                comparison[key] = v
+            else:
+                comparison.pop(key, None)
+        _eta = _number(_msrc.get("efficiency_shaft"))
+        if _eta is None:
+            _eta = _number(_msrc.get("efficiency"))
+        if _eta is not None:
+            comparison["efficiency_pct"] = _eta * 100.0
+        _tpm = _number(_msrc.get("T_field_k_Nm") if _gen else _msrc.get("T_shaft_Nm"))
+        _m = _number(comparison.get("mass_kg"))
+        if _tpm is not None and _m and _m > 0:
+            comparison["torque_to_mass_nm_kg"] = _tpm / _m
+        comparison["shaft_conv"] = 1
+    elif result_raw.get("shaft_conv") == 1:
+        # a result block on the convention with no summary beside it: only its own numbers, never another source's
+        _sc_row = True
+        for key, rk in (("torque_nm", "torque_nm"), ("power_w", "power_w"), ("efficiency_pct", "efficiency_pct")):
+            v = _number(result_raw.get(rk))
+            if v is not None:
+                comparison[key] = v
+            else:
+                comparison.pop(key, None)
+        comparison["shaft_conv"] = 1
     # 3-D END EFFECT (owner 2026-10-25: the project table shows the same corrected numbers as the report): when the
     # run carries its Stage-A 3-D factor (``end3d.k_flux``, the report's k_3d), torque, power, torque/mass and the
     # voltage peaks are scaled by it, exactly as report.py does; the 2-D values stay beside them.
@@ -1025,8 +1060,10 @@ def _comparison_projection(duty: dict, stored: dict) -> dict:
         except Exception:  # noqa: BLE001 - k_flux is the documented fallback
             kt = k3
         comparison["k_3d"] = k3
-        for key, factor in (("torque_nm", kt), ("power_w", kt), ("torque_to_mass_nm_kg", kt),
-                            ("v_phase_peak_v", k3), ("v_line_peak_v", k3)):
+        _scaled = ((("v_phase_peak_v", k3), ("v_line_peak_v", k3)) if _sc_row else
+                   (("torque_nm", kt), ("power_w", kt), ("torque_to_mass_nm_kg", kt),
+                    ("v_phase_peak_v", k3), ("v_line_peak_v", k3)))
+        for key, factor in _scaled:
             if isinstance(comparison.get(key), (int, float)) and not isinstance(comparison.get(key), bool):
                 comparison[key + "_2d"] = comparison[key]
                 comparison[key] = comparison[key] * factor

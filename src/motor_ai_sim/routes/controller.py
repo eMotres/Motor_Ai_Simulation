@@ -397,6 +397,15 @@ def _duty_defaults(die: Optional[str], cfg: Optional[str],
                          "— the motor's electrical input power")
     if t2d is not None:
         out["torque_Nm"] = t2d
+    # the shaft-side convention (motor_ai_sim.shaft_convention): the controller's torque is the shaft torque at the
+    # coupling, the same boundary as its power - not the 2-D field torque
+    from motor_ai_sim.shaft_convention import coupling_torque as _ct, has_marker as _hm
+    if _hm(em):
+        _tc = _ct({**em, "P_mech_extra_W": p_extra if p_extra is not None else em.get("P_mech_extra_W"),
+                   "rpm": em.get("rpm") or rpm})
+        if _tc is not None:
+            out["torque_Nm"] = _tc
+            src["torque_Nm"] = f"{where}: the shaft torque at the coupling (core loss on the shaft)"
 
     # ``efficiency_shaft`` rides ALONGSIDE, for the wall-to-shaft column — but
     # ``p_ac_W`` above never depends on it existing.  ``shaft_view`` itself

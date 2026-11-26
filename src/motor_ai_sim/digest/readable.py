@@ -129,8 +129,12 @@ def mechanical_numbers(kinds: dict) -> dict:
     # a generator run states its electrical OUTPUT as a negative electrical input (``P_elec_in_W`` < 0)
     p_in = _first(src, ("P_elec_in_W", "P_elec_in_solved_W"))
     p_out = -p_in if p_in is not None and p_in < 0 else None
+    # the shaft-power basis of P / eta: the record P is read from says it (shaft_convention); absent = an earlier run
+    p_src = next((r for r in src if num(r.get("P_mech_W")) is not None), {})
+    basis = ("shaft" if (num(p_src.get("shaft_conv")) == 1 or p_src.get("shaft_convention") == "fe_on_shaft_k3d_v1")
+             else "earlier")
     return {"T": _first(src, ("T_avg_Nm", "T_em_avg_Nm", "torque_nm")), "P": _first(src, ("P_mech_W",)), "eta": eta,
-            "P_out": p_out}
+            "P_out": p_out, "basis": basis}
 
 
 _RATED_NAME = re.compile(r"""rated duty (['"])(.+?)\1(?:'s| own|\s)""")
@@ -326,6 +330,8 @@ def headline(kinds: dict) -> str:
         parts.append(f"P {fmt_num(mech['P'] / 1000.0)} kW")
     if mech["eta"] is not None:
         parts.append(f"η {fmt_num(mech['eta'])} %")
+    if mech.get("basis") == "shaft" and (mech["P"] is not None or mech["eta"] is not None):
+        parts.append("core loss on the shaft")
     coil, mag = _temps(_d(kinds.get("coupled")))
     if coil is not None:
         parts.append(f"winding {fmt_temp(coil)}")

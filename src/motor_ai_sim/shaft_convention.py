@@ -213,8 +213,8 @@ def fields(b: Mapping[str, Any], dr: Mapping[str, Any], k: Optional[float]) -> D
         "shaft_convention": SHAFT_CONVENTION,
         "P_field_W": round(b["P_field_W"], 1), "P_gap_W": round(b["P_gap_W"], 1),
         "T_field_k_Nm": round(b["T_field_k_Nm"], 4), "T_shaft_Nm": round(b["T_shaft_Nm"], 4),
-        # the reported 2-D torque at full precision (T_em_avg_Nm is stored to 1 mN*m): a rebuild from it
-        "T_field_Nm": float("%.6g" % b["T_field_Nm"]),
+        # the reported 2-D torque at 9 significant digits (T_em_avg_Nm is stored to 1 mN*m): a rebuild from it
+        "T_field_Nm": float("%.9g" % b["T_field_Nm"]),
         "P_shaft_drag_W": round(dr["D_W"], 3), "P_shaft_drag_terms": list(dr["terms"]),
         "torque_side": dr["side"], "shaft_rotor_in_field": bool(dr["rotor_in_field"]),
         "P_torque_embedded_W": round(dr["rotor_embedded_W"] or dr["stator_embedded_W"], 3),
@@ -258,8 +258,12 @@ def overlay(base: Dict[str, Any], over: Mapping[str, Any]) -> None:
     """Carry the convention of ``over`` onto ``base`` ATOMICALLY: all its fields when it
     is marked, none (and the marker removed) when it is not."""
     strip(base)
+    # the mode and the speed are the over run's in both conventions: its numbers cannot be read without them
+    for key in CONVENTION_CONTEXT_KEYS:
+        if over.get(key) is not None:
+            base[key] = over[key]
     if has_marker(over):
-        for key in CONVENTION_KEYS + CONVENTION_CONTEXT_KEYS:
+        for key in CONVENTION_KEYS:
             if over.get(key) is not None:
                 base[key] = over[key]
 

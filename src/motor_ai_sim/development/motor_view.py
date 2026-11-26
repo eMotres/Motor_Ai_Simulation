@@ -708,18 +708,20 @@ def _rescale_to_loop(base: Dict[str, Any], before: Dict[str, Any]) -> None:
                 base[k] = base[k] * r
 
     from motor_ai_sim import shaft_convention as _SC
-    if not _SC.has_marker(base) and _SC.has_marker(before):
-        # an unmarked loop over a marked saved run: put the saved run's derived numbers back on the
-        # earlier convention (T*w, T/m) first, so the proportions below give the loop's own values
-        _w = 2.0 * math.pi * (_num(before.get("rpm")) or 0.0) / 60.0
-        _t0, _m0 = _num(before.get("T_em_avg_Nm")), _num(before.get("mass_total_kg"))
-        if _t0 is not None and _w > 0:
-            base["P_mech_W"] = abs(_t0) * _w
-            if _m0:
-                base["torque_per_mass_Nm_kg"] = abs(_t0) / _m0
-                base["power_per_mass_W_kg"] = abs(_t0) * _w / _m0
-            for _k in ("torque_per_mass_full_Nm_kg", "power_per_mass_full_W_kg"):
-                base.pop(_k, None)
+    _legacy_over_marked = not _SC.has_marker(base) and _SC.has_marker(before)
+    if _legacy_over_marked:
+        # an unmarked loop over a marked saved run: the loop's OWN earlier-convention numbers, from its torque, its
+        # speed and mode (carried by the overlay) and the masses - not a proportion of the saved run's shaft side
+        _w = 2.0 * math.pi * (_num(base.get("rpm")) or 0.0) / 60.0
+        _t = _num(base.get("T_em_avg_Nm"))
+        if _t is not None and _w > 0:
+            base["P_mech_W"] = abs(_t) * _w
+            for _mk, _tk, _pk in (("mass_total_kg", "torque_per_mass_Nm_kg", "power_per_mass_W_kg"),
+                                  ("mass_full_kg", "torque_per_mass_full_Nm_kg", "power_per_mass_full_W_kg")):
+                _m = _num(base.get(_mk))
+                if _m and _m > 0:
+                    base[_tk] = abs(_t) / _m
+                    base[_pk] = abs(_t) * _w / _m
     if _SC.rederive(base):
         # shaft-side convention: the shaft side is k*G -/+ D, not a proportion of the torque, and the densities are
         # rebuilt from the selected torque (motor shaft / generator field x k) and the masses themselves
@@ -733,7 +735,7 @@ def _rescale_to_loop(base: Dict[str, Any], before: Dict[str, Any]) -> None:
                     base[_tk] = _t / _m
                 if _p is not None:
                     base[_pk] = _p / _m
-    else:
+    elif not _legacy_over_marked:
         scale(("P_mech_W", "torque_per_mass_Nm_kg", "power_per_mass_W_kg", "torque_per_mass_full_Nm_kg",
                "power_per_mass_full_W_kg"), _ratio(base.get("T_em_avg_Nm"), before.get("T_em_avg_Nm")))
     e3 = base.get("end3d")

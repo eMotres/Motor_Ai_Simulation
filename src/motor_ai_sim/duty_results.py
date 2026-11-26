@@ -2211,6 +2211,9 @@ def compact_em_run(sbres: Dict[str, Any]) -> Dict[str, Any]:
             f = _f(v) if isinstance(v, (int, float)) else None
             if f is not None:
                 nums[k] = f
+    # the shaft-power convention of these numbers rides with them (1 = core loss on the shaft; shaft_convention)
+    if summary.get("shaft_convention") == "fe_on_shaft_k3d_v1":
+        nums["shaft_conv"] = 1.0
     text = {k: str(res.get(k) if res.get(k) is not None else summary.get(k))
             for k in _EM_RUN_TEXT_KEYS
             if (res.get(k) is not None or summary.get(k) is not None)

@@ -80,7 +80,36 @@
     "open": "打开",
     "archive": "归档",
     "restore": "恢复",
-    "showArchived": "已归档"
+    "showArchived": "已归档",
+    "dtLimitations": "未涵盖（传动链）",
+    "motorDie": "电机",
+    "motorConfig": "配置",
+    "gearboxSource": "减速器",
+    "sourceInline": "当前设计",
+    "sourceRecord": "已打开的记录",
+    "loadRows": "输出端载荷",
+    "loadName": "工况",
+    "loadTorque": "输出转矩，N*m",
+    "loadSpeed": "输出转速，rpm",
+    "loadDuty": "电机工况",
+    "dutyAuto": "自动",
+    "addLoad": "行",
+    "dtTorque": "转矩",
+    "dtSpeed": "转速",
+    "dtRequired": "所需",
+    "dtSaved": "已保存点",
+    "dtMargin": "裕量",
+    "dtMesh": "啮合",
+    "dtBearings": "轴承",
+    "dtChurning": "搅油",
+    "dtTotal": "合计",
+    "dtEffGearbox": "减速器效率",
+    "dtEffMotor": "电机效率（已保存）",
+    "dtEffChain": "链效率",
+    "dtMotorMass": "电机质量",
+    "dtGearboxMass": "减速器质量",
+    "dtTotalMass": "总质量",
+    "dtTorquePerMass": "单位质量转矩"
   },
   "tip": {
     "presetJoint": "两级行星轮，12.884:1：输出端 247 rpm 时 9.8 N*m。",
@@ -162,7 +191,39 @@
     "saveChanges": "覆盖已打开的记录。如果期间有人保存了更新的版本，则会被拒绝。",
     "currentRecord": "已打开记录 {id}，版本 {version}。",
     "showArchived": "归档的记录会保留；显示它们以便恢复。",
-    "unreadable": "此范围内无法读取的文件。它们不会列出；请联系管理员检查。"
+    "unreadable": "此范围内无法读取的文件。它们不会列出；请联系管理员检查。",
+    "tab_motor": "电机后面的减速器：所需电机转矩和转速、损耗、相对电机已保存工况点的裕量、链效率和单位质量转矩。仅使用已保存结果；不进行任何求解。",
+    "motorDie": "您可见的电机。仅使用已保存的工况点。",
+    "motorConfig": "电机的配置。",
+    "gearboxSource": "当前编辑的设计，或在“已保存的减速器”中打开的记录。",
+    "loadRows": "每种工况的输出转矩和转速。工况由电机已保存的工况回答：连续用额定工况，峰值用短时工况。",
+    "loadName": "工况名称：continuous 或 peak 自动对应已保存工况；其他名称需要指定工况。",
+    "loadTorque": "减速器输出端所需转矩。",
+    "loadSpeed": "减速器输出端所需转速。",
+    "loadDuty": "回答此行的电机已保存工况。自动则按工况名称规则。",
+    "addLoad": "添加一行载荷。",
+    "covered": "减速器需要电机提供的转矩和转速都在唯一的已保存电机工况点之内。已保存点之间不做任何断言。",
+    "limitedBy": "已保存电机工况点无法满足的项。需求按原值显示，不做截断。",
+    "motoringOnly": "功率从电机流向负载。不计算回馈和反向驱动。",
+    "reverseNotComputed": "此处不计算传动链的反向（反向驱动）方向。",
+    "dtLimitations": "传动链检查未涵盖的内容。",
+    "partialLoss": "部分损耗未计算（缺少输入：{missing}）；总计只包含已计算的部分。",
+    "dtTorque": "电机轴转矩。",
+    "dtSpeed": "电机轴转速。",
+    "dtRequired": "输出点通过减速器需要电机提供的值。",
+    "dtSaved": "电机对应工况已保存的工况点。",
+    "dtMargin": "已保存值减所需值；负值表示已保存点不足。",
+    "dtMesh": "齿轮啮合损耗。",
+    "dtBearings": "轴承摩擦损耗。短横线表示未提供轴承：未计算，不是零。",
+    "dtChurning": "搅油和拖曳损耗。短横线表示未提供拖曳转矩：未计算，不是零。",
+    "dtTotal": "该级已计算的损耗。",
+    "dtEffGearbox": "所需工况点下的减速器效率。",
+    "dtEffMotor": "电机已保存的效率，对应其自身已保存的转矩和转速。",
+    "dtEffChain": "电机乘以减速器，仅在所需工况点与已保存电机点相差不超过 2 % 时给出。",
+    "dtMotorMass": "已保存的电机质量。",
+    "dtGearboxMass": "减速器解析质量。",
+    "dtTotalMass": "电机加减速器。",
+    "dtTorquePerMass": "单位总质量的输出转矩。"
   },
   "gear": {
     "z": "齿数",
@@ -214,7 +275,8 @@
   "tab": {
     "point": "工况点",
     "spectrum": "工况谱",
-    "assembly": "3D"
+    "assembly": "3D",
+    "motor": "配电机"
   },
   "state": {
     "ok": "有效",
@@ -337,5 +399,50 @@
   "defaultName": "gearbox",
   "noSaved": "尚无已保存的记录。",
   "archived": "已归档",
-  "unreadable": "{count, plural, other {# 个无法读取的文件}}"
+  "unreadable": "{count, plural, other {# 个无法读取的文件}}",
+  "motoringOnly": "仅限电动工况",
+  "reverseNotComputed": "未计算反向（反向驱动）",
+  "covered": "已覆盖",
+  "notCovered": "未覆盖",
+  "partial": "部分",
+  "dtDuty": "工况：{name}",
+  "dtFlags": "{count} 个标志",
+  "dtSummary": "{die} / {configuration}，速比 {ratio}",
+  "limitedBy": {
+    "motor_torque": "受电机转矩限制",
+    "motor_speed": "受电机转速限制"
+  },
+  "basis": {
+    "shaft": "轴转矩",
+    "field_legacy": "场转矩（旧）"
+  },
+  "basisTip": {
+    "shaft": "已保存结果带有轴转矩约定标记：转矩为标记的轴量。",
+    "field_legacy": "已保存结果早于轴转矩约定：转矩为电磁场转矩，可能与轴转矩不同。"
+  },
+  "dtStatus": {
+    "ok": "正常",
+    "missing": "缺失",
+    "gearbox_failed": "减速器失败"
+  },
+  "dtStatusTip": {
+    "ok": "根据电机已保存的工况点计算。",
+    "missing": "电机没有此行可用的已保存工况点；原因已显示。减速器一侧仍会计算。",
+    "gearbox_failed": "核心在此工况点将减速器标为失败；显示其状态和缺少的输入。不与电机比较。"
+  },
+  "dtMissing": {
+    "shaft_key_unrecognised": "已保存结果标记为基于轴，但没有可识别的轴转矩。"
+  },
+  "dtMissingTip": {
+    "shaft_key_unrecognised": "带标记的已保存结果给出轴量。其轴转矩键不是本页已知的键，因此特意不使用场转矩。请重新保存电机结果。"
+  },
+  "dtReason": {
+    "motor_point_differs": "所需电机点与已保存点不同（相差超过 2 %）：不给出链数值；两个效率分别显示。",
+    "no_saved_point": "电机没有此行的已保存工况点。",
+    "not_covered": "已保存的电机点不满足需求。",
+    "efficiency_unavailable": "已保存结果没有效率。",
+    "gearbox_failed": "减速器在此工况点失败。",
+    "bearing_definitions": "没有轴承定义。",
+    "grease_drag_torque_Nm": "没有润滑脂拖曳转矩。"
+  }
 }

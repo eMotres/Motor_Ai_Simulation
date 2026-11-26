@@ -1,6 +1,7 @@
 // Gear module calls: /api/gears (staff only; auth headers come from the global fetch wrapper).
 // Routes: POST template | evaluate | assembly | pose, GET catalogues.  Every POST answers the core's schema-v1 record;
 // a refused body answers 422 {"detail":{"error":"validation","errors":[{path,code,message}]}}, path being an RFC 6901 pointer.
+import type { DrivetrainRequest, DrivetrainResponse } from './drivetrain';
 import type { BoxList, BoxRecord, CataloguesAnswer, FieldError, GearboxResponse, PlainBody, RequestRecord } from './types';
 
 const API = (import.meta.env?.VITE_API_URL ?? 'http://localhost:8001') as string;
@@ -77,4 +78,9 @@ export const boxesApi = {
     call<BoxRecord>('PUT', `/boxes/${encodeURIComponent(id)}${q(project)}`, body),
   archive: (project: string | null, id: string, version: number) => call<BoxRecord>('DELETE', `/boxes/${encodeURIComponent(id)}${q(project, { version })}`),
   restore: (project: string | null, id: string, version: number) => call<BoxRecord>('POST', `/boxes/${encodeURIComponent(id)}/restore${q(project, { version })}`),
+};
+
+export const drivetrainApi = {
+  /** one gearbox behind one motor configuration's SAVED points at output load rows (read only; nothing is solved) */
+  run: (body: DrivetrainRequest, signal?: AbortSignal) => call<DrivetrainResponse>('POST', '/drivetrain', body, signal),
 };

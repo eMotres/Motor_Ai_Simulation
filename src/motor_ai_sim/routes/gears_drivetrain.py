@@ -233,7 +233,9 @@ def saved_point(duty: Dict[str, Any]) -> Dict[str, Any]:
     torque = tkey = None
     if marker:                       # the marked shaft quantities (PR #900): coupling torque with a bearing model, else the shaft torque
         torque, tkey = _pick(blocks, SHAFT_TORQUE_KEYS)
-    if torque is None:
+        if torque is None:           # a MARKED record states shaft quantities: never fall back to the field torque
+            return {"duty": name, "missing": "shaft_key_unrecognised"}
+    else:
         torque, tkey = _pick(blocks, FIELD_TORQUE_KEYS)
     rpm, _ = _pick(blocks, ("rpm", "speed_rpm"))          # the saved blocks first: the duty's own rpm is editable
     if rpm is None:

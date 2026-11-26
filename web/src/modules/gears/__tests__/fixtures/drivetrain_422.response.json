@@ -1,0 +1,1 @@
+{"detail":{"error":"validation","errors":[{"code":"invalid_value","message":"Expected a finite number greater than 0","path":"/load/0/torque_out_Nm"}]}}

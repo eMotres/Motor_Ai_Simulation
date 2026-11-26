@@ -80,7 +80,36 @@
     "open": "Open",
     "archive": "Archive",
     "restore": "Restore",
-    "showArchived": "Archived"
+    "showArchived": "Archived",
+    "dtLimitations": "Not covered (drivetrain)",
+    "motorDie": "Motor",
+    "motorConfig": "Configuration",
+    "gearboxSource": "Gearbox",
+    "sourceInline": "Current design",
+    "sourceRecord": "Open record",
+    "loadRows": "Load at the output",
+    "loadName": "Mode",
+    "loadTorque": "Output torque, N*m",
+    "loadSpeed": "Output speed, rpm",
+    "loadDuty": "Motor duty",
+    "dutyAuto": "Automatic",
+    "addLoad": "Row",
+    "dtTorque": "Torque",
+    "dtSpeed": "Speed",
+    "dtRequired": "Required",
+    "dtSaved": "Saved point",
+    "dtMargin": "Margin",
+    "dtMesh": "Mesh",
+    "dtBearings": "Bearings",
+    "dtChurning": "Churning",
+    "dtTotal": "Total",
+    "dtEffGearbox": "Gearbox efficiency",
+    "dtEffMotor": "Motor efficiency (saved)",
+    "dtEffChain": "Chain efficiency",
+    "dtMotorMass": "Motor mass",
+    "dtGearboxMass": "Gearbox mass",
+    "dtTotalMass": "Total mass",
+    "dtTorquePerMass": "Torque per mass"
   },
   "tip": {
     "presetJoint": "Two planetary stages, 12.884:1: 9.8 N*m at 247 rpm at the output.",
@@ -162,7 +191,39 @@
     "saveChanges": "Overwrite the open record. It is refused when somebody saved a newer version meanwhile.",
     "currentRecord": "Open record {id}, version {version}.",
     "showArchived": "Archived records are kept; show them to restore one.",
-    "unreadable": "Files in this scope that could not be read. They are not listed; ask an administrator to check them."
+    "unreadable": "Files in this scope that could not be read. They are not listed; ask an administrator to check them.",
+    "tab_motor": "The gearbox behind a motor: required motor torque and speed, losses, margin against the motor's saved points, chain efficiency and torque per mass. Saved results only; nothing is solved.",
+    "motorDie": "Motors you may see. Only saved operating points are used.",
+    "motorConfig": "Configuration of the motor.",
+    "gearboxSource": "The current design as edited, or the saved record that is open in Saved gearboxes.",
+    "loadRows": "Output torque and speed per mode. A mode is answered by the motor's saved duty: continuous by its rated duty, peak by a short-time duty.",
+    "loadName": "Mode name: continuous or peak map to saved duties by themselves; any other name needs a duty.",
+    "loadTorque": "Torque required at the gearbox output.",
+    "loadSpeed": "Speed required at the gearbox output.",
+    "loadDuty": "Saved duty of the motor that answers this row. Automatic uses the rule for the mode.",
+    "addLoad": "Add a load row.",
+    "covered": "Both the torque and the speed the gearbox needs from the motor are within the one saved motor point. Between saved points nothing is claimed.",
+    "limitedBy": "What the saved motor point cannot deliver. The requirement is shown as is, never clamped.",
+    "motoringOnly": "Power flows from the motor to the load. Regeneration and back-driving are not computed.",
+    "reverseNotComputed": "The reverse (back-drive) direction of the chain is not computed here.",
+    "dtLimitations": "What the drivetrain check does not cover.",
+    "partialLoss": "Some losses were not computed (missing inputs: {missing}); the total holds only what was computed.",
+    "dtTorque": "Motor shaft torque.",
+    "dtSpeed": "Motor shaft speed.",
+    "dtRequired": "What the output point needs from the motor through the gearbox.",
+    "dtSaved": "The motor's saved operating point of the matching duty.",
+    "dtMargin": "Saved minus required; negative means the saved point is short.",
+    "dtMesh": "Gear mesh loss.",
+    "dtBearings": "Bearing friction loss. A dash means no bearing was supplied: not computed, not zero.",
+    "dtChurning": "Churning and drag loss. A dash means no drag torque was supplied: not computed, not zero.",
+    "dtTotal": "Computed losses of the stage.",
+    "dtEffGearbox": "Gearbox efficiency at the required point.",
+    "dtEffMotor": "The motor's saved efficiency, at its own saved torque and speed.",
+    "dtEffChain": "Motor times gearbox, given only when the required point matches the saved motor point within 2 %.",
+    "dtMotorMass": "Saved motor mass.",
+    "dtGearboxMass": "Analytical gearbox mass.",
+    "dtTotalMass": "Motor plus gearbox.",
+    "dtTorquePerMass": "Output torque per total mass."
   },
   "gear": {
     "z": "Teeth",
@@ -214,7 +275,8 @@
   "tab": {
     "point": "Point",
     "spectrum": "Duty spectrum",
-    "assembly": "3-D"
+    "assembly": "3-D",
+    "motor": "With motor"
   },
   "state": {
     "ok": "Valid",
@@ -337,5 +399,50 @@
   "defaultName": "gearbox",
   "noSaved": "Nothing saved yet.",
   "archived": "Archived",
-  "unreadable": "{count, plural, one {# unreadable file} other {# unreadable files}}"
+  "unreadable": "{count, plural, one {# unreadable file} other {# unreadable files}}",
+  "motoringOnly": "Motoring only",
+  "reverseNotComputed": "Reverse (backdrive) not computed",
+  "covered": "Covered",
+  "notCovered": "Not covered",
+  "partial": "partial",
+  "dtDuty": "Duty: {name}",
+  "dtFlags": "{count} flags",
+  "dtSummary": "{die} / {configuration}, ratio {ratio}",
+  "limitedBy": {
+    "motor_torque": "Limited by motor torque",
+    "motor_speed": "Limited by motor speed"
+  },
+  "basis": {
+    "shaft": "Shaft torque",
+    "field_legacy": "Field torque (legacy)"
+  },
+  "basisTip": {
+    "shaft": "The saved result carries the shaft-torque convention marker: the torque is the marked shaft quantity.",
+    "field_legacy": "The saved result predates the shaft convention: the torque is the electromagnetic field torque, which can differ from the shaft torque."
+  },
+  "dtStatus": {
+    "ok": "OK",
+    "missing": "Missing",
+    "gearbox_failed": "Gearbox failed"
+  },
+  "dtStatusTip": {
+    "ok": "Calculated from the motor's saved point.",
+    "missing": "The motor has no usable saved point for this row; the reason is shown. The gearbox side is still calculated.",
+    "gearbox_failed": "The core marks the gearbox failed at this point; its state and missing inputs are shown. No comparison with the motor is made."
+  },
+  "dtMissing": {
+    "shaft_key_unrecognised": "The saved result is marked as shaft-based but has no recognised shaft torque."
+  },
+  "dtMissingTip": {
+    "shaft_key_unrecognised": "A marked saved result states shaft quantities. Its shaft torque key is not one this page knows, so the field torque is deliberately not used. Re-save the motor result."
+  },
+  "dtReason": {
+    "motor_point_differs": "The required motor point is not the saved one (more than 2 % apart): no chain number is given; the two efficiencies are shown separately.",
+    "no_saved_point": "The motor has no saved point for this row.",
+    "not_covered": "The saved motor point does not cover the requirement.",
+    "efficiency_unavailable": "The saved result has no efficiency.",
+    "gearbox_failed": "The gearbox failed at this point.",
+    "bearing_definitions": "No bearing definitions.",
+    "grease_drag_torque_Nm": "No grease drag torque."
+  }
 }

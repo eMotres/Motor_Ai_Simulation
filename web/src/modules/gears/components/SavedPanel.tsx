@@ -13,11 +13,13 @@ interface Props {
   name: string; onName: (name: string) => void;
   buildSave: () => Promise<{ request: RequestRecord; response: unknown | null }>;
   onOpen: (rec: BoxRecord) => void;
+  /** the open record (id, scope, name), or null: the With motor tab can use it as its gearbox */
+  onRef?: (ref: { id: string; project: string; name: string } | null) => void;
 }
 
 const remembered = { ref: null as SavedRef | null, project: '', name: '', showArchived: false };
 
-export default function SavedPanel({ name, onName, buildSave, onOpen }: Props) {
+export default function SavedPanel({ name, onName, buildSave, onOpen, onRef }: Props) {
   const { t } = useTranslation('gears');
   const [mem, setMem] = useRememberedView('gears.saved', remembered, validateSavedRef);
   const [projectText, setProjectText] = useState(mem.project);
@@ -26,6 +28,8 @@ export default function SavedPanel({ name, onName, buildSave, onOpen }: Props) {
   const [message, setMessage] = useState<string | null>(null);
   const [conflict, setConflict] = useState<string | null>(null);   // id of the record that changed elsewhere
   const project = mem.project || null;
+  const current0 = mem.ref;
+  useEffect(() => { onRef?.(current0 ? { id: current0.id, project: current0.project, name: current0.name } : null); }, [current0?.id, current0?.name, current0?.project]);  // eslint-disable-line react-hooks/exhaustive-deps
 
   const refresh = useCallback(async () => {
     try { setList(await boxesApi.list(mem.project || null, 'all')); }

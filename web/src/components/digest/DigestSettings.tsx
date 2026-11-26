@@ -13,7 +13,7 @@ import { isListed, settingsChange, toggleChosen, type DigestSettingsView, type D
 
 const PANEL = { bgcolor: 'var(--panel-2)', border: '1px solid var(--line-soft)', borderRadius: 1.5, p: 1.25, mb: 1.5 } as const;
 
-const DigestSettings: React.FC<{ target: DigestTarget }> = ({ target }) => {
+const DigestSettings: React.FC<{ target: DigestTarget; actions?: React.ReactNode }> = ({ target, actions = null }) => {
   const { t } = useTranslation('common');
   const { isAdmin, role } = useAuth();
   const staff = isAdmin || role === 'engineer';           // "Approve first" waits for the owner in Admin: not an option a customer is offered
@@ -40,7 +40,9 @@ const DigestSettings: React.FC<{ target: DigestTarget }> = ({ target }) => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [view, key]);
 
-  if (!view) return err ? <Alert severity="warning" sx={{ mb: 1.5, py: 0 }}>{t('digest.loadFailed', { reason: err })}</Alert> : null;
+  // the page's own buttons (the Motors & results row) are never lost while the settings load or fail
+  const actionsRow = actions ? <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 1.5, flexWrap: 'wrap', mb: 1 }} data-testid="digest-actions">{actions}</Box> : null;
+  if (!view) return err ? <><Alert severity="warning" sx={{ mb: 1.5, py: 0 }}>{t('digest.loadFailed', { reason: err })}</Alert>{actionsRow}</> : actionsRow;
   const roleLabel = (r: string) => t(`digest.role.${r}`, { defaultValue: r });
 
   return (
@@ -53,6 +55,7 @@ const DigestSettings: React.FC<{ target: DigestTarget }> = ({ target }) => {
         {view.mode !== 'off' && <Typography sx={{ fontSize: 11.5, color: 'var(--text-3)' }}>{t('digest.recipientsCount', { count: view.will_receive.length })}</Typography>}
         {view.pending && <Chip size="small" color="warning" label={t('digest.pendingChip')} sx={{ height: 18, fontSize: 10.5 }} />}
         <Box sx={{ flex: 1 }} />
+        {actions}
         <Button size="small" sx={{ textTransform: 'none', fontSize: 12 }} onClick={() => setOpen((o) => !o)} aria-expanded={open}>
           {open ? t('digest.hide') : t('digest.change')}
         </Button>

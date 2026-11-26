@@ -1,49 +1,59 @@
-// What each Simulations page tells the help assistant (owner 2026-11-26): modes, status chips and flags only - no value of a geometry,
-// a setting number or a result.  Pure builders: the pages call `useHelpContext(...)` with them.  The tab ids and keys are the ones in
-// src/motor_ai_sim/help_docs/registry.json (the server drops anything else); a test checks every id has an EN and a zh-CN document.
-import { maskNumbers, type HelpContext } from './supportContext.ts';
+// What each Simulations page tells the help assistant (owner 2026-11-26; rules of the Astra review of #910): flags, bounded counts,
+// status chips and values from EXACT lists only - no name, no typed text, no setting value, no result number, no price.  Pure builders:
+// the pages call `useHelpContext(...)` with them.  The tab ids, keys and allowed values are the ones in
+// src/motor_ai_sim/help_docs/registry.json (the server drops anything else); a test checks that the lists agree and that every id has
+// an EN and a zh-CN document.
+import type { HelpContext } from './supportContext.ts';
 
-export const HELP_TABS = ['simulation', 'thermal', 'mechanical', 'propellers', 'schemas'] as const;
+export const HELP_TABS = ['simulation', 'thermal', 'mechanical'] as const;
 
-const word = (v: unknown): string => String(v ?? '').trim().replace(/[^A-Za-z0-9_\- ]/g, '').slice(0, 40);
-const motorName = (name?: string | null): Record<string, string> => (name ? { motor: String(name).slice(0, 80) } : {});
-const err = (e?: string | null): Record<string, string> => (e && e.trim() ? { error: maskNumbers(e) } : {});
+const pick = (v: unknown, allowed: readonly string[]): string | undefined => (typeof v === 'string' && allowed.includes(v) ? v : undefined);
+const put = (key: string, v: string | undefined): Record<string, string> => (v === undefined ? {} : { [key]: v });
+
+export const SIM_OP_MODES = ['motor', 'generator'] as const;
+export const SIM_COUPLED_DRIVES = ['sine', 'inverter'] as const;
+export const SIM_SOLVE_TO = ['steady', 'limits', 'continuous'] as const;
+export const COOL_MODES = ['air', 'liquid', 'manual', 'none', 'robotics'] as const;
+export const BORE_MODES = ['none', 'air', 'liquid', 'still'] as const;
+export const OUTER_SOURCES = ['manual', 'propeller'] as const;
+export const LOADS = ['centrifugal', 'torque', 'both'] as const;
+export const SYMMETRIES = ['full', 'sector'] as const;
 
 // ── Electromagnetic ──────────────────────────────────────────────────────────
 export interface SimulationHelp {
-  motorName?: string | null; opMode: string; drive: string; targetKind: string; connection: string;
-  coupled: boolean; coupledDrive: string; solveTo: string;
-  running: boolean; stopped: boolean; failed: boolean; ran: boolean; notice?: string | null;
+  opMode: string; drive: string; targetKind: string; coupled: boolean; coupledDrive: string; solveTo: string;
+  running: boolean; stopped: boolean; failed: boolean; ran: boolean; hasNotice: boolean;
 }
 export function simulationHelp(i: SimulationHelp): HelpContext {
-  const input = i.drive === 'current' && i.targetKind !== 'off' ? (i.targetKind === 'kw' ? 'target_power' : 'target_torque') : `${word(i.drive) || 'current'}_drive`;
+  const input = i.drive === 'current' ? (i.targetKind === 'kw' ? 'target_power' : i.targetKind === 'nm' ? 'target_torque' : 'sine_current') : 'other_drive';
   const status = i.running ? ['running'] : i.stopped ? ['stopped'] : i.failed ? ['error'] : i.ran ? ['done'] : ['not_run'];
   return {
-    tab: 'simulation', ...motorName(i.motorName), opMode: word(i.opMode), input, connection: word(i.connection),
-    coupled: i.coupled, ...(i.coupled ? { coupledDrive: word(i.coupledDrive), solveTo: word(i.solveTo) } : {}),
-    calculated: i.ran, status, ...err(i.notice),
+    tab: 'simulation', ...put('opMode', pick(i.opMode, SIM_OP_MODES)), input, coupled: i.coupled,
+    ...(i.coupled ? { ...put('coupledDrive', pick(i.coupledDrive, SIM_COUPLED_DRIVES)), ...put('solveTo', pick(i.solveTo, SIM_SOLVE_TO)) } : {}),
+    calculated: i.ran, status, ...(i.hasNotice || i.failed ? { error: 'run_failed' } : {}),
   };
 }
 
 // ── Thermal ──────────────────────────────────────────────────────────────────
 export interface ThermalHelp {
-  motorName?: string | null; coolMode: string; boreMode: string; outerSource: string;
-  busy: boolean; ran: boolean; stale: boolean; emMissing: boolean; compareRows: number; issue?: string | null;
+  coolMode: string; boreMode: string; outerSource: string;
+  busy: boolean; ran: boolean; stale: boolean; emMissing: boolean; compareRows: number; invalid: boolean;
 }
 export function thermalHelp(i: ThermalHelp): HelpContext {
   return {
-    tab: 'thermal', ...motorName(i.motorName), coolMode: word(i.coolMode), boreMode: word(i.boreMode), outerSource: word(i.outerSource),
+    tab: 'thermal', ...put('coolMode', pick(i.coolMode, COOL_MODES)), ...put('boreMode', pick(i.boreMode, BORE_MODES)),
+    ...put('outerSource', pick(i.outerSource, OUTER_SOURCES)),
     calculated: i.ran, stale: i.stale, emMissing: i.emMissing, compareRows: Math.min(99, i.compareRows),
-    status: i.busy ? ['solving'] : i.ran ? ['done'] : ['not_solved'], ...err(i.issue),
+    status: i.busy ? ['solving'] : i.ran ? ['done'] : ['not_solved'], ...(i.invalid ? { error: 'not_valid' } : {}),
   };
 }
 
 // ── Mechanical ───────────────────────────────────────────────────────────────
-export interface MechanicalHelp { motorName?: string | null; loads: string; symmetry: string; busy: boolean; ran: boolean; stale: boolean; error?: string | null }
+export interface MechanicalHelp { loads: string; symmetry: string; busy: boolean; ran: boolean; stale: boolean; failed: boolean }
 export function mechanicalHelp(i: MechanicalHelp): HelpContext {
   return {
-    tab: 'mechanical', ...motorName(i.motorName), loads: word(i.loads), symmetry: word(i.symmetry),
-    calculated: i.ran, stale: i.stale, status: i.busy ? ['solving'] : i.ran ? ['done'] : ['not_solved'], ...err(i.error),
+    tab: 'mechanical', ...put('loads', pick(i.loads, LOADS)), ...put('symmetry', pick(i.symmetry, SYMMETRIES)),
+    calculated: i.ran, stale: i.stale, status: i.busy ? ['solving'] : i.ran ? ['done'] : ['not_solved'], ...(i.failed ? { error: 'run_failed' } : {}),
   };
 }
 

@@ -1870,9 +1870,9 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
 
   // the window the help assistant sees (modes and chips only, no numbers)
   useHelpContext(simulationHelp({
-    motorName: getActiveMotor()?.name, opMode, drive, targetKind, connection, coupled, coupledDrive, solveTo,
+    opMode, drive, targetKind, coupled, coupledDrive, solveTo,
     running: !!simBusy || isRunning, stopped: cancelledRun, failed: !!srvErr || job?.status === 'error', ran: runNonce > 0 || job?.status === 'done',
-    notice: runNotice?.kind === 'error' ? runNotice.text : srvErr,
+    hasNotice: runNotice?.kind === 'error' || !!srvErr,
   }));
 
   // ─────────────────────────────────────────────────────────────────────────

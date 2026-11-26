@@ -23,7 +23,6 @@ import {
 } from '@mui/material';
 
 import { useMotorStore, useUIStore } from '../../stores/motorStore';
-import { getActiveMotor } from '../common/motorSettings';
 import { useHelpContext } from '../support/useHelpContext';
 import { thermalHelp } from '../../lib/helpContexts';
 import { coolingIssue, effectiveBoreMode, geomFor, HEAT_PATHS, isStale, useThermalStore } from '../../stores/thermalStore';
@@ -1083,8 +1082,8 @@ const ThermalPanel: React.FC = () => {
 
   // the window the help assistant sees (modes and chips only, no numbers)
   useHelpContext(thermalHelp({
-    motorName: getActiveMotor()?.name, coolMode: String(coolMode), boreMode: String(boreMode), outerSource: String(st.airSpeedSource),
-    busy, ran: !!res, stale, emMissing: !!emMissing, compareRows: compareRows.length, issue: coolErr,
+    coolMode: String(coolMode), boreMode: String(boreMode), outerSource: String(st.airSpeedSource),
+    busy, ran: !!res, stale, emMissing: !!emMissing, compareRows: compareRows.length, invalid: !!coolErr,
   }));
 
   /** One column per PART the STORED rows carry — the tiles' order first, then

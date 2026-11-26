@@ -239,7 +239,7 @@ def test_marked_point_prefers_coupling_torque():
     assert no_marker["torque_Nm"] == 2.2 and no_marker["torque_basis"] == "field_legacy"
     marked_without_shaft = gd.saved_point({"name": "a", "rpm": 100, "result": {"T_em_avg_Nm": 2.2},
                                            "summary": {"shaft_convention": "x"}})
-    assert marked_without_shaft["torque_Nm"] == 2.2 and marked_without_shaft["torque_basis"] == "field_legacy"
+    assert marked_without_shaft == {"duty": "a", "missing": "shaft_key_unrecognised"}   # a marked record never falls back to field torque
 
 
 def test_computed_losses_are_numbers_and_unpartial():
@@ -547,3 +547,36 @@ def test_independent_hand_check_numbers(client, inline):
     assert abs(row["margin"]["torque_Nm"] - 0.2298857475) < 1e-6 and abs(row["margin"]["speed_rpm"] - 317.6) < 1e-3
     assert abs(row["mass"]["total_kg"] - 0.7184477343) < 1e-6
     assert abs(row["output_torque_per_total_mass_Nm_per_kg"] - 13.6405190417) < 1e-5
+
+
+# ----------------------------------------------------------------------------------------- page PR follow-ups
+
+def test_marked_record_without_a_shaft_key_is_missing_not_field_torque(client, inline, motor_src):
+    pt = gd.saved_point({"name": "rated", "rpm": 3500.0, "result": {"T_em_avg_Nm": 1.0, "efficiency_pct": 85.0},
+                         "summary": {"shaft_convention": "fe_on_shaft_k3d_v1", "T_other_Nm": 1.0}})
+    assert pt == {"duty": "rated", "missing": "shaft_key_unrecognised"}
+    # an unmarked record keeps the field torque and says so
+    legacy = gd.saved_point({"name": "rated", "rpm": 3500.0, "result": {"T_em_avg_Nm": 1.0}})
+    assert legacy["torque_basis"] == "field_legacy" and legacy["torque_Nm"] == 1.0
+    # a marked record with a recognised key is still a shaft point
+    assert gd.saved_point({"name": "r", "rpm": 10.0, "summary": {"T_shaft_Nm": 2.0, "shaft_convention": "m"}})["torque_basis"] == "shaft"
+    motor_src["motor"]["duties"]["rated"] = pt
+    row = post(client, body(inline, [{"name": "continuous", "torque_out_Nm": 9.8, "speed_out_rpm": 247.0}])).json()["rows"][0]
+    assert row["status"] == "missing" and row["reason"] == "shaft_key_unrecognised"
+    assert row["chain_efficiency"] is None and row["chain_efficiency_reason"] == "no_saved_point"
+    assert row["gearbox"]["torque_in_Nm"] > 0                                  # the gearbox side is still computed
+
+
+def test_mass_overlay_with_a_cold_cache_reads_only_and_writes_nothing(monkeypatch, tmp_path):
+    from motor_ai_sim import fscache
+    from motor_ai_sim.routes import family
+    dies = tmp_path / "dies"
+    (dies / "D1").mkdir(parents=True)
+    monkeypatch.setattr(family, "_die_dir", lambda die: dies / die)
+    fscache.clear()
+    before = sorted(str(p.relative_to(tmp_path)) for p in tmp_path.rglob("*"))
+    cfg = {"name": "C1", "duties": [{"name": "rated", "result": {"mass_kg": 0.4}}]}
+    out = family._overlay_mass("D1", cfg)
+    assert out is not cfg and cfg == {"name": "C1", "duties": [{"name": "rated", "result": {"mass_kg": 0.4}}]}   # a copy, the input untouched
+    assert out["mass"]["partial"] is True and out["duties"][0]["result"]["mass_kg"] == 0.4
+    assert sorted(str(p.relative_to(tmp_path)) for p in tmp_path.rglob("*")) == before     # nothing written

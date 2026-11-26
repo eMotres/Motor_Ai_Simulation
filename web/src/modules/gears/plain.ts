@@ -36,9 +36,20 @@ export function defaultStage(kind: StageKind, name: string): PlainStage {
   return { uid: newUid(), kind, name, n_planets: 3, fixed_member: 'ring', gears: { sun: gear(40, 10), planet: gear(32, 10), ring: gear(104, 10) }, bearings: {} };
 }
 
+/** Planet bearing fit (owner 2026-11-26): OD <= planet root diameter - 3 module (1.5 module of rim on each side). */
+export function planetRootDiameter(g: PlainGear): number { return g.m_n_mm * (g.z + 2 * (g.x ?? 0) - 2 * 1.25); }
+export const maxPlanetBearingOd = (g: PlainGear): number => planetRootDiameter(g) - 3 * g.m_n_mm;
+/** null when the bearing fits (or none is chosen); else the numbers for the red field message. */
+export function planetBearingMisfit(stage: PlainStage, od: number | null | undefined): { od: number; max: number } | null {
+  const planet = stage.gears.planet;
+  if (!planet || od === null || od === undefined) return null;
+  const max = maxPlanetBearingOd(planet);
+  return od > max + 1e-9 ? { od, max } : null;
+}
+
 /** The humanoid-joint preset: two planetary stages, 12.884:1 (9.8 N*m at 247 rpm out).  Mirrors the template route's default. */
 export function humanoidJoint(): EditorState {
-  const s1 = defaultStage('planetary', 's1');
+  const s1: PlainStage = defaultStage('planetary', 's1');
   const s2: PlainStage = { ...defaultStage('planetary', 's2'), n_planets: 4,
     gears: { sun: gear(38, 12), planet: gear(30, 12), ring: gear(98, 12) } };
   return {

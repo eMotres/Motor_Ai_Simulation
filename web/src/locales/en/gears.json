@@ -69,7 +69,18 @@
     "addBin": "Row",
     "peakTorque": "Peak torque, N*m",
     "peakEvents": "Peak events",
-    "peakSpeed": "Peak speed, rpm"
+    "peakSpeed": "Peak speed, rpm",
+    "showStages": "Stages",
+    "saved": "Saved gearboxes",
+    "saveName": "Name",
+    "project": "Project",
+    "saveNew": "Save",
+    "saveChanges": "Save changes",
+    "reload": "Reload",
+    "open": "Open",
+    "archive": "Archive",
+    "restore": "Restore",
+    "showArchived": "Archived"
   },
   "tip": {
     "presetJoint": "Two planetary stages, 12.884:1: 9.8 N*m at 247 rpm at the output.",
@@ -93,7 +104,6 @@
     "stages": "Stages in order from the input; each stage's output is the next stage's input.",
     "limitations": "What this screening calculation does not cover. Read it before using any number.",
     "pass": "Combined result of the overall state, the preset checks and every supplied part. Estimated results may pass their thresholds but stay labelled as estimates.",
-    "passPoint": "A single point is never a duty qualification: it always reads not passed and says why. Use the duty spectrum for qualification.",
     "endurance": "Zero damage in the supported model. This is not unlimited physical life.",
     "bearingDiagnostic": "The bearing record failed or is unsupported: its life is a diagnostic value, not a rating, and no aggregate bearing life is formed.",
     "boundary": "Boundary lubrication: the oil film is thinner than the surface roughness; wear and micropitting risk is high.",
@@ -141,7 +151,18 @@
     "peakEvents": "Number of peak events over the life.",
     "peakSpeed": "Output speed during a peak event; zero is allowed.",
     "inputAngle": "Rotation angle at the chain input; every gear and planet orbit follows from the pose calculation.",
-    "title": "Gear and planetary gearbox calculation: a screening estimate, not a qualification."
+    "title": "Gear and planetary gearbox calculation: a screening estimate, not a qualification.",
+    "noVerdict": "A single operating point is never a duty qualification: parts and the preset are not evaluated here, so the point carries no pass or fail. The reasons below say what is missing. Use the duty spectrum for the verdict.",
+    "stageToggle": "Show or hide this stage.",
+    "showStages": "Which stages are shown in the 3-D view.",
+    "saved": "Gearboxes saved on the server: the design, the operating point or duty spectrum, and the last result when it is current.",
+    "saveName": "Name of the saved gearbox.",
+    "project": "Project id the record belongs to; blank keeps it in the workspace. There is no access rule yet: the page is staff only.",
+    "saveNew": "Save the current design as a new record.",
+    "saveChanges": "Overwrite the open record. It is refused when somebody saved a newer version meanwhile.",
+    "currentRecord": "Open record {id}, version {version}.",
+    "showArchived": "Archived records are kept; show them to restore one.",
+    "unreadable": "Files in this scope that could not be read. They are not listed; ask an administrator to check them."
   },
   "gear": {
     "z": "Teeth",
@@ -292,5 +313,29 @@
     "bearingAggregate": "A failed or unsupported bearing spectrum gives no aggregate life; finite life values inside failed records are diagnostic only. Blank bounds exclude the housing.",
     "outlines": "Sampled or decimated outlines are viewer geometry, not manufacturing CAD and not a 3-D clearance certification.",
     "irMotoringOnly": "The drivetrain (TransmissionIR) export from the core is motoring only and keeps partial and unqualified provenance. This page does not use it."
-  }
+  },
+  "noVerdict": "Point: no verdict (run the duty spectrum for a pass / fail)",
+  "bearingFit": "Bearing does not fit inside the planet (OD {od} mm, max {max} mm)",
+  "flag": {
+    "response_stale": "Result outdated",
+    "request_hash_mismatch": "Hash mismatch",
+    "request_invalid": "Request invalid",
+    "checksum_mismatch": "Checksum mismatch",
+    "core_stale": "Core changed",
+    "catalogue_changed": "Catalogue changed"
+  },
+  "flagTip": {
+    "response_stale": "The saved result may no longer be trusted, so it is not shown on Open; calculate again.",
+    "request_hash_mismatch": "The stored request does not match its stored hash.",
+    "request_invalid": "The core no longer accepts the stored request.",
+    "checksum_mismatch": "The file was changed outside the application (torn or hand-edited).",
+    "core_stale": "The calculation core changed since the result was saved.",
+    "catalogue_changed": "Materials, lubricants, bearings or presets changed since the result was saved."
+  },
+  "changedElsewhere": "Changed elsewhere. Reload to continue.",
+  "workspace": "Workspace",
+  "defaultName": "gearbox",
+  "noSaved": "Nothing saved yet.",
+  "archived": "Archived",
+  "unreadable": "{count, plural, one {# unreadable file} other {# unreadable files}}"
 }

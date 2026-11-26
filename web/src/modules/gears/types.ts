@@ -59,7 +59,9 @@ export interface EvaluationResult extends Rec {
 }
 
 export interface Outline extends Rec { z: number; is_internal: boolean; outer_diameter_mm: number | null; outline_mm: Array<[number, number]>; b_mm: number }
-export interface Placement { name: string; member_id: string; role: string; stage_index: number; outline_id: string; outline: Outline | null; center_mm: [number, number, number]; face_width_mm: number; reference_angle_deg: number }
+export interface Placement { name: string; member_id: string; role: string; stage_index: number; outline_id: string; outline: Outline | null; center_mm: [number, number, number]; face_width_mm: number; reference_angle_deg: number;
+  speed_ratio_to_input: number; carrier_speed_ratio_to_input: number; carrier_center_mm: [number, number, number];
+  orbital_radius_mm: number; orbital_angle_ref_deg: number }
 export interface AssemblyResult extends Rec { members: Placement[]; outlines: Record<string, Outline>; overall_ratio: number }
 export interface PoseMember { name: string; member_id: string; role: string; center_mm: [number, number, number]; rotation_deg: number }
 export interface PoseResult extends Rec { input_angle_deg: number; members: Record<string, PoseMember> }
@@ -75,3 +77,11 @@ export interface CataloguesAnswer {
   bearings: Array<{ name: string; core_supported: boolean; d_mm: number; D_mm: number; B_mm: number }>;
   presets: Array<{ name: string; description?: string }>;
 }
+
+export type BoxFlag = 'request_hash_mismatch' | 'request_invalid' | 'checksum_mismatch' | 'core_stale' | 'catalogue_changed';
+export interface BoxSummary {
+  id: string; name: string; scope: string; state: 'active' | 'archived'; version: number; created_at: string; updated_at: string;
+  author: string; updated_by: string; core_version: string | null; request_hash: string | null; flags: string[]; response_stale: boolean; has_response: boolean;
+}
+export interface BoxList { scope: string; items: BoxSummary[]; unreadable: Array<{ file: string; error: string }> }
+export interface BoxRecord extends Omit<BoxSummary, 'has_response'> { request: RequestRecord; response: GearboxResponse | null }

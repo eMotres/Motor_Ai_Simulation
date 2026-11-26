@@ -402,6 +402,8 @@ app.include_router(propellers_router)
 # Gear and gearbox module, stage 2 (2026-11-26): /api/gears/* calculation routes, staff only, no storage
 from motor_ai_sim.routes.gears import router as gears_router
 app.include_router(gears_router)
+from motor_ai_sim.routes.gears_store import router as gears_store_router   # stage 3: saved gearbox records
+app.include_router(gears_store_router)
 app.include_router(optimization_router)
 app.include_router(optimization_runs_router)   # /api/optimization/runs: saved optimisation runs per motor
 app.include_router(display_state_router)   # /api/display-state: Active / Parked / Archived for staff lists

@@ -29,11 +29,12 @@ export function cubeCameraTransform(cameraDirection: CubeVec3, cameraUp: CubeVec
   return [right[0],right[2],-right[1], screenUp[0],screenUp[2],-screenUp[1], direction[0],direction[2],-direction[1]].map((v) => v === 0 ? 0 : v);
 }
 
-const DIRECTIONS: Record<StandardView, [number, number, number]> = {
+// 'iso' is a host-requested start view only; the cube keeps snapping to the 18 face / edge views
+const DIRECTIONS: Record<Exclude<StandardView, 'iso'>, [number, number, number]> = {
   front:[0,-1,0], back:[0,1,0], left:[-1,0,0], right:[1,0,0], top:[0,0,1], bottom:[0,0,-1],
   frontTop:[0,-1,1], frontBottom:[0,-1,-1], backTop:[0,1,1], backBottom:[0,1,-1],
   leftTop:[-1,0,1], leftBottom:[-1,0,-1], rightTop:[1,0,1], rightBottom:[1,0,-1],
-  frontLeft:[-1,-1,0], frontRight:[1,-1,0], backLeft:[-1,1,0], backRight:[1,1,0],
+  frontLeft:[-1,-1,0], frontRight:[1,-1,0], backLeft:[-1,1,0], backRight:[1,1,0]
 };
 
 /** Resolve an oriented cube face/edge normal pair to the nearest supported camera view. */
@@ -41,7 +42,7 @@ export function cubeViewForLocalDirection(direction: CubeVec3): StandardView {
   const cad = cubeLocalToCad(direction);
   let best: StandardView = 'front';
   let score = -Infinity;
-  for (const [view, candidate] of Object.entries(DIRECTIONS) as Array<[StandardView, [number, number, number]]>) {
+  for (const [view, candidate] of Object.entries(DIRECTIONS) as Array<[Exclude<StandardView, 'iso'>, [number, number, number]]>) {
     const length = Math.hypot(...candidate);
     const next = (cad[0] * candidate[0] + cad[1] * candidate[1] + cad[2] * candidate[2]) / length;
     if (next > score) { best = view; score = next; }

@@ -34,7 +34,8 @@ def _code(method, path, who=None):
     return r.status_code
 
 
-PATHS = [("GET", MISSION + "/options"), ("GET", MISSION + "/runs"), ("POST", MISSION + "/run"), ("POST", MISSION)]
+PATHS = [("GET", MISSION + "/options"), ("GET", MISSION + "/runs"), ("POST", MISSION + "/run"), ("POST", MISSION),
+         ("DELETE", MISSION + "/runs/abc")]
 
 
 def test_anonymous_is_refused_401(accounts):
@@ -114,7 +115,7 @@ def test_worker_prefixes_differ_from_the_base_only_by_the_mission_entry():
 
 def test_gated_prefix_table_differs_from_the_base_only_by_the_mission_entries(env):
     A = env["A"]
-    new = {("GET", MISSION, "solve:engineer"), ("POST", MISSION, "solve:engineer")}
+    new = {(m, MISSION, "solve:engineer") for m in ("GET", "POST", "DELETE")}
     got = list(A._GATED_PREFIX)
     assert new <= set(got) and len(got) == len(set(got))
     rest = [e for e in got if e not in new]
@@ -122,4 +123,4 @@ def test_gated_prefix_table_differs_from_the_base_only_by_the_mission_entries(en
     assert [e for e in rest if e[1] == "/api/propellers/design"] == [
         (m, "/api/propellers/design", "solve:engineer") for m in ("GET", "POST", "PUT", "DELETE")]
     assert got.index(("GET", MISSION, "solve:engineer")) > got.index(("DELETE", "/api/propellers/design", "solve:engineer"))
-    assert len(rest) == len(got) - 2 == 55      # 55 base entries on pre-migration-freeze-2026-09-15
+    assert len(rest) == len(got) - 3 == 55      # 55 base entries on pre-migration-freeze-2026-09-15

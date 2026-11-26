@@ -56,6 +56,29 @@ Validity remains estimated screening in the existing domain: alpha_n 15-25 degre
 Illustrative robot stage: m0.6, z20/40/100, b10.5 mm, three planets, ring fixed, 600 rpm sun, 40 Nm carrier output, 70 C, grade6, default carburised material, ROBOT_GREASE_NLGI1_PAO, tooth thinning0.02 mm. Default f_ma=4.395706 um gives K_Hbeta=3.137318 and mesh min_S_H=0.654965; supplied1 um gives 2.688551/0.689450; supplied10 um gives 3.762670/0.614533. These assumed values show sensitivity, not a recommended tolerance. The brief's rounded 3.03/0.61 is not exactly reproducible without its complete payload. None qualifies; the shaft placeholder continues to dominate.
 `floating_member=True` selects the existing estimated planet load-sharing K_gamma default. It does not solve floating-sun self-alignment or shaft/carrier/housing compliance and gives no independent f_ma reduction. No new floating-sun mechanics is implemented.
 
+### Optional shaft/pin mesh misalignment input (f_sh)
+
+`PairStageSpec.f_sh_um`, `PlanetaryStageSpec.sun_planet_f_sh_um` and `PlanetaryStageSpec.planet_ring_f_sh_um` accept finite nonnegative numbers in micrometres (not booleans or numeric strings). `None`/absent retains the exact previous estimate; zero is supplied. Planetary inputs are independent, including stepped planet2/ring meshes. They pass through schema-v1 `GearboxRequest`, point, spectrum and peak evaluations. Low-level `rate_pair_iso6336` and `compute_iso6336_load_factors` also accept `f_sh_um`. Thresholds are unchanged.
+
+The value replaces only `f_sh` **before** the existing `1.33` multiplier: `F_bx = 1.33*f_sh + f_ma`, `y_beta = min(0.15*F_bx,6 um)`, `F_by = max(F_bx-y_beta,0)`. It is a mesh-face misalignment contribution from deflection, not a centre translation, total loaded `F_bx/F_by`, manufacturing error or an angle. Separate these contributions before supplying them. A supplied stage value is held constant at every duty/peak evaluation; for spectrum/peak screening, the caller must supply the conservative maximum f_sh applicable across all duty bins and the declared peak (the core does not rescale it with torque); reusing a rated-load deflection at a higher peak can understate K_Hbeta. `floating_member` does not zero it automatically.
+
+Fresh Python `load_factors` reports actual `f_sh_um` and `f_sh_source` (`supplied`/`estimated`). For exact legacy v1 compatibility, estimated `f_sh_um` and the default source are omitted from serialized results; old JSON did not retain this diagnostic. Decoding such a record gives `f_sh_um=None`, `f_sh_source="estimated"`; rerun the request for its numerical estimate. Supplied results serialize both fields and numeric metric availability. The strict decoder rejects a source inconsistent with the shaft-placeholder flag or a supplied source without a finite nonnegative value. Request defaults and their availability entries are omitted, as for f_ma; explicit null is not canonical.
+
+Supplying f_sh removes only `simplified:placeholder_shaft_bending_f_sh`. It leaves the independent f_ma estimate/caveat, fixed Bk/mass model and running-in approximations intact; `load_factors.state` stays `estimated` even when both misalignment inputs are supplied. The screening domain remains alpha_n 15-25 degrees, abs(beta)<=30 degrees, epsilon_alpha 1-2.5, admissible metallic geometry and existing rim/root gates. A finite input is not a physically qualified misalignment range. Internal-root bending remains unsupported.
+
+The robot example above, with both mesh f_sh values supplied and f_ma unchanged, gives:
+
+| f_sh input (um) | Sun/planet K_Hbeta | Sun/planet min S_H | Planet/ring K_Hbeta | Planet/ring min S_H |
+|---|---:|---:|---:|---:|
+| absent (separate estimates) | 3.137318 | 0.654965 | 2.696882 | 1.636581 |
+| 0.1 | 1.871698 | 0.782096 | 2.280278 | 1.779814 |
+| 0.11 | 1.874258 | 0.781562 | 2.283405 | 1.778595 |
+| 1.0 | 2.099619 | 0.744245 | 2.546416 | 1.684240 |
+
+These are sensitivity inputs from the brief, not validated build compliance. At f_sh=0.11 um, `1.33*f_sh=0.1463 um` versus f_ma=4.395706/4.712221 um: manufacturing/assembly now dominates F_bx in both meshes. Sun/planet still fails; no safe design is claimed. Its baseline f_sh is 6.306953 um for this fully specified fixture, not the brief's approximate 7.9 um. The placeholder uses F_m/b **before** K_v; the face-factor denominator includes K_v. The remote original payload is unavailable, so this reuses #930's reproducible example rather than claiming exact reproduction of the quoted 3.03/0.605.
+
+No automatic `PlanetPinSpec` compliance model is added. The brief's ideal simply supported, centrally loaded hollow pin has `I=pi*(12^4-6^4)/64=954.258769 mm^4`; assuming `E=206000 N/mm^2`, `delta=950*10.5^3/(48*206000*954.258769)=0.000116551 mm=0.116551 um`. The ideal maximum slope is `950*10.5^2/(16*206000*954.258769)=0.033300 um/mm` at the supports, and zero at midspan. See [MIT, Roylance, Beam Displacements, equations 6-7](https://web.mit.edu/course/3/3.11/www/modules/bdisp.pdf). This verifies bending-only arithmetic, not face misalignment: span/diameter=0.875 is not a slender beam; shear, bearing load transfer/tilt, plate compliance and press-fit rotational restraint are unresolved. The given diameter/bore/E/span/support/load position alone cannot determine the relative mesh-face alignment. Existing PlanetPinSpec strength calculations remain unchanged; no hollow-section strength support is implied.
+
 ## Limitations the UI must show
 
 - Internal-root bending remains unsupported (including cutter-count-only inputs); thin-rim unsupported gates remain. Complete planetary life/qualification cannot be green while a required root/history is unavailable.

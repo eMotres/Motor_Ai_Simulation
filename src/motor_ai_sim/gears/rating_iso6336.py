@@ -57,6 +57,12 @@ class ISO6336LoadFactors(DictResultMixin):
     # Absent in legacy v1 JSON means estimated; explicit supplied source is serialized.
     f_ma_source: Literal["estimated", "supplied"] = field(
         default="estimated", metadata={"omit_if_default": True})
+    # Estimated values are available on fresh results, but omitted from legacy
+    # v1 JSON for byte compatibility. Decoded old records have no retained value.
+    f_sh_um: Optional[float] = field(default=None, metadata={
+        "omit_if_default": True, "omit_if_flag": "simplified:placeholder_shaft_bending_f_sh"})
+    f_sh_source: Literal["estimated", "supplied"] = field(
+        default="estimated", metadata={"omit_if_default": True})
 
     def __post_init__(self):
         # An omitted v1 source may mean estimated only when its legacy evidence
@@ -66,6 +72,14 @@ class ISO6336LoadFactors(DictResultMixin):
                 or ("misalignment_f_ma_estimated_rigid_carrier_caveat" in self.flags) != estimated
                 or ("f_ma_um_including_shaft_housing_deflection" in self.missing_inputs) != estimated):
             raise FieldValidationError("/f_ma_source", "f_ma_source contradicts misalignment estimate evidence")
+        estimated_sh = self.f_sh_source == "estimated"
+        if (self.f_sh_source not in ("estimated", "supplied")
+                or ("simplified:placeholder_shaft_bending_f_sh" in self.flags) != estimated_sh):
+            raise FieldValidationError("/f_sh_source", "f_sh_source contradicts shaft estimate evidence")
+        if self.f_sh_um is not None:
+            require_number("f_sh_um", self.f_sh_um, minimum=0.)
+        elif not estimated_sh:
+            raise FieldValidationError("/f_sh_um", "Supplied shaft misalignment requires f_sh_um")
 
 
 @dataclass
@@ -220,6 +234,7 @@ def compute_iso6336_load_factors(
     n1_rel_rpm: float,
     K_A: float = 1.0,
     f_ma_um: Optional[float] = None,
+    f_sh_um: Optional[float] = None,
     f_pt_um: Optional[float] = None,
     f_pb_um: Optional[float] = None,
     E1_MPa: float = 206000.0,
@@ -230,8 +245,9 @@ def compute_iso6336_load_factors(
     """Compute the existing estimated Method B/C load-factor model.
 
     f_ma_um replaces only the manufacturing/assembly misalignment estimate.
-    The separate placeholder 1.33*f_sh and running-in approximation remain;
-    do not supply a total effective F_bx/F_by or double-count shaft bending.
+    f_sh_um replaces only the shaft/pin deflection misalignment contribution
+    before multiplication by 1.33. The running-in approximation remains;
+    do not supply a total effective F_bx/F_by or double-count misalignment.
     None preserves the legacy estimate; zero is an explicit supplied value.
     """
     for name, val in (
@@ -248,12 +264,14 @@ def compute_iso6336_load_factors(
         raise ValueError("K_A, E1_MPa, E2_MPa, rho1_kg_m3, and rho2_kg_m3 must be > 0")
     if f_ma_um is not None:
         require_number("f_ma_um", f_ma_um, minimum=0.)
+    if f_sh_um is not None:
+        require_number("f_sh_um", f_sh_um, minimum=0.)
     for opt_name, opt_val in (("f_pt_um", f_pt_um), ("f_pb_um", f_pb_um)):
         if opt_val is not None and (not math.isfinite(float(opt_val)) or float(opt_val) < 0.0):
             raise ValueError(f"{opt_name} must be finite and >= 0, got {opt_val!r}")
 
     flags: List[str] = [
-        "simplified:placeholder_shaft_bending_f_sh",
+        *(["simplified:placeholder_shaft_bending_f_sh"] if f_sh_um is None else []),
         "simplified:solid_cylinder_mass_and_fixed_Bk=0.2",
         "simplified:estimated_running_in_y_alpha_y_beta",
     ]
@@ -334,7 +352,8 @@ def compute_iso6336_load_factors(
         missing.append("f_ma_um_including_shaft_housing_deflection")
     else:
         f_ma = float(f_ma_um)
-    f_sh = 0.023 * f_m_per_mm * (b_eff / max(g1.d_mm, 1.0)) ** 2 * 10.0  # small shaft bending placeholder [um]
+    f_sh = (0.023 * f_m_per_mm * (b_eff / max(g1.d_mm, 1.0)) ** 2 * 10.0
+            if f_sh_um is None else float(f_sh_um))  # legacy placeholder or supplied [um]
     f_bx = 1.33 * f_sh + f_ma
     y_beta = min(0.15 * f_bx, 6.0)
     f_by = max(f_bx - y_beta, 0.0)
@@ -369,7 +388,7 @@ def compute_iso6336_load_factors(
     k_halpha = min(max(k_alpha_raw, 1.0), k_halpha_cap)
     k_falpha = min(max(k_alpha_raw, 1.0), k_falpha_cap)
 
-    # Always "estimated" because placeholder shaft bending f_sh, fixed Bk=0.2,
+    # Always "estimated" because fixed Bk=0.2,
     # solid-cylinder m_red, and approximate running-in y_alpha/y_beta are used.
     state: ValidityState = "estimated"
     return ISO6336LoadFactors(
@@ -388,6 +407,8 @@ def compute_iso6336_load_factors(
         f_pb_um=f_pb,
         f_ma_um=f_ma,
         f_ma_source="estimated" if f_ma_um is None else "supplied",
+        f_sh_um=f_sh,
+        f_sh_source="estimated" if f_sh_um is None else "supplied",
         state=state,
         applicability_evidence={
             "iso_edition": "ISO 6336-1:2019",
@@ -552,6 +573,7 @@ def rate_pair_iso6336(
     cycles_2: float = 5.0e7,
     K_A: float = 1.0,
     f_ma_um: Optional[float] = None,
+    f_sh_um: Optional[float] = None,
     gear1_is_planet_idler: bool = False,
     gear2_is_planet_idler: bool = False,
     shaper_cutter_z0: Optional[int] = None,
@@ -578,6 +600,7 @@ def rate_pair_iso6336(
         n1_rel_rpm=n1_rel_rpm,
         K_A=K_A,
         f_ma_um=f_ma_um,
+        f_sh_um=f_sh_um,
         E1_MPa=mat1.E_MPa,
         E2_MPa=mat2.E_MPa,
         rho1_kg_m3=mat1.density_kg_m3,

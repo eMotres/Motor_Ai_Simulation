@@ -109,7 +109,10 @@
     "dtMotorMass": "电机质量",
     "dtGearboxMass": "减速器质量",
     "dtTotalMass": "总质量",
-    "dtTorquePerMass": "单位质量转矩"
+    "dtTorquePerMass": "单位质量转矩",
+    "f_ma_um": "f_ma，µm",
+    "sun_planet_f_ma_um": "f_ma 太阳轮-行星轮，µm",
+    "planet_ring_f_ma_um": "f_ma 行星轮-齿圈，µm"
   },
   "tip": {
     "presetJoint": "两级行星轮，12.884:1：输出端 247 rpm 时 9.8 N*m。",
@@ -223,7 +226,10 @@
     "dtMotorMass": "已保存的电机质量。",
     "dtGearboxMass": "减速器解析质量。",
     "dtTotalMass": "电机加减速器。",
-    "dtTorquePerMass": "单位总质量的输出转矩。"
+    "dtTorquePerMass": "单位总质量的输出转矩。",
+    "f_ma_um": "该齿轮对的啤合错位 f_ma（微米），由工程师给定。留空 = 由内核估算（标记为估算）；0 表示已给定：无错位。",
+    "sun_planet_f_ma_um": "太阳轮-行星轮啤合的错位 f_ma（微米），由工程师给定。留空 = 由内核估算（标记为估算）；0 表示已给定：无错位。",
+    "planet_ring_f_ma_um": "行星轮-齿圈啤合的错位 f_ma（微米），由工程师给定。留空 = 由内核估算（标记为估算）；0 表示已给定：无错位。"
   },
   "gear": {
     "z": "齿数",

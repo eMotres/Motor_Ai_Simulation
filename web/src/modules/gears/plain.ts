@@ -18,6 +18,12 @@ export const BEARING_SLOTS: Record<StageKind, string[]> = {
   compound_planetary: ['input_bearing', 'planet_bearing', 'output_bearing'],
   pair: ['bearing_1a', 'bearing_1b', 'bearing_2a', 'bearing_2b'],
 };
+/** the optional misalignment inputs of each stage kind (micrometres); absent = the core's estimate */
+export const F_MA_KEYS: Record<StageKind, Array<'f_ma_um' | 'sun_planet_f_ma_um' | 'planet_ring_f_ma_um'>> = {
+  planetary: ['sun_planet_f_ma_um', 'planet_ring_f_ma_um'],
+  compound_planetary: ['sun_planet_f_ma_um', 'planet_ring_f_ma_um'],
+  pair: ['f_ma_um'],
+};
 export const FIXED_MEMBERS = ['ring', 'sun', 'carrier'] as const;
 export const GEAR_FIELDS = ['z', 'm_n_mm', 'b_mm', 'x', 'beta_deg', 'tooth_thickness_allowance_mm'] as const;
 export type GearField = typeof GEAR_FIELDS[number];
@@ -77,6 +83,7 @@ const stageBody = (s: PlainStage): Record<string, unknown> => {
   }
   for (const slot of BEARING_SLOTS[s.kind]) if (s.bearings[slot]) (out.bearings as Record<string, string>)[slot] = s.bearings[slot];
   if (s.kind !== 'pair') { out.n_planets = s.n_planets ?? 3; out.fixed_member = s.fixed_member ?? 'ring'; }
+  for (const k of F_MA_KEYS[s.kind]) { const v = s[k]; if (typeof v === 'number' && Number.isFinite(v) && v >= 0) out[k] = v; }   // absent stays absent
   return out;
 };
 

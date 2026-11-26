@@ -284,3 +284,23 @@ def test_template_default_has_no_bearings_and_auto_fits(client):
     # an explicit empty bearings block removes them
     bare = client.post(B + "/template", json={"stages": [{"kind": "pair", "name": "p", "gears": {"gear1": {"z": 20, "m_n_mm": 1., "b_mm": 12.}, "gear2": {"z": 40, "m_n_mm": 1., "b_mm": 12.}}}]}).json()
     assert bare["stages"][0]["bearing_1a"] is None
+
+def test_template_carries_the_optional_misalignment_inputs_and_absent_stays_absent(client):
+    g = lambda z, b=12.: {"z": z, "m_n_mm": 1., "b_mm": b}
+    planetary = {"kind": "planetary", "name": "s", "gears": {"sun": g(40), "planet": g(32), "ring": g(104)}}
+    pair = {"kind": "pair", "name": "p", "gears": {"gear1": g(20), "gear2": g(40)}}
+    r = client.post(B + "/template", json={"stages": [dict(planetary), dict(pair)]})
+    assert r.status_code == 200
+    stages = r.json()["stages"]
+    for st in stages:
+        assert not {"f_ma_um", "sun_planet_f_ma_um", "planet_ring_f_ma_um"} & set(st)          # absent fields do not appear in the record
+    supplied = {"stages": [{**planetary, "sun_planet_f_ma_um": 1.5, "planet_ring_f_ma_um": 0}, {**pair, "f_ma_um": 2.0}]}
+    r = client.post(B + "/template", json=supplied)
+    assert r.status_code == 200
+    body = r.json()
+    assert body["stages"][0]["sun_planet_f_ma_um"] == 1.5 and body["stages"][0]["planet_ring_f_ma_um"] == 0   # 0 is "supplied"
+    assert body["stages"][1]["f_ma_um"] == 2.0
+    assert GearboxRequest.from_dict(body).to_dict() == body                                   # schema v1 round trip
+    assert client.post(B + "/evaluate", json=body).status_code == 200
+    bad = client.post(B + "/template", json={"stages": [{**planetary, "sun_planet_f_ma_um": -1}]})
+    assert bad.status_code == 422 and "f_ma" in bad.text

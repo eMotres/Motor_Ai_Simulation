@@ -56,7 +56,8 @@ test('the draft card: editable type, title and description; Send and Dismiss', (
 test('Send goes through the confirm flow with the context; nothing is filed from the chat call', () => {
   assert.match(widget, /runConfirm\(flowRef\.current, submitTicket, context\(\), setFlow\)/);
   // ONE assistant (2026-11-11): the context rides only for a signed-in caller; inside a Specification the place (project, fill mode) too
-  assert.match(widget, /askAssistant\(msgs, user \? context\(\) : undefined, lang, spec \? \{ projectId: spec\.projectId, fill: fill && canApply \} : undefined\)/);
+  // a visitor sends only the language and the validated tab / sub ids (buildAnonContext), never the snapshot
+  assert.match(widget, /askAssistant\(msgs, user \? context\(\) : buildAnonContext\(\{ tab: activeTab, lang: [^)]*\), lang, spec \? \{ projectId: spec\.projectId, fill: fill && canApply \} : undefined\)/);
   assert.match(widget, /await ask\(next\.msgs\)/);
   assert.doesNotMatch(widget, /t\('demo'\)/);
   assert.match(widget, /installFailedCallRecorder\(/);

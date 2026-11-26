@@ -4,6 +4,8 @@ import { Box, Button, CircularProgress, IconButton, MenuItem, TextField, ToggleB
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
 import { useTranslation } from 'react-i18next';
 import { useRememberedView } from '../../../lib/useRememberedView';
+import { useHelpContext } from '../../../components/support/useHelpContext';
+import { motorPanelHelp } from '../helpContext';
 import { fetchFamilyTree } from '../../../lib/familyTree';
 import { GearsApiError, drivetrainApi } from '../api';
 import { MAX_ROWS, PICKER_MENU_PROPS, buildDrivetrainRequest, canCalculate, pickConfiguration, pickDie, defaultRows, drivetrainErrorKey, motorOptions, validateMotorMemory, type DrivetrainResponse, type LoadRow, type MotorMemory } from '../drivetrain';
@@ -13,6 +15,8 @@ import DrivetrainResults from './DrivetrainResults';
 import { NumField } from './parts';
 
 export interface SavedRefLite { id: string; project: string; name: string }
+
+const sourceNow = (mem: MotorMemory, saved: SavedRefLite | null): 'inline' | 'record' => (mem.source === 'record' && !!saved ? 'record' : 'inline');
 
 export default function MotorPanel({ buildInline, saved }: { buildInline: () => Promise<RequestRecord>; saved: SavedRefLite | null }) {
   const { t } = useTranslation('gears');
@@ -32,6 +36,11 @@ export default function MotorPanel({ buildInline, saved }: { buildInline: () => 
   const die = options.dies.find((d) => d.name === mem.die);
   const cfg = die?.configs.find((x) => x.name === mem.configuration);
   const fieldErr = useMemo(() => errorMap(errors.map((e) => ({ path: drivetrainErrorKey(e.path), code: '', message: e.message }))), [errors]);
+
+  useHelpContext(motorPanelHelp({
+    source: sourceNow(mem, saved), rows: mem.rows.length,
+    statuses: result ? result.rows.map((r) => r.status) : null, errors, failure,
+  }));
 
   const setRow = (i: number, patch: Partial<LoadRow>) => setMem({ ...mem, rows: mem.rows.map((r, k) => (k === i ? { ...r, ...patch } : r)) });
   const useRecord = mem.source === 'record' && !!saved;

@@ -9,6 +9,8 @@ import { useTranslation } from 'react-i18next';
 
 import SubTabs from '../../components/common/SubTabs';
 import { oneOf } from '../../lib/viewMemory';
+import { useHelpContext } from '../../components/support/useHelpContext';
+import { gearsPageHelp } from './helpContext';
 import { useRememberedView } from '../../lib/useRememberedView';
 import { GearsApiError, gearsApi } from './api';
 import { errorMap, humanoidJoint, toPlainBody, validateEditor, type EditorState } from './plain';
@@ -104,6 +106,14 @@ export default function GearsPage() {
 
   const shown = tab === 'point' ? point : tab === 'spectrum' ? spectrum : null;
   const stale = (ran: Ran<unknown> | null) => !!ran && tab !== 'motor' && ran.key !== keyOf(tab);
+
+  // the window the help assistant sees (ids, modes and chips only)
+  const ranNow = tab === 'assembly' ? assembly : shown;
+  useHelpContext(gearsPageHelp({
+    sub: tab, preset: state.preset_name, stageKinds: state.stages.map((s) => s.kind),
+    ran: ranNow as { response: { result?: { state?: unknown; passed?: unknown } | null } } | null, stale: tab === 'motor' ? false : stale(ranNow),
+    errors: errors.map((e) => ({ path: e.path, message: e.message })), failure, recordOpen: !!openRecord_,
+  }));
 
   return (
     <Box data-testid="gears-page" sx={{ height: '100%', overflow: 'auto', p: 2 }}>

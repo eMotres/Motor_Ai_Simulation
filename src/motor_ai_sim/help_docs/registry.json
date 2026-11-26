@@ -1,0 +1,62 @@
+{
+  "_comment": "ONE registry of the windows the help assistant knows (tab id -> sub-views, documents, the keys its ui_context may carry). The server (help_context.py) and the web tests read this file; every document id listed here needs <id>.en.md and <id>.zh-CN.md next to it. Key kinds: \"flag\", \"count\", \"code\" (a known validation code, help_context.ERROR_CODES), {\"enum\": [...]} and {\"enums\": [...]} with EXACT allowed values. Nothing a user typed is ever forwarded: no names, no free text. min_role is the lowest role that gets more than nothing for this tab; anon, user and oem never get more than the tab id (help_context.ID_ONLY_ROLES).",
+  "gears": {
+    "min_role": "engineer",
+    "subs": [
+      "point",
+      "spectrum",
+      "assembly",
+      "motor"
+    ],
+    "docs": [
+      "gears",
+      "gears.point",
+      "gears.spectrum",
+      "gears.assembly",
+      "gears.motor",
+      "gears.saved"
+    ],
+    "keys": {
+      "preset": {
+        "enum": [
+          "humanoid_robot_joint",
+          "standard"
+        ]
+      },
+      "stageKinds": {
+        "enums": [
+          "planetary",
+          "compound_planetary",
+          "pair"
+        ]
+      },
+      "stageCount": "count",
+      "calculated": "flag",
+      "stale": "flag",
+      "source": {
+        "enum": [
+          "inline",
+          "record"
+        ]
+      },
+      "rows": "count",
+      "record": "flag",
+      "status": {
+        "enums": [
+          "state_ok",
+          "state_estimated",
+          "state_unsupported",
+          "state_failed",
+          "state_unknown",
+          "state_valid",
+          "passed",
+          "not_passed",
+          "inputs_changed",
+          "row_ok",
+          "row_missing",
+          "row_gearbox_failed"
+        ]
+      }
+    }
+  }
+}

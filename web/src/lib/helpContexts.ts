@@ -61,7 +61,7 @@ export function mechanicalHelp(i: MechanicalHelp): HelpContext {
 export const POLARS = ['flatplate_model', 'camber_model', 'mfoil_table'] as const;
 export const GRAPH_VIEWS = ['modules', 'propeller_s1'] as const;
 
-export interface PropellersHelp { view: 'catalog' | 'designer'; rows: number; failed: boolean }
+export interface PropellersHelp { view: 'catalog' | 'designer' | 'mission'; rows: number; failed: boolean }
 export function propellersHelp(i: PropellersHelp): HelpContext {
   return { tab: 'propellers', sub: i.view, ...(i.view === 'catalog' ? { rows: Math.min(99, i.rows), ...(i.failed ? { error: 'load_failed' } : {}) } : {}) };
 }

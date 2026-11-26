@@ -26,7 +26,6 @@ export default function MissionPage() {
   const [form, setForm] = useState<MissionForm>(() => sanitizeForm(readView<unknown>(FORM_KEY, (v) => (v && typeof v === 'object' ? v : null))));
   const [opts, setOpts] = useState<api.MissionOptions | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [errorDetail, setErrorDetail] = useState<string>('');   // the server's own (English) text: only in the tooltip
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
   const [run, setRun] = useState<api.MissionRun | null>(null);
   const [runs, setRuns] = useState<api.RunSummary[]>([]);
@@ -46,8 +45,7 @@ export default function MissionPage() {
   const showError = useCallback((e: unknown) => {
     const err = e as { status?: number; message?: string };
     const text = String(err?.message ?? e);
-    setError(t(errorKey(err?.status ?? 0)));
-    setErrorDetail(text);
+    setError(t(errorKey(err?.status ?? 0)));            // translated only: the server's English text is not shown (its field is marked below)
     const key = serverFieldKey(text);
     if (key) setFieldErrors((f) => ({ ...f, [key]: 'range' }));
   }, [t]);
@@ -147,7 +145,7 @@ export default function MissionPage() {
   return (
     <Box sx={{ p: 2, display: 'flex', flexDirection: 'column', gap: 1.25 }} data-testid="prop-mission">
       <Alert severity="info" sx={{ py: 0, fontSize: 12 }} data-testid="mission-note">{t('propMissionNote')}</Alert>
-      {error && <Tooltip title={errorDetail} disableHoverListener={!errorDetail}><Alert severity="error" data-testid="mission-error" onClose={() => { setError(null); setErrorDetail(''); }}>{error}</Alert></Tooltip>}
+      {error && <Alert severity="error" data-testid="mission-error" onClose={() => setError(null)}>{error}</Alert>}
       <Box sx={{ display: 'grid', gridTemplateColumns: { xs: 'minmax(0,1fr)', lg: 'minmax(340px, 0.9fr) minmax(0, 2fr)' }, gap: 1.25, alignItems: 'start' }}>
         <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.25, minWidth: 0 }}>
           <Panel title={t('propMissionMotor')} tip={t('propMissionMotorTip')}>
@@ -266,7 +264,7 @@ export default function MissionPage() {
         </Box>
 
         <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.25, minWidth: 0 }}>
-          {run && run.status === 'failed' && <Tooltip title={run.error ?? ''}><Alert severity="error">{t('propMissionRunFailed')}</Alert></Tooltip>}
+          {run && run.status === 'failed' && <Alert severity="error">{t('propMissionRunFailed')}</Alert>}
           {run && run.status === 'interrupted' && <Alert severity="warning">{t('propMissionInterrupted')}</Alert>}
           {run && run.status === 'stopped' && !res && <Alert severity="info">{t('propMissionStoppedEarly')}</Alert>}
           {res && run && (

@@ -662,5 +662,16 @@
   "propMissionRule_hover_drive_bus_window": "悬停：负载电压超出控制器母线范围",
   "propMissionRule_cruise_drive_bus_window": "巡航：负载电压超出控制器母线范围",
   "propMissionRule_hover_end_drive_bus_window": "放电末期悬停：负载电压超出控制器母线范围",
-  "propMissionRule_cruise_end_drive_bus_window": "放电末期巡航：负载电压超出控制器母线范围"
+  "propMissionRule_cruise_end_drive_bus_window": "放电末期巡航：负载电压超出控制器母线范围",
+  "propMissionRule_peak_drive_bus_window": "峰值点：负载电压超出控制器母线范围",
+  "propMissionRuleMsg_headroom": "在放电末期、保留 {pct} % 电压余量时无法达到峰值点。",
+  "propMissionRuleMsg_tw_cont": "持续推重比 {value} 低于要求的 {limit}。",
+  "propMissionRuleMsg_tw_peak": "峰值推重比 {value} 低于要求的 {limit}。",
+  "propMissionRuleMsg_drive_bus_window": "电池电压范围 {vmin}–{vmax} V 超出控制器母线范围。",
+  "propMissionPointReason_motor": "电机无法维持该工作点（电压、电流或温度）。",
+  "propMissionPointReason_pack_cannot_deliver": "电池无法提供该功率。",
+  "propMissionPointReason_nonconverged": "电机与电池电压未收敛。",
+  "propMissionPointReason_thrust_outside_curve": "螺旋桨曲线达不到所需推力。",
+  "propMissionPointReason_drive_bus_window": "负载电池电压 {V} V 超出控制器母线范围。",
+  "propMissionPointReason_other": "无法达到该工作点。"
 }

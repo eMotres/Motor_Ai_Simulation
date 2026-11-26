@@ -809,8 +809,10 @@ class MotorBank:
 # Candidate evaluation
 # ---------------------------------------------------------------------------
 
-def _fail(out: List[Dict[str, Any]], rule: str, detail: str) -> None:
-    out.append({"rule": rule, "detail": detail})
+def _fail(out: List[Dict[str, Any]], rule: str, detail: str, **params: Any) -> None:
+    """One failed constraint: ``rule`` (stable key), ``params`` (the numbers of the message, so the UI translates the WHOLE message, review
+    #922 r3 D) and ``detail`` (English text for logs and the dataset; never shown in the UI)."""
+    out.append({"rule": rule, "params": {k: (round(v, 3) if isinstance(v, float) else v) for k, v in params.items()}, "detail": detail})
 
 
 def solve_pack_point(ctx: MotorCtx, ms: Mapping[str, Any], rpm: float, q_Nm: float, air_ms: float, which: str, headroom: float = 0.0
@@ -861,7 +863,7 @@ def flight_point(ctx: MotorCtx, rows: Sequence[Row], D_m: float, ms: Mapping[str
         return {"ok": False, "reason": "thrust_outside_curve", "detail": fl["error"], "V_ms": V}
     sp = solve_pack_point(ctx, ms, fl["rpm"], fl["q_Nm"], V + fl["v_h"], which, headroom)
     if not sp["ok"]:
-        return {"ok": False, "reason": sp["reason"], "detail": sp["detail"], "V_ms": V, "flight": fl}
+        return {"ok": False, "reason": sp["reason"], "detail": sp["detail"], "V_ms": V, "flight": fl, "last_V": sp.get("last_V")}
     mp, st = sp["mp"], sp["pack"]
     summ = _pt_summary(ms, D_m, fl, mp, st)
     summ["P_elec_W"] = ms["n_rot"] * mp["P_elec_W"] + ms["avionics_W"]
@@ -1042,7 +1044,7 @@ def evaluate_candidate(cand: Mapping[str, Any], bank: MotorBank, ms: Mapping[str
     if turns_override is not None:
         opt = next((o for o in bank.options if o["turns"] == turns_override), None)
         if opt is None:
-            return {**base, "passed": False, "failures": [{"rule": "no_turns", "detail": "no such winding"}], "objectives": {}, "objective_value": None, "checks": {}}
+            return {**base, "passed": False, "failures": [{"rule": "no_turns", "params": {}, "detail": "no such winding"}], "objectives": {}, "objective_value": None, "checks": {}}
         held, pk_info = True, {}
     else:
         opt, held, pk_info = choose_for_candidate(bank, rows, D_m, ms, cfg)
@@ -1055,12 +1057,12 @@ def evaluate_candidate(cand: Mapping[str, Any], bank: MotorBank, ms: Mapping[str
         held = bool(pk_info["held"])
     if not held:
         if pk_info.get("reason") == "drive_bus_window":
-            _fail(failures, "drive_bus_window", "peak point: the loaded pack voltage at the end of discharge is outside the controller's bus range")
+            _fail(failures, "peak_drive_bus_window", "peak point: the loaded pack voltage at the end of discharge is outside the controller's bus range")
         elif pk_info.get("reason") == "voltage_unverified":
             _fail(failures, "voltage_unverified", "the voltage check of this motor model is unverified: headroom cannot be asserted")
         else:
             _fail(failures, "headroom", "the peak point is not reachable with %.0f %% voltage headroom at the end-of-discharge voltage"
-                  % (100.0 * cfg["kv"]["headroom"]))
+                  % (100.0 * cfg["kv"]["headroom"]), pct=round(100.0 * cfg["kv"]["headroom"]))
 
     h = float(cfg["kv"]["headroom"])
     hov = flight_point(ctx, rows, D_m, ms, 0.0, "mean")
@@ -1073,16 +1075,16 @@ def evaluate_candidate(cand: Mapping[str, Any], bank: MotorBank, ms: Mapping[str
     tw_cont = lim["cont"]["thrust_N"] / W4 if lim["cont"] else 0.0
     tw_peak = lim["peak"]["thrust_N"] / W4 if lim["peak"] else 0.0
     if tw_cont < float(cfg["flight"]["tw_cont"]):
-        _fail(failures, "tw_cont", "T/W continuous %.2f is below %.2f" % (tw_cont, cfg["flight"]["tw_cont"]))
+        _fail(failures, "tw_cont", "T/W continuous %.2f is below %.2f" % (tw_cont, cfg["flight"]["tw_cont"]), value=round(tw_cont, 2), limit=cfg["flight"]["tw_cont"])
     if tw_peak < float(cfg["flight"]["tw_peak"]):
-        _fail(failures, "tw_peak", "T/W peak %.2f is below %.2f" % (tw_peak, cfg["flight"]["tw_peak"]))
+        _fail(failures, "tw_peak", "T/W peak %.2f is below %.2f" % (tw_peak, cfg["flight"]["tw_peak"]), value=round(tw_peak, 2), limit=cfg["flight"]["tw_peak"])
     unverified_seen = False
     for name, fp in (("hover", hov), ("cruise", cru), ("hover_end", hov_end), ("cruise_end", cru_end)):
         if fp is None:
             continue
         if not fp["ok"]:
             _fail(failures, name + "_drive_bus_window" if fp.get("reason") == "drive_bus_window" else name,
-                  fp.get("detail") or fp.get("reason") or "no point")
+                  fp.get("detail") or fp.get("reason") or "no point", reason=str(fp.get("reason") or "no_point"), V=fp.get("last_V"))
         else:
             for r in fp["reasons"]:
                 if r == "voltage_unverified":
@@ -1099,7 +1101,8 @@ def evaluate_candidate(cand: Mapping[str, Any], bank: MotorBank, ms: Mapping[str
     pack_win = {"v_min": ms["pack"]["V_end_open"], "v_max": ms["pack"]["S"] * float(cfg["battery"]["v_max"])}
     fits = s1.pack_fits_drive(ctx.drive, pack_win)
     if fits is False:
-        _fail(failures, "drive_bus_window", "the pack voltage window %.1f-%.1f V is outside the controller's bus range" % (pack_win["v_min"], pack_win["v_max"]))
+        _fail(failures, "drive_bus_window", "the pack voltage window %.1f-%.1f V is outside the controller's bus range" % (pack_win["v_min"], pack_win["v_max"]),
+              vmin=round(pack_win["v_min"], 1), vmax=round(pack_win["v_max"], 1))
     demag = {bool(fp.get("demag_known")) for fp in (hov, cru, hov_end, cru_end) if fp and fp.get("ok")}
     loaded_bus_fail = any(fp is not None and not fp.get("ok") and fp.get("reason") == "drive_bus_window" for fp in (hov, cru, hov_end, cru_end)) \
         or pk_info.get("reason") == "drive_bus_window"
@@ -1442,7 +1445,7 @@ def run_selection(cfg: Mapping[str, Any], raw_model: Mapping[str, Any], *, stock
                     c["rows"], c["flags"] = own_curve(c, design, ms, float(cfg["candidates"]["rpm_step"]))
                 except MissionError as exc:
                     results.append({k: c.get(k) for k in keys} | {"passed": False, "objectives": {}, "objective_value": None,
-                                                                  "failures": [{"rule": "invalid_design", "detail": str(exc)}], "checks": {}})
+                                                                  "failures": [{"rule": "invalid_design", "params": {}, "detail": str(exc)}], "checks": {}})
                     done += 1
                     if progress:
                         progress(done, total, c["name"])
@@ -1453,7 +1456,7 @@ def run_selection(cfg: Mapping[str, Any], raw_model: Mapping[str, Any], *, stock
                 raise
             except Exception as exc:                            # noqa: BLE001  (one bad candidate must not end the run)
                 res = {k: c.get(k) for k in keys} | {"passed": False, "objectives": {}, "objective_value": None, "checks": {},
-                                                      "failures": [{"rule": "evaluation_error", "detail": "%s: %s" % (type(exc).__name__, exc)}]}
+                                                      "failures": [{"rule": "evaluation_error", "params": {"error": type(exc).__name__}, "detail": "%s: %s" % (type(exc).__name__, exc)}]}
             cand_by_id[c["id"]] = c
             results.append(res)
             done += 1

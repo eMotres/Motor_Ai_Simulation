@@ -191,3 +191,9 @@ test('second review: hidden-bound errors land on the visible field, order is che
   assert.equal(M.stripText({ thickness_mm: null, width_mm: null }), null);
   assert.equal(M.stripText({ thickness_mm: 0.45, width_mm: 2.5 }), '0.45 × 2.5 mm');
 });
+
+test('third review: failure messages are translation keys with parameters, never the server text', () => {
+  assert.deepEqual(M.failureMessage({ rule: 'tw_cont', detail: 'English', params: { value: 1.2, limit: 1.5 } }), { key: 'propMissionRuleMsg_tw_cont', params: { value: 1.2, limit: 1.5 } });
+  assert.equal(M.failureMessage({ rule: 'hover_end', detail: 'x', params: { reason: 'motor_voltage_infeasible', V: null } }).key, 'propMissionPointReason_motor');
+  assert.equal(M.failureMessage({ rule: 'no_curve', detail: 'English' }), null);
+});

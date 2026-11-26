@@ -227,7 +227,20 @@ export interface Point {
   V_ms: number; thrust_N: number; rpm: number; torque_Nm: number; current_A: number | null; pack_power_W: number | null; motor_eta: number | null;
   T_winding_C: number | null; tip_mach: number; tilt_deg: number | null; verification?: string | null; pack_V?: number | null;
 }
-export interface Failure { rule: string; detail: string }
+export interface Failure { rule: string; detail: string; params?: Record<string, string | number | null> }
+
+/** The translation of a failure's WHOLE message (review #922 r3 D): the key and its parameters; the server's English ``detail`` is
+ *  never shown.  Point failures (hover / cruise ...) carry the reason of the point. */
+export function failureMessage(f: Failure): { key: string; params: Record<string, string | number> } | null {
+  const p: Record<string, string | number> = {};
+  for (const [k, v] of Object.entries(f.params ?? {})) if (v !== null && v !== undefined) p[k] = v;
+  if (typeof p.reason === 'string') {
+    const reason = p.reason.startsWith('motor_') ? 'motor' : p.reason;
+    return { key: `propMissionPointReason_${reason}`, params: p };
+  }
+  if (['headroom', 'tw_cont', 'tw_peak', 'drive_bus_window'].includes(f.rule) && Object.keys(p).length) return { key: `propMissionRuleMsg_${f.rule}`, params: p };
+  return null;
+}
 export interface CandidateResult {
   id: string; name: string; source: 'own' | 'catalogue'; prop_id?: string | null; D_in: number; pitch_ratio: number | null; pitch_in?: number | null;
   chord_scale: number | null; blades: number | null; flags?: string[]; turns?: number | null; winding_known?: boolean; strip?: { thickness_mm: number | null; width_mm: number | null; stock_kg: number | null; check: boolean; low_stock: boolean; unknown?: boolean } | null;

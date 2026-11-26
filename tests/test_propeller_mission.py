@@ -636,7 +636,9 @@ def test_open_circuit_pass_loaded_fail_fails_the_candidate_and_marks_the_check()
     res = pm.evaluate_candidate(cand, FakeBank(ctx), ms, cfg)
     rules = {f["rule"] for f in res["failures"]}
     assert not res["passed"] and res["checks"]["bus_window"] == "fail"
-    assert "hover_end_drive_bus_window" in rules or "drive_bus_window" in rules
+    assert rules & {"hover_end_drive_bus_window", "peak_drive_bus_window", "drive_bus_window"}
+    f = next(x for x in res["failures"] if x["rule"] == "hover_end_drive_bus_window")
+    assert f["params"]["reason"] == "drive_bus_window" and f["params"]["V"] is not None        # the UI translates the whole message
 
 
 def test_unknown_winding_is_saved_as_null_never_as_placeholders(stub):
@@ -704,3 +706,33 @@ def test_a_refused_admission_does_not_prune_history(stub, monkeypatch):
     with pytest.raises(J.WorkerDraining):
         pma.start_run(_body(), [], ACCESS)
     assert len(list(folder.glob("msn-*.run.json"))) == 100
+
+
+def test_retention_never_counts_an_active_job_even_after_its_terminal_file(stub, monkeypatch):
+    import os
+    folder = stub / "runs"
+    folder.mkdir()
+    for i in range(101):
+        rid = "msn-%010x" % (0x200 + i)
+        f = folder / (rid + ".run.json")
+        f.write_text(json.dumps({"run_id": rid, "status": "done"}))
+        os.utime(f, (1000 + i, 1000 + i))
+    busy = "msn-%010x" % 0x200                                                 # oldest file, but its job is not released yet
+
+    class Rec:
+        state = "running"
+    real = J.queue().status
+    monkeypatch.setattr(J.queue(), "status", lambda rid: Rec() if rid == busy else real(rid))
+    (folder / (busy + ".progress.json")).write_text(json.dumps({"run_id": busy, "status": "running"}))
+    assert pma.prune(folder, 100) == 0                                         # 100 ended runs + the active one: nothing to remove
+    assert (folder / (busy + ".run.json")).exists() and (folder / (busy + ".progress.json")).exists()
+
+
+def test_failures_carry_parameters_for_a_translated_message():
+    cfg, ms = _ms({"flight": {"tw_cont": 9.0, "tw_peak": 9.5}})
+    rows = _curve(0.3, 0.10, 0.045, 12000.0)
+    cand = {"id": "x", "name": "x", "source": "own", "D_in": 0.3 / 0.0254, "blades": 2, "rows": rows, "curve_source": "t"}
+    res = pm.evaluate_candidate(cand, FakeBank(FakeCtx()), ms, cfg)
+    f = next(x for x in res["failures"] if x["rule"] == "tw_cont")
+    assert f["params"]["limit"] == 9.0 and isinstance(f["params"]["value"], float)
+    assert all("params" in x for x in res["failures"])

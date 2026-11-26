@@ -7,7 +7,7 @@ import { useTranslation } from 'react-i18next';
 
 import { fmt } from '../../lib/propellerDesign';
 import type { Geometry } from '../../lib/propellerDesignApi';
-import { chartData, motorGroups, motorKey, msToKmh, stripText, tableRow } from '../../lib/propellerMission';
+import { chartData, failureMessage, motorGroups, motorKey, msToKmh, stripText, tableRow } from '../../lib/propellerMission';
 import type { Alternative, CandidateResult, MotorEntry, Objective, Point, Refined, SortKey } from '../../lib/propellerMission';
 import { PlanformChart, ZoneTable } from './DesignerParts';
 import { Panel } from './DesignerParts';
@@ -239,7 +239,7 @@ export function RowDetails({ row, alternatives }: { row: CandidateResult | null;
     <Panel title={`${t('propMissionDetails')}: ${row.name}`}>
       <Box data-testid="mission-details">
         {row.failures.map((f, i) => (
-          <Tooltip key={i} title={f.detail ?? ''}>
+          <Tooltip key={i} title={(() => { const m = failureMessage(f); return m ? t(m.key, { ...m.params, defaultValue: t('propMissionPointReason_other') }) : ''; })()}>
             <Alert severity="error" sx={{ py: 0, mb: 0.5, fontSize: 12 }}>{t(`propMissionRule_${f.rule}`, { defaultValue: f.rule })}</Alert>
           </Tooltip>
         ))}

@@ -662,5 +662,16 @@
   "propMissionRule_hover_drive_bus_window": "hover: loaded voltage outside the controller bus window",
   "propMissionRule_cruise_drive_bus_window": "cruise: loaded voltage outside the controller bus window",
   "propMissionRule_hover_end_drive_bus_window": "hover at the end of discharge: loaded voltage outside the controller bus window",
-  "propMissionRule_cruise_end_drive_bus_window": "cruise at the end of discharge: loaded voltage outside the controller bus window"
+  "propMissionRule_cruise_end_drive_bus_window": "cruise at the end of discharge: loaded voltage outside the controller bus window",
+  "propMissionRule_peak_drive_bus_window": "peak point: loaded voltage outside the controller bus window",
+  "propMissionRuleMsg_headroom": "The peak point is not reachable with {pct} % voltage headroom at the end of discharge.",
+  "propMissionRuleMsg_tw_cont": "T/W continuous {value} is below the required {limit}.",
+  "propMissionRuleMsg_tw_peak": "T/W peak {value} is below the required {limit}.",
+  "propMissionRuleMsg_drive_bus_window": "The pack voltage window {vmin}–{vmax} V is outside the controller bus range.",
+  "propMissionPointReason_motor": "The motor cannot hold this point (voltage, current or temperature).",
+  "propMissionPointReason_pack_cannot_deliver": "The battery cannot supply this power.",
+  "propMissionPointReason_nonconverged": "Motor and battery voltage did not converge.",
+  "propMissionPointReason_thrust_outside_curve": "The propeller curve does not reach the thrust needed.",
+  "propMissionPointReason_drive_bus_window": "The loaded battery voltage {V} V is outside the controller bus range.",
+  "propMissionPointReason_other": "The point cannot be reached."
 }

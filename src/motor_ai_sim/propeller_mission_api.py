@@ -177,11 +177,18 @@ def _terminal_runs(folder: Path) -> List[Tuple[float, str]]:
     """``(mtime, run_id)`` of every ENDED run of the folder, one per run id: a ``.run.json``, or a progress-only record whose effective state
     is terminal (stopped / interrupted / failed: cancelled while queued, a restart, a failed terminal write).  Active jobs are excluded."""
     seen: Dict[str, float] = {}
+    q = _J.queue()
+
+    def active(rid: str) -> bool:                 # a job still queued or running (e.g. between its terminal write and its release)
+        rec = q.status(rid)
+        return rec is not None and str(rec.state) in ("queued", "running")
     for f in folder.glob("msn-*.run.json"):
-        seen[f.name[: -len(".run.json")]] = f.stat().st_mtime
+        rid = f.name[: -len(".run.json")]
+        if not active(rid):
+            seen[rid] = f.stat().st_mtime
     for f in folder.glob("msn-*.progress.json"):
         rid = f.name[: -len(".progress.json")]
-        if rid in seen:
+        if rid in seen or active(rid) or (folder / (rid + ".run.json")).exists():
             continue
         try:
             st = str(json.loads(f.read_text(encoding="utf-8")).get("status"))

@@ -14,6 +14,10 @@
     POST /api/propellers/design/curve         thrust / torque / power against rpm with the motor torque limit
     POST /api/propellers/design/optimize      NSGA-II over the design variables: the Pareto front of the two objectives (capped, synchronous)
     GET|PUT|DELETE /api/propellers/design/drafts[/{name}]   drafts in the CALLER'S workspace (never the shared catalog)
+    GET  /api/propellers/mission/options      Mission tab: catalogue motors with their model kind, battery presets, objectives, defaults, wire stock strips
+    POST /api/propellers/mission/run          start a mission run (best propeller + turns / Kv for a flight; then an optimised own propeller) -> run_id
+    GET  /api/propellers/mission/runs[/{id}]  stored runs; one run (progress while it runs)
+    POST /api/propellers/mission/runs/{id}/stop
     The /design routes are gated like a solve (auth._GATED_PREFIX 'solve:engineer': admin while MOTRES_SOLVE_ADMIN_ONLY is on).
 
 SOLVER ISOLATION: nothing here solves a field or writes anything.  The catalogue
@@ -33,10 +37,11 @@ from __future__ import annotations
 import logging
 from typing import Any, Dict, Optional
 
-from fastapi import APIRouter, Body, Header, HTTPException, Query
+from fastapi import APIRouter, Body, Header, HTTPException, Query, Request
 
 from motor_ai_sim import propeller as pp
 from motor_ai_sim import propeller_design_api as pda
+from motor_ai_sim import propeller_mission_api as pma
 
 log = logging.getLogger(__name__)
 
@@ -131,6 +136,72 @@ def get_cooling_options(die: str = Query(..., description="die name"),
         if out.get("default_propeller") and out["default_propeller"] not in out["defaults"].values():
             out["default_propeller"] = None
     return out
+
+
+# ---------------------------------------------------------------------------
+# Mission (Propellers > Mission): registered BEFORE the /{prop_id} routes.  Gated like a solve (the table in auth.py has no entry for
+# this prefix, so the gate is applied here with the same rule as the /design routes).
+# ---------------------------------------------------------------------------
+
+def _mission_gate(request: Request) -> None:
+    from motor_ai_sim import auth as _auth
+    if not _auth.AUTH_ENFORCE and not _auth._ADMIN_EMAILS:
+        return                                                   # local / unconfigured: the developer is the admin
+    authz = request.headers.get("authorization")
+    is_admin, user = _auth._is_admin_caller(authz)
+    if user is None and not is_admin:
+        raise HTTPException(status_code=401, detail="sign in")
+    role = "admin" if is_admin else str(user.get("role") or "anon")
+    need = _auth._resolve_solve_tier("solve:engineer")
+    if _auth._ROLE_RANK.get(role, -1) < _auth._ROLE_RANK.get(need, 2):
+        raise HTTPException(status_code=403, detail="the Mission tab runs a calculation: engineer or admin only")
+
+
+def _mission_cards(authorization: Optional[str]) -> list:
+    """The motors of the catalogue as the app already lists them (``GET /api/catalog``): read-only, same visibility rules."""
+    try:
+        from motor_ai_sim.routes import catalog as _catalog
+        return list(_catalog.get_catalog(authorization).get("motors", []))
+    except Exception:                                            # noqa: BLE001
+        log.warning("mission: the motor catalogue could not be read", exc_info=True)
+        return []
+
+
+def _mission_call(fn, *a, **kw):
+    try:
+        return fn(*a, **kw)
+    except pda.ApiProblem as exc:
+        raise _problem(exc)
+
+
+@router.get("/mission/options")
+def mission_options(request: Request, authorization: Optional[str] = Header(default=None)) -> Dict[str, Any]:
+    _mission_gate(request)
+    return pma.options(_mission_cards(authorization))
+
+
+@router.post("/mission/run")
+def mission_run(request: Request, body: Dict[str, Any] = Body(...), authorization: Optional[str] = Header(default=None)) -> Dict[str, Any]:
+    _mission_gate(request)
+    return _mission_call(pma.start_run, body, _mission_cards(authorization))
+
+
+@router.get("/mission/runs")
+def mission_runs(request: Request) -> Dict[str, Any]:
+    _mission_gate(request)
+    return pma.list_runs()
+
+
+@router.get("/mission/runs/{run_id}")
+def mission_run_get(request: Request, run_id: str) -> Dict[str, Any]:
+    _mission_gate(request)
+    return _mission_call(pma.get_run, run_id)
+
+
+@router.post("/mission/runs/{run_id}/stop")
+def mission_run_stop(request: Request, run_id: str) -> Dict[str, Any]:
+    _mission_gate(request)
+    return _mission_call(pma.stop_run, run_id)
 
 
 @router.get("/{prop_id}")

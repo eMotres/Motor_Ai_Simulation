@@ -234,13 +234,15 @@ def principal_is_admin(email: str) -> bool:
     ident = (email or "").strip().lower()
     if not ident:
         return False
-    if ident == ADMIN_OWNER or ident in _ADMIN_EMAILS:
+    if ident == ADMIN_OWNER:
         return True
     try:                                    # a read-only look: never provision an account from a permission question
         from motor_ai_sim import users as _users
         rec = _users._load().get(ident)
-    except Exception:                       # noqa: BLE001 - unreadable registry = not an admin (fail closed)
-        return False
+    except Exception:                       # noqa: BLE001 - unreadable registry = not an admin (fail closed), the allowlist as before
+        return ident in _ADMIN_EMAILS
+    if ident in _ADMIN_EMAILS:              # the allowlist raises a tier, but a stored factory (oem) identity is never elevated
+        return not (isinstance(rec, dict) and str(rec.get("role") or "") == "oem")
     return bool(rec) and str(rec.get("role") or "") == "admin" and not rec.get("disabled")
 
 
@@ -724,16 +726,20 @@ def _registry_role(email: str, fallback: str = "user", fail_closed: bool = False
     (the `fallback`, which for a verified token is its own claim) and provision
     nothing."""
     if email and email in _ADMIN_EMAILS:
-        # the allowlist raises a tier, it never re-enables an account: a DISABLED record stays disabled (also on the raw Google path)
+        # the allowlist raises a tier, it never re-enables an account: a DISABLED record stays disabled (also on the raw Google path),
+        # and a stored factory (oem) identity is never elevated: it keeps its role below
+        stored_oem = False
         try:
             from motor_ai_sim import users as _u
             rec = _u._load().get(email.strip().lower())
             if isinstance(rec, dict) and rec.get("disabled"):
                 return "__disabled__"
+            stored_oem = isinstance(rec, dict) and str(rec.get("role") or "") == "oem"
         except Exception:                                   # noqa: BLE001
             if fail_closed:
                 return "__unavailable__"            # cannot tell whether the allowlisted account is disabled
-        return "admin"
+        if not stored_oem:
+            return "admin"
     try:
         from motor_ai_sim import users as _users
         try:

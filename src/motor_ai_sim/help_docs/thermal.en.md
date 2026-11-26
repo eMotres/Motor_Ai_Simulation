@@ -16,6 +16,6 @@ Results: temperature tiles per part (winding, magnet, rotor, shaft, stator, air 
 
 Warnings: a stale note when the geometry changed after the result (re-Solve), a cooling mismatch when the result was solved with other cooling than the fields show, and "Loaded from history" with Recompute.
 
-Below, the Duty cycle editor (S2 and similar cycles: cycle seconds, ED check, start temperature, rest unpowered or another duty, save the found ED) and the "Coupled EM and thermal" read-only block.
+The read-only "Coupled EM and thermal" block shows the last coupled result. If Duty cycle is enabled in this build, its editor appears after Frame and before the mesh and results.
 
 Usual order: run Electromagnetic, set cooling here, Solve, compare variants. For the coupled loop switch it on in Electromagnetic.

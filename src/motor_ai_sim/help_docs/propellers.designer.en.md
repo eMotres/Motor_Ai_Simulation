@@ -2,7 +2,7 @@
 
 Evaluate an own propeller with a blade-element model. The banner "BEMT, generic airfoil polars, not validated" is always on: results are screening estimates.
 
-Top row: Diameter (in), Blades, Motor, Polar (flat plate rough model, with camber, or viscous mfoil table), and Evaluate (shows "Evaluating" while it runs). Below, the blade parameters are grouped as Root (inner blade), Blade, Airfoil by zone, and Blades and diameter; each has bounds and "Reset to seed".
+Top row: Diameter (in), Blades, Motor, Polar (flat plate rough model, with camber, or viscous mfoil table), and Evaluate (shows "Evaluating" while it runs). Below are Root (inner blade), Blade and Airfoil by zone controls. Diameter and Blades stay in the top row. One "Reset to seed" restores all blade parameters while keeping the selected diameter and blade count.
 
 After Evaluate:
 - Tiles: thrust, torque, shaft power, speed, tip Mach, thrust per shaft watt, air speed at the motor.

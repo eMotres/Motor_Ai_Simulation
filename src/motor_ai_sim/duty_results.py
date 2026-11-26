@@ -2211,6 +2211,14 @@ def compact_em_run(sbres: Dict[str, Any]) -> Dict[str, Any]:
             f = _f(v) if isinstance(v, (int, float)) else None
             if f is not None:
                 nums[k] = f
+    # the shaft-power convention of these numbers rides with them (1 = core loss on the shaft; shaft_convention)
+    # ... with the FULL context its shaft numbers cannot be read without (marker, factor, torque side, the rotor-in-field
+    # bool, mode and speed keep their own types); a summary on the earlier convention files exactly what it did before
+    from motor_ai_sim.shaft_convention import CONVENTION_KEYS, CONVENTION_CONTEXT_KEYS, has_marker
+    shaft_context: Dict[str, Any] = {}
+    if has_marker(summary):
+        nums["shaft_conv"] = 1.0
+        shaft_context = {k: summary[k] for k in (*CONVENTION_KEYS, *CONVENTION_CONTEXT_KEYS) if k in summary}
     text = {k: str(res.get(k) if res.get(k) is not None else summary.get(k))
             for k in _EM_RUN_TEXT_KEYS
             if (res.get(k) is not None or summary.get(k) is not None)
@@ -2222,6 +2230,7 @@ def compact_em_run(sbres: Dict[str, Any]) -> Dict[str, Any]:
         **_fp2_block(),
         "numbers": nums,
         **({"text": text} if text else {}),
+        **({"shaft_context": shaft_context} if shaft_context else {}),
         # the mesh preset the run was solved with (mesh_presets.record), only when the request named one
         **({"preset": {k: pr.get(k) for k in ("name", "version", "custom", "overridden", "effective", "changed")}} if pr else {}),
     }

@@ -45,6 +45,7 @@ import {
 } from '../common/PromptDialogs';
 import ConfigHistoryDialog from '../catalog/ConfigHistoryDialog';
 import { PointChips } from './SimChips';
+import { useTranslation } from 'react-i18next';
 
 /** The duty-cycle chip ("S3 ED 25 % · 60 s") — nothing at all while the feature is off. */
 const cycleChip = (d: { duty_cycle?: Record<string, unknown> | null }): string | null =>
@@ -56,6 +57,8 @@ const readOpMode = (): 'motor' | 'generator' => {
 };
 
 const SimPointSwitcher: React.FC = () => {
+  const { t } = useTranslation('common');
+  const basisLabel = (marked: boolean) => t(marked ? 'shaftBasisCurrent' : 'shaftBasisEarlier');
   const [duty, setDuty] = useState(() => activeDuty());
   const [cfg, setCfg] = useState<TreeCfg | null>(null);
   const [canWrite, setCanWrite] = useState(false);
@@ -94,7 +97,7 @@ const SimPointSwitcher: React.FC = () => {
     };
   }, []);
 
-  const points: Point[] = pointsOf(cfg, canWrite, driveLabel, cycleChip);
+  const points: Point[] = pointsOf(cfg, canWrite, driveLabel, cycleChip, basisLabel);
   const layout = switcherLayout(points, canWrite, duty?.duty ?? null);
   if (!duty || !cfg || (!layout.chips && !layout.controls)) return null;
   const here = points.find((p) => p.name === duty.duty) ?? null;
@@ -165,7 +168,7 @@ const SimPointSwitcher: React.FC = () => {
     onConfirm: () => { void mutate(`delete ${d}`, () => deleteDuty(duty.die, duty.config, d), async () => {
       // The loaded point is gone: open the one the catalog loads for this motor.
       const t = await fetchFamilyTree({ fresh: true });
-      const rest = pointsOf(configOfTree(t.dies as never, duty.die, duty.config), canWrite, driveLabel, cycleChip);
+      const rest = pointsOf(configOfTree(t.dies as never, duty.die, duty.config), canWrite, driveLabel, cycleChip, basisLabel);
       const next = rest.find((p) => p.isDefault) ?? rest[0];
       setBusy(null);
       if (next) await load(next.name);

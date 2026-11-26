@@ -37,6 +37,7 @@ from __future__ import annotations
 import argparse
 import io
 import json
+import math
 import sys
 import time
 from pathlib import Path
@@ -169,8 +170,15 @@ def write(after_ts: float = 0.0, dry: bool = False) -> None:
                                      if met.get("T_ripple_raw_pct") is not None else None)
         m["reference_efficiency_pct"] = (round(float(met["efficiency"]) * 100.0, 2)
                                          if met.get("efficiency") is not None else None)
-        m["reference_P_mech_W"] = (round(float(met["P_mech_avg_W"]), 1)
-                                   if met.get("P_mech_avg_W") is not None else None)
+        # the 2-D field power T*w, not the solver's diagnostic balance
+        # P_mech_avg_W (it subtracted the in-field rotor drag a second time on a
+        # rotor-side torque, see motor_ai_sim.shaft_convention); the basis is
+        # stored beside it
+        _pa = met.get("P_airgap_W")
+        if _pa is None and met.get("T_avg_Nm") is not None and met.get("rpm"):
+            _pa = float(met["T_avg_Nm"]) * 2.0 * math.pi * float(met["rpm"]) / 60.0
+        m["reference_P_mech_W"] = (round(abs(float(_pa)), 1) if _pa is not None else None)
+        m["reference_P_mech_basis"] = "field torque x speed, 2-D (no losses subtracted)"
         m["reference_P_loss_W"] = met.get("P_loss_total_W")
         m["reference_V_peak_V"] = (round(float(met["V_peak_V"]), 2)
                                    if met.get("V_peak_V") is not None else None)

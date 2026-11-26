@@ -304,7 +304,15 @@ def _enrich_card_entry(entry: dict, geo: dict, sim: dict, met: dict) -> None:
     vpk = _pick("V_line_peak_V", "v_line_peak_v")
     rip = _pick("T_ripple_pct", "ripple_pct", "ripple")
     rpm = _num(sim.get("rpm")) or 0.0
-    pmech = _pick("P_mech_avg_W", "P_mech_W", "power_w")
+    # the card's power: the run's own P_mech_W (shaft side on the shaft-side
+    # convention), never the solver's diagnostic balance P_mech_avg_W (it
+    # subtracted the in-field rotor drag a second time and is signed);
+    # generators are quoted positive
+    pmech = _pick("P_mech_W", "power_w")
+    # quoted positive for a generator; a marked motor at no load keeps its negative shaft power
+    if pmech is not None and not (mm.get("shaft_convention") == "fe_on_shaft_k3d_v1"
+                                  and mm.get("op_mode") != "generator"):
+        pmech = abs(pmech)
     pelec = _pick("P_elec_in_W")
     eff = _pick("efficiency", "efficiency_pct")
     if eff is None and pmech and pelec and pelec > 0:
@@ -1118,7 +1126,10 @@ def _applied_metrics(raw: Optional[dict]) -> dict:
         ("mass_total_kg", ("mass_total_kg", "mass_kg", "mass")),
         ("torque_per_mass", ("torque_per_mass", "torque_per_mass_Nm_kg", "td")),
         ("V_line_peak_V", ("V_line_peak_V", "v_line_peak_v")),
-        ("P_mech_W", ("P_mech_W", "P_mech_avg_W")),
+        ("P_mech_W", ("P_mech_W",)),
+        # the shaft-power convention of the numbers above (1 = core loss on the
+        # shaft; absent = earlier); Compare refuses to rank a mix
+        ("shaft_conv", ("shaft_conv",)),
         # opt-in Sweep "Cogging pp" and the settings it was measured with (Compare ranks only equal ones)
         ("cogging_pp_Nm", ("cogging_pp_Nm",)), ("cogging_final", ("cogging_final",)),
         ("cogging_steps", ("cogging_steps",)), ("cogging_temp_c", ("cogging_temp_c",)),
@@ -1133,6 +1144,11 @@ def _applied_metrics(raw: Optional[dict]) -> dict:
         v = _pick(*names)
         if v is not None:
             out[key] = v
+    # an applied point that carries the convention's marker string says so in the
+    # numbers-only form Compare reads
+    from motor_ai_sim.shaft_convention import SHAFT_CONVENTION, SHAFT_CONVENTION_CODE
+    if m.get("shaft_convention") == SHAFT_CONVENTION:
+        out["shaft_conv"] = SHAFT_CONVENTION_CODE
     # The card's own key for ripple (it reads `ripple_pct`), kept in step with
     # the solver dialect above rather than left for a reader to translate.
     if "T_ripple_pct" in out:

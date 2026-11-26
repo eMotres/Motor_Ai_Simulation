@@ -622,7 +622,14 @@ def em_run_block(stored: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     if not row:
         return None
     nums = row.get("numbers") if isinstance(row.get("numbers"), dict) else {}
+    # a marked compact row carries the shaft context it was filed with (duty_results.compact_em_run); one that says it
+    # is marked but lacks the context is unreadable on either convention -> nothing to show, re-solve
+    from motor_ai_sim.shaft_convention import summary_from_compact
+    ctx = row.get("shaft_context") if isinstance(row.get("shaft_context"), dict) else None
+    if (ctx or _num(nums.get("shaft_conv")) == 1) and not summary_from_compact(row):
+        return None
     return {"numbers": {k: v for k, v in nums.items() if _num(v) is not None},
+            **({"shaft_context": dict(ctx)} if ctx else {}),
             "provenance": provenance(row)}
 
 
@@ -707,8 +714,37 @@ def _rescale_to_loop(base: Dict[str, Any], before: Dict[str, Any]) -> None:
             if _num(base.get(k)) is not None:
                 base[k] = base[k] * r
 
-    scale(("P_mech_W", "torque_per_mass_Nm_kg", "power_per_mass_W_kg", "torque_per_mass_full_Nm_kg",
-           "power_per_mass_full_W_kg"), _ratio(base.get("T_em_avg_Nm"), before.get("T_em_avg_Nm")))
+    from motor_ai_sim import shaft_convention as _SC
+    _legacy_over_marked = not _SC.has_marker(base) and _SC.has_marker(before)
+    if _legacy_over_marked:
+        # an unmarked loop over a marked saved run: the loop's OWN earlier-convention numbers, from its torque, its
+        # speed and mode (carried by the overlay) and the masses - not a proportion of the saved run's shaft side
+        _w = 2.0 * math.pi * (_num(base.get("rpm")) or 0.0) / 60.0
+        _t = _num(base.get("T_em_avg_Nm"))
+        if _t is not None and _w > 0:
+            base["P_mech_W"] = abs(_t) * _w
+            for _mk, _tk, _pk in (("mass_total_kg", "torque_per_mass_Nm_kg", "power_per_mass_W_kg"),
+                                  ("mass_full_kg", "torque_per_mass_full_Nm_kg", "power_per_mass_full_W_kg")):
+                _m = _num(base.get(_mk))
+                if _m and _m > 0:
+                    base[_tk] = abs(_t) / _m
+                    base[_pk] = abs(_t) * _w / _m
+    if _SC.rederive(base):
+        # shaft-side convention: the shaft side is k*G -/+ D, not a proportion of the torque, and the densities are
+        # rebuilt from the selected torque (motor shaft / generator field x k) and the masses themselves
+        _t = _num(base.get("T_field_k_Nm") if base.get("op_mode") == "generator" else base.get("T_shaft_Nm"))
+        _p = _num(base.get("P_mech_W"))
+        for _mk, _tk, _pk in (("mass_total_kg", "torque_per_mass_Nm_kg", "power_per_mass_W_kg"),
+                              ("mass_full_kg", "torque_per_mass_full_Nm_kg", "power_per_mass_full_W_kg")):
+            _m = _num(base.get(_mk))
+            if _m and _m > 0:
+                if _t is not None:
+                    base[_tk] = _t / _m
+                if _p is not None:
+                    base[_pk] = _p / _m
+    elif not _legacy_over_marked:
+        scale(("P_mech_W", "torque_per_mass_Nm_kg", "power_per_mass_W_kg", "torque_per_mass_full_Nm_kg",
+               "power_per_mass_full_W_kg"), _ratio(base.get("T_em_avg_Nm"), before.get("T_em_avg_Nm")))
     e3 = base.get("end3d")
     if isinstance(e3, dict):
         r = _ratio(base.get("T_em_avg_Nm"), before.get("T_em_avg_Nm"))
@@ -787,7 +823,7 @@ def build_panel(duty_summary: Any, kept: Dict[str, Any], thermal: Optional[Dict[
         base = _panel_plain(duty_summary) or {}
         em_from = "summary"
     elif em_run and em_run.get("numbers"):
-        base = dict(em_run["numbers"])
+        base = {**em_run["numbers"], **(em_run.get("shaft_context") or {})}
         em_from = "em_run"
     cp = kept.get("coupled") if isinstance(kept.get("coupled"), dict) else None
     cl = kept.get("coupled_limit") if isinstance(kept.get("coupled_limit"), dict) else None
@@ -821,6 +857,9 @@ def build_panel(duty_summary: Any, kept: Dict[str, Any], thermal: Optional[Dict[
                 base[k] = v
                 em_overlaid = True
         if em_overlaid:
+            # the shaft-power convention is the LOOP's run's, all of it or none (motor_ai_sim.shaft_convention)
+            from motor_ai_sim import shaft_convention as _SC
+            _SC.overlay(base, em)
             # the loop's own mechanical half rides with its electromagnetic numbers (top level of the record)
             for k in _PANEL_LOOP_KEYS:
                 if _num(final.get(k)) is not None:
@@ -876,6 +915,14 @@ def light_panel(panel: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
             out[k] = s[k]
     if isinstance(s.get("mass_partial"), bool):
         out["mass_partial"] = s["mass_partial"]
+    # the shaft-power convention, whole: without it the light panel's shaft numbers are read as the earlier
+    # convention and get the 3-D factor a second time (motor_ai_sim.shaft_convention)
+    from motor_ai_sim.shaft_convention import CONVENTION_KEYS, has_marker
+    if has_marker(s):
+        for k in CONVENTION_KEYS:
+            v = s.get(k)
+            if isinstance(v, (str, bool)) or (isinstance(v, list) and all(isinstance(x, str) for x in v)):
+                out[k] = v
     if isinstance(s.get("end3d"), dict):
         out["end3d"] = {k: v for k, v in s["end3d"].items() if isinstance(v, (int, float)) and not isinstance(v, bool)}
     cpl = s.get("coupling") if isinstance(s.get("coupling"), dict) else {}

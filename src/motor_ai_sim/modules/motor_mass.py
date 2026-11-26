@@ -766,10 +766,15 @@ def stamp_run_summary(summary: Dict[str, Any], die: str, config: str, *, raw: Op
     full = fields.get("mass_full_kg")
     if not full or full <= 1e-9:
         return summary
+    # on the shaft-side convention (motor_ai_sim.shaft_convention) a stored summary's torque density is the SHAFT
+    # torque of a motor and the field torque x k of a generator, the same numerator as the live run's
+    _sc_t = None
+    if summary.get("shaft_convention") == "fe_on_shaft_k3d_v1":
+        _sc_t = summary.get("T_field_k_Nm" if summary.get("op_mode") == "generator" else "T_shaft_Nm")
     for key, base_key, nd in _FULL_PER_MASS:
         base = (raw or {}).get(base_key)
         if base is None:
-            base = summary.get(base_key)
+            base = _sc_t if (base_key == "T_em_avg_Nm" and _sc_t is not None) else summary.get(base_key)
         if base is not None:
             summary[key] = round(float(base) / full, nd)
     return summary

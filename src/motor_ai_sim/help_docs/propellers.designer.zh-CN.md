@@ -2,7 +2,7 @@
 
 用叶素模型评估自己的螺旋桨。横幅“BEMT, generic airfoil polars, not validated”始终显示：结果是筛选估算。
 
-顶行：Diameter（英寸）、Blades、Motor、Polar（平板粗略模型、带弯度、或粘性 mfoil 表）和 Evaluate（运行时显示“Evaluating”）。其下按组列出叶片参数：Root (inner blade)、Blade、Airfoil by zone 以及 Blades and diameter；每个参数有边界和“Reset to seed”。
+顶行：Diameter（英寸）、Blades、Motor、Polar（平板粗略模型、带弯度、或粘性 mfoil 表）和 Evaluate（运行时显示“Evaluating”）。其下是 Root (inner blade)、Blade 和 Airfoil by zone 控件。Diameter 和 Blades 留在顶行。一个“Reset to seed”按钮恢复全部叶片参数，同时保留所选的直径和桨叶数。
 
 按 Evaluate 之后：
 - 卡片：推力、扭矩、轴功率、转速、叶尖马赫数、每轴瓦推力、电机处气流速度。

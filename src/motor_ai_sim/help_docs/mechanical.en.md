@@ -3,7 +3,7 @@
 What it is for: rotor centrifugal stress and retaining-sleeve sizing at speed, contacts and safety factors, then vibration modes, shaft critical speeds, and bearing and windage losses. Staff with the simulation UI. Solve is a deliberate press: nothing re-solves by itself.
 
 Controls (top row):
-- One speed: "rpm" is the Electromagnetic tab's operating point; type "proof rpm" to override, or "overspeed x". With coupled thermal on the speed and temperatures come from that run and are locked.
+- One speed: "rpm" is the Electromagnetic tab's operating point; enter a proof speed in the rpm field to override it; clear the field to follow Electromagnetic again. With coupled thermal on the speed and temperatures come from that run and are locked.
 - Loads menu: Centrifugal, Torque, or both; torque has its own "T N-m" field. Magnetic pull menu: no pull, EM field or uniform (with "p MPa").
 - "interference mm" and the "rotor C" and "sleeve C" temperatures.
 - Solve (shows "Solving"), and "Limit speed (SF = 1)", which searches the speed at which the minimum averaged safety factor reaches 1.

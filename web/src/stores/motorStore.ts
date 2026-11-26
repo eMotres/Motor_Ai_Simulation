@@ -116,12 +116,15 @@ function descentProvenance(st: any, pt: any | null) {
     rippleMaxPct: Number(st?.auto?.max_ripple_pct),
     // A picked point is not the run's best, so it does not carry the run's F.
     F: picked ? undefined : Number(st?.best?.F),
+    // the shaft-power convention of these numbers travels with them (1 = core loss on the shaft; Compare ranks one at a time)
     metrics: picked
       ? { T_avg_Nm: pt?.torque, T_ripple_pct: pt?.ripple, efficiency: pt?.eff,
-          torque_per_mass: pt?.td, mass_total_kg: pt?.mass }
+          torque_per_mass: pt?.td, mass_total_kg: pt?.mass,
+          ...(pt?.shaft_conv === 1 ? { shaft_conv: 1 } : {}) }
       : { T_avg_Nm: m?.T_em_Nm, T_ripple_pct: m?.T_ripple_pct,
           efficiency: m?.efficiency, torque_per_mass: m?.torque_per_mass,
-          mass_total_kg: m?.mass_total_kg },
+          mass_total_kg: m?.mass_total_kg,
+          ...(m?.shaft_convention === 'fe_on_shaft_k3d_v1' ? { shaft_conv: 1 } : {}) },
     overrides: (picked ? pt?.overrides : (st?.best?.x || st?.result?.best?.overrides)) || {},
   };
 }

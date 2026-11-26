@@ -21,6 +21,8 @@
 import type { LocalRow, ResultBlock } from '../compare/resultRows';
 import type { ColumnDef } from '../common/LocalCompareTable';
 import type { ControllerResult } from './controllerApi';
+import { nsT } from '../../i18n/nsT';
+const shaftTx = nsT('simulation');
 
 export type { LocalRow, ResultBlock };
 
@@ -61,6 +63,8 @@ export function controllerInputsFromResult(res: ControllerResult): ResultBlock {
   put(out, 'n_switches', num(t.n_switches));
   put(out, 'n_devices', num(t.n_devices));
   put(out, 'duty', str(res.context?.duty));
+  // only a marked record carries its basis: an earlier record keeps its earlier inputs block
+  if (res.sources?.shaft_convention === 'fe_on_shaft_k3d_v1') put(out, 'shaft_basis', 'current');
   put(out, 'f_carrier_hz', num(p.f_carrier_hz));
   put(out, 'v_dc_V', num(p.v_dc_V));
   put(out, 'dead_time_us', num(s.dead_time_us));
@@ -138,6 +142,8 @@ export const CONTROLLER_COMPARE_COLUMNS: ColumnDef[] = [
   { key: 'n_switches', label: 'Switches', kind: 'input', d: 0 },
   { key: 'n_devices', label: 'Devices', kind: 'input', d: 0 },
   { key: 'f_carrier_hz', label: 'Carrier', unit: 'Hz', kind: 'input', d: 0 },
+  { key: 'shaft_basis', get label() { return shaftTx('shaftConvCol'); }, kind: 'input',
+    fmt: v => shaftTx(v === 'current' ? 'shaftBasisCurrent' : 'shaftBasisEarlier') },  // shown only next to a marked row
   { key: 'v_dc_V', label: 'DC link', unit: 'V', kind: 'input', d: 0 },
   { key: 'dead_time_us', label: 'Dead time', unit: 'µs', kind: 'input', d: 2 },
   { key: 'coolant', label: 'Coolant', kind: 'input' },
@@ -160,3 +166,10 @@ export const CONTROLLER_COMPARE_COLUMNS: ColumnDef[] = [
   { key: 'limits_failed', label: 'Limits failed', kind: 'result', d: 0, better: 'lo' },
   { key: 'cost_proxy', label: 'Device cost proxy', kind: 'result', d: 0, better: 'lo' },
 ];
+
+/** The columns for these stacked rows: the shaft-basis column only when a row is marked (then an earlier row reads
+ *  "Earlier shaft basis"); a stack of earlier rows alone keeps its earlier columns. */
+export function controllerCompareColumns(rows: LocalRow[]): ColumnDef[] {
+  const marked = rows.some((r) => (r.inputs as Record<string, unknown> | undefined)?.shaft_basis === 'current');
+  return marked ? CONTROLLER_COMPARE_COLUMNS : CONTROLLER_COMPARE_COLUMNS.filter((c) => c.key !== 'shaft_basis');
+}

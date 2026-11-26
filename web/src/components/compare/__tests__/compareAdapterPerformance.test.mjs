@@ -9,7 +9,7 @@ const adapterSource = panel.slice(panel.indexOf('  const fullBasisRows ='), pane
 const adapterJs = ts.transpileModule(`${adapterSource}\nreturn { resultModelColumns, selectedResultModelColumns, comparisonPercentValue };`, {
   compilerOptions: { target: ts.ScriptTarget.ES2022 },
 }).outputText;
-const makeAdapter = new Function('sims', 'selected', 'resultCols', 'resultSrc', 'resultVal', 'colId', 'shouldSuppressMixedBasisColor', 'sweepMetricsComparable', 'isSweepRow', 'coggingComparable', 'storedNumber', 'txSim', adapterJs);
+const makeAdapter = new Function('sims', 'selected', 'resultCols', 'resultSrc', 'resultVal', 'colId', 'shouldSuppressMixedBasisColor', 'sweepMetricsComparable', 'isSweepRow', 'coggingComparable', 'storedNumber', 'txSim', 'shaftConventionComparable', adapterJs);
 
 function measure(rowsCount, mixed) {
   let basisReads = 0;
@@ -18,7 +18,7 @@ function measure(rowsCount, mixed) {
     key, label: key, activeBasis: row => { basisReads++; return row.active; },
   }));
   const { resultModelColumns: columns, comparisonPercentValue } = makeAdapter(sims, sims, resultCols, (_col, row) => row, (_col, row) => row.value,
-    col => col.key, shouldSuppressMixedBasisColor, () => true, () => false, () => true, Number, k => k);
+    col => col.key, shouldSuppressMixedBasisColor, () => true, () => false, () => true, Number, k => k, () => true);
   const suppressed = columns[0].noColor(sims[0], sims);
   const fullRow = sims.find(row => !row.active);
   const fullNotSuppressed = fullRow ? !columns[0].noColor(fullRow, sims) : true;

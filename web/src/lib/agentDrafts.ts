@@ -54,6 +54,7 @@ async function call<T>(path: string, init?: RequestInit): Promise<T> {
 /** Headline of a draft's best finished FEM run, same priority the backend's
  *  get_design_result(design_id) MCP tool uses: coupled > thermal (1-iter) > em. */
 export interface DraftHeadline {
+  shaft_conv?: number; torque_basis?: string; power_basis?: string;
   what: string; torque_nm: number | null; power_kw: number | null;
   efficiency_shaft_pct: number | null; mass_kg: number | null;
 }

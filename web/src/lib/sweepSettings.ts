@@ -114,3 +114,18 @@ export function sweepMetricsComparable(rows: Array<Record<string, unknown> | und
   if (sigs.some(v => typeof v !== 'number' || !Number.isFinite(v) || v <= 0)) return false;
   return new Set(sigs as number[]).size === 1;
 }
+
+/** Saved results are ranked together only when they share ONE shaft-power convention (owner 2026-11-25): `shaft_conv` 1 =
+ *  core loss on the shaft and the 3-D factor in the run (src/motor_ai_sim/shaft_convention.py); absent = a run solved
+ *  before it, whose efficiency and power put every loss on the electrical side.  A mix is never ranked. */
+export function shaftConventionComparable(rows: Array<Record<string, unknown> | undefined | null>): boolean {
+  const codes = new Set(rows.filter(r => !!r).map(shaftConventionOf));
+  return codes.size <= 1;
+}
+
+/** The convention code of one saved row (1 = core loss on the shaft, 0 = earlier): the numbers-only `shaft_conv`, or the
+ *  summary's own marker when the row stored the displayed summary. */
+export function shaftConventionOf(r: Record<string, unknown> | undefined | null): number {
+  if (!r) return 0;
+  return Number((r as any).shaft_conv) === 1 || (r as any).shaft_convention === 'fe_on_shaft_k3d_v1' ? 1 : 0;
+}

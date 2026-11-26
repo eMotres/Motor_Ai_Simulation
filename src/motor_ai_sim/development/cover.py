@@ -48,7 +48,7 @@ def make_thumbnail(path) -> bytes:
 
 def _cover_allowed(row: dict | None) -> bool:
     """The cover is shown to the WHOLE project, so a document that is price-restricted, internal or archived (or gone) never is one."""
-    return bool(row) and not (row.get("price_restricted") or row.get("internal") or row.get("archived"))
+    return bool(row) and not (row.get("price_restricted") or row.get("internal") or row.get("archived") or row.get("spec_source"))
 
 
 @router.get("/{project_id}/cover")
@@ -75,9 +75,11 @@ async def set_cover(request: Request, project_id: str):
     doc_id = body.get("document_id") if isinstance(body, dict) else None
     if not isinstance(doc_id, str) or not doc_id:
         raise HTTPException(status_code=422, detail="document_id expected")
-    row = documents._find(project_id, doc_id, staff, prices=documents._prices(user, project, staff))
+    row = documents._find(project_id, doc_id, staff, prices=documents._prices(user, project, staff), spec=documents._spec(user, project))
     if row.get("price_restricted"):
         raise HTTPException(status_code=422, detail="A price-restricted document cannot be the cover (the whole project sees it)")
+    if row.get("spec_source"):
+        raise HTTPException(status_code=422, detail="A specification source file cannot be the cover (the whole project sees it)")
     if row.get("internal"):
         raise HTTPException(status_code=422, detail="An internal document cannot be the cover (the whole project sees it)")
     path = store.read_document_file(project_id, str(row.get("file_id") or ""))

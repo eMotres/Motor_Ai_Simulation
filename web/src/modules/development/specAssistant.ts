@@ -9,6 +9,8 @@ export interface Proposal {
   id: string; field_id: string; value: unknown; reason: string; recalc: ProposalRecalc; by: string; created_at: string;
   status: 'open' | 'applied' | 'dismissed' | 'undone'; applied_by?: string | null; applied_revision?: number | null;
   current?: { value: unknown; status: string }; basis?: string | null; via?: string | null;
+  file_source?: { ref: string; cited?: string; excerpt?: string; converted?: string; found?: boolean };
+  source_file?: { name: string; document_id: string };
 }
 export interface ChatMessage { role: 'user' | 'assistant'; content: string; applied?: Proposal[] }
 type Obj = Record<string, unknown>;

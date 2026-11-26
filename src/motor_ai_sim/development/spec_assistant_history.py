@@ -28,16 +28,20 @@ def _doc() -> dict:
     return {"messages": []}
 
 
-def _row(role: str, text: str, proposals: list[str] | None = None, applied: list[str] | None = None) -> dict:
-    return {"id": "m-" + secrets.token_hex(5), "role": role, "text": str(text)[:MAX_TEXT], "at": models.now(),
-            "proposals": list(proposals or []), "applied": list(applied or [])}
+def _row(role: str, text: str, proposals: list[str] | None = None, applied: list[str] | None = None,
+         file: dict | None = None) -> dict:
+    row = {"id": "m-" + secrets.token_hex(5), "role": role, "text": str(text)[:MAX_TEXT], "at": models.now(),
+           "proposals": list(proposals or []), "applied": list(applied or [])}
+    if isinstance(file, dict) and file.get("name"):             # an attached specification file: its name and document id, never its text
+        row["file"] = {"name": str(file.get("name"))[:200], "document_id": str(file.get("document_id") or "")[:60]}
+    return row
 
 
 def append(project_id: str, email: str, rows: list[dict]) -> None:
     """Add messages (``{role, text, proposals?, applied?}``) to this user's history; the oldest fall off past ``MAX_STORED``."""
     if not rows:
         return
-    new = [_row(r["role"], r["text"], r.get("proposals"), r.get("applied")) for r in rows]
+    new = [_row(r["role"], r["text"], r.get("proposals"), r.get("applied"), r.get("file")) for r in rows]
 
     def mutate(doc: dict) -> None:
         msgs = doc.setdefault("messages", [])
@@ -51,7 +55,7 @@ def clear(project_id: str, email: str) -> None:
     store.save_json(project_id, _name(email), _doc())
 
 
-def load(project_id: str, email: str) -> list[dict]:
+def load(project_id: str, email: str, *, source_file: bool = False) -> list[dict]:
     """The stored messages of this user; every card id is replaced by the proposal as it stands now (open / applied / undone ...)."""
     doc = store.load_json(project_id, _name(email), _doc())
     rows = [m for m in (doc.get("messages") if isinstance(doc, dict) else []) or [] if isinstance(m, dict)]
@@ -59,10 +63,15 @@ def load(project_id: str, email: str) -> list[dict]:
     out: list[dict] = []
     for m in rows:
         row = {k: m.get(k) for k in ("id", "role", "text", "at")}
+        if isinstance(m.get("file"), dict):
+            if source_file:
+                row["file"] = m["file"]
+            else:                                                  # who cannot open the file does not learn its name
+                row["text"] = "(attached file)"
         cards: dict[str, list[dict]] = {}
         for key in ("proposals", "applied"):
             found = [by_id[i] for i in (m.get(key) or []) if i in by_id]
-            cards[key] = P.with_current(project_id, found) if found else []
+            cards[key] = P.with_current(project_id, found, source_file=source_file) if found else []
         row.update(cards)
         out.append(row)
     return out

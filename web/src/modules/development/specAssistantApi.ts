@@ -23,11 +23,29 @@ async function call<T>(method: string, path: string, body?: unknown): Promise<T>
 
 const p = (id: string) => `/api/projects/${enc(id)}/spec`;
 
-export interface AssistantStatus { allowed: boolean; can_apply: boolean; configured: boolean }
+export interface AssistantStatus { allowed: boolean; can_apply: boolean; configured: boolean; file_upload?: boolean; file_max_bytes?: number; file_extensions?: string[] }
+export interface FileTurn extends AssistantTurn { dropped?: number; file: { name: string; document_id: string; ignored_instructions?: number; removed_commercial?: number } }
 export interface AssistantTurn { reply: string; proposals: Proposal[]; applied?: Proposal[]; source: string; model?: string }
 export interface ProposalList { proposals: Proposal[]; revision: number; can_apply: boolean }
 
+/** One attached file: multipart, the browser sets the boundary.  The server's refusal text (already in the UI language) is the message. */
+async function sendFile(id: string, file: File, lang: string, messages: ChatMessage[]): Promise<FileTurn> {
+  const form = new FormData();
+  form.append('file', file, file.name);
+  form.append('lang', lang);
+  form.append('messages', JSON.stringify(messages.slice(-20)));
+  const r = await fetch(`${API}${p(id)}/assistant/file`, { method: 'POST', body: form });
+  const data = await r.json().catch(() => null);
+  if (!r.ok) {
+    const detail = data?.detail;
+    const message = typeof detail === 'string' ? detail : typeof detail?.message === 'string' ? detail.message : `HTTP ${r.status}`;
+    throw new SpecAssistantError(r.status, message, detail);
+  }
+  return data as FileTurn;
+}
+
 export const specAssistantApi = {
+  sendFile,
   status: (id: string) => call<AssistantStatus>('GET', `${p(id)}/assistant`),
   turn: (id: string, messages: ChatMessage[], lang: string, fill = false) => call<AssistantTurn>('POST', `${p(id)}/assistant`, { messages, lang, fill }),
   history: (id: string) => call<{ messages: StoredMessage[] }>('GET', `${p(id)}/assistant/history`),

@@ -210,13 +210,16 @@ def get(project_id: str, proposal_id: str) -> dict | None:
     return next((p for p in list_proposals(project_id) if p.get("id") == proposal_id), None)
 
 
-def with_current(project_id: str, proposals: list[dict]) -> list[dict]:
-    """The proposals with the field's CURRENT answer beside them (what would change), read now."""
+def with_current(project_id: str, proposals: list[dict], *, source_file: bool = False) -> list[dict]:
+    """The proposals with the field's CURRENT answer beside them (what would change), read now.  ``source_file``: keep the name and the
+    document id of the attached file (only for who may open that file: the specification editors and staff)."""
     wrapper = draft_wrapper(project_id)
     version = schema_version_of(wrapper)
     out = []
     for p in proposals:
         row = copy.deepcopy(p)
+        if not source_file:
+            row.pop("source_file", None)
         try:
             row["current"] = current_answer(wrapper, p["field_id"], version)
         except ProposalError:
@@ -226,7 +229,7 @@ def with_current(project_id: str, proposals: list[dict]) -> list[dict]:
 
 
 def create(project_id: str, field_id: str, value: Any, reason: str, *, by: str = "assistant", basis: str | None = None,
-           answer_status: str = "filled", sources: list | None = None) -> dict:
+           answer_status: str = "filled", sources: list | None = None, file_source: dict | None = None) -> dict:
     """Validate and store a proposal.  A newer proposal for the same field replaces the open one (dismissed as
     ``superseded``).  Raises ``ProposalError`` for an invalid one - nothing is stored then."""
     reason = " ".join(str(reason or "").split())
@@ -247,6 +250,11 @@ def create(project_id: str, field_id: str, value: Any, reason: str, *, by: str =
     urls = [str(u)[:300] for u in (sources or []) if isinstance(u, str) and u.startswith(("http://", "https://"))][:5]
     if urls:
         proposal["sources"] = urls
+    if isinstance(file_source, dict) and file_source.get("ref"):        # a value read from an uploaded specification file
+        proposal["file_source"] = {k: (v if isinstance(v, bool) else str(v)[:300]) for k, v in file_source.items()
+                                   if k in ("ref", "cited", "excerpt", "converted", "found")}
+        # the name and the document id of the file go only to people who may open that file (``with_current(source_file=True)``)
+        proposal["source_file"] = {"name": str(file_source.get("file_name") or "")[:200], "document_id": str(file_source.get("document_id") or "")[:60]}
 
     def mutate(doc: dict) -> None:
         rows = doc.setdefault("proposals", [])

@@ -91,10 +91,21 @@ def _prices(user: dict, project: dict, staff: bool | None = None) -> bool:
     return access.sees_prices(user, project)
 
 
+def _spec(user: dict, project: dict) -> bool:
+    """May this caller see a SPEC SOURCE document (the original of a file attached in the specification assistant, which holds
+    unsanitised commercial text): MOTRES staff and who may EDIT the specification (project owner, admin).  Never an MCP agent or a
+    factory account, never a project engineer or customer member (coordinator 2026-11-24)."""
+    from motor_ai_sim import auth
+    if not user or auth._AGENT_USER.get() is not None or str(user.get("role") or "").lower() == "oem":
+        return False
+    return access.is_engineer(user) or access.can_edit_spec(user, project)
+
+
 def _public(row: dict, staff: bool) -> dict:
     out = {k: row.get(k) for k in ("id", "name", "folder", "revision", "internal", "size", "sha256", "uploaded_at", "archived",
                                     "archived_at")}
     out["price_restricted"] = bool(row.get("price_restricted"))
+    out["spec_source"] = bool(row.get("spec_source"))
     email = str(row.get("uploader_email") or "")
     if staff:
         out["uploader"] = email
@@ -108,20 +119,23 @@ def _public(row: dict, staff: bool) -> dict:
     return out
 
 
-def _visible(rows: list[dict], staff: bool, include_archived: bool = False, prices: bool | None = None) -> list[dict]:
+def _visible(rows: list[dict], staff: bool, include_archived: bool = False, prices: bool | None = None,
+             spec: bool | None = None) -> list[dict]:
     """``prices``: the caller may read price-restricted rows (default: staff only, so a reader that does not know the project
-    never shows one)."""
+    never shows one).  ``spec``: the caller may read spec-source rows (``_spec``; default: staff only)."""
     prices = staff if prices is None else prices
+    spec = bool(spec)                      # never by default: a caller that does not say it may read spec sources, does not
     if staff:
-        return [r for r in rows if (include_archived or not r.get("archived")) and (prices or not r.get("price_restricted"))]
-    return [r for r in rows if not r.get("internal") and (prices or not r.get("price_restricted"))
+        return [r for r in rows if (include_archived or not r.get("archived")) and (prices or not r.get("price_restricted"))
+                and (spec or not r.get("spec_source"))]
+    return [r for r in rows if not r.get("internal") and (prices or not r.get("price_restricted")) and (spec or not r.get("spec_source"))
             and (include_archived or not r.get("archived"))]
 
 
 def _details(row: dict, extra: dict | None = None) -> dict:
     details = {"name": row.get("name"), "folder": row.get("folder"), "revision": row.get("revision"),
                "internal": bool(row.get("internal")), "price_restricted": bool(row.get("price_restricted")),
-               "size": row.get("size")}
+               "spec_source": bool(row.get("spec_source")), "size": row.get("size")}
     details.update(extra or {})
     return details
 
@@ -158,8 +172,9 @@ def _context(request: Request, project_id: str, *, edit: bool = False):
     return user, project, role, _staff(user, role)
 
 
-def _find(project_id: str, doc_id: str, staff: bool, include_archived: bool = False, prices: bool | None = None) -> dict:
-    for row in _visible(store.load_documents(project_id), staff, include_archived, prices):
+def _find(project_id: str, doc_id: str, staff: bool, include_archived: bool = False, prices: bool | None = None,
+          spec: bool | None = None) -> dict:
+    for row in _visible(store.load_documents(project_id), staff, include_archived, prices, spec):
         if row.get("id") == doc_id:
             return row
     raise HTTPException(status_code=404, detail="Document not found")
@@ -201,7 +216,7 @@ def releases(project: dict, rows: list[dict]) -> dict:
     """``{"current": label | None, "groups": [{revision, current, superseded, count, latest_upload}], "stored": bool}`` for the
     rows ONE caller may see (archived rows are never part of a release).  Order: the current release, the unlabelled group, then
     the superseded groups newest first."""
-    live = [r for r in rows if not r.get("archived")]
+    live = [r for r in rows if not r.get("archived") and not r.get("spec_source")]       # the spec source is no release
     latest: dict[str, str] = {}
     count: dict[str, int] = {}
     for r in live:
@@ -227,7 +242,7 @@ def _superseded(project: dict, rows: list[dict], label: str) -> bool:
     return any(g["revision"] == label and g["superseded"] for g in info["groups"])
 
 
-def _cleared_note(project_id: str, staff: bool, prices: bool) -> str | None:
+def _cleared_note(project_id: str, staff: bool, prices: bool, spec: bool = False) -> str | None:
     """The editors' note that the chosen release no longer exists: its LABEL for a caller who could see a document of that group
     (the caller's internal / price rules applied, the archived state set aside), else ``""`` - the generic notice, so a pin on a
     group the caller never saw does not name it (Astra #852 round 2).  ``None``: no note."""
@@ -235,9 +250,9 @@ def _cleared_note(project_id: str, staff: bool, prices: bool) -> str | None:
     label = note.get("revision") if isinstance(note, dict) else None
     if not isinstance(label, str):
         return None
-    rows = [{"internal": bool(f.get("internal")), "price_restricted": bool(f.get("price_restricted"))}
+    rows = [{"internal": bool(f.get("internal")), "price_restricted": bool(f.get("price_restricted")), "spec_source": bool(f.get("spec_source"))}
             for f in (note.get("rows") or []) if isinstance(f, dict)]
-    return label if _visible(rows, staff, prices=prices) else ""
+    return label if _visible(rows, staff, prices=prices, spec=spec) else ""
 
 
 def _release_check(project_id: str, user: dict, reason: str, moved: dict | None = None) -> None:
@@ -254,7 +269,8 @@ def _release_check(project_id: str, user: dict, reason: str, moved: dict | None 
         return
     # who could see that group: the flags of the documents that carried the label (archived ones, and a relabelled one)
     carried = [r for r in docs if _label(r) == chosen.get("revision")] + ([moved] if moved else [])
-    flags = [{"internal": bool(r.get("internal")), "price_restricted": bool(r.get("price_restricted"))} for r in carried]
+    flags = [{"internal": bool(r.get("internal")), "price_restricted": bool(r.get("price_restricted")),
+              "spec_source": bool(r.get("spec_source"))} for r in carried]
     now = datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds")
 
     def edit(doc: dict) -> None:
@@ -276,7 +292,7 @@ def set_release(request: Request, project_id: str, body: dict):
     if not _can_edit(user, role):
         raise HTTPException(status_code=403, detail="Only the project owner, its engineer or staff choose the current release")
     value = body.get("revision") if isinstance(body, dict) else None
-    rows = _visible(store.load_documents(project_id), staff, prices=_prices(user, project, staff))
+    rows = _visible(store.load_documents(project_id), staff, prices=_prices(user, project, staff), spec=_spec(user, project))
     if value is not None:
         if not isinstance(value, str) or not value.strip():
             raise HTTPException(status_code=422, detail="revision: a label of the documents, or null")
@@ -304,7 +320,7 @@ def list_documents(request: Request, project_id: str, archived: bool = False):
     user, project, role, staff = _context(request, project_id)
     can_edit = _can_edit(user, role)
     rows = _visible(store.load_documents(project_id), staff, include_archived=bool(archived and staff),
-                    prices=_prices(user, project, staff))
+                    prices=_prices(user, project, staff), spec=_spec(user, project))
     cover = (store.get_project(project_id) or {}).get("cover")
     cover = cover if isinstance(cover, dict) else {}
     info = releases(store.get_project(project_id) or project, rows)
@@ -312,7 +328,7 @@ def list_documents(request: Request, project_id: str, archived: bool = False):
     return {"documents": [dict(_public(r, staff), is_cover=bool(cover) and r.get("id") == cover.get("document_id"),
                                superseded=_label(r) in old and not r.get("archived")) for r in rows],
             "releases": info["groups"], "current_release": info["current"], "release_stored": info["stored"],
-            "release_cleared": _cleared_note(project_id, staff, _prices(user, project, staff)) if can_edit else None,
+            "release_cleared": _cleared_note(project_id, staff, _prices(user, project, staff), _spec(user, project)) if can_edit else None,
             "superseded_download": SUPERSEDED_SINGLE_DOWNLOAD or staff,
             "folders": list(models.DOCUMENT_FOLDERS), "can_edit": can_edit, "is_staff": staff, "max_bytes": models.DOCUMENT_MAX_BYTES,
             "cover_version": cover.get("version"), "can_restrict": _can_restrict(user, project)}
@@ -397,7 +413,8 @@ async def patch_document(request: Request, project_id: str, doc_id: str):
     """``internal`` (hidden from customer-side members), ``folder``, ``revision``; ``archived: false`` restores an archived document."""
     user, project, role, staff_flag = _context(request, project_id)
     prices = _prices(user, project, staff_flag)
-    _require_row_then_editor(user, project_id, doc_id, role, staff_flag, prices)
+    spec_ok = _spec(user, project)
+    _require_row_then_editor(user, project_id, doc_id, role, staff_flag, prices, spec_ok)
     body = await request.json()
     allowed = ("internal", "price_restricted", "folder", "revision", "archived")
     if not isinstance(body, dict) or not any(k in body for k in allowed):
@@ -432,10 +449,11 @@ async def patch_document(request: Request, project_id: str, doc_id: str):
 
     def apply(doc: dict) -> None:
         for row in doc.setdefault("documents", []):
-            if row.get("id") == doc_id and _visible([row], staff_flag, staff_flag, prices):   # a row this caller cannot list is "not found"
+            if row.get("id") == doc_id and _visible([row], staff_flag, staff_flag, prices, spec_ok):   # a row this caller cannot list is "not found"
                 before = {k: row.get(k) for k in changes}
                 # the flags BEFORE this change: who could see the group a relabel leaves (the cleared-release note, Astra #852 r3)
-                found["original"] = {"internal": bool(row.get("internal")), "price_restricted": bool(row.get("price_restricted"))}
+                found["original"] = {"internal": bool(row.get("internal")), "price_restricted": bool(row.get("price_restricted")),
+                                     "spec_source": bool(row.get("spec_source"))}
                 row.update(changes)
                 if changes.get("archived") is False:
                     row["archived_at"] = None
@@ -463,11 +481,12 @@ async def patch_document(request: Request, project_id: str, doc_id: str):
     return _public(found["row"], staff_flag)
 
 
-def _require_row_then_editor(user: dict, project_id: str, doc_id: str, role: str | None, staff: bool, prices: bool) -> None:
+def _require_row_then_editor(user: dict, project_id: str, doc_id: str, role: str | None, staff: bool, prices: bool,
+                             spec: bool | None = None) -> None:
     """404 for a document this caller cannot list - exactly the answer for an unknown id (no existence oracle) - and only then 403
     for a member who sees it but may not edit."""
     can_edit = _can_edit(user, role)
-    _find(project_id, doc_id, staff, include_archived=staff, prices=prices)        # an archived row: staff only
+    _find(project_id, doc_id, staff, include_archived=staff, prices=prices, spec=spec)        # an archived row: staff only
     if not can_edit:
         raise HTTPException(status_code=403, detail="Project engineer access required")
 
@@ -477,12 +496,13 @@ def archive_document(request: Request, project_id: str, doc_id: str):
     """Archive = hide.  The file stays on disk and the audit trail keeps every row; ``PATCH {"archived": false}`` restores it."""
     user, project, role, staff_flag = _context(request, project_id)
     prices = _prices(user, project, staff_flag)
-    _require_row_then_editor(user, project_id, doc_id, role, staff_flag, prices)
+    spec_ok = _spec(user, project)
+    _require_row_then_editor(user, project_id, doc_id, role, staff_flag, prices, spec_ok)
     found: dict[str, Any] = {}
 
     def apply(doc: dict) -> None:
         for row in doc.setdefault("documents", []):
-            if row.get("id") == doc_id and _visible([row], staff_flag, staff_flag, prices):   # a row this caller cannot list is "not found"
+            if row.get("id") == doc_id and _visible([row], staff_flag, staff_flag, prices, spec_ok):   # a row this caller cannot list is "not found"
                 found["was"] = bool(row.get("archived"))
                 if not row.get("archived"):
                     row["archived"] = True
@@ -510,9 +530,9 @@ def archive_document(request: Request, project_id: str, doc_id: str):
 def download_document(request: Request, project_id: str, doc_id: str):
     """One document, streamed from disk.  Staff may also fetch an archived one."""
     user, project, role, staff = _context(request, project_id)
-    row = _find(project_id, doc_id, staff, include_archived=staff, prices=_prices(user, project, staff))
+    row = _find(project_id, doc_id, staff, include_archived=staff, prices=_prices(user, project, staff), spec=_spec(user, project))
     superseded = not row.get("archived") and _superseded(
-        project, _visible(store.load_documents(project_id), staff, prices=_prices(user, project, staff)), _label(row))
+        project, _visible(store.load_documents(project_id), staff, prices=_prices(user, project, staff), spec=_spec(user, project)), _label(row))
     if superseded and not staff and not SUPERSEDED_SINGLE_DOWNLOAD:
         raise HTTPException(status_code=403, detail="This document belongs to a superseded release: view only")
     path = store.read_document_file(project_id, str(row.get("file_id") or ""))
@@ -554,7 +574,7 @@ def download_documents_zip(request: Request, project_id: str, revision: str | No
     (folders kicad / fabrication / bom / 3d / docs + MANIFEST.txt).  A customer-side member gets the current release only."""
     from motor_ai_sim.production.routes import _TempFileStreamingResponse
     user, project, _role, staff = _context(request, project_id)
-    rows = _visible(store.load_documents(project_id), staff, prices=_prices(user, project, staff))
+    rows = _visible(store.load_documents(project_id), staff, prices=_prices(user, project, staff), spec=_spec(user, project))
     label = None if revision is None else revision.strip()
     if label is None:
         if not staff:

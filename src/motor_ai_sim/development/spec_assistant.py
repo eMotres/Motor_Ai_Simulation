@@ -97,7 +97,7 @@ def may_use(user: dict, project: dict) -> bool:
 # ── the marker ───────────────────────────────────────────────────────────────
 
 _START = re.compile(r"\[\[\s*SPEC_PROPOSAL\b\s*:?", re.IGNORECASE)
-_KEY = re.compile(r"[\s;,]*(field|value|reason|basis|status)\s*[=:]\s*", re.IGNORECASE)
+_KEY = re.compile(r"[\s;,]*(field|value|reason|basis|status|source|excerpt|converted)\s*[=:]\s*", re.IGNORECASE)
 _FLAG = {"submit": re.compile(r"\[\[\s*SUBMIT_SPEC\s*\]\]", re.IGNORECASE), "create": re.compile(r"\[\[\s*CREATE_SPEC\b[^\]]*\]\]", re.IGNORECASE)}
 _URL = re.compile(r"https?://[^\s)\]\"'<>,;]+")
 
@@ -177,12 +177,12 @@ def _label(project_id: str, field_id: str, lang: str) -> str:
         return field_id
 
 
-def process_markers(project_id: str, found: list[dict], lang: str, *, fill_email: Optional[str] = None) -> dict:
+def process_markers(project_id: str, found: list[dict], lang: str, *, fill_email: Optional[str] = None, cap: Optional[int] = None) -> dict:
     """Validate and store the parsed markers; ``{"open": [...], "applied": [...]}``.  The invalid ones are dropped (logged), never
     raised.  With ``fill_email`` (fill mode: the caller may apply) a stored proposal is applied at once through ``P.fill``; one
     that cannot be (customer decision never gets this far; a stated-only field without basis "stated"; a stale or no longer valid
     draft) stays an open card."""
-    cap = MAX_MARKERS_FILL if fill_email else MAX_MARKERS
+    cap = cap or (MAX_MARKERS_FILL if fill_email else MAX_MARKERS)
     opened: list[dict] = []
     applied: list[dict] = []
     refused: list[str] = []
@@ -190,7 +190,7 @@ def process_markers(project_id: str, found: list[dict], lang: str, *, fill_email
     count = 0
     for fields in found:
         if count >= cap:
-            log.warning("spec assistant: proposal for %r dropped (more than %d in one reply)", fields.get("field"), cap)
+            log.warning("spec assistant: a proposal was dropped (more than %d in one reply)", cap)
             dropped += 1
             continue
         field_id = str(fields.get("field") or "").strip().strip("\"'")
@@ -206,9 +206,10 @@ def process_markers(project_id: str, found: list[dict], lang: str, *, fill_email
             if "value" not in fields and not nky:
                 raise P.ProposalError("no value")
             prop = P.create(project_id, field_id, fields.get("value"), reason or ("customer: not known yet" if nky else ""), basis=basis,
-                            answer_status="not_known_yet" if nky else "filled", sources=_URL.findall(reason))
+                            answer_status="not_known_yet" if nky else "filled", sources=_URL.findall(reason),
+                            file_source=fields.get("_file_source"))
         except Exception as exc:                              # noqa: BLE001 - a bad marker must never fail the reply
-            log.warning("spec assistant: proposal for %r dropped (%s)", field_id, str(exc)[:160])
+            log.warning("spec assistant: a proposal was dropped (%s)", type(exc).__name__)
             dropped += 1
             try:
                 section, _ = P.field_info(field_id, P.schema_version_of(P.draft_wrapper(project_id)))
@@ -224,7 +225,7 @@ def process_markers(project_id: str, found: list[dict], lang: str, *, fill_email
                 applied.append(done["proposal"])
                 continue
             except Exception as exc:                          # noqa: BLE001 - stays a card
-                log.warning("spec assistant: fill of %r not applied, kept as a card (%s)", field_id, str(exc)[:160])
+                log.warning("spec assistant: a fill was not applied, kept as a card (%s)", type(exc).__name__)
         opened.append(prop)
     return {"open": opened, "applied": applied, "refused": refused, "dropped": dropped}
 

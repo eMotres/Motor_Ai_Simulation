@@ -7810,6 +7810,39 @@ def _end3d_machine_curve(cands: list, when) -> list:
     return [(L, k, key) for L, (k, key) in sorted(best.items())]
 
 
+def _end3d_pick(store: dict, geo_fp: str, geo: Optional[dict] = None) -> Optional[dict]:
+    """The passport of ``geo_fp`` in the merged store (``end3d_store.load``), the same answer whichever of the machine's
+    equivalent prints (canonical / legacy49) is asked, so switching writers (``geo_fingerprint.WRITE_CANONICAL``) does not
+    change it.  ONE rule, the store's own: the WORKSPACE layer wins over the shared one (a local re-measurement), now across
+    the alias group too; inside a layer the literal print first (the answer of the build before), then the equivalent prints
+    in ``accepted`` order."""
+    if isinstance(store.get(geo_fp), dict):
+        lit = store[geo_fp]
+    else:
+        lit = None
+    prints = None
+    try:
+        from motor_ai_sim import end3d_store as _e3s
+        ws_path = _e3s.workspace_path()
+        ws = {} if ws_path == _e3s.shared_path() else _e3s._read(ws_path)
+    except Exception:                                             # noqa: BLE001 - no workspace layer
+        ws = {}
+    # a workspace entry counts only as the merged store holds it (the store in hand is the source of truth)
+    ws = {k: v for k, v in ws.items() if isinstance(store.get(k), dict) and store.get(k) == v}
+    if ws:
+        if geo_fp in ws:
+            return ws[geo_fp]
+        prints = _geo_fp_module().accepted(geo_fp, geo)
+        for _f in prints[1:]:
+            if _f in ws:
+                return ws[_f]
+    if lit is not None:
+        return lit
+    if prints is None:
+        prints = _geo_fp_module().accepted(geo_fp, geo)
+    return next((store[_f] for _f in prints[1:] if isinstance(store.get(_f), dict)), None)
+
+
 def _end3d_lookup(geo_fp: Optional[str], geo: Optional[dict] = None,
                   exact: bool = False, diag: Optional[dict] = None) -> Optional[dict]:
     """The Stage A end-effect passport for THIS machine, or None.
@@ -7833,9 +7866,9 @@ def _end3d_lookup(geo_fp: Optional[str], geo: Optional[dict] = None,
         from motor_ai_sim import end3d_store as _e3_store
         store = _e3_store.load()
         from motor_ai_sim.end3d_factors import enrich as _e3_enrich
-        # the passport written under this fingerprint, else under its legacy49 alias (2026-11-15 .. 2026-11-25); the geometry in
+        # the passport written under this fingerprint or under an equivalent print (canonical <-> legacy49); the geometry in
         # hand resolves the alias when this process has not fingerprinted the machine yet
-        rec = next((store[_f] for _f in _geo_fp_module().accepted(str(geo_fp), geo) if isinstance(store.get(_f), dict)), None)
+        rec = _end3d_pick(store, str(geo_fp), geo)
         if isinstance(rec, dict):
             # + the torque factor (measured k_T, else k_flux) — owner
             # 2026-09-30, motor_ai_sim/end3d_factors.py

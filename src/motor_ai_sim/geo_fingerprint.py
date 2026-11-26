@@ -12,7 +12,7 @@ the 2026-10-20 baseline, at its default value, does not change the fingerprint.
 * both are hashed from ONE snapshot of the geometry (``routes.simulation._geometry_fingerprint_pair``) and registered as
   equivalent; a reader that matches a stored fingerprint against the live one accepts either (``same`` / ``accepted``).
   Nothing stored is rewritten.
-* writers keep storing legacy49 until ``WRITE_CANONICAL`` is switched on in a later deploy (see that constant and
+* writers keep storing legacy49 until ``WRITE_CANONICAL`` is switched on by a separate, reviewed PR (see that constant and
   ``docs/GEO_FINGERPRINT_ROLLOUT_2026-11-26.md``).
 
 A NEW geometry key must be registered consciously: ``KNOWN_POST_BASELINE`` lists every key the live object may carry beyond
@@ -86,8 +86,10 @@ def canonical_geometry(geo: Optional[Mapping[str, Any]]) -> Optional[Dict[str, A
 
 #: Staged rollout (review of PR #891, 2026-11-26).  During a deploy the API and the worker may run different builds for a few
 #: minutes, and a build before this one compares the legacy49 print LITERALLY.  Stage 1 (this build): writers keep writing the
-#: legacy49 print (bit-identical to the build before), readers accept both prints.  Stage 2 (a LATER deploy, once no process of
-#: a build without these readers is left): set this True and writers store the canonical print.  Readers need no change then.
+#: legacy49 print (bit-identical to the build before), readers accept both prints.  Stage 2 (writers store the canonical print)
+#: is NOT approved: it needs its own pull request and review once the conditions in docs/GEO_FINGERPRINT_ROLLOUT_2026-11-26.md
+#: hold (every consumer upgraded, durable pair provenance instead of the process-local book, duplicate-alias winner rules, a
+#: real stored-print inventory).
 WRITE_CANONICAL = False
 
 

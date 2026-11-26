@@ -291,3 +291,51 @@ def test_the_enrich_path_keeps_the_measured_k_T_of_a_legacy_record(machine, monk
         assert got is not None and got.get("k_flux") == 0.93
         assert got.get("k_T") == 0.83 and not got.get("k_T_inherited"), live
         assert F.torque_factor(got) == (0.83, F.BASIS_MEASURED)
+
+
+# ── review r2 of #891: a stable winner between equivalent records ───────────────────────────────────────────────────────
+@pytest.mark.parametrize("order", ["canonical_first", "legacy_first"])
+def test_measured_k_T_keeps_literal_priority_between_equivalent_records(machine, monkeypatch, order):
+    """Records under BOTH prints (canonical 0.71, legacy 0.83): the queried print's own record wins (the base answer), in
+    either file order; the equivalent one is used only when no literal record exists."""
+    from motor_ai_sim import end3d_factors as F
+    base, state = machine
+    state["g"], state["glive"] = {**base, **DEFAULTS}, {**base, **DEFAULTS}
+    canon, legacy = S._geometry_fingerprints(None)
+    rc, rl = dict(_kT_record(canon), k_T=0.71), dict(_kT_record(legacy), k_T=0.83)
+    monkeypatch.setattr(F, "_records", lambda: [rc, rl] if order == "canonical_first" else [rl, rc])
+    assert F.measured_k_T(legacy)["k_T"] == 0.83
+    assert F.measured_k_T(canon)["k_T"] == 0.71
+    monkeypatch.setattr(F, "_records", lambda: [rc])
+    assert F.measured_k_T(legacy)["k_T"] == 0.71                            # no literal record: the equivalent one
+
+
+def test_the_passport_answer_does_not_depend_on_which_print_is_asked(machine, monkeypatch, tmp_path):
+    """The store's rule (workspace over shared) holds across the alias group, so the answer stays the same when writers later
+    switch from legacy49 to canonical; inside one layer the literal print wins."""
+    from motor_ai_sim import end3d_factors as F
+    from motor_ai_sim import end3d_store
+    base, state = machine
+    state["g"], state["glive"] = {**base, **DEFAULTS}, {**base, **DEFAULTS}
+    canon, legacy = S._geometry_fingerprints(None)
+    monkeypatch.setattr(F, "_records", lambda: [])
+    sh, ws = tmp_path / "shared.json", tmp_path / "ws.json"
+    monkeypatch.setattr(end3d_store, "shared_path", lambda: sh)
+    monkeypatch.setattr(end3d_store, "workspace_path", lambda: ws)
+    sh.write_text(json.dumps({canon: {"k_flux": 0.75, "machine": "x", "stack_mm": 40.0}}), encoding="utf-8")
+    ws.write_text(json.dumps({legacy: {"k_flux": 0.93, "machine": "x", "stack_mm": 40.0}}), encoding="utf-8")
+    for live in (legacy, canon):
+        for book_known in (True, False):
+            if not book_known:
+                GF._BOOK.clear()
+            got = S._end3d_lookup(live, None, exact=True)
+            assert got is not None and got["k_flux"] == 0.93, (live, book_known)
+    # the same pair in ONE layer: the literal print wins (the base answer for each print)
+    ws.write_text("{}", encoding="utf-8")
+    sh.write_text(json.dumps({canon: {"k_flux": 0.75, "machine": "x", "stack_mm": 40.0},
+                              legacy: {"k_flux": 0.93, "machine": "x", "stack_mm": 40.0}}), encoding="utf-8")
+    assert S._end3d_lookup(legacy, None, exact=True)["k_flux"] == 0.93
+    assert S._end3d_lookup(canon, None, exact=True)["k_flux"] == 0.75
+    # shared only, under the other print: found
+    sh.write_text(json.dumps({canon: {"k_flux": 0.75, "machine": "x", "stack_mm": 40.0}}), encoding="utf-8")
+    assert S._end3d_lookup(legacy, None, exact=True)["k_flux"] == 0.75

@@ -9,6 +9,7 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+import math
 from pathlib import Path
 
 import pytest
@@ -230,12 +231,34 @@ def test_marked_summary_uses_shaft_quantities(client, inline, motor_src):
     assert sp["torque_basis"] == "shaft" and sp["torque_Nm"] == 1.0 and sp["shaft_convention"] == "fe_on_shaft_k3d_v1"
 
 
+def _marked(summary, rpm=100, result=None):
+    return gd.saved_point({"name": "a", "rpm": rpm, "result": result or {"efficiency_pct": 90},
+                           "summary": {**summary, "shaft_convention": "x"}})
+
+
 def test_marked_point_prefers_coupling_torque():
-    both = gd.saved_point({"name": "a", "rpm": 100, "result": {"efficiency_pct": 90},
-                           "summary": {"T_shaft_Nm": 2.0, "T_coupling_Nm": 1.8, "T_em_avg_Nm": 2.2, "shaft_convention": "x"}})
-    assert both["torque_Nm"] == 1.8 and both["torque_basis"] == "shaft" and both["torque_key"] == "T_coupling_Nm"
+    # P_shaft_net_W / omega wins over T_shaft_Nm; the speed is the saved one (blocks first)
+    both = _marked({"T_shaft_Nm": 2.0, "P_shaft_net_W": 1000.0, "T_em_avg_Nm": 2.2, "rpm": 1000})
+    assert abs(both["torque_Nm"] - 1000.0 / (1000 * math.pi / 30)) < 1e-9
+    assert both["torque_basis"] == "shaft" and both["torque_key"] == "P_shaft_net_W"
+    # only the shaft torque
+    only_t = _marked({"T_shaft_Nm": 2.0, "T_em_avg_Nm": 2.2})
+    assert only_t["torque_Nm"] == 2.0 and only_t["torque_basis"] == "shaft" and only_t["torque_key"] == "T_shaft_Nm"
+    # a negative net power is no motoring point
+    neg = _marked({"P_shaft_net_W": -50.0, "rpm": 1000})
+    assert "missing" in neg and neg["missing"] != "shaft_key_unrecognised"
+    # omega 0: no division, falls to T_shaft_Nm, or is unrecognised without it
+    zero = _marked({"P_shaft_net_W": 100.0, "T_shaft_Nm": 1.5, "rpm": 0}, rpm=0)
+    assert "torque_Nm" not in zero and "missing" in zero
+    zero_t = _marked({"P_shaft_net_W": 100.0, "T_shaft_Nm": 1.5}, rpm=0, result={"rpm": 0})
+    assert "missing" in zero_t
+    only_p0 = gd.saved_point({"name": "a", "rpm": 0, "summary": {"P_shaft_net_W": 100.0, "shaft_convention": "x"}})
+    assert only_p0 == {"duty": "a", "missing": "shaft_key_unrecognised"}
+    # the removed names are not read
+    dead = _marked({"T_coupling_Nm": 1.8, "T_shaft_em_Nm": 1.7})
+    assert dead == {"duty": "a", "missing": "shaft_key_unrecognised"}
     no_marker = gd.saved_point({"name": "a", "rpm": 100, "result": {"efficiency_pct": 90},
-                                "summary": {"T_shaft_Nm": 2.0, "T_coupling_Nm": 1.8, "T_em_avg_Nm": 2.2}})
+                                "summary": {"T_shaft_Nm": 2.0, "P_shaft_net_W": 1000.0, "T_em_avg_Nm": 2.2}})
     assert no_marker["torque_Nm"] == 2.2 and no_marker["torque_basis"] == "field_legacy"
     marked_without_shaft = gd.saved_point({"name": "a", "rpm": 100, "result": {"T_em_avg_Nm": 2.2},
                                            "summary": {"shaft_convention": "x"}})

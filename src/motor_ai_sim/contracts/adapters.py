@@ -202,6 +202,13 @@ def result_ir_from_transient(sbres: Dict[str, Any], *, provenance: Optional[Prov
         mass_kg=f("mass_total_kg", "mass_kg"),
     )
 
+    from motor_ai_sim.shaft_convention import has_marker
+    if has_marker(s):
+        scalars.shaft_convention = s["shaft_convention"]
+        scalars.torque_basis = "2-D field"
+        scalars.power_basis = "shaft before bearings/windage"
+        scalars.efficiency_basis = "shaft before bearings/windage"
+
     series: Optional[SeriesResults] = None
     if sbres.get("time_s"):
         extra: Dict[str, List[float]] = {}

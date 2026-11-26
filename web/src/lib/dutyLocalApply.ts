@@ -450,6 +450,12 @@ export async function applyDutyLocal(die: string, cfg: string, duty: string,
     return { machineChanged: changed,
              message: `saved run state restored; Run to recompute${alsoTxt}` };
   }
+  // a duty on the shaft-side convention without its full stored summary: its requested torque / power cannot be turned
+  // into a shaft-side summary (a marker alone does not rebuild the field decomposition) - nothing is shown, re-solve
+  if (Number((rr as any).shaft_conv) === 1) {
+    clearLastTransient();
+    return { machineChanged: changed, message: 'no saved results yet; press Run in Simulation' };
+  }
   if (rr.efficiency_pct != null || dd.torque_nm != null) {
     const rpm = Number(sim.rpm) || 0;
     const omega = 2 * Math.PI * rpm / 60;

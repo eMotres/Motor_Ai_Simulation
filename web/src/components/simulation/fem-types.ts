@@ -18,6 +18,7 @@ export interface FemPayload {
   P_mag_eddy_W:  number | null;
   P_loss_total_W:number | null;
   P_mech_W:      number;
+  shaft_convention?: string;
   efficiency:    number | null;
   freq_Hz:       number;
   rpm:           number;

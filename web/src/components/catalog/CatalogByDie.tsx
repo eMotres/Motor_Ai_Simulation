@@ -145,6 +145,8 @@ const small = { fontSize: 11.5, color: 'var(--text-3)' };
 const CatalogByDie: React.FC<Props> = ({ dies, thumbs, rated, active, isAdmin, canWrite, standardUser, busy, actions, overview: given,
   cells: cellsOf, dieExtras, nameTip, jobs: givenJobs, highlighted, allDies }) => {
   const { t } = useTranslation(['motors', 'common', 'development']);
+  // per render: does this row's die block mix two shaft-power conventions (filled by sortBlock, read by cell)
+  const convMixed = new Map<MotorRow, boolean>();
   const [overview, setOverview] = useState<ByDieOverview | null>(given ?? null);
   const [dieMenu, setDieMenu] = useState<{ el: HTMLElement; die: ByDieDie } | null>(null);
   const [cfgMenu, setCfgMenu] = useState<{ el: HTMLElement; m: MotorRow } | null>(null);
@@ -232,12 +234,13 @@ const CatalogByDie: React.FC<Props> = ({ dies, thumbs, rated, active, isAdmin, c
   };
   const cell = (key: ColKey, m: MotorRow) => {
     const x = colValue(key, m, cells?.(m.die, m.config)?.cogging ?? null);
+    const oldConv = convMixed.get(m) === true && m.values?.shaft_conv !== 1 && (key === 'power' || key === 'torque' || key === 'eff');
     const muted = (key === 'ripple' && !!m.values?.ripple_low) || (key === 'cogging' && !!cells?.(m.die, m.config)?.coggingStale);
     return (
-      <Tooltip key={key} title={cellTip(key, m)}>
+      <Tooltip key={key} title={oldConv ? `${t('common:shaftConvOld')} ${cellTip(key, m)}` : cellTip(key, m)}>
         <Box component="span" data-testid={`by-die-v-${key}`}
           sx={{ textAlign: 'right', color: muted ? 'var(--text-4)' : 'var(--text-2)', cursor: 'help', whiteSpace: 'nowrap' }}>
-          {x === null ? '—' : x.toFixed(COL_DIGITS[key])}
+          {x === null ? '—' : `${x.toFixed(COL_DIGITS[key])}${oldConv ? '†' : ''}`}
         </Box>
       </Tooltip>
     );
@@ -380,7 +383,14 @@ const CatalogByDie: React.FC<Props> = ({ dies, thumbs, rated, active, isAdmin, c
       </Box>
     );
   };
-  const sortBlock = (motors: MotorRow[]) => (sort ? sortMotors(motors, sort.key, sort.dir, (m) => cells?.(m.die, m.config)?.cogging ?? null) : motors);
+  // a block whose rows carry two shaft-power conventions marks its earlier rows' power, torque and efficiency "†"
+  // (owner 2026-11-25: never two conventions read as one; the sort keeps them apart, the mark says why)
+  const mixedConvBlock = (motors: MotorRow[]) => new Set(motors.map((m) => (m.values?.shaft_conv === 1 ? 1 : 0))).size > 1;
+  const sortBlock = (motors: MotorRow[]) => {
+    const mixed = mixedConvBlock(motors);
+    for (const m of motors) convMixed.set(m, mixed);
+    return sort ? sortMotors(motors, sort.key, sort.dir, (m) => cells?.(m.die, m.config)?.cogging ?? null) : motors;
+  };
   const header = (
     <Box data-testid="by-die-header" sx={{ position: 'sticky', top: -SCROLLER_PAD_PX, zIndex: 2, bgcolor: 'var(--panel-2)', display: 'flex', alignItems: 'flex-end',
       columnGap: 1, flexWrap: 'wrap', px: 1, py: 0.3, borderBottom: '1px solid var(--line-soft)', fontSize: 10, color: 'var(--text-3)' }}>

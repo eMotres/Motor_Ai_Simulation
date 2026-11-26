@@ -173,6 +173,11 @@ const PointsConfigure: React.FC<Props> = ({ view, loadedDuty }) => {
 
   const peers = useMemo(() => steps.map((v) => v.points.find((p) => p.duty === duty) ?? null), [steps, duty]);
   const labels = useMemo(() => stepLabels(steps), [steps]);
+  // the shaft-power convention of each step's numbers: two conventions in one steps table mark the earlier rows "†"
+  // (owner 2026-11-25; src/motor_ai_sim/shaft_convention.py)
+  const convOf = (p: any): number => (Number(p?.comparison?.shaft_conv) === 1
+    || p?.panel?.summary?.shaft_convention === 'fe_on_shaft_k3d_v1' ? 1 : 0);
+  const stepsConvMixed = new Set(peers.filter(Boolean).map(convOf)).size > 1;
   // the information panel of the ordinary Configure (ONE component, components/common/ResultsPanel), fed with the point's FINAL stored
   // result: the coupled loop's numbers, temperatures and drive where one exists, else the saved EM run's; a tile the point does not
   // store is not drawn (owner 2026-11-01)
@@ -330,7 +335,9 @@ const PointsConfigure: React.FC<Props> = ({ view, loadedDuty }) => {
               return (
                 <Box component="tr" key={`${v.die}/${v.config}`} onClick={() => openStep(index)}
                   sx={{ cursor: 'pointer', bgcolor: index === stepIndex ? 'var(--panel-3, rgba(255,255,255,0.06))' : 'transparent', '&:hover': { bgcolor: 'rgba(255,255,255,0.04)' } }}>
-                  <Box component="td" sx={{ ...TD, textAlign: 'left', boxShadow: `inset 3px 0 0 ${motorColor(v)}` }}>{labels[index]}</Box>
+                  <Box component="td" sx={{ ...TD, textAlign: 'left', boxShadow: `inset 3px 0 0 ${motorColor(v)}` }}
+                    title={stepsConvMixed && p && convOf(p) !== 1 ? t('common:shaftConvOld') : undefined}>
+                    {labels[index]}{stepsConvMixed && p && convOf(p) !== 1 ? '†' : ''}</Box>
                   {POINT_TILES.filter((spec) => spec.group !== 'thermal' && (spec.core || peers.some((peer) => tileValue(peer, spec) !== null))).map((spec) => {
                     const value = tileValue(p, spec);
                     return <Box component="td" key={spec.id} sx={TD}>{value === null ? '' : fmt(value, spec.d)}</Box>;

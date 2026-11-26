@@ -103,7 +103,8 @@ def _duty_row(d: dict, family, build_sig) -> dict:
         "power_kw": _num(d.get("power_kw")),
         "star_delta": (d.get("star_delta") or (d.get("summary") or {}).get("star_delta")),
         # the two numbers a chip's tooltip quotes; the rest of the stored result is the project view's business
-        "result": {"efficiency_pct": _num(res.get("efficiency_pct")), "v_ll_peak_v": _num(res.get("v_ll_peak_v"))},
+        "result": {"efficiency_pct": _num(res.get("efficiency_pct")), "v_ll_peak_v": _num(res.get("v_ll_peak_v")),
+                   **({"shaft_conv": 1} if res.get("shaft_conv") == 1 else {})},
         "stale": stale or any(x["stale"] for x in runs),
         "primary_drive": prim, "runs": runs,
         "duty_cycle": scrub(d.get("duty_cycle")) if isinstance(d.get("duty_cycle"), dict) else None,

@@ -719,13 +719,14 @@ def duty_points(duties: Mapping[str, Mapping[str, Any]]) -> Dict[str, Any]:
             continue
         e, pt = c["em"], c["point"]
         rpm, cur, tq = _fnum(pt.get("rpm")), _fnum(pt.get("I_phase_rms")), _fnum(e.get("T_em_avg_Nm"))
-        if not (rpm and cur and tq) or rpm <= 0 or cur <= 0 or tq <= 0 or c.get("runaway") or c.get("converged") is False:
+        limited = c.get("mode") == "limited"                     # a solve_to-limits record: a valid EM point at the limit temperature
+        if not (rpm and cur and tq) or rpm <= 0 or cur <= 0 or tq <= 0 or c.get("runaway") or (c.get("converged") is False and not limited):
             continue
         th = kinds.get("thermal") if isinstance(kinds.get("thermal"), Mapping) else {}
         pts.append({"duty": name, "rpm": rpm, "I_A": cur, "T2d_Nm": tq, "P_cu_W": _fnum(e.get("P_stranded_W")), "P_fe_W": _fnum(e.get("P_core_W")),
                     "P_rotor_W": _fnum(e.get("P_solid_W")) or 0.0, "coil_c": _fnum(c.get("coil_temp_c")), "magnet_c": _fnum(c.get("magnet_temp_c")),
                     "R_ohm": _fnum(run.get("R_phase_ohm")), "end_winding_factor": _fnum(run.get("end_winding_factor")),
-                    "fingerprint": c.get("geometry_fingerprint"), "shaft_convention": e.get("shaft_convention"),
+                    "fingerprint": c.get("geometry_fingerprint"), "shaft_convention": e.get("shaft_convention"), "limited": limited,
                     "cooling": dict(th.get("cooling") or {}) if th.get("state", "steady") == "steady" else {}})
     pts.sort(key=lambda x: (x["I_A"], x["rpm"]))
     return {"points": pts, "noload": noload}

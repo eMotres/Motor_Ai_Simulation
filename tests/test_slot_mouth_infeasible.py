@@ -7,7 +7,9 @@ the CIANO14 30_10 cross-section in Configure.  Configure lets the user change
 the winding, so the live geometry can hold a wire whose column overruns the slot
 (slot-mouth fill radius <= 0) while the die itself is fine; the slot cutters then
 collide and the stator is drawn with a lobe.  Such a machine is never drawn or
-solved: the viewer routes answer 422 and the solver gate names the same limit.
+solved: the solver gate names the limit.  Since 2026-11-27 (owner: "even with a split everything must build") the VIEWER routes draw
+it anyway and attach the warning (`_warnings`: the field, the limit, what is compared); only a machine that could not be built at
+all is still the 422.
 """
 from __future__ import annotations
 
@@ -50,16 +52,74 @@ def test_too_wide_wire_is_refused_with_the_right_maximum():
     assert slot_mouth_infeasibility({**_GEO, "wire_width": w_max + 0.01}) is not None
 
 
-def test_split_names_the_strip_count():
+def test_split_names_the_strip_count_and_says_what_a_split_is():
     bad = slot_mouth_infeasibility({**_GEO, "wire_split": 2, "wire_width": 1.6})
     assert bad is not None and bad["field"] == "wire_split"
     assert bad["message"].startswith("wire split too wide for this slot")
+    # what wire_split MEANS (winding.py): N strips side by side in EACH wire row, every strip a SERIES turn: 6 rows -> 12 series turns
+    assert bad["turns"] == 6 and bad["wire_split"] == 2 and bad["series_turns"] == 12
+    assert "wire_split = 2 puts 2 strips of 1.6 mm side by side in each of the 6 wire rows (12 series turns)" in bad["message"]
+    # the comparison is in the answer: the half-slot side vs the limit the tooth pitch leaves
+    assert bad["side_at_mm"] > bad["limit_mm"] and bad["over_mm"] == pytest.approx(bad["side_at_mm"] - bad["limit_mm"])
+    assert bad["column_mm"] == pytest.approx(2 * 1.6 + 2.0 * _GEO["wire_spacing_x"])
 
 
-def test_mesh_routes_refuse_it_with_a_422():
+def test_the_same_split_without_outer_notches_fits_the_pocket_rule():
+    """The comparison is NOT 'strips + gaps < slot_width': it is the half-slot outer side (tooth_width/2 + 2 insulation + column +
+    wire_spacing_x [+ tooth2_width when notched]) against the half-sector line; a stator without outer notches compares the pocket
+    wall (tooth2_width taken off) against the line at the bore, so the same split can fit there and not with notches."""
+    geo = {**_GEO, "wire_split": 2, "wire_width": 1.6}
+    notched = slot_cut_limits(geo)
+    plain = slot_cut_limits({**geo, "stator_outer_notches": False})
+    assert notched[0] - plain[0] == pytest.approx(geo["tooth2_width"])        # the notched side carries tooth2_width
+    assert notched[0] != plain[0] and notched[1] != plain[1]
+
+
+def test_viewer_routes_draw_an_infeasible_winding_with_a_warning(monkeypatch):
+    """The geometry window must not stay empty: the mesh is built and the warning rides in `_warnings`."""
     from motor_ai_sim.routes import geometry as rg
+    from motor_ai_sim import cadquery_geometry as cg
+
+    class _Motor:
+        _stator_outline_violation = None
+        def set_parameters(self, p): self.p = p
+        def build_all(self): pass
+        def get_all_mesh_data(self): return {"stator_core": {"vertices": [0, 0, 0], "faces": [0, 0, 0]}}
+        def get_extruded_mesh_data(self, depth=None): return {"stator_core": {"vertices": [0, 0, 0], "faces": [0, 0, 0]}}
+        def get_2d_mesh_data(self): return {"stator_core": {"vertices": [0, 0, 0], "faces": [0, 0, 0]}}
+    monkeypatch.setattr(cg, "CadQueryMotor", _Motor)
+    monkeypatch.setattr(rg, "_mesh_disk_get", lambda *a, **k: None)
+    monkeypatch.setattr(rg, "_mesh_disk_put", lambda *a, **k: None)
+    monkeypatch.setattr(rg, "_warm_live_mesh", lambda: None, raising=False)
+    for cache in (rg._mesh_cache, rg._mesh2d_cache, rg._mesh_extruded_cache):
+        cache["hash"], cache["data"] = None, None
     bad_geo = json.dumps({**_GEO, "wire_width": 2.48})
-    for route in (rg.get_geometry_mesh2d, rg.get_geometry_mesh):
+    for route in (rg.get_geometry_mesh2d, rg.get_geometry_mesh, rg.get_geometry_mesh_extruded):
+        out = route(geo=bad_geo)
+        assert "stator_core" in out
+        w = out["_warnings"][0]
+        assert w["field"] == "wire_width" and w["code"] == "wire_too_wide_for_slot"
+        assert w["max"] == pytest.approx(2.30, abs=1e-6) and w["turns"] == 6
+    # a feasible request carries no warning key, and a cached answer never leaks another request's warning
+    good = json.dumps(_GEO)
+    for route in (rg.get_geometry_mesh2d, rg.get_geometry_mesh, rg.get_geometry_mesh_extruded):
+        assert "_warnings" not in route(geo=good)
+    for cache in (rg._mesh_cache, rg._mesh2d_cache, rg._mesh_extruded_cache):
+        assert cache["data"] is None or "_warnings" not in cache["data"]
+
+
+def test_viewer_routes_still_refuse_when_the_builder_could_not_draw_it(monkeypatch):
+    from motor_ai_sim.routes import geometry as rg
+    from motor_ai_sim import cadquery_geometry as cg
+
+    class _Broken:
+        def set_parameters(self, p): raise RuntimeError("the cutters collided")
+    monkeypatch.setattr(cg, "CadQueryMotor", _Broken)
+    monkeypatch.setattr(rg, "_mesh_disk_get", lambda *a, **k: None)
+    for cache in (rg._mesh_cache, rg._mesh2d_cache, rg._mesh_extruded_cache):
+        cache["hash"], cache["data"] = None, None
+    bad_geo = json.dumps({**_GEO, "wire_width": 2.48})
+    for route in (rg.get_geometry_mesh2d, rg.get_geometry_mesh, rg.get_geometry_mesh_extruded):
         with pytest.raises(HTTPException) as ei:
             route(geo=bad_geo)
         assert ei.value.status_code == 422
@@ -68,10 +128,7 @@ def test_mesh_routes_refuse_it_with_a_422():
         f = d["invalid_parameters"][0]
         assert f["field"] == "wire_width" and f["kind"] == "wire_too_wide_for_slot"
         assert f["max"] == pytest.approx(2.30, abs=1e-6) and f["turns"] == 6
-    with pytest.raises(HTTPException) as ei:
-        rg.get_geometry_mesh_extruded(geo=bad_geo)
-    assert ei.value.status_code == 422
-    rg._refuse_infeasible_section(_GEO)          # feasible: no exception
+    assert rg._refuse_infeasible_section(_GEO) is None          # feasible: no warning, no exception
 
 
 def test_solver_gate_names_the_same_limit():

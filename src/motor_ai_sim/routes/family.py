@@ -7064,6 +7064,147 @@ def patch_config_motor_keys(die: str, cfg: str, req: MotorKeysPatch, dry_run: bo
     return out
 
 
+class DieGeometryPatch(BaseModel):
+    keys: Dict[str, Any]                  # {die input key: number}; nothing else is accepted
+    dry_run: bool = False
+    allow_config_misfit: bool = False     # a configuration whose own free keys do not fit the new sheet is warned, not refused
+
+
+def _die_sheet_keys_refusals(keys: Dict[str, Any], die_geo: dict) -> list:
+    """``[{key, reason}]`` for every sent key a die's sheet edit does not take: a configuration (FREE), motor, derived or
+    identity key, a key the die does not store, or a value that is not a number like the stored one."""
+    from motor_ai_sim.geometry.motor_geometry import ALL_DERIVED_GEOMETRY_NAMES, UNUSED_GEOMETRY_KEYS
+    out = []
+    for k, v in (keys or {}).items():
+        if k in FREE_GEO_KEYS:
+            why = "a configuration key (set it on the configuration)"
+        elif k in MOTOR_GEO_KEYS:
+            why = "a motor key (PATCH /config/{die}/{cfg}/motor_keys)"
+        elif k in DIE_IDENTITY_KEYS:
+            why = "an identity key: a different value is a different lamination, i.e. a new die"
+        elif k in ALL_DERIVED_GEOMETRY_NAMES or k in ("num_slots", "num_poles"):
+            why = "a derived key (it follows its inputs)"
+        elif k in UNUSED_GEOMETRY_KEYS:
+            why = "an unused key"
+        elif k not in die_geo:
+            why = "not stored in this die's sheet"
+        else:
+            old = die_geo.get(k)
+            num = isinstance(v, (int, float)) and not isinstance(v, bool) and v == v and abs(float(v)) != float("inf")
+            if not num or not (isinstance(old, (int, float)) and not isinstance(old, bool)):
+                why = f"not a number of the stored kind ({old!r} -> {v!r})"
+            else:
+                continue
+        out.append({"key": k, "reason": why})
+    return out
+
+
+def _sheet_errors(geo: dict) -> list:
+    """The geometry refusals of one machine (field values and the slot-mouth fit), as ``[{field, message}]``."""
+    from motor_ai_sim import geometry_validation as _gv
+    errs = [{"field": str(e.get("field") or ""), "message": str(e.get("message") or "")}
+            for e in _gv.validate_parameter_values(geo)]
+    sm = _gv.slot_mouth_infeasibility(geo)
+    if sm:
+        errs.append({"field": str(sm.get("field") or "slot"), "message": str(sm.get("message") or "")})
+    return errs
+
+
+@router.patch("/die/{die}/geometry")
+def patch_die_geometry(die: str, req: DieGeometryPatch, dry_run: bool = False,
+                       _w: dict = Depends(require_catalog_write)):
+    """Admin: change a die's sheet IN PLACE, keeping its name (owner 2026-11-27; the old path was a new die, a moved
+    configuration and a retire).
+
+    Only die INPUT keys are taken (422 names the others: configuration, motor, derived, identity, unknown, not a number).
+    A LOCKED die is refused (409).  Every configuration of the die is validated on the new sheet; errors refuse the write
+    (422, per configuration) - except a misfit of the configuration's OWN keys when ``allow_config_misfit`` is sent (a
+    warning; its next duty save adopts keys that fit).  ``dry_run`` (body or ``?dry_run=1``) writes nothing and answers the
+    same document.  Stored results are kept: their build signature changes, so they read "computed on an older build"
+    (duties and cogging alike).  The write regenerates the thumbnail (the old one stays if that fails) and records
+    ``die.geometry`` in the admin audit."""
+    from motor_ai_sim import admin_audit as _AA
+    from motor_ai_sim.geometry.motor_geometry import refresh_derived_geometry
+    if not _w.get("is_admin"):
+        raise HTTPException(403, detail="only an admin may change a die's sheet")
+    die = _check_name(die, "die")
+    _require_die_write(die, _w)
+    _require_writable_die(die)
+    dfile = _die_file(die)
+    d = _load_yaml(dfile, "die")
+    if not req.keys:
+        raise HTTPException(422, detail="send the keys to change")
+    die_geo = dict(d.get("geometry") or {})
+    bad = _die_sheet_keys_refusals(req.keys, die_geo)
+    if bad:
+        raise HTTPException(422, detail={"message": "keys a die's sheet edit does not take: "
+                                         + ", ".join(b["key"] for b in bad), "keys": bad})
+    changed = sorted(k for k, v in req.keys.items() if abs(float(die_geo[k]) - float(v)) > 1e-9)
+    dry = bool(dry_run or req.dry_run)
+    new_geo = refresh_derived_geometry(dict(die_geo, **{k: req.keys[k] for k in changed}))
+    if changed and bool(d.get("locked", True)):
+        raise HTTPException(409, detail=f"die '{die}' is locked: unlock it first to change its sheet")
+    before = {k: die_geo.get(k) for k in changed}
+    after = {k: new_geo.get(k) for k in changed}
+    derived = sorted(k for k in new_geo if k not in changed and new_geo.get(k) != die_geo.get(k))
+    d2 = dict(d, geometry=new_geo)
+    # the die's own sheet, then every configuration on it (die sheet + its overrides)
+    # The die's own stamp carries the wire stack of the moment it was cut; a configuration overrides it, so a die WITH
+    # configurations is judged through them, and the stamp alone only when it has none.
+    cfg_files = [f for f in sorted(_die_dir(die).glob("*.yaml")) if f.name != "die.yaml"]
+    die_new = ([e for e in _sheet_errors(new_geo) if e not in _sheet_errors(die_geo)]
+               if changed and not cfg_files else [])
+    per_cfg: Dict[str, Any] = {}
+    refused = {}
+    for f in cfg_files:
+        try:
+            c = _load_yaml(f, "configuration")
+        except HTTPException:
+            continue
+        name = str(c.get("name") or f.stem)
+        ov = c.get("geometry_overrides") or {}
+        errs_old = _sheet_errors(refresh_derived_geometry({**die_geo, **ov}))
+        errs_new = [e for e in _sheet_errors(refresh_derived_geometry({**new_geo, **ov})) if e not in errs_old] if changed else []
+        stale = []
+        for du in c.get("duties") or []:
+            if isinstance(du, dict) and du.get("name") and (du.get("result") or du.get("summary") or du.get("runs")):
+                stale.append(str(du["name"]))
+        try:
+            from motor_ai_sim import cogging as _cg
+            has_cog = _cg.block_of(c) is not None
+        except Exception:                                   # noqa: BLE001
+            has_cog = False
+        per_cfg[name] = {"build_sig_before": _build_sig(d, c), "build_sig_after": _build_sig(d2, c),
+                         "stale_duties": stale if changed else [], "cogging_stale": bool(has_cog and changed),
+                         "validation": errs_new,
+                         "outcome": "refused" if errs_new and not req.allow_config_misfit else ("warning" if errs_new else "ok")}
+        if errs_new and not req.allow_config_misfit:
+            refused[name] = errs_new
+    out = {"ok": True, "dry_run": dry, "die": die, "changed": changed, "before": before, "after": after,
+           "derived_changed": derived, "validation": {"die": die_new, "configurations": per_cfg},
+           "configurations": per_cfg, "thumb_regenerated": False}
+    if (die_new or refused) and not dry:
+        raise HTTPException(422, detail={"message": "the new sheet does not fit", "die": die_new, "configurations": refused})
+    if die_new or refused:
+        out["ok"] = False
+    if dry or not changed:
+        return out
+    try:
+        from motor_ai_sim.routes.presets import _gen_thumb_svg
+        thumb = _gen_thumb_svg(dict(new_geo))
+        if thumb:
+            d2["thumb_svg"] = thumb
+            out["thumb_regenerated"] = True
+    except Exception:                                       # noqa: BLE001 - cosmetic, the old thumbnail stays
+        log.warning("family: thumbnail of die '%s' not regenerated", die)
+    _save_yaml(dfile, d2)
+    actor = str((_w.get("user") or {}).get("email") or "local-dev").strip().lower()
+    _AA.record(actor, "die.geometry", die, details={"from": before, "to": after})
+    log.info("family: die '%s' sheet changed in place: %s", die,
+             ", ".join("%s %s -> %s" % (k, before[k], after[k]) for k in changed))
+    return out
+
+
 class CadMassPut(BaseModel):
     grams: Optional[float] = None        # the CAD whole-motor mass [g]; null clears it
     source: Optional[str] = None         # the CAD model it was read from ("Fusion CIANO20 200_50 assembly v12")

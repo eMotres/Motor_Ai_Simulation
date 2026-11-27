@@ -7070,13 +7070,21 @@ class DieGeometryPatch(BaseModel):
     allow_config_misfit: bool = False     # a configuration whose own free keys do not fit the new sheet is warned, not refused
 
 
+#: The geometry FLAGS a die's sheet edit takes, as booleans (``stator_outer_notches``; stored only when OFF, absent = on).
+_SHEET_FLAG_KEYS = ("stator_outer_notches",)
+
+
 def _die_sheet_keys_refusals(keys: Dict[str, Any], die_geo: dict) -> list:
     """``[{key, reason}]`` for every sent key a die's sheet edit does not take: a configuration (FREE), motor, derived or
     identity key, a key the die does not store, or a value that is not a number like the stored one."""
     from motor_ai_sim.geometry.motor_geometry import ALL_DERIVED_GEOMETRY_NAMES, UNUSED_GEOMETRY_KEYS
     out = []
     for k, v in (keys or {}).items():
-        if k in FREE_GEO_KEYS:
+        if k in _SHEET_FLAG_KEYS:
+            if isinstance(v, bool):
+                continue
+            why = "a flag: send true or false"
+        elif k in FREE_GEO_KEYS:
             why = "a configuration key (set it on the configuration)"
         elif k in MOTOR_GEO_KEYS:
             why = "a motor key (PATCH /config/{die}/{cfg}/motor_keys)"
@@ -7139,13 +7147,23 @@ def patch_die_geometry(die: str, req: DieGeometryPatch, dry_run: bool = False,
     if bad:
         raise HTTPException(422, detail={"message": "keys a die's sheet edit does not take: "
                                          + ", ".join(b["key"] for b in bad), "keys": bad})
-    changed = sorted(k for k, v in req.keys.items() if abs(float(die_geo[k]) - float(v)) > 1e-9)
+    from motor_ai_sim.geometry.motor_geometry import stator_outer_notches as _notches_on
+    flags = {k: bool(req.keys[k]) for k in _SHEET_FLAG_KEYS if k in req.keys}
+    flag_changed = [k for k, v in flags.items() if v != _notches_on(die_geo)]
+    changed = sorted([k for k, v in req.keys.items() if k not in flags and abs(float(die_geo[k]) - float(v)) > 1e-9]
+                     + flag_changed)
     dry = bool(dry_run or req.dry_run)
-    new_geo = refresh_derived_geometry(dict(die_geo, **{k: req.keys[k] for k in changed}))
+    new_geo = dict(die_geo, **{k: req.keys[k] for k in changed if k not in flags})
+    for k in flag_changed:                      # on = the key is absent (how the reader treats it); off is stored
+        if flags[k]:
+            new_geo.pop(k, None)
+        else:
+            new_geo[k] = False
+    new_geo = refresh_derived_geometry(new_geo)
     if changed and bool(d.get("locked", True)):
         raise HTTPException(409, detail=f"die '{die}' is locked: unlock it first to change its sheet")
-    before = {k: die_geo.get(k) for k in changed}
-    after = {k: new_geo.get(k) for k in changed}
+    before = {k: (_notches_on(die_geo) if k in flags else die_geo.get(k)) for k in changed}
+    after = {k: (_notches_on(new_geo) if k in flags else new_geo.get(k)) for k in changed}
     derived = sorted(k for k in new_geo if k not in changed and new_geo.get(k) != die_geo.get(k))
     d2 = dict(d, geometry=new_geo)
     # the die's own sheet, then every configuration on it (die sheet + its overrides)
@@ -7163,8 +7181,9 @@ def patch_die_geometry(die: str, req: DieGeometryPatch, dry_run: bool = False,
             continue
         name = str(c.get("name") or f.stem)
         ov = c.get("geometry_overrides") or {}
+        ov_new = {k: v for k, v in ov.items() if k not in flags}    # the sheet's flag wins in the judgement
         errs_old = _sheet_errors(refresh_derived_geometry({**die_geo, **ov}))
-        errs_new = [e for e in _sheet_errors(refresh_derived_geometry({**new_geo, **ov})) if e not in errs_old] if changed else []
+        errs_new = [e for e in _sheet_errors(refresh_derived_geometry({**new_geo, **ov_new})) if e not in errs_old] if (changed or flags) else []
         stale = []
         for du in c.get("duties") or []:
             if isinstance(du, dict) and du.get("name") and (du.get("result") or du.get("summary") or du.get("runs")):

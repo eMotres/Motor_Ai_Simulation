@@ -18,7 +18,8 @@ WIRE = {"wire_width": 4.0, "wire_spacing_x": 0.1, "insulation_thickness": 0.2,
         "wire_height": 1.75, "num_wires_per_slot": 6, "motor_length": 100}
 GEO = dict({"stator_diameter": 150.0, "num_seg": 2, "num_slots_per_segment": 6, "num_poles_per_segment": 7,
             "core_thickness": 5.6, "slot_height": 20.4, "air_gap": 0.65, "magnet_height": 8.0,
-            "rotor_house_height": 10.9, "tooth_width": 11.3, "tooth2_width": 14.8}, **WIRE)
+            "rotor_house_height": 10.9, "tooth_width": 11.3, "tooth2_width": 14.8,
+            "num_slots": 12, "cut_width": 0.5}, **WIRE)
 ADMIN = {"is_admin": True, "user": {"email": "admin@example.com"}}
 AUDIT: list = []
 
@@ -45,9 +46,9 @@ def cat(tmp_path, monkeypatch):
     root = tmp_path / "dies"
     die_doc = {"name": DIE, "locked": False, "created": "2026-11-01", "geometry": dict(GEO), "thumb_svg": "<svg old/>"}
     _write(root / DIE / "die.yaml", die_doc)
-    sig = fam._build_sig(die_doc, {"geometry_overrides": dict(WIRE), "winding": {"connection": "4S"},
-                                   "materials": {"magnet": "N52UH"}})
-    _write(root / DIE / "L100.yaml", _cfg("L100", sig))
+    cfg = _cfg("L100", "x", stator_outer_notches=False)
+    cfg["duties"][0]["result"]["build_sig"] = cfg["cogging"]["build_sig"] = fam._build_sig(die_doc, cfg)
+    _write(root / DIE / "L100.yaml", cfg)
     monkeypatch.setattr(fam, "_DIES_DIR", root)
     monkeypatch.setattr(fam, "_require_die_write", lambda *_a, **_k: None)
     monkeypatch.setattr(fam, "_require_writable_die", lambda *_a, **_k: None)
@@ -170,3 +171,42 @@ def test_a_configuration_misfit_refuses_unless_allowed(cat, monkeypatch):
     assert out["ok"] is True and out["configurations"]["L100"]["outcome"] == "warning"
     assert out["configurations"]["L100"]["validation"][0]["field"] == "wire_width"
     assert _yaml(cat / DIE / "die.yaml")["geometry"]["tooth2_width"] == 6.6
+
+
+# ── the OD-notch flag (stored only when OFF; absent = on) ───────────────────────────────────────────────────────────────
+def test_notches_back_on_with_a_fitting_tooth2_removes_the_key_and_writes(cat):
+    out = _patch({"stator_outer_notches": True, "tooth2_width": 6.6})
+    g = _yaml(cat / DIE / "die.yaml")["geometry"]
+    assert "stator_outer_notches" not in g and g["tooth2_width"] == 6.6          # absent = on
+    # the die was notched already (key absent): only tooth2 changes; a SENT flag is judged on every configuration all the
+    # same, so L100 (own override: round) is checked on the NOTCHED sheet and fits with the narrow tooth2
+    assert out["changed"] == ["tooth2_width"] and out["configurations"]["L100"]["outcome"] == "ok"
+
+
+def test_notches_on_with_the_wide_tooth2_does_not_fit_the_notched_sheet_and_is_refused(cat):
+    # sent while the die is notched already: nothing changes for the flag; make the die round first, then ask for notches
+    d = _yaml(cat / DIE / "die.yaml")
+    _write(cat / DIE / "die.yaml", dict(d, geometry=dict(d["geometry"], stator_outer_notches=False)))
+    before = _files(cat)
+    with pytest.raises(HTTPException) as e:
+        _patch({"stator_outer_notches": True})
+    assert e.value.status_code == 422 and "L100" in e.value.detail["configurations"]
+    assert "wire" in e.value.detail["configurations"]["L100"][0]["message"]
+    assert _files(cat) == before
+    ok = _patch({"stator_outer_notches": True}, allow_config_misfit=True)
+    assert ok["configurations"]["L100"]["outcome"] == "warning"
+
+
+def test_notches_off_is_stored_as_false_and_a_non_boolean_flag_is_422(cat):
+    out = _patch({"stator_outer_notches": False})
+    assert _yaml(cat / DIE / "die.yaml")["geometry"]["stator_outer_notches"] is False and out["changed"] == ["stator_outer_notches"]
+    for bad in (1, "false", None):
+        with pytest.raises(HTTPException) as e:
+            _patch({"stator_outer_notches": bad})
+        assert e.value.status_code == 422
+
+
+def test_a_sent_flag_is_judged_even_when_the_die_already_has_that_value(cat):
+    with pytest.raises(HTTPException) as e:           # die notched (absent), tooth2 14.8: L100 on the notched sheet does not fit
+        _patch({"stator_outer_notches": True})
+    assert e.value.status_code == 422 and "L100" in e.value.detail["configurations"]

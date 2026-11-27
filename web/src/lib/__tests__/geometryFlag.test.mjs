@@ -69,3 +69,22 @@ t('stamps of one machine do not differ; another machine does', () => {
   // unknown is not "changed"
   assert.equal(d(a, ''), false);
 });
+
+import { geoOverrideBody, GEOMETRY_FLAG_KEYS } from '../geometryFlag.ts';
+
+test('geo= carries the geometry flags: stator_outer_notches: false reaches the server, an absent flag stays absent', () => {
+  assert.deepEqual(GEOMETRY_FLAG_KEYS, ['stator_outer_notches']);
+  const round = geoOverrideBody({ stator_diameter: 150, num_slots: 12, stator_outer_notches: false, note: 'x', bad: Number.NaN });
+  assert.deepEqual(round, { stator_diameter: 150, num_slots: 12, stator_outer_notches: false });
+  assert.deepEqual(geoOverrideBody({ stator_diameter: 150 }), { stator_diameter: 150 });         // absent = on: nothing is invented
+  assert.equal(geoOverrideBody({ stator_outer_notches: true })?.stator_outer_notches, true);
+  assert.equal(geoOverrideBody({ other_flag: false }), null);                                    // only the known flags ride, no stray booleans
+  assert.equal(geoOverrideBody(null), null);
+});
+
+test('the store builds its geo= carrier from it (no second numeric-only filter)', async () => {
+  const { readFileSync } = await import('node:fs');
+  const store = readFileSync(new URL('../../stores/motorStore.ts', import.meta.url), 'utf8');
+  assert.match(store, /geoOverrideBody\(useMotorStore\.getState\(\)\.geometry/);
+  assert.doesNotMatch(store, /if \(typeof v === 'number' && Number\.isFinite\(v\)\) num\[k\] = v;/);
+});

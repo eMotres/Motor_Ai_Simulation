@@ -312,3 +312,32 @@ def test_the_optimization_preset_has_the_2h_wire_cell_and_the_simulation_preset_
     assert MP.resolve("simulation", g)["values"]["component_mesh"]["coil_rel"] == 1.0
     assert MP.resolve("optimization", g)["sources"]["component_mesh"] == "owner"
     assert MP.version() >= 2
+
+
+def test_a_small_machines_preset_sizes_are_what_the_app_runs_and_the_runner_accepts_them():
+    """OD 70: the Optimization preset resolves 0.875 / 0.0875 mm, below the 1.0 / 0.1 floors of a request WITHOUT a preset.  The
+    headless body names the preset, so the app keeps the preset sizes and the runner's clamp check sees no difference."""
+    from motor_ai_sim import optimize_headless as H
+    import motor_ai_sim.routes.optimization as mod
+    g = _machine(70.0, 12, 10)
+    cfg = {"geometry": g}
+    req = _headless_req(variables=[{"name": "tooth_width", "min": 0.0, "max": 0.0}],
+                        operating_point={"current_a": 10.0, "gamma_deg": 5.0, "rpm": 3000.0}, max_iters=2)
+    rec = H.apply_optimization_preset(req, cfg, "descent")
+    ms, mn = rec["resolved"]["mesh_size_mm"], rec["resolved"]["min_size_mm"]
+    assert ms < 1.0 and mn < 0.1
+    body = req["descent"]
+    assert body["preset"] == "optimization" and body["mesh_size_mm"] == ms and body["min_size_mm"] == mn
+    orig = mod.get_config
+    mod.get_config = lambda *a, **k: {"geometry": g}
+    try:
+        plan = mod.prepare_descent(mod.DescentRequest(**body))
+        no_preset = mod.prepare_descent(mod.DescentRequest(**{k: v for k, v in body.items() if k != "preset"}))
+    finally:
+        mod.get_config = orig
+    ep = plan["init_state"]["eval_params"]
+    assert (ep["mesh_size_mm"], ep["min_size_mm"]) == (ms, mn) and "mesh_clamped" not in plan["response"]
+    H.refuse_clamped([("mesh_size_mm", body["mesh_size_mm"], ep["mesh_size_mm"]),
+                      ("min_size_mm", body["min_size_mm"], ep["min_size_mm"])])
+    # the floors still hold for a request without a preset
+    assert no_preset["init_state"]["eval_params"]["mesh_size_mm"] == 1.0 and "mesh_clamped" in no_preset["response"]

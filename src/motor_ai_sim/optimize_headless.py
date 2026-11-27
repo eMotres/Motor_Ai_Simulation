@@ -182,6 +182,10 @@ def apply_optimization_preset(req: Dict[str, Any], cfg: Dict[str, Any], mode: st
         mesh["component_mesh"] = comp
     cfg["mesh"] = mesh
     req[mode] = done["body"]
+    # Name the preset on the body too: the request's mesh-size floors (1.0 / 0.1 mm) are for a request WITHOUT a preset; a
+    # preset-resolved size (0.875 / 0.0875 mm at OD 70) is what the app must run, not what the floor makes of it, and the
+    # runner's clamp check then agrees with the app (a small machine was refused for its own preset).
+    req[mode].setdefault("preset", "optimization")
     return rec
 
 

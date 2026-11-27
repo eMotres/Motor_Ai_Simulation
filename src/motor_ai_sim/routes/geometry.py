@@ -1122,12 +1122,14 @@ def _resolve_geo_dict(geo: Optional[str]) -> dict:
     return merge_geo_override(params_dict, override)
 
 
-def _refuse_infeasible_section(params_dict: dict) -> None:
-    """422 instead of drawing a stator that is not a lamination.
+def _refuse_infeasible_section(params_dict: dict) -> Optional[dict]:
+    """Refuse what cannot be drawn at all; return a WARNING for a winding that does not fit.
 
-    A wire column wider than the slot mouth leaves (fill radius <= 0): the slot
-    cutters collide and the section carries a lobe (owner 2026-10-15).  Never
-    drawn, never solved — the message names the limit in user terms.
+    ``wire_omit`` cells off the strip grid are a 422 naming the grid (nothing meaningful can be drawn).  A wire column wider than the
+    slot mouth leaves (fill radius <= 0): the slot cutters collide and the section carries a lobe.  Since 2026-11-27 (owner: «даже
+    со сплитом все должно нормально строить») the viewer routes DRAW it anyway and attach this warning (``_warnings`` in the payload:
+    the field, its limit, what is compared) so the geometry window shows it; the solvers and the parameter validator still refuse a
+    machine that cannot be solved, with the same message.  ``None`` when the winding fits.
     """
     # `wire_omit` on the grid the BUILDER will read (this very dict): a user value that cannot be drawn is a 422 naming the grid,
     # never a 500 from the mesh builder (live finding 2026-11-15)
@@ -1137,13 +1139,23 @@ def _refuse_infeasible_section(params_dict: dict) -> None:
         if _wo:
             raise reject("infeasible geometry - " + _wo, [param_error("wire_omit", params_dict.get("wire_omit"), "wire_omit_grid", _wo)])
     from motor_ai_sim.geometry_validation import slot_mouth_infeasibility
-    bad = slot_mouth_infeasibility(params_dict)
-    if bad is None:
-        return
-    raise reject(
-        "infeasible geometry - " + bad["message"],
-        [param_error(bad["field"], bad["value"], bad["code"], bad["message"],
-                     max=bad["max"], turns=bad["turns"])])
+    return slot_mouth_infeasibility(params_dict)
+
+
+def _infeasible_422(warn: dict):
+    """The refusal the viewer routes fall back to when a machine with an infeasible winding could not be built at all."""
+    return reject("infeasible geometry - " + warn["message"],
+                  [param_error(warn["field"], warn["value"], warn["code"], warn["message"], max=warn["max"], turns=warn["turns"])])
+
+
+def _with_warning(data, warn: Optional[dict]):
+    """The payload with the infeasible-winding warning attached (``_warnings``, a non-mesh key like ``_timing``); a copy, so a
+    cached payload never carries a warning of another request."""
+    if not warn or not isinstance(data, dict):
+        return data
+    out = dict(data)
+    out["_warnings"] = [dict(warn)]
+    return out
 
 
 #: Bump when the cross-section builder changes what a given geometry draws, so
@@ -1230,19 +1242,19 @@ def get_geometry_mesh(geo: Optional[str] = None, request: Request = None):
         from motor_ai_sim.cadquery_geometry import CadQueryMotor
         import hashlib, json, time
         params_dict = _resolve_geo_dict(geo)
-        _refuse_infeasible_section(params_dict)
+        _warn = _refuse_infeasible_section(params_dict)
         params_hash = hashlib.md5(
             (json.dumps(params_dict, sort_keys=True)
              + _part_state_cache_tag()).encode()).hexdigest()
 
         if _mesh_cache["hash"] == params_hash and _mesh_cache["data"] is not None:
-            return _mesh_cache["data"]
+            return _with_warning(_mesh_cache["data"], _warn)
         _disk = _mesh_disk_get("mesh3d", params_hash)
         if _disk is not None:
             _mesh_cache["hash"] = params_hash
             _mesh_cache["data"] = _disk
             _mesh_cache["build_time_s"] = 0.0
-            return _disk
+            return _with_warning(_disk, _warn)
 
         with _mesh_build_turn(request):
             motor = CadQueryMotor()
@@ -1289,10 +1301,12 @@ def get_geometry_mesh(geo: Optional[str] = None, request: Request = None):
         _mesh_disk_put("mesh3d", params_hash, data)
         log.info("3-D viewer mesh built in %.1f s (%d parts) — cached in memory and on disk",
                  build_time, len(data) if isinstance(data, dict) else 0)
-        return data
+        return _with_warning(data, _warn)
     except HTTPException:
         raise          # a 422 from `geo=` must not be laundered into a 500
     except Exception as e:
+        if locals().get("_warn"):
+            raise _infeasible_422(locals()["_warn"])      # it could not even be drawn: the refusal, as before
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -1303,19 +1317,19 @@ def get_geometry_mesh2d(geo: Optional[str] = None):
         from motor_ai_sim.cadquery_geometry import CadQueryMotor
         import hashlib, json, time
         params_dict = _resolve_geo_dict(geo)
-        _refuse_infeasible_section(params_dict)
+        _warn = _refuse_infeasible_section(params_dict)
         params_hash = hashlib.md5(
             (json.dumps(params_dict, sort_keys=True)
              + _part_state_cache_tag() + _MESH_BUILD_REV).encode()).hexdigest()
 
         if _mesh2d_cache["hash"] == params_hash and _mesh2d_cache["data"] is not None:
-            return _mesh2d_cache["data"]
+            return _with_warning(_mesh2d_cache["data"], _warn)
         _disk = _mesh_disk_get("mesh2d", params_hash)
         if _disk is not None:
             _mesh2d_cache["hash"] = params_hash
             _mesh2d_cache["data"] = _disk
             _mesh2d_cache["build_time_s"] = 0.0
-            return _disk
+            return _with_warning(_disk, _warn)
 
         motor = CadQueryMotor()
         motor.set_parameters(params_dict)
@@ -1328,11 +1342,13 @@ def get_geometry_mesh2d(geo: Optional[str] = None):
         _mesh2d_cache["data"] = data
         _mesh2d_cache["build_time_s"] = round(build_time, 3)
         _mesh_disk_put("mesh2d", params_hash, data)
-        return data
+        return _with_warning(data, _warn)
     except HTTPException:
         raise          # a 422 from `geo=` must not be laundered into a 500
     except Exception as e:
         import traceback
+        if locals().get("_warn"):
+            raise _infeasible_422(locals()["_warn"])      # it could not even be drawn: the refusal, as before
         raise HTTPException(status_code=500, detail=f"{e}\n{traceback.format_exc()}")
 
 
@@ -1349,14 +1365,14 @@ def get_geometry_mesh_extruded(depth: Optional[float] = None, geo: Optional[str]
         from motor_ai_sim.cadquery_geometry import CadQueryMotor
         import hashlib, json, time
         params_dict = _resolve_geo_dict(geo)
-        _refuse_infeasible_section(params_dict)
+        _warn = _refuse_infeasible_section(params_dict)
         cache_key = hashlib.md5(
             (json.dumps({**params_dict, "_depth": depth}, sort_keys=True)
              + _part_state_cache_tag() + _MESH_BUILD_REV).encode()
         ).hexdigest()
 
         if _mesh_extruded_cache["hash"] == cache_key and _mesh_extruded_cache["data"] is not None:
-            return _mesh_extruded_cache["data"]
+            return _with_warning(_mesh_extruded_cache["data"], _warn)
 
         motor = CadQueryMotor()
         motor.set_parameters(params_dict)
@@ -1385,11 +1401,13 @@ def get_geometry_mesh_extruded(depth: Optional[float] = None, geo: Optional[str]
         _mesh_extruded_cache["hash"] = cache_key
         _mesh_extruded_cache["data"] = data
         _mesh_extruded_cache["build_time_s"] = build_time
-        return data
+        return _with_warning(data, _warn)
     except HTTPException:
         raise          # a 422 from `geo=` must not be laundered into a 500
     except Exception as e:
         import traceback
+        if locals().get("_warn"):
+            raise _infeasible_422(locals()["_warn"])      # it could not even be drawn: the refusal, as before
         raise HTTPException(status_code=500, detail=f"{e}\n{traceback.format_exc()}")
 
 

@@ -765,10 +765,14 @@ def slot_mouth_infeasibility(geo: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     Configure by widening the wire).  A machine like that is NEVER drawn or
     solved; the refusal names the limit.
 
-    Returns ``{"code", "field", "value", "message", "max", "turns", "fill_r_mm"}``
-    where ``max`` is the largest ``wire_width`` [mm] (solving ``fill_r = 0``) or,
-    with a split, the largest strip count — the same bound ``split_width_error``
-    gives the parameter validator.
+    Returns ``{"code", "field", "value", "message", "max", "turns", "fill_r_mm", "wire_split", "series_turns", "column_mm",
+    "limit_mm", "side_at_mm", "over_mm"}`` where ``max`` is the largest ``wire_width`` [mm] (solving ``fill_r = 0``) or,
+    with a split, the largest strip count — the same bound ``split_width_error`` gives the parameter validator.  ``turns`` is the
+    number of wire ROWS (``num_wires_per_slot``); with ``wire_split = N`` every row carries N strips, each one a SERIES turn
+    (``series_turns = turns x N``).  ``side_at_mm`` vs ``limit_mm`` is the comparison: ``slot_cut_limits`` (half-slot outer side
+    ``tooth_width/2 + 2 insulation + column + wire_spacing_x [+ tooth2_width when notched]`` against the half-sector wedge at the
+    slot-bottom radius ``(inner_radius + cut_width) sin(slot_angle/2)``; without outer notches the pocket wall against
+    ``inner_radius sin(slot_angle/2)``).
     """
     lim = slot_cut_limits(geo)
     if lim is None:
@@ -785,15 +789,26 @@ def slot_mouth_infeasibility(geo: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     half = max(1, int(round(_num(geo.get("num_slots")) or 2)) // 2)
     s2 = math.sin(math.radians(360.0 / half / 2.0))
     fill_r = (cut_x_max - cut_x) / (1.0 - s2) if s2 < 1.0 else float("nan")
+    ww = _num(geo.get("wire_width")) or 0.0
+    dx = _num(geo.get("wire_spacing_x")) or 0.0
+    column = ww if n_split <= 1 else n_split * ww + (n_split - 1) * _GAP_F * dx
+    over = cut_x - cut_x_max
     if field == "wire_width":
         msg = ("wire too wide for this slot: max wire width {:.2f} mm{}"
                .format(bound, at))
     else:
-        msg = ("wire split too wide for this slot: max {:d} strip{} of the "
-               "current wire width{}".format(int(bound), "" if int(bound) == 1 else "s", at))
+        # WHAT wire_split IS (winding.py): N strips of wire_width side by side in EVERY wire row, each strip a SERIES turn, so
+        # num_wires_per_slot rows carry rows x N series turns (the "at 6 turns" of the plain message counts ROWS)
+        msg = ("wire split too wide for this slot: wire_split = {:d} puts {:d} strips of {:g} mm side by side in each of the "
+               "{:d} wire rows ({:d} series turns); the {:.3f} mm column puts the half-slot side at {:.3f} mm, past the "
+               "{:.3f} mm the tooth pitch leaves, by {:.3f} mm; max {:d} strip{} of the current wire width"
+               .format(n_split, n_split, ww, turns, turns * n_split, column, cut_x, cut_x_max, over,
+                       int(bound), "" if int(bound) == 1 else "s"))
     return {"code": "wire_too_wide_for_slot", "field": field,
             "value": _num(geo.get(field)), "message": msg,
-            "max": float(bound), "turns": turns, "fill_r_mm": float(fill_r)}
+            "max": float(bound), "turns": turns, "fill_r_mm": float(fill_r),
+            "wire_split": int(n_split), "series_turns": int(turns * n_split),
+            "column_mm": float(column), "limit_mm": float(cut_x_max), "side_at_mm": float(cut_x), "over_mm": float(over)}
 
 
 def weld_tol_mm(params: Optional[Dict[str, Any]] = None,

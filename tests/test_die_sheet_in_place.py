@@ -210,3 +210,40 @@ def test_a_sent_flag_is_judged_even_when_the_die_already_has_that_value(cat):
     with pytest.raises(HTTPException) as e:           # die notched (absent), tooth2 14.8: L100 on the notched sheet does not fit
         _patch({"stator_outer_notches": True})
     assert e.value.status_code == 422 and "L100" in e.value.detail["configurations"]
+
+
+# ── the configuration's free keys, in place ────────────────────────────────────────────────────────────────────────────
+def _free(keys, dry=False, w=ADMIN):
+    return fam.patch_config_free_keys(DIE, "L100", fam.ConfigFreeKeysPatch(keys=keys, dry_run=dry), _w=w)
+
+
+def test_free_keys_the_package_for_a_round_split_configuration(cat):
+    # die sheet first (narrow tooth2; L100 only warned), then the configuration: wire 8.0, split 1, notches back on
+    _patch({"tooth2_width": 6.6, "stator_outer_notches": True}, allow_config_misfit=True)
+    dry = _free({"wire_width": 8.0, "wire_split": 1, "stator_outer_notches": True}, dry=True)
+    assert dry["dry_run"] is True and dry["ok"] is True and "stator_outer_notches" in dry["changed"]
+    assert _yaml(cat / DIE / "L100.yaml")["geometry_overrides"]["stator_outer_notches"] is False
+    out = _free({"wire_width": 8.0, "wire_split": 1, "stator_outer_notches": True})
+    ov = _yaml(cat / DIE / "L100.yaml")["geometry_overrides"]
+    assert "stator_outer_notches" not in ov and ov["wire_width"] == 8.0 and ov["wire_split"] == 1
+    assert out["before"]["stator_outer_notches"] is False and out["after"]["stator_outer_notches"] is True
+    assert out["build_sig_before"] != out["build_sig_after"] and out["stale_duties"] == ["rated"]
+    assert AUDIT[-1][0][1] == "config.free_keys"
+
+
+def test_free_keys_refusals_and_lock(cat):
+    before = _files(cat)
+    for bad in ({"tooth2_width": 6.6}, {"magnet_fill_up": 0.5}, {"wire_width": "8"}, {"stator_outer_notches": 1}):
+        with pytest.raises(HTTPException) as e:
+            _free(bad)
+        assert e.value.status_code == 422
+    with pytest.raises(HTTPException) as e:
+        _free({"wire_width": 4.0}, w={"is_admin": False})
+    assert e.value.status_code == 403
+    c = _yaml(cat / DIE / "L100.yaml")
+    _write(cat / DIE / "L100.yaml", dict(c, locked=True))
+    with pytest.raises(HTTPException) as e:
+        _free({"wire_width": 5.0})
+    assert e.value.status_code == 409
+    _write(cat / DIE / "L100.yaml", c)
+    assert _files(cat) == before

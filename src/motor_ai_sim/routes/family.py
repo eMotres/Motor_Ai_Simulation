@@ -7224,6 +7224,96 @@ def patch_die_geometry(die: str, req: DieGeometryPatch, dry_run: bool = False,
     return out
 
 
+#: The configuration keys the free-keys route takes: numbers (null clears the override) and the OD-notch flag.
+_CONFIG_FREE_NUMBER_KEYS = ("motor_length", "wire_width", "wire_height", "wire_spacing_x", "wire_spacing_y",
+                            "num_wires_per_slot", "wire_split", "wire_parallel", "insulation_thickness")
+
+
+class ConfigFreeKeysPatch(BaseModel):
+    keys: Dict[str, Optional[Any]]      # {free key: number | null}; stator_outer_notches: true drops the override
+    dry_run: bool = False
+
+
+@router.patch("/config/{die}/{cfg}/free_keys")
+def patch_config_free_keys(die: str, cfg: str, req: ConfigFreeKeysPatch, dry_run: bool = False,
+                           _w: dict = Depends(require_catalog_write)):
+    """Admin: set or clear the configuration's own FREE geometry keys (wire stack, stack length, the OD-notch flag) in place,
+    without a duty save (owner 2026-11-27: the sheet change of a die must show on its configuration at once).
+
+    A key that is NOT SENT is left unchanged; ``null``, or the die's own value, clears the override.
+    ``stator_outer_notches``: ``true`` drops the override (absent = on) when the die is notched, ``false`` stores it.  Other
+    keys (die, motor, derived, ``wire_omit`` / ``k_end_by_turns`` lists) are refused (422).  The machine (die sheet + the new
+    overrides) is validated; an error the current one did not have refuses the write (422).  A LOCKED configuration is
+    refused (409).  The overrides are part of the build signature, so stored results read "computed on an older build".
+    The previous values go to the admin audit (``config.free_keys``).  ``dry_run`` (body or ``?dry_run=1``) writes nothing."""
+    from motor_ai_sim import admin_audit as _AA
+    from motor_ai_sim.geometry.motor_geometry import refresh_derived_geometry, stator_outer_notches as _notches_on
+    if not _w.get("is_admin"):
+        raise HTTPException(403, detail="only an admin may set a configuration's free keys")
+    die, cfg = _check_name(die, "die"), _check_name(cfg, "configuration")
+    _require_die_write(die, _w, cfg)
+    sent = dict(req.keys or {})
+    if not sent:
+        raise HTTPException(422, detail="send the keys to change")
+    ok_keys = _CONFIG_FREE_NUMBER_KEYS + _SHEET_FLAG_KEYS
+    bad = sorted(k for k in sent if k not in ok_keys)
+    badv = []
+    for k, v in sent.items():
+        if k in _SHEET_FLAG_KEYS:
+            if not isinstance(v, bool):
+                badv.append(k)
+        elif v is not None and not (isinstance(v, (int, float)) and not isinstance(v, bool)
+                                    and v == v and abs(float(v)) != float("inf")):
+            badv.append(k)
+    if bad or badv:
+        raise HTTPException(422, detail={"message": "keys the free-keys route does not take: " + ", ".join(bad + badv),
+                                         "not_free_keys": bad, "not_a_number_or_flag": badv, "allowed": list(ok_keys)})
+    d = _load_yaml(_die_file(die), "die")
+    cfile = _cfg_file(die, cfg)
+    c = _load_yaml(cfile, "configuration")
+    die_geo = d.get("geometry") or {}
+    ov0 = dict(c.get("geometry_overrides") or {})
+    ov = dict(ov0)
+    for k, v in sent.items():
+        if k in _SHEET_FLAG_KEYS:
+            if v == _notches_on(die_geo):
+                ov.pop(k, None)                      # the die's own value: no override
+            else:
+                ov[k] = v
+            continue
+        dv = die_geo.get(k)
+        if v is None or (isinstance(dv, (int, float)) and not isinstance(dv, bool) and abs(float(dv) - float(v)) <= 1e-9
+                        ):
+            ov.pop(k, None)
+        else:
+            ov[k] = v
+    def _eff(o, k):
+        return _notches_on({**die_geo, **o}) if k in _SHEET_FLAG_KEYS else o.get(k, die_geo.get(k))
+    changed = sorted(k for k in sent if _eff(ov0, k) != _eff(ov, k))
+    c2 = dict(c, geometry_overrides=ov)
+    errs_old = _sheet_errors(refresh_derived_geometry({**die_geo, **ov0}))
+    errs_new = [e for e in _sheet_errors(refresh_derived_geometry({**die_geo, **ov})) if e not in errs_old] if changed else []
+    if changed and c.get("locked") is True:
+        raise HTTPException(409, detail=f"configuration '{die}/{cfg}' is locked: unlock it to change its free keys")
+    dry = bool(dry_run or req.dry_run)
+    stale = [str(x["name"]) for x in (c.get("duties") or [])
+             if isinstance(x, dict) and x.get("name") and (x.get("result") or x.get("summary") or x.get("runs"))]
+    out = {"ok": not errs_new, "dry_run": dry, "die": die, "config": cfg, "changed": changed,
+           "before": {k: _eff(ov0, k) for k in changed}, "after": {k: _eff(ov, k) for k in changed},
+           "build_sig_before": _build_sig(d, c), "build_sig_after": _build_sig(d, c2),
+           "stale_duties": stale if changed else [], "validation": errs_new}
+    if errs_new and not dry:
+        raise HTTPException(422, detail={"message": "the machine does not fit", "validation": errs_new})
+    if dry or not changed:
+        return out
+    _save_yaml(cfile, c2)
+    actor = str((_w.get("user") or {}).get("email") or "local-dev").strip().lower()
+    _AA.record(actor, "config.free_keys", f"{die}/{cfg}", details={"from": out["before"], "to": out["after"]})
+    log.info("family: free keys of '%s/%s': %s", die, cfg,
+             ", ".join("%s %s -> %s" % (k, out["before"][k], out["after"][k]) for k in changed))
+    return out
+
+
 class CadMassPut(BaseModel):
     grams: Optional[float] = None        # the CAD whole-motor mass [g]; null clears it
     source: Optional[str] = None         # the CAD model it was read from ("Fusion CIANO20 200_50 assembly v12")

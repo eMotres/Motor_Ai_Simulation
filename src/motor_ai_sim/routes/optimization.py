@@ -4920,6 +4920,14 @@ class DescentRequest(BaseModel):
     # run's mesh.  cogging_max_nm is a HARD cap on that pk-pk value [N*m], 0 = off.
     cogging_max_nm: float = Field(0.0, ge=0.0)
     cogging_steps_per_period: int = Field(144, ge=120)
+    # Opt-in HARD limit on the rotor's mechanics (owner 2026-11-27: a max-torque run drove magnet_fill_down to 1.0, a rotor
+    # that cannot be meshed, and a 0.92 cap left SF 1.87 against the required 2).  sf_min > 0: every candidate geometry gets
+    # ONE rotor_stress solve (centrifugal, 20 C, ONE case at mech_rpm, the app's own module), memoised per geometry; the
+    # averaged safety factor must reach sf_min.  A rotor that cannot be meshed or is not retained counts as failed, never as
+    # feasible.  0 = off (the run is exactly as before).
+    sf_min: float = Field(0.0, ge=0.0, le=100.0)
+    mech_rpm: float = Field(0.0, ge=0.0, le=1.0e6)
+    mech_mesh_mm: float = Field(1.0, gt=0.1, le=10.0)
     # See OptRequest.allow_new_lamination.
     allow_new_lamination: bool = False
     # Opt-in: the MTPA pre-sweep solves its angles with THIS run's eval
@@ -4944,6 +4952,12 @@ class DescentRequest(BaseModel):
         if str(self.objective or "") == "min_ripple" and float(self.cogging_max_nm) > 0.0:
             raise ValueError("cogging is used only beside the torque / efficiency ranking "
                              "(baseline_line, product or min_cogging), never with min_ripple")
+        return self
+
+    @model_validator(mode="after")
+    def _rotor_sf_needs_a_speed(self):
+        if float(self.sf_min) > 0.0 and not float(self.mech_rpm) > 0.0:
+            raise ValueError("sf_min needs mech_rpm: the speed the rotor safety factor is checked at")
         return self
 
 
@@ -5015,6 +5029,8 @@ def _msum(m: Dict[str, Any]) -> Dict[str, Any]:
         # The no-load cogging torque of an opt-in cogging run (absent otherwise).
         **({k: m.get(k) for k in ("cogging_pp_Nm", "cogging_steps_per_period", "cogging_error")
             if k in m} if "cogging_pp_Nm" in m else {}),
+        # The rotor safety factor of an opt-in mechanics-limit run (absent otherwise).
+        **({k: m.get(k) for k in ("rotor_sf", "rotor_sf_rpm", "rotor_sf_error") if k in m} if "rotor_sf" in m else {}),
     }
 
 
@@ -5064,7 +5080,8 @@ def _pt(out: Dict[str, Any], kind: str):
                                  and r.get("cogging_sampling_final_quality_sufficient") is True
                                  else "preliminary"),
             # Only in a run that measures cogging (absent otherwise: the point is unchanged).
-            **({"cogging_pp": r.get("cogging_pp_Nm")} if "cogging_pp_Nm" in r else {})}
+            **({"cogging_pp": r.get("cogging_pp_Nm")} if "cogging_pp_Nm" in r else {}),
+            **({"rotor_sf": r.get("rotor_sf")} if "rotor_sf" in r else {})}
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -5178,11 +5195,14 @@ _HARD_LIMIT_COST = 1000.0
 # Opt-in cogging measurement of the run (same per-run-global pattern): steps 0 = not measured,
 # max 0 = no cap.  Set together with _RUN_LIMITS by begin_descent_state, cleared with it.
 _COG_LIMIT = {"max": 0.0, "steps": 0}
+# Opt-in rotor mechanics limit (same per-run-global pattern): sf_min 0 = off.
+_MECH_LIMIT = {"sf_min": 0.0, "rpm": 0.0, "mesh_mm": 1.0}
 
 
 def _reset_run_limits() -> None:
     _RUN_LIMITS.update(mode="", eff_min=0.0, j_max=0.0, vll_max=0.0)
     _COG_LIMIT.update(max=0.0, steps=0)
+    _MECH_LIMIT.update(sf_min=0.0, rpm=0.0, mesh_mm=1.0)
 
 
 def _cogging_on() -> bool:
@@ -5245,6 +5265,57 @@ def _attach_cogging(o: Dict[str, Any], dd: Dict[str, float], memo: Dict[tuple, D
     return o
 
 
+def _rotor_sf_on() -> bool:
+    """The run checks each candidate's rotor safety factor (sf_min set)."""
+    return float(_MECH_LIMIT["sf_min"]) > 0.0 and float(_MECH_LIMIT["rpm"]) > 0.0
+
+
+def _rotor_sf_of(dd: Dict[str, float], rpm: float, mesh_mm: float) -> Dict[str, Any]:
+    """The averaged rotor safety factor of geometry ``dd`` at ``rpm`` by the app's own rotor_stress route (one case,
+    centrifugal, 20 C, no sleeve fit).  ``{"sf": float | None, "error": str | None}``: a rotor that cannot be meshed, is not
+    retained, or any failure gives ``sf`` None (or 0 for not retained) and an error, never a pass."""
+    import json as _json
+    try:
+        from motor_ai_sim.routes import mechanical as _mech
+        from motor_ai_sim.simulation.mechanical import rotor_stress as _rsm
+        out = _mech.run_rotor_stress_at(
+            {}, rpm=float(rpm), cases="single", loads="centrifugal", overspeed_factor=1.0, interference_mm=0.0,
+            mesh_size_mm=float(mesh_mm), order=2, field=False, geo=_json.dumps({k: float(v) for k, v in dd.items()}))
+        case = next(iter((out.get("cases") or {}).values()), None)
+        if not isinstance(case, dict):
+            return {"sf": None, "error": "rotor stress gave no case"}
+        if _rsm.case_failed(case):
+            return {"sf": 0.0, "error": "rotor not retained without adhesive"}
+        sf = case.get("sf_min")
+        sf = float(sf) if sf is not None else None
+        if sf is None or not math.isfinite(sf):
+            return {"sf": None, "error": "rotor stress gave no finite safety factor"}
+        return {"sf": sf, "error": None}
+    except Exception as exc:                      # noqa: BLE001 - an unmeshable rotor is a failed candidate
+        return {"sf": None, "error": "rotor stress failed: %s" % (str(exc)[:200] or type(exc).__name__)}
+
+
+def _attach_rotor_sf(o: Dict[str, Any], dd: Dict[str, float], memo: Dict[tuple, Dict[str, Any]],
+                     lock) -> Dict[str, Any]:
+    """Add the candidate's rotor safety factor to a successful load eval (opt-in run only; one solve per GEOMETRY,
+    memoised, in the caller's own worker)."""
+    if not _rotor_sf_on() or not isinstance(o, dict) or not o.get("ok") or not isinstance(o.get("res"), dict):
+        return o
+    geo = {k: v for k, v in dd.items() if k != "gamma_deg"}
+    key = tuple(sorted((k, round(float(v), 6)) for k, v in geo.items()))
+    with lock:
+        rec = memo.get(key)
+    if rec is None:
+        rec = _rotor_sf_of(geo, float(_MECH_LIMIT["rpm"]), float(_MECH_LIMIT["mesh_mm"]))
+        with lock:
+            memo[key] = rec
+    o["res"]["rotor_sf"] = rec["sf"]
+    o["res"]["rotor_sf_rpm"] = float(_MECH_LIMIT["rpm"])
+    if rec["error"]:
+        o["res"]["rotor_sf_error"] = rec["error"]
+    return o
+
+
 def _limit_violation(m: Dict[str, Any]) -> float:
     """Summed relative overshoot of the hard limits the run set (0.0 = feasible).  A limit that is
     on and whose metric is missing or not finite counts as broken (1.0): it is never assumed met."""
@@ -5261,7 +5332,8 @@ def _limit_violation(m: Dict[str, Any]) -> float:
     return (_over("efficiency", _RUN_LIMITS["eff_min"], True)
             + _over("J_coil_A_per_mm2", _RUN_LIMITS["j_max"], False)
             + _over("V_line_peak_V", _RUN_LIMITS["vll_max"], False)
-            + _over("cogging_pp_Nm", _COG_LIMIT["max"], False))
+            + _over("cogging_pp_Nm", _COG_LIMIT["max"], False)
+            + _over("rotor_sf", _MECH_LIMIT["sf_min"], True))
 
 
 def _defined_ripple_pct(metrics: Dict[str, Any]) -> Optional[float]:
@@ -5423,7 +5495,8 @@ def _point_as_metrics(pt: Dict[str, Any]) -> Dict[str, Any]:
     return {"torque_per_mass_Nm_kg": pt.get("td"),
             "efficiency": pt.get("eff"), "T_ripple_pct": pt.get("ripple"),
             "V_peak": pt.get("v_peak"), "THD_LL_pct": pt.get("thd"),
-            **({"cogging_pp_Nm": pt.get("cogging_pp")} if "cogging_pp" in pt else {})}
+            **({"cogging_pp_Nm": pt.get("cogging_pp")} if "cogging_pp" in pt else {}),
+            **({"rotor_sf": pt.get("rotor_sf")} if "rotor_sf" in pt else {})}
 
 
 def _finalize_standard_shortlist(
@@ -5814,6 +5887,7 @@ def _descent_worker(var_specs, op, ripple_max, w_eff, w_td, lam,
 
         _cog_memo: Dict[tuple, Dict[str, Any]] = {}     # opt-in cogging: one no-load solve per geometry
         _cog_lock = threading.Lock()
+        _sf_memo: Dict[tuple, Dict[str, Any]] = {}      # opt-in rotor mechanics: one rotor_stress solve per geometry
         _cog_kw = dict(mesh_size_mm=mesh_size, min_size_mm=min_size, n_sectors=n_sectors,
                        pole_copy=pole_copy, torque_filter=torque_filter,
                        end_winding_factor=end_winding, gap_layers=gap_layers,
@@ -5842,7 +5916,7 @@ def _descent_worker(var_specs, op, ripple_max, w_eff, w_td, lam,
                 o["res"]["current_a"] = float(cur)   # record solved current in best
             if isinstance(o, dict):
                 o["overrides"] = dict(d)             # stamp design → chart click-to-apply
-            return _attach_cogging(o, d, _cog_memo, _cog_lock, _cog_kw)
+            return _attach_rotor_sf(_attach_cogging(o, d, _cog_memo, _cog_lock, _cog_kw), d, _sf_memo, _cog_lock)
 
         def evalx(xx):
             # Target-torque: probe at the WARM-START current (the last geometry's
@@ -6241,6 +6315,7 @@ def _cmaes_worker(var_specs, op, ripple_max, w_eff, w_td, lam,
 
         _cog_memo: Dict[tuple, Dict[str, Any]] = {}     # opt-in cogging: one no-load solve per geometry
         _cog_lock = threading.Lock()
+        _sf_memo: Dict[tuple, Dict[str, Any]] = {}      # opt-in rotor mechanics: one rotor_stress solve per geometry
         _cog_kw = dict(mesh_size_mm=mesh_size, min_size_mm=min_size, n_sectors=n_sectors,
                        pole_copy=pole_copy, torque_filter=torque_filter,
                        end_winding_factor=end_winding, gap_layers=gap_layers,
@@ -6269,7 +6344,7 @@ def _cmaes_worker(var_specs, op, ripple_max, w_eff, w_td, lam,
                 o["res"]["current_a"] = float(cur)
             if isinstance(o, dict):
                 o["overrides"] = dict(dd)            # stamp design → chart click-to-apply
-            return _attach_cogging(o, dd, _cog_memo, _cog_lock, _cog_kw)
+            return _attach_rotor_sf(_attach_cogging(o, dd, _cog_memo, _cog_lock, _cog_kw), dd, _sf_memo, _cog_lock)
 
         def evalx(d):
             # Target-torque with warm-start + ±2 % band: probe at the warm-start
@@ -6754,6 +6829,8 @@ def prepare_descent(req: DescentRequest) -> Dict[str, Any]:
             "j_max": float(req.j_max_a_mm2), "vll_max": float(req.v_ll_peak_max_v)}
     _cog = ({"max": float(req.cogging_max_nm), "steps": int(req.cogging_steps_per_period)}
             if _obj == "min_cogging" or float(req.cogging_max_nm) > 0.0 else None)
+    _mech = ({"sf_min": float(req.sf_min), "rpm": float(req.mech_rpm), "mesh_mm": float(req.mech_mesh_mm)}
+             if float(req.sf_min) > 0.0 else None)
     kwargs = {"iron_template": bool(getattr(req, "iron_template", True)),
                 "geo_mesh": bool(getattr(req, "geo_mesh", True)),
                 "element_order": int(getattr(req, "element_order", 2) or 2)}
@@ -6778,11 +6855,15 @@ def prepare_descent(req: DescentRequest) -> Dict[str, Any]:
     if _cog:                                                                     # absent unless asked
         init_state["cogging_limit"] = dict(_cog)
         response["cogging_limit"] = dict(_cog)
+    if _mech:                                                                    # absent unless asked
+        init_state["mech_limit"] = dict(_mech)
+        response["mech_limit"] = dict(_mech)
     return {"var_specs": var_specs, "dropped": dropped, "worker": worker,
             "args": args, "kwargs": kwargs, "init_state": init_state,
             "ripple_pen0": _rp0, "thd_pen": (_thd_lam, _thd_max),
             "run_limits": _lim,
             **({"cogging_limit": _cog} if _cog else {}),
+            **({"mech_limit": _mech} if _mech else {}),
             "response": response}
 
 
@@ -6797,6 +6878,7 @@ def begin_descent_state(plan: Dict[str, Any]) -> None:
     _THD_PEN["lam"], _THD_PEN["max"] = plan["thd_pen"]
     _RUN_LIMITS.update(plan.get("run_limits") or {"mode": "", "eff_min": 0.0, "j_max": 0.0, "vll_max": 0.0})
     _COG_LIMIT.update(plan.get("cogging_limit") or {"max": 0.0, "steps": 0})   # an older run's never stays
+    _MECH_LIMIT.update(plan.get("mech_limit") or {"sf_min": 0.0, "rpm": 0.0, "mesh_mm": 1.0})
     with _descent_lock:
         _descent_external[0] = False   # this process owns the flag now
         _descent_state.update(plan["init_state"])

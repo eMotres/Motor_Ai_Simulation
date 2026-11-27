@@ -3,6 +3,7 @@ import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import { syncActiveMotor } from '../components/common/motorSettings';
 import { setGeoGetter } from '../lib/apiAuth';
+import { geoOverrideBody } from '../lib/geometryFlag';
 import { canWriteServer, getStoredUser } from '../lib/localAuth';
 import { autoSaveAppliedDesign } from '../lib/appliedAutoSave';
 import type { AppliedSaveResult, ApplyMode } from '../lib/appliedAutoSave';
@@ -1539,13 +1540,8 @@ if (typeof window !== 'undefined' && import.meta.env?.DEV) {
 // isolation, no shared global config. See docs/MULTI_USER_PLAN.md.
 setGeoGetter(() => {
   try {
-    const g = useMotorStore.getState().geometry as Record<string, unknown> | undefined;
-    if (!g) return null;
-    const num: Record<string, number> = {};
-    for (const [k, v] of Object.entries(g)) {
-      if (typeof v === 'number' && Number.isFinite(v)) num[k] = v;
-    }
-    return Object.keys(num).length ? JSON.stringify(num) : null;
+    const body = geoOverrideBody(useMotorStore.getState().geometry as Record<string, unknown> | undefined);
+    return body ? JSON.stringify(body) : null;      // numbers AND the geometry flags (stator_outer_notches: false must reach the server)
   } catch { return null; }
 });
 

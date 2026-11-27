@@ -3,6 +3,7 @@ import { Canvas, useThree, useFrame } from '@react-three/fiber';
 import { OrbitControls, PerspectiveCamera, OrthographicCamera, Grid } from '@react-three/drei';
 import { EffectComposer, Bloom } from '@react-three/postprocessing';
 import { useUIStore, useMotorStore, useBuildTimingStore } from '../../stores/motorStore';
+import { useGeometryWarningStore } from '../../stores/geometryWarningStore';
 import * as THREE from 'three';
 import Viewcube from './Viewcube';
 import { ApiMotor2dFlat, ApiMotorExtruded } from './ApiMotorMesh';
@@ -232,6 +233,23 @@ const FitCameraOnLoad: React.FC<{ controlsRef: React.RefObject<any> }> = ({ cont
   return null;
 };
 
+// ─── infeasible-winding warning (the machine is still drawn) ───────────────────────────────────────
+const GeometryWarningBanner: React.FC = () => {
+  const warnings = useGeometryWarningStore((s) => s.warnings);
+  if (!warnings.length) return null;
+  return (
+    <div role="alert" data-testid="geometry-warning" style={{ position: 'absolute', top: 8, left: 8, right: 8, zIndex: 20, pointerEvents: 'none',
+      display: 'flex', flexDirection: 'column', gap: 4 }}>
+      {warnings.map((w, i) => (
+        <div key={`${w.code}-${i}`} style={{ background: 'rgba(120,53,15,0.92)', border: '1px solid #f59e0b', color: '#fde68a', borderRadius: 4,
+          padding: '4px 8px', fontSize: 12, lineHeight: 1.35 }}>
+          {'\u26A0 '}{w.field}: {w.message}
+        </div>
+      ))}
+    </div>
+  );
+};
+
 // ─── EXT ↔ 2D toggle button ──────────────────────────────────────────────────
 const fmt = (s: number | null) => s == null ? '…' : s < 1 ? `${(s * 1000).toFixed(0)}ms` : `${s.toFixed(1)}s`;
 
@@ -387,6 +405,7 @@ const MotorScene: React.FC<{ force3d?: boolean }> = ({ force3d }) => {
       <ComponentTree />
 
       {/* 2D / 3D toggle */}
+      <GeometryWarningBanner />
       <View2dToggle />
 
       {/* Material assignment bar — shows when a part is selected */}

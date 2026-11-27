@@ -1,4 +1,8 @@
 import React, { useMemo, useEffect, useState, useRef } from 'react';
+import { splitWarnings, useGeometryWarningStore, type GeometryWarning } from '../../stores/geometryWarningStore';
+
+/** the warnings of each geometry key, so a cached mesh brings its own warning back (and a feasible one clears it) */
+const warningCache = new Map<string, GeometryWarning[]>();
 import { PART_COLORS } from '../../lib/partColors';
 import * as THREE from 'three';
 import { useMotorStore, useUIStore, useBuildTimingStore } from '../../stores/motorStore';
@@ -329,7 +333,7 @@ export function useMotorMeshExtruded() {
   useEffect(() => {
     if (!connectedToApi) { setData(null); return; }
     const cached = meshExtrudedCache.get(geometryKey);
-    if (cached) { setData(cached); setGeometryUpdating(false); return; }
+    if (cached) { useGeometryWarningStore.getState().setWarnings(warningCache.get(`ext:${geometryKey}`) ?? []); setData(cached); setGeometryUpdating(false); return; }
 
     if (!inflightRequestExt || inflightGeometryKeyExt !== geometryKey) {
       inflightGeometryKeyExt = geometryKey;
@@ -340,8 +344,11 @@ export function useMotorMeshExtruded() {
           const timing = (result as any)._timing;
           if (timing?.extruded_s != null) setMeshExtTime(timing.extruded_s);
           if (timing?.mesh2d_s   != null) setMesh2dTime(timing.mesh2d_s);
-          const { _timing: _, ...meshOnly } = result as any;
-          meshExtrudedCache.set(geometryKey, meshOnly);
+          const { _timing: _, ...withWarnings } = result as any;
+          const { warnings, rest: meshOnly } = splitWarnings(withWarnings);
+          warningCache.set(`ext:${geometryKey}`, warnings);
+          useGeometryWarningStore.getState().setWarnings(warnings);     // the machine is drawn; the window says what does not fit
+          meshExtrudedCache.set(geometryKey, meshOnly as AllMeshData);
           return meshOnly as AllMeshData;
         })
         .catch(err => { console.error('Failed to fetch extruded mesh:', err); return null as unknown as AllMeshData; })
@@ -487,13 +494,19 @@ export function useMotorMesh2d() {
   useEffect(() => {
     if (!connectedToApi) { setData(null); return; }
     const cached = mesh2dCache.get(geometryKey);
-    if (cached) { setData(cached); setGeometryUpdating(false); return; }
+    if (cached) { useGeometryWarningStore.getState().setWarnings(warningCache.get(`2d:${geometryKey}`) ?? []); setData(cached); setGeometryUpdating(false); return; }
 
     if (!inflightRequest2d || inflightGeometryKey2d !== geometryKey) {
       inflightGeometryKey2d = geometryKey;
       inflightRequest2d = fetch(`${API_BASE_URL}/api/geometry/mesh2d`)
         .then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json() as Promise<AllMeshData>; })
-        .then(result => { mesh2dCache.set(geometryKey, result); return result; })
+        .then(result => {
+          const { warnings, rest } = splitWarnings(result as unknown as Record<string, unknown>);
+          warningCache.set(`2d:${geometryKey}`, warnings);
+          useGeometryWarningStore.getState().setWarnings(warnings);
+          mesh2dCache.set(geometryKey, rest as unknown as AllMeshData);
+          return rest as unknown as AllMeshData;
+        })
         .catch(err => { console.error('Failed to fetch 2d mesh:', err); return null as unknown as AllMeshData; })
         .finally(() => { inflightRequest2d = null; });
     }

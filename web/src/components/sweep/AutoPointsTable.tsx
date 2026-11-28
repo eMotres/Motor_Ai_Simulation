@@ -2,9 +2,9 @@ import React, { useState } from 'react';
 import { nsT } from '../../i18n/nsT';
 import { useTranslation } from 'react-i18next';
 import { autoPointPowerKw, autoPointFieldTorque } from '../../lib/autoPointPower';
-import { anyMarked } from '../../lib/shaftBasisLabel';
+import { anyMarked, basesMixed } from '../../lib/shaftBasisLabel';
 const tx = nsT('simulation');
-import { Box, Chip, Typography } from '@mui/material';
+import { Box, Chip, Tooltip, Typography } from '@mui/material';
 import HelpTip from '../common/HelpTip';
 import { useMotorStore } from '../../stores/motorStore';
 
@@ -53,11 +53,9 @@ const AutoPointsTable: React.FC<{ points: any[]; gate: number; rpm?: number }> =
     const c: { id: string; label: string; get: (r: any) => number;
                fmt: (v: number) => string; vcol?: boolean }[] = [];
     c.push({ id: 'i', label: '#', get: r => r.i, fmt: v => String(v) });
-    // the basis column and the basis-named headers only when a marked point is in the table (then an earlier
-    // point reads "Earlier shaft basis"); a table of earlier points alone keeps its earlier columns
+    // the basis-named headers only when a marked point is in the table; no basis column (owner 2026-11-28): a table that
+    // mixes the two bases carries one warning chip above it instead (mixedBases)
     const marked = anyMarked(rows.map((r: any) => r.shaftConv === 1));
-    if (marked) c.push({ id: 'basis', label: tx('shaftConvCol'), get: r => r.shaftConv,
-      fmt: v => tx(v === 1 ? 'shaftBasisCurrent' : 'shaftBasisEarlier') });
     // OUTPUTS FIRST, variables after — the one place this departs from the Sweep
     // table, and for a measured reason: a sweep varies two or three parameters,
     // an optimization varies all eighteen, and with the variables leading, every
@@ -95,6 +93,7 @@ const AutoPointsTable: React.FC<{ points: any[]; gate: number; rpm?: number }> =
     return c;
   }, [rows, i18n.resolvedLanguage]);
 
+  const mixedBases = React.useMemo(() => basesMixed(rows.map((r: any) => r.shaftConv === 1)), [rows]);
   const [sortId, setSortId] = useState('F');
   const [dir, setDir] = useState<1 | -1>(-1);
   const [all, setAll] = useState(false);
@@ -128,6 +127,10 @@ const AutoPointsTable: React.FC<{ points: any[]; gate: number; rpm?: number }> =
           + 'amber. F is the objective: the signed perpendicular distance above the '
           + 'current-only baseline line, so F > 0 means the design beats simply raising '
           + 'the current. Sort by it to see what the search actually likes.'} />
+        {mixedBases && (
+          <Tooltip title={tx('shaftConvMixed')}><Chip size="small" color="warning" variant="outlined"
+            data-testid="auto-shaft-basis-mixed" label={tx('shaftConvMixedChip')} sx={{ fontSize: 10, height: 20, cursor: 'help' }} /></Tooltip>
+        )}
         {rows.length > 60 && (
           <Chip size="small" label={all ? 'show top 60' : `show all ${rows.length}`}
             onClick={() => setAll(v => !v)} sx={{ fontSize: 10, height: 20 }} />

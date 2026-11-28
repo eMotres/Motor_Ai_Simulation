@@ -147,7 +147,7 @@ for (const lang of ['en', 'zh-CN']) {
     assert.ok(sweep.includes('<SweepTooltip mixed={chartMixed} />'));
   });
 
-  test(`Sweep actual table columns label every row with numeric export and old columns intact (${lang})`, () => {
+  test(`Sweep actual table has no shaft-basis column, in every mix, and keeps the old columns (${lang})`, () => {
     const body = between(sweep, '  const rows = useMemo', '  const [sortId') + 'return {rows, cols};';
     const buildTable = points => run(body, { points, omega: 100, k3d: null, vdcF: 1 / Math.sqrt(3),
       useMemo: fn => fn(), kOfPoint: p => pointApply3dK(p, null, true), scale3d, coggingOf, tx });
@@ -155,17 +155,14 @@ for (const lang of ['en', 'zh-CN']) {
     for (const points of [[point], [{ ...point, shaft_convention: SHAFT_CONVENTION }],
       [point, { ...point, shaft_convention: SHAFT_CONVENTION }]]) {
       const { rows, cols } = buildTable(points);
-      const marked = points.some(isMarked), basis = cols.find(c => c.id === 'shaftConv');
-      assert.deepEqual(cols.map(c => c.id), marked ? ['shaftConv', ...oldIds] : oldIds);
+      assert.deepEqual(cols.map(c => c.id), oldIds);
       for (const row of rows) {
-        if (marked) {
-          assert.equal(basis.fmt(basis.get(row)), tx(row.sc === 1 ? 'shaftBasisCurrent' : 'shaftBasisEarlier'));
-          assert.equal(basis.get(row), row.sc); // exportRows uses get, not fmt
-        }
         assert.equal(cols.find(c => c.id === 'P').fmt(row.P), '0.87');
         assert.equal(cols.find(c => c.id === 'eff').fmt(row.eff), '89.69');
         assert.equal(cols.find(c => c.id === 'T').fmt(row.T), '10.00');
       }
     }
+    // the information stays: a chip above the chart when the two bases are mixed
+    assert.ok(sweep.includes("data-testid=\"sweep-shaft-basis-mixed\"") && sweep.includes("tx('shaftConvMixedChip')"));
   });
 }

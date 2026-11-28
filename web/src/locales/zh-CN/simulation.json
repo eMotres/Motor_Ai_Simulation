@@ -312,6 +312,7 @@
   "sweepPresetError": "无法解析运行设置，因此无法开始运行。",
   "sweepPresetRetry": "重试",
   "sweepMixedSettings": "这些结果的每周期步数或气隙层数不同（或其中之一未使用“优化”预设）；它们之间不进行排名。",
+  "shaftConvMixedChip": "轴功率口径不一 †",
   "shaftConvMixed": "这些结果采用了不同的轴功率口径（铁损计入轴侧且运行中已含三维系数，或较早的运行将全部损耗计入电气侧）；它们之间不进行排名。",
   "shaftConvCol": "轴功率口径",
   "runSettingsMesh": "网格",

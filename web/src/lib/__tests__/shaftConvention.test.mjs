@@ -405,7 +405,8 @@ test('r7: an unmarked record alone keeps its earlier text; marked and mixed view
 
   // components: the basis words are gated on a marked record / a mixed view, and the unmarked text is the earlier one
   const auto = read('components/sweep/AutoPointsTable.tsx');
-  assert.match(auto, /if \(marked\) c\.push\(\{ id: 'basis'/);
+  assert.doesNotMatch(auto, /id: 'basis'/);   // no basis column (owner 2026-11-28); a mixed table carries a chip
+  assert.match(auto, /data-testid="auto-shaft-basis-mixed"/);
   assert.match(auto, /label: marked \? `\$\{tx\('fieldTorque'\)\} \(N·m\)` : 'T \(N·m\)'/);
   assert.match(auto, /label: marked \? `\$\{tx\('shaftPower'\)\} \(kW\)` : 'P \(kW\)'/);
   const opt = read('components/sweep/AutoOptimizePanel.tsx');

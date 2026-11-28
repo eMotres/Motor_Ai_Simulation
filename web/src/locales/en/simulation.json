@@ -312,6 +312,7 @@
   "sweepPresetError": "The run settings could not be resolved, so the run cannot start.",
   "sweepPresetRetry": "Retry",
   "sweepMixedSettings": "These results were computed at different steps per period or gap rows (or one is not on the Optimization preset); they are not ranked against each other.",
+  "shaftConvMixedChip": "Mixed shaft bases †",
   "shaftConvMixed": "These results use different shaft-power conventions (core loss on the shaft and the 3-D factor in the run, or an earlier run with every loss on the electrical side); they are not ranked against each other.",
   "shaftConvCol": "Shaft basis",
   "runSettingsMesh": "mesh",
